@@ -398,20 +398,32 @@ Making one row the boundary means every administrator mutation, every login,
 every webhook write and the API's own boot all meet on it. That was worth
 measuring rather than asserting, so it was:
 
-|                                       | latency                 |
-| ------------------------------------- | ----------------------- |
-| login, sequential                     | 13ms                    |
-| login, 16 concurrent                  | ~43ms each              |
-| `setRoles`, sequential                | 10ms                    |
-| `setRoles`, 16 concurrent             | ~101ms each, 168ms wall |
-| login, during a burst of 16 mutations | ~263ms each             |
+Distinct accounts per login, so the figures are not measuring contention on one
+account's throttle row. Hashing is at the test cost profile, which is what
+isolates lock behaviour from scrypt.
 
-Administrator mutations serialise completely — 16 concurrent take the same wall
-time as 16 sequential — which is exactly what an exclusive lock is for and is
-not a problem for a surface where mutations are rare human actions. The number
-that matters is the last row: while mutations are in flight, concurrent logins
-wait behind them, here by about 6×. That is acceptable. It is only acceptable
-because the wait is **bounded**.
+|                                                         | latency                |
+| ------------------------------------------------------- | ---------------------- |
+| login, sequential                                       | 14ms                   |
+| login, 8 concurrent                                     | ~47ms each             |
+| login, 16 concurrent                                    | ~86ms each             |
+| `setRoles`, sequential                                  | 10ms                   |
+| `setRoles`, 16 concurrent                               | ~93ms each, 164ms wall |
+| login, 16 concurrent **during a burst of 16 mutations** | ~287ms each            |
+
+Administrator mutations serialise completely — 16 concurrent take essentially
+the same wall time as 16 sequential — which is exactly what an exclusive lock is
+for, and is not a problem for a surface where mutations are rare human actions.
+
+The number that matters is the last row against the one above it: while
+mutations are in flight, concurrent logins wait behind them, here by about 3.3×
+(86ms to 287ms). That is acceptable. It is only acceptable because the wait is
+**bounded**.
+
+Moving the login audit and the response's permission and role reads inside the
+session transaction — which lengthens the time login holds its share lock — cost
+nothing measurable: sequential login moved from 13.3ms to 13.7ms, inside the
+noise.
 
 Postgres defaults `lock_timeout`, `statement_timeout` and
 `idle_in_transaction_session_timeout` to `0`, which means wait forever. With
