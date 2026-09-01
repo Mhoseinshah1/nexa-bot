@@ -69,6 +69,14 @@ export const EVENT_TYPES = [
   'BotInstanceStatusChanged',
   'SettingChanged',
   'PermissionDenied',
+
+  // Identity — Phase 1. Lifecycle only: a sign-in is not a domain event, it is
+  // an audit row. What other modules must react to is an administrator's
+  // existence, status and privileges changing.
+  'AdminCreated',
+  'AdminStatusChanged',
+  'AdminRolesChanged',
+  'AdminPasswordChanged',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -97,6 +105,17 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   BotInstanceStatusChanged: z.object({ from: z.string(), to: z.string() }),
   SettingChanged: z.object({ key: z.string(), from: z.unknown(), to: z.unknown() }),
   PermissionDenied: z.object({ permissionKey: z.string(), reason: z.string() }),
+  AdminCreated: z.object({
+    username: z.string(),
+    roleKeys: z.array(z.string()),
+  }),
+  AdminStatusChanged: z.object({ from: z.string(), to: z.string() }),
+  AdminRolesChanged: z.object({
+    added: z.array(z.string()),
+    removed: z.array(z.string()),
+  }),
+  // Carries no password material of any kind, not even a length.
+  AdminPasswordChanged: z.object({ bySelf: z.boolean() }),
 } as const satisfies Record<EventType, z.ZodType>;
 
 export type EventPayload<T extends EventType> = z.infer<(typeof EVENT_PAYLOAD_SCHEMAS)[T]>;

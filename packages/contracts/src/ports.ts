@@ -156,3 +156,30 @@ export interface OperationalEventInput {
 export interface OperationalEventRecorder {
   record(scope: ScopeContext, event: OperationalEventInput): Promise<void>;
 }
+
+/**
+ * Password hashing.
+ *
+ * `encoded` carries the algorithm and its parameters alongside the digest, so a
+ * stored hash is self-describing and the cost can be raised — or the algorithm
+ * replaced — without a migration: `needsRehash` reports that a verified
+ * password should be re-stored, and the only moment the plaintext exists is the
+ * moment it can be re-hashed.
+ *
+ * There is no `compare(hashA, hashB)`. Verification takes the plaintext and the
+ * stored string, so no caller can be tempted to compare two digests with `===`.
+ */
+export interface PasswordHasher {
+  /** Returns the self-describing encoded hash to store. Never reversible. */
+  hash(plaintext: string): Promise<string>;
+  /** Constant-time within the algorithm. False for any malformed stored value. */
+  verify(plaintext: string, encoded: string): Promise<boolean>;
+  /** True when `encoded` was produced with weaker parameters than current policy. */
+  needsRehash(encoded: string): boolean;
+  /**
+   * Spends the same work as a real verification against a value that cannot
+   * match. Called when no account exists, so the response time of "no such
+   * username" and "wrong password" do not differ.
+   */
+  spendDummyWork(): Promise<void>;
+}

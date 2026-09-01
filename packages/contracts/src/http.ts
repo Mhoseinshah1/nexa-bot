@@ -62,3 +62,121 @@ export const HEALTH_ROUTES = {
 
 export const CORRELATION_ID_HEADER = 'x-correlation-id';
 export const TELEGRAM_SECRET_TOKEN_HEADER = 'x-telegram-bot-api-secret-token';
+
+// ---------------------------------------------------------------------------
+// Web Admin authentication and administration
+// ---------------------------------------------------------------------------
+
+/**
+ * These schemas are the seam. The server parses requests with them and
+ * validates responses against them; the web admin parses responses with the
+ * same objects. A shape change is a type error in both at once — which is the
+ * mechanism that stops the two surfaces drifting the way the legacy system's
+ * did, with four admin roles on one side and seven on the other.
+ */
+
+export const loginRequestSchema = z.object({
+  username: z.string().min(1).max(64),
+  password: z.string().min(1).max(1024),
+});
+export type LoginRequest = z.infer<typeof loginRequestSchema>;
+
+/** The admin as any authenticated surface may see them. Never a password field. */
+export const adminSummarySchema = z.object({
+  id: z.string(),
+  username: z.string(),
+  displayName: z.string(),
+  status: z.enum(['ACTIVE', 'DISABLED']),
+  telegramUserId: z.string().nullable(),
+  roleKeys: z.array(z.string()),
+  createdAt: z.string(),
+  lastLoginAt: z.string().nullable(),
+});
+export type AdminSummary = z.infer<typeof adminSummarySchema>;
+
+/**
+ * The login response.
+ *
+ * `token` is returned exactly once and is also set as an httpOnly cookie. A
+ * browser never needs to read it; it exists in the body so a non-browser client
+ * has a way in that does not depend on a cookie jar.
+ */
+export const loginResponseSchema = z.object({
+  token: z.string(),
+  expiresAt: z.string(),
+  admin: adminSummarySchema,
+  /** Resolved server-side. The UI uses it to hide chrome — never to authorize. */
+  permissions: z.array(z.string()),
+});
+export type LoginResponse = z.infer<typeof loginResponseSchema>;
+
+export const sessionResponseSchema = z.object({
+  admin: adminSummarySchema,
+  permissions: z.array(z.string()),
+  expiresAt: z.string(),
+});
+export type SessionResponse = z.infer<typeof sessionResponseSchema>;
+
+export const logoutResponseSchema = z.object({ ok: z.literal(true) });
+export type LogoutResponse = z.infer<typeof logoutResponseSchema>;
+
+export const changePasswordRequestSchema = z.object({
+  currentPassword: z.string().min(1).max(1024),
+  newPassword: z.string().min(12).max(1024),
+});
+export type ChangePasswordRequest = z.infer<typeof changePasswordRequestSchema>;
+
+export const createAdminRequestSchema = z.object({
+  username: z.string().min(3).max(64),
+  displayName: z.string().min(1).max(120),
+  password: z.string().min(12).max(1024),
+  roleKeys: z.array(z.string()).min(1),
+  telegramUserId: z
+    .string()
+    .regex(/^[0-9]{1,20}$/)
+    .nullable()
+    .optional(),
+});
+export type CreateAdminRequest = z.infer<typeof createAdminRequestSchema>;
+
+export const setAdminStatusRequestSchema = z.object({
+  status: z.enum(['ACTIVE', 'DISABLED']),
+  reason: z.string().min(1).max(500),
+});
+export type SetAdminStatusRequest = z.infer<typeof setAdminStatusRequestSchema>;
+
+export const setAdminRolesRequestSchema = z.object({
+  roleKeys: z.array(z.string()),
+  reason: z.string().min(1).max(500),
+});
+export type SetAdminRolesRequest = z.infer<typeof setAdminRolesRequestSchema>;
+
+export const adminListResponseSchema = z.object({ admins: z.array(adminSummarySchema) });
+export type AdminListResponse = z.infer<typeof adminListResponseSchema>;
+
+export const roleSummarySchema = z.object({
+  key: z.string(),
+  name: z.string(),
+  isSystem: z.boolean(),
+  permissions: z.array(z.string()),
+});
+export type RoleSummary = z.infer<typeof roleSummarySchema>;
+
+export const roleListResponseSchema = z.object({ roles: z.array(roleSummarySchema) });
+export type RoleListResponse = z.infer<typeof roleListResponseSchema>;
+
+/** Routes, relative to `API_PREFIX`. One place, so the client cannot guess. */
+export const AUTH_ROUTES = {
+  login: '/auth/login',
+  logout: '/auth/logout',
+  session: '/auth/session',
+  password: '/auth/password',
+} as const;
+
+export const ADMIN_ROUTES = {
+  list: '/admins',
+  create: '/admins',
+  status: (id: string) => `/admins/${id}/status`,
+  roles: (id: string) => `/admins/${id}/roles`,
+  rolesCatalog: '/roles',
+} as const;

@@ -120,3 +120,28 @@ export const PLATFORM_ERROR_CODES = {
   SECRET_DECRYPT_FAILED: 'platform.secret_decrypt_failed',
   TELEGRAM_BAD_SECRET_TOKEN: 'telegram.bad_secret_token',
 } as const;
+
+/**
+ * Codes emitted by identity, authentication and authorization.
+ *
+ * `AUTH_INVALID_CREDENTIALS` is deliberately the ONLY code a failed login can
+ * produce. Unknown username, wrong password and disabled account all map to it,
+ * so the response is not an account oracle; the audit row records which it was.
+ */
+export const IDENTITY_ERROR_CODES = {
+  AUTH_INVALID_CREDENTIALS: 'auth.invalid_credentials',
+  AUTH_RATE_LIMITED: 'auth.rate_limited',
+  AUTH_SESSION_INVALID: 'auth.session_invalid',
+  AUTH_SESSION_EXPIRED: 'auth.session_expired',
+  AUTH_REQUIRED: 'auth.required',
+  AUTH_ORIGIN_REJECTED: 'auth.origin_rejected',
+  ADMIN_NOT_FOUND: 'admin.not_found',
+  ADMIN_USERNAME_TAKEN: 'admin.username_taken',
+  ADMIN_TELEGRAM_ID_TAKEN: 'admin.telegram_id_taken',
+  ADMIN_SELF_MODIFICATION: 'admin.self_modification_denied',
+  ADMIN_LAST_OWNER: 'admin.last_owner_protected',
+  ADMIN_PASSWORD_REUSED: 'admin.password_reused',
+  ROLE_NOT_FOUND: 'role.not_found',
+  ROLE_SYSTEM_IMMUTABLE: 'role.system_immutable',
+  BOOTSTRAP_ALREADY_DONE: 'bootstrap.already_completed',
+} as const;
