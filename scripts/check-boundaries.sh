@@ -214,6 +214,54 @@ if [ -d docs/research ]; then
   fi
 fi
 
+# ---------------------------------------------------------------------------
+# Every declared error code can actually be produced
+# ---------------------------------------------------------------------------
+#
+# A code in the frozen contracts is a promise the system makes about how it
+# fails. Three times on this branch a code was declared and emitted by nothing:
+# the failure it named surfaced as a driver error and a 500 instead
+# (`admin.telegram_id_taken`), or named a distinction the security model
+# forbids (`auth.session_expired`, and the bearer transport before it). An
+# unproduced code is not a spare part; it is read as permission by whoever
+# comes next.
+#
+# Only the string-valued *_ERROR_CODES entries are scanned. The ErrorKind
+# taxonomy in the same file maps kinds to HTTP statuses and is deliberately
+# complete, so a kind with no producer is not a broken promise.
+#
+# RESERVED codes are exempt, and each must say why here. The list is the point:
+# adding a code with no producer now requires deciding, in this file, whether it
+# is genuinely reserved.
+RESERVED_CODES="TENANT_MISMATCH IDEMPOTENCY_IN_FLIGHT ROLE_SYSTEM_IMMUTABLE"
+#   TENANT_MISMATCH       - repositories filter by tenant, so a cross-tenant id
+#                           is NOT_FOUND. Reserved for the explicit cross-tenant
+#                           query service ADR-0004 defers.
+#   IDEMPOTENCY_IN_FLIGHT - the store records AFTER the work, with
+#                           ON CONFLICT DO NOTHING. Reserved for a claim-before-
+#                           work design, which Phase 0 deliberately did not build.
+#   ROLE_SYSTEM_IMMUTABLE - enforced by the nexa_protect_system_role trigger.
+#                           Reserved for the role editor; there is no role-editing
+#                           path to translate it into an error yet.
+
+UNPRODUCED=""
+while read -r code; do
+  [ -n "$code" ] || continue
+  case " $RESERVED_CODES " in *" $code "*) continue ;; esac
+  if ! grep -rq --include='*.ts' --include='*.tsx' "$code" apps packages/i18n tests 2>/dev/null; then
+    UNPRODUCED="$UNPRODUCED $code"
+  fi
+done <<EOF
+$(grep -oE "^  [A-Z0-9_]+: '[^']+'," packages/contracts/src/errors.ts | cut -d: -f1 | tr -d ' ')
+EOF
+
+if [ -n "$UNPRODUCED" ]; then
+  fail "every declared error code has a producer" \
+    "no code path produces:$UNPRODUCED (add a producer, or reserve it in scripts/check-boundaries.sh with a reason)"
+else
+  pass "every declared error code has a producer or a stated reservation"
+fi
+
 echo
 if [ "$FAILED" -ne 0 ]; then
   echo "Boundary checks failed."
