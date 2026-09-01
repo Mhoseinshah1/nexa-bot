@@ -2190,3 +2190,39 @@ describe('the outbox re-checks the tenant at dispatch, not only at claim', () =>
     expect(result.published).toBeGreaterThan(0);
   }, 30_000);
 });
+
+describe('a session issued for a tenant stopped mid-login is inert', () => {
+  it('cannot be used, even though login may still create it', async () => {
+    // Login checks tenant status outside any lock and writes its session under
+    // a lock on the ADMIN row, so a stop committing in between still issues
+    // one. That is a deliberate boundary rather than an oversight: taking the
+    // tenant lock on the login path would serialise every sign-in against every
+    // administrator mutation, to prevent writing a row that can never be used.
+    //
+    // This pins the "can never be used" half, which is what makes the trade
+    // sound. If it ever stops holding, the boundary has to move.
+    const issued = await ctx.container.auth.login(
+      tenantA,
+      anonymous,
+      { username: 'owner', password: owner.password },
+      from,
+    );
+
+    await ctx.container.database.db
+      .update(tenants)
+      .set({ status: 'STOPPED' })
+      .where(eq(tenants.id, tenantA.tenantId));
+
+    await expect(ctx.container.auth.authenticate(issued.token)).rejects.toMatchObject({
+      kind: 'UNAUTHENTICATED',
+    });
+
+    // And it is not revoked on the way out — a tenant can be started again, and
+    // the sessions its operators held are not what was suspended.
+    const [row] = await ctx.container.database.db
+      .select()
+      .from(adminSessions)
+      .where(eq(adminSessions.id, issued.session.id));
+    expect(row?.revokedAt).toBeNull();
+  });
+});
