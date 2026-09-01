@@ -2324,3 +2324,155 @@ describe('the webhook write is refused if the bot stops while it runs', () => {
     ).resolves.toBeDefined();
   }, 30_000);
 });
+
+describe('a login refused by a tenant stop is classified by the transaction', () => {
+  it('gives the reservations back even if the tenant restarts immediately', async () => {
+    // The refusal reason used to come from a second, UNLOCKED read after the
+    // transaction returned. A restart in that gap made a refusal caused by the
+    // stop look like a wrong password, so the operator kept the throttle
+    // reservations for a credential that was correct — inferring a locked
+    // decision from an unlocked read, which is the exact mistake the lock was
+    // added to stop.
+    const strict = await createTestContext({
+      LOGIN_MAX_ATTEMPTS_PER_USERNAME: '1',
+      LOGIN_MAX_ATTEMPTS_PER_IP: '1',
+    });
+    try {
+      await strict.reset();
+      const subject = await createAdmin(strict.container, tenantA, {
+        username: 'restarted-under-me',
+        password: 'the-correct-password',
+        roleKeys: [OWNER_ROLE_KEY],
+      });
+      // Below current cost, so the rehash runs and gives a window to stall in.
+      await strict.container.admins.setPasswordHash(
+        tenantA,
+        subject.id as AdminId,
+        await new ScryptPasswordHasher(LEGACY_SCRYPT).hash('the-correct-password'),
+        strict.container.clock.now(),
+      );
+      const ip = '198.51.100.220';
+
+      const hasher = strict.container.hasher as unknown as Record<string, unknown>;
+      const realHash = strict.container.hasher.hash.bind(strict.container.hasher);
+      let release: () => void = () => undefined;
+      const rehashing = new Promise<void>((resolve) => {
+        hasher['hash'] = async (plaintext: string) => {
+          hasher['hash'] = realHash;
+          resolve();
+          await new Promise<void>((r) => {
+            release = r;
+          });
+          return realHash(plaintext);
+        };
+      });
+
+      const login = strict.container.auth
+        .login(
+          tenantA,
+          anonymous,
+          { username: 'restarted-under-me', password: 'the-correct-password' },
+          { ip, userAgent: 'vitest' },
+        )
+        .catch((error: unknown) => error);
+
+      await rehashing;
+      await strict.container.database.db
+        .update(tenants)
+        .set({ status: 'STOPPED' })
+        .where(eq(tenants.id, tenantA.tenantId));
+
+      // The restart lands in the GAP — after the transaction has refused and
+      // before anything could re-read the status. That gap is the whole finding:
+      // stopping and restarting either side of the login proves nothing, because
+      // an unlocked re-read afterwards would still see STOPPED. The service's
+      // own tenant read is the seam, so the restart is triggered from it.
+      const auth = strict.container.auth as unknown as Record<string, unknown>;
+      const realTenantCheck = (auth['tenantIsActive'] as (scope: unknown) => Promise<boolean>).bind(
+        strict.container.auth,
+      );
+      auth['tenantIsActive'] = async (scope: unknown) => {
+        auth['tenantIsActive'] = realTenantCheck;
+        await strict.container.database.db
+          .update(tenants)
+          .set({ status: 'ACTIVE' })
+          .where(eq(tenants.id, tenantA.tenantId));
+        return realTenantCheck(scope);
+      };
+
+      release();
+      await login;
+      auth['tenantIsActive'] = realTenantCheck;
+
+      await strict.container.database.db
+        .update(tenants)
+        .set({ status: 'ACTIVE' })
+        .where(eq(tenants.id, tenantA.tenantId));
+
+      const [row] = await strict.container.database.db
+        .select()
+        .from(adminLoginThrottle)
+        .where(eq(adminLoginThrottle.subject, ip));
+      expect(row?.failedCount ?? 0).toBe(0);
+
+      // And decisively: the operator can sign in.
+      await expect(
+        strict.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: 'restarted-under-me', password: 'the-correct-password' },
+          { ip, userAgent: 'vitest' },
+        ),
+      ).resolves.toBeDefined();
+    } finally {
+      await strict.close();
+    }
+  }, 30_000);
+});
+
+describe('an attempted privilege escalation is recorded in full', () => {
+  it('names the permissions the actor tried to confer, not "unknown"', async () => {
+    // A guard denial names one permission under `permission`; an amplification
+    // refusal names the whole offending set under `permissions`. Reading only
+    // the singular recorded the more serious of the two — somebody caught
+    // trying to confer authority they do not hold — as `unknown` in the
+    // operational log and `null` in the audit row.
+    const manager = await createAdmin(ctx.container, tenantA, {
+      username: 'delegated-manager',
+      roleKeys: ['support'],
+    });
+    await ctx.container.database.db.insert(adminPermissionOverrides).values({
+      tenantId: tenantA.tenantId,
+      adminId: manager.id,
+      permissionKey: 'admins.edit',
+      effect: 'GRANT',
+      reason: 'Administers the roster.',
+      expiresAt: null,
+    });
+
+    await expect(
+      ctx.container.adminManagement.create(tenantA, adminActorFor(manager), {
+        username: 'a-puppet',
+        displayName: 'Puppet',
+        password: 'a-perfectly-fine-password',
+        roleKeys: ['finance'],
+      }),
+    ).rejects.toMatchObject({ code: 'admin.privilege_escalation_denied' });
+
+    const [row] = (await ctx.container.database.db
+      .select()
+      .from(auditLogs)
+      .where(eq(auditLogs.action, 'admin.create'))) as {
+      result: string;
+      after: Record<string, unknown> | null;
+    }[];
+
+    expect(row?.result).toBe('DENIED');
+    expect(row?.after?.['reason']).toBe('admin.privilege_escalation_denied');
+    // The set, not a single name and not null.
+    const attempted = row?.after?.['deniedPermissions'] as string[] | undefined;
+    expect(Array.isArray(attempted)).toBe(true);
+    expect((attempted ?? []).length).toBeGreaterThan(0);
+    expect(row?.after?.['deniedPermission']).not.toBeNull();
+  });
+});

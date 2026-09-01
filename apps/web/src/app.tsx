@@ -9,6 +9,7 @@ import {
   signIn,
   signOut,
 } from './api/client';
+import type { SessionResponse } from '@nexa/contracts';
 import { t } from './i18n/web.fa';
 
 /**
@@ -22,10 +23,50 @@ import { t } from './i18n/web.fa';
  * decide what is allowed — the server re-checks every call, and this component
  * would be just as safe if it drew everything.
  */
+/**
+ * Which of four states the session query is in.
+ *
+ * A pure function, and separate from the component, because the distinction it
+ * makes is a rule rather than a rendering detail: `fetchSession` resolves to
+ * `null` ONLY for a 401 — the server saying there is no session — and rejects
+ * for everything else. Collapsing those two into "show the sign-in form" told
+ * an administrator holding a good cookie that they were signed out, and invited
+ * them to open a second session to fix a problem that was never theirs.
+ */
+export function sessionView(query: {
+  isPending: boolean;
+  isError: boolean;
+  data?: SessionResponse | null | undefined;
+}): 'loading' | 'unavailable' | 'signed-in' | 'signed-out' {
+  if (query.isPending) return 'loading';
+  if (query.isError) return 'unavailable';
+  return query.data ? 'signed-in' : 'signed-out';
+}
+
 export function App() {
   const session = useQuery({ queryKey: ['session'], queryFn: fetchSession, retry: false });
 
-  if (session.isPending) return <main className="shell">{t('web.loading')}</main>;
+  const view = sessionView(session);
+
+  if (view === 'loading') return <main className="shell">{t('web.loading')}</main>;
+
+  // A failed LOOKUP is not a signed-out state. `fetchSession` returns null only
+  // for a 401, which is the server saying "no session"; anything else — a
+  // database outage, a proxy 503, a dropped connection — rejects. Rendering the
+  // sign-in form for those told an administrator holding a perfectly good
+  // cookie that they were logged out, and invited them to open a second
+  // session to fix a problem that was never theirs.
+  if (view === 'unavailable') {
+    return (
+      <main className="shell">
+        <p>{t('web.session_unavailable')}</p>
+        <button type="button" onClick={() => void session.refetch()}>
+          {t('web.retry')}
+        </button>
+      </main>
+    );
+  }
+
   return session.data ? (
     <SignedIn permissions={session.data.permissions} admin={session.data.admin} />
   ) : (

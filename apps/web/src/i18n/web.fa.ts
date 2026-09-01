@@ -18,6 +18,9 @@ export const WEB_FA = {
   'web.down': 'خارج از دسترس',
   'web.loading': 'در حال بارگذاری…',
   'web.error': 'خطا در ارتباط با سرور',
+  'web.session_unavailable':
+    'وضعیت ورود شما قابل بررسی نیست. ممکن است همچنان وارد باشید — پیش از ورود دوباره، اتصال را بررسی کنید.',
+  'web.retry': 'تلاش دوباره',
   'web.build_info': 'اطلاعات نسخه',
   'web.version': 'نسخه',
   'web.commit': 'کامیت',

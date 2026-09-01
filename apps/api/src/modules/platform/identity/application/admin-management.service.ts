@@ -853,17 +853,34 @@ export class AdminManagementService {
       return await this.uow.run(scope, fn);
     } catch (error) {
       if (isNexaError(error) && error.kind === 'PERMISSION_DENIED') {
-        const permission = error.details['permission'];
+        // A guard denial names one permission under `permission`; an
+        // amplification refusal names the whole offending set under
+        // `permissions`. Reading only the singular recorded the second — the
+        // more serious of the two, an administrator caught trying to confer
+        // authority they do not hold — as permission `unknown` in the
+        // operational log and `null` in the audit row, which is precisely the
+        // record an operator would need and the one they would not get.
+        const single = error.details['permission'];
+        const many = error.details['permissions'];
+        const attempted = Array.isArray(many) ? many.map(String) : single ? [String(single)] : [];
+
         await this.opsLog.record(
           scope,
-          this.guard.denialEvent(actor, (permission ?? 'unknown') as PermissionKey),
+          this.guard.denialEvent(actor, (attempted[0] ?? 'unknown') as PermissionKey),
         );
         await this.audit.record(scope, actor, {
           action: denial.action,
           entityType: 'Admin',
           entityId: denial.entityId,
           before: null,
-          after: { deniedPermission: permission ?? null },
+          after: {
+            deniedPermission: attempted[0] ?? null,
+            // The full set, and the code that distinguishes a plain denial from
+            // an attempted escalation. One name is not the story when somebody
+            // tried to hand out five permissions at once.
+            deniedPermissions: attempted,
+            reason: error.code,
+          },
           result: 'DENIED',
         });
       }

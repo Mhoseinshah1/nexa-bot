@@ -296,7 +296,7 @@ export class AuthenticationService {
       //
       // `FOR SHARE`, so concurrent sign-ins do not queue behind one another;
       // only a status change waits.
-      if ((await this.admins.lockTenantForRead(scope, tx)) !== 'ACTIVE') return false;
+      if ((await this.admins.lockTenantForRead(scope, tx)) !== 'ACTIVE') return 'TENANT_STOPPED';
 
       const stillCurrent = await this.admins.lockIfPasswordHashMatches(
         scope,
@@ -304,7 +304,7 @@ export class AuthenticationService {
         credentials.passwordHash,
         tx,
       );
-      if (!stillCurrent) return false;
+      if (!stillCurrent) return 'CREDENTIAL_STALE';
 
       // Safe unconditionally here: the row is locked and its hash was just
       // confirmed to be the one this login verified. Doing it as a second
@@ -329,20 +329,23 @@ export class AuthenticationService {
         },
         tx,
       );
-      return true;
+      return 'ISSUED';
     });
 
-    if (!issued) {
+    if (issued !== 'ISSUED') {
       // Either the password changed under us, or the tenant stopped while we
       // hashed. Both are reported as an ordinary credential failure, because
       // from the caller's side the first is exactly that and the second must
       // not be distinguishable from it.
       //
-      // The reservations go back if the tenant is what refused this: the
-      // credential was correct, and a maintenance window must not lock its
-      // operator out. Re-read rather than remembered, because between the two
-      // checks is the whole point.
-      if (!(await this.tenantIsActive(scope))) {
+      // WHICH of the two happened comes out of the transaction that decided it,
+      // not from a second read afterwards. An earlier version re-read tenant
+      // status here, outside the lock: a restart in that gap made a refusal
+      // caused by the stop look like a wrong password, and the operator kept
+      // the throttle reservations for a credential that was correct. Inferring
+      // a locked decision from an unlocked read is the exact mistake the lock
+      // was added to stop.
+      if (issued === 'TENANT_STOPPED') {
         await this.releaseReservations(scope, username, context.ip, reserved);
         return this.failLogin(scope, actor, username, reserved, 'TENANT_INACTIVE');
       }
