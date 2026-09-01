@@ -107,9 +107,21 @@ a cookie can no longer be set at all.
 The prefix requires `Secure`, which a plain-HTTP development server cannot
 offer and for which a browser silently refuses the cookie — presenting as
 "login succeeds and nothing is signed in". So the unprefixed spelling is issued
-outside production, and the reader accepts either, **prefixed first**: when both
-arrive, the one that could only have come from this host wins, whatever order
-the browser sent them in.
+outside production, and **in production it is not accepted at all**.
+
+Preferring the prefixed name was the first attempt and was not enough. Ordering
+only decides between two cookies a request actually carries; a _logged-out_
+victim carries neither, so the sibling's plain-named cookie would simply be
+believed — and nothing could clean it up afterwards, because a host-only
+`Set-Cookie` cannot delete another domain's cookie. The plain name therefore
+survives only where the prefix is unusable, which is a deployment without TLS.
+
+Which is also why **every production admin origin must be `https://`**, checked
+at boot. An `http://` origin would otherwise start, pass the Origin check, log
+in successfully, and leave the administrator unauthenticated with nothing to
+point at, because the browser refused to store a `Secure` cookie from an
+insecure page. HSTS cannot rescue that first response — a browser ignores HSTS
+received over HTTP.
 
 ## Client IP behind the reverse proxy
 
@@ -259,6 +271,13 @@ reasons: an attacker must not be able to clear their own counter by waiting out
 a cache eviction or a restart, and the window advances by the injected `Clock`
 so the tests are deterministic without sleeping.
 
+A lockout that has **expired** ends the counting period with it. Without that,
+a lockout shorter than the window never actually ended: the first attempt after
+it expired still incremented the over-limit count, wrote a fresh lock, and was
+refused before the password was checked — and every retry renewed it, so a
+30-second lockout inside a 24-hour window was a 24-hour lockout. An _unexpired_
+lock is still never cleared by a window reset, for the reason above.
+
 Keyed on the **submitted** username rather than a resolved admin id. Throttling
 only real accounts would turn the lockout into the username oracle the error
 text refuses to be. A lockout also refuses the _correct_ password — a lockout
@@ -291,6 +310,21 @@ The cost accepted is peak memory: two derivations are briefly in flight, so that
 login allocates the current profile plus the older, cheaper one rather than one
 of them. It applies only to accounts not yet rehashed, and the number of logins
 in flight is what the throttle bounds.
+
+## A stopped tenant is closed
+
+`STOPPED` and `DISABLED` on the tenant now refuse both a new login and an
+already-open session. They used to change nothing at all: the installation's
+tenant id was cached at boot, the permission resolver never read the tenant row,
+and `TENANT_INACTIVE` was declared in the contracts as a login failure reason
+that no code could emit. A status nothing enforces is a label, not a kill
+switch.
+
+The login check sits **after** the password, beside the administrator-status
+check and for the same reason: an installation that has been stopped must not
+answer differently before the password is known. Existing sessions are refused
+but **not revoked** — a tenant can be started again, and the sessions its
+operators held are not what was suspended.
 
 ## Costs accepted
 

@@ -255,6 +255,20 @@ authority mid-request, and it was recorded in full. An audit log that captures
 only the rare case is the "activity feed with no attempt history" this project
 exists not to repeat.
 
+## System roles are synchronised at boot, not only at bootstrap
+
+`ensureSystemRoles` is idempotent so that a release adding a permission to a
+seeded role reaches installations that already exist. It ran in exactly one
+production place — inside the first-owner bootstrap, which returns the moment
+any administrator exists — so the upgrade path it promised was unreachable for
+precisely the installations that needed it. A permission newly added to the
+`owner` seed would never reach existing owners, and the amplification rule would
+then stop _anyone_ granting it, because nobody would hold it.
+
+It now also runs when the API resolves its installation tenant at boot. Roles an
+operator created are never touched, and the writes ignore conflicts, so a boot
+that changes nothing costs one statement per seeded role.
+
 ## The bootstrap exception, and why it is not a bypass
 
 `BootstrapOwnerService` creates an administrator without authorizing a caller,

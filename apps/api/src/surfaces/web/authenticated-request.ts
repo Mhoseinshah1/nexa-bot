@@ -2,7 +2,8 @@ import type { FastifyRequest } from 'fastify';
 import {
   errors,
   IDENTITY_ERROR_CODES,
-  SESSION_COOKIE_NAMES,
+  SESSION_COOKIE_NAME,
+  SESSION_COOKIE_NAME_SECURE,
   type ActorContext,
   type Admin,
   type AdminSession,
@@ -39,21 +40,31 @@ export interface AuthenticatedContext {
  * its own issuance, scope, lifetime and revocation. It is not this cookie
  * wearing a different header name.
  */
-export function readSessionToken(request: FastifyRequest): string | null {
+/**
+ * The session token this request presented, or null.
+ *
+ * In production ONLY the `__Host-` spelling is accepted. Preferring it was not
+ * enough: ordering protects a request that carries both names, and a logged-out
+ * victim carries neither — so a sibling host under a shared parent domain could
+ * set the plain name for the parent domain and have the fallback authenticate
+ * it. Nor could that be cleaned up afterwards, since a host-only clear header
+ * cannot delete another domain's cookie. The plain name survives only where the
+ * prefix is unusable, which is a deployment without TLS.
+ */
+export function readSessionToken(request: FastifyRequest, isProduction: boolean): string | null {
   const cookies = parseCookies(request.headers.cookie);
-  // Most trusted name first. A `__Host-` cookie could only have been set by
-  // this host over TLS with `Path=/` and no `Domain`, so when both spellings
-  // arrive it wins — whatever order the browser sent them in, and whatever Path
-  // the other one was given to sort itself ahead.
-  for (const name of SESSION_COOKIE_NAMES) {
+  const accepted = isProduction
+    ? [SESSION_COOKIE_NAME_SECURE]
+    : [SESSION_COOKIE_NAME_SECURE, SESSION_COOKIE_NAME];
+  for (const name of accepted) {
     const token = cookies.get(name);
     if (token !== undefined) return token;
   }
   return null;
 }
 
-export function requireSessionToken(request: FastifyRequest): string {
-  const token = readSessionToken(request);
+export function requireSessionToken(request: FastifyRequest, isProduction: boolean): string {
+  const token = readSessionToken(request, isProduction);
   if (token === null) {
     throw errors.unauthenticated(
       IDENTITY_ERROR_CODES.AUTH_REQUIRED,

@@ -78,6 +78,42 @@ describe('configuration', () => {
     );
   });
 
+  it('refuses a plain-HTTP admin origin in production', () => {
+    // Not a style rule. Production issues the session as a `Secure` `__Host-`
+    // cookie, which a browser will not store from an insecure origin — so an
+    // `http://` origin boots, passes the Origin check, logs in successfully and
+    // authenticates nothing, with no error anywhere to point at. HSTS cannot
+    // repair the first response, because a browser ignores HSTS over HTTP.
+    expect(() =>
+      loadConfig({
+        ...valid,
+        NODE_ENV: 'production',
+        PASSWORD_HASH_PROFILE: 'production',
+        WEB_ADMIN_ORIGINS: 'http://admin.example.test',
+      }),
+    ).toThrowError(/https/i);
+
+    // One bad entry in a list is still a bad configuration.
+    expect(() =>
+      loadConfig({
+        ...valid,
+        NODE_ENV: 'production',
+        PASSWORD_HASH_PROFILE: 'production',
+        WEB_ADMIN_ORIGINS: 'https://good.example.test,http://bad.example.test',
+      }),
+    ).toThrowError(/bad\.example\.test/);
+
+    // And an https origin boots.
+    expect(() =>
+      loadConfig({
+        ...valid,
+        NODE_ENV: 'production',
+        PASSWORD_HASH_PROFILE: 'production',
+        WEB_ADMIN_ORIGINS: 'https://admin.example.test',
+      }),
+    ).not.toThrow();
+  });
+
   it('parses the admin origin list', () => {
     const config = loadConfig({
       ...valid,

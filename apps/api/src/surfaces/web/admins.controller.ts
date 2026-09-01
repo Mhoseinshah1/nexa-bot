@@ -27,6 +27,11 @@ import { toSummary } from './auth.controller.js';
 export class AdminsController {
   constructor(@Inject(CONTAINER) private readonly container: Container) {}
 
+  /** Whether only the `__Host-` session cookie may be presented. */
+  private get isProduction(): boolean {
+    return this.container.config.NODE_ENV === 'production';
+  }
+
   @Get('admins')
   async list(@Req() request: FastifyRequest): Promise<AdminListResponse> {
     const { scope, actor } = await this.authenticate(request);
@@ -90,7 +95,7 @@ export class AdminsController {
     request: FastifyRequest,
     options: { write?: boolean } = {},
   ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request);
+    const token = requireSessionToken(request, this.isProduction);
     if (options.write) {
       assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
     }

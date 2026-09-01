@@ -60,10 +60,16 @@ export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
    * the conflict actually resolves against, so concurrent inserts serialise on
    * the unique index and each increments what the previous one wrote.
    *
-   * An existing lock is never cleared here: `locked_until` is only ever moved
-   * forward. Otherwise an attacker could wait out the counting WINDOW — which is
-   * configured separately from the lockout — and have the reset clear a lockout
-   * that had not expired.
+   * An UNEXPIRED lock is never cleared here: otherwise an attacker could wait
+   * out the counting WINDOW — configured separately from the lockout — and have
+   * the window reset clear a lockout that had not run its course.
+   *
+   * An EXPIRED lock, by contrast, ends the counting period with it. Without
+   * that, a lockout shorter than the window never actually ends: the first
+   * attempt after it expires still increments the over-limit count, writes a
+   * fresh lock, and is refused before the password is even checked — and every
+   * retry renews it. A 30-second lockout inside a 24-hour window was a 24-hour
+   * lockout, which is not what the configuration says.
    */
   async reserveAttempt(
     scope: ScopeContext,
@@ -77,8 +83,16 @@ export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
     const windowCutoff = new Date(now.getTime() - policy.windowSeconds * 1000);
     const lockedUntil = new Date(now.getTime() + policy.lockoutSeconds * 1000);
 
-    const nextCount = sql`CASE
-        WHEN ${adminLoginThrottle.windowStartedAt} <= ${windowCutoff} THEN 1
+    // The counting period restarts when the window has elapsed, and equally
+    // when a lockout has run out: the lockout is the penalty, and serving it
+    // must clear the record that imposed it.
+    const periodEnded = sql`(
+        ${adminLoginThrottle.windowStartedAt} <= ${windowCutoff}
+        OR (${adminLoginThrottle.lockedUntil} IS NOT NULL
+            AND ${adminLoginThrottle.lockedUntil} <= ${now})
+      )`;
+
+    const nextCount = sql`CASE WHEN ${periodEnded} THEN 1
         ELSE ${adminLoginThrottle.failedCount} + 1
       END`;
 
@@ -101,12 +115,16 @@ export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
         ],
         set: {
           failedCount: nextCount,
-          windowStartedAt: sql`CASE
-            WHEN ${adminLoginThrottle.windowStartedAt} <= ${windowCutoff} THEN ${now}
+          windowStartedAt: sql`CASE WHEN ${periodEnded} THEN ${now}
             ELSE ${adminLoginThrottle.windowStartedAt}
           END`,
+          // Ordered deliberately: a fresh period that immediately re-reaches
+          // the limit (`maxAttempts = 1`) locks again rather than being
+          // cleared, and an unexpired lock is carried forward untouched.
           lockedUntil: sql`CASE
             WHEN (${nextCount}) >= ${policy.maxAttempts} THEN ${lockedUntil}
+            WHEN ${adminLoginThrottle.lockedUntil} IS NOT NULL
+                 AND ${adminLoginThrottle.lockedUntil} <= ${now} THEN NULL
             ELSE ${adminLoginThrottle.lockedUntil}
           END`,
           updatedAt: now,

@@ -225,7 +225,14 @@ export class DrizzleAdminRepository implements AdminRepository {
     const tenantId = requireTenantId(scope);
     await this.db
       .update(admins)
-      .set({ lastLoginAt: now })
+      // Never backwards. `now` is captured before the KDF, so two overlapping
+      // logins can reach this statement in the opposite order to the one they
+      // started in, and an unconditional write would let the slower, earlier
+      // request replace a newer timestamp — reporting a last login that
+      // predates one that has already finished.
+      .set({
+        lastLoginAt: sql`GREATEST(${admins.lastLoginAt}, ${now})`,
+      })
       .where(and(eq(admins.tenantId, tenantId), eq(admins.id, id)));
   }
 

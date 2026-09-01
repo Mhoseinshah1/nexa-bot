@@ -9,13 +9,16 @@ import {
   type AdminId,
   type CorrelationId,
 } from '@nexa/contracts';
-import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import { createApiApp, resolveInstallationTenant, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { ScryptPasswordHasher } from '../../apps/api/src/infrastructure/crypto/password-hasher';
 import {
   adminLoginThrottle,
   adminSessions,
   auditLogs,
+  roles,
+  rolePermissions,
+  tenants,
 } from '../../apps/api/src/infrastructure/persistence/schema';
 import {
   adminActorFor,
@@ -752,4 +755,226 @@ describe('the session cookie a production deployment issues', () => {
     expect(session.statusCode).toBe(200);
     expect(session.json()).toMatchObject({ admin: { username: 'owner' } });
   }, 30_000);
+});
+
+describe('a lockout that has expired ends the counting period with it', () => {
+  it('does not renew itself forever when the lockout is shorter than the window', async () => {
+    // With a 24-hour window and a 30-second lockout, the first attempt after
+    // those 30 seconds still incremented the over-limit count, wrote a fresh
+    // lock, and was refused before the password was checked. Every retry
+    // renewed it, so the configured 30 seconds was really 24 hours.
+    const brief = await createTestContext({
+      LOGIN_THROTTLE_WINDOW_SECONDS: '86400',
+      LOGIN_LOCKOUT_SECONDS: '60',
+      LOGIN_MAX_ATTEMPTS_PER_USERNAME: '3',
+    });
+    try {
+      await brief.reset();
+      await createAdmin(brief.container, tenantA, {
+        username: 'locked-out',
+        password: 'the-correct-password',
+        roleKeys: ['support'],
+      });
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await expect(
+          brief.container.auth.login(
+            tenantA,
+            anonymous,
+            { username: 'locked-out', password: 'wrong' },
+            { ip: null, userAgent: 'vitest' },
+          ),
+        ).rejects.toThrow();
+      }
+      // Locked, and the correct password is refused — which is the point of a
+      // lockout.
+      await expect(
+        brief.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: 'locked-out', password: 'the-correct-password' },
+          { ip: null, userAgent: 'vitest' },
+        ),
+      ).rejects.toMatchObject({ kind: 'RATE_LIMITED' });
+
+      // Serve the sentence. The window has 24 hours left on it, so this is
+      // exactly the case that used to renew instead of releasing.
+      await brief.container.database.db
+        .update(adminLoginThrottle)
+        .set({ lockedUntil: new Date(Date.now() - 1000) })
+        .where(eq(adminLoginThrottle.subject, 'locked-out'));
+
+      await expect(
+        brief.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: 'locked-out', password: 'the-correct-password' },
+          { ip: null, userAgent: 'vitest' },
+        ),
+      ).resolves.toMatchObject({ admin: { username: 'locked-out' } });
+    } finally {
+      await brief.close();
+    }
+  });
+
+  it('still refuses while the lockout is unexpired', async () => {
+    // The converse, so the fix is not "clear the lock whenever asked".
+    const limit = ctx.container.config.LOGIN_MAX_ATTEMPTS_PER_USERNAME;
+    for (let attempt = 0; attempt < limit; attempt += 1) {
+      await expect(
+        ctx.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: 'owner', password: 'wrong' },
+          { ip: null, userAgent: 'vitest' },
+        ),
+      ).rejects.toThrow();
+    }
+    await expect(
+      ctx.container.auth.login(
+        tenantA,
+        anonymous,
+        { username: 'owner', password: owner.password },
+        { ip: null, userAgent: 'vitest' },
+      ),
+    ).rejects.toMatchObject({ kind: 'RATE_LIMITED' });
+  });
+});
+
+describe('a stopped tenant is closed for business', () => {
+  async function stopTenant(): Promise<void> {
+    await ctx.container.database.db
+      .update(tenants)
+      .set({ status: 'STOPPED' })
+      .where(eq(tenants.id, tenantA.tenantId));
+  }
+
+  it('refuses a login with the correct password', async () => {
+    // TENANT_INACTIVE was declared in the contracts and emitted by nothing, so
+    // stopping an installation changed precisely nothing about who could sign
+    // into it.
+    await stopTenant();
+    await expect(
+      ctx.container.auth.login(
+        tenantA,
+        anonymous,
+        { username: 'owner', password: owner.password },
+        from,
+      ),
+    ).rejects.toMatchObject({ code: 'auth.invalid_credentials' });
+  });
+
+  it('refuses a session that was already open', async () => {
+    // Otherwise stopping an installation leaves every session already issued
+    // able to mutate it until expiry.
+    const issued = await ctx.container.auth.login(
+      tenantA,
+      anonymous,
+      { username: 'owner', password: owner.password },
+      from,
+    );
+    expect(issued.admin.username).toBe('owner');
+
+    await stopTenant();
+    await expect(ctx.container.auth.authenticate(issued.token)).rejects.toMatchObject({
+      kind: 'UNAUTHENTICATED',
+    });
+  });
+
+  it('records the reason in the audit log without disclosing it', async () => {
+    await stopTenant();
+    await expect(
+      ctx.container.auth.login(
+        tenantA,
+        anonymous,
+        { username: 'owner', password: owner.password },
+        from,
+      ),
+    ).rejects.toThrow();
+
+    const rows = (await ctx.container.database.db
+      .select()
+      .from(auditLogs)
+      .where(eq(auditLogs.action, 'auth.login'))) as { after: Record<string, unknown> | null }[];
+    expect(JSON.stringify(rows)).toContain('TENANT_INACTIVE');
+  });
+
+  it('lets an active tenant through, so the check is not a blanket refusal', async () => {
+    await expect(
+      ctx.container.auth.login(
+        tenantA,
+        anonymous,
+        { username: 'owner', password: owner.password },
+        from,
+      ),
+    ).resolves.toBeDefined();
+  });
+});
+
+describe('the last login timestamp never moves backwards', () => {
+  it('keeps the newer value when an older write lands second', async () => {
+    // `now` is captured before the KDF, so two overlapping logins can reach the
+    // write in the opposite order to the one they started in.
+    const subject = await createAdmin(ctx.container, tenantA, {
+      username: 'twice',
+      password: 'the-correct-password',
+      roleKeys: ['support'],
+    });
+
+    const newer = new Date('2030-01-02T00:00:00.000Z');
+    const older = new Date('2030-01-01T00:00:00.000Z');
+    await ctx.container.admins.recordLogin(tenantA, subject.id as AdminId, newer);
+    await ctx.container.admins.recordLogin(tenantA, subject.id as AdminId, older);
+
+    const stored = await ctx.container.admins.findById(tenantA, subject.id as AdminId);
+    expect(stored?.lastLoginAt?.toISOString()).toBe(newer.toISOString());
+  });
+
+  it('still records the first login, when there is nothing to compare against', async () => {
+    const subject = await createAdmin(ctx.container, tenantA, {
+      username: 'first-timer',
+      roleKeys: ['support'],
+    });
+    const at = new Date('2030-03-03T00:00:00.000Z');
+    await ctx.container.admins.recordLogin(tenantA, subject.id as AdminId, at);
+    const stored = await ctx.container.admins.findById(tenantA, subject.id as AdminId);
+    expect(stored?.lastLoginAt?.toISOString()).toBe(at.toISOString());
+  });
+});
+
+describe('system roles are synchronised for an installation that already exists', () => {
+  it('restores a catalogue permission missing from a seeded role at boot', async () => {
+    // `ensureSystemRoles` was written to be re-runnable so an upgrade picks up
+    // a permission newly added to a seeded role — and its only production
+    // caller was inside the first-owner bootstrap, which returns early once any
+    // administrator exists. The upgrade path was unreachable for exactly the
+    // installations that needed it, and a missing `owner` permission would then
+    // stop ANYONE granting it, since the amplification rule requires a holder.
+    await ctx.container.roles.ensureSystemRoles(tenantA);
+    const [ownerRole] = await ctx.container.database.db
+      .select()
+      .from(roles)
+      .where(eq(roles.key, OWNER_ROLE_KEY));
+    expect(ownerRole).toBeDefined();
+
+    const before = await ctx.container.roles.permissionsForAdmin(tenantA, owner.id as AdminId);
+    const dropped = 'admins.permissions.edit';
+    expect(before).toContain(dropped);
+
+    // Simulate the state a release would leave: the row exists, the permission
+    // the new build expects does not.
+    await ctx.container.database.db
+      .delete(rolePermissions)
+      .where(eq(rolePermissions.permissionKey, dropped));
+    expect(
+      await ctx.container.roles.permissionsForAdmin(tenantA, owner.id as AdminId),
+    ).not.toContain(dropped);
+
+    // What boot now does for an installation that has administrators.
+    await resolveInstallationTenant(ctx.container);
+
+    expect(await ctx.container.roles.permissionsForAdmin(tenantA, owner.id as AdminId)).toContain(
+      dropped,
+    );
+  });
 });

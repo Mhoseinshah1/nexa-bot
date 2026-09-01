@@ -217,6 +217,27 @@ export const configSchema = z
           'the CSRF defence, behind the SameSite=Strict session cookie.',
       });
     }
+    if (config.NODE_ENV === 'production') {
+      // Not a style preference. Production issues the session as a `Secure`
+      // `__Host-` cookie, and a browser will not store one from an insecure
+      // origin — so an `http://` admin origin boots, passes the Origin check,
+      // logs in successfully, and leaves the administrator unauthenticated with
+      // nothing to point at. HSTS cannot rescue the first response, because a
+      // browser ignores HSTS received over HTTP. Refused at boot instead.
+      const insecure = config.WEB_ADMIN_ORIGINS.filter(
+        (origin) => !origin.toLowerCase().startsWith('https://'),
+      );
+      if (insecure.length > 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['WEB_ADMIN_ORIGINS'],
+          message:
+            `Every production admin origin must be https. These are not: ${insecure.join(', ')}. ` +
+            'The session is issued as a Secure __Host- cookie, which a browser refuses to store ' +
+            'from an insecure origin, so login would appear to succeed and authenticate nothing.',
+        });
+      }
+    }
     if (config.TELEGRAM_WEBHOOK_ENABLED && config.TELEGRAM_WEBHOOK_SECRET.length < 16) {
       ctx.addIssue({
         code: 'custom',

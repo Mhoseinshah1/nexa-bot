@@ -21,26 +21,34 @@ describe('session cookie precedence', () => {
     // Exactly the ordering a browser produces for an attacker's longer-path
     // cookie: theirs first, the real one after.
     const header = `${SESSION_COOKIE_NAME}=tossed-by-a-sibling-host; ${SESSION_COOKIE_NAME_SECURE}=the-real-session`;
-    expect(readSessionToken(request(header))).toBe('the-real-session');
+    expect(readSessionToken(request(header), false)).toBe('the-real-session');
+    expect(readSessionToken(request(header), true)).toBe('the-real-session');
   });
 
-  it('still reads a plain cookie when no prefixed one is present', () => {
-    // Development over plain HTTP, where the prefix cannot be used at all.
-    expect(readSessionToken(request(`${SESSION_COOKIE_NAME}=a-development-session`))).toBe(
-      'a-development-session',
-    );
+  it('refuses a plain cookie outright in production', () => {
+    // Preferring the prefixed name protects a request carrying BOTH. A
+    // logged-out victim carries neither, so a sibling host setting the plain
+    // name for the parent domain would simply be believed — and a host-only
+    // clear header cannot delete another domain's cookie afterwards.
+    const header = `${SESSION_COOKIE_NAME}=tossed-by-a-sibling-host`;
+    expect(readSessionToken(request(header), true)).toBeNull();
+    // Outside production it remains the only usable spelling, because a browser
+    // refuses a __Host- cookie without Secure.
+    expect(readSessionToken(request(header), false)).toBe('tossed-by-a-sibling-host');
   });
 
   it('takes the first occurrence within one name, as every parser does', () => {
     expect(
       readSessionToken(
         request(`${SESSION_COOKIE_NAME_SECURE}=first; ${SESSION_COOKIE_NAME_SECURE}=second`),
+        true,
       ),
     ).toBe('first');
   });
 
   it('reads nothing from a request with no cookies', () => {
-    expect(readSessionToken(request(''))).toBeNull();
+    expect(readSessionToken(request(''), true)).toBeNull();
+    expect(readSessionToken(request(''), false)).toBeNull();
   });
 
   it('names the prefixed cookie in the form browsers enforce', () => {

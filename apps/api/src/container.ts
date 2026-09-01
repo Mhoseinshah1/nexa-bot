@@ -142,6 +142,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       maxAttemptsPerIp: config.LOGIN_MAX_ATTEMPTS_PER_IP,
       lockoutSeconds: config.LOGIN_LOCKOUT_SECONDS,
     },
+    tenants,
   );
 
   const adminManagement = new AdminManagementService(

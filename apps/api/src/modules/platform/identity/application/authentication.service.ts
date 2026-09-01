@@ -18,6 +18,8 @@ import {
   type PermissionKey,
   type ScopeContext,
   type TenantContext,
+  type TenantId,
+  type TenantStatus,
   type UnitOfWork,
 } from '@nexa/contracts';
 import type {
@@ -76,6 +78,17 @@ export interface ThrottlePolicy {
   readonly lockoutSeconds: number;
 }
 
+/**
+ * The slice of the tenant repository authentication needs.
+ *
+ * Declared here rather than depending on the whole repository: this module has
+ * one question to ask about a tenant, and stating it as one method keeps the
+ * dependency honest and the test double small.
+ */
+export interface TenantStatusReader {
+  findById(id: TenantId): Promise<{ status: TenantStatus } | null>;
+}
+
 export class AuthenticationService {
   constructor(
     private readonly admins: AdminRepository,
@@ -90,7 +103,22 @@ export class AuthenticationService {
     private readonly ids: IdGenerator,
     private readonly sessionTtlSeconds: number,
     private readonly policy: ThrottlePolicy,
+    private readonly tenants: TenantStatusReader,
   ) {}
+
+  /**
+   * Whether the tenant this request belongs to is still open for business.
+   *
+   * `STOPPED` and `DISABLED` were a tenant status that changed nothing: the
+   * installation's tenant id was cached at boot, the permission resolver never
+   * read the tenant row, and `TENANT_INACTIVE` was declared in the contracts
+   * with no code that could ever emit it. A status nothing enforces is not a
+   * kill switch, it is a label.
+   */
+  private async tenantIsActive(scope: TenantContext): Promise<boolean> {
+    const tenant = await this.tenants.findById(scope.tenantId);
+    return tenant !== null && tenant.status === 'ACTIVE';
+  }
 
   async login(
     scope: TenantContext,
@@ -162,6 +190,13 @@ export class AuthenticationService {
     // from an active one without already knowing the password.
     if (credentials.admin.status !== 'ACTIVE') {
       return this.failLogin(scope, actor, username, reserved, 'ADMIN_DISABLED');
+    }
+
+    // Same placement, same reason: an installation that has been stopped must
+    // not answer differently before the password is known. Reported as the one
+    // generic failure like every other reason; the audit row says which it was.
+    if (!(await this.tenantIsActive(scope))) {
+      return this.failLogin(scope, actor, username, reserved, 'TENANT_INACTIVE');
     }
 
     // The password was correct and the cost profile has since been raised, so
@@ -303,6 +338,18 @@ export class AuthenticationService {
       // Disabling revokes on the spot rather than at session expiry: authority
       // is resolved per request, and so is the right to hold a session at all.
       await this.sessions.revoke(session.id, now, 'admin_not_active');
+      throw errors.unauthenticated(
+        IDENTITY_ERROR_CODES.AUTH_SESSION_INVALID,
+        'The session is not valid. Sign in again.',
+      );
+    }
+
+    // A tenant that is stopped or disabled ends existing access too, not only
+    // new logins — otherwise stopping an installation leaves every session
+    // already open still able to mutate it until expiry. NOT revoked, unlike a
+    // disabled administrator: a tenant can be started again, and the sessions
+    // its operators held are not the thing that was suspended.
+    if (!(await this.tenantIsActive(scope))) {
       throw errors.unauthenticated(
         IDENTITY_ERROR_CODES.AUTH_SESSION_INVALID,
         'The session is not valid. Sign in again.',

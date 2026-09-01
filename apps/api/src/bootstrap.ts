@@ -20,6 +20,24 @@ import type { AppConfig } from './infrastructure/config/config.schema.js';
 export async function resolveInstallationTenant(container: Container): Promise<void> {
   const primary = await container.tenants.findPrimary();
   container.setInstallationTenant(primary?.id ?? null);
+
+  if (primary === null) return;
+
+  // Bring the system roles up to date with this build's catalogue.
+  //
+  // `ensureSystemRoles` was written to be idempotent so that an upgrade picks
+  // up a permission newly added to a seeded role — and then had exactly one
+  // production caller, inside the first-owner bootstrap, which returns early
+  // the moment any administrator exists. The upgrade path it promised was
+  // therefore unreachable for every installation that had one. Left that way, a
+  // release adding a permission to the `owner` seed would leave existing owners
+  // without it, and the amplification rule would then stop ANYONE granting it,
+  // because nobody holds it.
+  //
+  // Roles an operator created are never touched, and the write is a conflict-
+  // ignoring insert, so a boot that changes nothing costs one statement per
+  // seeded role.
+  await container.roles.ensureSystemRoles({ tenantId: primary.id, botInstanceId: null });
 }
 
 export interface ApiApp {

@@ -83,7 +83,9 @@ export class AuthController {
 
   @Get('session')
   async session(@Req() request: FastifyRequest): Promise<SessionResponse> {
-    const described = await this.container.auth.describeSession(requireSessionToken(request));
+    const described = await this.container.auth.describeSession(
+      requireSessionToken(request, this.isProduction),
+    );
     return {
       admin: toSummary(described.admin, described.roleKeys),
       // Sent so the UI can hide chrome it cannot use. It is never the basis of
@@ -98,7 +100,7 @@ export class AuthController {
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<LogoutResponse> {
-    const token = requireSessionToken(request);
+    const token = requireSessionToken(request, this.isProduction);
     assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
 
     const { admin, session } = await this.container.auth.authenticate(token);
@@ -116,7 +118,7 @@ export class AuthController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Body() body: unknown,
   ): Promise<{ ok: true }> {
-    const token = requireSessionToken(request);
+    const token = requireSessionToken(request, this.isProduction);
     assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
 
     const { admin } = await this.container.auth.authenticate(token);
@@ -164,10 +166,12 @@ export class AuthController {
    * a browser silently refuses a `__Host-` cookie without it — which would
    * present as "login succeeds and then nothing is signed in".
    */
+  private get isProduction(): boolean {
+    return this.container.config.NODE_ENV === 'production';
+  }
+
   private get sessionCookieName(): string {
-    return this.container.config.NODE_ENV === 'production'
-      ? SESSION_COOKIE_NAME_SECURE
-      : SESSION_COOKIE_NAME;
+    return this.isProduction ? SESSION_COOKIE_NAME_SECURE : SESSION_COOKIE_NAME;
   }
 
   private setSessionCookie(reply: FastifyReply, token: string, expiresAt: Date): void {
@@ -182,9 +186,11 @@ export class AuthController {
       'SameSite=Strict',
       `Expires=${expiresAt.toUTCString()}`,
     ];
-    // Omitted outside production so a plain-HTTP development server can log in;
-    // the config schema requires TLS-fronted origins in production.
-    if (this.container.config.NODE_ENV === 'production') attributes.push('Secure');
+    // Omitted outside production so a plain-HTTP development server can log in.
+    // In production the config schema refuses any admin origin that is not
+    // https, so a browser can always store this — an http origin would leave
+    // login succeeding and authenticating nothing.
+    if (this.isProduction) attributes.push('Secure');
     // Deliberately no `Domain`: it is what the prefix forbids, and what would
     // let a sibling host under a shared parent domain claim this cookie.
     void reply.header('set-cookie', attributes.join('; '));
@@ -196,7 +202,7 @@ export class AuthController {
     // one it now issues would leave the old one presented on every request.
     for (const name of [SESSION_COOKIE_NAME_SECURE, SESSION_COOKIE_NAME]) {
       const attributes = [`${name}=`, 'Path=/', 'HttpOnly', 'SameSite=Strict', 'Max-Age=0'];
-      if (this.container.config.NODE_ENV === 'production') attributes.push('Secure');
+      if (this.isProduction) attributes.push('Secure');
       void reply.header('set-cookie', attributes.join('; '));
     }
   }
