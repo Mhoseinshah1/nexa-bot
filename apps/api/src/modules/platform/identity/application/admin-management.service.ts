@@ -13,6 +13,7 @@ import {
   type Admin,
   type AdminId,
   type AdminSessionId,
+  type TenantStatus,
   type AdminStatus,
   type AuditWriter,
   type Clock,
@@ -50,6 +51,26 @@ import { assertNotSelf, assertOwnerSurvives, diffRoles } from '../domain/admin-p
  * if nothing can change between counting and writing. The triggers in migration
  * 0006 repeat the owner rule as a backstop for a future path that forgets.
  */
+/**
+ * Refuses a write for a tenant that is not open for business.
+ *
+ * Called with the status the tenant LOCK returned, never with one read
+ * separately: authentication established a status when the request arrived, and
+ * a stop committing between then and the lock would otherwise be observed by
+ * the lock and ignored by the work it protects.
+ *
+ * Reported as an unauthenticated session rather than a distinct code, matching
+ * what a stopped installation tells every other caller.
+ */
+function assertTenantActive(status: TenantStatus): void {
+  if (status !== 'ACTIVE') {
+    throw errors.unauthenticated(
+      IDENTITY_ERROR_CODES.AUTH_SESSION_INVALID,
+      'The session is not valid. Sign in again.',
+    );
+  }
+}
+
 export class AdminManagementService {
   constructor(
     private readonly guard: PermissionGuard,
@@ -132,7 +153,11 @@ export class AdminManagementService {
       actor,
       { action: 'admin.create', entityId: null },
       async (tx) => {
-        await this.admins.lockTenantForAdminChange(scope, tx);
+        // The lock, and the tenant's status as of holding it. Authentication
+        // checked that status when the request arrived, which is a snapshot: a
+        // stop committing in between would otherwise be observed by the lock
+        // and ignored by the work it protects.
+        assertTenantActive(await this.admins.lockTenantForAdminChange(scope, tx));
 
         // The session, before the authority it carries. A revoked session is
         // not a less-privileged actor; it is not an actor.
@@ -261,7 +286,11 @@ export class AdminManagementService {
       actor,
       { action: 'admin.status_change', entityId: targetId },
       async (tx) => {
-        await this.admins.lockTenantForAdminChange(scope, tx);
+        // The lock, and the tenant's status as of holding it. Authentication
+        // checked that status when the request arrived, which is a snapshot: a
+        // stop committing in between would otherwise be observed by the lock
+        // and ignored by the work it protects.
+        assertTenantActive(await this.admins.lockTenantForAdminChange(scope, tx));
 
         // The session, before the authority it carries. A revoked session is
         // not a less-privileged actor; it is not an actor.
@@ -408,7 +437,11 @@ export class AdminManagementService {
       actor,
       { action: 'admin.roles_change', entityId: targetId },
       async (tx) => {
-        await this.admins.lockTenantForAdminChange(scope, tx);
+        // The lock, and the tenant's status as of holding it. Authentication
+        // checked that status when the request arrived, which is a snapshot: a
+        // stop committing in between would otherwise be observed by the lock
+        // and ignored by the work it protects.
+        assertTenantActive(await this.admins.lockTenantForAdminChange(scope, tx));
 
         // The session, before the authority it carries. A revoked session is
         // not a less-privileged actor; it is not an actor.
@@ -544,7 +577,6 @@ export class AdminManagementService {
     // holding a transaction open for its duration turns one password change into
     // contention for every other writer in the tenant.
     const hash = await this.hasher.hash(command.newPassword);
-    const now = this.clock.now();
 
     // COMPARE-AND-SET, not a blind write.
     //
@@ -560,11 +592,23 @@ export class AdminManagementService {
     // check and the write become one atomic statement, and a request whose
     // view of the credential is stale updates no rows.
     const rotated = await this.uow.run(scope, async (tx) => {
+      // The same serialization the administrator mutations take, for the same
+      // three reasons: a stopped tenant must not accept a rotation that was
+      // authenticated before it stopped; the timestamp below must describe when
+      // this happened rather than when it asked; and the wait itself is what
+      // those two are measured against.
+      assertTenantActive(await this.admins.lockTenantForAdminChange(scope, tx));
+
       // Same rule as the administrator mutations: a revoked session performs no
       // writes. The compare-and-set below already loses to a competing
       // ROTATION, but a logout changes no hash, so without this a signed-out
       // request could still commit one.
       await this.assertSessionStillLive(scope, actor, tx);
+
+      // Captured after the wait, not before it. A rotation that queued here
+      // while a login issued a session would otherwise revoke that session with
+      // a timestamp older than its own issue time.
+      const now = this.clock.now();
 
       const won = await this.admins.compareAndSetPasswordHash(
         scope,

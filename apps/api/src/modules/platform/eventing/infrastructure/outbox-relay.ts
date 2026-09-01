@@ -1,4 +1,4 @@
-import { and, asc, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, or, sql } from 'drizzle-orm';
 import {
   type Clock,
   type DomainEvent,
@@ -6,7 +6,7 @@ import {
   type Logger,
   type ActorRef,
 } from '@nexa/contracts';
-import type { Database } from '../../../../infrastructure/persistence/database.js';
+import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   outboxMessages,
   processedMessages,
@@ -122,6 +122,20 @@ export class OutboxRelay {
       let failed = 0;
 
       for (const row of claimed) {
+        // The eligibility above was evaluated when the row was SELECTed, and
+        // `FOR UPDATE` locked the message, not its tenant — so a stop could
+        // commit between the claim and the dispatch and the delivery would go
+        // out anyway, which is the one thing the pause exists to prevent.
+        //
+        // Locking the tenant row here holds the answer still for the rest of
+        // this transaction: a status change either committed before this and is
+        // seen, or waits until the dispatch is done. `FOR SHARE` rather than
+        // `FOR UPDATE` because several relay workers may hold this at once —
+        // they are readers of the status, not writers of it.
+        if (row.tenantId !== null && !(await this.tenantIsActive(tx, row.tenantId))) {
+          continue;
+        }
+
         const event = toDomainEvent(row);
         try {
           await this.dispatch(tx, event);
@@ -170,6 +184,22 @@ export class OutboxRelay {
 
       await consumer.handle(event);
     }
+  }
+
+  /**
+   * Whether this tenant is open for business, held still for the transaction.
+   *
+   * Read on the relay's own connection inside the claim transaction, so a
+   * concurrent status change cannot slip between the decision and the delivery.
+   */
+  private async tenantIsActive(tx: Executor, tenantId: string): Promise<boolean> {
+    const [row] = await tx
+      .select({ status: tenants.status })
+      .from(tenants)
+      .where(eq(tenants.id, tenantId))
+      .limit(1)
+      .for('share');
+    return row?.status === 'ACTIVE';
   }
 
   /**

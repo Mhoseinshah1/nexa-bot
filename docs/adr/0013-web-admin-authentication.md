@@ -217,7 +217,11 @@ The surface clears the cookie afterwards — that is not the revocation, which
 already committed; it stops the browser presenting a credential the server will
 now refuse.
 
-**A revoked session performs no writes.** Validity is established once, when
+**A revoked session performs no writes.** The re-read takes `FOR UPDATE` on the
+session row, not a plain select: reading it closes the window before the check
+and leaves the one after it, where a logout starting once the read returned
+commits on its own connection while the mutation is still working. The lock
+makes that logout wait for the transaction instead. Validity is established once, when
 the request arrives, and then the request does work — so a logout or a rotation
 committing in that window would otherwise still let it commit. Every
 administrator mutation and the password rotation re-read the session on the
@@ -362,6 +366,14 @@ tenant id was cached at boot, the permission resolver never read the tenant row,
 and `TENANT_INACTIVE` was declared in the contracts as a login failure reason
 that no code could emit. A status nothing enforces is a label, not a kill
 switch.
+
+Every write re-reads the tenant's status **under the lock it already takes**,
+from the same statement that takes it. Authentication establishes a status when
+the request arrives, which is a snapshot; a stop committing in between would
+otherwise be observed by the lock and ignored by the work the lock protects. The
+relay does the same at dispatch rather than only at claim, taking `FOR SHARE` on
+the owning tenant — the claim's `FOR UPDATE` locks the message, not its tenant,
+so a stop could otherwise commit between deciding to deliver and delivering.
 
 It closes the Telegram surface and the outbox too. A bot's own status was the
 whole check on the webhook, and the relay claimed any unpublished row — so a

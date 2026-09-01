@@ -9,6 +9,7 @@ import type {
   Role,
   RoleId,
   ScopeContext,
+  TenantStatus,
 } from '@nexa/contracts';
 
 /**
@@ -133,7 +134,7 @@ export interface AdminRepository {
    * different owner both count two and both commit. The database trigger is a
    * backstop for a forgotten call, not a substitute for this lock.
    */
-  lockTenantForAdminChange(scope: ScopeContext, tx: unknown): Promise<void>;
+  lockTenantForAdminChange(scope: ScopeContext, tx: unknown): Promise<TenantStatus>;
   /** Active admins holding the owner role. The number the guards defend. */
   countActiveOwners(scope: ScopeContext, tx?: unknown): Promise<number>;
 }

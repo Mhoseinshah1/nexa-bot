@@ -5,6 +5,7 @@ import {
   type AdminId,
   type AdminStatus,
   type ScopeContext,
+  type TenantStatus,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -240,15 +241,22 @@ export class DrizzleAdminRepository implements AdminRepository {
       .where(and(eq(admins.tenantId, tenantId), eq(admins.id, id)));
   }
 
-  async lockTenantForAdminChange(scope: ScopeContext, tx: unknown): Promise<void> {
+  async lockTenantForAdminChange(scope: ScopeContext, tx: unknown): Promise<TenantStatus> {
     const tenantId = requireTenantId(scope);
     // Serialises owner-affecting changes within a tenant. Counting owners is
     // only a decision if nothing can change between the count and the write.
-    await executorOf(this.db, tx)
-      .select({ id: tenants.id })
+    const [row] = await executorOf(this.db, tx)
+      .select({ status: tenants.status })
       .from(tenants)
       .where(eq(tenants.id, tenantId))
       .for('update');
+
+    // The status is read by the SAME statement that takes the lock, so the two
+    // cannot disagree. A caller that checked tenant status when the request
+    // arrived is holding a snapshot; the transition it may have missed either
+    // committed before this lock — in which case this returns the new value —
+    // or cannot commit until this transaction ends.
+    return (row?.status ?? 'DISABLED') as TenantStatus;
   }
 
   async lockIfPasswordHashMatches(

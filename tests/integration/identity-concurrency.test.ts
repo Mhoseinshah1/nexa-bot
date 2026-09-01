@@ -556,10 +556,13 @@ describe('role changes decide under the lock', () => {
     // must commit first. The lock itself is what serialises them; the stall
     // only makes the ordering deterministic.
     const repo = ctx.container.admins as { lockTenantForAdminChange: unknown };
+    // Returns the tenant's status, read by the same statement that takes the
+    // lock. The stalls below must PASS IT THROUGH: a stub that swallowed it
+    // would make every mutation behind this see an inactive tenant.
     const realLock = repo.lockTenantForAdminChange.bind(ctx.container.admins) as (
       scope: unknown,
       tx: unknown,
-    ) => Promise<void>;
+    ) => Promise<unknown>;
 
     let releaseB: () => void = () => undefined;
     const bHasLocked = new Promise<void>((resolve) => {
@@ -569,7 +572,7 @@ describe('role changes decide under the lock', () => {
         await new Promise<void>((release) => {
           releaseB = release;
         });
-        await realLock(scope, tx);
+        return realLock(scope, tx);
       };
     });
 
@@ -697,10 +700,13 @@ describe('actor authority is re-checked under the lock', () => {
    */
   function stallBeforeLock(): { reached: Promise<void>; release: () => void } {
     const repo = ctx.container.admins as { lockTenantForAdminChange: unknown };
+    // Returns the tenant's status, read by the same statement that takes the
+    // lock. The stalls below must PASS IT THROUGH: a stub that swallowed it
+    // would make every mutation behind this see an inactive tenant.
     const realLock = repo.lockTenantForAdminChange.bind(ctx.container.admins) as (
       scope: unknown,
       tx: unknown,
-    ) => Promise<void>;
+    ) => Promise<unknown>;
 
     let release: () => void = () => undefined;
     const reached = new Promise<void>((resolve) => {
@@ -710,7 +716,7 @@ describe('actor authority is re-checked under the lock', () => {
         await new Promise<void>((r) => {
           release = r;
         });
-        await realLock(scope, tx);
+        return realLock(scope, tx);
       };
     });
     return { reached, release: () => release() };

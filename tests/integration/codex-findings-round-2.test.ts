@@ -2018,3 +2018,175 @@ describe('readiness does not count deliberately paused work', () => {
     }
   }, 30_000);
 });
+
+describe('serialization holds for the whole write, not just up to the check', () => {
+  it('refuses a mutation whose session is revoked AFTER the liveness check', async () => {
+    // The previous round closed the window before the check and left the one
+    // after it: a logout starting once `isLive` had returned could commit on
+    // its own connection while the mutation was still working. `FOR UPDATE`
+    // makes the logout wait for this transaction instead.
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'post-check-target',
+      roleKeys: ['support'],
+    });
+    const issued = await ctx.container.auth.login(
+      tenantA,
+      anonymous,
+      { username: 'owner', password: owner.password },
+      from,
+    );
+    const actorOnSession = { ...adminActorFor(owner), sessionId: issued.session.id as string };
+
+    // Stall the mutation AFTER the session check, before it writes.
+    const admins = ctx.container.admins as unknown as Record<string, unknown>;
+    const realRequire = ctx.container.admins.findById.bind(ctx.container.admins);
+    let release: () => void = () => undefined;
+    let stalled = false;
+    const pastTheCheck = new Promise<void>((resolve) => {
+      admins['findById'] = async (...args: unknown[]) => {
+        if (!stalled) {
+          stalled = true;
+          resolve();
+          await new Promise<void>((r) => {
+            release = r;
+          });
+        }
+        return (realRequire as (...a: unknown[]) => unknown)(...args);
+      };
+    });
+
+    const mutating = ctx.container.adminManagement
+      .setStatus(tenantA, actorOnSession, target.id as AdminId, {
+        status: 'DISABLED',
+        reason: 'Started before the logout.',
+      })
+      .catch((error: unknown) => error);
+
+    await pastTheCheck;
+
+    // The logout must not be able to commit while that transaction holds the
+    // session row; it blocks until the mutation finishes.
+    const loggingOut = ctx.container.auth
+      .logout(tenantA, actorOnSession, issued.session.id)
+      .catch((error: unknown) => error);
+
+    release();
+    admins['findById'] = realRequire;
+    await mutating;
+    await loggingOut;
+
+    // Whichever order the database chose, the two must not BOTH have taken
+    // effect out of order: a mutation that committed did so while its session
+    // was live, and the revocation that follows is simply later.
+    const [session] = await ctx.container.database.db
+      .select()
+      .from(adminSessions)
+      .where(eq(adminSessions.id, issued.session.id));
+    expect(session?.revokedAt).not.toBeNull();
+  }, 30_000);
+});
+
+describe('a tenant stopped mid-request stops the write', () => {
+  it('refuses a mutation when the stop commits before the lock', async () => {
+    // Authentication checked tenant status when the request arrived, which is a
+    // snapshot. The lock observes the transition; the work it protects has to
+    // observe it too, or a stop that has already returned to the operator still
+    // lets writes land.
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'stopped-mid-request',
+      roleKeys: ['support'],
+    });
+
+    const admins = ctx.container.admins as unknown as Record<string, unknown>;
+    const realLock = ctx.container.admins.lockTenantForAdminChange.bind(ctx.container.admins);
+    let release: () => void = () => undefined;
+    const reachedLock = new Promise<void>((resolve) => {
+      admins['lockTenantForAdminChange'] = async (scope: never, tx: never) => {
+        admins['lockTenantForAdminChange'] = realLock;
+        resolve();
+        await new Promise<void>((r) => {
+          release = r;
+        });
+        return realLock(scope, tx);
+      };
+    });
+
+    const mutating = ctx.container.adminManagement
+      .setStatus(tenantA, adminActorFor(owner), target.id as AdminId, {
+        status: 'DISABLED',
+        reason: 'Authenticated before the stop.',
+      })
+      .catch((error: unknown) => error);
+
+    await reachedLock;
+    await ctx.container.database.db
+      .update(tenants)
+      .set({ status: 'STOPPED' })
+      .where(eq(tenants.id, tenantA.tenantId));
+    release();
+
+    const caught = await mutating;
+    expect((caught as { code?: string }).code).toBe('auth.session_invalid');
+    expect((await ctx.container.admins.findById(tenantA, target.id as AdminId))?.status).toBe(
+      'ACTIVE',
+    );
+  }, 30_000);
+});
+
+describe('the outbox re-checks the tenant at dispatch, not only at claim', () => {
+  it('takes the tenant row lock before delivering, so a stop cannot slip in', async () => {
+    // Eligibility was evaluated when the row was SELECTed, and `FOR UPDATE`
+    // locked the message rather than its tenant — so a stop committing between
+    // the claim and the dispatch still let the delivery go out, which is the
+    // one thing the pause exists to prevent.
+    //
+    // There is no seam between the claim and the dispatch to interleave at, so
+    // this observes the lock instead: holding the tenant row from another
+    // transaction must make the batch WAIT. It cannot wait unless it asks for
+    // that row, which is the property. An earlier version of this test stopped
+    // the tenant before the batch ran and therefore only re-tested the claim
+    // filter another test already covers.
+    const relay = ctx.container.relay;
+    await relay.processBatch();
+
+    await ctx.container.uow.run(tenantA, async (tx) => {
+      await ctx.container.outbox.write(tx, adminActorFor(owner), {
+        eventType: 'SystemPinged',
+        aggregateType: 'System',
+        aggregateId: ctx.container.ids.uuid(),
+        payload: { note: 'claimed then stopped' },
+      });
+    });
+
+    let releaseHolder: () => void = () => undefined;
+    let batchFinished = false;
+
+    const holderHasTenantRow = new Promise<void>((resolve) => {
+      void ctx.container.uow.run(tenantA, async (tx) => {
+        await ctx.container.admins.lockTenantForAdminChange(tenantA, tx);
+        resolve();
+        await new Promise<void>((release) => {
+          releaseHolder = release;
+        });
+      });
+    });
+    await holderHasTenantRow;
+
+    const batch = relay.processBatch().then((result) => {
+      batchFinished = true;
+      return result;
+    });
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(batchFinished).toBe(false);
+    } finally {
+      // Released even on failure: a held transaction would hang the run rather
+      // than failing this one test.
+      releaseHolder();
+    }
+
+    const result = await batch;
+    expect(result.published).toBeGreaterThan(0);
+  }, 30_000);
+});

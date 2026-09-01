@@ -93,7 +93,15 @@ export class DrizzleSessionRepository implements SessionRepository {
           gt(adminSessions.expiresAt, now),
         ),
       )
-      .limit(1);
+      .limit(1)
+      // FOR UPDATE, not a plain read. Without it this closes the window before
+      // the check and leaves the one after it: a logout starting once this
+      // query returned could commit on its own connection while the mutation
+      // was still working, and the write would land after the revocation. The
+      // lock makes the logout wait for this transaction, so either it gets
+      // there first and this finds nothing, or the write it is racing has
+      // already committed.
+      .for('update');
     return row !== undefined;
   }
 
