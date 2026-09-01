@@ -81,9 +81,13 @@ export class DrizzleAdminRepository implements AdminRepository {
     return row ? toAdmin(row) : null;
   }
 
-  async findByTelegramUserId(scope: ScopeContext, telegramUserId: string): Promise<Admin | null> {
+  async findByTelegramUserId(
+    scope: ScopeContext,
+    telegramUserId: string,
+    tx?: unknown,
+  ): Promise<Admin | null> {
     const tenantId = requireTenantId(scope);
-    const [row] = await this.db
+    const [row] = await executorOf(this.db, tx)
       .select()
       .from(admins)
       .where(and(eq(admins.tenantId, tenantId), eq(admins.telegramUserId, telegramUserId)))

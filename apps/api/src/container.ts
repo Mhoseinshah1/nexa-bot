@@ -143,6 +143,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       lockoutSeconds: config.LOGIN_LOCKOUT_SECONDS,
     },
     tenants,
+    guard,
   );
 
   const adminManagement = new AdminManagementService(

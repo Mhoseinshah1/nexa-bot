@@ -241,6 +241,18 @@ Phase 1 adds none. `admins.view`, `admins.edit` and `admins.permissions.edit`
 were already in the Phase 0 catalog, and RBAC is built against the frozen
 catalog rather than the catalog being grown to fit the implementation.
 
+## What a session reports is what the guard will enforce
+
+The `permissions` in the login and session responses are for DISPLAY — hiding
+chrome an administrator cannot use — and authorize nothing; every endpoint
+re-checks server-side. They are nevertheless resolved by the guard's own rule,
+`(roles ∪ GRANT) − DENY`, and not by reading the role union.
+
+Reading the union ignored overrides in both directions: an administrator with a
+GRANT saw the button hidden, and one with a DENY saw a button that then answered 403. Neither is an authorization failure, and both are the same shape as the
+legacy system's two surfaces reporting revenue figures 38% apart — one concept,
+two implementations, no mechanism forcing them to agree.
+
 ## Re-enabling is granting
 
 Rule 4 — an administrator may not confer a permission they do not hold — binds

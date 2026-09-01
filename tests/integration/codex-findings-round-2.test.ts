@@ -1388,3 +1388,142 @@ describe('permissionsIfActive answers only for this tenant', () => {
     expect((await ctx.container.guard.permissionsOf(tenantA, adminActorFor(dormant))).size).toBe(0);
   });
 });
+
+describe('the first owner gets the same validation as everyone else', () => {
+  it('refuses an empty display name', async () => {
+    // There is no profile-edit route, so whatever the installer types is what
+    // the first owner is called permanently. Bootstrap validated the username
+    // and the password and passed the display name straight through, so
+    // pressing Enter at the prompt persisted an empty one.
+    for (const displayName of ['', '   ', 'x'.repeat(121)]) {
+      await expect(
+        ctx.container.bootstrapOwner.execute(tenantB, {
+          username: 'installer',
+          displayName,
+          password: 'a-perfectly-fine-password',
+        }),
+      ).rejects.toThrow();
+    }
+
+    // Nothing was created by the refused attempts.
+    expect(await ctx.container.admins.list(tenantB)).toHaveLength(0);
+  });
+
+  it('accepts a valid display name and trims it', async () => {
+    const created = await ctx.container.bootstrapOwner.execute(tenantB, {
+      username: 'installer',
+      displayName: '  The Operator  ',
+      password: 'a-perfectly-fine-password',
+    });
+    const stored = await ctx.container.admins.findById(tenantB, created.adminId);
+    expect(stored?.displayName).toBe('The Operator');
+  });
+});
+
+describe('a duplicate Telegram identity is a conflict, not a server fault', () => {
+  it('reports admin.telegram_id_taken rather than failing on the unique index', async () => {
+    // Only the username was checked, so the unique index rejected the INSERT
+    // and the driver error surfaced as a 500 — an ordinary input mistake
+    // reported as a server fault, and a declared conflict code that nothing
+    // could emit.
+    const first = await createAdmin(ctx.container, tenantA, {
+      username: 'linked-admin',
+      roleKeys: ['support'],
+      telegramUserId: '123456789',
+    });
+    expect(first.username).toBe('linked-admin');
+
+    let caught: unknown;
+    try {
+      await ctx.container.adminManagement.create(tenantA, adminActorFor(owner), {
+        username: 'second-linked',
+        displayName: 'Second',
+        password: 'a-perfectly-fine-password',
+        roleKeys: ['support'],
+        telegramUserId: '123456789',
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect((caught as { kind?: string }).kind).toBe('CONFLICT');
+    expect((caught as { code?: string }).code).toBe('admin.telegram_id_taken');
+
+    // And nothing was written.
+    expect(await ctx.container.admins.findByUsername(tenantA, 'second-linked')).toBeNull();
+  });
+
+  it('still permits a distinct Telegram identity', async () => {
+    await createAdmin(ctx.container, tenantA, {
+      username: 'linked-one',
+      roleKeys: ['support'],
+      telegramUserId: '111111111',
+    });
+    await expect(
+      ctx.container.adminManagement.create(tenantA, adminActorFor(owner), {
+        username: 'linked-two',
+        displayName: 'Two',
+        password: 'a-perfectly-fine-password',
+        roleKeys: ['support'],
+        telegramUserId: '222222222',
+      }),
+    ).resolves.toBeDefined();
+  });
+});
+
+describe('the permissions a session reports are the ones that will be enforced', () => {
+  it('includes a GRANT override and excludes a DENY one', async () => {
+    // These are display permissions — they authorize nothing, and every
+    // endpoint re-checks. But they were the raw union of role permissions,
+    // which ignores overrides in both directions: a granted administrator saw
+    // the button hidden, a denied one saw a button that then answered 403. A
+    // surface computing a concept differently from the layer that enforces it
+    // is the divergence this codebase exists to avoid.
+    const subject = await createAdmin(ctx.container, tenantA, {
+      username: 'overridden',
+      password: 'the-correct-password',
+      roleKeys: ['support'],
+    });
+
+    const roleUnion = await ctx.container.roles.permissionsForAdmin(tenantA, subject.id as AdminId);
+    const denied = roleUnion[0];
+    expect(denied).toBeDefined();
+
+    await ctx.container.database.db.insert(adminPermissionOverrides).values([
+      {
+        tenantId: tenantA.tenantId,
+        adminId: subject.id,
+        permissionKey: 'admins.edit',
+        effect: 'GRANT',
+        reason: 'Temporarily administers the roster.',
+        expiresAt: null,
+      },
+      {
+        tenantId: tenantA.tenantId,
+        adminId: subject.id,
+        permissionKey: denied as string,
+        effect: 'DENY',
+        reason: 'Withdrawn.',
+        expiresAt: null,
+      },
+    ]);
+
+    const login = await ctx.container.auth.login(
+      tenantA,
+      anonymous,
+      { username: 'overridden', password: 'the-correct-password' },
+      from,
+    );
+    expect(login.permissions).toContain('admins.edit');
+    expect(login.permissions).not.toContain(denied);
+
+    // And the session view agrees with the login view.
+    const described = await ctx.container.auth.describeSession(login.token);
+    expect(described.permissions).toContain('admins.edit');
+    expect(described.permissions).not.toContain(denied);
+
+    // Decisively: what is reported is what the guard enforces.
+    const enforced = await ctx.container.guard.permissionsOf(tenantA, adminActorFor(subject));
+    expect([...described.permissions].sort()).toEqual([...enforced].sort());
+  });
+});

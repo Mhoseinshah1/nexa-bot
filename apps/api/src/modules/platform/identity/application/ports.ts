@@ -41,7 +41,11 @@ export interface AdminRepository {
    * which is exactly the stale-state decision the lock exists to prevent.
    */
   findById(scope: ScopeContext, id: AdminId, tx?: unknown): Promise<Admin | null>;
-  findByTelegramUserId(scope: ScopeContext, telegramUserId: string): Promise<Admin | null>;
+  findByTelegramUserId(
+    scope: ScopeContext,
+    telegramUserId: string,
+    tx?: unknown,
+  ): Promise<Admin | null>;
   /**
    * Existence check by username, without the credential.
    *

@@ -156,6 +156,23 @@ export class AdminManagementService {
           );
         }
 
+        // The other uniqueness the schema enforces. Without this check the
+        // unique index rejected the INSERT instead, and a driver error is a
+        // 500 — an ordinary input mistake reported as a server fault, and a
+        // declared conflict code (`admin.telegram_id_taken`) that nothing could
+        // ever emit. Read on the locked connection, so two requests claiming
+        // the same Telegram account cannot both pass it.
+        if (command.telegramUserId != null) {
+          const linked = await this.admins.findByTelegramUserId(scope, command.telegramUserId, tx);
+          if (linked !== null) {
+            throw errors.conflict(
+              IDENTITY_ERROR_CODES.ADMIN_TELEGRAM_ID_TAKEN,
+              'That Telegram account is already linked to an administrator.',
+              { telegramUserId: command.telegramUserId },
+            );
+          }
+        }
+
         const roleIds = await this.resolveRoleIds(scope, roleKeys, tx);
 
         await this.admins.create(

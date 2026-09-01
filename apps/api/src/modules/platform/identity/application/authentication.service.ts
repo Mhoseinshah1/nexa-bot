@@ -101,6 +101,18 @@ interface Reservation {
   readonly ip: ThrottleState | null;
 }
 
+/**
+ * The guard's own view of effective permissions, narrowed to what this module
+ * asks of it: what does this actor hold, by the rule that will be enforced.
+ */
+export interface EffectivePermissionReader {
+  permissionsOf(
+    scope: ScopeContext,
+    actor: ActorContext,
+    tx?: unknown,
+  ): Promise<ReadonlySet<PermissionKey>>;
+}
+
 export class AuthenticationService {
   constructor(
     private readonly admins: AdminRepository,
@@ -116,7 +128,30 @@ export class AuthenticationService {
     private readonly sessionTtlSeconds: number,
     private readonly policy: ThrottlePolicy,
     private readonly tenants: TenantStatusReader,
+    private readonly permissions: EffectivePermissionReader,
   ) {}
+
+  /**
+   * The permissions a surface may use to decide what chrome to render.
+   *
+   * Resolved by the SAME rule the guard enforces — `(roles ∪ GRANT) − DENY` —
+   * rather than by reading the role union. The union ignores overrides in both
+   * directions, so a granted administrator saw a button hidden and a denied one
+   * saw a button that then answered 403. It authorizes nothing either way, but
+   * a surface computing a concept differently from the layer that enforces it
+   * is exactly the divergence this codebase is built to avoid.
+   */
+  private async displayPermissions(admin: Admin): Promise<readonly PermissionKey[]> {
+    const scope: TenantContext = { tenantId: admin.tenantId, botInstanceId: null };
+    const actor: ActorContext = {
+      type: 'WEB_ADMIN',
+      id: admin.id,
+      label: admin.username,
+      surface: 'WEB',
+      correlationId: 'display-permissions' as never,
+    };
+    return [...(await this.permissions.permissionsOf(scope, actor))].sort();
+  }
 
   /**
    * Whether the tenant this request belongs to is still open for business.
@@ -307,7 +342,7 @@ export class AuthenticationService {
     });
 
     const [permissions, roleKeys] = await Promise.all([
-      this.roles.permissionsForAdmin(scope, credentials.admin.id),
+      this.displayPermissions(credentials.admin),
       this.admins.roleKeysFor(scope, credentials.admin.id),
     ]);
 
@@ -392,7 +427,7 @@ export class AuthenticationService {
     const scope: TenantContext = { tenantId: admin.tenantId, botInstanceId: null };
 
     const [permissions, roleKeys] = await Promise.all([
-      this.roles.permissionsForAdmin(scope, admin.id),
+      this.displayPermissions(admin),
       this.admins.roleKeysFor(scope, admin.id),
     ]);
 

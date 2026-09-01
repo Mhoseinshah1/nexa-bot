@@ -1,4 +1,5 @@
 import {
+  adminDisplayNameSchema,
   adminPasswordSchema,
   adminUsernameSchema,
   errors,
@@ -70,6 +71,11 @@ export class BootstrapOwnerService {
   async execute(scope: TenantContext, input: BootstrapOwnerInput): Promise<BootstrapOwnerResult> {
     const username = adminUsernameSchema.parse(input.username.trim().toLowerCase());
     adminPasswordSchema.parse(input.password);
+    // The same rule the HTTP surface applies. Validated here because there is
+    // no profile-edit route: whatever the installer types is what the first
+    // owner is called, permanently, unless someone edits the database. Pressing
+    // Enter at the prompt used to be accepted.
+    const displayName = adminDisplayNameSchema.parse(input.displayName);
 
     // A cheap rejection before the hash. NOT the fence — that is re-run under
     // the tenant lock below, because this read sees only what has committed so
@@ -111,7 +117,7 @@ export class BootstrapOwnerService {
         {
           id: adminId,
           username,
-          displayName: input.displayName,
+          displayName,
           passwordHash,
           telegramUserId: null,
           now,
