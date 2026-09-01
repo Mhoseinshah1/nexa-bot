@@ -91,6 +91,15 @@ describe('password hashing', () => {
     // time after the deploy, as an unexplained "nobody can log in". A boot
     // failure naming its cause is the better outcome.
     expect(() => new ScryptPasswordHasher({ N: 2 ** 22, r: 32, p: 1 })).toThrow(/Refusing scrypt/);
+
+    // The whole acceptance rule, not just the memory part of it. `r = 64` is
+    // rejected on read and would have been accepted on write, which is the same
+    // lockout arriving through a different field.
+    expect(() => new ScryptPasswordHasher({ N: 1024, r: 64, p: 1 })).toThrow(/r must be between/);
+    expect(() => new ScryptPasswordHasher({ N: 3, r: 8, p: 1 })).toThrow(/power of two/);
+    expect(() => new ScryptPasswordHasher({ N: 1024, r: 8, p: 0 })).toThrow(/p must be between/);
+    expect(() => new ScryptPasswordHasher({ N: 2 ** 30, r: 1, p: 1 })).toThrow(/N exceeds/);
+
     // And the profile we actually ship is comfortably inside it.
     expect(() => new ScryptPasswordHasher(PRODUCTION_SCRYPT)).not.toThrow();
   });

@@ -55,17 +55,23 @@ function memoryFor(params: ScryptParams): number {
 
 export class ScryptPasswordHasher implements PasswordHasher {
   constructor(private readonly params: ScryptParams = PRODUCTION_SCRYPT) {
-    // The aggregate ceiling below is what a STORED hash may name, and this
-    // class's own parameters are stored hashes tomorrow. Raising the profile
-    // past the ceiling would hash every password into a value `parse` then
-    // refuses — an installation-wide lockout that would first appear as
-    // "nobody can log in any more" some time after the deploy. Refuse at
-    // construction instead, where it is a boot failure naming its cause.
-    if (memoryFor(params) > MAX_MEMORY_BYTES) {
+    // What a STORED hash may name, applied to this class's own parameters —
+    // which are stored hashes tomorrow. A profile outside the accepted range
+    // would hash every password into a value `parse` then refuses: an
+    // installation-wide lockout first appearing as "nobody can log in any
+    // more", some time after the deploy that caused it. Refused here instead,
+    // where it is a boot failure naming its cause.
+    //
+    // The SAME predicate `parse` uses, not a subset of it. An earlier version
+    // checked only the memory ceiling, so `r = 64` — rejected on read, accepted
+    // on write — would have produced exactly the lockout this guard exists to
+    // prevent, through a different field.
+    const rejection = describeUnacceptable(params);
+    if (rejection !== null) {
       throw new Error(
-        `Refusing scrypt parameters N=${params.N}, r=${params.r}: they ask for more than the ` +
-          `${MAX_MEMORY_BYTES} bytes a stored hash is allowed to name, so every hash written ` +
-          'with them would be unverifiable. Raise MAX_MEMORY_BYTES deliberately if this is intended.',
+        `Refusing scrypt parameters N=${params.N}, r=${params.r}, p=${params.p}: ${rejection}. ` +
+          'Every hash written with them would be unverifiable. Raise the ceilings in this file ' +
+          'deliberately if that is genuinely intended.',
       );
     }
   }
@@ -170,6 +176,31 @@ function isPowerOfTwo(value: number): boolean {
   return value >= 2 && (value & (value - 1)) === 0;
 }
 
+/**
+ * The one statement of which parameters are acceptable.
+ *
+ * Written once and used by both directions — `parse`, which decides what a
+ * stored hash may name, and the constructor, which decides what this process
+ * may write. Two copies of this rule would drift, and the drift would be
+ * silent until the day a password could be written but not read back.
+ *
+ * Returns the reason for refusal, or `null` when the parameters are fine.
+ */
+function describeUnacceptable(params: ScryptParams): string | null {
+  const { N, r, p } = params;
+  if (!Number.isSafeInteger(N) || !Number.isSafeInteger(r) || !Number.isSafeInteger(p)) {
+    return 'the parameters are not safe integers';
+  }
+  if (!isPowerOfTwo(N)) return 'N must be a power of two';
+  if (N > MAX_N) return `N exceeds ${MAX_N}`;
+  if (r < 1 || r > MAX_R) return `r must be between 1 and ${MAX_R}`;
+  if (p < 1 || p > MAX_P) return `p must be between 1 and ${MAX_P}`;
+  if (memoryFor(params) > MAX_MEMORY_BYTES) {
+    return `they ask for more than the ${MAX_MEMORY_BYTES} bytes one derivation may allocate`;
+  }
+  return null;
+}
+
 function parse(encoded: string): ParsedHash | null {
   const parts = encoded.split('$');
   if (parts.length !== 6 || parts[0] !== PREFIX) return null;
@@ -177,11 +208,7 @@ function parse(encoded: string): ParsedHash | null {
   const N = Number(parts[1]);
   const r = Number(parts[2]);
   const p = Number(parts[3]);
-  if (!Number.isSafeInteger(N) || !Number.isSafeInteger(r) || !Number.isSafeInteger(p)) return null;
-  if (!isPowerOfTwo(N) || N > MAX_N) return null;
-  if (r < 1 || r > MAX_R) return null;
-  if (p < 1 || p > MAX_P) return null;
-  if (memoryFor({ N, r, p }) > MAX_MEMORY_BYTES) return null;
+  if (describeUnacceptable({ N, r, p }) !== null) return null;
 
   try {
     const salt = Buffer.from(parts[4] as string, 'base64');
