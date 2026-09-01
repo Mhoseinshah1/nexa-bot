@@ -1,0 +1,127 @@
+/*
+ * RTL-first, because the product is Persian. The document direction is set on
+ * <html dir="rtl">, so logical properties do the right thing without a
+ * left-to-right variant of every rule.
+ */
+
+:root {
+  --bg: #fbfbfa;
+  --fg: #1c1b19;
+  --muted: #6b6a67;
+  --line: #e3e1dd;
+  --up: #1f7a4d;
+  --down: #b3261e;
+  --accent: #2f5fd8;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17171a;
+    --fg: #ececee;
+    --muted: #9b9aa0;
+    --line: #303035;
+    --up: #4fbf85;
+    --down: #f2867d;
+    --accent: #8ba9f5;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family:
+    'Vazirmatn',
+    'IRANSans',
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+  line-height: 1.6;
+}
+
+.shell {
+  max-width: 60rem;
+  margin-inline: auto;
+  padding: 2rem 1.5rem 4rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.subtitle {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+}
+
+.notice {
+  margin: 1.5rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--line);
+  border-inline-start: 3px solid var(--accent);
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+section {
+  margin-top: 2rem;
+}
+
+h2 {
+  font-size: 1.05rem;
+  margin-bottom: 0.75rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.925rem;
+}
+
+th,
+td {
+  text-align: start;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+
+th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+td.up {
+  color: var(--up);
+}
+
+td.down {
+  color: var(--down);
+}
+
+.error {
+  color: var(--down);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.4rem 1rem;
+  margin: 0;
+  font-size: 0.925rem;
+}
+
+dt {
+  color: var(--muted);
+}
+
+dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}

@@ -1,0 +1,28 @@
+{
+  "name": "@nexa/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Nexa Bot web admin shell.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "preview": "vite preview",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@nexa/contracts": "workspace:*",
+    "@nexa/i18n": "workspace:*",
+    "@tanstack/react-query": "5.102.8",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.5",
+    "@vitejs/plugin-react": "6.1.1",
+    "typescript": "6.0.2",
+    "vite": "8.2.2"
+  }
+}
