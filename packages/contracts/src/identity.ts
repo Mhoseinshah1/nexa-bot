@@ -114,17 +114,6 @@ export interface AdminSession {
 }
 
 /**
- * A session token, returned exactly once at login.
- *
- * The store holds only a SHA-256 of this value, so the plaintext exists in the
- * response body and nowhere else. There is no endpoint that can read it back.
- */
-export interface IssuedSession {
-  readonly token: string;
-  readonly session: AdminSession;
-}
-
-/**
  * The session cookie's name, in two spellings.
  *
  * `__Host-` is not decoration: a browser refuses to store a cookie under that
