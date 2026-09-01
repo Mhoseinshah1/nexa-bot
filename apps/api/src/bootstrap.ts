@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { TenantContext } from '@nexa/contracts';
 import { AppModule } from './app.module.js';
 import { createContainer, type Container } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
@@ -34,10 +35,22 @@ export async function resolveInstallationTenant(container: Container): Promise<v
   // without it, and the amplification rule would then stop ANYONE granting it,
   // because nobody holds it.
   //
-  // Roles an operator created are never touched, and the write is a conflict-
-  // ignoring insert, so a boot that changes nothing costs one statement per
-  // seeded role.
-  await container.roles.ensureSystemRoles({ tenantId: primary.id, botInstanceId: null });
+  // Roles an operator created are never touched, and the writes are conflict-
+  // ignoring inserts, so a boot that changes nothing costs a few statements.
+  //
+  // Under the SAME tenant lock every administrator mutation takes, and in one
+  // transaction. Without it, a rolling upgrade has a window with teeth: a
+  // concurrent `setRoles` reads a role's permissions, passes the
+  // no-amplification check against an actor who does not hold the permission
+  // this boot is about to add, and assigns the role — and when the seeder
+  // commits, the target silently holds authority nobody ever checked. The
+  // lock makes role contents unable to change between an authorization and the
+  // assignment it authorised.
+  const scope: TenantContext = { tenantId: primary.id, botInstanceId: null };
+  await container.uow.run(scope, async (tx) => {
+    await container.admins.lockTenantForAdminChange(scope, tx);
+    await container.roles.ensureSystemRoles(scope, tx);
+  });
 }
 
 export interface ApiApp {

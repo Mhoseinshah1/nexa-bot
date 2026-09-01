@@ -75,6 +75,17 @@ export class TelegramWebhookController {
       throw errors.notFound(PLATFORM_ERROR_CODES.TENANT_NOT_FOUND, 'Unknown bot instance.');
     }
 
+    // The bot's own status is not the whole kill switch. Stopping a TENANT now
+    // ends Web Admin logins and existing sessions, and it has to end this
+    // surface too — the update below acts as SYSTEM_JOB, which never consults
+    // the permission resolver, so nothing downstream would notice. An
+    // installation switched off must be switched off everywhere, not only
+    // where a human signs in.
+    const tenant = await this.container.tenants.findById(botInstance.tenantId);
+    if (tenant === null || tenant.status !== 'ACTIVE') {
+      throw errors.notFound(PLATFORM_ERROR_CODES.TENANT_NOT_FOUND, 'Unknown bot instance.');
+    }
+
     const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
     const updateId = String(update.update_id ?? 'unknown');
 

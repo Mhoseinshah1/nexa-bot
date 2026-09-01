@@ -7,11 +7,12 @@ import {
   SESSION_COOKIE_NAME,
   SESSION_COOKIE_NAME_SECURE,
   systemContext,
+  TELEGRAM_SECRET_TOKEN_HEADER,
   type AdminId,
   type CorrelationId,
 } from '@nexa/contracts';
 import { createApiApp, resolveInstallationTenant, type ApiApp } from '../../apps/api/src/bootstrap';
-import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
+import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { ScryptPasswordHasher } from '../../apps/api/src/infrastructure/crypto/password-hasher';
 import {
   adminLoginThrottle,
@@ -1526,4 +1527,181 @@ describe('the permissions a session reports are the ones that will be enforced',
     const enforced = await ctx.container.guard.permissionsOf(tenantA, adminActorFor(subject));
     expect([...described.permissions].sort()).toEqual([...enforced].sort());
   });
+});
+
+describe('a status change is stamped with when it happened', () => {
+  it('never revokes a session before the session was issued', async () => {
+    // `now` used to be captured before `runLockedMutation`, so a request could
+    // queue on the tenant lock for as long as the holder took. In that window
+    // the target can log in and be issued a session — and the revocation then
+    // stamped `revoked_at` earlier than that session's `issued_at`, a record
+    // saying the session was revoked before it existed.
+    //
+    // Stalled at the lock acquisition itself rather than by holding a real
+    // lock from another transaction: doing that occupies a pool connection
+    // while the login needs one, which is the pool-exhaustion deadlock this
+    // branch fixed elsewhere. The seam is enough — what matters is that time
+    // passes between the request starting and the lock being taken.
+    const subject = await createAdmin(ctx.container, tenantA, {
+      username: 'stamped',
+      password: 'the-correct-password',
+      roleKeys: ['support'],
+    });
+
+    const admins = ctx.container.admins as unknown as Record<string, unknown>;
+    const realLock = ctx.container.admins.lockTenantForAdminChange.bind(ctx.container.admins);
+    let releaseLock: () => void = () => undefined;
+    const disableReachedLock = new Promise<void>((resolve) => {
+      admins['lockTenantForAdminChange'] = async (scope: never, tx: never) => {
+        admins['lockTenantForAdminChange'] = realLock;
+        resolve();
+        await new Promise<void>((release) => {
+          releaseLock = release;
+        });
+        return realLock(scope, tx);
+      };
+    });
+
+    const disabling = ctx.container.adminManagement
+      .setStatus(tenantA, adminActorFor(owner), subject.id as AdminId, {
+        status: 'DISABLED',
+        reason: 'Queued behind the lock.',
+      })
+      .catch((error: unknown) => error);
+
+    await disableReachedLock;
+
+    // While the disable waits, the target signs in.
+    const issued = await ctx.container.auth.login(
+      tenantA,
+      anonymous,
+      { username: 'stamped', password: 'the-correct-password' },
+      from,
+    );
+
+    releaseLock();
+    await disabling;
+
+    const [row] = await ctx.container.database.db
+      .select()
+      .from(adminSessions)
+      .where(eq(adminSessions.id, issued.session.id));
+    expect(row?.revokedAt).not.toBeNull();
+    // The record must describe the order these things actually happened in.
+    expect((row?.revokedAt as Date).getTime()).toBeGreaterThanOrEqual(
+      (row?.issuedAt as Date).getTime(),
+    );
+  }, 30_000);
+});
+
+describe('a stopped tenant closes its Telegram surface too', () => {
+  let api: ApiApp;
+  const WEBHOOK_SECRET = 'a-sufficiently-long-secret';
+
+  const ping = (botInstanceId: string, updateId: number) =>
+    api.app
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: `/telegram/webhook/${botInstanceId}`,
+        headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET },
+        payload: {
+          update_id: updateId,
+          message: { message_id: 1, date: 0, chat: { id: 1, type: 'private' }, text: '/ping' },
+        },
+      } as never);
+
+  beforeAll(async () => {
+    const config = testConfig({
+      TELEGRAM_WEBHOOK_ENABLED: 'true',
+      TELEGRAM_WEBHOOK_SECRET: WEBHOOK_SECRET,
+    });
+    await migrateOnce(config.DATABASE_URL);
+    api = await createApiApp(config);
+  });
+
+  afterAll(async () => {
+    await api?.close();
+  });
+
+  beforeEach(async () => {
+    const config = api.container.config;
+    await resetDatabase(api.container.database.db);
+    await seed(api.container.database.db, config.SECRETS_KEK, config.SECRETS_KEK_ID);
+  });
+
+  it('accepts an update while the tenant is active', async () => {
+    expect((await ping(SEED_IDS.botA1, 9101)).statusCode).toBe(201);
+  });
+
+  it('refuses an update for an ACTIVE bot whose tenant is stopped', async () => {
+    // The bot's own status was the whole check. But the update acts as
+    // SYSTEM_JOB, which never consults the permission resolver, so a stopped
+    // installation kept accepting Telegram work while its Web Admin was shut.
+    await api.container.database.db
+      .update(tenants)
+      .set({ status: 'STOPPED' })
+      .where(eq(tenants.id, SEED_IDS.tenantA));
+
+    expect((await ping(SEED_IDS.botA1, 9102)).statusCode).toBe(404);
+
+    // And no work was recorded under the stopped tenant.
+    const keys = await api.container.database.db.execute(
+      `SELECT key FROM request_idempotency WHERE key LIKE '%:update:9102'` as never,
+    );
+    expect(JSON.stringify(keys)).not.toContain('update:9102');
+  });
+
+  it('refuses an update for a DISABLED tenant', async () => {
+    await api.container.database.db
+      .update(tenants)
+      .set({ status: 'DISABLED' })
+      .where(eq(tenants.id, SEED_IDS.tenantA));
+    expect((await ping(SEED_IDS.botA1, 9103)).statusCode).toBe(404);
+  });
+});
+
+describe('the boot-time role sync is serialised with administrator mutations', () => {
+  it('holds the same tenant lock those mutations take', async () => {
+    // Without it, a rolling upgrade has a window with teeth: a concurrent
+    // `setRoles` reads a role's permissions, passes the no-amplification check
+    // against an actor who does not hold the permission this boot is about to
+    // add, and assigns the role — and when the seeder commits, the target
+    // silently holds authority nobody ever checked.
+    //
+    // Asserted by observing the lock: a mutation holding it must block the
+    // sync, which it cannot do unless the sync takes it too.
+    let releaseHolder: () => void = () => undefined;
+    let syncFinished = false;
+
+    const holderHasLock = new Promise<void>((resolve) => {
+      void ctx.container.uow.run(tenantA, async (tx) => {
+        await ctx.container.admins.lockTenantForAdminChange(tenantA, tx);
+        resolve();
+        await new Promise<void>((release) => {
+          releaseHolder = release;
+        });
+      });
+    });
+    await holderHasLock;
+
+    const sync = resolveInstallationTenant(ctx.container).then(() => {
+      syncFinished = true;
+    });
+
+    try {
+      // Give it every chance to finish if it were not waiting on the lock.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(syncFinished).toBe(false);
+    } finally {
+      // Released even when the assertion above fails: leaving the holding
+      // transaction open would hang the whole run rather than failing this one
+      // test, and a slow failure is a failure nobody reads.
+      releaseHolder();
+    }
+
+    await sync;
+    expect(syncFinished).toBe(true);
+  }, 30_000);
 });

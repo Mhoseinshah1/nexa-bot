@@ -101,7 +101,6 @@ export class AdminManagementService {
       entityId: null,
     });
 
-    const now = this.clock.now();
     const adminId = this.ids.uuid() as AdminId;
     // Hashing is deliberately outside the transaction: it is intentionally slow,
     // and holding a database transaction open for the duration of a KDF turns
@@ -133,6 +132,11 @@ export class AdminManagementService {
       { action: 'admin.create', entityId: null },
       async (tx) => {
         await this.admins.lockTenantForAdminChange(scope, tx);
+
+        // Taken after the lock, for the reason `setStatus` states: this request
+        // may have queued here for the length of another mutation, and the row
+        // it writes should be stamped with when it happened, not when it asked.
+        const now = this.clock.now();
 
         // Re-checked against authoritative state. If the caller lost
         // `admins.edit` — or was disabled, which empties their permissions — the
@@ -247,14 +251,21 @@ export class AdminManagementService {
     // this holds no matter which permissions they carry.
     assertNotSelf(adminIdOf(actor), targetId);
 
-    const now = this.clock.now();
-
     const updated = await this.runLockedMutation(
       scope,
       actor,
       { action: 'admin.status_change', entityId: targetId },
       async (tx) => {
         await this.admins.lockTenantForAdminChange(scope, tx);
+
+        // The mutation time, taken AFTER the lock rather than before it.
+        // A request can queue on this lock for as long as the holder takes, and
+        // a timestamp captured before waiting describes a moment when the
+        // transition had not happened. The sharp case: a target logs in and is
+        // issued a session while a disable waits here, and the revocation then
+        // stamps `revoked_at` earlier than that session's `issued_at` — a
+        // record that says the session was revoked before it existed.
+        const now = this.clock.now();
 
         // The actor's BASE authority, re-read under the lock. Target state was
         // already reloaded here; the actor's own right to act was not, so a
@@ -362,7 +373,6 @@ export class AdminManagementService {
     assertNotSelf(adminIdOf(actor), targetId);
 
     const next = [...new Set(command.roleKeys)].sort();
-    const now = this.clock.now();
 
     // EVERY authoritative read, decision and write happens under the tenant
     // lock, in this transaction.
@@ -390,6 +400,9 @@ export class AdminManagementService {
       { action: 'admin.roles_change', entityId: targetId },
       async (tx) => {
         await this.admins.lockTenantForAdminChange(scope, tx);
+
+        // Taken after the lock, for the reason `setStatus` states.
+        const now = this.clock.now();
 
         // The actor's BASE authority, re-read under the lock — before any target
         // state, because an actor who has lost `admins.edit` has no business

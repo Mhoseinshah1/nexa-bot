@@ -253,6 +253,16 @@ GRANT saw the button hidden, and one with a DENY saw a button that then answered
 legacy system's two surfaces reporting revenue figures 38% apart — one concept,
 two implementations, no mechanism forcing them to agree.
 
+## Mutation timestamps are taken after the lock
+
+A request can queue on the tenant lock for as long as its holder takes, and a
+timestamp captured before waiting describes a moment when the transition had not
+happened. The sharp case: a target logs in and is issued a session while a
+disable waits, and the revocation then stamps `revoked_at` earlier than that
+session's `issued_at` — a record saying the session was revoked before it
+existed. All three mutations take their `now` inside the transaction, after the
+lock.
+
 ## Re-enabling is granting
 
 Rule 4 — an administrator may not confer a permission they do not hold — binds
@@ -298,9 +308,17 @@ precisely the installations that needed it. A permission newly added to the
 `owner` seed would never reach existing owners, and the amplification rule would
 then stop _anyone_ granting it, because nobody would hold it.
 
-It now also runs when the API resolves its installation tenant at boot. Roles an
-operator created are never touched, and the writes ignore conflicts, so a boot
-that changes nothing costs one statement per seeded role.
+It now also runs when the API resolves its installation tenant at boot, in a
+transaction holding **the same tenant lock every administrator mutation takes**.
+Roles an operator created are never touched, and the writes ignore conflicts, so
+a boot that changes nothing costs a few statements.
+
+The lock is not tidiness. Without it a rolling upgrade has a window with teeth: a
+concurrent `setRoles` reads a role's permissions, passes the no-amplification
+check against an actor who does not hold the permission this boot is about to
+add, and assigns the role — and when the seeder commits, the target silently
+holds authority nobody ever checked. Role contents must not change between an
+authorization and the assignment it authorised.
 
 ## The bootstrap exception, and why it is not a bypass
 

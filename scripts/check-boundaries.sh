@@ -233,16 +233,12 @@ fi
 # RESERVED codes are exempt, and each must say why here. The list is the point:
 # adding a code with no producer now requires deciding, in this file, whether it
 # is genuinely reserved.
-RESERVED_CODES="TENANT_MISMATCH IDEMPOTENCY_IN_FLIGHT ROLE_SYSTEM_IMMUTABLE"
-#   TENANT_MISMATCH       - repositories filter by tenant, so a cross-tenant id
-#                           is NOT_FOUND. Reserved for the explicit cross-tenant
-#                           query service ADR-0004 defers.
-#   IDEMPOTENCY_IN_FLIGHT - the store records AFTER the work, with
-#                           ON CONFLICT DO NOTHING. Reserved for a claim-before-
-#                           work design, which Phase 0 deliberately did not build.
-#   ROLE_SYSTEM_IMMUTABLE - enforced by the nexa_protect_system_role trigger.
-#                           Reserved for the role editor; there is no role-editing
-#                           path to translate it into an error yet.
+RESERVED_CODES=""
+# Empty, deliberately. Three codes were reserved here for one commit and then
+# removed instead: reserving them kept dead names in a FROZEN spec, which is
+# what CLAUDE.md means by "no placeholder abstractions". A code arrives when a
+# path produces it, and adding one back is a one-line contract commit. Put a
+# name here only with a reason that survives being read aloud.
 
 UNPRODUCED=""
 while read -r code; do

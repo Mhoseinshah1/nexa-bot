@@ -347,6 +347,12 @@ and `TENANT_INACTIVE` was declared in the contracts as a login failure reason
 that no code could emit. A status nothing enforces is a label, not a kill
 switch.
 
+It closes the Telegram surface too. A bot's own `STOPPED`/`DISABLED` status was
+the whole check there, and an update acts as `SYSTEM_JOB`, which never consults
+the permission resolver — so a stopped installation went on accepting Telegram
+work while its Web Admin was shut. An installation switched off must be switched
+off everywhere, not only where a human signs in.
+
 The login check sits **after** the password, beside the administrator-status
 check and for the same reason: an installation that has been stopped must not
 answer differently before the password is known. Existing sessions are refused
