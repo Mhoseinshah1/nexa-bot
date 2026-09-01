@@ -48,11 +48,49 @@ export const configSchema = z
     SECRETS_KEK_ID: z.string().min(1),
 
     /**
-     * Phase 0 ships no authentication. `none` is a development-only value and
-     * the refinement below refuses to boot with it anywhere else — a stub login
-     * gets copied into Phase 1, a hard failure does not.
+     * `password` is the real Web Admin authentication surface: username and
+     * password against the `admins` table. `none` remains a development-only
+     * escape hatch and the refinement below still refuses to boot with it
+     * anywhere else.
      */
-    AUTH_MODE: z.enum(['none']).default('none'),
+    AUTH_MODE: z.enum(['none', 'password']).default('password'),
+
+    /** How long a session lives without being renewed. */
+    SESSION_TTL_SECONDS: z.coerce
+      .number()
+      .int()
+      .min(300)
+      .max(30 * 24 * 3600)
+      .default(12 * 3600),
+
+    /**
+     * Password hashing cost. `fast` makes the test suite finish; the refinement
+     * below refuses it in production, the same way it refuses AUTH_MODE=none.
+     * Inferring this from NODE_ENV would mean an install left on `development`
+     * stored every password at a thousandth of the intended cost.
+     */
+    PASSWORD_HASH_PROFILE: z.enum(['production', 'fast']).default('production'),
+
+    /** Failed logins per subject before a lockout, and how long it lasts. */
+    LOGIN_MAX_ATTEMPTS_PER_USERNAME: z.coerce.number().int().min(1).max(100).default(5),
+    LOGIN_MAX_ATTEMPTS_PER_IP: z.coerce.number().int().min(1).max(1000).default(20),
+    LOGIN_THROTTLE_WINDOW_SECONDS: z.coerce.number().int().min(30).max(86_400).default(900),
+    LOGIN_LOCKOUT_SECONDS: z.coerce.number().int().min(30).max(86_400).default(900),
+
+    /**
+     * Origins the browser admin may call from. Empty disables the check, which
+     * is only legal outside production: the Origin check is the second half of
+     * the CSRF defence, behind SameSite=Strict.
+     */
+    WEB_ADMIN_ORIGINS: z
+      .string()
+      .default('')
+      .transform((value) =>
+        value
+          .split(',')
+          .map((origin) => origin.trim())
+          .filter((origin) => origin.length > 0),
+      ),
 
     TELEGRAM_WEBHOOK_ENABLED: booleanish.default(false),
     // The route itself is fixed at /telegram/webhook. A configurable path was
@@ -77,6 +115,24 @@ export const configSchema = z
         message:
           'AUTH_MODE=none is permitted only when NODE_ENV=development. Phase 0 ships no authentication; ' +
           'see docs/adr/0009-identity-and-auth.md before deploying.',
+      });
+    }
+    if (config.PASSWORD_HASH_PROFILE === 'fast' && config.NODE_ENV === 'production') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['PASSWORD_HASH_PROFILE'],
+        message:
+          'PASSWORD_HASH_PROFILE=fast is a test affordance and must never be used in production. ' +
+          'It reduces the scrypt work factor by more than two orders of magnitude.',
+      });
+    }
+    if (config.NODE_ENV === 'production' && config.WEB_ADMIN_ORIGINS.length === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['WEB_ADMIN_ORIGINS'],
+        message:
+          'WEB_ADMIN_ORIGINS must list the admin origin in production. It is the second half of ' +
+          'the CSRF defence, behind the SameSite=Strict session cookie.',
       });
     }
     if (config.TELEGRAM_WEBHOOK_ENABLED && config.TELEGRAM_WEBHOOK_SECRET.length < 16) {

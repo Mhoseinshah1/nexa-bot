@@ -36,6 +36,20 @@
       "when": 1788266691186,
       "tag": "0004_operational_event_scope_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788270259990,
+      "tag": "0005_identity_and_rbac",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788270259991,
+      "tag": "0006_identity_guards",
+      "breakpoints": true
     }
   ]
 }

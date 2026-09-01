@@ -1,5 +1,6 @@
 import {
   bigint,
+  boolean,
   check,
   index,
   integer,
@@ -13,11 +14,13 @@ import {
 import { sql, type SQL } from 'drizzle-orm';
 import {
   ACTOR_TYPES,
+  ADMIN_STATUSES,
   AUDIT_RESULTS,
   BOT_INSTANCE_STATUSES,
   CALENDARS,
   CURRENCY_CODES,
   OPERATIONAL_SEVERITIES,
+  PERMISSION_OVERRIDE_EFFECTS,
   SOURCE_SURFACES,
   TENANT_KINDS,
   TENANT_STATUSES,
@@ -288,6 +291,267 @@ export const operationalEvents = pgTable(
   ],
 );
 
+// ---------------------------------------------------------------------------
+// Identity and RBAC — Phase 1
+// ---------------------------------------------------------------------------
+
+/**
+ * Administrators.
+ *
+ * Scoped to the TENANT, not to a bot instance. `UNK-ADM-004` is unresolved, and
+ * the tenant-wide model is the one that can be narrowed later — adding
+ * `bot_instance_id` to `admin_roles` is additive, while removing a scope that
+ * turned out to be wrong is not.
+ *
+ * An Admin is not a Customer. They will not share a table, an id space or a
+ * status vocabulary, because in the legacy system they do and "is this person
+ * an admin" is therefore the same row as "is this person a buyer".
+ *
+ * `username` is stored already lower-cased — the CHECK enforces it — so the
+ * composite unique index is enough to stop `Owner` and `owner` becoming two
+ * accounts, with no query needing to remember `lower()`.
+ */
+export const admins = pgTable(
+  'admins',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    username: text('username').notNull(),
+    displayName: text('display_name').notNull(),
+    /**
+     * The self-describing output of the PasswordHasher: algorithm, parameters,
+     * salt and digest in one string. Never a plaintext, never a bare digest,
+     * and never returned by any query a surface can reach.
+     */
+    passwordHash: text('password_hash').notNull(),
+    passwordUpdatedAt: timestamptz('password_updated_at').notNull(),
+    status: text('status').notNull().default('ACTIVE'),
+    /**
+     * The Telegram admin seam. A later Telegram admin surface attaches to THIS
+     * identity rather than creating a second admin table — which is how the
+     * legacy system ended up with two role vocabularies for one column.
+     * Stored as text: Telegram ids exceed 2^53 and must not become floats.
+     */
+    telegramUserId: text('telegram_user_id'),
+    lastLoginAt: timestamptz('last_login_at'),
+    disabledAt: timestamptz('disabled_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('admins_tenant_username_key').on(table.tenantId, table.username),
+    // Partial: two tenants may each have an admin with no Telegram link.
+    uniqueIndex('admins_tenant_telegram_key')
+      .on(table.tenantId, table.telegramUserId)
+      .where(sql`telegram_user_id IS NOT NULL`),
+    index('admins_tenant_status_idx').on(table.tenantId, table.status),
+    check('admins_status_check', enumCheck('status', ADMIN_STATUSES)),
+    check('admins_username_lowercase_check', sql`username = lower(username)`),
+    check('admins_username_shape_check', sql`username ~ '^[a-z0-9._-]{3,64}$'`),
+    check(
+      'admins_telegram_shape_check',
+      sql`telegram_user_id IS NULL OR telegram_user_id ~ '^[0-9]{1,20}$'`,
+    ),
+    // A disabled admin has a disabling timestamp and an active one does not, so
+    // the two columns cannot drift into disagreeing about the same fact.
+    check(
+      'admins_disabled_at_check',
+      sql`(status = 'DISABLED' AND disabled_at IS NOT NULL) OR (status <> 'DISABLED' AND disabled_at IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * Roles: a tenant-scoped, editable composition over the frozen permission
+ * catalog. Never an enum — the legacy role column is one, which is why it holds
+ * four values in one surface and seven in the other, cannot be changed, and
+ * audits nothing.
+ *
+ * System roles are seeded from `ROLE_SEEDS` and cannot be deleted. An
+ * installation that deleted its owner role would have no way back in.
+ */
+export const roles = pgTable(
+  'roles',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    key: text('key').notNull(),
+    name: text('name').notNull(),
+    isSystem: boolean('is_system').notNull().default(false),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('roles_tenant_key_key').on(table.tenantId, table.key),
+    check('roles_key_shape_check', sql`key ~ '^[a-z][a-z0-9_]{1,63}$'`),
+  ],
+);
+
+/**
+ * Which permissions a role carries.
+ *
+ * `tenant_id` is carried here as well as on `roles`, and is part of the unique
+ * index. It is denormalised on purpose: it makes every scoped query a
+ * single-table predicate rather than a join the caller could forget, which is
+ * the whole basis of application-level tenant isolation (ADR-0004).
+ */
+export const rolePermissions = pgTable(
+  'role_permissions',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    roleId: uuid('role_id')
+      .notNull()
+      .references(() => roles.id),
+    permissionKey: text('permission_key').notNull(),
+  },
+  (table) => [
+    uniqueIndex('role_permissions_pkey').on(table.tenantId, table.roleId, table.permissionKey),
+    index('role_permissions_role_idx').on(table.roleId),
+  ],
+);
+
+/** Role assignment. An admin may hold several roles; effective = the union. */
+export const adminRoles = pgTable(
+  'admin_roles',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    adminId: uuid('admin_id')
+      .notNull()
+      .references(() => admins.id),
+    roleId: uuid('role_id')
+      .notNull()
+      .references(() => roles.id),
+    assignedAt: timestamptz('assigned_at').notNull().defaultNow(),
+    /** The admin who granted this. Null only for the installation bootstrap. */
+    assignedByAdminId: uuid('assigned_by_admin_id'),
+  },
+  (table) => [
+    uniqueIndex('admin_roles_pkey').on(table.tenantId, table.adminId, table.roleId),
+    index('admin_roles_admin_idx').on(table.adminId),
+    index('admin_roles_role_idx').on(table.roleId),
+  ],
+);
+
+/**
+ * Per-admin overrides on top of their roles.
+ *
+ * Justified by the resolution rule already frozen in the contract
+ * (`resolveEffectivePermissions`): effective = (roles ∪ GRANT) − DENY, DENY
+ * always wins, and an expired override stops applying without anyone running a
+ * cleanup job. A `reason` is mandatory — an unexplained standing exception is
+ * indistinguishable from a mistake six months later.
+ */
+export const adminPermissionOverrides = pgTable(
+  'admin_permission_overrides',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    adminId: uuid('admin_id')
+      .notNull()
+      .references(() => admins.id),
+    permissionKey: text('permission_key').notNull(),
+    effect: text('effect').notNull(),
+    reason: text('reason').notNull(),
+    expiresAt: timestamptz('expires_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    createdByAdminId: uuid('created_by_admin_id'),
+  },
+  (table) => [
+    uniqueIndex('admin_permission_overrides_pkey').on(
+      table.tenantId,
+      table.adminId,
+      table.permissionKey,
+      table.effect,
+    ),
+    index('admin_permission_overrides_admin_idx').on(table.adminId),
+    check(
+      'admin_permission_overrides_effect_check',
+      enumCheck('effect', PERMISSION_OVERRIDE_EFFECTS),
+    ),
+  ],
+);
+
+/**
+ * Sessions.
+ *
+ * Only the SHA-256 of the token is stored, so reading this table cannot
+ * impersonate anyone — a database backup, a log line or a support screenshot
+ * carries nothing usable. The plaintext exists in exactly one response body and
+ * is never recoverable afterwards.
+ *
+ * Revocation is a timestamp rather than a delete, so "when was this session
+ * killed, and by what" survives.
+ */
+export const adminSessions = pgTable(
+  'admin_sessions',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    adminId: uuid('admin_id')
+      .notNull()
+      .references(() => admins.id),
+    tokenHash: text('token_hash').notNull(),
+    issuedAt: timestamptz('issued_at').notNull(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    lastSeenAt: timestamptz('last_seen_at').notNull(),
+    revokedAt: timestamptz('revoked_at'),
+    revokedReason: text('revoked_reason'),
+    ip: text('ip'),
+    userAgent: text('user_agent'),
+  },
+  (table) => [
+    // Global rather than per-tenant: the token is the lookup key and is
+    // presented before any tenant is known, so it must be unique everywhere.
+    uniqueIndex('admin_sessions_token_key').on(table.tokenHash),
+    index('admin_sessions_admin_idx').on(table.tenantId, table.adminId),
+    index('admin_sessions_expiry_idx')
+      .on(table.expiresAt)
+      .where(sql`revoked_at IS NULL`),
+  ],
+);
+
+/**
+ * Login throttling.
+ *
+ * Durable rather than in Redis, for two reasons: an attacker must not be able
+ * to clear their own counter by waiting for a cache eviction or a restart, and
+ * the tests must be deterministic — the window advances by the injected Clock,
+ * not by sleeping.
+ *
+ * Keyed by subject rather than by admin id, so a username that does not exist
+ * is throttled exactly like one that does. Throttling only real accounts would
+ * turn the lockout itself into a username oracle.
+ */
+export const adminLoginThrottle = pgTable(
+  'admin_login_throttle',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    subjectKind: text('subject_kind').notNull(),
+    subject: text('subject').notNull(),
+    failedCount: integer('failed_count').notNull().default(0),
+    windowStartedAt: timestamptz('window_started_at').notNull(),
+    lockedUntil: timestamptz('locked_until'),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('admin_login_throttle_pkey').on(table.tenantId, table.subjectKind, table.subject),
+    check('admin_login_throttle_kind_check', enumCheck('subject_kind', ['USERNAME', 'IP'])),
+    check('admin_login_throttle_count_check', sql`failed_count >= 0`),
+  ],
+);
+
 /** A counter that keeps the outbox `sequence` monotonic per aggregate. */
 export const aggregateSequences = pgTable(
   'aggregate_sequences',
@@ -304,6 +568,13 @@ export const aggregateSequences = pgTable(
 export const schema = {
   tenants,
   botInstances,
+  admins,
+  roles,
+  rolePermissions,
+  adminRoles,
+  adminPermissionOverrides,
+  adminSessions,
+  adminLoginThrottle,
   outboxMessages,
   processedMessages,
   requestIdempotency,

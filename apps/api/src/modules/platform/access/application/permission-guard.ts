@@ -27,9 +27,12 @@ import {
  * explicit, narrow permission set (`SYSTEM_JOB_PERMISSIONS`) like everyone else,
  * so a job that gains a new power gains it visibly, in a contract diff.
  *
- * Phase 0 ships the guard and the catalog. There is no authentication yet and
- * no admin records to resolve, so the human-actor resolver grants nothing. That
- * is deliberate: a stub that grants everything would be copied into Phase 1.
+ * Phase 1 supplies the real resolver (`AdminPermissionResolver`), backed by
+ * `admins`, `roles`, `role_permissions` and per-admin overrides, and resolving
+ * on every call rather than caching authority into a session. Phase 0's
+ * placeholder resolver has been deleted rather than left in place: a resolver
+ * that grants nothing is a correct answer when there are no admins and a
+ * dangerous one the moment there are.
  */
 
 export interface PermissionResolver {
@@ -76,18 +79,6 @@ export class PermissionGuard {
       return new Set<PermissionKey>(SYSTEM_JOB_PERMISSIONS);
     }
     return this.resolver.resolve(scope, actor);
-  }
-}
-
-/**
- * Phase 0's resolver for human actors: nobody holds any permission, because
- * there are no admins and no authentication. Phase 1 replaces this with a
- * resolver backed by `admins`, `roles`, `role_permissions` and per-admin
- * overrides.
- */
-export class NoAdminsPermissionResolver implements PermissionResolver {
-  async resolve(): Promise<ReadonlySet<PermissionKey>> {
-    return new Set<PermissionKey>();
   }
 }
 

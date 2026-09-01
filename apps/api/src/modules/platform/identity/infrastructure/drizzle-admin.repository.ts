@@ -1,0 +1,214 @@
+import { and, eq, inArray, sql } from 'drizzle-orm';
+import {
+  asId,
+  type Admin,
+  type AdminId,
+  type AdminStatus,
+  type ScopeContext,
+} from '@nexa/contracts';
+import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
+import {
+  adminRoles,
+  admins,
+  roles,
+  tenants,
+} from '../../../../infrastructure/persistence/schema.js';
+import {
+  requireTenantId,
+  type TransactionScope,
+} from '../../../../infrastructure/persistence/unit-of-work.js';
+import type { AdminCredentials, AdminRepository } from '../application/ports.js';
+
+type AdminRow = typeof admins.$inferSelect;
+
+/**
+ * Every method resolves its tenant through `requireTenantId`, so a query that
+ * forgets the predicate throws rather than reading another tenant's rows. The
+ * password hash never leaves this file except through
+ * `findCredentialsByUsername`, which the authentication service alone calls.
+ */
+function toAdmin(row: AdminRow): Admin {
+  return {
+    id: asId<'AdminId'>(row.id),
+    tenantId: asId<'TenantId'>(row.tenantId),
+    username: row.username,
+    displayName: row.displayName,
+    status: row.status as AdminStatus,
+    telegramUserId: row.telegramUserId,
+    createdAt: row.createdAt,
+    lastLoginAt: row.lastLoginAt,
+    disabledAt: row.disabledAt,
+  };
+}
+
+function executorOf(db: Database, tx?: unknown): Executor {
+  return (tx as TransactionScope | undefined)?.tx ?? db;
+}
+
+export class DrizzleAdminRepository implements AdminRepository {
+  constructor(private readonly db: Database) {}
+
+  async findCredentialsByUsername(
+    scope: ScopeContext,
+    username: string,
+  ): Promise<AdminCredentials | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.db
+      .select()
+      .from(admins)
+      .where(and(eq(admins.tenantId, tenantId), eq(admins.username, username)))
+      .limit(1);
+    return row ? { admin: toAdmin(row), passwordHash: row.passwordHash } : null;
+  }
+
+  async findById(scope: ScopeContext, id: AdminId): Promise<Admin | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.db
+      .select()
+      .from(admins)
+      .where(and(eq(admins.tenantId, tenantId), eq(admins.id, id)))
+      .limit(1);
+    return row ? toAdmin(row) : null;
+  }
+
+  async findByTelegramUserId(scope: ScopeContext, telegramUserId: string): Promise<Admin | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.db
+      .select()
+      .from(admins)
+      .where(and(eq(admins.tenantId, tenantId), eq(admins.telegramUserId, telegramUserId)))
+      .limit(1);
+    return row ? toAdmin(row) : null;
+  }
+
+  async list(scope: ScopeContext): Promise<Admin[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.db
+      .select()
+      .from(admins)
+      .where(eq(admins.tenantId, tenantId))
+      .orderBy(admins.username);
+    return rows.map(toAdmin);
+  }
+
+  async roleKeysFor(scope: ScopeContext, id: AdminId): Promise<string[]> {
+    const byAdmin = await this.roleKeysForAll(scope, [id]);
+    return byAdmin.get(id) ?? [];
+  }
+
+  async roleKeysForAll(
+    scope: ScopeContext,
+    ids: readonly AdminId[],
+  ): Promise<Map<string, string[]>> {
+    const tenantId = requireTenantId(scope);
+    const result = new Map<string, string[]>();
+    if (ids.length === 0) return result;
+
+    const rows = await this.db
+      .select({ adminId: adminRoles.adminId, key: roles.key })
+      .from(adminRoles)
+      .innerJoin(roles, eq(roles.id, adminRoles.roleId))
+      .where(and(eq(adminRoles.tenantId, tenantId), inArray(adminRoles.adminId, [...ids])));
+
+    for (const row of rows) {
+      const existing = result.get(row.adminId);
+      if (existing) existing.push(row.key);
+      else result.set(row.adminId, [row.key]);
+    }
+    for (const keys of result.values()) keys.sort();
+    return result;
+  }
+
+  async create(
+    scope: ScopeContext,
+    input: {
+      readonly id: AdminId;
+      readonly username: string;
+      readonly displayName: string;
+      readonly passwordHash: string;
+      readonly telegramUserId: string | null;
+      readonly now: Date;
+    },
+    tx?: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await executorOf(this.db, tx).insert(admins).values({
+      id: input.id,
+      tenantId,
+      username: input.username,
+      displayName: input.displayName,
+      passwordHash: input.passwordHash,
+      passwordUpdatedAt: input.now,
+      status: 'ACTIVE',
+      telegramUserId: input.telegramUserId,
+      createdAt: input.now,
+      updatedAt: input.now,
+    });
+  }
+
+  async setStatus(
+    scope: ScopeContext,
+    id: AdminId,
+    status: AdminStatus,
+    now: Date,
+    tx?: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await executorOf(this.db, tx)
+      .update(admins)
+      .set({
+        status,
+        // The CHECK constraint requires these two to agree, so they are always
+        // written together rather than left to a caller to remember.
+        disabledAt: status === 'DISABLED' ? now : null,
+        updatedAt: now,
+      })
+      .where(and(eq(admins.tenantId, tenantId), eq(admins.id, id)));
+  }
+
+  async setPasswordHash(
+    scope: ScopeContext,
+    id: AdminId,
+    hash: string,
+    now: Date,
+    tx?: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await executorOf(this.db, tx)
+      .update(admins)
+      .set({ passwordHash: hash, passwordUpdatedAt: now, updatedAt: now })
+      .where(and(eq(admins.tenantId, tenantId), eq(admins.id, id)));
+  }
+
+  async recordLogin(scope: ScopeContext, id: AdminId, now: Date): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await this.db
+      .update(admins)
+      .set({ lastLoginAt: now })
+      .where(and(eq(admins.tenantId, tenantId), eq(admins.id, id)));
+  }
+
+  async lockTenantForAdminChange(scope: ScopeContext, tx: unknown): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    // Serialises owner-affecting changes within a tenant. Counting owners is
+    // only a decision if nothing can change between the count and the write.
+    await executorOf(this.db, tx)
+      .select({ id: tenants.id })
+      .from(tenants)
+      .where(eq(tenants.id, tenantId))
+      .for('update');
+  }
+
+  async countActiveOwners(scope: ScopeContext, tx?: unknown): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await executorOf(this.db, tx)
+      .select({ count: sql<number>`count(*)::int` })
+      .from(adminRoles)
+      .innerJoin(roles, eq(roles.id, adminRoles.roleId))
+      .innerJoin(admins, eq(admins.id, adminRoles.adminId))
+      .where(
+        and(eq(adminRoles.tenantId, tenantId), eq(roles.key, 'owner'), eq(admins.status, 'ACTIVE')),
+      );
+    return row?.count ?? 0;
+  }
+}

@@ -23,6 +23,7 @@
     "db:generate": "pnpm --filter @nexa/api db:generate",
     "db:check": "pnpm --filter @nexa/api db:check",
     "db:seed": "pnpm --filter @nexa/api db:seed",
+    "admin:bootstrap": "pnpm --filter @nexa/api admin:bootstrap",
     "dev:services": "bash scripts/dev-services.sh",
     "verify": "pnpm typecheck && pnpm lint && pnpm check:boundaries && pnpm check:i18n && pnpm test && pnpm build"
   },

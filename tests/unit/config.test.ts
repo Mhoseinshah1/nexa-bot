@@ -36,9 +36,52 @@ describe('configuration', () => {
     expect(problems.join('\n')).toContain('SECRETS_KEK');
   });
 
+  it('defaults to real password authentication', () => {
+    // Phase 1 ships username and password. `none` survives only as a
+    // development escape hatch and is no longer what an unset variable means.
+    expect(loadConfig(valid).AUTH_MODE).toBe('password');
+  });
+
   it('refuses to boot without authentication outside development', () => {
     // A stub login gets copied into the next phase; a hard failure does not.
-    expect(() => loadConfig({ ...valid, NODE_ENV: 'production' })).toThrowError(/AUTH_MODE/);
+    expect(() =>
+      loadConfig({
+        ...valid,
+        NODE_ENV: 'production',
+        AUTH_MODE: 'none',
+        WEB_ADMIN_ORIGINS: 'https://admin.example.test',
+      }),
+    ).toThrowError(/AUTH_MODE/);
+  });
+
+  it('refuses the fast password hash profile in production', () => {
+    // It reduces the scrypt work factor by more than two orders of magnitude.
+    // Inferring the profile from NODE_ENV would let an install left on
+    // `development` store every password at that strength without saying so.
+    expect(() =>
+      loadConfig({
+        ...valid,
+        NODE_ENV: 'production',
+        PASSWORD_HASH_PROFILE: 'fast',
+        WEB_ADMIN_ORIGINS: 'https://admin.example.test',
+      }),
+    ).toThrowError(/PASSWORD_HASH_PROFILE/);
+  });
+
+  it('requires an admin origin in production', () => {
+    // The Origin check is the half of the CSRF defence that does not depend on
+    // the browser honouring SameSite.
+    expect(() => loadConfig({ ...valid, NODE_ENV: 'production' })).toThrowError(
+      /WEB_ADMIN_ORIGINS/,
+    );
+  });
+
+  it('parses the admin origin list', () => {
+    const config = loadConfig({
+      ...valid,
+      WEB_ADMIN_ORIGINS: 'https://a.example.test, https://b.example.test ,',
+    });
+    expect(config.WEB_ADMIN_ORIGINS).toEqual(['https://a.example.test', 'https://b.example.test']);
   });
 
   it('refuses a weak Telegram webhook secret when the webhook is enabled', () => {

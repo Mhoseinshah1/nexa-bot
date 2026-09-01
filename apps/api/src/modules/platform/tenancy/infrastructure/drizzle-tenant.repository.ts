@@ -61,6 +61,19 @@ export class DrizzleTenantRepository implements TenantRepository {
     return row ? toTenant(row) : null;
   }
 
+  async findPrimary(): Promise<Tenant | null> {
+    // Ordered by creation so a deployment that somehow acquired two primary
+    // tenants resolves the same one on every boot rather than whichever the
+    // planner returned first.
+    const [row] = await this.db
+      .select()
+      .from(tenants)
+      .where(eq(tenants.kind, 'PRIMARY'))
+      .orderBy(tenants.createdAt, tenants.id)
+      .limit(1);
+    return row ? toTenant(row) : null;
+  }
+
   async findInScope(scope: ScopeContext): Promise<Tenant | null> {
     const tenantId = requireTenantId(scope);
     const [row] = await this.db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1);
@@ -73,6 +86,17 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository {
     private readonly db: Database,
     private readonly cipher: SecretCipher,
   ) {}
+
+  /**
+   * Unscoped by necessity, and safe for the same reason `TenantRepository`'s is:
+   * it resolves WHICH tenant an inbound update belongs to. It returns no secret
+   * — `tokenSecretRef` is a reference — and everything downstream runs under the
+   * tenant it yields.
+   */
+  async findById(id: BotInstanceId): Promise<BotInstance | null> {
+    const [row] = await this.db.select().from(botInstances).where(eq(botInstances.id, id)).limit(1);
+    return row ? toBotInstance(row) : null;
+  }
 
   async listForTenant(scope: ScopeContext): Promise<BotInstance[]> {
     const tenantId = requireTenantId(scope);

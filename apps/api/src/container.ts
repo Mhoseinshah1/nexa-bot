@@ -5,7 +5,9 @@ import type {
   IdempotencyStore,
   Logger,
   OperationalEventRecorder,
+  PasswordHasher,
   SecretCipher,
+  TenantId,
 } from '@nexa/contracts';
 import { createTranslator } from '@nexa/i18n';
 import type { Translator } from '@nexa/contracts';
@@ -28,10 +30,16 @@ import { OutboxRelay } from './modules/platform/eventing/infrastructure/outbox-r
 import { DrizzleAuditWriter } from './modules/platform/audit/infrastructure/drizzle-audit-writer.js';
 import { DrizzleOperationalEventRecorder } from './modules/platform/opslog/infrastructure/drizzle-operational-events.js';
 import { DrizzleIdempotencyStore } from './modules/platform/idempotency/infrastructure/drizzle-idempotency-store.js';
-import {
-  NoAdminsPermissionResolver,
-  PermissionGuard,
-} from './modules/platform/access/application/permission-guard.js';
+import { PermissionGuard } from './modules/platform/access/application/permission-guard.js';
+import { AdminPermissionResolver } from './modules/platform/access/infrastructure/admin-permission-resolver.js';
+import { ScryptPasswordHasher, scryptParamsFor } from './infrastructure/crypto/password-hasher.js';
+import { DrizzleAdminRepository } from './modules/platform/identity/infrastructure/drizzle-admin.repository.js';
+import { DrizzleRoleRepository } from './modules/platform/identity/infrastructure/drizzle-role.repository.js';
+import { DrizzleSessionRepository } from './modules/platform/identity/infrastructure/drizzle-session.repository.js';
+import { DrizzleLoginThrottleRepository } from './modules/platform/identity/infrastructure/drizzle-login-throttle.repository.js';
+import { AuthenticationService } from './modules/platform/identity/application/authentication.service.js';
+import { AdminManagementService } from './modules/platform/identity/application/admin-management.service.js';
+import { BootstrapOwnerService } from './modules/platform/identity/application/bootstrap-owner.service.js';
 import { RecordPingService } from './modules/platform/system/application/record-ping.service.js';
 import { PingLogConsumer } from './modules/platform/opslog/application/ping-log.consumer.js';
 
@@ -64,6 +72,24 @@ export interface Container {
   readonly opsLog: OperationalEventRecorder;
   readonly idempotency: IdempotencyStore;
   readonly guard: PermissionGuard;
+  readonly hasher: PasswordHasher;
+  readonly admins: DrizzleAdminRepository;
+  readonly roles: DrizzleRoleRepository;
+  readonly sessions: DrizzleSessionRepository;
+  readonly auth: AuthenticationService;
+  readonly adminManagement: AdminManagementService;
+  readonly bootstrapOwner: BootstrapOwnerService;
+  /**
+   * The primary tenant this installation serves.
+   *
+   * Resolved once at boot rather than taken from a request: one install serves
+   * one customer (ADR-0001), and a caller-supplied tenant id on the login
+   * surface would let anyone choose which tenant to attack. Null until a tenant
+   * is provisioned, which the login surface reports as a configuration error
+   * rather than authenticating against nothing.
+   */
+  readonly installationTenantId: TenantId | null;
+  setInstallationTenant(tenantId: TenantId | null): void;
   readonly recordPing: RecordPingService;
   shutdown(): Promise<void>;
 }
@@ -86,7 +112,62 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const audit = new DrizzleAuditWriter(database.db, ids, clock);
   const opsLog = new DrizzleOperationalEventRecorder(database.db, ids, clock);
   const idempotency = new DrizzleIdempotencyStore(database.db, ids);
-  const guard = new PermissionGuard(new NoAdminsPermissionResolver(), opsLog);
+
+  const hasher = new ScryptPasswordHasher(scryptParamsFor(config.PASSWORD_HASH_PROFILE));
+  const admins = new DrizzleAdminRepository(database.db);
+  const roles = new DrizzleRoleRepository(database.db, ids);
+  const sessions = new DrizzleSessionRepository(database.db);
+  const loginThrottle = new DrizzleLoginThrottleRepository(database.db);
+
+  // The real resolver replaces Phase 0's placeholder, which granted nothing
+  // because there were no admins. `SYSTEM_JOB` still holds only its explicit
+  // contract set: nothing here reintroduces an actor-type bypass.
+  const guard = new PermissionGuard(new AdminPermissionResolver(admins, roles, clock), opsLog);
+
+  const auth = new AuthenticationService(
+    admins,
+    roles,
+    sessions,
+    loginThrottle,
+    hasher,
+    audit,
+    opsLog,
+    clock,
+    ids,
+    config.SESSION_TTL_SECONDS,
+    {
+      windowSeconds: config.LOGIN_THROTTLE_WINDOW_SECONDS,
+      maxAttemptsPerUsername: config.LOGIN_MAX_ATTEMPTS_PER_USERNAME,
+      maxAttemptsPerIp: config.LOGIN_MAX_ATTEMPTS_PER_IP,
+      lockoutSeconds: config.LOGIN_LOCKOUT_SECONDS,
+    },
+  );
+
+  const adminManagement = new AdminManagementService(
+    guard,
+    uow,
+    admins,
+    roles,
+    sessions,
+    hasher,
+    audit,
+    outbox,
+    clock,
+    ids,
+  );
+
+  const bootstrapOwner = new BootstrapOwnerService(
+    uow,
+    admins,
+    roles,
+    hasher,
+    audit,
+    outbox,
+    clock,
+    ids,
+  );
+
+  let installationTenantId: TenantId | null = null;
 
   const relay = new OutboxRelay(database.db, [new PingLogConsumer(opsLog)], clock, logger, {
     batchSize: config.OUTBOX_RELAY_BATCH_SIZE,
@@ -114,6 +195,19 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLog,
     idempotency,
     guard,
+    hasher,
+    admins,
+    roles,
+    sessions,
+    auth,
+    adminManagement,
+    bootstrapOwner,
+    get installationTenantId() {
+      return installationTenantId;
+    },
+    setInstallationTenant(tenantId: TenantId | null) {
+      installationTenantId = tenantId;
+    },
     recordPing,
     async shutdown() {
       await relay.stop();

@@ -12,9 +12,21 @@ import {
   type ScopeContext,
 } from '@nexa/contracts';
 import {
-  NoAdminsPermissionResolver,
   PermissionGuard,
+  type PermissionResolver,
 } from '../../apps/api/src/modules/platform/access/application/permission-guard';
+
+/**
+ * A resolver that grants nothing, so these tests measure the GUARD rather than
+ * a resolver's data. Phase 1 deleted the placeholder resolver from production
+ * code; the empty behaviour it stood for still belongs here, where it is a test
+ * fixture and cannot be wired into an application by accident.
+ */
+class GrantsNothingResolver implements PermissionResolver {
+  async resolve(): Promise<ReadonlySet<PermissionKey>> {
+    return new Set<PermissionKey>();
+  }
+}
 
 const CORRELATION = 'corr-authz' as CorrelationId;
 
@@ -27,7 +39,7 @@ class RecordingOpsLog implements OperationalEventRecorder {
 
 function guard() {
   const opsLog = new RecordingOpsLog();
-  return { guard: new PermissionGuard(new NoAdminsPermissionResolver(), opsLog), opsLog };
+  return { guard: new PermissionGuard(new GrantsNothingResolver(), opsLog), opsLog };
 }
 
 const scope = systemContext('test');

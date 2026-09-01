@@ -79,6 +79,46 @@ else
   pass "surfaces contain no data access"
 fi
 
+# --- The owner bootstrap is not reachable from a surface -------------------
+# BootstrapOwnerService creates an administrator without authorizing a caller,
+# because provisioning has no caller. That is only safe while it cannot be
+# reached over HTTP or Telegram: exposed on a surface it would be an
+# unauthenticated route that creates an owner. The service refuses to run once
+# any admin exists; this check is what keeps the other half of the argument
+# true.
+BOOTSTRAP_LEAK=$(grep -rn "bootstrap-owner.service\|bootstrapOwner" apps/api/src/surfaces 2>/dev/null || true)
+if [ -n "$BOOTSTRAP_LEAK" ]; then
+  fail "A surface reaches the owner bootstrap" "$BOOTSTRAP_LEAK" \
+       "Bootstrap is a CLI provisioning step (src/bootstrap-owner.cli.ts), not an endpoint."
+else
+  pass "the owner bootstrap is not reachable from any surface"
+fi
+
+# --- Authorization is not decided in a surface ------------------------------
+# UI visibility is not authorization. A controller that resolves permissions
+# itself is a controller that can decide differently from the service the
+# Telegram surface calls — which is how the legacy system ended up with four
+# admin roles in one surface and seven in the other.
+SURFACE_AUTHZ=$(grep -rnE "resolveEffectivePermissions|permissionsForAdmin\(|SYSTEM_JOB_PERMISSIONS" apps/api/src/surfaces 2>/dev/null || true)
+if [ -n "$SURFACE_AUTHZ" ]; then
+  fail "A surface resolves permissions itself" "$SURFACE_AUTHZ" \
+       "Call the application service; it checks the permission."
+else
+  pass "surfaces do not resolve permissions themselves"
+fi
+
+# --- No password or session material is logged or persisted raw -------------
+# A password reaching a log or an audit column is unrecoverable: it is in the
+# backups before anyone notices.
+SECRET_LEAK=$(grep -rnE "(after|before|context):\s*\{[^}]*\b(password|passwordHash|token)\b" \
+  apps/api/src --include=*.ts 2>/dev/null | grep -v "tokenSecretRef" || true)
+if [ -n "$SECRET_LEAK" ]; then
+  fail "A credential is written into an audit or log payload" "$SECRET_LEAK" \
+       "Audit the fact of the change, never the material."
+else
+  pass "no credential is written into an audit or log payload"
+fi
+
 # --- Money is never a float or a bare number -------------------------------
 # A float that reaches production is very expensive to find.
 if grep -rnE "(amount|price|balance|total)\s*:\s*number" \

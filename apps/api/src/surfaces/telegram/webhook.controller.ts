@@ -1,12 +1,14 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { Body, Controller, Headers, Inject, Post } from '@nestjs/common';
+import { Body, Controller, Headers, Inject, Param, Post } from '@nestjs/common';
 import type { Update } from 'grammy/types';
 import {
   errors,
   PLATFORM_ERROR_CODES,
-  systemContext,
   systemJobActor,
   TELEGRAM_SECRET_TOKEN_HEADER,
+  uuidV7Schema,
+  type BotInstanceId,
+  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
@@ -14,29 +16,39 @@ import { currentCorrelationId, newCorrelationId } from '../../infrastructure/log
 /**
  * The Telegram webhook receiver.
  *
- * Phase 0 scope, deliberately narrow: authenticate the update, acknowledge it,
- * and hand the work to the write path. There is no conversation state machine,
- * no menu, no product flow and no outbound send — those are Phase 1 and Phase 2.
+ * Phase 1 scope stays narrow: authenticate the update, identify the bot,
+ * acknowledge, and hand the work to the write path. No conversation state
+ * machine, no menu, no product flow, no outbound send.
  *
- * Two shapes are fixed here because everything later copies them:
+ * Three shapes are fixed here because everything later copies them:
  *
  *   - The webhook ANSWERS IMMEDIATELY and does the work behind the outbox.
  *     Telegram times a webhook out in seconds; a handler that calls a payment
  *     gateway or a panel inline will eventually be that timeout.
- *   - Every update is authenticated by the secret token header. The endpoint
- *     does not exist at all unless the feature is switched on.
+ *   - Every update is authenticated by the secret token header, and the
+ *     endpoint does not exist at all unless the feature is switched on.
+ *   - The route NAMES THE BOT INSTANCE. Telegram's `update_id` is a per-bot
+ *     sequence, not a global one, so two bots in one installation routinely
+ *     produce the same id. Keying idempotency on `update_id` alone therefore
+ *     makes one bot's update look like a replay of another's — silently
+ *     dropped, 200, nothing logged. The identity is `(bot_instance_id,
+ *     update_id)`, and resolving the bot is also what supplies the tenant, so
+ *     the update stops running under the system scope.
  */
 @Controller()
 export class TelegramWebhookController {
   constructor(@Inject(CONTAINER) private readonly container: Container) {}
 
-  @Post('/telegram/webhook')
+  @Post('/telegram/webhook/:botInstanceId')
   async receive(
+    @Param('botInstanceId') botInstanceIdParam: string,
     @Headers(TELEGRAM_SECRET_TOKEN_HEADER) secretToken: string | undefined,
     @Body() update: Update,
   ): Promise<{ ok: true }> {
     const expected = this.container.config.TELEGRAM_WEBHOOK_SECRET;
 
+    // Authenticated before the bot id is even parsed, so the endpoint cannot be
+    // used to probe which bot ids exist.
     if (!expected || !secretTokenMatches(secretToken, expected)) {
       throw errors.unauthenticated(
         PLATFORM_ERROR_CODES.TELEGRAM_BAD_SECRET_TOKEN,
@@ -44,18 +56,39 @@ export class TelegramWebhookController {
       );
     }
 
+    const parsed = uuidV7Schema.safeParse(botInstanceIdParam);
+    if (!parsed.success) {
+      throw errors.notFound(PLATFORM_ERROR_CODES.TENANT_NOT_FOUND, 'Unknown bot instance.');
+    }
+
+    const botInstance = await this.container.botInstances.findById(
+      parsed.data as unknown as BotInstanceId,
+    );
+    if (botInstance === null) {
+      throw errors.notFound(PLATFORM_ERROR_CODES.TENANT_NOT_FOUND, 'Unknown bot instance.');
+    }
+
     const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
     const updateId = String(update.update_id ?? 'unknown');
 
     // The update is a trigger; the ping itself is system work, so it acts as
-    // SYSTEM_JOB and the audit row names the update that caused it.
-    const actor = systemJobActor(`telegram-update:${updateId}`, correlationId);
+    // SYSTEM_JOB and the audit row names the update that caused it. SYSTEM_JOB
+    // is not a bypass — it holds only the narrow set the contract grants it.
+    const actor = systemJobActor(`telegram-update:${botInstance.id}:${updateId}`, correlationId);
+
+    // Scoped to the bot's own tenant rather than to the system scope, so the
+    // rows this writes belong to somebody.
+    const scope: TenantContext = {
+      tenantId: botInstance.tenantId,
+      botInstanceId: botInstance.id,
+    };
 
     if (isPingCommand(update)) {
-      await this.container.recordPing.execute(systemContext('telegram-webhook'), actor, {
-        // Telegram redelivers an update after a timeout; keying on the update id
-        // makes that redelivery a replay rather than a second ping.
-        idempotencyKey: `telegram:update:${updateId}`,
+      await this.container.recordPing.execute(scope, actor, {
+        // Telegram redelivers an update after a timeout; keying on the bot AND
+        // the update id makes that redelivery a replay, while keeping two bots'
+        // identically numbered updates distinct.
+        idempotencyKey: telegramUpdateKey(botInstance.id, updateId),
         source: 'telegram',
       });
     }
@@ -64,6 +97,16 @@ export class TelegramWebhookController {
     // and an update we do not handle is not an error.
     return { ok: true };
   }
+}
+
+/**
+ * The idempotency identity of a Telegram update.
+ *
+ * Exported so the tests assert the shape directly rather than inferring it from
+ * behaviour — this is the property, not an implementation detail.
+ */
+export function telegramUpdateKey(botInstanceId: string, updateId: string): string {
+  return `telegram:${botInstanceId}:update:${updateId}`;
 }
 
 /**
