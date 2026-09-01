@@ -44,6 +44,14 @@ previous entry. `0001_append_only_guards.sql` is the worked example.
 Because such a file adds only things the schema file does not describe, it does
 not affect the drift check.
 
+## Forward-only, even when editing would be tidier
+
+`0002_drop_callback_refs.sql` is the worked example. A table added in 0000
+turned out to have no producer and no reader, and was removed by a new
+migration rather than by editing 0000 — even though nothing had deployed it and
+editing would have left a cleaner history. The rule does not get an exception
+because the case looks harmless; the exception is what erodes it.
+
 ## Append-only tables
 
 `audit_logs` refuses UPDATE and DELETE. `operational_events` refuses DELETE and

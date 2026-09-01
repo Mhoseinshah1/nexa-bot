@@ -265,27 +265,6 @@ export const operationalEvents = pgTable(
   ],
 );
 
-// ---------------------------------------------------------------------------
-// Telegram callback references
-// ---------------------------------------------------------------------------
-
-export const callbackRefs = pgTable(
-  'callback_refs',
-  {
-    ref: text('ref').primaryKey(),
-    tenantId: uuid('tenant_id')
-      .notNull()
-      .references(() => tenants.id),
-    botInstanceId: uuid('bot_instance_id').references(() => botInstances.id),
-    flow: text('flow').notNull(),
-    step: text('step').notNull(),
-    payload: jsonb('payload').notNull(),
-    expiresAt: timestamptz('expires_at').notNull(),
-    createdAt: timestamptz('created_at').notNull().defaultNow(),
-  },
-  (table) => [index('callback_refs_expires_idx').on(table.expiresAt)],
-);
-
 /** A counter that keeps the outbox `sequence` monotonic per aggregate. */
 export const aggregateSequences = pgTable(
   'aggregate_sequences',
@@ -307,7 +286,6 @@ export const schema = {
   requestIdempotency,
   auditLogs,
   operationalEvents,
-  callbackRefs,
   aggregateSequences,
 };
 

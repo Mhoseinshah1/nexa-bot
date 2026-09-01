@@ -12,12 +12,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/../apps/api"
 
-BEFORE=$(find drizzle -name '*.sql' | sort | md5sum)
+# Hash the file CONTENTS, not just the names, so a regenerated file is caught as
+# well as a new one.
+BEFORE=$(find drizzle -name '*.sql' | sort | xargs md5sum | md5sum)
 
 DATABASE_URL="${DATABASE_URL:-postgres://nexa:nexa@127.0.0.1:5432/nexa_dev}" \
   pnpm exec drizzle-kit generate --name drift-check >/dev/null 2>&1 || true
 
-AFTER=$(find drizzle -name '*.sql' | sort | md5sum)
+AFTER=$(find drizzle -name '*.sql' | sort | xargs md5sum | md5sum)
 
 if [ "$BEFORE" != "$AFTER" ]; then
   echo "FAIL  The Drizzle schema and the migration files disagree."

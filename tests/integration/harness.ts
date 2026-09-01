@@ -58,7 +58,7 @@ export async function resetDatabase(db: Database): Promise<void> {
   await db.execute(
     `TRUNCATE TABLE
        audit_logs, operational_events, outbox_messages, processed_messages,
-       request_idempotency, aggregate_sequences, callback_refs,
+       request_idempotency, aggregate_sequences,
        bot_instances, tenants
      RESTART IDENTITY CASCADE` as never,
   );

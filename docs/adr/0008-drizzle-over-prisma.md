@@ -48,3 +48,12 @@ policy rather than hope:
 hand-written and registered in the journal so the standard migrator applies it.
 Because it adds only triggers and functions — things the schema file does not
 describe — it does not affect the drift check.
+
+## Forward-only in practice
+
+`0002_drop_callback_refs.sql` is the worked example of the forward-only rule
+under pressure. The table was created in 0000 and turned out to have no producer
+and no reader. Editing 0000 would have been smaller and would have left a
+cleaner history, and it was not done: an applied migration is never edited, and
+that rule does not get an exception because the table happened to be new and
+undeployed. The exception is what erodes the rule.

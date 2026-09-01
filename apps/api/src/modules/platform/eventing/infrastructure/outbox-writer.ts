@@ -2,7 +2,6 @@ import { sql } from 'drizzle-orm';
 import {
   errors,
   isEventType,
-  isSystemContext,
   PLATFORM_ERROR_CODES,
   type ActorContext,
   type AggregateType,
@@ -10,7 +9,6 @@ import {
   type EventPayload,
   type EventType,
   type IdGenerator,
-  type ScopeContext,
 } from '@nexa/contracts';
 import { actorRef, EVENT_ENVELOPE_VERSION } from '@nexa/contracts';
 import {
@@ -105,9 +103,4 @@ export class OutboxWriter {
     }
     return Number(row.lastSequence);
   }
-}
-
-/** Convenience for code paths that legitimately have no tenant. */
-export function describeScope(scope: ScopeContext): string {
-  return isSystemContext(scope) ? `system:${scope.reason}` : `tenant:${scope.tenantId}`;
 }

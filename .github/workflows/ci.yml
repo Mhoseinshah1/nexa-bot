@@ -81,6 +81,10 @@ jobs:
       DATABASE_URL: postgres://nexa:nexa@127.0.0.1:5432/nexa_test
       TEST_DATABASE_URL: postgres://nexa:nexa@127.0.0.1:5432/nexa_test
       REDIS_URL: redis://127.0.0.1:6379
+      # A throwaway key for the test database only. Real deployments supply
+      # their own; nothing encrypted with this ever leaves CI.
+      SECRETS_KEK: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      SECRETS_KEK_ID: ci-1
 
     steps:
       - uses: actions/checkout@v5
@@ -104,8 +108,13 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
-      - name: Apply migrations
-        run: pnpm db:migrate
+      # Migrations run in contexts that legitimately have no application
+      # secrets — a CI step, an installer before first boot, a restore from
+      # backup. Unsetting the key here is the regression guard: if the migration
+      # runner ever starts loading the full application configuration again,
+      # this step fails.
+      - name: Apply migrations without application secrets
+        run: env -u SECRETS_KEK -u SECRETS_KEK_ID pnpm db:migrate
 
       # A schema change that never became a migration is a deployment that works
       # on one machine and nowhere else.
@@ -138,19 +147,29 @@ jobs:
           BUILD_VERSION: ${{ github.sha }}
           BUILD_COMMIT: ${{ github.sha }}
 
-      # The api entrypoints must actually start from the built output, not just
-      # compile. A missing runtime import is invisible to tsc under ESM.
-      - name: Smoke-check the built entrypoints
+      # A missing runtime import is invisible to tsc under ESM, so the built
+      # graph has to be loaded, not just compiled. `bootstrap.js` pulls in the
+      # whole application graph — Nest, the container, every adapter — without
+      # the two lines in `main.js` that read configuration and listen, so this
+      # checks resolution without needing a database or a secret key.
+      - name: Smoke-check the built output
         run: |
           test -f apps/api/dist/main.js
           test -f apps/api/dist/main.worker.js
           test -f apps/web/dist/index.html
           node --input-type=module -e "
-            const missing = await import('./apps/api/dist/main.js').then(() => null, (e) => e);
-            // The entrypoint exits non-zero without configuration; what matters
-            // is that every module it imports resolves.
-            if (missing && /Cannot find (module|package)/.test(String(missing))) {
-              console.error(String(missing));
+            // bootstrap.js reaches the whole api graph; container.js reaches the
+            // whole worker graph. Neither reads configuration or opens a socket,
+            // so this proves resolution without a database or a secret key.
+            const api = await import('./apps/api/dist/bootstrap.js');
+            const worker = await import('./apps/api/dist/container.js');
+            const missing = [
+              typeof api.createApiApp === 'function' ? null : 'bootstrap.createApiApp',
+              typeof worker.createContainer === 'function' ? null : 'container.createContainer',
+            ].filter(Boolean);
+            if (missing.length) {
+              console.error('missing exports: ' + missing.join(', '));
               process.exit(1);
             }
+            console.log('api and worker graphs resolve from the built output');
           "

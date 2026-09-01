@@ -87,6 +87,13 @@ for the route, and Persian flow names are multi-byte. Separately, the service
 username the legacy system generates embeds identifying information — ours is
 opaque.
 
+**Enforced by.** `IdGenerator.callbackRef()` and `callbackRefSchema`, with unit
+tests for length, alphabet and uniqueness. The **registry table does not exist
+yet**: it was created in migration 0000 with nothing reading or writing it and
+dropped again in 0002, because a table nothing touches is exactly the
+placeholder infrastructure this project avoids. It lands with the conversation
+state machine in Phase 1, when something writes a row.
+
 ---
 
 ## Events, audit and operational events are three different things

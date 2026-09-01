@@ -1,4 +1,4 @@
-import { and, asc, isNull, lt, sql } from 'drizzle-orm';
+import { asc, isNull, sql } from 'drizzle-orm';
 import {
   type Clock,
   type DomainEvent,
@@ -170,17 +170,6 @@ export class OutboxRelay {
 
   async isHealthy(): Promise<boolean> {
     return (await this.lagMs()) <= this.options.maxLagMs;
-  }
-
-  /** Count of messages stuck behind a failing consumer, for diagnostics. */
-  async stuckCount(minAttempts = 3): Promise<number> {
-    const [row] = await this.db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(outboxMessages)
-      .where(
-        and(isNull(outboxMessages.publishedAt), lt(sql`${minAttempts}`, outboxMessages.attempts)),
-      );
-    return row?.count ?? 0;
   }
 }
 
