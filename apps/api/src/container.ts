@@ -104,7 +104,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const cipher = new AesGcmSecretCipher(config.SECRETS_KEK, config.SECRETS_KEK_ID);
   const translator = createTranslator();
 
-  const database = createDatabase(config.DATABASE_URL, config.DATABASE_POOL_MAX);
+  const database = createDatabase(config.DATABASE_URL, config.DATABASE_POOL_MAX, {
+    statementTimeoutMs: config.DATABASE_STATEMENT_TIMEOUT_MS,
+    lockTimeoutMs: config.DATABASE_LOCK_TIMEOUT_MS,
+    idleInTransactionTimeoutMs: config.DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS,
+  });
   const redis = createRedis(config.REDIS_URL);
 
   const uow = new DrizzleUnitOfWork(database.db);

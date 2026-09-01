@@ -79,6 +79,23 @@ export const configSchema = z
     LOGIN_LOCKOUT_SECONDS: z.coerce.number().int().min(30).max(86_400).default(900),
 
     /**
+     * Bounds on a database connection's waiting and working.
+     *
+     * Postgres defaults all three to 0 — wait forever — which turns one stalled
+     * transaction holding the tenant row into an installation-wide outage with
+     * no error to see. See `DatabaseTimeouts`. Migrations are exempt: they open
+     * their own handle without these.
+     */
+    DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(15_000),
+    DATABASE_LOCK_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(5_000),
+    DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(600_000)
+      .default(30_000),
+
+    /**
      * How long an EXPIRED session row is kept before housekeeping removes it.
      *
      * Not the session's lifetime — `SESSION_TTL_SECONDS` is that. This is how

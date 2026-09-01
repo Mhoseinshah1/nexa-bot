@@ -392,6 +392,46 @@ A login that finds the tenant stopped under the lock therefore fails, and gives
 its throttle reservations back: the credential was correct, and a maintenance
 window must not lock out the operator who tried during it.
 
+### What that concentration costs, measured
+
+Making one row the boundary means every administrator mutation, every login,
+every webhook write and the API's own boot all meet on it. That was worth
+measuring rather than asserting, so it was:
+
+| | latency |
+|---|---|
+| login, sequential | 13ms |
+| login, 16 concurrent | ~43ms each |
+| `setRoles`, sequential | 10ms |
+| `setRoles`, 16 concurrent | ~101ms each, 168ms wall |
+| login, during a burst of 16 mutations | ~263ms each |
+
+Administrator mutations serialise completely — 16 concurrent take the same wall
+time as 16 sequential — which is exactly what an exclusive lock is for and is
+not a problem for a surface where mutations are rare human actions. The number
+that matters is the last row: while mutations are in flight, concurrent logins
+wait behind them, here by about 6×. That is acceptable. It is only acceptable
+because the wait is **bounded**.
+
+Postgres defaults `lock_timeout`, `statement_timeout` and
+`idle_in_transaction_session_timeout` to `0`, which means wait forever. With
+those defaults, one transaction that stalls while holding the tenant row blocks
+every login for the installation — no error, no bound — until the pool fills
+with waiters and the API stops serving anything, health included. The stalled
+holder does not even have to be doing anything: the dangerous case is
+application code that opened a transaction, took the lock, and then stopped,
+which is why `idle_in_transaction_session_timeout` matters most of the three.
+
+All three are set on every pooled connection, as connection options rather than
+a `SET` per checkout, so no code path can forget them. Migrations are exempt and
+open their own handle without them: a long index build is not a stuck
+transaction, and killing one halfway is worse than waiting for it.
+
+Nothing here removes the concentration — it bounds what happens when it goes
+wrong. Turning the tenant row into something less contended (a per-installation
+advisory lock, or a narrower boundary per aggregate) is a change worth making on
+evidence from a real deployment, not on this benchmark.
+
 It closes the Telegram surface and the outbox too. A bot's own status was the
 whole check on the webhook, and the relay claimed any unpublished row — so a
 stopped installation went on accepting Telegram updates and, worse, went on
