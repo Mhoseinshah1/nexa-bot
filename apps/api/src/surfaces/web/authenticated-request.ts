@@ -106,12 +106,20 @@ export function assertOriginAllowed(
   }
 }
 
-/** Builds the actor for an authenticated administrator. */
+/**
+ * Builds the actor for an authenticated administrator.
+ *
+ * `sessionId` is REQUIRED, not optional. The mutation-time check that a session
+ * has not been revoked skips an actor that carries none — correct for
+ * `SYSTEM_JOB`, which has no session, and a silent hole if a controller ever
+ * forgets. Every caller of this function has just authenticated and therefore
+ * has one, so the compiler can insist rather than the reviewer.
+ */
 export function adminActor(
   admin: Admin,
   correlationId: CorrelationId,
   request: FastifyRequest,
-  sessionId?: string,
+  sessionId: string,
 ): ActorContext {
   return {
     type: 'WEB_ADMIN',
@@ -122,7 +130,7 @@ export function adminActor(
     correlationId,
     // Carried so a mutation can confirm, under the lock it takes anyway, that
     // this session has not been revoked since the request arrived.
-    ...(sessionId !== undefined ? { sessionId } : {}),
+    sessionId,
     ...(request.ip ? { ip: request.ip } : {}),
     ...(typeof request.headers['user-agent'] === 'string'
       ? { userAgent: request.headers['user-agent'] }
