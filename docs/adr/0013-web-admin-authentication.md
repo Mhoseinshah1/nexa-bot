@@ -217,6 +217,22 @@ The surface clears the cookie afterwards — that is not the revocation, which
 already committed; it stops the browser presenting a credential the server will
 now refuse.
 
+**A revoked session performs no writes.** Validity is established once, when
+the request arrives, and then the request does work — so a logout or a rotation
+committing in that window would otherwise still let it commit. Every
+administrator mutation and the password rotation re-read the session on the
+LOCKED connection, beside the actor's permissions, which is what makes "a
+rotation revokes every session" true of the requests already in flight and not
+only of the rows. System work carries no session and is fenced by the boundary
+check instead.
+
+The generic refusal a paused tenant returns **gives its throttle reservations
+back**. That attempt presented the right password; the refusal is about the
+installation, not about them, and at a limit of one a single correct attempt
+during a maintenance window would otherwise leave the operator rate limited the
+moment it ended. A wrong password, or a disabled administrator, keeps its
+reservation — those are failures against a real credential.
+
 **Sessions carry identity, never authority.** Permissions are resolved from the
 database on every request. This answers the third question ADR-0009 left open:
 a role change takes effect on the next request, and disabling an administrator

@@ -183,6 +183,15 @@ export interface SessionRepository {
    * subsequent call is scoped.
    */
   findByTokenHash(tokenHash: string): Promise<AdminSession | null>;
+  /**
+   * Whether this session is still live at this instant.
+   *
+   * Takes `tx` because its whole purpose is to be re-asked on the LOCKED
+   * connection, inside the transaction a mutation is about to commit in: the
+   * validity established when the request arrived is a snapshot, and a logout
+   * or a password rotation can revoke it while the request is still working.
+   */
+  isLive(scope: ScopeContext, id: AdminSessionId, now: Date, tx?: unknown): Promise<boolean>;
   touch(id: AdminSessionId, now: Date): Promise<void>;
   revoke(id: AdminSessionId, now: Date, reason: string): Promise<void>;
   revokeAllForAdmin(

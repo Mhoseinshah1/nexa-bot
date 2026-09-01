@@ -243,6 +243,17 @@ export class AuthenticationService {
     // not answer differently before the password is known. Reported as the one
     // generic failure like every other reason; the audit row says which it was.
     if (!(await this.tenantIsActive(scope))) {
+      // The reservations go back first. This attempt presented the RIGHT
+      // password — the refusal is about the installation being paused, not
+      // about them — and keeping it counted would lock an operator out of a
+      // maintenance window by trying during it. At a limit of one, a single
+      // correct attempt while stopped would leave them rate limited the moment
+      // the tenant came back.
+      //
+      // A wrong password, or a disabled administrator, keeps its reservation:
+      // those are failures against a real credential and are what the counter
+      // exists to count.
+      await this.releaseReservations(scope, username, context.ip, reserved);
       return this.failLogin(scope, actor, username, reserved, 'TENANT_INACTIVE');
     }
 

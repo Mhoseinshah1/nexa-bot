@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import {
   asId,
   type AdminId,
@@ -78,6 +78,23 @@ export class DrizzleSessionRepository implements SessionRepository {
       .where(eq(adminSessions.tokenHash, tokenHash))
       .limit(1);
     return row ? toSession(row) : null;
+  }
+
+  async isLive(scope: ScopeContext, id: AdminSessionId, now: Date, tx?: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await executorOf(this.db, tx)
+      .select({ id: adminSessions.id })
+      .from(adminSessions)
+      .where(
+        and(
+          eq(adminSessions.tenantId, tenantId),
+          eq(adminSessions.id, id),
+          isNull(adminSessions.revokedAt),
+          gt(adminSessions.expiresAt, now),
+        ),
+      )
+      .limit(1);
+    return row !== undefined;
   }
 
   async touch(id: AdminSessionId, now: Date): Promise<void> {

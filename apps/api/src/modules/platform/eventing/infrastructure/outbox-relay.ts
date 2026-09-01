@@ -96,7 +96,9 @@ export class OutboxRelay {
   async processBatch(): Promise<RelayBatchResult> {
     return this.db.transaction(async (tx) => {
       // Work belonging to a tenant that is not ACTIVE is left UNCLAIMED, not
-      // discarded and not marked published.
+      // discarded and not marked published. `eligibleForDispatch` below is the
+      // one statement of that rule; readiness uses it too, so the two cannot
+      // disagree about what is pending.
       //
       // Stopping a tenant now ends its Web Admin logins and its Telegram
       // intake; a relay that went on dispatching would leave the one half of
@@ -106,14 +108,7 @@ export class OutboxRelay {
       // of that: the messages are still there, in order, when the tenant is
       // started again. A message with no tenant is platform work and always
       // eligible.
-      const eligible = or(
-        isNull(outboxMessages.tenantId),
-        sql`EXISTS (
-          SELECT 1 FROM ${tenants}
-          WHERE ${tenants.id} = ${outboxMessages.tenantId}
-            AND ${tenants.status} = 'ACTIVE'
-        )`,
-      );
+      const eligible = eligibleForDispatch();
 
       const claimed = await tx
         .select()
@@ -177,12 +172,21 @@ export class OutboxRelay {
     }
   }
 
-  /** Oldest unpublished message age, for readiness reporting. */
+  /**
+   * Oldest DISPATCHABLE unpublished message age, for readiness reporting.
+   *
+   * The same eligibility the claim uses, deliberately. Work paused because its
+   * tenant is stopped is never going to publish while that lasts, so counting
+   * it would make readiness fall behind for as long as the pause — and an
+   * installation somebody switched off on purpose would report itself unready,
+   * indefinitely, and be pulled out of service. The relay is healthy; it is
+   * waiting, which is what it was told to do.
+   */
   async lagMs(): Promise<number> {
     const [row] = await this.db
       .select({ occurredAt: outboxMessages.occurredAt })
       .from(outboxMessages)
-      .where(isNull(outboxMessages.publishedAt))
+      .where(and(isNull(outboxMessages.publishedAt), eligibleForDispatch()))
       .orderBy(asc(outboxMessages.occurredAt))
       .limit(1);
     if (!row) return 0;
@@ -192,6 +196,27 @@ export class OutboxRelay {
   async isHealthy(): Promise<boolean> {
     return (await this.lagMs()) <= this.options.maxLagMs;
   }
+}
+
+/**
+ * Which unpublished rows this relay may act on.
+ *
+ * A message with no tenant is platform work and always eligible. A
+ * tenant-scoped one is eligible only while its tenant is ACTIVE: stopping a
+ * tenant ends its Web Admin logins and its Telegram intake, and a relay that
+ * kept dispatching would leave the half of the installation that talks to the
+ * outside world still talking. Skipped, never dropped — the rows stay
+ * unpublished, in order, for when the tenant comes back.
+ */
+function eligibleForDispatch() {
+  return or(
+    isNull(outboxMessages.tenantId),
+    sql`EXISTS (
+      SELECT 1 FROM ${tenants}
+      WHERE ${tenants.id} = ${outboxMessages.tenantId}
+        AND ${tenants.status} = 'ACTIVE'
+    )`,
+  );
 }
 
 function toDomainEvent(row: typeof outboxMessages.$inferSelect): DomainEvent {

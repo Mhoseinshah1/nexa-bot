@@ -111,6 +111,7 @@ export function adminActor(
   admin: Admin,
   correlationId: CorrelationId,
   request: FastifyRequest,
+  sessionId?: string,
 ): ActorContext {
   return {
     type: 'WEB_ADMIN',
@@ -119,6 +120,9 @@ export function adminActor(
     label: admin.username,
     surface: 'WEB',
     correlationId,
+    // Carried so a mutation can confirm, under the lock it takes anyway, that
+    // this session has not been revoked since the request arrived.
+    ...(sessionId !== undefined ? { sessionId } : {}),
     ...(request.ip ? { ip: request.ip } : {}),
     ...(typeof request.headers['user-agent'] === 'string'
       ? { userAgent: request.headers['user-agent'] }

@@ -12,6 +12,7 @@ import {
   type ActorContext,
   type Admin,
   type AdminId,
+  type AdminSessionId,
   type AdminStatus,
   type AuditWriter,
   type Clock,
@@ -132,6 +133,10 @@ export class AdminManagementService {
       { action: 'admin.create', entityId: null },
       async (tx) => {
         await this.admins.lockTenantForAdminChange(scope, tx);
+
+        // The session, before the authority it carries. A revoked session is
+        // not a less-privileged actor; it is not an actor.
+        await this.assertSessionStillLive(scope, actor, tx);
 
         // Taken after the lock, for the reason `setStatus` states: this request
         // may have queued here for the length of another mutation, and the row
@@ -257,6 +262,10 @@ export class AdminManagementService {
       { action: 'admin.status_change', entityId: targetId },
       async (tx) => {
         await this.admins.lockTenantForAdminChange(scope, tx);
+
+        // The session, before the authority it carries. A revoked session is
+        // not a less-privileged actor; it is not an actor.
+        await this.assertSessionStillLive(scope, actor, tx);
 
         // The mutation time, taken AFTER the lock rather than before it.
         // A request can queue on this lock for as long as the holder takes, and
@@ -400,6 +409,10 @@ export class AdminManagementService {
       { action: 'admin.roles_change', entityId: targetId },
       async (tx) => {
         await this.admins.lockTenantForAdminChange(scope, tx);
+
+        // The session, before the authority it carries. A revoked session is
+        // not a less-privileged actor; it is not an actor.
+        await this.assertSessionStillLive(scope, actor, tx);
 
         // Taken after the lock, for the reason `setStatus` states.
         const now = this.clock.now();
@@ -547,6 +560,12 @@ export class AdminManagementService {
     // check and the write become one atomic statement, and a request whose
     // view of the credential is stale updates no rows.
     const rotated = await this.uow.run(scope, async (tx) => {
+      // Same rule as the administrator mutations: a revoked session performs no
+      // writes. The compare-and-set below already loses to a competing
+      // ROTATION, but a logout changes no hash, so without this a signed-out
+      // request could still commit one.
+      await this.assertSessionStillLive(scope, actor, tx);
+
       const won = await this.admins.compareAndSetPasswordHash(
         scope,
         adminId,
@@ -740,6 +759,43 @@ export class AdminManagementService {
         });
       }
       throw error;
+    }
+  }
+
+  /**
+   * Refuses if the session authorising this request has been revoked.
+   *
+   * Session validity is established once, when the request arrives, and then
+   * the request does work. A logout or a password rotation committing in that
+   * window revokes the session — and without re-reading it here, the request
+   * still commits. That would make "a rotation revokes every session" true of
+   * the rows and false of the requests already in flight, which is the one
+   * thing rotation exists to guarantee.
+   *
+   * Read on the LOCKED connection, inside the transaction that is about to
+   * commit, for the same reason the actor's permissions are.
+   */
+  private async assertSessionStillLive(
+    scope: ScopeContext,
+    actor: ActorContext,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const sessionId = actor.sessionId;
+    // System work has no session. It is fenced by the boundary check and by
+    // holding only what the contract grants `SYSTEM_JOB`, not by this.
+    if (sessionId === undefined) return;
+
+    const live = await this.sessions.isLive(
+      scope,
+      sessionId as AdminSessionId,
+      this.clock.now(),
+      tx,
+    );
+    if (!live) {
+      throw errors.unauthenticated(
+        IDENTITY_ERROR_CODES.AUTH_SESSION_INVALID,
+        'The session is not valid. Sign in again.',
+      );
     }
   }
 

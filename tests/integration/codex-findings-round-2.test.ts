@@ -1809,3 +1809,212 @@ describe("a boot sync does not undo an operator's decision", () => {
     expect(granted.length).toBeGreaterThan(0);
   });
 });
+
+describe('a revoked session performs no writes', () => {
+  it('refuses a mutation whose session was revoked while it waited', async () => {
+    // Session validity is established once, when the request arrives, and then
+    // the request does work. A logout or a password rotation committing in that
+    // window revokes the session — and without re-reading it under the lock,
+    // the request still commits. That would make "a rotation revokes every
+    // session" true of the rows and false of the requests already in flight,
+    // which is the one thing rotation exists to guarantee.
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'mutation-target',
+      roleKeys: ['support'],
+    });
+
+    // The owner acts on a real session, as a surface would.
+    const issued = await ctx.container.auth.login(
+      tenantA,
+      anonymous,
+      { username: 'owner', password: owner.password },
+      from,
+    );
+    const actorOnSession = {
+      ...adminActorFor(owner),
+      sessionId: issued.session.id as string,
+    };
+
+    // Stall the mutation at the lock, then revoke its session underneath it.
+    const admins = ctx.container.admins as unknown as Record<string, unknown>;
+    const realLock = ctx.container.admins.lockTenantForAdminChange.bind(ctx.container.admins);
+    let release: () => void = () => undefined;
+    const reachedLock = new Promise<void>((resolve) => {
+      admins['lockTenantForAdminChange'] = async (scope: never, tx: never) => {
+        admins['lockTenantForAdminChange'] = realLock;
+        resolve();
+        await new Promise<void>((r) => {
+          release = r;
+        });
+        return realLock(scope, tx);
+      };
+    });
+
+    const mutating = ctx.container.adminManagement
+      .setStatus(tenantA, actorOnSession, target.id as AdminId, {
+        status: 'DISABLED',
+        reason: 'Started before the logout.',
+      })
+      .catch((error: unknown) => error);
+
+    await reachedLock;
+    await ctx.container.auth.logout(tenantA, actorOnSession, issued.session.id);
+    release();
+
+    const caught = await mutating;
+    expect((caught as { code?: string }).code).toBe('auth.session_invalid');
+
+    // And decisively: the mutation did not happen.
+    expect((await ctx.container.admins.findById(tenantA, target.id as AdminId))?.status).toBe(
+      'ACTIVE',
+    );
+  }, 30_000);
+
+  it('still permits a mutation on a live session', async () => {
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'mutation-target-2',
+      roleKeys: ['support'],
+    });
+    const issued = await ctx.container.auth.login(
+      tenantA,
+      anonymous,
+      { username: 'owner', password: owner.password },
+      from,
+    );
+    await expect(
+      ctx.container.adminManagement.setStatus(
+        tenantA,
+        { ...adminActorFor(owner), sessionId: issued.session.id as string },
+        target.id as AdminId,
+        { status: 'DISABLED', reason: 'Ordinary administration.' },
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it('still permits system work, which carries no session', async () => {
+    // A SYSTEM_JOB actor is not a signed-in administrator wearing a different
+    // hat, and this gate must not become a way to refuse provisioning.
+    await expect(
+      ctx.container.bootstrapOwner.execute(tenantB, {
+        username: 'installer',
+        displayName: 'The Operator',
+        password: 'a-perfectly-fine-password',
+      }),
+    ).resolves.toBeDefined();
+  });
+});
+
+describe('a paused installation does not lock its operator out', () => {
+  it('gives back the reservations when a correct password meets a stopped tenant', async () => {
+    // The refusal is about the installation being paused, not about them. At a
+    // limit of one, a single correct attempt during a maintenance window would
+    // otherwise leave the operator rate limited the moment it ended.
+    const strict = await createTestContext({
+      LOGIN_MAX_ATTEMPTS_PER_USERNAME: '1',
+      LOGIN_MAX_ATTEMPTS_PER_IP: '1',
+    });
+    try {
+      await strict.reset();
+      await createAdmin(strict.container, tenantA, {
+        username: 'operator',
+        password: 'the-correct-password',
+        roleKeys: [OWNER_ROLE_KEY],
+      });
+      const ip = '198.51.100.201';
+
+      await strict.container.database.db
+        .update(tenants)
+        .set({ status: 'STOPPED' })
+        .where(eq(tenants.id, tenantA.tenantId));
+
+      await expect(
+        strict.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: 'operator', password: 'the-correct-password' },
+          { ip, userAgent: 'vitest' },
+        ),
+      ).rejects.toMatchObject({ code: 'auth.invalid_credentials' });
+
+      await strict.container.database.db
+        .update(tenants)
+        .set({ status: 'ACTIVE' })
+        .where(eq(tenants.id, tenantA.tenantId));
+
+      // The maintenance window is over; the operator must be able to sign in.
+      await expect(
+        strict.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: 'operator', password: 'the-correct-password' },
+          { ip, userAgent: 'vitest' },
+        ),
+      ).resolves.toBeDefined();
+    } finally {
+      await strict.close();
+    }
+  }, 30_000);
+
+  it('still counts a WRONG password against a stopped tenant', async () => {
+    // The release is for a correct credential meeting a paused installation,
+    // not an amnesty for guessing during one.
+    await ctx.container.database.db
+      .update(tenants)
+      .set({ status: 'STOPPED' })
+      .where(eq(tenants.id, tenantA.tenantId));
+
+    await expect(
+      ctx.container.auth.login(
+        tenantA,
+        anonymous,
+        { username: 'owner', password: 'wrong' },
+        { ip: '198.51.100.202', userAgent: 'vitest' },
+      ),
+    ).rejects.toThrow();
+
+    const [row] = await ctx.container.database.db
+      .select()
+      .from(adminLoginThrottle)
+      .where(eq(adminLoginThrottle.subject, '198.51.100.202'));
+    expect(row?.failedCount).toBe(1);
+  });
+});
+
+describe('readiness does not count deliberately paused work', () => {
+  it('reports no lag for messages held back by a stopped tenant', async () => {
+    // Otherwise an installation somebody switched off on purpose reports itself
+    // unready, indefinitely, and gets pulled out of service.
+    const relay = ctx.container.relay;
+    await relay.processBatch();
+
+    await ctx.container.uow.run(tenantA, async (tx) => {
+      await ctx.container.outbox.write(tx, adminActorFor(owner), {
+        eventType: 'SystemPinged',
+        aggregateType: 'System',
+        aggregateId: ctx.container.ids.uuid(),
+        payload: { note: 'paused' },
+      });
+    });
+
+    // Move the clock forward rather than backdating the row: `nexa_outbox_guard`
+    // refuses to alter an outbox message's content, correctly.
+    const clock = ctx.container.clock as unknown as Record<string, unknown>;
+    const realNow = ctx.container.clock.now.bind(ctx.container.clock);
+    clock['now'] = () => new Date(realNow().getTime() + 3_600_000);
+
+    try {
+      expect(await relay.lagMs()).toBeGreaterThan(60_000);
+
+      await ctx.container.database.db
+        .update(tenants)
+        .set({ status: 'STOPPED' })
+        .where(eq(tenants.id, tenantA.tenantId));
+
+      // Paused, therefore not lagging.
+      expect(await relay.lagMs()).toBe(0);
+      expect(await relay.isHealthy()).toBe(true);
+    } finally {
+      clock['now'] = realNow;
+    }
+  }, 30_000);
+});

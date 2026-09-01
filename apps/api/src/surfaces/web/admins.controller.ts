@@ -100,12 +100,12 @@ export class AdminsController {
       assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
     }
 
-    const { admin } = await this.container.auth.authenticate(token);
+    const { admin, session } = await this.container.auth.authenticate(token);
     const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
 
     return {
       scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request),
+      actor: adminActor(admin, correlationId, request, session.id),
     };
   }
 }

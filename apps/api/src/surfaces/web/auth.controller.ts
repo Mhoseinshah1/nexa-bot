@@ -107,7 +107,11 @@ export class AuthController {
     const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
     const scope: TenantContext = { tenantId: admin.tenantId, botInstanceId: null };
 
-    await this.container.auth.logout(scope, adminActor(admin, correlationId, request), session.id);
+    await this.container.auth.logout(
+      scope,
+      adminActor(admin, correlationId, request, session.id),
+      session.id,
+    );
     this.clearSessionCookie(reply);
     return { ok: true };
   }
@@ -121,13 +125,13 @@ export class AuthController {
     const token = requireSessionToken(request, this.isProduction);
     assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
 
-    const { admin } = await this.container.auth.authenticate(token);
+    const { admin, session } = await this.container.auth.authenticate(token);
     const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
     const scope: TenantContext = { tenantId: admin.tenantId, botInstanceId: null };
 
     await this.container.adminManagement.changeOwnPassword(
       scope,
-      adminActor(admin, correlationId, request),
+      adminActor(admin, correlationId, request, session.id),
       body,
     );
 
