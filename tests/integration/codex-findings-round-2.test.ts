@@ -9,6 +9,7 @@ import {
   systemContext,
   TELEGRAM_SECRET_TOKEN_HEADER,
   type AdminId,
+  type AdminSessionId,
   type CorrelationId,
 } from '@nexa/contracts';
 import { createApiApp, resolveInstallationTenant, type ApiApp } from '../../apps/api/src/bootstrap';
@@ -2584,5 +2585,126 @@ describe('the login throttle does not grow without bound', () => {
       .from(adminLoginThrottle)
       .where(eq(adminLoginThrottle.subject, 'owner'));
     expect(survivor).toBeDefined();
+  }, 30_000);
+});
+
+describe('review round 15', () => {
+  it('does not commit a session whose login audit fails', async () => {
+    // The previous round moved the throttle cleanup and `recordLogin` into the
+    // session transaction and stopped there. The SUCCESS audit stayed outside
+    // it, so a failing audit insert left a live session committed, returned an
+    // error to the caller, and recorded nothing about a sign-in that had
+    // actually happened.
+    const audit = ctx.container.audit as unknown as Record<string, unknown>;
+    const realRecord = ctx.container.audit.record.bind(ctx.container.audit);
+    let refused = 0;
+    audit['record'] = async (
+      scope: unknown,
+      actor: unknown,
+      entry: { action: string; result: string },
+      tx?: unknown,
+    ) => {
+      if (entry.action === 'auth.login' && entry.result === 'SUCCESS') {
+        refused += 1;
+        throw new Error('audit is unavailable');
+      }
+      return realRecord(scope as never, actor as never, entry as never, tx as never);
+    };
+
+    try {
+      await expect(
+        ctx.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: owner.username, password: owner.password },
+          from,
+        ),
+      ).rejects.toThrow('audit is unavailable');
+    } finally {
+      audit['record'] = realRecord;
+    }
+    expect(refused).toBe(1);
+
+    // The session must have gone back with the audit row. A committed session
+    // whose token the caller never received is one nobody can account for.
+    const sessions = await ctx.container.database.db
+      .select()
+      .from(adminSessions)
+      .where(eq(adminSessions.adminId, owner.id));
+    expect(sessions).toHaveLength(0);
+  }, 30_000);
+
+  it('removes expired sessions, and only past the retention cutoff', async () => {
+    // `purgeExpiredBefore` existed with no caller anywhere: sessions were only
+    // ever marked revoked, never removed, so one valid credential signed in
+    // repeatedly grew the table for the life of the installation.
+    const issued = await ctx.container.auth.login(
+      tenantA,
+      anonymous,
+      { username: owner.username, password: owner.password },
+      from,
+    );
+
+    const rowsForSession = () =>
+      ctx.container.database.db
+        .select()
+        .from(adminSessions)
+        .where(eq(adminSessions.id, issued.session.id));
+
+    // Still live: housekeeping must not touch it.
+    expect(await ctx.container.sessionSweeper.sweep()).toBe(0);
+    expect(await rowsForSession()).toHaveLength(1);
+
+    const clock = ctx.container.clock as unknown as Record<string, unknown>;
+    const realNow = ctx.container.clock.now.bind(ctx.container.clock);
+    const ttl = ctx.container.config.SESSION_TTL_SECONDS;
+    const retention = ctx.container.config.SESSION_RETENTION_SECONDS;
+    try {
+      // Expired, but inside the retention window — still readable for
+      // forensics, which is the whole reason the cutoff is not "expired".
+      clock['now'] = () => new Date(realNow().getTime() + (ttl + 60) * 1000);
+      expect(await ctx.container.sessionSweeper.sweep()).toBe(0);
+      expect(await rowsForSession()).toHaveLength(1);
+
+      // Past retention: collected.
+      clock['now'] = () => new Date(realNow().getTime() + (ttl + retention + 60) * 1000);
+      expect(await ctx.container.sessionSweeper.sweep()).toBeGreaterThanOrEqual(1);
+      expect(await rowsForSession()).toHaveLength(0);
+    } finally {
+      clock['now'] = realNow;
+    }
+  }, 30_000);
+
+  it('collects a revoked session too, on the same schedule', async () => {
+    // Revoking sets `revoked_at` and leaves the original expiry, so the one
+    // condition the sweep uses covers both without a second branch.
+    const issued = await ctx.container.auth.login(
+      tenantA,
+      anonymous,
+      { username: owner.username, password: owner.password },
+      from,
+    );
+    await ctx.container.auth.logout(
+      tenantA,
+      adminActorFor(owner),
+      issued.session.id as AdminSessionId,
+    );
+
+    const clock = ctx.container.clock as unknown as Record<string, unknown>;
+    const realNow = ctx.container.clock.now.bind(ctx.container.clock);
+    const ttl = ctx.container.config.SESSION_TTL_SECONDS;
+    const retention = ctx.container.config.SESSION_RETENTION_SECONDS;
+    clock['now'] = () => new Date(realNow().getTime() + (ttl + retention + 60) * 1000);
+    try {
+      expect(await ctx.container.sessionSweeper.sweep()).toBeGreaterThanOrEqual(1);
+      expect(
+        await ctx.container.database.db
+          .select()
+          .from(adminSessions)
+          .where(eq(adminSessions.id, issued.session.id)),
+      ).toHaveLength(0);
+    } finally {
+      clock['now'] = realNow;
+    }
   }, 30_000);
 });

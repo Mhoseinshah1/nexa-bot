@@ -79,6 +79,23 @@ export const configSchema = z
     LOGIN_LOCKOUT_SECONDS: z.coerce.number().int().min(30).max(86_400).default(900),
 
     /**
+     * How long an EXPIRED session row is kept before housekeeping removes it.
+     *
+     * Not the session's lifetime — `SESSION_TTL_SECONDS` is that. This is how
+     * long the dead row stays readable afterwards, which is a forensic
+     * question: it carries the IP and user agent a sign-in came from, and the
+     * audit log points at it by id. Long enough to investigate an incident
+     * found weeks later; not the life of the installation, which is what
+     * "never delete" amounted to.
+     */
+    SESSION_RETENTION_SECONDS: z.coerce
+      .number()
+      .int()
+      .min(3600)
+      .max(365 * 24 * 3600)
+      .default(30 * 24 * 3600),
+
+    /**
      * How this installation is exposed. There is no default in production,
      * because the two topologies need opposite settings and guessing wrong is a
      * security bug in one direction and an availability bug in the other.

@@ -147,11 +147,28 @@ export class DrizzleSessionRepository implements SessionRepository {
     return rows.length;
   }
 
-  /** Removes sessions that expired long enough ago to have no forensic value. */
-  async purgeExpiredBefore(cutoff: Date): Promise<number> {
+  /**
+   * Removes sessions that expired long enough ago to have no forensic value.
+   *
+   * Keyed on `expires_at` alone, which collects revoked sessions too: revoking
+   * sets `revoked_at` and leaves the original expiry, so a revoked row becomes
+   * eligible on the same schedule as one that simply ran out. Deliberately not
+   * "revoked and old enough" as a second branch — one condition that provably
+   * covers both is worth more here than collecting revoked rows sooner.
+   *
+   * Bounded, because the caller drains in batches: an unbounded DELETE on a
+   * table an attacker can grow is one long statement holding one connection.
+   */
+  async purgeExpiredBefore(cutoff: Date, limit: number): Promise<number> {
     const rows = await this.db
       .delete(adminSessions)
-      .where(sql`${adminSessions.expiresAt} < ${cutoff}`)
+      .where(
+        sql`ctid IN (
+          SELECT ctid FROM ${adminSessions}
+          WHERE ${adminSessions.expiresAt} < ${cutoff}
+          LIMIT ${limit}
+        )`,
+      )
       .returning({ id: adminSessions.id });
     return rows.length;
   }

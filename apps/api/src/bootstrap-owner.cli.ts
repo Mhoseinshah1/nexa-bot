@@ -1,6 +1,7 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { isNexaError, type TenantContext } from '@nexa/contracts';
+import { readSecret } from './infrastructure/tty/read-secret.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 
@@ -55,26 +56,37 @@ async function main(): Promise<void> {
       );
     }
 
+    // Readline first, and CLOSED before the password is read. It owns stdin
+    // while it is open — in terminal mode it puts the tty in raw mode and
+    // echoes what it receives — so reading the secret from the same stream
+    // underneath it would have echoed the password after all.
+    let username: string;
+    let displayName: string;
     const rl = createInterface({ input: stdin, output: stdout, terminal: stdin.isTTY });
     try {
-      const username = args.username ?? (await rl.question('Owner username: '));
-      const displayName = args.displayName ?? (await rl.question('Display name: '));
-      // Not echoed back, not defaulted, and never taken from argv.
-      const password = await rl.question('Password (input is not hidden): ');
-
-      const scope: TenantContext = { tenantId: tenant.id, botInstanceId: null };
-      const result = await container.bootstrapOwner.execute(scope, {
-        username,
-        displayName,
-        password,
-      });
-
-      console.warn(
-        `Owner "${result.username}" created for tenant "${tenant.slug}" (${result.adminId}).`,
-      );
+      username = args.username ?? (await rl.question('Owner username: '));
+      displayName = args.displayName ?? (await rl.question('Display name: '));
     } finally {
       rl.close();
     }
+
+    // Read straight from the terminal with echo off, never from argv. This
+    // prompt used to say "(input is not hidden)" — accurately, since
+    // `rl.question` echoes — directly beneath a comment claiming it was not
+    // echoed back. The comment was the aspiration and the prompt was the truth;
+    // now they agree, and a unit test holds them to it.
+    const password = await readSecret(stdin, stdout, 'Password: ');
+
+    const scope: TenantContext = { tenantId: tenant.id, botInstanceId: null };
+    const result = await container.bootstrapOwner.execute(scope, {
+      username,
+      displayName,
+      password,
+    });
+
+    console.warn(
+      `Owner "${result.username}" created for tenant "${tenant.slug}" (${result.adminId}).`,
+    );
   } finally {
     await container.shutdown();
   }

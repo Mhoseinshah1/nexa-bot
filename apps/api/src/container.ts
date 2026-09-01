@@ -40,7 +40,7 @@ import { DrizzleLoginThrottleRepository } from './modules/platform/identity/infr
 import { AuthenticationService } from './modules/platform/identity/application/authentication.service.js';
 import { AdminManagementService } from './modules/platform/identity/application/admin-management.service.js';
 import { BootstrapOwnerService } from './modules/platform/identity/application/bootstrap-owner.service.js';
-import { ThrottleSweeper } from './modules/platform/identity/application/throttle-sweeper.js';
+import { RetentionSweeper } from './modules/platform/identity/application/retention-sweeper.js';
 import { RecordPingService } from './modules/platform/system/application/record-ping.service.js';
 import { PingLogConsumer } from './modules/platform/opslog/application/ping-log.consumer.js';
 
@@ -69,7 +69,8 @@ export interface Container {
   readonly botInstances: DrizzleBotInstanceRepository;
   readonly outbox: OutboxWriter;
   readonly relay: OutboxRelay;
-  readonly throttleSweeper: ThrottleSweeper;
+  readonly throttleSweeper: RetentionSweeper;
+  readonly sessionSweeper: RetentionSweeper;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
   readonly idempotency: IdempotencyStore;
@@ -181,15 +182,42 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     maxLagMs: config.OUTBOX_RELAY_MAX_LAG_MS,
   });
 
-  const throttleSweeper = new ThrottleSweeper(loginThrottle, clock, logger, {
-    // Hourly is ample: the rows this removes are already expired, and the
-    // problem it prevents is slow accumulation rather than a spike.
-    intervalMs: 3_600_000,
-    // Comfortably past the longest window plus lockout the schema permits, so
-    // a sweep can never remove a row something is still counting.
-    retentionSeconds: config.LOGIN_THROTTLE_WINDOW_SECONDS + config.LOGIN_LOCKOUT_SECONDS + 3_600,
-    batchSize: 5_000,
-  });
+  // Comfortably past the longest window plus lockout the schema permits, so a
+  // sweep can never remove a row something is still counting.
+  const throttleRetentionSeconds =
+    config.LOGIN_THROTTLE_WINDOW_SECONDS + config.LOGIN_LOCKOUT_SECONDS + 3_600;
+
+  const throttleSweeper = new RetentionSweeper(
+    {
+      name: 'login-throttle',
+      purge: (now, limit) => loginThrottle.purgeExpired(now, throttleRetentionSeconds, limit),
+    },
+    clock,
+    logger,
+    {
+      // Hourly is ample: the rows this removes are already expired, and each
+      // tick now drains the backlog rather than taking one batch off it.
+      intervalMs: 3_600_000,
+      batchSize: 5_000,
+      // 5m rows in one pass is far past any plausible backlog; the ceiling
+      // exists so housekeeping is bounded, not to ration it.
+      maxBatchesPerTick: 1_000,
+    },
+  );
+
+  const sessionSweeper = new RetentionSweeper(
+    {
+      name: 'admin-sessions',
+      purge: (now, limit) =>
+        sessions.purgeExpiredBefore(
+          new Date(now.getTime() - config.SESSION_RETENTION_SECONDS * 1000),
+          limit,
+        ),
+    },
+    clock,
+    logger,
+    { intervalMs: 3_600_000, batchSize: 5_000, maxBatchesPerTick: 1_000 },
+  );
 
   const recordPing = new RecordPingService(guard, uow, outbox, audit, idempotency, clock, tenants);
 
@@ -208,6 +236,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     outbox,
     relay,
     throttleSweeper,
+    sessionSweeper,
     audit,
     opsLog,
     idempotency,
@@ -229,6 +258,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     async shutdown() {
       await relay.stop();
       await throttleSweeper.stop();
+      await sessionSweeper.stop();
       await redis.close();
       await database.close();
     },

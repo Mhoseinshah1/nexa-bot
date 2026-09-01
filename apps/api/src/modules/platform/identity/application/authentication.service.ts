@@ -141,7 +141,10 @@ export class AuthenticationService {
    * a surface computing a concept differently from the layer that enforces it
    * is exactly the divergence this codebase is built to avoid.
    */
-  private async displayPermissions(admin: Admin): Promise<readonly PermissionKey[]> {
+  private async displayPermissions(
+    admin: Admin,
+    tx?: unknown,
+  ): Promise<readonly PermissionKey[]> {
     const scope: TenantContext = { tenantId: admin.tenantId, botInstanceId: null };
     const actor: ActorContext = {
       type: 'WEB_ADMIN',
@@ -150,7 +153,7 @@ export class AuthenticationService {
       surface: 'WEB',
       correlationId: 'display-permissions' as never,
     };
-    return [...(await this.permissions.permissionsOf(scope, actor))].sort();
+    return [...(await this.permissions.permissionsOf(scope, actor, tx))].sort();
   }
 
   /**
@@ -355,10 +358,42 @@ export class AuthenticationService {
       }
       await this.admins.recordLogin(scope, credentials.admin.id, now, tx);
 
-      return 'ISSUED';
+      // The SUCCESS audit commits with the session too.
+      //
+      // The previous round moved the throttle and `recordLogin` in and stopped
+      // there, which left the most important row of the three outside: a login
+      // whose audit insert failed committed a live session and recorded no
+      // trace of it. "The database is the log" is not a property the happy path
+      // can hold on its own.
+      const identifiedActor = actorFor(actor, credentials.admin);
+      await this.audit.record(
+        scope,
+        identifiedActor,
+        {
+          action: 'auth.login',
+          entityType: 'Admin',
+          entityId: credentials.admin.id,
+          before: null,
+          // No token, no hash, no password material of any kind.
+          after: { sessionId, expiresAt: expiresAt.toISOString() },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+
+      // Read on the locked connection, and SEQUENTIALLY: a transaction is one
+      // connection, so issuing both at once on `Promise.all` would interleave
+      // two statements on it. Read here rather than after the commit because
+      // the response cannot be built without them — a failure out there
+      // returned an error to a caller whose session had already been created,
+      // and who therefore never received the token to a session that exists.
+      const permissions = await this.displayPermissions(credentials.admin, tx);
+      const roleKeys = await this.admins.roleKeysFor(scope, credentials.admin.id, tx);
+
+      return { outcome: 'ISSUED' as const, permissions, roleKeys };
     });
 
-    if (issued !== 'ISSUED') {
+    if (issued === 'TENANT_STOPPED' || issued === 'CREDENTIAL_STALE') {
       // Either the password changed under us, or the tenant stopped while we
       // hashed. Both are reported as an ordinary credential failure, because
       // from the caller's side the first is exactly that and the second must
@@ -378,21 +413,7 @@ export class AuthenticationService {
       return this.failLogin(scope, actor, username, reserved, 'BAD_PASSWORD');
     }
 
-    const identifiedActor = actorFor(actor, credentials.admin);
-    await this.audit.record(scope, identifiedActor, {
-      action: 'auth.login',
-      entityType: 'Admin',
-      entityId: credentials.admin.id,
-      before: null,
-      // No token, no hash, no password material of any kind.
-      after: { sessionId, expiresAt: expiresAt.toISOString() },
-      result: 'SUCCESS',
-    });
-
-    const [permissions, roleKeys] = await Promise.all([
-      this.displayPermissions(credentials.admin),
-      this.admins.roleKeysFor(scope, credentials.admin.id),
-    ]);
+    const { permissions, roleKeys } = issued;
 
     return {
       token,

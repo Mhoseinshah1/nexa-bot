@@ -207,6 +207,14 @@ export interface SessionRepository {
     reason: string,
     tx?: unknown,
   ): Promise<number>;
+  /**
+   * Retention. Bounded, because worker housekeeping drains it in batches.
+   *
+   * Declared on the port because it had none and no caller either: a method
+   * that only the adapter knew about is a cleanup nothing performs, and the
+   * table grew for the life of the installation.
+   */
+  purgeExpiredBefore(cutoff: Date, limit: number): Promise<number>;
 }
 
 /** The durable login throttle. Keyed by subject, never by admin id. */
