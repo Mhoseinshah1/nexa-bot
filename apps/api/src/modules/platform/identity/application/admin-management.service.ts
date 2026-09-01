@@ -5,6 +5,7 @@ import {
   changePasswordRequestSchema,
   errors,
   IDENTITY_ERROR_CODES,
+  isNexaError,
   OWNER_ROLE_KEY,
   setAdminRolesRequestSchema,
   setAdminStatusRequestSchema,
@@ -15,7 +16,9 @@ import {
   type AuditWriter,
   type Clock,
   type IdGenerator,
+  type OperationalEventRecorder,
   type PasswordHasher,
+  type PermissionKey,
   type Role,
   type RoleId,
   type ScopeContext,
@@ -55,6 +58,7 @@ export class AdminManagementService {
     private readonly sessions: SessionRepository,
     private readonly hasher: PasswordHasher,
     private readonly audit: AuditWriter,
+    private readonly opsLog: OperationalEventRecorder,
     private readonly outbox: OutboxWriter,
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
@@ -120,74 +124,79 @@ export class AdminManagementService {
     //
     // Both are the same mistake `setRoles` was corrected for: authorization on
     // state that can change before the write commits.
-    await this.uow.run(scope, async (tx) => {
-      await this.admins.lockTenantForAdminChange(scope, tx);
+    await this.runLockedMutation(
+      scope,
+      actor,
+      { action: 'admin.create', entityId: null },
+      async (tx) => {
+        await this.admins.lockTenantForAdminChange(scope, tx);
 
-      // Re-checked against authoritative state. If the caller lost
-      // `admins.edit` — or was disabled, which empties their permissions — the
-      // hash just computed is simply discarded.
-      await this.guard.check(scope, actor, 'admins.edit', tx);
+        // Re-checked against authoritative state. If the caller lost
+        // `admins.edit` — or was disabled, which empties their permissions — the
+        // hash just computed is simply discarded.
+        await this.guard.check(scope, actor, 'admins.edit', tx);
 
-      // Granting the owner role is the single most privileged act available.
-      // `admins.edit` creates administrators; making one an owner additionally
-      // needs the permission that governs privilege itself.
-      if (roleKeys.includes(OWNER_ROLE_KEY)) {
-        await this.guard.check(scope, actor, 'admins.permissions.edit', tx);
-      }
-      await this.assertGrantsNoMorePrivilegeThanHeld(scope, actor, roleKeys, tx);
+        // Granting the owner role is the single most privileged act available.
+        // `admins.edit` creates administrators; making one an owner additionally
+        // needs the permission that governs privilege itself.
+        if (roleKeys.includes(OWNER_ROLE_KEY)) {
+          await this.guard.check(scope, actor, 'admins.permissions.edit', tx);
+        }
+        await this.assertGrantsNoMorePrivilegeThanHeld(scope, actor, roleKeys, tx);
 
-      const existing = await this.admins.findByUsername(scope, username, tx);
-      if (existing !== null) {
-        throw errors.conflict(
-          IDENTITY_ERROR_CODES.ADMIN_USERNAME_TAKEN,
-          'An administrator with that username already exists.',
-          { username },
-        );
-      }
+        const existing = await this.admins.findByUsername(scope, username, tx);
+        if (existing !== null) {
+          throw errors.conflict(
+            IDENTITY_ERROR_CODES.ADMIN_USERNAME_TAKEN,
+            'An administrator with that username already exists.',
+            { username },
+          );
+        }
 
-      const roleIds = await this.resolveRoleIds(scope, roleKeys, tx);
+        const roleIds = await this.resolveRoleIds(scope, roleKeys, tx);
 
-      await this.admins.create(
-        scope,
-        {
-          id: adminId,
-          username,
-          displayName: command.displayName,
-          passwordHash,
-          telegramUserId: command.telegramUserId ?? null,
-          now,
-        },
-        tx,
-      );
-      await this.roles.setAdminRoles(scope, adminId, roleIds, adminIdOf(actor), tx);
-
-      await this.audit.record(
-        scope,
-        actor,
-        {
-          action: 'admin.create',
-          entityType: 'Admin',
-          entityId: adminId,
-          before: null,
-          // No password, no hash. `passwordHash` would be caught by the
-          // redactor anyway; not writing it is better than relying on that.
-          after: {
+        await this.admins.create(
+          scope,
+          {
+            id: adminId,
             username,
             displayName: command.displayName,
-            roleKeys,
+            passwordHash,
+            telegramUserId: command.telegramUserId ?? null,
+            now,
           },
-          result: 'SUCCESS',
-        },
-        tx,
-      );
+          tx,
+        );
+        await this.roles.setAdminRoles(scope, adminId, roleIds, adminIdOf(actor), tx);
 
-      await this.outbox.write(tx, actor, {
-        eventType: 'AdminCreated',
-        aggregateType: 'Admin',
-        aggregateId: adminId,
-        payload: { username, roleKeys },
-      });
-    });
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'admin.create',
+            entityType: 'Admin',
+            entityId: adminId,
+            before: null,
+            // No password, no hash. `passwordHash` would be caught by the
+            // redactor anyway; not writing it is better than relying on that.
+            after: {
+              username,
+              displayName: command.displayName,
+              roleKeys,
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+
+        await this.outbox.write(tx, actor, {
+          eventType: 'AdminCreated',
+          aggregateType: 'Admin',
+          aggregateId: adminId,
+          payload: { username, roleKeys },
+        });
+      },
+    );
 
     const created = await this.admins.findById(scope, adminId);
     if (created === null) {
@@ -217,63 +226,68 @@ export class AdminManagementService {
 
     const now = this.clock.now();
 
-    const updated = await this.uow.run(scope, async (tx) => {
-      await this.admins.lockTenantForAdminChange(scope, tx);
+    const updated = await this.runLockedMutation(
+      scope,
+      actor,
+      { action: 'admin.status_change', entityId: targetId },
+      async (tx) => {
+        await this.admins.lockTenantForAdminChange(scope, tx);
 
-      // The actor's BASE authority, re-read under the lock. Target state was
-      // already reloaded here; the actor's own right to act was not, so a
-      // manager disabled or demoted while this request was in flight still
-      // mutated another administrator. Disabling empties an actor's
-      // permissions, so this covers both cases with one check.
-      await this.guard.check(scope, actor, 'admins.edit', tx);
+        // The actor's BASE authority, re-read under the lock. Target state was
+        // already reloaded here; the actor's own right to act was not, so a
+        // manager disabled or demoted while this request was in flight still
+        // mutated another administrator. Disabling empties an actor's
+        // permissions, so this covers both cases with one check.
+        await this.guard.check(scope, actor, 'admins.edit', tx);
 
-      // Transaction-aware, for the same reason as setRoles: a read on the pool
-      // after the lock does not participate in it, so the status this decision
-      // rests on could differ from the one about to be overwritten.
-      const target = await this.requireAdmin(scope, targetId, tx);
-      // Re-checked against the id the DATABASE returned, not the one the caller
-      // supplied. The boundary already canonicalises, and this is the check
-      // that does not depend on it having: whatever row we are about to write
-      // is the row the guard now sees.
-      assertNotSelf(adminIdOf(actor), target.id);
-      if (target.status === command.status) return target;
+        // Transaction-aware, for the same reason as setRoles: a read on the pool
+        // after the lock does not participate in it, so the status this decision
+        // rests on could differ from the one about to be overwritten.
+        const target = await this.requireAdmin(scope, targetId, tx);
+        // Re-checked against the id the DATABASE returned, not the one the caller
+        // supplied. The boundary already canonicalises, and this is the check
+        // that does not depend on it having: whatever row we are about to write
+        // is the row the guard now sees.
+        assertNotSelf(adminIdOf(actor), target.id);
+        if (target.status === command.status) return target;
 
-      if (command.status === 'DISABLED') {
-        await this.assertOwnerSurvivesDisabling(scope, target, tx);
-      }
+        if (command.status === 'DISABLED') {
+          await this.assertOwnerSurvivesDisabling(scope, target, tx);
+        }
 
-      await this.admins.setStatus(scope, targetId, command.status, now, tx);
+        await this.admins.setStatus(scope, targetId, command.status, now, tx);
 
-      // Disabling ends every live session immediately. Waiting for expiry would
-      // leave a revoked administrator acting for up to the session lifetime.
-      if (command.status === 'DISABLED') {
-        await this.sessions.revokeAllForAdmin(scope, targetId, now, 'admin_disabled', tx);
-      }
+        // Disabling ends every live session immediately. Waiting for expiry would
+        // leave a revoked administrator acting for up to the session lifetime.
+        if (command.status === 'DISABLED') {
+          await this.sessions.revokeAllForAdmin(scope, targetId, now, 'admin_disabled', tx);
+        }
 
-      await this.audit.record(
-        scope,
-        actor,
-        {
-          action: 'admin.status_change',
-          entityType: 'Admin',
-          entityId: targetId,
-          before: { status: target.status },
-          after: { status: command.status },
-          reason: command.reason,
-          result: 'SUCCESS',
-        },
-        tx,
-      );
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'admin.status_change',
+            entityType: 'Admin',
+            entityId: targetId,
+            before: { status: target.status },
+            after: { status: command.status },
+            reason: command.reason,
+            result: 'SUCCESS',
+          },
+          tx,
+        );
 
-      await this.outbox.write(tx, actor, {
-        eventType: 'AdminStatusChanged',
-        aggregateType: 'Admin',
-        aggregateId: targetId,
-        payload: { from: target.status, to: command.status },
-      });
+        await this.outbox.write(tx, actor, {
+          eventType: 'AdminStatusChanged',
+          aggregateType: 'Admin',
+          aggregateId: targetId,
+          payload: { from: target.status, to: command.status },
+        });
 
-      return { ...target, status: command.status as AdminStatus };
-    });
+        return { ...target, status: command.status as AdminStatus };
+      },
+    );
 
     return updated;
   }
@@ -314,75 +328,80 @@ export class AdminManagementService {
     //
     // Reading current state before the lock is therefore not an optimisation
     // with a small race; it is authorization on unsound input.
-    const result = await this.uow.run(scope, async (tx) => {
-      await this.admins.lockTenantForAdminChange(scope, tx);
+    const result = await this.runLockedMutation(
+      scope,
+      actor,
+      { action: 'admin.roles_change', entityId: targetId },
+      async (tx) => {
+        await this.admins.lockTenantForAdminChange(scope, tx);
 
-      // The actor's BASE authority, re-read under the lock — before any target
-      // state, because an actor who has lost `admins.edit` has no business
-      // reading it either.
-      //
-      // This matters most for a REMOVE-ONLY delta: `delta.added` is then empty,
-      // so the amplification check examines nothing and would wave the request
-      // through. Losing all authority has to stop the mutation on its own.
-      await this.guard.check(scope, actor, 'admins.edit', tx);
+        // The actor's BASE authority, re-read under the lock — before any target
+        // state, because an actor who has lost `admins.edit` has no business
+        // reading it either.
+        //
+        // This matters most for a REMOVE-ONLY delta: `delta.added` is then empty,
+        // so the amplification check examines nothing and would wave the request
+        // through. Losing all authority has to stop the mutation on its own.
+        await this.guard.check(scope, actor, 'admins.edit', tx);
 
-      // Transaction-aware. A read on the pool after the lock does not
-      // participate in it and can observe a different snapshot.
-      const target = await this.requireAdmin(scope, targetId, tx);
-      assertNotSelf(adminIdOf(actor), target.id);
+        // Transaction-aware. A read on the pool after the lock does not
+        // participate in it and can observe a different snapshot.
+        const target = await this.requireAdmin(scope, targetId, tx);
+        assertNotSelf(adminIdOf(actor), target.id);
 
-      const current = await this.admins.roleKeysFor(scope, target.id, tx);
-      const delta = diffRoles(current, next);
+        const current = await this.admins.roleKeysFor(scope, target.id, tx);
+        const delta = diffRoles(current, next);
 
-      // Authorised from the LOCKED delta. Granting or removing the owner role
-      // is a change to privilege itself, not merely to an assignment.
-      if (delta.added.includes(OWNER_ROLE_KEY) || delta.removed.includes(OWNER_ROLE_KEY)) {
-        await this.guard.check(scope, actor, 'admins.permissions.edit', tx);
-      }
-      // Also from the locked delta: only what is genuinely being ADDED relative
-      // to authoritative state. Removing a role is not amplification.
-      await this.assertGrantsNoMorePrivilegeThanHeld(scope, actor, delta.added, tx);
+        // Authorised from the LOCKED delta. Granting or removing the owner role
+        // is a change to privilege itself, not merely to an assignment.
+        if (delta.added.includes(OWNER_ROLE_KEY) || delta.removed.includes(OWNER_ROLE_KEY)) {
+          await this.guard.check(scope, actor, 'admins.permissions.edit', tx);
+        }
+        // Also from the locked delta: only what is genuinely being ADDED relative
+        // to authoritative state. Removing a role is not amplification.
+        await this.assertGrantsNoMorePrivilegeThanHeld(scope, actor, delta.added, tx);
 
-      if (delta.removed.includes(OWNER_ROLE_KEY)) {
-        await this.assertOwnerSurvivesDisabling(scope, target, tx);
-      }
+        if (delta.removed.includes(OWNER_ROLE_KEY)) {
+          await this.assertOwnerSurvivesDisabling(scope, target, tx);
+        }
 
-      // Nothing to do. Returning early avoids an audit row and an event
-      // claiming a change that did not happen.
-      if (delta.added.length === 0 && delta.removed.length === 0) {
-        return { admin: target, roleKeys: current };
-      }
+        // Nothing to do. Returning early avoids an audit row and an event
+        // claiming a change that did not happen.
+        if (delta.added.length === 0 && delta.removed.length === 0) {
+          return { admin: target, roleKeys: current };
+        }
 
-      const roleIds = await this.resolveRoleIds(scope, next, tx);
-      await this.roles.setAdminRoles(scope, target.id, roleIds, adminIdOf(actor), tx);
+        const roleIds = await this.resolveRoleIds(scope, next, tx);
+        await this.roles.setAdminRoles(scope, target.id, roleIds, adminIdOf(actor), tx);
 
-      // before/after are the locked state, so the audit row describes the
-      // transition that actually occurred rather than the one intended.
-      await this.audit.record(
-        scope,
-        actor,
-        {
-          action: 'admin.roles_change',
-          entityType: 'Admin',
-          entityId: target.id,
-          before: { roleKeys: current },
-          after: { roleKeys: next },
-          reason: command.reason,
-          result: 'SUCCESS',
-        },
-        tx,
-      );
+        // before/after are the locked state, so the audit row describes the
+        // transition that actually occurred rather than the one intended.
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'admin.roles_change',
+            entityType: 'Admin',
+            entityId: target.id,
+            before: { roleKeys: current },
+            after: { roleKeys: next },
+            reason: command.reason,
+            result: 'SUCCESS',
+          },
+          tx,
+        );
 
-      await this.outbox.write(tx, actor, {
-        eventType: 'AdminRolesChanged',
-        aggregateType: 'Admin',
-        aggregateId: target.id,
-        payload: { added: delta.added, removed: delta.removed },
-      });
+        await this.outbox.write(tx, actor, {
+          eventType: 'AdminRolesChanged',
+          aggregateType: 'Admin',
+          aggregateId: target.id,
+          payload: { added: delta.added, removed: delta.removed },
+        });
 
-      void now;
-      return { admin: target, roleKeys: next };
-    });
+        void now;
+        return { admin: target, roleKeys: next };
+      },
+    );
 
     return result;
   }
@@ -546,7 +565,14 @@ export class AdminManagementService {
     const actorId = adminIdOf(actor);
     if (actorId === null) return;
 
-    const held = new Set(await this.roles.permissionsForAdmin(scope, actorId, tx));
+    // The actor's EFFECTIVE permissions, resolved by the same rule the guard
+    // uses — `(roles ∪ GRANT) − DENY`. This used to read the raw union of the
+    // actor's roles, which ignores overrides in both directions. The dangerous
+    // direction: an actor with a DENY on `refunds.issue` was refused it
+    // directly, then handed it out by creating an administrator with a role
+    // that carries it and choosing that account's password. A permission the
+    // system says you do not have is not one you may delegate.
+    const held = await this.guard.permissionsOf(scope, actor, tx);
     const granting = new Set<string>();
     for (const role of await this.roles.list(scope, tx)) {
       if (!roleKeys.includes(role.key)) continue;
@@ -560,6 +586,47 @@ export class AdminManagementService {
         'You cannot grant a permission you do not hold yourself.',
         { permissions: excess },
       );
+    }
+  }
+
+  /**
+   * Runs a locked mutation and records a denial once the transaction is gone.
+   *
+   * The guard deliberately does not write its operational event from inside a
+   * transaction: it would take a second pool connection while holding one and
+   * the tenant lock, and the row would roll back with the denial anyway. So the
+   * transactional caller owns it, and records it here — on the pool, after the
+   * rollback, where both are safe.
+   *
+   * The audit row is the more important half. A refused administrative
+   * mutation is exactly the kind of event an operator needs to see later, and
+   * before this it left no trace at all for `setStatus` and `setRoles`.
+   */
+  private async runLockedMutation<T>(
+    scope: ScopeContext,
+    actor: ActorContext,
+    denial: { action: string; entityId: string | null },
+    fn: (tx: TransactionScope) => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await this.uow.run(scope, fn);
+    } catch (error) {
+      if (isNexaError(error) && error.kind === 'PERMISSION_DENIED') {
+        const permission = error.details['permission'];
+        await this.opsLog.record(
+          scope,
+          this.guard.denialEvent(actor, (permission ?? 'unknown') as PermissionKey),
+        );
+        await this.audit.record(scope, actor, {
+          action: denial.action,
+          entityType: 'Admin',
+          entityId: denial.entityId,
+          before: null,
+          after: { deniedPermission: permission ?? null },
+          result: 'DENIED',
+        });
+      }
+      throw error;
     }
   }
 

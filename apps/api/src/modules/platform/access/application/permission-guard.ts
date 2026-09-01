@@ -5,6 +5,7 @@ import {
   SYSTEM_JOB_PERMISSIONS,
   type ActorContext,
   type Clock,
+  type OperationalEventInput,
   type OperationalEventRecorder,
   type PermissionKey,
   type PermissionOverride,
@@ -67,15 +68,24 @@ export class PermissionGuard {
     const held = await this.effective(scope, actor, tx);
     if (held.has(permission)) return;
 
-    // Every denial is an operational event. Repeated denials from one actor are
-    // a signal worth alerting on, and they cannot be if they are never recorded.
-    await this.opsLog.record(scope, {
-      code: 'access.permission_denied',
-      severity: 'WARN',
-      message: `Actor ${actor.type}:${actor.id ?? 'anonymous'} was denied ${permission}.`,
-      context: { permission, actorType: actor.type, actorId: actor.id, surface: actor.surface },
-      correlationId: actor.correlationId,
-    });
+    // Every denial is an operational event — repeated denials from one actor
+    // are a signal worth alerting on, and cannot be if nothing records them.
+    //
+    // But NOT from inside a caller's transaction. The recorder writes on the
+    // pool, so recording here while the caller holds a pool connection AND the
+    // tenant row lock would take a SECOND connection from the same pool. With
+    // `DATABASE_POOL_MAX` concurrent denials, every connection is held by a
+    // transaction waiting for a connection that will never come, and the
+    // transaction never rolls back, so the tenant lock is never released
+    // either: the process wedges until restart. Reproduced at pool size 1.
+    //
+    // The row would roll back with the denial in any case, so writing it here
+    // buys nothing even when it does not deadlock. A transactional caller owns
+    // recording its own denial, AFTER the transaction unwinds — the pattern
+    // `AdminManagementService` uses.
+    if (tx === undefined) {
+      await this.opsLog.record(scope, this.denialEvent(actor, permission));
+    }
 
     throw errors.permissionDenied(
       PLATFORM_ERROR_CODES.PERMISSION_DENIED,
@@ -91,6 +101,38 @@ export class PermissionGuard {
     tx?: unknown,
   ): Promise<boolean> {
     return (await this.effective(scope, actor, tx)).has(permission);
+  }
+
+  /**
+   * The operational event a denial produces.
+   *
+   * Exposed so a transactional caller can record the same event once its
+   * transaction has unwound, rather than the guard writing it under a lock.
+   */
+  denialEvent(actor: ActorContext, permission: PermissionKey): OperationalEventInput {
+    return {
+      code: 'access.permission_denied',
+      severity: 'WARN',
+      message: `Actor ${actor.type}:${actor.id ?? 'anonymous'} was denied ${permission}.`,
+      context: { permission, actorType: actor.type, actorId: actor.id, surface: actor.surface },
+      ...(actor.correlationId ? { correlationId: actor.correlationId } : {}),
+    };
+  }
+
+  /**
+   * The actor's effective permissions, by the ONE resolution rule.
+   *
+   * Exposed because anything deciding what an actor may do must decide it the
+   * same way `check` does. A caller that assembles its own view of an actor's
+   * authority will eventually disagree with the guard, and the disagreement
+   * will be the security hole.
+   */
+  async permissionsOf(
+    scope: ScopeContext,
+    actor: ActorContext,
+    tx?: unknown,
+  ): Promise<ReadonlySet<PermissionKey>> {
+    return this.effective(scope, actor, tx);
   }
 
   private async effective(

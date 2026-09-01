@@ -75,6 +75,23 @@ them repeated by database triggers as a backstop.
    amplification, and requiring the remover to hold it would stop a manager
    cleaning up a role they were never given.
 
+Rule 3 covers an owner's **status** as well as their role. Disabling an owner
+empties their authority exactly as completely as removing the role does — the
+resolver grants a non-ACTIVE administrator nothing — so gating one and not the
+other would have let plain `admins.edit` neutralise an owner by the back door.
+Re-enabling is gated for the same reason in the other direction. The cost is
+that an operator holding only `admins.edit` cannot disable a compromised owner
+account in an emergency; the answer to that is another owner, or the same
+recovery path as a lost owner.
+
+Rule 4 resolves the actor's authority through `PermissionGuard.permissionsOf`,
+the same `(roles ∪ GRANT) − DENY` rule every other check uses. It first read the
+raw union of the actor's roles, which consults no overrides — so an actor DENIED
+`refunds.issue` was refused it directly and could still hand it out by creating
+an administrator with a role that carries it and choosing that account's
+password. A permission the system says you do not have is not one you may
+delegate. One resolution rule, one place.
+
 Changing one's own **password** is deliberately not covered by rule 1: it
 requires the current password, grants nothing, and refusing it would mean an
 administrator could never rotate a credential they believe is exposed.
@@ -193,6 +210,18 @@ transaction handle. That is not tidiness: a nested read on the POOL while
 holding a transaction both misses the lock and occupies a second connection, so
 `DATABASE_POOL_MAX` concurrent admin mutations would each hold one connection
 while waiting for another that never comes.
+
+The same reasoning applies to the guard's own denial event, and it bit. Every
+denial wrote an operational event on the pool — including denials raised while
+the caller held a connection and the tenant lock. At pool size 1 that never
+settles, and at the default 10 it takes ten concurrent denials to wedge the
+process permanently: the transaction cannot roll back, so the tenant lock is
+never released either. The guard now records inline only when it is NOT inside a
+transaction; a transactional caller records the denial after the transaction has
+unwound, where the write is both safe and durable — inside, it would have rolled
+back with the denial anyway. `AdminManagementService.runLockedMutation` does
+this for all three mutations, and audits the refusal while it is there, which
+`setStatus` and `setRoles` previously did not do at all.
 
 ### On the triggers
 

@@ -151,6 +151,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     sessions,
     hasher,
     audit,
+    opsLog,
     outbox,
     clock,
     ids,

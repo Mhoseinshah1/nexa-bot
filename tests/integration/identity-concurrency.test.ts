@@ -602,13 +602,16 @@ describe('role changes decide under the lock', () => {
       OWNER_ROLE_KEY,
     ]);
 
-    // And no audit row claims B's change happened.
+    // And no SUCCESSFUL audit row claims B's change happened. B's refusal is
+    // recorded as DENIED, which is the trace an operator wants.
     const audits = await ctx.container.database.db
       .select()
       .from(auditLogs)
       .where(eq(auditLogs.action, 'admin.roles_change'));
-    expect(audits).toHaveLength(1);
-    expect((audits[0]?.after as { roleKeys: string[] }).roleKeys).toEqual([OWNER_ROLE_KEY]);
+    const succeeded = audits.filter((row) => row.result === 'SUCCESS');
+    expect(succeeded).toHaveLength(1);
+    expect((succeeded[0]?.after as { roleKeys: string[] }).roleKeys).toEqual([OWNER_ROLE_KEY]);
+    expect(audits.filter((row) => row.result === 'DENIED')).toHaveLength(1);
   });
 
   it('permits the same stale request when the actor does hold the privilege permission', async () => {
@@ -765,13 +768,21 @@ describe('actor authority is re-checked under the lock', () => {
       'ACTIVE',
     );
 
-    // Exactly one status change was audited: the owner's, not the stale one.
+    // Exactly one SUCCESSFUL status change: the owner's, not the stale one.
     const audits = await ctx.container.database.db
       .select()
       .from(auditLogs)
       .where(eq(auditLogs.action, 'admin.status_change'));
-    expect(audits).toHaveLength(1);
-    expect(audits[0]?.entityId).toBe(manager.id);
+    const succeeded = audits.filter((row) => row.result === 'SUCCESS');
+    expect(succeeded).toHaveLength(1);
+    expect(succeeded[0]?.entityId).toBe(manager.id);
+
+    // And the refusal left a record of its own, naming the target it failed to
+    // touch. A denied administrative mutation is exactly what an operator needs
+    // to be able to find later.
+    const denied = audits.filter((row) => row.result === 'DENIED');
+    expect(denied).toHaveLength(1);
+    expect(denied[0]?.entityId).toBe(target.id);
 
     // And no event claims the stale change happened.
     const events = await ctx.container.database.db
@@ -825,7 +836,71 @@ describe('actor authority is re-checked under the lock', () => {
       .select()
       .from(auditLogs)
       .where(eq(auditLogs.action, 'admin.roles_change'));
-    expect(audits).toHaveLength(0);
+    expect(audits.filter((row) => row.result === 'SUCCESS')).toHaveLength(0);
+    expect(audits.filter((row) => row.result === 'DENIED')).toHaveLength(1);
+
+    // The denial is also an operational event, recorded AFTER the transaction
+    // unwound — writing it from inside would take a second pool connection
+    // while holding one and the tenant lock.
+    const events = await ctx.container.database.db.execute(
+      `SELECT code FROM operational_events WHERE code = 'access.permission_denied'` as never,
+    );
+    expect(JSON.stringify(events)).toContain('access.permission_denied');
+  });
+
+  it('refuses a stale request that is genuinely CONTENDING for the lock', async () => {
+    // The interleaving the other tests do not cover, and the one production
+    // actually produces: the competing transaction HOLDS the lock while the
+    // stale request blocks on acquiring it, and commits while it waits.
+    //
+    // It is load-bearing for a reason that is easy to miss — it only passes at
+    // READ COMMITTED, where the statement after the lock gets a fresh snapshot.
+    // Under REPEATABLE READ the re-check would read the pre-lock snapshot and
+    // the whole fix would be theatre. Worth pinning, because isolation level is
+    // exactly the kind of thing that gets changed for unrelated reasons.
+    const manager = await managerWithAdminsEdit('manager', ['support']);
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'target',
+      roleKeys: ['support'],
+    });
+
+    // A competing transaction takes the tenant lock, revokes the manager's
+    // authority, and holds it all open.
+    let commitCompeting: () => void = () => undefined;
+    const competingHoldsLock = new Promise<void>((reachedLock) => {
+      void ctx.container.uow.run(tenantA, async (tx) => {
+        await ctx.container.admins.lockTenantForAdminChange(tenantA, tx);
+        await tx.tx
+          .delete(adminPermissionOverrides)
+          .where(eq(adminPermissionOverrides.adminId, manager.id));
+        reachedLock();
+        await new Promise<void>((release) => {
+          commitCompeting = release;
+        });
+      });
+    });
+
+    await competingHoldsLock;
+
+    // The stale request passes its pool check against still-committed state,
+    // then blocks inside lockTenantForAdminChange.
+    const stale = ctx.container.adminManagement.setStatus(
+      tenantA,
+      adminActorFor(manager),
+      target.id as AdminId,
+      { status: 'DISABLED', reason: 'Contending stale request.' },
+    );
+    const settled = stale.catch((error: unknown) => error);
+
+    // Let the competing transaction commit; the stale one then acquires the
+    // lock and must see the revocation.
+    commitCompeting();
+    const caught = await settled;
+
+    expect((caught as { code?: string }).code).toBe('platform.permission_denied');
+    expect((await ctx.container.admins.findById(tenantA, target.id as AdminId))?.status).toBe(
+      'ACTIVE',
+    );
   });
 
   it('still permits the mutation when the actor keeps their authority', async () => {
@@ -852,6 +927,224 @@ describe('actor authority is re-checked under the lock', () => {
     expect((await ctx.container.admins.findById(tenantA, target.id as AdminId))?.status).toBe(
       'DISABLED',
     );
+  });
+});
+
+describe('a denial under the lock does not wedge the connection pool', () => {
+  it('settles a denied locked mutation with only ONE connection available', async () => {
+    // The guard used to write its denial event on the pool while the caller
+    // held a pool connection AND the tenant row lock — a second connection from
+    // the same pool. At `DATABASE_POOL_MAX` concurrent denials every connection
+    // is held by a transaction waiting for one that never comes; the
+    // transaction never rolls back, so the tenant lock is never released
+    // either, and the process wedges until restart.
+    //
+    // Pool size 1 makes that deterministic: if anything inside the transaction
+    // reaches for a second connection, this never settles.
+    const single = await createTestContext({ DATABASE_POOL_MAX: '1' });
+    try {
+      await single.reset();
+      const singleOwner = await createAdmin(single.container, tenantA, {
+        username: 'owner',
+        roleKeys: ['owner'],
+      });
+      const powerless = await createAdmin(single.container, tenantA, {
+        username: 'powerless',
+        roleKeys: ['support'],
+      });
+      const target = await createAdmin(single.container, tenantA, {
+        username: 'target',
+        roleKeys: ['support'],
+      });
+
+      // The outer check passes as the owner; the in-transaction check is
+      // re-aimed at an actor with no authority, so the real guard denies while
+      // the lock is held.
+      const guard = single.container.guard as { check: unknown };
+      const realCheck = guard.check.bind(single.container.guard) as (
+        s: unknown,
+        a: unknown,
+        p: string,
+        tx?: unknown,
+      ) => Promise<void>;
+      guard.check = async (sc: unknown, a: unknown, permission: string, tx?: unknown) =>
+        tx === undefined
+          ? realCheck(sc, a, permission, tx)
+          : realCheck(sc, adminActorFor(powerless), permission, tx);
+
+      const outcome = await Promise.race([
+        single.container.adminManagement
+          .setStatus(tenantA, adminActorFor(singleOwner), target.id as AdminId, {
+            status: 'DISABLED',
+            reason: 'Denied under the lock.',
+          })
+          .then(
+            () => 'RESOLVED',
+            (error: { code?: string }) => `REJECTED:${error.code ?? 'unknown'}`,
+          ),
+        new Promise((resolve) => setTimeout(() => resolve('WEDGED'), 10_000)),
+      ]);
+      guard.check = realCheck;
+
+      expect(outcome).toBe('REJECTED:platform.permission_denied');
+
+      // The lock was released, so the tenant row is usable again immediately.
+      await expect(
+        single.container.database.db.execute(
+          `SELECT id FROM tenants WHERE id = '${tenantA.tenantId}' FOR UPDATE` as never,
+        ),
+      ).resolves.toBeDefined();
+    } finally {
+      await single.close();
+    }
+  }, 40_000);
+
+  it('completes an ALLOWED locked mutation with only one connection', async () => {
+    // The other half: the in-lock permission resolution must ride the
+    // transaction connection. If any of its three reads went to the pool, this
+    // would hang rather than pass.
+    const single = await createTestContext({ DATABASE_POOL_MAX: '1' });
+    try {
+      await single.reset();
+      const singleOwner = await createAdmin(single.container, tenantA, {
+        username: 'owner',
+        roleKeys: ['owner'],
+      });
+      const target = await createAdmin(single.container, tenantA, {
+        username: 'target',
+        roleKeys: ['support'],
+      });
+
+      const outcome = await Promise.race([
+        single.container.adminManagement
+          .setStatus(tenantA, adminActorFor(singleOwner), target.id as AdminId, {
+            status: 'DISABLED',
+            reason: 'Allowed under the lock.',
+          })
+          .then(() => 'DONE'),
+        new Promise((resolve) => setTimeout(() => resolve('WEDGED'), 10_000)),
+      ]);
+      expect(outcome).toBe('DONE');
+    } finally {
+      await single.close();
+    }
+  }, 40_000);
+});
+
+describe('privilege amplification uses EFFECTIVE permissions', () => {
+  it('refuses to hand out a permission the actor holds a DENY override on', async () => {
+    // The guard refuses this actor `refunds.issue` directly. Creating an
+    // administrator with a role that carries it — and choosing that account's
+    // password — must not be a way around that. The check used to read the raw
+    // union of the actor's roles, which never consults overrides.
+    const manager = await createAdmin(ctx.container, tenantA, {
+      username: 'manager',
+      roleKeys: [OWNER_ROLE_KEY],
+    });
+    await ctx.container.database.db.insert(adminPermissionOverrides).values({
+      tenantId: tenantA.tenantId,
+      adminId: manager.id,
+      permissionKey: 'refunds.issue',
+      effect: 'DENY',
+      reason: 'Under investigation.',
+      expiresAt: null,
+    });
+
+    // The premise: the guard genuinely refuses them the permission.
+    expect(await ctx.container.guard.has(tenantA, adminActorFor(manager), 'refunds.issue')).toBe(
+      false,
+    );
+    // …while the raw role union still contains it.
+    expect(await ctx.container.roles.permissionsForAdmin(tenantA, manager.id)).toContain(
+      'refunds.issue',
+    );
+
+    await expect(
+      ctx.container.adminManagement.create(tenantA, adminActorFor(manager), {
+        username: 'puppet',
+        displayName: 'Puppet',
+        password: 'a-perfectly-fine-password',
+        roleKeys: ['finance'],
+      }),
+    ).rejects.toThrow(/cannot grant a permission you do not hold/i);
+
+    expect(await ctx.container.admins.findByUsername(tenantA, 'puppet')).toBeNull();
+  });
+
+  it('refuses the same grant through setRoles', async () => {
+    const manager = await createAdmin(ctx.container, tenantA, {
+      username: 'manager',
+      roleKeys: [OWNER_ROLE_KEY],
+    });
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'target',
+      roleKeys: ['support'],
+    });
+    await ctx.container.database.db.insert(adminPermissionOverrides).values({
+      tenantId: tenantA.tenantId,
+      adminId: manager.id,
+      permissionKey: 'refunds.issue',
+      effect: 'DENY',
+      reason: 'Under investigation.',
+      expiresAt: null,
+    });
+
+    await expect(
+      ctx.container.adminManagement.setRoles(
+        tenantA,
+        adminActorFor(manager),
+        target.id as AdminId,
+        {
+          roleKeys: ['finance'],
+          reason: 'Would hand out a denied permission.',
+        },
+      ),
+    ).rejects.toThrow(/cannot grant a permission you do not hold/i);
+
+    expect(await ctx.container.admins.roleKeysFor(tenantA, target.id as AdminId)).toEqual([
+      'support',
+    ]);
+  });
+
+  it('counts a GRANT override as held, so the rule is not merely restrictive', async () => {
+    // The mirror image. An actor granted a permission by override holds it as
+    // far as the guard is concerned, so they may delegate it — otherwise the
+    // check would be inconsistent in the other direction.
+    const manager = await createAdmin(ctx.container, tenantA, {
+      username: 'manager',
+      roleKeys: ['support'],
+    });
+    for (const permissionKey of ['admins.edit', 'refunds.issue'] as const) {
+      await ctx.container.database.db.insert(adminPermissionOverrides).values({
+        tenantId: tenantA.tenantId,
+        adminId: manager.id,
+        permissionKey,
+        effect: 'GRANT',
+        reason: 'Temporary cover.',
+        expiresAt: null,
+      });
+    }
+
+    // `finance` carries refunds.issue plus several the manager lacks, so a role
+    // they cannot fully cover is still refused.
+    await expect(
+      ctx.container.adminManagement.create(tenantA, adminActorFor(manager), {
+        username: 'puppet',
+        displayName: 'Puppet',
+        password: 'a-perfectly-fine-password',
+        roleKeys: ['finance'],
+      }),
+    ).rejects.toThrow(/cannot grant a permission you do not hold/i);
+
+    // A role entirely within what they hold goes through.
+    await expect(
+      ctx.container.adminManagement.create(tenantA, adminActorFor(manager), {
+        username: 'colleague',
+        displayName: 'Colleague',
+        password: 'a-perfectly-fine-password',
+        roleKeys: ['support'],
+      }),
+    ).resolves.toBeDefined();
   });
 });
 
