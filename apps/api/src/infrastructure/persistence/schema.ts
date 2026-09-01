@@ -30,7 +30,21 @@ import {
  * phrases — because nothing constrained the column.
  */
 function enumCheck(column: string, values: readonly string[]): SQL {
-  const list = values.map((v) => `'${v}'`).join(', ');
+  // This is the only sql.raw in the codebase. Every argument today is a
+  // compile-time literal from a contract enum, which is what makes it safe — so
+  // assert that rather than trust it, and escape anyway. A runtime-derived list
+  // would otherwise turn a DDL helper into an injection point.
+  if (!/^[a-z_][a-z0-9_]*$/.test(column)) {
+    throw new Error(`enumCheck: "${column}" is not a plain column name.`);
+  }
+  const list = values
+    .map((value) => {
+      if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+        throw new Error(`enumCheck: "${value}" is not a plain enum literal.`);
+      }
+      return `'${value.replace(/'/g, "''")}'`;
+    })
+    .join(', ');
   return sql.raw(`${column} IN (${list})`);
 }
 
@@ -247,7 +261,16 @@ export const operationalEvents = pgTable(
     severity: text('severity').notNull(),
     message: text('message').notNull(),
     context: jsonb('context'),
-    /** Repeats collapse onto one row and increment the counter. */
+    /**
+     * Which dedupe namespace this row belongs to: the tenant id, or 'SYSTEM'.
+     *
+     * Without it the unique index below is global, and two tenants recording
+     * the same dedupe key collapse onto ONE row — a cross-tenant write that no
+     * repository predicate can prevent, because the collision happens in the
+     * index rather than in a query.
+     */
+    dedupeScope: text('dedupe_scope').notNull().default('SYSTEM'),
+    /** Repeats within one scope collapse onto one row and increment the counter. */
     dedupeKey: text('dedupe_key'),
     occurrenceCount: integer('occurrence_count').notNull().default(1),
     firstSeenAt: timestamptz('first_seen_at').notNull(),
@@ -259,7 +282,7 @@ export const operationalEvents = pgTable(
   (table) => [
     index('operational_events_tenant_seen_idx').on(table.tenantId, table.lastSeenAt),
     index('operational_events_code_idx').on(table.code),
-    uniqueIndex('operational_events_dedupe_key').on(table.dedupeKey),
+    uniqueIndex('operational_events_dedupe_key').on(table.dedupeScope, table.dedupeKey),
     check('operational_events_severity_check', enumCheck('severity', OPERATIONAL_SEVERITIES)),
     check('operational_events_occurrence_check', sql`occurrence_count >= 1`),
   ],

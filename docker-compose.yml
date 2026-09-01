@@ -13,8 +13,10 @@ services:
       POSTGRES_USER: nexa
       POSTGRES_PASSWORD: nexa
       POSTGRES_DB: nexa_dev
+    # Bound to loopback: these are development credentials on an unauthenticated
+    # Redis, and publishing them on 0.0.0.0 exposes them to the local network.
     ports:
-      - '5432:5432'
+      - '127.0.0.1:5432:5432'
     volumes:
       - nexa-pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -28,7 +30,7 @@ services:
     container_name: nexa-redis
     command: ['redis-server', '--appendonly', 'yes']
     ports:
-      - '6379:6379'
+      - '127.0.0.1:6379:6379'
     volumes:
       - nexa-redisdata:/data
     healthcheck:

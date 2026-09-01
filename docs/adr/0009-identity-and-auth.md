@@ -40,6 +40,22 @@ Creating the table first would mean guessing, and then living with the guess.
 3. Session lifetime, rotation and revocation, and whether a role change takes
    effect on the next request or invalidates in-flight sessions.
 
+## Correction: `SYSTEM_JOB` is not a bypass
+
+An earlier version of the guard returned early for `SYSTEM_JOB`, treating
+background work as trusted because it is our own code. A security review found
+the hole: the HTTP ping controller constructed a `SYSTEM_JOB` actor for an
+anonymous caller, so that actor type — the one that skipped deny-by-default —
+was reachable from the internet.
+
+Deny-by-default now has no exceptions. Jobs hold `SYSTEM_JOB_PERMISSIONS`, an
+explicit list in the frozen contract, so widening what background work may do is
+a visible contract change. The HTTP endpoint is additionally registered only
+when `NODE_ENV=development`.
+
+The lesson generalises: "trusted by construction" is a claim about the entire
+codebase, and a guard cannot verify it.
+
 ## What is already built, so Phase 1 does not start from nothing
 
 The permission catalog, role seeds, the DENY-wins resolution rule with expiring

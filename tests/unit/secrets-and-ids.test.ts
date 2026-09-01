@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { CALLBACK_REF_LENGTH, callbackRefSchema, uuidV7Schema } from '@nexa/contracts';
 import { AesGcmSecretCipher } from '../../apps/api/src/infrastructure/crypto/secret-cipher';
 import { Uuidv7IdGenerator } from '../../apps/api/src/infrastructure/ids';
-import { redactSensitive } from '../../apps/api/src/modules/platform/audit/infrastructure/drizzle-audit-writer';
+import {
+  isSensitiveKey,
+  normaliseKey,
+  redactRecord,
+  redactSecrets,
+} from '../../apps/api/src/infrastructure/redaction';
 
 const KEK_A = Buffer.alloc(32, 1).toString('base64');
 const KEK_B = Buffer.alloc(32, 2).toString('base64');
@@ -87,21 +92,64 @@ describe('identifiers', () => {
   });
 });
 
-describe('audit redaction', () => {
-  it('replaces secret-shaped values before they reach the audit log', () => {
-    const redacted = redactSensitive({
-      username: 'acme_bot',
-      token: '123456:AAH',
-      nested: { apiKey: 'abc', keep: 1 },
-    });
-    expect(redacted).toEqual({
+describe('redaction', () => {
+  it('replaces secret-shaped values at every depth', () => {
+    expect(
+      redactSecrets({
+        username: 'acme_bot',
+        token: '123456:AAH',
+        nested: { apiKey: 'abc', keep: 1, deeper: { botToken: 'x', fine: 2 } },
+      }),
+    ).toEqual({
       username: 'acme_bot',
       token: '[redacted]',
-      nested: { apiKey: '[redacted]', keep: 1 },
+      nested: { apiKey: '[redacted]', keep: 1, deeper: { botToken: '[redacted]', fine: 2 } },
     });
   });
 
+  it('traverses arrays', () => {
+    // A credential inside a list is still a credential. The previous
+    // implementation copied arrays verbatim, so a list of bot instances wrote
+    // its tokens to the audit log in cleartext.
+    expect(redactSecrets({ bots: [{ username: 'a', token: '123456:AAH-real' }] })).toEqual({
+      bots: [{ username: 'a', token: '[redacted]' }],
+    });
+  });
+
+  it('redacts a key it cannot assess rather than passing it through', () => {
+    // A homoglyph normalises to something that matches no fragment (`tken`),
+    // and a non-Latin key normalises to nothing at all. Both are unreadable, so
+    // both fail closed. A false positive costs a log line; a false negative
+    // costs a secret.
+    expect(normaliseKey('tоken')).not.toContain('token'); // Cyrillic о
+    expect(isSensitiveKey('tоken')).toBe(true);
+    expect(isSensitiveKey('توکن')).toBe(true);
+    expect(redactSecrets({ tоken: 'secret-value' })).toEqual({ tоken: '[redacted]' });
+    // Plain ASCII that genuinely is not sensitive stays readable.
+    expect(isSensitiveKey('displayName')).toBe(false);
+  });
+
+  it('still matches keys that carry digits or separators', () => {
+    expect(isSensitiveKey('Token-1')).toBe(true);
+    expect(isSensitiveKey('api_key')).toBe(true);
+    expect(isSensitiveKey('bot_token_2')).toBe(true);
+    expect(isSensitiveKey('username')).toBe(false);
+  });
+
+  it('survives a cyclic value instead of throwing inside a transaction', () => {
+    const cyclic: Record<string, unknown> = { name: 'a' };
+    cyclic.self = cyclic;
+    expect(() => redactSecrets(cyclic)).not.toThrow();
+    expect((redactSecrets(cyclic) as { self: unknown }).self).toBe('[circular]');
+  });
+
+  it('truncates beyond a bounded depth', () => {
+    let deep: Record<string, unknown> = { value: 'bottom' };
+    for (let i = 0; i < 20; i += 1) deep = { nested: deep };
+    expect(JSON.stringify(redactSecrets(deep))).toContain('[truncated]');
+  });
+
   it('passes null through', () => {
-    expect(redactSensitive(null)).toBeNull();
+    expect(redactRecord(null)).toBeNull();
   });
 });

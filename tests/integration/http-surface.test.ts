@@ -67,13 +67,30 @@ describe('HTTP surface', () => {
       expect(body.nodeVersion).toBe(process.version);
     });
 
-    it('echoes a caller-supplied correlation id', async () => {
+    it('echoes a caller-supplied correlation id when it is a UUID', async () => {
+      const supplied = '01900000-0000-7000-8000-0000000000aa';
+      const response = await inject({
+        method: 'GET',
+        url: '/health/live',
+        headers: { 'x-correlation-id': supplied },
+      });
+      expect(response.headers['x-correlation-id']).toBe(supplied);
+    });
+
+    it('replaces a correlation id that is not a UUID', async () => {
+      // The value lands in append-only columns, so an unbounded caller-supplied
+      // string would be undeletable, and a deliberately colliding one would
+      // muddy another request's trace.
       const response = await inject({
         method: 'GET',
         url: '/health/live',
         headers: { 'x-correlation-id': 'caller-supplied-id' },
       });
-      expect(response.headers['x-correlation-id']).toBe('caller-supplied-id');
+      const echoed = response.headers['x-correlation-id'];
+      expect(echoed).not.toBe('caller-supplied-id');
+      expect(String(echoed)).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
     });
   });
 
@@ -218,6 +235,24 @@ describe('readiness when a dependency is down', () => {
     expect(body.status).toBe('degraded');
     expect(body.dependencies.find((d) => d.name === 'redis')?.status).toBe('down');
     expect(body.dependencies.find((d) => d.name === 'postgres')?.status).toBe('up');
+  });
+
+  it('describes the failure from a closed vocabulary, not from the driver', async () => {
+    // Readiness is unauthenticated. A driver message would hand an anonymous
+    // caller internal hostnames, ports, database and role names — precisely
+    // when the system is broken.
+    const ready = await api.app
+      .getHttpAdapter()
+      .getInstance()
+      .inject({ method: 'GET', url: '/health/ready' });
+
+    const body = healthReadyResponseSchema.parse(ready.json());
+    const redis = body.dependencies.find((d) => d.name === 'redis');
+
+    expect(['unreachable', 'timeout', 'auth failed', 'missing', 'unavailable']).toContain(
+      redis?.detail,
+    );
+    expect(redis?.detail).not.toMatch(/6399|127\.0\.0\.1|ECONNREFUSED/);
   });
 });
 

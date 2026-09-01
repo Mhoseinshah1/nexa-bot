@@ -1,4 +1,4 @@
-import type { ActorContext } from './actor.js';
+import type { ActorContext, SourceSurface } from './actor.js';
 import type { ScopeContext } from './tenant.js';
 import type { CorrelationId } from './ids.js';
 
@@ -77,6 +77,13 @@ export interface IdempotencyRecord<TResult = unknown> {
   readonly createdAt: Date;
 }
 
+/**
+ * Which surface minted a key. Keys are unique within a namespace, never across
+ * them: two surfaces must not be able to consume each other's keys, even when
+ * both run under the same scope.
+ */
+export type IdempotencyNamespace = SourceSurface;
+
 export interface IdempotencyStore {
   /**
    * Returns the stored result when this key has already completed. Throws a
@@ -85,11 +92,13 @@ export interface IdempotencyStore {
    */
   find<TResult>(
     scope: ScopeContext,
+    namespace: IdempotencyNamespace,
     key: string,
     requestHash: string,
   ): Promise<IdempotencyRecord<TResult> | null>;
   remember<TResult>(
     scope: ScopeContext,
+    namespace: IdempotencyNamespace,
     key: string,
     requestHash: string,
     result: TResult,

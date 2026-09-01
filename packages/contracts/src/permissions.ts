@@ -237,6 +237,22 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
 ];
 
 /**
+ * What background work may do.
+ *
+ * Jobs used to bypass the permission guard entirely, on the reasoning that they
+ * are "our own code". That reasoning does not survive contact with a surface
+ * that can construct a `SYSTEM_JOB` actor — and one did. Deny-by-default now
+ * applies to every actor type without exception; jobs simply hold an explicit,
+ * narrow, auditable set.
+ *
+ * Adding a key here is a contract change. It should be rare, and it should be
+ * obvious in a diff that background work gained a new power.
+ */
+export const SYSTEM_JOB_PERMISSIONS = [
+  'maintenance.run',
+] as const satisfies readonly PermissionKey[];
+
+/**
  * Resolution: effective = (role permissions ∪ GRANT overrides) − DENY overrides.
  * DENY always wins, and anything not listed is denied.
  */

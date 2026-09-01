@@ -8,7 +8,8 @@ import {
 } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { operationalEvents } from '../../../../infrastructure/persistence/schema.js';
-import { scopeTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { scopeRef, scopeTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { redactRecord } from '../../../../infrastructure/redaction.js';
 
 /**
  * Operational events: what the system did.
@@ -37,7 +38,12 @@ export class DrizzleOperationalEventRecorder implements OperationalEventRecorder
       code: event.code,
       severity: event.severity,
       message: event.message,
-      context: (event.context ?? null) as Record<string, unknown> | null,
+      // Redacted like the audit log: this table is projected into an operations
+      // channel, so anything written here leaves the database.
+      context: redactRecord((event.context ?? null) as Record<string, unknown> | null),
+      // Deduplication is per scope. Globally-unique dedupe keys would let two
+      // tenants collapse onto one row and overwrite each other's context.
+      dedupeScope: scopeRef(scope, 'OPSLOG'),
       dedupeKey: event.dedupeKey ?? null,
       occurrenceCount: 1,
       firstSeenAt: now,
@@ -55,7 +61,7 @@ export class DrizzleOperationalEventRecorder implements OperationalEventRecorder
       .insert(operationalEvents)
       .values(values)
       .onConflictDoUpdate({
-        target: operationalEvents.dedupeKey,
+        target: [operationalEvents.dedupeScope, operationalEvents.dedupeKey],
         set: {
           occurrenceCount: sql`${operationalEvents.occurrenceCount} + 1`,
           lastSeenAt: now,

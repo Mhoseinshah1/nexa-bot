@@ -14,20 +14,22 @@ const booleanish = z
 
 const port = z.coerce.number().int().min(1).max(65535);
 
+// Node's base64 decoder silently discards invalid characters, so a length check
+// alone accepts a corrupted or truncated key and boots with a key that is not
+// the one the operator pasted — producing data nobody can decrypt later.
 const base64Key = (bytes: number) =>
   z
     .string()
     .min(1)
-    .refine(
-      (value) => {
-        try {
-          return Buffer.from(value, 'base64').length === bytes;
-        } catch {
-          return false;
-        }
-      },
-      { message: `must be ${bytes} bytes encoded as base64` },
-    );
+    .refine((value) => /^[A-Za-z0-9+/]+={0,2}$/.test(value), {
+      message: 'must be valid base64',
+    })
+    .refine((value) => Buffer.from(value, 'base64').length === bytes, {
+      message: `must decode to exactly ${bytes} bytes`,
+    })
+    .refine((value) => !Buffer.from(value, 'base64').every((byte) => byte === 0), {
+      message: 'must not be all zero bytes',
+    });
 
 export const configSchema = z
   .object({
@@ -53,8 +55,10 @@ export const configSchema = z
     AUTH_MODE: z.enum(['none']).default('none'),
 
     TELEGRAM_WEBHOOK_ENABLED: booleanish.default(false),
+    // The route itself is fixed at /telegram/webhook. A configurable path was
+    // validated here and never read by the controller, so setting it produced a
+    // registered URL that 404s while the real endpoint stayed on the default.
     TELEGRAM_WEBHOOK_SECRET: z.string().default(''),
-    TELEGRAM_WEBHOOK_PATH: z.string().startsWith('/').default('/telegram/webhook'),
 
     OUTBOX_RELAY_ENABLED: booleanish.default(true),
     OUTBOX_RELAY_BATCH_SIZE: z.coerce.number().int().min(1).max(1000).default(100),

@@ -22,8 +22,8 @@ export class DomainErrorFilter implements ExceptionFilter {
     const reply = host.switchToHttp().getResponse<FastifyReply>();
     const correlationId = currentCorrelationId() ?? 'unknown';
 
-    const body = this.toBody(exception, correlationId);
     const status = this.toStatus(exception);
+    const body = this.toBody(exception, correlationId, status);
 
     if (status >= 500) {
       this.container.logger.error(
@@ -42,16 +42,22 @@ export class DomainErrorFilter implements ExceptionFilter {
     return 500;
   }
 
-  private toBody(exception: unknown, correlationId: string): ErrorResponse {
+  private toBody(exception: unknown, correlationId: string, status: number): ErrorResponse {
+    // Anything answering 5xx keeps its message for the log and not for the
+    // client, whatever class it is. Checking the class instead of the status
+    // let framework exceptions carry their message out on a 500.
+    const serverError = status >= 500;
+
     if (isNexaError(exception)) {
       return {
         error: {
           kind: exception.kind,
           code: exception.code,
-          // An internal failure's message is for the log, not for the client.
-          message:
-            exception.kind === 'INTERNAL' ? 'An internal error occurred.' : exception.message,
-          ...(exception.kind === 'INTERNAL' ? {} : { details: exception.details }),
+          // A server-side failure's message is for the log, not for the client.
+          // Keying on the status rather than on `kind === 'INTERNAL'` also
+          // covers CONFIGURATION, whose message names environment variables.
+          message: serverError ? 'An internal error occurred.' : exception.message,
+          ...(serverError ? {} : { details: exception.details }),
           correlationId,
         },
       };
@@ -74,9 +80,9 @@ export class DomainErrorFilter implements ExceptionFilter {
     if (exception instanceof HttpException) {
       return {
         error: {
-          kind: 'VALIDATION',
+          kind: serverError ? 'INTERNAL' : 'VALIDATION',
           code: 'http.error',
-          message: exception.message,
+          message: serverError ? 'An internal error occurred.' : exception.message,
           correlationId,
         },
       };

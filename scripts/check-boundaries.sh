@@ -144,14 +144,33 @@ fi
 # The corpus documents a third party's production deployment. Identifiers,
 # credentials and endpoints do not belong in this repository.
 if [ -d docs/research ]; then
-  if grep -rnE "([0-9]{8,10}:AA[A-Za-z0-9_-]{30,})" docs/research >/dev/null 2>&1; then
-    fail "A Telegram bot token appears in docs/research"
-  elif grep -rnE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" docs/research \
-       | grep -vE "\b(0\.0\.0\.0|127\.0\.0\.1|255\.255|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)" >/dev/null 2>&1; then
-    fail "An IP address appears in docs/research" \
-         "$(grep -rnE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" docs/research | grep -vE "\b(0\.0\.0\.0|127\.0\.0\.1|255\.255|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)" | head -5)"
-  else
-    pass "docs/research contains no tokens or IP addresses"
+  # Every pattern runs. An earlier version used if/elif, so a token hit skipped
+  # the remaining scans entirely, and it checked only two of the four patterns
+  # the import script enforces.
+  RESEARCH_CLEAN=1
+
+  scan_research() {
+    local description="$1" pattern="$2" allow="${3:-}"
+    local hits
+    if [ -n "$allow" ]; then
+      hits=$(grep -rnE "$pattern" docs/research 2>/dev/null | grep -vE "$allow" || true)
+    else
+      hits=$(grep -rnE "$pattern" docs/research 2>/dev/null || true)
+    fi
+    if [ -n "$hits" ]; then
+      fail "$description appears in docs/research" "$(echo "$hits" | head -5)"
+      RESEARCH_CLEAN=0
+    fi
+  }
+
+  scan_research "A Telegram bot token" "[0-9]{8,10}:AA[A-Za-z0-9_-]{20,}"
+  scan_research "An email address" "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+  scan_research "An IP address" "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" \
+    "\b(0\.0\.0\.0|127\.0\.0\.1|255\.255|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)"
+  scan_research "A payment card number" "\b[0-9]{4}[- ][0-9]{4}[- ][0-9]{4}[- ][0-9]{4}\b"
+
+  if [ "$RESEARCH_CLEAN" -eq 1 ]; then
+    pass "docs/research contains no tokens, emails, IP addresses or card numbers"
   fi
 fi
 

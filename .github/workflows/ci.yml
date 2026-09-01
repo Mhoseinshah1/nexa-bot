@@ -10,6 +10,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# CI reads the repository and nothing else. Without this the job token inherits
+# the repository default, which is frequently read/write.
+permissions:
+  contents: read
+
 env:
   NODE_VERSION: '22'
   PNPM_VERSION: '10.33.0'

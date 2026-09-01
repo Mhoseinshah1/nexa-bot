@@ -18,6 +18,19 @@ PG_PASSWORD="${PGPASSWORD_NEXA:-nexa}"
 PG_HOST=127.0.0.1
 PG_PORT=5432
 
+# These are interpolated into a `su postgres -c "psql -c \"…\""`, which is parsed
+# by two shells before it reaches SQL. A value containing $(…) or a backtick
+# would execute as the postgres user, so reject anything that is not a plain
+# identifier rather than trying to quote around it.
+if ! printf '%s' "$PG_USER" | grep -qE '^[a-z_][a-z0-9_]{0,62}$'; then
+  echo "PGUSER_NEXA must be a plain lowercase identifier." >&2
+  exit 1
+fi
+if ! printf '%s' "$PG_PASSWORD" | grep -qE '^[A-Za-z0-9_-]{1,64}$'; then
+  echo "PGPASSWORD_NEXA must be alphanumeric with - or _ only." >&2
+  exit 1
+fi
+
 echo "==> development services"
 
 start_with_docker() {
@@ -71,7 +84,7 @@ start_natively() {
   # Role and databases, created only if missing.
   if command -v psql >/dev/null 2>&1; then
     su postgres -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='${PG_USER}'\"" 2>/dev/null | grep -q 1 ||
-      su postgres -c "psql -c \"CREATE ROLE ${PG_USER} LOGIN PASSWORD '${PG_PASSWORD}' SUPERUSER\"" >/dev/null 2>&1
+      su postgres -c "psql -c \"CREATE ROLE ${PG_USER} LOGIN PASSWORD '${PG_PASSWORD}' CREATEDB\"" >/dev/null 2>&1
     for db in nexa_dev nexa_test; do
       su postgres -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='${db}'\"" 2>/dev/null | grep -q 1 ||
         su postgres -c "createdb -O ${PG_USER} ${db}" >/dev/null 2>&1

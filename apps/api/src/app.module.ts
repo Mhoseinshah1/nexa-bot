@@ -17,7 +17,17 @@ import { DomainErrorFilter } from './surfaces/web/error.filter.js';
 @Module({})
 export class AppModule implements NestModule {
   static forContainer(container: Container) {
-    const controllers = [HealthController, SystemController];
+    const controllers = [HealthController];
+
+    // The system ping endpoint runs the canonical write path over HTTP with no
+    // authentication, because Phase 0 has none. That is acceptable as a
+    // development affordance and unacceptable anywhere else: it would let an
+    // anonymous caller write rows into append-only tables. Registered only in
+    // development, the same way the webhook is registered only when configured.
+    if (container.config.NODE_ENV === 'development') {
+      controllers.push(SystemController as never);
+    }
+
     if (container.config.TELEGRAM_WEBHOOK_ENABLED) {
       controllers.push(TelegramWebhookController as never);
     }

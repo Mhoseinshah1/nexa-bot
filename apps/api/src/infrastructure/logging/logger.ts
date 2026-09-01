@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import pino from 'pino';
 import { asId, type CorrelationId, type LogLevel, type Logger } from '@nexa/contracts';
+import { redactSecrets } from '../redaction.js';
 
 /**
  * Structured logging, with the correlation id carried implicitly.
@@ -64,28 +65,30 @@ class PinoLogger implements Logger {
   }
 }
 
-/** Values that must never reach a log line, whatever a caller passes. */
-const REDACT_PATHS = [
-  'token',
-  '*.token',
-  'secret',
-  '*.secret',
-  'password',
-  '*.password',
-  'authorization',
-  '*.authorization',
-  'req.headers.authorization',
-  'req.headers["x-telegram-bot-api-secret-token"]',
-  'tokenCiphertext',
-  '*.tokenCiphertext',
-];
-
+/**
+ * Redaction runs over the whole log object, not over a list of paths.
+ *
+ * pino's `redact.paths` is exact-path and case-sensitive, and its `*` matches
+ * exactly one level — so `botToken`, `webhookSecret`, anything three levels
+ * deep, and anything inside an array all slipped through the path list this
+ * replaced. A hook that walks the object shares one implementation, and one
+ * definition of "sensitive", with the audit log.
+ */
 export function createLogger(level: LogLevel, role: string): Logger {
   return new PinoLogger(
     pino({
       level,
       base: { role },
-      redact: { paths: REDACT_PATHS, censor: '[redacted]' },
+      hooks: {
+        logMethod(args, method) {
+          const [first, ...rest] = args;
+          if (first !== null && typeof first === 'object') {
+            method.apply(this, [redactSecrets(first), ...rest] as typeof args);
+            return;
+          }
+          method.apply(this, args);
+        },
+      },
       formatters: { level: (label) => ({ level: label }) },
       timestamp: pino.stdTimeFunctions.isoTime,
     }),

@@ -86,8 +86,11 @@ export class RecordPingService {
 
     // 5. IDEMPOTENCY — a replay returns the first result rather than repeating
     //    the work. A key reused with different input throws instead.
+    // Namespaced by the acting surface. Without that, every system-scoped
+    // caller shares one namespace and one surface can consume another's keys.
     const existing = await this.idempotency.find<Omit<RecordPingResult, 'replayed'>>(
       scope,
+      actor.surface,
       command.idempotencyKey,
       requestHash,
     );
@@ -120,6 +123,7 @@ export class RecordPingService {
 
       await this.idempotency.remember(
         scope,
+        actor.surface,
         command.idempotencyKey,
         requestHash,
         { eventId: written.eventId, sequence: written.sequence },

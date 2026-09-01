@@ -72,11 +72,19 @@ export class HealthController {
         ...(result.detail ? { detail: result.detail } : {}),
       };
     } catch (error) {
+      // Readiness is unauthenticated. A driver message here would hand an
+      // anonymous caller internal hostnames, ports, database and role names —
+      // precisely when the system is broken. The real message goes to the log
+      // with the correlation id; the response gets a fixed word.
+      this.container.logger.error(
+        { dependency: name, err: error instanceof Error ? error.stack : String(error) },
+        'Readiness probe failed',
+      );
       return {
         name,
         status: 'down',
         latencyMs: Date.now() - started,
-        detail: error instanceof Error ? error.message : String(error),
+        detail: classifyProbeFailure(error),
       };
     }
   }
@@ -89,7 +97,13 @@ export class HealthController {
   }
 
   private checkRedis(): Promise<DependencyStatus> {
-    return this.timed('redis', async () => ({ ok: await this.container.redis.ping() }));
+    // The Redis handle swallows its own connection errors so a blip degrades
+    // readiness rather than crashing the process, which means this probe never
+    // throws — it still has to say something when the answer is no.
+    return this.timed('redis', async () => {
+      const ok = await this.container.redis.ping();
+      return ok ? { ok } : { ok, detail: 'unreachable' };
+    });
   }
 
   /**
@@ -117,4 +131,17 @@ export class HealthController {
       return { ok: healthy, detail: `oldest unpublished ${lag}ms` };
     });
   }
+}
+
+/**
+ * A closed vocabulary. Enough for an operator to know where to look, not enough
+ * to describe the deployment to a stranger.
+ */
+function classifyProbeFailure(error: unknown): string {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  if (message.includes('econnrefused') || message.includes('enotfound')) return 'unreachable';
+  if (message.includes('etimedout') || message.includes('timeout')) return 'timeout';
+  if (message.includes('password') || message.includes('authentication')) return 'auth failed';
+  if (message.includes('does not exist')) return 'missing';
+  return 'unavailable';
 }

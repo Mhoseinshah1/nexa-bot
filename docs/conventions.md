@@ -143,8 +143,9 @@ not treated as a replay.
 legacy system has no idempotency, no payment record and no dedupe anywhere, so a
 duplicate callback there is indistinguishable from a second purchase.
 
-**Enforced by.** A unique index on `(scope_ref, key)`; integration tests for
-replay, payload mismatch and per-tenant scoping.
+**Enforced by.** A unique index on `(scope_ref, key)`, where `scope_ref` carries
+both the scope and the namespace; integration tests for replay, payload
+mismatch, per-tenant scoping and per-surface scoping.
 
 ---
 
@@ -239,6 +240,50 @@ backup of both.
 
 **Enforced by.** Unit tests for round-trip, wrong key, tampering and masking; an
 integration test asserts the repository read model never carries the plaintext.
+
+**One redactor, used everywhere.** `apps/api/src/infrastructure/redaction.ts` is
+the single implementation, shared by the logger, the audit log and the
+operational log. It traverses arrays as well as objects, bounds its recursion,
+survives a cyclic value, and **fails closed on a key it cannot read** — a
+homoglyph or a non-Latin key is redacted rather than passed through, because a
+false positive costs a log line and a false negative costs a secret. Two
+divergent implementations existed before, and both had holes.
+
+---
+
+## Authorization
+
+**Rule.** Deny by default, for every actor type, with no exceptions. A
+permission that is not granted is denied; an unknown permission is denied.
+Background work holds an explicit `SYSTEM_JOB_PERMISSIONS` set from the frozen
+contract — it does not skip the check.
+
+**Why.** The guard originally returned early for `SYSTEM_JOB`, on the reasoning
+that jobs are our own code and therefore trusted. That reasoning fails the
+moment anything else can construct such an actor, and something did: an HTTP
+controller built one for an anonymous caller, which handed every permission in
+the catalog to the internet. "Trusted by construction" is a claim about the
+whole codebase, and it is not one a guard can verify.
+
+**Enforced by.** Unit tests assert that background work is denied a permission
+outside its grant, that the grant is narrow, and that the resolver is not
+consulted for it; an integration test asserts the denial is recorded.
+
+---
+
+## Idempotency keys are namespaced per surface
+
+**Rule.** A key is unique within `(scope, surface)`, never within scope alone.
+
+**Why.** Both the HTTP surface and the Telegram webhook run under a system
+scope. Sharing one namespace meant an unauthenticated caller could pre-claim
+`telegram:update:<n>` — guessable, because Telegram's update ids are sequential
+— and either make the real update look like a replay or wedge the webhook into
+an endless retry with a payload mismatch.
+
+**Still open:** update ids are unique _per bot_, not globally. Once more than
+one bot instance exists, the webhook's key must include the bot instance id.
+Tracked for Phase 1.
 
 ---
 

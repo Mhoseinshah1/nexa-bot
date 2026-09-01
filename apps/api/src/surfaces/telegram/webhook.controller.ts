@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { Body, Controller, Headers, Inject, Post } from '@nestjs/common';
 import type { Update } from 'grammy/types';
 import {
@@ -36,7 +37,7 @@ export class TelegramWebhookController {
   ): Promise<{ ok: true }> {
     const expected = this.container.config.TELEGRAM_WEBHOOK_SECRET;
 
-    if (!expected || secretToken !== expected) {
+    if (!expected || !secretTokenMatches(secretToken, expected)) {
       throw errors.unauthenticated(
         PLATFORM_ERROR_CODES.TELEGRAM_BAD_SECRET_TOKEN,
         'Missing or incorrect Telegram secret token.',
@@ -63,6 +64,21 @@ export class TelegramWebhookController {
     // and an update we do not handle is not an error.
     return { ok: true };
   }
+}
+
+/**
+ * Constant-time comparison.
+ *
+ * Timing analysis over the network is not a realistic attack on a 16+ character
+ * secret, but the comparison costs nothing to do correctly. Both sides are
+ * hashed first so the buffers are always equal length and the comparison itself
+ * cannot leak the secret's length.
+ */
+function secretTokenMatches(supplied: string | undefined, expected: string): boolean {
+  if (supplied === undefined) return false;
+  const a = createHash('sha256').update(supplied).digest();
+  const b = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(a, b);
 }
 
 function isPingCommand(update: Update): boolean {

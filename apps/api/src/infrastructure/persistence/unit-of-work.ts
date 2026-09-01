@@ -59,9 +59,18 @@ export function requireTenantId(scope: ScopeContext): string {
   return scope.tenantId;
 }
 
-/** The value written to `scope_ref` columns, which cannot be null. */
-export function scopeRef(scope: ScopeContext): string {
-  return isSystemContext(scope) ? 'SYSTEM' : scope.tenantId;
+/**
+ * The value written to `scope_ref` columns, which cannot be null.
+ *
+ * The namespace is part of the key, not decoration. Without it every
+ * system-scoped caller shares one `'SYSTEM'` namespace, and an idempotency key
+ * minted by one surface collides with a key minted by another — which is
+ * exactly how an HTTP caller could once suppress or wedge a Telegram update by
+ * guessing its sequential `update_id`.
+ */
+export function scopeRef(scope: ScopeContext, namespace: string): string {
+  const scopeToken = isSystemContext(scope) ? 'SYSTEM' : scope.tenantId;
+  return `${scopeToken}|${namespace}`;
 }
 
 /** The nullable `tenant_id` column value for a scope. */

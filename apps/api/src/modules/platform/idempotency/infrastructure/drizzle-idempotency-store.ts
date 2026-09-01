@@ -4,6 +4,7 @@ import {
   errors,
   PLATFORM_ERROR_CODES,
   type IdGenerator,
+  type IdempotencyNamespace,
   type IdempotencyRecord,
   type IdempotencyStore,
   type ScopeContext,
@@ -47,13 +48,19 @@ export class DrizzleIdempotencyStore implements IdempotencyStore {
 
   async find<TResult>(
     scope: ScopeContext,
+    namespace: IdempotencyNamespace,
     key: string,
     requestHash: string,
   ): Promise<IdempotencyRecord<TResult> | null> {
     const [row] = await this.db
       .select()
       .from(requestIdempotency)
-      .where(and(eq(requestIdempotency.scopeRef, scopeRef(scope)), eq(requestIdempotency.key, key)))
+      .where(
+        and(
+          eq(requestIdempotency.scopeRef, scopeRef(scope, namespace)),
+          eq(requestIdempotency.key, key),
+        ),
+      )
       .limit(1);
 
     if (!row) return null;
@@ -77,6 +84,7 @@ export class DrizzleIdempotencyStore implements IdempotencyStore {
 
   async remember<TResult>(
     scope: ScopeContext,
+    namespace: IdempotencyNamespace,
     key: string,
     requestHash: string,
     result: TResult,
@@ -88,7 +96,7 @@ export class DrizzleIdempotencyStore implements IdempotencyStore {
       .insert(requestIdempotency)
       .values({
         id: this.ids.uuid(),
-        scopeRef: scopeRef(scope),
+        scopeRef: scopeRef(scope, namespace),
         tenantId: scopeTenantId(scope),
         key,
         requestHash,

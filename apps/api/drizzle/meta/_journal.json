@@ -22,6 +22,20 @@
       "when": 1788265129757,
       "tag": "0002_drop_callback_refs",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788266691185,
+      "tag": "0003_scope_operational_event_dedupe",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788266691186,
+      "tag": "0004_operational_event_scope_guard",
+      "breakpoints": true
     }
   ]
 }

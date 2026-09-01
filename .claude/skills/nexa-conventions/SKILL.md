@@ -45,8 +45,10 @@ Every state-changing operation follows all seven steps, in order. Copy
 
 1. Authenticate — the caller supplies an `ActorContext`.
 2. Resolve scope — `TenantContext` or explicit `SystemContext`.
-3. Authorize — `guard.check(scope, actor, permission)`. Deny by default. Audit
-   the denial before rethrowing.
+3. Authorize — `guard.check(scope, actor, permission)`. Deny by default, for
+   **every** actor type including `SYSTEM_JOB`, which holds only
+   `SYSTEM_JOB_PERMISSIONS`. Never add an actor-type bypass. Audit the denial
+   before rethrowing.
 4. Validate — parse into a typed command with zod at the boundary.
 5. Idempotency — look the key up; return the first result on a replay.
 6. Transact — domain change, audit row and outbox rows in **one** transaction.
@@ -67,9 +69,11 @@ The database is the log. Telegram is a projection of it.
 
 ## Idempotency
 
-Every state-changing command takes a key. A replay returns the first result. A
-key reused with a **different** payload is rejected — that is a caller bug, and
-returning the stale result would hide it.
+Every state-changing command takes a key, namespaced by the acting surface. A
+replay returns the first result. A key reused with a **different** payload is
+rejected — that is a caller bug, and returning the stale result would hide it.
+Never widen a key's namespace: two surfaces sharing one lets either consume the
+other's keys.
 
 ## Text
 
@@ -83,8 +87,9 @@ returning the stale result would hide it.
 
 - Stored credentials use `SecretCipher` (envelope encryption, `keyId` on the
   ciphertext). No API response ever contains a credential.
-- Redact before writing to an audit row or a log line — both do it, do not
-  bypass them.
+- Redact before writing anything durable. `infrastructure/redaction.ts` is the
+  one implementation, shared by the logger, the audit log and the ops log — do
+  not write a second one, and do not bypass it.
 
 ## Never
 
