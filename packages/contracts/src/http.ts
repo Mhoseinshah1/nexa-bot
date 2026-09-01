@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { adminDisplayNameSchema } from './identity.js';
 
 /**
  * The HTTP seam.
@@ -135,7 +136,7 @@ export type ChangePasswordRequest = z.infer<typeof changePasswordRequestSchema>;
 
 export const createAdminRequestSchema = z.object({
   username: z.string().min(3).max(64),
-  displayName: z.string().min(1).max(120),
+  displayName: adminDisplayNameSchema,
   password: z.string().min(12).max(1024),
   roleKeys: z.array(z.string()).min(1),
   telegramUserId: z

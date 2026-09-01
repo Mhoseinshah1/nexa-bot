@@ -58,6 +58,16 @@ export const ADMIN_PASSWORD_MIN = 12;
 export const ADMIN_PASSWORD_MAX = 1024;
 export const adminPasswordSchema = z.string().min(ADMIN_PASSWORD_MIN).max(ADMIN_PASSWORD_MAX);
 
+/**
+ * An administrator's display name.
+ *
+ * Extracted so the HTTP schema and the installation bootstrap enforce the same
+ * rule. They did not: bootstrap validated the username and password and passed
+ * the display name straight through, so pressing Enter at its prompt persisted
+ * an empty name — on the one account there is no profile-edit route to repair.
+ */
+export const adminDisplayNameSchema = z.string().trim().min(1).max(120);
+
 export interface Admin {
   readonly id: AdminId;
   readonly tenantId: TenantId;
