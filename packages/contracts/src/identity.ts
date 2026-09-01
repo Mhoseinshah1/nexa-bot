@@ -118,7 +118,37 @@ export interface IssuedSession {
 export const SESSION_TRANSPORTS = ['COOKIE', 'BEARER'] as const;
 export type SessionTransport = (typeof SESSION_TRANSPORTS)[number];
 
+/**
+ * The session cookie's name, in two spellings.
+ *
+ * `__Host-` is not decoration: a browser refuses to store a cookie under that
+ * prefix unless it is `Secure`, has `Path=/`, and names no `Domain`. That last
+ * condition is the one that matters. Without it, a sibling host under a shared
+ * parent domain — `evil.example.com` beside `admin.example.com` — can set a
+ * cookie of the same name for `Domain=example.com` with a longer `Path`, and
+ * browsers send longer-path cookies FIRST. Every conventional cookie parser
+ * takes the first occurrence, so the attacker's value is the one read: enough
+ * to keep a victim permanently logged out, and enough for anyone holding any
+ * administrator credential to toss their own session into a victim's browser.
+ * The prefix removes the possibility rather than the ordering, since such a
+ * cookie can no longer be set at all.
+ *
+ * The prefix demands `Secure`, which a plain-HTTP development server cannot
+ * offer, so the unprefixed spelling remains for non-production. Both names are
+ * declared here rather than assembled at the surface, so the reader and the
+ * writer cannot disagree about what a session cookie is called.
+ */
 export const SESSION_COOKIE_NAME = 'nexa_admin_session';
+export const SESSION_COOKIE_NAME_SECURE = `__Host-${SESSION_COOKIE_NAME}` as const;
+
+/**
+ * The names a request may present a session under, most trusted first.
+ *
+ * Order is load-bearing: a `__Host-` cookie carries a guarantee the plain one
+ * does not, so when both arrive the prefixed one wins regardless of the order
+ * the browser sent them in.
+ */
+export const SESSION_COOKIE_NAMES = [SESSION_COOKIE_NAME_SECURE, SESSION_COOKIE_NAME] as const;
 
 /**
  * Why a login attempt failed.
