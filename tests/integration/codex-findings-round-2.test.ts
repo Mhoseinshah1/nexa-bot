@@ -978,3 +978,66 @@ describe('system roles are synchronised for an installation that already exists'
     );
   });
 });
+
+describe('two processes may seed the system roles at once', () => {
+  it('does not fail when several callers race the same insert', async () => {
+    // `ensureSystemRoles` used to SELECT, then INSERT ... ON CONFLICT DO
+    // NOTHING with an id it had generated, then grant permissions against that
+    // id. Whichever caller loses the unique index gets a no-op from the insert,
+    // so the id it generated was never stored — and `role_permissions` has a
+    // composite foreign key to `roles`, which rejects a grant naming a role
+    // that does not exist. Two API processes booting together would take one of
+    // them down, and this now runs at boot.
+    //
+    // There is no seam inside the statement to interleave at, so this races for
+    // real. Each trial gets a fresh tenant: system roles cannot be deleted
+    // (`nexa_protect_system_role` sees to that, correctly), so a trial cannot
+    // reuse one.
+    const template = (
+      await ctx.container.database.db.select().from(tenants).where(eq(tenants.id, tenantB.tenantId))
+    )[0];
+    expect(template).toBeDefined();
+
+    for (let trial = 0; trial < 4; trial += 1) {
+      const id = ctx.container.ids.uuid();
+      await ctx.container.database.db.insert(tenants).values({
+        ...(template as NonNullable<typeof template>),
+        id,
+        slug: `race-${trial}-${id.slice(0, 8)}`,
+      });
+      const scope = { tenantId: id as never, botInstanceId: null };
+
+      const outcomes = await Promise.allSettled(
+        Array.from({ length: 6 }, () => ctx.container.roles.ensureSystemRoles(scope)),
+      );
+      expect(
+        outcomes
+          .filter((o) => o.status === 'rejected')
+          .map((o) => String((o as PromiseRejectedResult).reason)),
+      ).toEqual([]);
+
+      // One row per seeded role, and every grant resolves to one of them.
+      const seeded = await ctx.container.database.db
+        .select()
+        .from(roles)
+        .where(eq(roles.tenantId, id));
+      expect(seeded.length).toBeGreaterThan(0);
+      expect(new Set(seeded.map((role) => role.key)).size).toBe(seeded.length);
+
+      const roleIds = new Set(seeded.map((role) => role.id));
+      const grants = await ctx.container.database.db
+        .select()
+        .from(rolePermissions)
+        .where(eq(rolePermissions.tenantId, id));
+      expect(grants.length).toBeGreaterThan(0);
+      expect(grants.every((grant) => roleIds.has(grant.roleId))).toBe(true);
+    }
+  }, 60_000);
+
+  it('is a no-op when everything is already seeded', async () => {
+    const before = await ctx.container.database.db.select().from(rolePermissions);
+    await ctx.container.roles.ensureSystemRoles(tenantA);
+    const after = await ctx.container.database.db.select().from(rolePermissions);
+    expect(after).toHaveLength(before.length);
+  });
+});

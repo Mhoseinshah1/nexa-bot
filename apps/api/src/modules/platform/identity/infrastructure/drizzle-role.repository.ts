@@ -112,24 +112,43 @@ export class DrizzleRoleRepository implements RoleRepository {
    * Idempotent and re-runnable: an installation that upgrades to a build with a
    * new permission in a seeded role picks it up here rather than needing a data
    * migration. Roles an operator created themselves are never touched.
+   *
+   * Safe to run concurrently, which matters because it runs at API boot and two
+   * processes can start together. The role id is re-read after the insert
+   * rather than assumed: whichever process loses the unique index gets a no-op
+   * from `onConflictDoNothing`, and the id it generated was never stored — so
+   * granting permissions against it would name a role that does not exist, and
+   * the composite foreign key would reject that and fail the boot.
    */
   async ensureSystemRoles(scope: ScopeContext, tx?: unknown): Promise<void> {
     const tenantId = requireTenantId(scope);
     const executor = executorOf(this.db, tx);
 
-    for (const seed of ROLE_SEEDS) {
-      const [existing] = await executor
-        .select()
+    const findRoleId = async (key: string): Promise<string | undefined> => {
+      const [row] = await executor
+        .select({ id: roles.id })
         .from(roles)
-        .where(and(eq(roles.tenantId, tenantId), eq(roles.key, seed.key)))
+        .where(and(eq(roles.tenantId, tenantId), eq(roles.key, key)))
         .limit(1);
+      return row?.id;
+    };
 
-      const roleId = existing?.id ?? this.ids.uuid();
-      if (!existing) {
+    for (const seed of ROLE_SEEDS) {
+      let roleId = await findRoleId(seed.key);
+
+      if (roleId === undefined) {
         await executor
           .insert(roles)
-          .values({ id: roleId, tenantId, key: seed.key, name: seed.name, isSystem: true })
+          .values({ id: this.ids.uuid(), tenantId, key: seed.key, name: seed.name, isSystem: true })
           .onConflictDoNothing();
+        // The authoritative id, whoever wrote it.
+        roleId = await findRoleId(seed.key);
+      }
+
+      if (roleId === undefined) {
+        // Neither our insert nor anyone else's produced a row. Better to say so
+        // than to carry on and write permissions nothing can resolve.
+        throw new Error(`The system role '${seed.key}' could not be created or found.`);
       }
 
       await executor
