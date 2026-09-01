@@ -437,7 +437,7 @@ describe('login throttling counts every concurrent failure', () => {
       const subject = `burst-${trial}`;
       const states = await Promise.all(
         Array.from({ length: attempts }, () =>
-          throttle().recordFailure(tenantA, 'USERNAME', subject, now, policy),
+          throttle().reserveAttempt(tenantA, 'USERNAME', subject, now, policy),
         ),
       );
 
@@ -453,7 +453,7 @@ describe('login throttling counts every concurrent failure', () => {
   it('locks out once the threshold is crossed, and not before', async () => {
     const now = ctx.container.clock.now();
     for (let attempt = 1; attempt <= policy.maxAttempts; attempt += 1) {
-      const state = await throttle().recordFailure(tenantA, 'USERNAME', 'stepwise', now, policy);
+      const state = await throttle().reserveAttempt(tenantA, 'USERNAME', 'stepwise', now, policy);
       expect(state.failedCount).toBe(attempt);
       expect(state.lockedUntil === null).toBe(attempt < policy.maxAttempts);
     }
@@ -461,11 +461,11 @@ describe('login throttling counts every concurrent failure', () => {
 
   it('resets the count when the window has expired', async () => {
     const now = ctx.container.clock.now();
-    await throttle().recordFailure(tenantA, 'USERNAME', 'windowed', now, policy);
-    await throttle().recordFailure(tenantA, 'USERNAME', 'windowed', now, policy);
+    await throttle().reserveAttempt(tenantA, 'USERNAME', 'windowed', now, policy);
+    await throttle().reserveAttempt(tenantA, 'USERNAME', 'windowed', now, policy);
 
     const later = new Date(now.getTime() + (policy.windowSeconds + 1) * 1000);
-    const state = await throttle().recordFailure(tenantA, 'USERNAME', 'windowed', later, policy);
+    const state = await throttle().reserveAttempt(tenantA, 'USERNAME', 'windowed', later, policy);
     expect(state.failedCount).toBe(1);
   });
 
@@ -476,12 +476,12 @@ describe('login throttling counts every concurrent failure', () => {
     const shortWindow = { windowSeconds: 60, maxAttempts: 2, lockoutSeconds: 3600 };
     const now = ctx.container.clock.now();
 
-    await throttle().recordFailure(tenantA, 'USERNAME', 'locked', now, shortWindow);
-    const locked = await throttle().recordFailure(tenantA, 'USERNAME', 'locked', now, shortWindow);
+    await throttle().reserveAttempt(tenantA, 'USERNAME', 'locked', now, shortWindow);
+    const locked = await throttle().reserveAttempt(tenantA, 'USERNAME', 'locked', now, shortWindow);
     expect(locked.lockedUntil).not.toBeNull();
 
     const afterWindow = new Date(now.getTime() + 61_000);
-    const state = await throttle().recordFailure(
+    const state = await throttle().reserveAttempt(
       tenantA,
       'USERNAME',
       'locked',

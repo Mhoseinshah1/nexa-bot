@@ -251,6 +251,21 @@ export class AdminManagementService {
         assertNotSelf(adminIdOf(actor), target.id);
         if (target.status === command.status) return target;
 
+        // Changing an OWNER's status is a change to privilege, so it takes the
+        // permission that governs privilege — the same gate `setRoles` applies
+        // to granting or removing the role.
+        //
+        // Without it the two paths disagreed about the same authority:
+        // `admins.permissions.edit` was required to take the owner role away,
+        // but plain `admins.edit` sufficed to disable the owner outright, which
+        // empties their authority just as completely (the resolver grants a
+        // non-ACTIVE admin nothing). Placed before the DISABLED branch so it
+        // gates re-enabling too — restoring an owner is the same act reversed.
+        const targetRoleKeys = await this.admins.roleKeysFor(scope, target.id, tx);
+        if (targetRoleKeys.includes(OWNER_ROLE_KEY)) {
+          await this.guard.check(scope, actor, 'admins.permissions.edit', tx);
+        }
+
         if (command.status === 'DISABLED') {
           await this.assertOwnerSurvivesDisabling(scope, target, tx);
         }

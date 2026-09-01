@@ -18,13 +18,16 @@ import {
   type PermissionKey,
   type ScopeContext,
   type TenantContext,
+  type UnitOfWork,
 } from '@nexa/contracts';
 import type {
   AdminRepository,
   LoginThrottleRepository,
   RoleRepository,
   SessionRepository,
+  ThrottleState,
 } from './ports.js';
+import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { generateSessionToken, hashSessionToken } from './session-token.js';
 
 /**
@@ -79,6 +82,7 @@ export class AuthenticationService {
     private readonly roles: RoleRepository,
     private readonly sessions: SessionRepository,
     private readonly throttle: LoginThrottleRepository,
+    private readonly uow: UnitOfWork<TransactionScope>,
     private readonly hasher: PasswordHasher,
     private readonly audit: AuditWriter,
     private readonly opsLog: OperationalEventRecorder,
@@ -102,13 +106,25 @@ export class AuthenticationService {
 
     await this.assertNotThrottled(scope, actor, username, context.ip);
 
+    // The attempt is counted NOW, before the verification, not after it fails.
+    //
+    // The check above only reads. A concurrent burst therefore all passed it
+    // while the counters were still empty, and every request queued a
+    // production-cost scrypt derivation — deliberately memory-heavy — so one
+    // unauthenticated burst could saturate the crypto pool long after the
+    // configured limit had been crossed. Reserving first makes the Nth request
+    // in that burst see its own increment and be refused before it hashes.
+    //
+    // A successful login gives the reservation back below.
+    const reserved = await this.reserveAttempt(scope, actor, username, context.ip);
+
     // A username that could never exist is rejected before touching the
     // database, but only AFTER the throttle check — otherwise the cheap
     // rejection is itself a signal about which strings are worth trying.
     const shaped = adminUsernameSchema.safeParse(username);
     if (!shaped.success) {
       await this.hasher.spendDummyWork();
-      return this.failLogin(scope, actor, username, context, 'NO_SUCH_ADMIN');
+      return this.failLogin(scope, actor, username, reserved, 'NO_SUCH_ADMIN');
     }
 
     const credentials = await this.admins.findCredentialsByUsername(scope, username);
@@ -119,18 +135,26 @@ export class AuthenticationService {
       // password" takes a full hash, and the difference is a username oracle
       // that identical error text does nothing to hide.
       await this.hasher.spendDummyWork();
-      return this.failLogin(scope, actor, username, context, 'NO_SUCH_ADMIN');
+      return this.failLogin(scope, actor, username, reserved, 'NO_SUCH_ADMIN');
     }
 
     const passwordMatches = await this.hasher.verify(command.password, credentials.passwordHash);
     if (!passwordMatches) {
-      return this.failLogin(scope, actor, username, context, 'BAD_PASSWORD');
+      // A stored hash below current cost verifies FASTER than the dummy work an
+      // unknown username spends, so after a cost increase the difference says
+      // which usernames exist — until each one happens to log in and be
+      // rehashed. Topping the cheap verification up to a full current-profile
+      // derivation removes the signal.
+      if (this.hasher.needsRehash(credentials.passwordHash)) {
+        await this.hasher.spendDummyWork();
+      }
+      return this.failLogin(scope, actor, username, reserved, 'BAD_PASSWORD');
     }
 
     // Checked AFTER the password, so a disabled account cannot be distinguished
     // from an active one without already knowing the password.
     if (credentials.admin.status !== 'ACTIVE') {
-      return this.failLogin(scope, actor, username, context, 'ADMIN_DISABLED');
+      return this.failLogin(scope, actor, username, reserved, 'ADMIN_DISABLED');
     }
 
     // The password was correct and the cost profile has since been raised, so
@@ -158,24 +182,64 @@ export class AuthenticationService {
       );
     }
 
-    await Promise.all([
-      this.throttle.clear(scope, 'USERNAME', username),
-      context.ip === null ? Promise.resolve() : this.throttle.clear(scope, 'IP', context.ip),
-    ]);
-
     const token = generateSessionToken();
     const sessionId = this.ids.uuid() as AdminSessionId;
     const expiresAt = new Date(now.getTime() + this.sessionTtlSeconds * 1000);
 
-    await this.sessions.create(scope, {
-      id: sessionId,
-      adminId: credentials.admin.id,
-      tokenHash: hashSessionToken(token),
-      issuedAt: now,
-      expiresAt,
-      ip: context.ip,
-      userAgent: context.userAgent,
+    // The session is bound to the credential that authorised it.
+    //
+    // Verification happened outside any transaction — scrypt is slow by design
+    // — so a rotation can commit in the gap. It revokes every session that
+    // EXISTS at that moment; a session inserted afterwards from the old
+    // password was not one of them, and survived. Rotation would then have
+    // failed at the one thing it is for: ending access by a compromised
+    // credential.
+    //
+    // `FOR UPDATE` on the predicate serialises this against the rotation's own
+    // compare-and-set, so whichever runs first, the other sees the committed
+    // outcome rather than a snapshot: either the session is created before the
+    // rotation and then revoked by it, or the credential is already gone and no
+    // session is created at all.
+    const issued = await this.uow.run(scope, async (tx) => {
+      const stillCurrent = await this.admins.lockIfPasswordHashMatches(
+        scope,
+        credentials.admin.id,
+        credentials.passwordHash,
+        tx,
+      );
+      if (!stillCurrent) return false;
+
+      await this.sessions.create(
+        scope,
+        {
+          id: sessionId,
+          adminId: credentials.admin.id,
+          tokenHash: hashSessionToken(token),
+          issuedAt: now,
+          expiresAt,
+          ip: context.ip,
+          userAgent: context.userAgent,
+        },
+        tx,
+      );
+      return true;
     });
+
+    if (!issued) {
+      // The password changed under us. Reported as an ordinary credential
+      // failure, because from the caller's side that is exactly what it is:
+      // the password they presented is no longer the account's password.
+      return this.failLogin(scope, actor, username, reserved, 'BAD_PASSWORD');
+    }
+
+    // Only now, having actually authenticated. The USERNAME counter is erased —
+    // the account holder proved who they are. The IP reservation is merely
+    // GIVEN BACK: clearing it would let anyone with one valid account spray
+    // guesses across administrator names and reset the breadth limiter by
+    // periodically signing into their own.
+    await this.throttle.clear(scope, 'USERNAME', username);
+    if (context.ip !== null) await this.throttle.releaseAttempt(scope, 'IP', context.ip);
+
     await this.admins.recordLogin(scope, credentials.admin.id, now);
 
     const identifiedActor = actorFor(actor, credentials.admin);
@@ -322,28 +386,90 @@ export class AuthenticationService {
    * the caller: the returned type is `never` precisely so no call site can
    * accidentally branch on which kind of failure it was.
    */
-  private async failLogin(
+  /**
+   * Counts this attempt against both subjects and refuses if it crosses a limit.
+   *
+   * Called before the verification, so the reservation is what stops a burst
+   * rather than the count that follows it.
+   */
+  private async reserveAttempt(
     scope: TenantContext,
     actor: ActorContext,
     username: string,
-    context: LoginContext,
-    reason: LoginFailureReason,
-  ): Promise<never> {
+    ip: string | null,
+  ): Promise<ThrottleState> {
     const now = this.clock.now();
 
-    const usernameState = await this.throttle.recordFailure(scope, 'USERNAME', username, now, {
+    const usernameState = await this.throttle.reserveAttempt(scope, 'USERNAME', username, now, {
       windowSeconds: this.policy.windowSeconds,
       maxAttempts: this.policy.maxAttemptsPerUsername,
       lockoutSeconds: this.policy.lockoutSeconds,
     });
-    if (context.ip !== null) {
-      await this.throttle.recordFailure(scope, 'IP', context.ip, now, {
-        windowSeconds: this.policy.windowSeconds,
-        maxAttempts: this.policy.maxAttemptsPerIp,
-        lockoutSeconds: this.policy.lockoutSeconds,
-      });
+    const ipState =
+      ip === null
+        ? null
+        : await this.throttle.reserveAttempt(scope, 'IP', ip, now, {
+            windowSeconds: this.policy.windowSeconds,
+            maxAttempts: this.policy.maxAttemptsPerIp,
+            lockoutSeconds: this.policy.lockoutSeconds,
+          });
+
+    // This attempt is the one that crossed the line. Refused here, before the
+    // KDF runs, which is the whole point of reserving.
+    for (const [kind, state] of [
+      ['USERNAME', usernameState],
+      ['IP', ipState],
+    ] as const) {
+      if (state?.lockedUntil && state.lockedUntil.getTime() > now.getTime()) {
+        await this.recordThrottleDenial(scope, actor, username);
+        // Recorded here rather than on the failure path, because the failure
+        // path is no longer reached once a subject locks: reserving refuses the
+        // attempt before it is verified. Repeated lockouts are worth alerting
+        // on and cannot be if nothing writes them down.
+        await this.opsLog.record(scope, {
+          code: 'auth.login_locked_out',
+          severity: 'WARN',
+          message: `Login attempts were locked out for a ${kind.toLowerCase()} subject.`,
+          context: { username, subjectKind: kind, failedCount: state.failedCount },
+          dedupeKey: `auth.login_locked_out:${kind}:${kind === 'USERNAME' ? username : (ip ?? '')}`,
+          correlationId: actor.correlationId,
+        });
+        throw new NexaError({
+          kind: 'RATE_LIMITED',
+          code: IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED,
+          message: 'Too many attempts. Try again later.',
+          details: {
+            retryAfterSeconds: Math.ceil((state.lockedUntil.getTime() - now.getTime()) / 1000),
+          },
+        });
+      }
     }
 
+    return usernameState;
+  }
+
+  private async recordThrottleDenial(
+    scope: TenantContext,
+    actor: ActorContext,
+    username: string,
+  ): Promise<void> {
+    await this.audit.record(scope, actor, {
+      action: 'auth.login',
+      entityType: 'Admin',
+      entityId: null,
+      before: null,
+      after: { username, reason: 'THROTTLED' satisfies LoginFailureReason },
+      result: 'DENIED',
+    });
+  }
+
+  private async failLogin(
+    scope: TenantContext,
+    actor: ActorContext,
+    username: string,
+    usernameState: ThrottleState,
+    reason: LoginFailureReason,
+  ): Promise<never> {
     await this.audit.record(scope, actor, {
       action: 'auth.login',
       entityType: 'Admin',
@@ -354,20 +480,6 @@ export class AuthenticationService {
       after: { username, reason, failedCount: usernameState.failedCount },
       result: 'DENIED',
     });
-
-    if (usernameState.lockedUntil !== null) {
-      // Repeated failures against one account are worth alerting on, and cannot
-      // be if nothing records them. Deduped per subject so a sustained attack
-      // is one row with a counter rather than thousands.
-      await this.opsLog.record(scope, {
-        code: 'auth.login_locked_out',
-        severity: 'WARN',
-        message: 'Login attempts for an administrator username were locked out.',
-        context: { username, failedCount: usernameState.failedCount },
-        dedupeKey: `auth.login_locked_out:${username}`,
-        correlationId: actor.correlationId,
-      });
-    }
 
     throw errors.unauthenticated(
       IDENTITY_ERROR_CODES.AUTH_INVALID_CREDENTIALS,

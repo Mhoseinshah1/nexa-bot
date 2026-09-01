@@ -46,7 +46,7 @@ export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
   }
 
   /**
-   * Records a failure as ONE atomic statement.
+   * Counts one attempt as a single atomic statement.
    *
    * The previous version read the row `FOR UPDATE`, computed the next count in
    * JavaScript, then upserted it. That serialises correctly only when the row
@@ -65,7 +65,7 @@ export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
    * configured separately from the lockout — and have the reset clear a lockout
    * that had not expired.
    */
-  async recordFailure(
+  async reserveAttempt(
     scope: ScopeContext,
     kind: ThrottleSubjectKind,
     subject: string,
@@ -125,6 +125,29 @@ export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
       throw new Error('The login throttle upsert returned no row.');
     }
     return { failedCount: row.failedCount, lockedUntil: row.lockedUntil };
+  }
+
+  /**
+   * Returns one reserved attempt. Never drops below zero, and never touches the
+   * window or an existing lockout — this undoes a reservation, it does not
+   * forgive a failure.
+   */
+  async releaseAttempt(
+    scope: ScopeContext,
+    kind: ThrottleSubjectKind,
+    subject: string,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await this.db
+      .update(adminLoginThrottle)
+      .set({ failedCount: sql`GREATEST(${adminLoginThrottle.failedCount} - 1, 0)` })
+      .where(
+        and(
+          eq(adminLoginThrottle.tenantId, tenantId),
+          eq(adminLoginThrottle.subjectKind, kind),
+          eq(adminLoginThrottle.subject, subject),
+        ),
+      );
   }
 
   async clear(scope: ScopeContext, kind: ThrottleSubjectKind, subject: string): Promise<void> {

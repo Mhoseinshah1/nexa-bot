@@ -64,7 +64,14 @@ export class TelegramWebhookController {
     const botInstance = await this.container.botInstances.findById(
       parsed.data as unknown as BotInstanceId,
     );
-    if (botInstance === null) {
+    // STOPPED and DISABLED are an inbound kill switch, and only mean that if
+    // the receiver honours them. Refusing only a MISSING row let a validly
+    // signed update keep executing under a stopped bot's tenant — and every
+    // command handler added here later would have inherited that.
+    //
+    // Answered the same way as an unknown id, so the endpoint does not report
+    // which bots exist but are switched off.
+    if (botInstance === null || botInstance.status !== 'ACTIVE') {
       throw errors.notFound(PLATFORM_ERROR_CODES.TENANT_NOT_FOUND, 'Unknown bot instance.');
     }
 

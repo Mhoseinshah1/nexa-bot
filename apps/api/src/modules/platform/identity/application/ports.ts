@@ -95,6 +95,20 @@ export interface AdminRepository {
     tx?: unknown,
   ): Promise<boolean>;
   /**
+   * Locks the admin row and reports whether its password hash is still the one
+   * given. False means the credential this request verified has been replaced.
+   *
+   * `FOR UPDATE` is what makes it a decision rather than an observation: it
+   * serialises against the rotation's own compare-and-set, so whichever runs
+   * first, the other sees the committed outcome instead of a snapshot.
+   */
+  lockIfPasswordHashMatches(
+    scope: ScopeContext,
+    id: AdminId,
+    expectedHash: string,
+    tx: unknown,
+  ): Promise<boolean>;
+  /**
    * Unconditional write, for the two paths with nothing to compare against:
    * installation bootstrap, and rehashing a verified password at a raised cost
    * factor. Never use it for a rotation — that is what the CAS above is for.
@@ -191,13 +205,32 @@ export interface LoginThrottleRepository {
     kind: ThrottleSubjectKind,
     subject: string,
   ): Promise<ThrottleState | null>;
-  /** Records a failure, advancing or resetting the window. Returns the new state. */
-  recordFailure(
+  /**
+   * Counts an attempt BEFORE it is verified, advancing or resetting the window.
+   *
+   * Reserved rather than recorded afterwards, because the verification in
+   * between is a deliberately slow, memory-heavy KDF. Counting only failures
+   * meant a concurrent burst all passed the pre-check while the counters were
+   * empty and every one of them queued a production-cost derivation — an
+   * unauthenticated caller could saturate the crypto pool long after the
+   * configured limit had been crossed. Reserving makes the Nth request in a
+   * burst see its own increment and be refused before hashing.
+   */
+  reserveAttempt(
     scope: ScopeContext,
     kind: ThrottleSubjectKind,
     subject: string,
     now: Date,
     policy: { windowSeconds: number; maxAttempts: number; lockoutSeconds: number },
   ): Promise<ThrottleState>;
+  /**
+   * Gives back one reserved attempt without erasing earlier failures.
+   *
+   * Used for the IP subject on a successful login. Clearing it outright would
+   * let anyone holding one valid account spray guesses across administrator
+   * names and periodically reset the breadth limiter by signing into their own.
+   */
+  releaseAttempt(scope: ScopeContext, kind: ThrottleSubjectKind, subject: string): Promise<void>;
+  /** Erases a subject's counter entirely. For the USERNAME that just succeeded. */
   clear(scope: ScopeContext, kind: ThrottleSubjectKind, subject: string): Promise<void>;
 }

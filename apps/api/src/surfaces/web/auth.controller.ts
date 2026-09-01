@@ -41,6 +41,20 @@ export class AuthController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Body() body: unknown,
   ): Promise<LoginResponse> {
+    // Login is state-changing: it mints a session and sets a cookie. It was the
+    // one such route not checking Origin, on the reasoning that the classic
+    // login-CSRF vectors are already closed — no CORS is configured, so a
+    // cross-origin JSON POST fails preflight, and Fastify parses none of the
+    // form content types a plain HTML form can send, so those get 415.
+    //
+    // That reasoning is correct and it is still the wrong place to rely on it.
+    // It depends on two unrelated absences staying absent: add a CORS plugin or
+    // a form-body parser for any reason, and login quietly becomes forgeable —
+    // an attacker who knows any administrator's credentials could sign a
+    // victim's browser into THEIR account and watch what the victim then does.
+    // The invariant is cheaper to hold than to reason about per-route.
+    assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
+
     const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
     const actor = anonymousActor(correlationId, request);
     const scope = this.installationScope();

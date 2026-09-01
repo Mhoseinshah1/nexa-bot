@@ -78,9 +78,18 @@ export class ScryptPasswordHasher implements PasswordHasher {
       return false;
     }
 
-    const derived = await this.derive(plaintext, parsed.salt, parsed.params);
-    if (derived.length !== parsed.digest.length) return false;
-    return timingSafeEqual(derived, parsed.digest);
+    try {
+      const derived = await this.derive(plaintext, parsed.salt, parsed.params);
+      if (derived.length !== parsed.digest.length) return false;
+      return timingSafeEqual(derived, parsed.digest);
+    } catch (error) {
+      // The backstop behind `parse`'s validation. OpenSSL enforces constraints
+      // of its own — memory floors, internal limits — and a stored value that
+      // satisfies our checks but not its own must still fail ONE login rather
+      // than returning a 500 that says the account exists and its row is odd.
+      void error;
+      return false;
+    }
   }
 
   needsRehash(encoded: string): boolean {
@@ -120,6 +129,23 @@ interface ParsedHash {
   readonly digest: Buffer;
 }
 
+/**
+ * Bounds on the parameters a stored hash may name.
+ *
+ * `N` must be a power of two — scrypt requires it, and `scrypt$3$…` otherwise
+ * reaches OpenSSL and throws, turning one administrator's login into a 500 that
+ * incidentally confirms their account exists. The upper bounds stop a corrupted
+ * or imported row from asking for gigabytes: the parameters are read from the
+ * database, so they are only as trustworthy as everything that can write there.
+ */
+const MAX_N = 2 ** 22;
+const MAX_R = 32;
+const MAX_P = 16;
+
+function isPowerOfTwo(value: number): boolean {
+  return value >= 2 && (value & (value - 1)) === 0;
+}
+
 function parse(encoded: string): ParsedHash | null {
   const parts = encoded.split('$');
   if (parts.length !== 6 || parts[0] !== PREFIX) return null;
@@ -128,7 +154,9 @@ function parse(encoded: string): ParsedHash | null {
   const r = Number(parts[2]);
   const p = Number(parts[3]);
   if (!Number.isSafeInteger(N) || !Number.isSafeInteger(r) || !Number.isSafeInteger(p)) return null;
-  if (N < 2 || r < 1 || p < 1) return null;
+  if (!isPowerOfTwo(N) || N > MAX_N) return null;
+  if (r < 1 || r > MAX_R) return null;
+  if (p < 1 || p > MAX_P) return null;
 
   try {
     const salt = Buffer.from(parts[4] as string, 'base64');

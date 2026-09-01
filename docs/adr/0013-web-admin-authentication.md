@@ -167,10 +167,37 @@ The audit row records which it actually was. Both properties matter and they are
 not in tension — one is what the caller learns, the other is what the operator
 can review.
 
+## The session is bound to the credential that authorised it
+
+Login verifies outside any transaction — scrypt is slow by design — so a
+rotation can commit in the gap. Rotation revokes every session that EXISTS at
+that moment, and a session inserted afterwards from the old password was not one
+of them. It survived, and rotation had failed at the one thing it is for.
+
+Session creation therefore happens in a transaction that first takes
+`SELECT … FOR UPDATE` on the admin row with the verified hash as a predicate.
+That serialises against the rotation's own compare-and-set: either the session
+is created first and the rotation then revokes it, or the credential is already
+gone and no session is created. The caller is told the password is incorrect,
+which is precisely true.
+
 ## Throttling
 
-Five failures per username and twenty per IP in a fifteen-minute window, then a
-fifteen-minute lockout. Held in the database rather than in Redis, for two
+Five attempts per username and twenty per IP in a fifteen-minute window, then a
+fifteen-minute lockout.
+
+The attempt is **reserved before the password is verified**, not recorded after
+it fails. Counting only failures left the check a pure read, so a concurrent
+burst arriving while the counters were empty all passed it and every request
+queued a production-cost, memory-heavy derivation — an unauthenticated caller
+could saturate the crypto pool long after the limit had been crossed. Reserving
+makes the request that crosses the line see its own increment and be refused
+before it hashes.
+
+A successful login **clears the username counter and gives back only its own IP
+reservation.** Clearing the IP outright let anyone holding one valid account
+spray guesses across administrator names and reset the breadth limiter by
+periodically signing into their own. Held in the database rather than in Redis, for two
 reasons: an attacker must not be able to clear their own counter by waiting out
 a cache eviction or a restart, and the window advances by the injected `Clock`
 so the tests are deterministic without sleeping.

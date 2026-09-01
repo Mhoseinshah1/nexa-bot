@@ -232,6 +232,28 @@ export class DrizzleAdminRepository implements AdminRepository {
       .for('update');
   }
 
+  async lockIfPasswordHashMatches(
+    scope: ScopeContext,
+    id: AdminId,
+    expectedHash: string,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await executorOf(this.db, tx)
+      .select({ id: admins.id })
+      .from(admins)
+      .where(
+        and(
+          eq(admins.tenantId, tenantId),
+          eq(admins.id, id),
+          eq(admins.passwordHash, expectedHash),
+        ),
+      )
+      .for('update')
+      .limit(1);
+    return rows.length === 1;
+  }
+
   /** Used only by the bootstrap and rehash paths, which have no CAS predicate. */
   async setPasswordHash(
     scope: ScopeContext,

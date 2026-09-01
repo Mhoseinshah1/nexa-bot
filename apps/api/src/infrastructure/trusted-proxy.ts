@@ -98,7 +98,19 @@ export function matchesTrustedEntry(rawAddress: string, rawEntry: string): boole
   const address = normaliseAddress(rawAddress);
   const entry = rawEntry.includes('/') ? rawEntry : normaliseAddress(rawEntry);
 
-  if (!entry.includes('/')) return address === entry;
+  if (!entry.includes('/')) {
+    if (address === entry) return true;
+    // IPv6 has many spellings of one address: `2001:0db8:0:0:0:0:0:1` and
+    // `2001:db8::1` are the same host. A textual comparison misses that, and
+    // the consequence is not cosmetic — a trusted proxy written in the long
+    // form stops being recognised, so `ipThrottleSubject` treats it as a client
+    // and every administrator's failures pile onto one shared subject.
+    const addressBytes = toBytes(address);
+    const entryBytes = toBytes(entry);
+    if (addressBytes === null || entryBytes === null) return false;
+    if (addressBytes.length !== entryBytes.length) return false;
+    return addressBytes.every((byte, index) => byte === entryBytes[index]);
+  }
 
   const [network = '', prefixText = ''] = entry.split('/');
   const prefix = Number(prefixText);
