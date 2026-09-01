@@ -42,6 +42,13 @@ export interface AdminRepository {
    */
   findById(scope: ScopeContext, id: AdminId, tx?: unknown): Promise<Admin | null>;
   findByTelegramUserId(scope: ScopeContext, telegramUserId: string): Promise<Admin | null>;
+  /**
+   * Existence check by username, without the credential.
+   *
+   * Separate from `findCredentialsByUsername` so a uniqueness check never pulls
+   * a password hash into scope it has no use for.
+   */
+  findByUsername(scope: ScopeContext, username: string, tx?: unknown): Promise<Admin | null>;
   list(scope: ScopeContext): Promise<Admin[]>;
   roleKeysFor(scope: ScopeContext, id: AdminId, tx?: unknown): Promise<string[]>;
   /** Role keys for many admins at once, so listing is not N+1. */
@@ -114,7 +121,7 @@ export interface AdminRepository {
 }
 
 export interface RoleRepository {
-  list(scope: ScopeContext): Promise<Role[]>;
+  list(scope: ScopeContext, tx?: unknown): Promise<Role[]>;
   findByKey(scope: ScopeContext, key: string, tx?: unknown): Promise<Role | null>;
   /** Seeds the frozen ROLE_SEEDS for a tenant. Idempotent. */
   ensureSystemRoles(scope: ScopeContext, tx?: unknown): Promise<void>;
@@ -125,8 +132,16 @@ export interface RoleRepository {
     assignedBy: AdminId | null,
     tx?: unknown,
   ): Promise<void>;
-  permissionsForAdmin(scope: ScopeContext, adminId: AdminId): Promise<PermissionKey[]>;
-  overridesForAdmin(scope: ScopeContext, adminId: AdminId): Promise<PermissionOverride[]>;
+  permissionsForAdmin(
+    scope: ScopeContext,
+    adminId: AdminId,
+    tx?: unknown,
+  ): Promise<PermissionKey[]>;
+  overridesForAdmin(
+    scope: ScopeContext,
+    adminId: AdminId,
+    tx?: unknown,
+  ): Promise<PermissionOverride[]>;
 }
 
 export interface SessionRepository {

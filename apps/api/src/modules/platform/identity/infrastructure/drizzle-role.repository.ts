@@ -47,16 +47,16 @@ export class DrizzleRoleRepository implements RoleRepository {
     private readonly ids: IdGenerator,
   ) {}
 
-  async list(scope: ScopeContext): Promise<Role[]> {
+  async list(scope: ScopeContext, tx?: unknown): Promise<Role[]> {
     const tenantId = requireTenantId(scope);
-    const roleRows = await this.db
+    const roleRows = await executorOf(this.db, tx)
       .select()
       .from(roles)
       .where(eq(roles.tenantId, tenantId))
       .orderBy(roles.key);
     if (roleRows.length === 0) return [];
 
-    const permissionRows = await this.db
+    const permissionRows = await executorOf(this.db, tx)
       .select()
       .from(rolePermissions)
       .where(eq(rolePermissions.tenantId, tenantId));
@@ -167,9 +167,13 @@ export class DrizzleRoleRepository implements RoleRepository {
     );
   }
 
-  async permissionsForAdmin(scope: ScopeContext, adminId: AdminId): Promise<PermissionKey[]> {
+  async permissionsForAdmin(
+    scope: ScopeContext,
+    adminId: AdminId,
+    tx?: unknown,
+  ): Promise<PermissionKey[]> {
     const tenantId = requireTenantId(scope);
-    const rows = await this.db
+    const rows = await executorOf(this.db, tx)
       .select({ permissionKey: rolePermissions.permissionKey })
       .from(adminRoles)
       .innerJoin(
@@ -188,9 +192,13 @@ export class DrizzleRoleRepository implements RoleRepository {
     return [...unique];
   }
 
-  async overridesForAdmin(scope: ScopeContext, adminId: AdminId): Promise<PermissionOverride[]> {
+  async overridesForAdmin(
+    scope: ScopeContext,
+    adminId: AdminId,
+    tx?: unknown,
+  ): Promise<PermissionOverride[]> {
     const tenantId = requireTenantId(scope);
-    const rows = await this.db
+    const rows = await executorOf(this.db, tx)
       .select()
       .from(adminPermissionOverrides)
       .where(

@@ -83,19 +83,16 @@ export class AdminManagementService {
     actor: ActorContext,
     input: unknown,
   ): Promise<{ admin: Admin; roleKeys: string[] }> {
-    await this.guard.check(scope, actor, 'admins.edit');
     const command = createAdminRequestSchema.parse(input);
 
     const username = adminUsernameSchema.parse(command.username.trim().toLowerCase());
     adminPasswordSchema.parse(command.password);
 
-    // Granting the owner role is the single most privileged act available.
-    // `admins.edit` creates administrators; making one an owner additionally
-    // needs the permission that governs privilege itself.
-    if (command.roleKeys.includes(OWNER_ROLE_KEY)) {
-      await this.guard.check(scope, actor, 'admins.permissions.edit');
-    }
-    await this.assertGrantsNoMorePrivilegeThanHeld(scope, actor, command.roleKeys);
+    // A cheap rejection before the expensive hash, so an unprivileged caller
+    // does not get to spend a KDF per request. It is NOT the authorization —
+    // that is re-run under the lock below, because this one is read on the pool
+    // and can be stale by the time the row is written.
+    await this.guard.check(scope, actor, 'admins.edit');
 
     const now = this.clock.now();
     const adminId = this.ids.uuid() as AdminId;
@@ -104,18 +101,52 @@ export class AdminManagementService {
     // one slow request into contention for every other writer.
     const passwordHash = await this.hasher.hash(command.password);
 
-    const existing = await this.admins.findCredentialsByUsername(scope, username);
-    if (existing !== null) {
-      throw errors.conflict(
-        IDENTITY_ERROR_CODES.ADMIN_USERNAME_TAKEN,
-        'An administrator with that username already exists.',
-        { username },
-      );
-    }
+    const roleKeys = [...new Set(command.roleKeys)].sort();
 
-    const roleIds = await this.resolveRoleIds(scope, command.roleKeys);
-
+    // Everything that decides whether this administrator may exist happens
+    // under the tenant lock, on the locked connection.
+    //
+    // `create` mints a NEW CREDENTIAL with roles attached and a password the
+    // caller chooses — the most privileged act on this surface — and it used to
+    // authorize entirely before the transaction, with scrypt inside the gap.
+    // That made the window wide and attacker-triggerable rather than
+    // microseconds, and two interleavings exploited it:
+    //
+    //   - a manager disabled mid-request still created a live administrator,
+    //     AFTER the disable and the session revocation had committed;
+    //   - a manager demoted mid-request still granted the role they had just
+    //     lost, because the amplification check had passed against a snapshot
+    //     that no longer existed.
+    //
+    // Both are the same mistake `setRoles` was corrected for: authorization on
+    // state that can change before the write commits.
     await this.uow.run(scope, async (tx) => {
+      await this.admins.lockTenantForAdminChange(scope, tx);
+
+      // Re-checked against authoritative state. If the caller lost
+      // `admins.edit` — or was disabled, which empties their permissions — the
+      // hash just computed is simply discarded.
+      await this.guard.check(scope, actor, 'admins.edit', tx);
+
+      // Granting the owner role is the single most privileged act available.
+      // `admins.edit` creates administrators; making one an owner additionally
+      // needs the permission that governs privilege itself.
+      if (roleKeys.includes(OWNER_ROLE_KEY)) {
+        await this.guard.check(scope, actor, 'admins.permissions.edit', tx);
+      }
+      await this.assertGrantsNoMorePrivilegeThanHeld(scope, actor, roleKeys, tx);
+
+      const existing = await this.admins.findByUsername(scope, username, tx);
+      if (existing !== null) {
+        throw errors.conflict(
+          IDENTITY_ERROR_CODES.ADMIN_USERNAME_TAKEN,
+          'An administrator with that username already exists.',
+          { username },
+        );
+      }
+
+      const roleIds = await this.resolveRoleIds(scope, roleKeys, tx);
+
       await this.admins.create(
         scope,
         {
@@ -143,7 +174,7 @@ export class AdminManagementService {
           after: {
             username,
             displayName: command.displayName,
-            roleKeys: [...command.roleKeys].sort(),
+            roleKeys,
           },
           result: 'SUCCESS',
         },
@@ -154,7 +185,7 @@ export class AdminManagementService {
         eventType: 'AdminCreated',
         aggregateType: 'Admin',
         aggregateId: adminId,
-        payload: { username, roleKeys: [...command.roleKeys].sort() },
+        payload: { username, roleKeys },
       });
     });
 
@@ -165,7 +196,7 @@ export class AdminManagementService {
         'The administrator was not readable after creation.',
       );
     }
-    return { admin: created, roleKeys: [...command.roleKeys].sort() };
+    return { admin: created, roleKeys };
   }
 
   async setStatus(
@@ -286,11 +317,11 @@ export class AdminManagementService {
       // Authorised from the LOCKED delta. Granting or removing the owner role
       // is a change to privilege itself, not merely to an assignment.
       if (delta.added.includes(OWNER_ROLE_KEY) || delta.removed.includes(OWNER_ROLE_KEY)) {
-        await this.guard.check(scope, actor, 'admins.permissions.edit');
+        await this.guard.check(scope, actor, 'admins.permissions.edit', tx);
       }
       // Also from the locked delta: only what is genuinely being ADDED relative
       // to authoritative state. Removing a role is not amplification.
-      await this.assertGrantsNoMorePrivilegeThanHeld(scope, actor, delta.added);
+      await this.assertGrantsNoMorePrivilegeThanHeld(scope, actor, delta.added, tx);
 
       if (delta.removed.includes(OWNER_ROLE_KEY)) {
         await this.assertOwnerSurvivesDisabling(scope, target, tx);
@@ -490,13 +521,14 @@ export class AdminManagementService {
     scope: ScopeContext,
     actor: ActorContext,
     roleKeys: readonly string[],
+    tx?: unknown,
   ): Promise<void> {
     const actorId = adminIdOf(actor);
     if (actorId === null) return;
 
-    const held = new Set(await this.roles.permissionsForAdmin(scope, actorId));
+    const held = new Set(await this.roles.permissionsForAdmin(scope, actorId, tx));
     const granting = new Set<string>();
-    for (const role of await this.roles.list(scope)) {
+    for (const role of await this.roles.list(scope, tx)) {
       if (!roleKeys.includes(role.key)) continue;
       for (const permission of role.permissions) granting.add(permission);
     }

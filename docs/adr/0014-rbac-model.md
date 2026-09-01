@@ -154,7 +154,21 @@ and can observe a different snapshot, which is why `findById` and `roleKeysFor`
 take the transaction handle.
 
 `setStatus` already locked first but read through the pool; it now reads inside
-the transaction for the same reason.
+the transaction for the same reason. `create` — which mints a new credential
+with roles attached and a password the caller chooses, the most privileged act
+on the surface — took no lock at all, and put scrypt inside the gap between
+deciding and writing. A manager disabled mid-request still created a live
+administrator after the revocation had committed, and a manager demoted
+mid-request still granted the role they had just lost. It now authorizes under
+the lock like the others; the cheap pre-check survives only so an unprivileged
+caller cannot make the server spend a KDF per request.
+
+Because these re-checks run inside a transaction, `PermissionResolver.resolve`,
+`permissionsForAdmin`, `overridesForAdmin` and `roles.list` all take the
+transaction handle. That is not tidiness: a nested read on the POOL while
+holding a transaction both misses the lock and occupies a second connection, so
+`DATABASE_POOL_MAX` concurrent admin mutations would each hold one connection
+while waiting for another that never comes.
 
 ### On the triggers
 

@@ -136,9 +136,26 @@ export class AuthenticationService {
     // The password was correct and the cost profile has since been raised, so
     // re-store it at current strength. The only moment the plaintext exists is
     // the only moment this is possible.
+    //
+    // Compare-and-set, for exactly the reason `changeOwnPassword` uses one: the
+    // hash below takes as long as scrypt is configured to take, and a rotation
+    // can commit inside that window. An unconditional write here would replace
+    // the freshly rotated credential with a re-hash of the OLD password —
+    // silently reverting a rotation whose audit row and event both say SUCCESS,
+    // and leaving live the credential the administrator believed they had
+    // replaced.
+    //
+    // A rehash that loses simply does not need to happen: the winning rotation
+    // already stored a hash at current cost.
     if (this.hasher.needsRehash(credentials.passwordHash)) {
       const rehashed = await this.hasher.hash(command.password);
-      await this.admins.setPasswordHash(scope, credentials.admin.id, rehashed, now);
+      await this.admins.compareAndSetPasswordHash(
+        scope,
+        credentials.admin.id,
+        credentials.passwordHash,
+        rehashed,
+        now,
+      );
     }
 
     await Promise.all([

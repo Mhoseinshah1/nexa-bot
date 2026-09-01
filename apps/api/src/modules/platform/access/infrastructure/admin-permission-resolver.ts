@@ -32,7 +32,11 @@ export class AdminPermissionResolver implements PermissionResolver {
     private readonly clock: Clock,
   ) {}
 
-  async resolve(scope: ScopeContext, actor: ActorContext): Promise<ReadonlySet<PermissionKey>> {
+  async resolve(
+    scope: ScopeContext,
+    actor: ActorContext,
+    tx?: unknown,
+  ): Promise<ReadonlySet<PermissionKey>> {
     const empty = new Set<PermissionKey>();
 
     // Authority is always tenant-scoped. An actor presenting itself under the
@@ -48,16 +52,17 @@ export class AdminPermissionResolver implements PermissionResolver {
     if (actor.id === null) return empty;
 
     const adminId = actor.id as AdminId;
-    const admin = await this.admins.findById(scope, adminId);
+    const admin = await this.admins.findById(scope, adminId, tx);
 
     // No such admin in this tenant, or disabled. A disabled admin keeps their
     // roles — history must still name them — and holds none of their powers.
     if (admin === null || admin.status !== 'ACTIVE') return empty;
 
-    const [rolePermissions, overrides] = await Promise.all([
-      this.roles.permissionsForAdmin(scope, adminId),
-      this.roles.overridesForAdmin(scope, adminId),
-    ]);
+    // Sequential rather than concurrent when a transaction is supplied: a
+    // transaction handle is a single connection and cannot serve two queries at
+    // once. Concurrency here would buy microseconds and cost correctness.
+    const rolePermissions = await this.roles.permissionsForAdmin(scope, adminId, tx);
+    const overrides = await this.roles.overridesForAdmin(scope, adminId, tx);
 
     // The frozen rule: effective = (roles ∪ GRANT) − DENY, DENY always wins,
     // and an expired override simply stops applying.

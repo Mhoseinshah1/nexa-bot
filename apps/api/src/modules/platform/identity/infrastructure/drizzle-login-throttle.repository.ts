@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { ScopeContext } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { adminLoginThrottle } from '../../../../infrastructure/persistence/schema.js';
@@ -45,6 +45,26 @@ export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
     return row ? { failedCount: row.failedCount, lockedUntil: row.lockedUntil } : null;
   }
 
+  /**
+   * Records a failure as ONE atomic statement.
+   *
+   * The previous version read the row `FOR UPDATE`, computed the next count in
+   * JavaScript, then upserted it. That serialises correctly only when the row
+   * already exists — `FOR UPDATE` on a missing row locks nothing, so every
+   * concurrent transaction computed `1` and they all wrote `1`. Ten simultaneous
+   * failed logins registered as one, and since a successful login DELETES the
+   * row, that no-row state recurs constantly. An attacker who sent guesses in
+   * bursts rather than sequentially spent one attempt from a budget of five.
+   *
+   * The count is therefore computed inside the statement, from the row version
+   * the conflict actually resolves against, so concurrent inserts serialise on
+   * the unique index and each increments what the previous one wrote.
+   *
+   * An existing lock is never cleared here: `locked_until` is only ever moved
+   * forward. Otherwise an attacker could wait out the counting WINDOW — which is
+   * configured separately from the lockout — and have the reset clear a lockout
+   * that had not expired.
+   */
   async recordFailure(
     scope: ScopeContext,
     kind: ThrottleSubjectKind,
@@ -53,56 +73,58 @@ export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
     policy: { windowSeconds: number; maxAttempts: number; lockoutSeconds: number },
   ): Promise<ThrottleState> {
     const tenantId = requireTenantId(scope);
+    // A window that started at or before this instant has expired.
+    const windowCutoff = new Date(now.getTime() - policy.windowSeconds * 1000);
+    const lockedUntil = new Date(now.getTime() + policy.lockoutSeconds * 1000);
 
-    return this.db.transaction(async (tx) => {
-      const [existing] = await tx
-        .select()
-        .from(adminLoginThrottle)
-        .where(
-          and(
-            eq(adminLoginThrottle.tenantId, tenantId),
-            eq(adminLoginThrottle.subjectKind, kind),
-            eq(adminLoginThrottle.subject, subject),
-          ),
-        )
-        .for('update')
-        .limit(1);
+    const nextCount = sql`CASE
+        WHEN ${adminLoginThrottle.windowStartedAt} <= ${windowCutoff} THEN 1
+        ELSE ${adminLoginThrottle.failedCount} + 1
+      END`;
 
-      const windowExpired =
-        existing !== undefined &&
-        now.getTime() - existing.windowStartedAt.getTime() >= policy.windowSeconds * 1000;
-
-      const failedCount = existing === undefined || windowExpired ? 1 : existing.failedCount + 1;
-      const windowStartedAt =
-        existing === undefined || windowExpired ? now : existing.windowStartedAt;
-
-      const lockedUntil =
-        failedCount >= policy.maxAttempts
-          ? new Date(now.getTime() + policy.lockoutSeconds * 1000)
-          : null;
-
-      await tx
-        .insert(adminLoginThrottle)
-        .values({
-          tenantId,
-          subjectKind: kind,
-          subject,
-          failedCount,
-          windowStartedAt,
-          lockedUntil,
+    const rows = await this.db
+      .insert(adminLoginThrottle)
+      .values({
+        tenantId,
+        subjectKind: kind,
+        subject,
+        failedCount: 1,
+        windowStartedAt: now,
+        lockedUntil: policy.maxAttempts <= 1 ? lockedUntil : null,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [
+          adminLoginThrottle.tenantId,
+          adminLoginThrottle.subjectKind,
+          adminLoginThrottle.subject,
+        ],
+        set: {
+          failedCount: nextCount,
+          windowStartedAt: sql`CASE
+            WHEN ${adminLoginThrottle.windowStartedAt} <= ${windowCutoff} THEN ${now}
+            ELSE ${adminLoginThrottle.windowStartedAt}
+          END`,
+          lockedUntil: sql`CASE
+            WHEN (${nextCount}) >= ${policy.maxAttempts} THEN ${lockedUntil}
+            ELSE ${adminLoginThrottle.lockedUntil}
+          END`,
           updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: [
-            adminLoginThrottle.tenantId,
-            adminLoginThrottle.subjectKind,
-            adminLoginThrottle.subject,
-          ],
-          set: { failedCount, windowStartedAt, lockedUntil, updatedAt: now },
-        });
+        },
+      })
+      .returning({
+        failedCount: adminLoginThrottle.failedCount,
+        lockedUntil: adminLoginThrottle.lockedUntil,
+      });
 
-      return { failedCount, lockedUntil };
-    });
+    const row = rows[0];
+    if (row === undefined) {
+      // An upsert with a matching conflict target always returns its row. If it
+      // did not, reporting "no failures recorded" would understate the state
+      // that protects the account.
+      throw new Error('The login throttle upsert returned no row.');
+    }
+    return { failedCount: row.failedCount, lockedUntil: row.lockedUntil };
   }
 
   async clear(scope: ScopeContext, kind: ThrottleSubjectKind, subject: string): Promise<void> {

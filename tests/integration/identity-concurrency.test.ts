@@ -18,6 +18,7 @@ import {
   type SeededAdmin,
   type TestContext,
 } from './harness';
+import { ScryptPasswordHasher } from '../../apps/api/src/infrastructure/crypto/password-hasher';
 
 /**
  * Concurrency in identity and RBAC mutations.
@@ -206,6 +207,312 @@ describe('password rotation is compare-and-set', () => {
     );
     expect(won).toBe(false);
     await expect(ctx.container.auth.authenticate(session.token)).resolves.toBeTruthy();
+  });
+});
+
+describe('rehash on login cannot revert a rotation', () => {
+  it('discards a rehash whose verified credential was superseded', async () => {
+    // The rehash path has the same verify-then-write window as a rotation, for
+    // the same reason: the hash between them takes as long as scrypt is
+    // configured to take. Writing unconditionally there replaced a freshly
+    // rotated credential with a re-hash of the OLD password — silently
+    // reverting a rotation whose audit row and event both said SUCCESS.
+    const subject = await createAdmin(ctx.container, tenantA, {
+      username: 'rehashed',
+      password: 'the-original-password',
+      roleKeys: ['support'],
+    });
+
+    // Force the stored hash below current policy, so a login triggers a rehash.
+    // Below the suite's own profile, so a login triggers a rehash — but above
+    // scrypt's memory floor, which N=2 is not.
+    const weak = await new ScryptPasswordHasher({ N: 256, r: 8, p: 1 }).hash(
+      'the-original-password',
+    );
+    await ctx.container.admins.setPasswordHash(
+      tenantA,
+      subject.id as AdminId,
+      weak,
+      ctx.container.clock.now(),
+    );
+    expect(ctx.container.hasher.needsRehash(weak)).toBe(true);
+
+    // Stall the login inside its rehash, after it has verified.
+    const hasher = ctx.container.hasher as { hash: unknown };
+    const realHash = hasher.hash.bind(ctx.container.hasher) as (p: string) => Promise<string>;
+
+    let releaseLogin: () => void = () => undefined;
+    const loginIsHashing = new Promise<void>((resolve) => {
+      hasher.hash = async (plaintext: string) => {
+        hasher.hash = realHash;
+        const result = await realHash(plaintext);
+        resolve();
+        await new Promise<void>((release) => {
+          releaseLogin = release;
+        });
+        return result;
+      };
+    });
+
+    const login = ctx.container.auth.login(
+      tenantA,
+      anonymous,
+      { username: 'rehashed', password: 'the-original-password' },
+      from,
+    );
+    const loginSettled = login.catch((error: unknown) => error);
+
+    await loginIsHashing;
+
+    // The rotation commits while the login is held mid-rehash.
+    await ctx.container.adminManagement.changeOwnPassword(tenantA, adminActorFor(subject), {
+      currentPassword: 'the-original-password',
+      newPassword: 'the-rotated-password',
+    });
+
+    releaseLogin();
+    await loginSettled;
+
+    // The rotation stands. The old password must be dead.
+    await expect(
+      ctx.container.auth.login(
+        tenantA,
+        anonymous,
+        { username: 'rehashed', password: 'the-rotated-password' },
+        from,
+      ),
+    ).resolves.toBeDefined();
+    await expect(
+      ctx.container.auth.login(
+        tenantA,
+        anonymous,
+        { username: 'rehashed', password: 'the-original-password' },
+        from,
+      ),
+    ).rejects.toThrow();
+  });
+});
+
+describe('administrator creation decides under the lock', () => {
+  async function delegated(username: string, roleKeys: string[]): Promise<SeededAdmin> {
+    const manager = await createAdmin(ctx.container, tenantA, { username, roleKeys });
+    await ctx.container.database.db.insert(adminPermissionOverrides).values({
+      tenantId: tenantA.tenantId,
+      adminId: manager.id,
+      permissionKey: 'admins.edit',
+      effect: 'GRANT',
+      reason: 'Onboards staff.',
+      expiresAt: null,
+    });
+    return manager;
+  }
+
+  /** Holds a create request inside its password hash, after the cheap checks. */
+  function stallInsideHash(): { reached: Promise<void>; release: () => void } {
+    const hasher = ctx.container.hasher as { hash: unknown };
+    const realHash = hasher.hash.bind(ctx.container.hasher) as (p: string) => Promise<string>;
+    let release: () => void = () => undefined;
+    const reached = new Promise<void>((resolve) => {
+      hasher.hash = async (plaintext: string) => {
+        hasher.hash = realHash;
+        const result = await realHash(plaintext);
+        resolve();
+        await new Promise<void>((r) => {
+          release = r;
+        });
+        return result;
+      };
+    });
+    return { reached, release: () => release() };
+  }
+
+  it('refuses a creation by an administrator disabled mid-request', async () => {
+    // Creation mints a new credential with a password the caller chooses. A
+    // manager disabled and revoked mid-request must not still be able to leave
+    // a live administrator behind them.
+    const manager = await delegated('manager', ['support']);
+    const stall = stallInsideHash();
+
+    const creating = ctx.container.adminManagement.create(tenantA, adminActorFor(manager), {
+      username: 'backdoor',
+      displayName: 'Backdoor',
+      password: 'a-perfectly-fine-password',
+      roleKeys: ['support'],
+    });
+    const settled = creating.catch((error: unknown) => error);
+
+    await stall.reached;
+
+    await ctx.container.adminManagement.setStatus(
+      tenantA,
+      adminActorFor(owner),
+      manager.id as AdminId,
+      { status: 'DISABLED', reason: 'Left the company.' },
+    );
+
+    stall.release();
+    const caught = await settled;
+
+    expect((caught as { code?: string }).code).toBe('platform.permission_denied');
+    expect(await ctx.container.admins.findByUsername(tenantA, 'backdoor')).toBeNull();
+  });
+
+  it('refuses a creation granting a role the creator lost mid-request', async () => {
+    // The amplification rule, re-decided under the lock: the snapshot that
+    // permitted this grant no longer exists.
+    const manager = await delegated('manager', ['support', 'finance']);
+    const stall = stallInsideHash();
+
+    const creating = ctx.container.adminManagement.create(tenantA, adminActorFor(manager), {
+      username: 'puppet',
+      displayName: 'Puppet',
+      password: 'a-perfectly-fine-password',
+      roleKeys: ['finance'],
+    });
+    const settled = creating.catch((error: unknown) => error);
+
+    await stall.reached;
+
+    await ctx.container.adminManagement.setRoles(
+      tenantA,
+      adminActorFor(owner),
+      manager.id as AdminId,
+      { roleKeys: ['support'], reason: 'Off the finance desk.' },
+    );
+
+    stall.release();
+    const caught = await settled;
+
+    expect((caught as { code?: string }).code).toBe(
+      IDENTITY_ERROR_CODES.ADMIN_PRIVILEGE_ESCALATION,
+    );
+    expect(await ctx.container.admins.findByUsername(tenantA, 'puppet')).toBeNull();
+  });
+
+  it('still creates normally when nothing changes underneath', async () => {
+    const manager = await delegated('manager', ['support']);
+    const created = await ctx.container.adminManagement.create(tenantA, adminActorFor(manager), {
+      username: 'colleague',
+      displayName: 'Colleague',
+      password: 'a-perfectly-fine-password',
+      roleKeys: ['support'],
+    });
+    expect(created.admin.username).toBe('colleague');
+    expect(created.roleKeys).toEqual(['support']);
+  });
+});
+
+describe('login throttling counts every concurrent failure', () => {
+  const policy = { windowSeconds: 900, maxAttempts: 5, lockoutSeconds: 900 };
+
+  /** The throttle repository, which is what carries the counting invariant. */
+  function throttle() {
+    return ctx.container.auth['throttle'];
+  }
+
+  it('does not lose increments when the counter row does not exist yet', async () => {
+    // Driven at the repository rather than through login, deliberately: the
+    // login path serialises on the libuv thread pool that scrypt runs in, so an
+    // end-to-end burst does not reliably overlap at the statement that carries
+    // the defect. The invariant belongs to this method, so this is where it is
+    // tested.
+    //
+    // `FOR UPDATE` on a MISSING row locks nothing, so the previous
+    // read-compute-write version had every concurrent transaction compute 1 and
+    // write 1: a burst of failures registered as one. A successful login
+    // DELETES the row, so that no-row state recurs constantly — an attacker
+    // sending bursts rather than sequential guesses spent one attempt from a
+    // budget of five.
+    //
+    // Repeated trials rather than a forced interleaving: the losing write is a
+    // genuine race, and there is no seam inside a single SQL statement to stall.
+    // Against the pre-fix implementation this fails on the first or second
+    // trial; verified by reverting the repository and re-running.
+    const trials = 8;
+    const attempts = 12;
+    const now = ctx.container.clock.now();
+
+    for (let trial = 0; trial < trials; trial += 1) {
+      const subject = `burst-${trial}`;
+      const states = await Promise.all(
+        Array.from({ length: attempts }, () =>
+          throttle().recordFailure(tenantA, 'USERNAME', subject, now, policy),
+        ),
+      );
+
+      const final = await throttle().find(tenantA, 'USERNAME', subject);
+      expect(final?.failedCount).toBe(attempts);
+      // Every caller was handed a distinct count, so no two shared a read.
+      expect(new Set(states.map((state) => state.failedCount)).size).toBe(attempts);
+      // Well past the threshold of five, so the subject is locked out.
+      expect(final?.lockedUntil).not.toBeNull();
+    }
+  });
+
+  it('locks out once the threshold is crossed, and not before', async () => {
+    const now = ctx.container.clock.now();
+    for (let attempt = 1; attempt <= policy.maxAttempts; attempt += 1) {
+      const state = await throttle().recordFailure(tenantA, 'USERNAME', 'stepwise', now, policy);
+      expect(state.failedCount).toBe(attempt);
+      expect(state.lockedUntil === null).toBe(attempt < policy.maxAttempts);
+    }
+  });
+
+  it('resets the count when the window has expired', async () => {
+    const now = ctx.container.clock.now();
+    await throttle().recordFailure(tenantA, 'USERNAME', 'windowed', now, policy);
+    await throttle().recordFailure(tenantA, 'USERNAME', 'windowed', now, policy);
+
+    const later = new Date(now.getTime() + (policy.windowSeconds + 1) * 1000);
+    const state = await throttle().recordFailure(tenantA, 'USERNAME', 'windowed', later, policy);
+    expect(state.failedCount).toBe(1);
+  });
+
+  it('does not let an expired window clear an unexpired lockout', async () => {
+    // The window and the lockout are configured separately. If the reset
+    // cleared `locked_until`, an attacker could wait out the shorter window and
+    // have their own lockout lifted early.
+    const shortWindow = { windowSeconds: 60, maxAttempts: 2, lockoutSeconds: 3600 };
+    const now = ctx.container.clock.now();
+
+    await throttle().recordFailure(tenantA, 'USERNAME', 'locked', now, shortWindow);
+    const locked = await throttle().recordFailure(tenantA, 'USERNAME', 'locked', now, shortWindow);
+    expect(locked.lockedUntil).not.toBeNull();
+
+    const afterWindow = new Date(now.getTime() + 61_000);
+    const state = await throttle().recordFailure(
+      tenantA,
+      'USERNAME',
+      'locked',
+      afterWindow,
+      shortWindow,
+    );
+    expect(state.failedCount).toBe(1);
+    // Still locked: the lockout has an hour to run.
+    expect(state.lockedUntil).not.toBeNull();
+    expect(state.lockedUntil?.getTime()).toBeGreaterThan(afterWindow.getTime());
+  });
+
+  it('still locks the account out end to end', async () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(
+        ctx.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: 'owner', password: `wrong-${attempt}` },
+          { ip: null, userAgent: 'vitest' },
+        ),
+      ).rejects.toThrow();
+    }
+
+    await expect(
+      ctx.container.auth.login(
+        tenantA,
+        anonymous,
+        { username: 'owner', password: 'wrong-again' },
+        { ip: null, userAgent: 'vitest' },
+      ),
+    ).rejects.toThrow(/Too many attempts/);
   });
 });
 

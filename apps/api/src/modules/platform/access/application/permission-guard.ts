@@ -36,8 +36,20 @@ import {
  */
 
 export interface PermissionResolver {
-  /** The permissions this actor effectively holds in this scope. */
-  resolve(scope: ScopeContext, actor: ActorContext): Promise<ReadonlySet<PermissionKey>>;
+  /**
+   * The permissions this actor effectively holds in this scope.
+   *
+   * `tx` makes the read participate in the caller's transaction. A permission
+   * re-checked under a lock must be read on the LOCKED connection: a pool read
+   * neither participates in the lock nor draws from the same connection, and
+   * with every pool connection held by a transaction waiting for one, the
+   * process deadlocks itself.
+   */
+  resolve(
+    scope: ScopeContext,
+    actor: ActorContext,
+    tx?: unknown,
+  ): Promise<ReadonlySet<PermissionKey>>;
 }
 
 export class PermissionGuard {
@@ -46,8 +58,13 @@ export class PermissionGuard {
     private readonly opsLog: OperationalEventRecorder,
   ) {}
 
-  async check(scope: ScopeContext, actor: ActorContext, permission: PermissionKey): Promise<void> {
-    const held = await this.effective(scope, actor);
+  async check(
+    scope: ScopeContext,
+    actor: ActorContext,
+    permission: PermissionKey,
+    tx?: unknown,
+  ): Promise<void> {
+    const held = await this.effective(scope, actor, tx);
     if (held.has(permission)) return;
 
     // Every denial is an operational event. Repeated denials from one actor are
@@ -67,18 +84,24 @@ export class PermissionGuard {
     );
   }
 
-  async has(scope: ScopeContext, actor: ActorContext, permission: PermissionKey): Promise<boolean> {
-    return (await this.effective(scope, actor)).has(permission);
+  async has(
+    scope: ScopeContext,
+    actor: ActorContext,
+    permission: PermissionKey,
+    tx?: unknown,
+  ): Promise<boolean> {
+    return (await this.effective(scope, actor, tx)).has(permission);
   }
 
   private async effective(
     scope: ScopeContext,
     actor: ActorContext,
+    tx?: unknown,
   ): Promise<ReadonlySet<PermissionKey>> {
     if (actor.type === 'SYSTEM_JOB') {
       return new Set<PermissionKey>(SYSTEM_JOB_PERMISSIONS);
     }
-    return this.resolver.resolve(scope, actor);
+    return this.resolver.resolve(scope, actor, tx);
   }
 }
 
