@@ -3,9 +3,13 @@
 Tenant-aware Telegram service-sales platform. TypeScript, NestJS, PostgreSQL 16,
 Redis, BullMQ, grammY, React. One codebase, several process roles.
 
-**Phase 0 is the foundation only.** There are no product features yet: no
-purchases, payments, wallet, providers, resellers or production Telegram
-operations. Do not add them without an explicit instruction.
+**Phases 0 and 1 are done: foundation, then identity and RBAC.** There are still
+no product features: no purchases, payments, wallet, providers, resellers or
+production Telegram operations. Do not add them without an explicit instruction.
+
+Authentication and authorization are real now. Every new write path takes a
+`ScopeContext` and an `ActorContext` and checks a permission through the guard —
+never by inspecting an actor's type, and never by not drawing a button.
 
 ## Before you change anything
 
@@ -53,6 +57,7 @@ touch the database.
 ```bash
 bash scripts/dev-services.sh   # postgres + redis (docker, or native fallback)
 pnpm db:migrate && pnpm db:seed
+pnpm admin:bootstrap           # create the installation's first owner (CLI only)
 pnpm verify                    # typecheck, lint, boundaries, i18n, unit tests, build
 pnpm test:integration          # needs the services above
 ```

@@ -2,9 +2,13 @@
 
 Unresolved product decisions, carried rather than guessed.
 
-Nothing here blocks Phase 0. Most of it blocks a specific later phase, and the
-table says which. An entry leaves this file when someone with product authority
-answers it — not when someone finds a plausible answer.
+Nothing here blocks Phase 0 or Phase 1. Most of it blocks a specific later
+phase, and the table says which. An entry leaves this file when someone with
+product authority answers it — not when someone finds a plausible answer.
+
+Entries that HAVE been answered move to **Resolved** at the bottom, with the ADR
+that answered them. They are not deleted: a decision whose reasoning has been
+thrown away gets re-litigated.
 
 Two categories, kept apart deliberately:
 
@@ -18,15 +22,18 @@ Two categories, kept apart deliberately:
 
 ---
 
-## Blocks Phase 1 — identity, tenancy, RBAC
+## Carried through Phase 1 — identity, tenancy, RBAC
 
-| Id                       | Type    | Question                                                                                                                                                                | Fallback if unanswered                                                                                                                    |
-| ------------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `UNK-ADM-004`            | UNKNOWN | Is an admin global, or scoped per bot? The web `Admin` entity carries a bot column; the Telegram surface shows no scope at all.                                         | Tenant-scoped, keyed `(tenant_id, telegram_user_id)`, plus an explicit platform-admin flag. More restrictive, so it is safe to adopt now. |
-| `UNK-ADM-001/002`        | UNKNOWN | Are the legacy role descriptions enforced, or is "enforcement" only menu-hiding? All four production admins hold full access, so no restricted role was ever exercised. | Assume menu-hiding. Treat descriptions as aspirational; build deny-by-default with a generated role × operation matrix test.              |
-| `CON-WEB-001`            | UNKNOWN | Which role vocabulary is canonical — the four Telegram roles or the seven web roles? Only one name overlaps.                                                            | Seed the seven web names as presets over the permission catalog.                                                                          |
-| `UNK-ADM-005`            | UNKNOWN | Can a restricted admin reach admin management and escalate their own privileges?                                                                                        | Assume yes. Self-protection rules are mandatory regardless.                                                                               |
-| `UNK-GTL-002/006`, `O-5` | UNKNOWN | Is a trial allowance a cap or a remaining balance, and what does `0` mean?                                                                                              | Store allowance and consumed separately; `0` means no trials. Adopt this even if the single-field model is confirmed.                     |
+Phase 1 shipped without answers to these. None of them blocked it: each has a
+decision recorded in [ADR-0014](adr/0014-rbac-model.md) that is either the more
+restrictive reading, or a rule that holds regardless of what the legacy system
+turns out to have done. They block **reseller admin scoping** in Phase 7.
+
+| Id                | Type    | Question                                                                                                                                                                | Fallback if unanswered                                                                                                                                                                                                  |
+| ----------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `UNK-ADM-004`     | UNKNOWN | Is an admin global, or scoped per bot? The web `Admin` entity carries a bot column; the Telegram surface shows no scope at all.                                         | **Still open.** Phase 1 adopted tenant-wide admins (ADR-0014) because that scope can be narrowed later — adding `bot_instance_id` to `admin_roles` is additive. Answering it would let reseller admin scoping be built. |
+| `UNK-ADM-001/002` | UNKNOWN | Are the legacy role descriptions enforced, or is "enforcement" only menu-hiding? All four production admins hold full access, so no restricted role was ever exercised. | Assumed menu-hiding, and it no longer matters what the answer is: Phase 1 enforces server-side on every call, from every surface.                                                                                       |
+| `CON-WEB-001`     | UNKNOWN | Which role vocabulary is canonical — the four Telegram roles or the seven web roles? Only one name overlaps.                                                            | Seeded the eight `ROLE_SEEDS` presets over the permission catalog. Since a role is now editable data rather than an enum, picking wrong is a rename, not a migration.                                                   |
 
 ## Blocks Phase 2 — templates, settings, features
 
@@ -105,3 +112,17 @@ Two categories, kept apart deliberately:
 | `C-RLS`            | The architecture review (ADR-004, ACCEPTED) requires Postgres row-level security alongside the repository guard.                                                                                                                                                                         | **Owner chose application-level scoping only.** Recorded with its cost in `docs/adr/0004-tenant-isolation.md`.                                                                                                                |
 | `C-LEDGER-COUNT`   | The review calls the ledger vocabulary "the 24-value reason enum" but its own verbatim list enumerates 25.                                                                                                                                                                               | The list is authoritative. `LEDGER_REASONS` has 25 entries.                                                                                                                                                                   |
 | `C-MODULE-TREE`    | The review's §3 module tree (`src/commerce/ordering`) and its agent-ownership section (`modules/ordering`) disagree on nesting.                                                                                                                                                          | Reconciled as `src/modules/<context>/<submodule>`; recorded in `docs/adr/0002-module-boundaries.md`.                                                                                                                          |
+
+---
+
+## Resolved
+
+Answered by an explicit decision, with the ADR that records the reasoning. Kept
+here so the question and its answer stay together.
+
+| Id                       | Question                                                                         | Answer                                                                                                                                                                                                           | Where                                             |
+| ------------------------ | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `UNK-GTL-002/006`, `O-5` | Is a trial allowance a cap or a remaining balance, and what does `0` mean?       | A cap and a consumed count, stored separately, plus an optional persistent per-customer override. A global reset zeroes consumption and leaves overrides intact. `0` means zero trials and never unlimited.      | [ADR-0015](adr/0015-trial-allowance-semantics.md) |
+| `ADR-0009` §1            | Telegram Login Widget, local credentials, or both, for the Web Admin?            | Username and password. The Login Widget makes Telegram an availability dependency of fixing Telegram, and account recovery becomes unrecoverable locally. `admins.telegram_user_id` is a link, not a credential. | [ADR-0013](adr/0013-web-admin-authentication.md)  |
+| `ADR-0009` §3            | Does a role change take effect next request, or invalidate in-flight sessions?   | Next request. Sessions carry identity, never authority — permissions are resolved per request. Disabling an administrator additionally revokes their live sessions on the spot.                                  | [ADR-0013](adr/0013-web-admin-authentication.md)  |
+| `UNK-ADM-005`            | Can a restricted admin reach admin management and escalate their own privileges? | Not here, whatever they hold: an administrator can never change their own roles or status. The question about the LEGACY system stays unanswered; the answer for ours is settled.                                | [ADR-0014](adr/0014-rbac-model.md)                |

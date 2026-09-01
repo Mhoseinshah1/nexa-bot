@@ -22,7 +22,18 @@ export const WEB_FA = {
   'web.version': 'نسخه',
   'web.commit': 'کامیت',
   'web.environment': 'محیط',
-  'web.auth_notice': 'این نسخه احراز هویت ندارد. ورود و کنترل دسترسی در فاز بعدی اضافه می‌شود.',
+  'web.sign_in': 'ورود',
+  'web.sign_out': 'خروج',
+  'web.username': 'نام کاربری',
+  'web.password': 'گذرواژه',
+  'web.signing_in': 'در حال ورود…',
+  'web.sign_in_failed': 'نام کاربری یا گذرواژه نادرست است.',
+  'web.rate_limited': 'تلاش‌های ناموفق زیاد بوده است. کمی بعد دوباره تلاش کنید.',
+  'web.signed_in_as': 'وارد شده به عنوان',
+  'web.roles': 'نقش‌ها',
+  'web.permissions': 'دسترسی‌ها',
+  'web.administrators': 'مدیران',
+  'web.no_permission': 'شما به این بخش دسترسی ندارید.',
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

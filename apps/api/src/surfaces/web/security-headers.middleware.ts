@@ -21,7 +21,7 @@ export type Middleware = (
 
 /** Built with the environment it needs, rather than reading it back at runtime. */
 export function securityHeaders(isProduction: boolean): Middleware {
-  return (request, response, next) => {
+  return (_request, response, next) => {
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('X-Frame-Options', 'DENY');
     response.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
@@ -34,10 +34,14 @@ export function securityHeaders(isProduction: boolean): Middleware {
     // Authenticated responses carry administrator data and, on login, a session
     // token. None of it may sit in a shared cache or a browser's back-forward
     // cache after sign-out.
-    if (request.url?.startsWith('/api/')) {
-      response.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-      response.setHeader('Pragma', 'no-cache');
-    }
+    //
+    // Applied unconditionally rather than to /api/ only. Two reasons: this
+    // process serves JSON and nothing else, so there is no response worth
+    // caching; and the raw request URL seen here is prefix-stripped by the
+    // middleware mount, so a path test silently matched nothing — the header
+    // was absent from exactly the responses it was written for.
+    response.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    response.setHeader('Pragma', 'no-cache');
 
     // Only over TLS, and only in production: sending it from a plain-HTTP
     // development server would pin a developer's browser to HTTPS on localhost.
