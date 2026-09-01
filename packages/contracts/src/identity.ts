@@ -114,10 +114,6 @@ export interface IssuedSession {
   readonly session: AdminSession;
 }
 
-/** How an authenticated request presented its session. */
-export const SESSION_TRANSPORTS = ['COOKIE', 'BEARER'] as const;
-export type SessionTransport = (typeof SESSION_TRANSPORTS)[number];
-
 /**
  * The session cookie's name, in two spellings.
  *
