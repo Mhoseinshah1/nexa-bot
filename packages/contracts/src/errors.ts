@@ -131,8 +131,12 @@ export const PLATFORM_ERROR_CODES = {
 export const IDENTITY_ERROR_CODES = {
   AUTH_INVALID_CREDENTIALS: 'auth.invalid_credentials',
   AUTH_RATE_LIMITED: 'auth.rate_limited',
+  // One code for every way a session fails to authenticate: unknown, revoked,
+  // expired. `auth.session_expired` used to sit here beside it and was emitted
+  // by nothing — which was the only thing keeping it honest, because telling a
+  // caller a session EXPIRED tells them it existed, and this block's whole
+  // point is that the response is not an account oracle.
   AUTH_SESSION_INVALID: 'auth.session_invalid',
-  AUTH_SESSION_EXPIRED: 'auth.session_expired',
   AUTH_REQUIRED: 'auth.required',
   AUTH_ORIGIN_REJECTED: 'auth.origin_rejected',
   ADMIN_NOT_FOUND: 'admin.not_found',
