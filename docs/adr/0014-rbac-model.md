@@ -309,7 +309,22 @@ precisely the installations that needed it. A permission newly added to the
 then stop _anyone_ granting it, because nobody would hold it.
 
 It now also runs when the API resolves its installation tenant at boot, in a
-transaction holding **the same tenant lock every administrator mutation takes**.
+transaction holding **the same tenant lock every administrator mutation takes**,
+and it is **creation-only**: a role that already exists is left exactly as it is.
+
+That last part is a choice between two reported problems, and it is worth
+recording which one was taken. Writing the seed unconditionally let an upgrade
+add a permission to an existing role — and made every restart silently restore
+one an operator had deliberately withdrawn, with no audit row and nothing to
+notice it. Writing it only at creation means a permission newly added to a
+seeded role does _not_ reach installations that already have that role; adding
+one is an explicit migration.
+
+The second failure is the safer one. It is visible: the amplification rule
+refuses to grant a permission nobody holds, loudly and immediately. The first is
+invisible and hands back authority that was taken away on purpose. Restoring
+privilege by accident is worse than failing to extend it on time.
+
 Roles an operator created are never touched, and the writes ignore conflicts, so
 a boot that changes nothing costs a few statements.
 

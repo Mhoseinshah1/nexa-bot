@@ -1,4 +1,4 @@
-import { asc, isNull, sql } from 'drizzle-orm';
+import { and, asc, isNull, or, sql } from 'drizzle-orm';
 import {
   type Clock,
   type DomainEvent,
@@ -10,6 +10,7 @@ import type { Database } from '../../../../infrastructure/persistence/database.j
 import {
   outboxMessages,
   processedMessages,
+  tenants,
 } from '../../../../infrastructure/persistence/schema.js';
 import type { EventConsumer } from '../application/event-consumer.js';
 
@@ -94,10 +95,30 @@ export class OutboxRelay {
    */
   async processBatch(): Promise<RelayBatchResult> {
     return this.db.transaction(async (tx) => {
+      // Work belonging to a tenant that is not ACTIVE is left UNCLAIMED, not
+      // discarded and not marked published.
+      //
+      // Stopping a tenant now ends its Web Admin logins and its Telegram
+      // intake; a relay that went on dispatching would leave the one half of
+      // the installation that talks to the outside world still talking —
+      // notifications sent, provisioning performed — for an installation
+      // somebody switched off. Skipping rather than dropping is the other half
+      // of that: the messages are still there, in order, when the tenant is
+      // started again. A message with no tenant is platform work and always
+      // eligible.
+      const eligible = or(
+        isNull(outboxMessages.tenantId),
+        sql`EXISTS (
+          SELECT 1 FROM ${tenants}
+          WHERE ${tenants.id} = ${outboxMessages.tenantId}
+            AND ${tenants.status} = 'ACTIVE'
+        )`,
+      );
+
       const claimed = await tx
         .select()
         .from(outboxMessages)
-        .where(isNull(outboxMessages.publishedAt))
+        .where(and(isNull(outboxMessages.publishedAt), eligible))
         .orderBy(asc(outboxMessages.occurredAt), asc(outboxMessages.sequence))
         .limit(this.options.batchSize)
         .for('update', { skipLocked: true });

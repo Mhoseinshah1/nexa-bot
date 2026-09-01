@@ -244,7 +244,15 @@ UNPRODUCED=""
 while read -r code; do
   [ -n "$code" ] || continue
   case " $RESERVED_CODES " in *" $code "*) continue ;; esac
-  if ! grep -rq --include='*.ts' --include='*.tsx' "$code" apps packages/i18n tests 2>/dev/null; then
+  # Runtime server sources only. Including tests was the flaw in the first
+  # version of this check: a test asserting the catalogue CONTAINS a code
+  # satisfied the search and hid exactly the dead contract it exists to reject.
+  # Comment lines are stripped for the same reason — a code named only in prose
+  # is not a code anything can emit.
+  if ! find apps/api/src apps/web/src packages/i18n/src -name '*.ts' -o -name '*.tsx' 2>/dev/null \
+    | xargs grep -h "$code" 2>/dev/null \
+    | grep -vE '^\s*(//|\*|/\*)' \
+    | grep -q .; then
     UNPRODUCED="$UNPRODUCED $code"
   fi
 done <<EOF

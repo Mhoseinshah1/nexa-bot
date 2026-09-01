@@ -347,7 +347,19 @@ and `TENANT_INACTIVE` was declared in the contracts as a login failure reason
 that no code could emit. A status nothing enforces is a label, not a kill
 switch.
 
-It closes the Telegram surface too. A bot's own `STOPPED`/`DISABLED` status was
+It closes the Telegram surface and the outbox too. A bot's own status was the
+whole check on the webhook, and the relay claimed any unpublished row — so a
+stopped installation went on accepting Telegram updates and, worse, went on
+_dispatching_ work to the outside world. Tenant-scoped messages for a tenant
+that is not ACTIVE are now left **unclaimed**: not dropped, not marked
+published, still in order when the tenant is started again. Platform work with
+no tenant is always eligible.
+
+Two further consequences of taking the switch seriously: `DEPLOYMENT_TOPOLOGY`
+may not be `direct` in production, because this process serves plain HTTP and
+the `Secure __Host-` cookie a production login issues would be discarded by
+every browser — validating that the _origin_ is https does not put TLS on the
+transport. A bot's own `STOPPED`/`DISABLED` status was
 the whole check there, and an update acts as `SYSTEM_JOB`, which never consults
 the permission resolver — so a stopped installation went on accepting Telegram
 work while its Web Admin was shut. An installation switched off must be switched

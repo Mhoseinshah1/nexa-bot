@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   API_PREFIX,
   AUTH_ROUTES,
@@ -18,6 +18,7 @@ import {
   adminLoginThrottle,
   adminPermissionOverrides,
   adminSessions,
+  outboxMessages,
   auditLogs,
   roles,
   rolePermissions,
@@ -655,6 +656,11 @@ describe('the session cookie a production deployment issues', () => {
       NODE_ENV: 'production',
       PASSWORD_HASH_PROFILE: 'production',
       WEB_ADMIN_ORIGINS: ORIGIN,
+      // The only production topology: `direct` is refused there, because this
+      // process serves plain HTTP and the Secure `__Host-` cookie below would
+      // be discarded by every browser.
+      DEPLOYMENT_TOPOLOGY: 'reverse-proxy',
+      TRUSTED_PROXY_IPS: '127.0.0.1,::1',
     });
     await migrateOnce(config.DATABASE_URL);
     api = await createApiApp(config);
@@ -945,42 +951,22 @@ describe('the last login timestamp never moves backwards', () => {
   });
 });
 
-describe('system roles are synchronised for an installation that already exists', () => {
-  it('restores a catalogue permission missing from a seeded role at boot', async () => {
-    // `ensureSystemRoles` was written to be re-runnable so an upgrade picks up
-    // a permission newly added to a seeded role — and its only production
-    // caller was inside the first-owner bootstrap, which returns early once any
-    // administrator exists. The upgrade path was unreachable for exactly the
-    // installations that needed it, and a missing `owner` permission would then
-    // stop ANYONE granting it, since the amplification rule requires a holder.
-    await ctx.container.roles.ensureSystemRoles(tenantA);
-    const [ownerRole] = await ctx.container.database.db
-      .select()
-      .from(roles)
-      .where(eq(roles.key, OWNER_ROLE_KEY));
-    expect(ownerRole).toBeDefined();
-
-    const before = await ctx.container.roles.permissionsForAdmin(tenantA, owner.id as AdminId);
-    const dropped = 'admins.permissions.edit';
-    expect(before).toContain(dropped);
-
-    // Simulate the state a release would leave: the row exists, the permission
-    // the new build expects does not.
-    await ctx.container.database.db
-      .delete(rolePermissions)
-      .where(eq(rolePermissions.permissionKey, dropped));
-    expect(
-      await ctx.container.roles.permissionsForAdmin(tenantA, owner.id as AdminId),
-    ).not.toContain(dropped);
-
-    // What boot now does for an installation that has administrators.
-    await resolveInstallationTenant(ctx.container);
-
-    expect(await ctx.container.roles.permissionsForAdmin(tenantA, owner.id as AdminId)).toContain(
-      dropped,
-    );
-  });
-});
+// The describe that stood here asserted that a boot restores a catalogue
+// permission missing from an existing seeded role. That behaviour was
+// deliberately reversed — a restart reasserting the seed also silently restored
+// permissions an operator had withdrawn, and between "an upgrade does not extend
+// a role automatically" and "a restart hands back authority somebody removed",
+// the first is the failure to keep: it is visible, because the amplification
+// rule refuses to grant what nobody holds, and it is fixed by a migration that
+// says what it is doing.
+//
+// It is removed rather than rewritten because its replacement would duplicate
+// coverage that already exists: 'still creates a seeded role that is missing
+// entirely' pins the creation path, and 'holds the same tenant lock those
+// mutations take' pins that boot reaches the sync at all — which was the
+// reachability the original finding was about. Simulating a missing role inside
+// an installation that has one is not possible anyway: `nexa_protect_system_role`
+// refuses to delete it, correctly.
 
 describe('two processes may seed the system roles at once', () => {
   it('does not fail when several callers race the same insert', async () => {
@@ -1704,4 +1690,122 @@ describe('the boot-time role sync is serialised with administrator mutations', (
     await sync;
     expect(syncFinished).toBe(true);
   }, 30_000);
+});
+
+describe('the outbox pauses for a tenant that is not active', () => {
+  it('leaves the work unclaimed, and delivers it when the tenant returns', async () => {
+    // Stopping a tenant ends its Web Admin logins and its Telegram intake. A
+    // relay that went on dispatching would leave the half of the installation
+    // that talks to the outside world still talking. Skipping rather than
+    // dropping is the other half of that promise: the messages must still be
+    // there, in order, when the tenant is started again.
+    const relay = ctx.container.relay;
+
+    // Drain anything the fixtures left behind, so the counts below are this
+    // test's own.
+    await relay.processBatch();
+
+    await ctx.container.uow.run(tenantA, async (tx) => {
+      await ctx.container.outbox.write(tx, adminActorFor(owner), {
+        eventType: 'SystemPinged',
+        aggregateType: 'System',
+        aggregateId: ctx.container.ids.uuid(),
+        payload: { note: 'while active' },
+      });
+    });
+
+    await ctx.container.database.db
+      .update(tenants)
+      .set({ status: 'STOPPED' })
+      .where(eq(tenants.id, tenantA.tenantId));
+
+    const whileStopped = await relay.processBatch();
+    expect(whileStopped.published).toBe(0);
+
+    // Still pending, not published and not failed.
+    const pending = await ctx.container.database.db
+      .select()
+      .from(outboxMessages)
+      .where(eq(outboxMessages.tenantId, tenantA.tenantId));
+    expect(pending.length).toBeGreaterThan(0);
+    expect(pending.every((row) => row.publishedAt === null)).toBe(true);
+    expect(pending.every((row) => row.attempts === 0)).toBe(true);
+
+    await ctx.container.database.db
+      .update(tenants)
+      .set({ status: 'ACTIVE' })
+      .where(eq(tenants.id, tenantA.tenantId));
+
+    const afterRestart = await relay.processBatch();
+    expect(afterRestart.published).toBeGreaterThan(0);
+  }, 30_000);
+});
+
+describe("a boot sync does not undo an operator's decision", () => {
+  it('leaves a permission that was deliberately withdrawn withdrawn', async () => {
+    // The seed used to be written on every boot, so a permission an operator
+    // had removed came back at the next restart, silently and with no audit
+    // row. That is authority being restored by accident, which is worse than
+    // the failure it replaces: a permission newly added to a seeded role no
+    // longer reaches installations that already have the role, and THAT fails
+    // loudly — the amplification rule refuses to grant what nobody holds.
+    const [financeRole] = await ctx.container.database.db
+      .select()
+      .from(roles)
+      .where(and(eq(roles.tenantId, tenantA.tenantId), eq(roles.key, 'finance')));
+    expect(financeRole).toBeDefined();
+
+    const before = await ctx.container.database.db
+      .select()
+      .from(rolePermissions)
+      .where(eq(rolePermissions.roleId, financeRole?.id as string));
+    const withdrawn = before[0]?.permissionKey;
+    expect(withdrawn).toBeDefined();
+
+    await ctx.container.database.db
+      .delete(rolePermissions)
+      .where(
+        and(
+          eq(rolePermissions.roleId, financeRole?.id as string),
+          eq(rolePermissions.permissionKey, withdrawn as string),
+        ),
+      );
+
+    // What a restart does.
+    await resolveInstallationTenant(ctx.container);
+
+    const after = await ctx.container.database.db
+      .select()
+      .from(rolePermissions)
+      .where(eq(rolePermissions.roleId, financeRole?.id as string));
+    expect(after.map((row) => row.permissionKey)).not.toContain(withdrawn);
+    expect(after).toHaveLength(before.length - 1);
+  });
+
+  it('still creates a seeded role that is missing entirely', async () => {
+    // The reachability the previous round asked for is kept: a role absent from
+    // an installation — a new one in the catalogue, or a fresh install — is
+    // created with its seed permissions.
+    const scope = { tenantId: tenantB.tenantId as never, botInstanceId: null };
+    expect(
+      await ctx.container.database.db
+        .select()
+        .from(roles)
+        .where(eq(roles.tenantId, tenantB.tenantId)),
+    ).toHaveLength(0);
+
+    await ctx.container.roles.ensureSystemRoles(scope);
+
+    const created = await ctx.container.database.db
+      .select()
+      .from(roles)
+      .where(eq(roles.tenantId, tenantB.tenantId));
+    expect(created.length).toBeGreaterThan(0);
+
+    const granted = await ctx.container.database.db
+      .select()
+      .from(rolePermissions)
+      .where(eq(rolePermissions.tenantId, tenantB.tenantId));
+    expect(granted.length).toBeGreaterThan(0);
+  });
 });

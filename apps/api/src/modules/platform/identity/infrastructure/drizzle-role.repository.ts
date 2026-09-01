@@ -109,9 +109,14 @@ export class DrizzleRoleRepository implements RoleRepository {
   /**
    * Seeds the system roles for a tenant.
    *
-   * Idempotent and re-runnable: an installation that upgrades to a build with a
-   * new permission in a seeded role picks it up here rather than needing a data
-   * migration. Roles an operator created themselves are never touched.
+   * Idempotent and re-runnable, and CREATION-ONLY: a role this call finds is
+   * left exactly as it is. A role missing entirely — a new one in the
+   * catalogue, or a fresh installation — is created with its seed permissions.
+   * Roles an operator created themselves are never touched.
+   *
+   * Adding a permission to a role that already exists is therefore an explicit
+   * migration, not something a restart does quietly. See the loop below for why
+   * that trade is the right way round.
    *
    * Safe to run concurrently, which matters because it runs at API boot and two
    * processes can start together. The role id is re-read after the insert
@@ -134,17 +139,33 @@ export class DrizzleRoleRepository implements RoleRepository {
     };
 
     for (const seed of ROLE_SEEDS) {
-      let roleId = await findRoleId(seed.key);
+      const existingId = await findRoleId(seed.key);
 
-      if (roleId === undefined) {
-        await executor
-          .insert(roles)
-          .values({ id: this.ids.uuid(), tenantId, key: seed.key, name: seed.name, isSystem: true })
-          .onConflictDoNothing();
-        // The authoritative id, whoever wrote it.
-        roleId = await findRoleId(seed.key);
-      }
+      // A role that already exists is LEFT ALONE. Its permissions are a
+      // creation default, not a state this reasserts on every boot.
+      //
+      // This is a decision between two reported problems, and it is worth
+      // stating which one was chosen. Writing the seed unconditionally made an
+      // upgrade able to add a permission to an existing role — and made every
+      // restart silently restore one an operator had deliberately withdrawn,
+      // with no audit row and nothing to notice it. Writing it only at creation
+      // means a permission newly added to a seeded role does NOT reach
+      // installations that already have that role.
+      //
+      // The second failure is the safer one. It is visible — the amplification
+      // rule refuses to grant a permission nobody holds, loudly — and it is
+      // fixed by a migration that says what it is doing. The first is invisible
+      // and hands back authority that was taken away on purpose. Restoring
+      // privilege by accident is worse than failing to extend it on time.
+      if (existingId !== undefined) continue;
 
+      await executor
+        .insert(roles)
+        .values({ id: this.ids.uuid(), tenantId, key: seed.key, name: seed.name, isSystem: true })
+        .onConflictDoNothing();
+
+      // The authoritative id, whoever won the insert.
+      const roleId = await findRoleId(seed.key);
       if (roleId === undefined) {
         // Neither our insert nor anyone else's produced a row. Better to say so
         // than to carry on and write permissions nothing can resolve.

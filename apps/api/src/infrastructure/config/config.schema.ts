@@ -217,6 +217,18 @@ export const configSchema = z
           'the CSRF defence, behind the SameSite=Strict session cookie.',
       });
     }
+    if (config.NODE_ENV === 'production' && config.DEPLOYMENT_TOPOLOGY === 'direct') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['DEPLOYMENT_TOPOLOGY'],
+        message:
+          'DEPLOYMENT_TOPOLOGY=direct is not usable in production: this process serves plain ' +
+          'HTTP and has no TLS configuration, while a production login always issues a Secure ' +
+          '__Host- cookie that a browser refuses to store over HTTP. Every login would appear to ' +
+          'succeed and authenticate nothing. Put TLS in front and set ' +
+          'DEPLOYMENT_TOPOLOGY=reverse-proxy with TRUSTED_PROXY_IPS.',
+      });
+    }
     if (config.NODE_ENV === 'production') {
       // Not a style preference. Production issues the session as a `Secure`
       // `__Host-` cookie, and a browser will not store one from an insecure

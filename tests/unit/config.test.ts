@@ -114,6 +114,40 @@ describe('configuration', () => {
     ).not.toThrow();
   });
 
+  it('refuses the direct topology in production, because the API serves plain HTTP', () => {
+    // `direct` means nothing sits in front of this process, and this process
+    // calls the plain-HTTP `app.listen` with no TLS configuration. Production
+    // nevertheless always issues a Secure `__Host-` cookie, which a browser
+    // refuses to store over HTTP — so every login would appear to succeed and
+    // authenticate nothing, with no error to point at. Validating that the
+    // ORIGIN is https does not put TLS on the transport.
+    expect(() =>
+      loadConfig({
+        ...valid,
+        NODE_ENV: 'production',
+        PASSWORD_HASH_PROFILE: 'production',
+        WEB_ADMIN_ORIGINS: 'https://admin.example.test',
+        DEPLOYMENT_TOPOLOGY: 'direct',
+        TRUSTED_PROXY_IPS: '',
+      }),
+    ).toThrowError(/DEPLOYMENT_TOPOLOGY/);
+
+    // Behind a declared proxy it boots, which is the supported shape.
+    expect(() =>
+      loadConfig({
+        ...valid,
+        NODE_ENV: 'production',
+        PASSWORD_HASH_PROFILE: 'production',
+        WEB_ADMIN_ORIGINS: 'https://admin.example.test',
+      }),
+    ).not.toThrow();
+
+    // And `direct` remains legal outside production, where the suite uses it.
+    expect(() =>
+      loadConfig({ ...valid, DEPLOYMENT_TOPOLOGY: 'direct', TRUSTED_PROXY_IPS: '' }),
+    ).not.toThrow();
+  });
+
   it('refuses a production origin that is not a canonical serialized origin', () => {
     // A browser sends `Origin: https://admin.example.test` and nothing else,
     // and the check compares exactly. `https://admin.example.test/` — one
