@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash scripts/claude-session-start.sh",
+            "timeout": 240
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "security-guidance@claude-plugins-official": true,
+    "code-review@claude-plugins-official": true
+  },
+  "env": {
+    "DATABASE_URL": "postgres://nexa:nexa@127.0.0.1:5432/nexa_dev",
+    "TEST_DATABASE_URL": "postgres://nexa:nexa@127.0.0.1:5432/nexa_test",
+    "REDIS_URL": "redis://127.0.0.1:6379"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(pnpm install)",
+      "Bash(pnpm install --frozen-lockfile)",
+      "Bash(pnpm typecheck)",
+      "Bash(pnpm lint)",
+      "Bash(pnpm lint:fix)",
+      "Bash(pnpm format)",
+      "Bash(pnpm format:check)",
+      "Bash(pnpm test)",
+      "Bash(pnpm test:integration)",
+      "Bash(pnpm build)",
+      "Bash(pnpm verify)",
+      "Bash(pnpm check:boundaries)",
+      "Bash(pnpm check:i18n)",
+      "Bash(pnpm db:migrate)",
+      "Bash(pnpm db:seed)",
+      "Bash(pnpm db:check)",
+      "Bash(pnpm db:generate)",
+      "Bash(pnpm --filter :*)",
+      "Bash(bash scripts/dev-services.sh)",
+      "Bash(bash scripts/check-boundaries.sh)",
+      "Bash(git status)",
+      "Bash(git status:*)",
+      "Bash(git diff)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch)",
+      "Bash(psql:*)",
+      "Bash(redis-cli:*)"
+    ],
+    "deny": [
+      "Bash(git push origin main:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Read(./.env)",
+      "Read(./.env.*)"
+    ]
+  }
+}
