@@ -1,0 +1,52 @@
+{
+  "name": "nexa-bot",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22.11.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r --workspace-concurrency=1 typecheck",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check:boundaries": "bash scripts/check-boundaries.sh",
+    "check:i18n": "node scripts/check-i18n-keys.mjs",
+    "test": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:watch": "vitest",
+    "build": "pnpm -r build",
+    "db:migrate": "pnpm --filter @nexa/api db:migrate",
+    "db:generate": "pnpm --filter @nexa/api db:generate",
+    "db:check": "pnpm --filter @nexa/api db:check",
+    "db:seed": "pnpm --filter @nexa/api db:seed",
+    "dev:services": "bash scripts/dev-services.sh",
+    "verify": "pnpm typecheck && pnpm lint && pnpm check:boundaries && pnpm check:i18n && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@nexa/contracts": "workspace:*",
+    "@nexa/i18n": "workspace:*",
+    "@types/node": "22.20.1",
+    "@types/pg": "8.15.6",
+    "drizzle-orm": "0.45.2",
+    "eslint": "10.9.1",
+    "pg": "8.23.0",
+    "prettier": "3.9.6",
+    "typescript": "6.0.2",
+    "typescript-eslint": "8.69.0",
+    "vitest": "4.1.11"
+  },
+  "pnpm": {
+    "overrides": {
+      "typescript": "6.0.2"
+    },
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "msgpackr-extract"
+    ]
+  }
+}

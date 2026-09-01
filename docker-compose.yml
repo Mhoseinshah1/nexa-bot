@@ -1,0 +1,42 @@
+# Local development services.
+#
+# Cloud sessions (Claude Code on the web) start without a Docker daemon, so
+# `scripts/dev-services.sh` starts the same two services natively instead. Both
+# paths expose the same DATABASE_URL and REDIS_URL, and the integration tests
+# use whichever is present.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: nexa-postgres
+    environment:
+      POSTGRES_USER: nexa
+      POSTGRES_PASSWORD: nexa
+      POSTGRES_DB: nexa_dev
+    ports:
+      - '5432:5432'
+    volumes:
+      - nexa-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U nexa -d nexa_dev']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: nexa-redis
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '6379:6379'
+    volumes:
+      - nexa-redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  nexa-pgdata:
+  nexa-redisdata:

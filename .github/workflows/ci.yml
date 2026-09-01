@@ -1,0 +1,156 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  PNPM_VERSION: '10.33.0'
+
+jobs:
+  static:
+    name: Typecheck, lint and boundaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Format check
+        run: pnpm format:check
+
+      # Conventions a type system cannot express: dependency direction, money
+      # never typed as number, no mutable balance column, no empty catch, no
+      # secrets in the committed research.
+      - name: Boundary checks
+        run: pnpm check:boundaries
+
+      - name: i18n key check
+        run: pnpm check:i18n
+
+  test:
+    name: Unit and integration tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nexa
+          POSTGRES_PASSWORD: nexa
+          POSTGRES_DB: nexa_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U nexa -d nexa_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://nexa:nexa@127.0.0.1:5432/nexa_test
+      TEST_DATABASE_URL: postgres://nexa:nexa@127.0.0.1:5432/nexa_test
+      REDIS_URL: redis://127.0.0.1:6379
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Internal packages have a build step; the apps typecheck against their
+      # declaration output.
+      - name: Build internal packages
+        run: pnpm --filter @nexa/contracts --filter @nexa/i18n build
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Apply migrations
+        run: pnpm db:migrate
+
+      # A schema change that never became a migration is a deployment that works
+      # on one machine and nowhere else.
+      - name: Migration drift check
+        run: pnpm db:check
+
+      - name: Integration tests
+        run: pnpm test:integration
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build all workspaces
+        run: pnpm build
+        env:
+          BUILD_VERSION: ${{ github.sha }}
+          BUILD_COMMIT: ${{ github.sha }}
+
+      # The api entrypoints must actually start from the built output, not just
+      # compile. A missing runtime import is invisible to tsc under ESM.
+      - name: Smoke-check the built entrypoints
+        run: |
+          test -f apps/api/dist/main.js
+          test -f apps/api/dist/main.worker.js
+          test -f apps/web/dist/index.html
+          node --input-type=module -e "
+            const missing = await import('./apps/api/dist/main.js').then(() => null, (e) => e);
+            // The entrypoint exits non-zero without configuration; what matters
+            // is that every module it imports resolves.
+            if (missing && /Cannot find (module|package)/.test(String(missing))) {
+              console.error(String(missing));
+              process.exit(1);
+            }
+          "
