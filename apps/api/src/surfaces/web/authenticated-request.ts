@@ -138,8 +138,28 @@ function parseCookies(header: string | undefined): Map<string, string> {
     const index = part.indexOf('=');
     if (index <= 0) continue;
     const name = part.slice(0, index).trim();
-    const value = part.slice(index + 1).trim();
-    if (name.length > 0) cookies.set(name, decodeURIComponent(value));
+    if (name.length === 0) continue;
+    // First occurrence wins, matching every conventional cookie parser. It is
+    // not a defence on its own — an attacker who can set a cookie for this host
+    // can also choose a Path that sorts theirs first — but differing from the
+    // convention buys nothing and surprises the next reader.
+    if (cookies.has(name)) continue;
+    cookies.set(name, decodeValue(part.slice(index + 1).trim()));
   }
   return cookies;
+}
+
+/**
+ * A malformed percent-escape must fail authentication, not the request.
+ *
+ * `decodeURIComponent('%')` throws, and an unhandled throw here turns what
+ * should be a 401 into a 500 — a worse answer, and one that says a header the
+ * client controls can reach the error path.
+ */
+function decodeValue(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }

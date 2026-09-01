@@ -190,6 +190,28 @@ describe('admin HTTP surface', () => {
       }
     });
 
+    it('answers 401, not 500, for a malformed cookie value', async () => {
+      // `decodeURIComponent('%')` throws. An unhandled throw here would turn a
+      // rejected credential into a server error — a worse answer, and one that
+      // says a client-controlled header reaches the error path.
+      const response = await inject({
+        method: 'GET',
+        url: `${API_PREFIX}${ADMIN_ROUTES.list}`,
+        headers: { cookie: `${SESSION_COOKIE_NAME}=%` },
+      });
+      expect(response.statusCode).toBe(401);
+    });
+
+    it('takes the first of duplicate session cookies', async () => {
+      const cookie = await cookieFor('owner', 'the-owners-real-password');
+      const response = await inject({
+        method: 'GET',
+        url: `${API_PREFIX}${AUTH_ROUTES.session}`,
+        headers: { cookie: `${cookie}; ${SESSION_COOKIE_NAME}=${'z'.repeat(43)}` },
+      });
+      expect(response.statusCode).toBe(200);
+    });
+
     it('refuses a forged session cookie', async () => {
       const response = await inject({
         method: 'GET',

@@ -53,12 +53,32 @@ export function ipThrottleSubject(
   if (typeof clientIp !== 'string' || clientIp.length === 0) return null;
   if (isIP(clientIp) === 0) return null;
 
+  // Normalised first. On a dual-stack listener the socket address arrives as
+  // `::ffff:127.0.0.1` while the operator wrote `127.0.0.1`, and an unnormalised
+  // exact-string comparison would miss — so the proxy's own address would fail
+  // the check below and become a shared throttle subject, which is precisely the
+  // installation-wide lockout this function exists to prevent.
+  const address = normaliseAddress(clientIp);
+
   // The client IP resolving to a configured upstream means the forwarded header
   // was absent or not believed — so this address identifies our own proxy, not
   // a client. Counting failures against it would lock out the installation.
-  if (trustedProxyIps.some((entry) => matchesTrustedEntry(clientIp, entry))) return null;
+  if (trustedProxyIps.some((entry) => matchesTrustedEntry(address, entry))) return null;
 
-  return clientIp;
+  return address;
+}
+
+/**
+ * Unwraps an IPv4-mapped IPv6 address to its IPv4 form.
+ *
+ * `::ffff:127.0.0.1` and `127.0.0.1` are the same host, and which one appears
+ * depends on whether the listener is dual-stack — a deployment detail that must
+ * not change whether a trusted-proxy entry matches.
+ */
+export function normaliseAddress(address: string): string {
+  const mapped = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(address);
+  if (mapped !== null && isIP(mapped[1] as string) === 4) return mapped[1] as string;
+  return address;
 }
 
 /**
@@ -69,7 +89,10 @@ export function ipThrottleSubject(
  * `10.1.1.10`, and a substring test would also make `192.168.1.1` match
  * `192.168.1.10/32`.
  */
-export function matchesTrustedEntry(address: string, entry: string): boolean {
+export function matchesTrustedEntry(rawAddress: string, rawEntry: string): boolean {
+  const address = normaliseAddress(rawAddress);
+  const entry = rawEntry.includes('/') ? rawEntry : normaliseAddress(rawEntry);
+
   if (!entry.includes('/')) return address === entry;
 
   const [network = '', prefixText = ''] = entry.split('/');
@@ -77,7 +100,7 @@ export function matchesTrustedEntry(address: string, entry: string): boolean {
   if (!Number.isInteger(prefix) || prefix < 0) return false;
 
   const addressBytes = toBytes(address);
-  const networkBytes = toBytes(network);
+  const networkBytes = toBytes(normaliseAddress(network));
   if (addressBytes === null || networkBytes === null) return false;
   if (addressBytes.length !== networkBytes.length) return false;
   if (prefix > addressBytes.length * 8) return false;
@@ -107,8 +130,18 @@ function toBytes(address: string): number[] | null {
   return null;
 }
 
-/** Expands an IPv6 address, `::` included, to its 16 bytes. */
+/**
+ * Expands an IPv6 address, `::` included, to its 16 bytes.
+ *
+ * An address carrying an embedded IPv4 literal in a form `normaliseAddress` did
+ * not unwrap is REJECTED rather than guessed at. Parsing `127.0.0.1` as a hex
+ * group yields `0x127` and silently discards the rest, which made
+ * `::ffff:127.0.0.1` and `::ffff:127.99.99.99` expand to identical bytes — a
+ * comparison that says two different hosts are the same one.
+ */
 function expandIpv6(address: string): number[] | null {
+  if (address.includes('.')) return null;
+
   const [head = '', tail, ...rest] = address.split('::');
   if (rest.length > 0) return null;
 

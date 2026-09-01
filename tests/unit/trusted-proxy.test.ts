@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ipThrottleSubject,
   matchesTrustedEntry,
+  normaliseAddress,
   trustProxyOption,
 } from '../../apps/api/src/infrastructure/trusted-proxy';
 
@@ -84,5 +85,44 @@ describe('per-IP throttle subject', () => {
     expect(ipThrottleSubject('10.0.0.5', ['10.0.0.0/8'])).toBeNull();
     // A genuine client behind that same proxy is still throttled normally.
     expect(ipThrottleSubject('203.0.113.7', ['10.0.0.0/8'])).toBe('203.0.113.7');
+  });
+});
+
+describe('IPv4-mapped IPv6 addresses', () => {
+  it('unwraps a mapped address to its IPv4 form', () => {
+    // Which form arrives depends on whether the listener is dual-stack. That is
+    // a deployment detail and must not change whether an entry matches.
+    expect(normaliseAddress('::ffff:127.0.0.1')).toBe('127.0.0.1');
+    expect(normaliseAddress('::FFFF:10.0.0.5')).toBe('10.0.0.5');
+    expect(normaliseAddress('127.0.0.1')).toBe('127.0.0.1');
+    expect(normaliseAddress('fd00::1')).toBe('fd00::1');
+    expect(normaliseAddress('not-an-ip')).toBe('not-an-ip');
+  });
+
+  it('matches a mapped client address against a plain IPv4 entry', () => {
+    // Without this, the proxy's own address fails the trusted check on a
+    // dual-stack listener and becomes a shared throttle subject — the
+    // installation-wide lockout the check exists to prevent.
+    expect(matchesTrustedEntry('::ffff:127.0.0.1', '127.0.0.1')).toBe(true);
+    expect(matchesTrustedEntry('::ffff:10.0.0.5', '10.0.0.0/8')).toBe(true);
+    expect(matchesTrustedEntry('::ffff:11.0.0.5', '10.0.0.0/8')).toBe(false);
+    expect(ipThrottleSubject('::ffff:127.0.0.1', ['127.0.0.1'])).toBeNull();
+  });
+
+  it('normalises the subject it returns, so one host is one subject', () => {
+    expect(ipThrottleSubject('::ffff:203.0.113.7', ['127.0.0.1'])).toBe('203.0.113.7');
+  });
+
+  it('does not conflate two different mapped hosts', () => {
+    // Parsing `127.0.0.1` as a hex group yields 0x127 and discards the rest, so
+    // an earlier version expanded ::ffff:127.0.0.1 and ::ffff:127.99.99.99 to
+    // the same bytes — a comparison that called two hosts one.
+    expect(matchesTrustedEntry('::ffff:127.99.99.99', '127.0.0.1')).toBe(false);
+    expect(matchesTrustedEntry('::ffff:127.0.0.1', '::ffff:127.99.99.99')).toBe(false);
+    expect(matchesTrustedEntry('::ffff:127.0.0.1', '::ffff:127.0.0.1')).toBe(true);
+  });
+
+  it('rejects an embedded IPv4 literal it cannot unwrap, rather than guessing', () => {
+    expect(matchesTrustedEntry('64:ff9b::192.0.2.1', '64:ff9b::/96')).toBe(false);
   });
 });
