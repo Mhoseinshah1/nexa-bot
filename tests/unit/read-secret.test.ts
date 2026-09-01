@@ -103,6 +103,33 @@ describe('readSecret', () => {
     expect(await answer).toBe('رم');
   });
 
+  it('ignores arrow keys instead of storing their escape sequence', async () => {
+    // Raw mode delivers ESC [ D verbatim. Stored, it becomes three bytes of a
+    // password the operator cannot see and could never retype.
+    const tty = new FakeTty();
+    const answer = readSecret(tty as never, capture(), 'Password: ');
+    tty.type('pass');
+    tty.press(0x1b);
+    tty.type('[D'); // left arrow
+    tty.press(0x1b);
+    tty.type('[H'); // home
+    tty.type('word');
+    tty.press(ENTER);
+    expect(await answer).toBe('password');
+  });
+
+  it('ignores a stray control byte rather than storing it', async () => {
+    // Ctrl+D mid-password would otherwise be a literal 0x04 in the credential.
+    const tty = new FakeTty();
+    const answer = readSecret(tty as never, capture(), 'Password: ');
+    tty.type('ab');
+    tty.press(0x04);
+    tty.press(0x0b);
+    tty.type('cd');
+    tty.press(ENTER);
+    expect(await answer).toBe('abcd');
+  });
+
   it('rejects on Ctrl+C rather than returning a partial password', async () => {
     const tty = new FakeTty();
     const answer = readSecret(tty as never, capture(), 'Password: ');

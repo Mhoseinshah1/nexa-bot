@@ -27,6 +27,7 @@ export interface SecretOutput {
 
 const ETX = 0x03; // Ctrl+C
 const EOT = 0x04; // Ctrl+D
+const ESC = 0x1b;
 const BACKSPACE = 0x08;
 const DELETE = 0x7f;
 
@@ -54,6 +55,13 @@ export function readSecret(
     // backspace would then delete a third of a character rather than a
     // character. Decoded once, at the end.
     const bytes: number[] = [];
+    // Raw mode delivers escape sequences verbatim: an arrow key sends
+    // ESC [ D, Home sends ESC [ H, and a paste can carry bracketed-paste
+    // markers. Left alone, those bytes land IN the password — silently, since
+    // nothing is echoed — and the operator ends up with a credential they
+    // cannot see and could never retype. `readline` handles them; reading the
+    // stream directly means handling them here.
+    let escape: 'none' | 'after-esc' | 'csi' = 'none';
     input.setRawMode?.(true);
     input.resume?.();
 
@@ -68,6 +76,26 @@ export function readSecret(
     const onData = (chunk: Buffer | string): void => {
       const chunkBytes = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
       for (const byte of chunkBytes) {
+        if (escape === 'after-esc') {
+          // ESC [ and ESC O introduce a multi-byte sequence; ESC followed by
+          // anything else is a two-byte one (Alt+key) and ends here. Treating
+          // `[` as a terminator, which it is in the CSI final-byte range, ended
+          // the sequence one byte early and let `D` through as content — which
+          // is how the first version of this turned a left arrow into a letter
+          // in the password.
+          escape = byte === 0x5b || byte === 0x4f ? 'csi' : 'none';
+          continue;
+        }
+        if (escape === 'csi') {
+          // Parameter bytes are 0x30-0x3F and intermediates 0x20-0x2F; the
+          // sequence ends at the first final byte, 0x40-0x7E.
+          if (byte >= 0x40 && byte <= 0x7e) escape = 'none';
+          continue;
+        }
+        if (byte === ESC) {
+          escape = 'after-esc';
+          continue;
+        }
         if (byte === ETX) {
           finish(() => {
             reject(new Error('Cancelled.'));
@@ -97,6 +125,11 @@ export function readSecret(
           bytes.pop();
           continue;
         }
+        // Every other C0 control byte is a keystroke, not a character. Ctrl+D
+        // mid-password is the clearest case: it would otherwise be stored as a
+        // literal 0x04 in the credential. A password may contain anything
+        // printable, in any script, but not a raw control byte.
+        if (byte < 0x20) continue;
         // Anything else is content. Deliberately NOT written anywhere.
         bytes.push(byte);
       }
