@@ -65,9 +65,36 @@ them repeated by database triggers as a backstop.
    merely `admins.edit`. Creating an administrator and creating an _owner_ are
    different acts.
 
+4. **An administrator may not grant a permission they do not hold themselves.**
+   Rule 1 stops self-promotion; without this one it is trivially routed around
+   by creating a puppet: an admin with `admins.edit` gives a new account the
+   `finance` role, sets its password, and signs in as it. The two rules only
+   work together. An owner holds the whole catalog, so this never constrains
+   them — it constrains a _delegated_ admin manager, which is the case it
+   exists for. Removing a role is exempt: taking authority away is not
+   amplification, and requiring the remover to hold it would stop a manager
+   cleaning up a role they were never given.
+
 Changing one's own **password** is deliberately not covered by rule 1: it
 requires the current password, grants nothing, and refusing it would mean an
 administrator could never rotate a credential they believe is exposed.
+
+### Identifiers are canonicalised at the boundary
+
+Rule 1 was, in its first implementation, a `===` between two strings. The
+security review defeated it in one request: Postgres compares `uuid` values
+case-insensitively, so `…89AB` and `…89ab` are **one row**, while JavaScript
+says they are two different strings. Upper-casing your own admin id in the URL
+made the guard see somebody else, and every query afterwards resolved it back to
+you. Both self-protected operations were reachable that way.
+
+The lesson is not "add `toLowerCase` to that comparison". It is that **a check
+which decides in the application about a row the database will resolve is only
+as good as the two agreeing on identity.** So `uuidV7Schema` now lower-cases on
+parse — every branded id in the system is canonical by construction, which fixes
+the class rather than the instance — and the self-guard additionally re-runs
+inside the transaction against the id the database _returned_, so it holds even
+if some future path skips the boundary.
 
 ### On the triggers
 

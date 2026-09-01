@@ -5,7 +5,9 @@ import {
   assertOwnerSurvives,
   diffRoles,
   losesOwnerRole,
+  sameAdmin,
 } from '../../apps/api/src/modules/platform/identity/domain/admin-protection';
+import { uuidV7Schema } from '@nexa/contracts';
 import {
   generateSessionToken,
   hashSessionToken,
@@ -64,6 +66,17 @@ describe('self-modification', () => {
     expect(() => assertNotSelf(alice, bob)).not.toThrow();
   });
 
+  it('refuses a self-change hidden by re-casing the id', () => {
+    // `===` is case-sensitive; Postgres `uuid` equality is not. A guard that
+    // decides in JavaScript about a row the database resolves loses whenever
+    // the two disagree — which is how a review defeated the earlier version.
+    const id = '01a05d5a-a719-74c8-9e98-fb1c9c616a16' as AdminId;
+    const shouted = id.toUpperCase() as AdminId;
+    expect(() => assertNotSelf(id, shouted)).toThrow(/cannot change their own/i);
+    expect(sameAdmin(id, shouted)).toBe(true);
+    expect(sameAdmin(id, '01a05d5a-a719-74c8-9e98-fb1c9c616a17')).toBe(false);
+  });
+
   it('permits a system actor with no admin identity', () => {
     // Bootstrap has no acting admin. It is fenced by not being reachable from a
     // surface, not by this rule.
@@ -120,5 +133,20 @@ describe('session tokens', () => {
     expect(tokenHashesMatch(a, a)).toBe(true);
     expect(tokenHashesMatch(a, hashSessionToken('two'))).toBe(false);
     expect(tokenHashesMatch(a, 'short')).toBe(false);
+  });
+});
+
+describe('identifier canonicalisation', () => {
+  it('lower-cases a UUID at the trust boundary', () => {
+    // The class fix. Every branded id is lower-case by construction, so no
+    // later comparison has to remember that the database folds case.
+    const shouted = '01A05D5A-A719-74C8-9E98-FB1C9C616A16';
+    expect(uuidV7Schema.parse(shouted)).toBe('01a05d5a-a719-74c8-9e98-fb1c9c616a16');
+  });
+
+  it('still rejects a value that is not a UUIDv7', () => {
+    for (const bad of ['', 'not-a-uuid', '01a05d5a-a719-14c8-9e98-fb1c9c616a16']) {
+      expect(() => uuidV7Schema.parse(bad)).toThrow();
+    }
   });
 });

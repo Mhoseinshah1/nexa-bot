@@ -50,14 +50,33 @@ export function assertOwnerSurvives(context: OwnerChangeContext): void {
  *
  * Changing one's own PASSWORD is not this: it takes the current password and
  * grants nothing, so it goes through a different path.
+ *
+ * The comparison folds case. It reads as belt-and-braces now that
+ * `uuidV7Schema` canonicalises at the boundary, and it is not: this comparison
+ * decides an authorization question in JavaScript about a row the DATABASE will
+ * resolve, and Postgres `uuid` equality is case-insensitive. When the two
+ * disagree, the guard loses. A security review defeated the earlier `===` by
+ * upper-casing the acting admin's own id in the request path — the guard saw a
+ * different string, and every query afterwards resolved it back to the caller.
+ * Callers should also re-check against the id the database returned; see
+ * `AdminManagementService`.
  */
 export function assertNotSelf(actingAdminId: AdminId | null, targetAdminId: AdminId): void {
-  if (actingAdminId !== null && actingAdminId === targetAdminId) {
+  if (actingAdminId !== null && sameAdmin(actingAdminId, targetAdminId)) {
     throw errors.conflict(
       IDENTITY_ERROR_CODES.ADMIN_SELF_MODIFICATION,
       'An administrator cannot change their own roles or status. Ask another administrator.',
     );
   }
+}
+
+/**
+ * Whether two identifiers name the same administrator.
+ *
+ * Case-folded because the database folds. Never compare admin ids with `===`.
+ */
+export function sameAdmin(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
 }
 
 /** The role keys being added and removed, for the audit row and the event. */

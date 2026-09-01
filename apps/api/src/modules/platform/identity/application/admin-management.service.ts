@@ -95,6 +95,7 @@ export class AdminManagementService {
     if (command.roleKeys.includes(OWNER_ROLE_KEY)) {
       await this.guard.check(scope, actor, 'admins.permissions.edit');
     }
+    await this.assertGrantsNoMorePrivilegeThanHeld(scope, actor, command.roleKeys);
 
     const now = this.clock.now();
     const adminId = this.ids.uuid() as AdminId;
@@ -186,6 +187,11 @@ export class AdminManagementService {
       await this.admins.lockTenantForAdminChange(scope, tx);
 
       const target = await this.requireAdmin(scope, targetId);
+      // Re-checked against the id the DATABASE returned, not the one the caller
+      // supplied. The boundary already canonicalises, and this is the check
+      // that does not depend on it having: whatever row we are about to write
+      // is the row the guard now sees.
+      assertNotSelf(adminIdOf(actor), target.id);
       if (target.status === command.status) return target;
 
       if (command.status === 'DISABLED') {
@@ -248,6 +254,10 @@ export class AdminManagementService {
     if (delta.added.includes(OWNER_ROLE_KEY) || delta.removed.includes(OWNER_ROLE_KEY)) {
       await this.guard.check(scope, actor, 'admins.permissions.edit');
     }
+    // Only what is being ADDED. Taking a role away is not amplification, and
+    // requiring the remover to hold it would stop a manager cleaning up a role
+    // they were never given.
+    await this.assertGrantsNoMorePrivilegeThanHeld(scope, actor, delta.added);
 
     const roleIds = await this.resolveRoleIds(scope, next);
     const now = this.clock.now();
@@ -255,6 +265,7 @@ export class AdminManagementService {
     await this.uow.run(scope, async (tx) => {
       await this.admins.lockTenantForAdminChange(scope, tx);
       const target = await this.requireAdmin(scope, targetId);
+      assertNotSelf(adminIdOf(actor), target.id);
 
       if (delta.removed.includes(OWNER_ROLE_KEY)) {
         await this.assertOwnerSurvivesDisabling(scope, target, tx);
@@ -373,6 +384,43 @@ export class AdminManagementService {
     // does when they believe a credential is exposed, and leaving the other
     // sessions alive would make it useless for that.
     await this.sessions.revokeAllForAdmin(scope, adminId, now, 'password_changed');
+  }
+
+  /**
+   * Refuses to grant a permission the acting administrator does not hold.
+   *
+   * Without this, `admins.edit` silently confers every assignable role's
+   * powers: create an administrator with the `finance` role, set its password,
+   * sign in as it. The self-modification guard does not help — the puppet is
+   * somebody else — so the two rules only work together.
+   *
+   * An owner holds the whole catalog, so this never constrains them. It
+   * constrains a DELEGATED admin manager, which is the case the rule exists
+   * for and the case that will actually occur once roles are edited.
+   */
+  private async assertGrantsNoMorePrivilegeThanHeld(
+    scope: ScopeContext,
+    actor: ActorContext,
+    roleKeys: readonly string[],
+  ): Promise<void> {
+    const actorId = adminIdOf(actor);
+    if (actorId === null) return;
+
+    const held = new Set(await this.roles.permissionsForAdmin(scope, actorId));
+    const granting = new Set<string>();
+    for (const role of await this.roles.list(scope)) {
+      if (!roleKeys.includes(role.key)) continue;
+      for (const permission of role.permissions) granting.add(permission);
+    }
+
+    const excess = [...granting].filter((permission) => !held.has(permission as never)).sort();
+    if (excess.length > 0) {
+      throw errors.permissionDenied(
+        IDENTITY_ERROR_CODES.ADMIN_PRIVILEGE_ESCALATION,
+        'You cannot grant a permission you do not hold yourself.',
+        { permissions: excess },
+      );
+    }
   }
 
   private async requireAdmin(scope: ScopeContext, id: AdminId): Promise<Admin> {

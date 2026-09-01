@@ -16,13 +16,28 @@ declare const brand: unique symbol;
 
 export type Branded<T, B extends string> = T & { readonly [brand]: B };
 
-/** A UUIDv7 string. Time-sortable, non-enumerable. */
+/**
+ * A UUIDv7 string, canonicalised to lower case.
+ *
+ * The `i` flag is what makes the lower-casing load-bearing rather than tidy.
+ * Postgres compares `uuid` values case-insensitively, so `…89AB` and `…89ab`
+ * are ONE row — while JavaScript `===` says they are two different strings.
+ * Any check that compares ids in JavaScript and then acts on the row the
+ * database resolves is therefore bypassable by re-casing the input, which is
+ * exactly how the self-modification guard was defeated: an administrator
+ * upper-cased their own id in the path, the guard saw somebody else, and every
+ * query afterwards resolved it back to them.
+ *
+ * Normalising here fixes the whole class at the trust boundary, rather than one
+ * comparison at a time.
+ */
 export const uuidV7Schema = z
   .string()
   .regex(
     /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     'must be a UUIDv7',
-  );
+  )
+  .transform((value) => value.toLowerCase());
 
 function brandedId<B extends string>(_brandName: B) {
   return uuidV7Schema.transform((v) => v as Branded<string, B>);

@@ -140,6 +140,7 @@ export const IDENTITY_ERROR_CODES = {
   ADMIN_TELEGRAM_ID_TAKEN: 'admin.telegram_id_taken',
   ADMIN_SELF_MODIFICATION: 'admin.self_modification_denied',
   ADMIN_LAST_OWNER: 'admin.last_owner_protected',
+  ADMIN_PRIVILEGE_ESCALATION: 'admin.privilege_escalation_denied',
   ADMIN_PASSWORD_REUSED: 'admin.password_reused',
   ROLE_NOT_FOUND: 'role.not_found',
   ROLE_SYSTEM_IMMUTABLE: 'role.system_immutable',

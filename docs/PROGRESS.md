@@ -189,6 +189,41 @@ Worth recording because each contradicted an earlier stated plan:
   boundary check needed a per-file exception. Removing the reason for the
   exception was better than writing one.
 
+### Security review
+
+An independent review of the branch ran before the phase closed. It confirmed
+clean: the session path (expiry and revocation both enforced, verified
+empirically), the Origin/CSRF check on every cookie-reachable write, permission
+resolution (no actor type or scope returns a full set), tenant scoping in every
+identity repository, the last-owner lock, the bootstrap fence, the Telegram
+webhook, credential leakage, and injection.
+
+It found **one HIGH**, reproduced end-to-end, and raised one design question
+that turned out to be the same hole from another direction. Both are fixed, each
+with a regression test.
+
+- **The self-modification guard was bypassable by re-casing an id.** It compared
+  two strings with `===`. Postgres compares `uuid` values case-insensitively, so
+  an upper-cased copy of the caller's own admin id looked like a different
+  administrator to the guard and resolved back to the caller in every query
+  afterwards — letting an admin rewrite their own roles and disable themselves
+  through paths the service explicitly refuses. Fixed at the boundary
+  (`uuidV7Schema` now canonicalises, which fixes the class) and again inside the
+  transaction, where the guard re-runs against the id the database returned.
+- **`admins.edit` implicitly conferred every assignable role's permissions.**
+  Not reported as a finding — but the self-guard never stopped it, because a
+  puppet account is somebody else: create an administrator with the `finance`
+  role, set its password, sign in as it. An administrator may now not grant a
+  permission they do not hold themselves. Removing a role stays exempt; taking
+  authority away is not amplification. An owner holds the whole catalog, so this
+  constrains only a delegated admin manager.
+
+The first one is worth stating plainly: the guard was written, reviewed,
+described in a commit message as load-bearing, and covered by a passing test —
+and it did not work, because the test only ever exercised the canonical form. A
+check that decides in the application about a row the database resolves is only
+as good as the two agreeing on identity.
+
 ### Deliberately absent
 
 No commerce, products, providers, payments, wallet, orders, reseller bots or

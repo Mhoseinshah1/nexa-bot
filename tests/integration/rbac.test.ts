@@ -346,7 +346,13 @@ describe('owner self-preservation', () => {
    * wrong reason.
    */
   async function privilegedNonOwner(username = 'manager'): Promise<SeededAdmin> {
-    const manager = await createAdmin(ctx.container, tenantA, { username, roleKeys: ['operator'] });
+    // Holds `support` as well as `operator` because these tests demote owners
+    // INTO `support`, and an administrator may not grant a permission they do
+    // not hold themselves.
+    const manager = await createAdmin(ctx.container, tenantA, {
+      username,
+      roleKeys: ['operator', 'support'],
+    });
     await ctx.container.database.db.insert(adminPermissionOverrides).values([
       {
         tenantId: tenantA.tenantId,
@@ -443,6 +449,32 @@ describe('owner self-preservation', () => {
     ).rejects.toThrow(/cannot change their own/i);
   });
 
+  it('refuses a self-change dressed up as somebody else by re-casing the id', async () => {
+    // A security review defeated the guard exactly this way. `===` is
+    // case-sensitive; Postgres `uuid` equality is not, so an upper-cased copy
+    // of the caller's own id looked like a different administrator to the
+    // guard and resolved back to the caller in every query afterwards.
+    const upperCased = (owner.id as string).toUpperCase() as AdminId;
+
+    await expect(
+      ctx.container.adminManagement.setRoles(tenantA, adminActorFor(owner), upperCased, {
+        roleKeys: [OWNER_ROLE_KEY, 'finance'],
+        reason: 'Self-promotion through a re-cased id.',
+      }),
+    ).rejects.toThrow(/cannot change their own/i);
+
+    await expect(
+      ctx.container.adminManagement.setStatus(tenantA, adminActorFor(owner), upperCased, {
+        status: 'DISABLED',
+        reason: 'Self-disable through a re-cased id.',
+      }),
+    ).rejects.toThrow(/cannot change their own/i);
+
+    // And nothing was written on the way to being refused.
+    expect(await ctx.container.admins.roleKeysFor(tenantA, owner.id)).toEqual(['owner']);
+    expect((await ctx.container.admins.findById(tenantA, owner.id))?.status).toBe('ACTIVE');
+  });
+
   it('permits a genuine hand-over: promote first, then demote', async () => {
     const successor = await createAdmin(ctx.container, tenantA, {
       username: 'successor',
@@ -459,6 +491,101 @@ describe('owner self-preservation', () => {
     });
 
     expect(await ctx.container.admins.countActiveOwners(tenantA)).toBe(1);
+  });
+});
+
+describe('privilege amplification', () => {
+  /**
+   * `admins.edit` is authority over other administrators. It must not be a way
+   * to acquire permissions one lacks, and the self-modification guard alone
+   * does not stop that: a puppet account is somebody else.
+   */
+  async function delegatedManager(): Promise<SeededAdmin> {
+    const manager = await createAdmin(ctx.container, tenantA, {
+      username: 'delegate',
+      roleKeys: ['support'],
+    });
+    await ctx.container.database.db.insert(adminPermissionOverrides).values({
+      tenantId: tenantA.tenantId,
+      adminId: manager.id,
+      permissionKey: 'admins.edit',
+      effect: 'GRANT',
+      reason: 'Onboards the support rota.',
+      expiresAt: null,
+    });
+    return manager;
+  }
+
+  it('refuses to create an administrator holding a permission the creator lacks', async () => {
+    const manager = await delegatedManager();
+
+    // `finance` carries refunds.issue and users.wallet.credit; support does not.
+    await expect(
+      ctx.container.adminManagement.create(tenantA, adminActorFor(manager), {
+        username: 'puppet',
+        displayName: 'Puppet',
+        password: 'a-perfectly-fine-password',
+        roleKeys: ['finance'],
+      }),
+    ).rejects.toThrow(/cannot grant a permission you do not hold/i);
+
+    expect(await ctx.container.admins.findCredentialsByUsername(tenantA, 'puppet')).toBeNull();
+  });
+
+  it('permits creating an administrator with a role the creator does hold', async () => {
+    const manager = await delegatedManager();
+    await expect(
+      ctx.container.adminManagement.create(tenantA, adminActorFor(manager), {
+        username: 'colleague',
+        displayName: 'Colleague',
+        password: 'a-perfectly-fine-password',
+        roleKeys: ['support'],
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it('refuses to grant an existing administrator a permission the granter lacks', async () => {
+    const manager = await delegatedManager();
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'target',
+      roleKeys: ['support'],
+    });
+
+    await expect(
+      ctx.container.adminManagement.setRoles(tenantA, adminActorFor(manager), target.id, {
+        roleKeys: ['support', 'finance'],
+        reason: 'Would hand out refunds.issue.',
+      }),
+    ).rejects.toThrow(/cannot grant a permission you do not hold/i);
+  });
+
+  it('still permits REMOVING a role the remover does not hold', async () => {
+    // Taking a role away is not amplification. Requiring the remover to hold it
+    // would stop a manager cleaning up a role they were never given.
+    const manager = await delegatedManager();
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'over-privileged',
+      roleKeys: ['support', 'finance'],
+    });
+
+    await expect(
+      ctx.container.adminManagement.setRoles(tenantA, adminActorFor(manager), target.id, {
+        roleKeys: ['support'],
+        reason: 'Left the finance desk.',
+      }),
+    ).resolves.toBeDefined();
+    expect(await ctx.container.admins.roleKeysFor(tenantA, target.id)).toEqual(['support']);
+  });
+
+  it('never constrains an owner, who holds the whole catalog', async () => {
+    await expect(
+      ctx.container.adminManagement.create(tenantA, adminActorFor(owner), {
+        username: 'anyone',
+        displayName: 'Anyone',
+        password: 'a-perfectly-fine-password',
+        roleKeys: ['finance', 'technical'],
+      }),
+    ).resolves.toBeDefined();
   });
 });
 
