@@ -257,6 +257,11 @@ max(legacy, current), which is what an unknown username costs. Running it
 afterwards made the total nearly twice the unknown-username path — the same
 oracle, pointing the other way.
 
+The cost accepted is peak memory: two derivations are briefly in flight, so that
+login allocates the current profile plus the older, cheaper one rather than one
+of them. It applies only to accounts not yet rehashed, and the number of logins
+in flight is what the throttle bounds.
+
 ## Costs accepted
 
 A username and password is one more secret for an operator to manage, and there
