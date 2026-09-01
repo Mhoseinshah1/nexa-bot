@@ -96,6 +96,35 @@ the class rather than the instance — and the self-guard additionally re-runs
 inside the transaction against the id the database _returned_, so it holds even
 if some future path skips the boundary.
 
+### The database enforces tenant ownership too
+
+Migration 0005 put `tenant_id` on every identity table and made every unique
+index composite on it — enough for the application to scope its predicates. The
+foreign keys, though, still referenced globally unique ids alone, so a row could
+name tenant A while pointing at tenant B's admin and tenant C's role and the
+database would accept it. Because every read filters on `tenant_id`, such a row
+is **invisible to the tenant that owns the id**: it simply grants, or fails to
+grant, in silence.
+
+Migration 0007 makes them composite — `(tenant_id, admin_id) → admins(tenant_id,
+id)` and the same for roles — across `admin_roles`, `role_permissions`,
+`admin_permission_overrides`, `admin_sessions`, and the `assigned_by` /
+`created_by` actor references. Each parent gains a `UNIQUE (tenant_id, id)`
+candidate key, redundant with its primary key and deliberately so: it is what
+lets a child say "this admin, _in this tenant_".
+
+This is not RLS by another name, and it does not reopen ADR-0004. RLS answers
+"which rows may this session see"; a foreign key answers "may these two rows be
+related at all". The second question has a cheap, declarative answer that does
+not depend on anyone remembering a predicate, and v1 declining the first is no
+reason to decline both.
+
+`assigned_by_admin_id` and `created_by_admin_id` stay **nullable**. Installation
+bootstrap grants the first owner role with no acting administrator, because none
+exists yet; writing a fabricated actor there would be the invented identity this
+codebase refuses elsewhere. NULL means "the installation did this", and the
+audit row with actor `SYSTEM_JOB` carries the rest.
+
 ### On the triggers
 
 The migration repeats the last-owner rule as `AFTER` constraint triggers. They

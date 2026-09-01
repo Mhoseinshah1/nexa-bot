@@ -11,12 +11,7 @@ import {
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
-import {
-  adminActor,
-  assertOriginAllowed,
-  requireSessionToken,
-  usedCookieAuth,
-} from './authenticated-request.js';
+import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
 import { toSummary } from './auth.controller.js';
 
 /**
@@ -97,11 +92,7 @@ export class AdminsController {
   ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
     const token = requireSessionToken(request);
     if (options.write) {
-      assertOriginAllowed(
-        request,
-        this.container.config.WEB_ADMIN_ORIGINS,
-        usedCookieAuth(request),
-      );
+      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
     }
 
     const { admin } = await this.container.auth.authenticate(token);

@@ -27,24 +27,20 @@ export interface AuthenticatedContext {
 }
 
 /**
- * Reads the session token.
+ * Reads the session token. The cookie is the ONLY transport.
  *
- * Cookie first: it is the browser path and cannot be read by script. A bearer
- * header is accepted for non-browser callers, and accepting it does NOT weaken
- * the CSRF story — a cross-origin page can cause a cookie to be sent, but it
- * cannot set an Authorization header.
+ * An earlier version also accepted `Authorization: Bearer`, for non-browser
+ * callers. Login no longer returns the token in its body, so nothing can obtain
+ * one to present — which made bearer an authentication path that no legitimate
+ * client could use and an attacker could still try. An unreachable way in is
+ * not a feature.
+ *
+ * A CLI or API credential, if one is ever wanted, is a separate surface with
+ * its own issuance, scope, lifetime and revocation. It is not this cookie
+ * wearing a different header name.
  */
 export function readSessionToken(request: FastifyRequest): string | null {
-  const cookies = parseCookies(request.headers.cookie);
-  const fromCookie = cookies.get(SESSION_COOKIE_NAME);
-  if (fromCookie) return fromCookie;
-
-  const authorization = request.headers.authorization;
-  if (typeof authorization === 'string' && authorization.startsWith('Bearer ')) {
-    const token = authorization.slice('Bearer '.length).trim();
-    return token.length > 0 ? token : null;
-  }
-  return null;
+  return parseCookies(request.headers.cookie).get(SESSION_COOKIE_NAME) ?? null;
 }
 
 export function requireSessionToken(request: FastifyRequest): string {
@@ -64,30 +60,30 @@ export function requireSessionToken(request: FastifyRequest): string {
  * SameSite alone is a browser-side control: it is enforced by the client, and
  * an older or unusual client that does not enforce it leaves the cookie
  * exposed. Checking the Origin server-side does not depend on the browser
- * behaving. Requests carrying a bearer token skip it, because a cross-origin
- * page cannot set that header in the first place.
+ * behaving.
+ *
+ * It now applies to every state-changing request without exception. While
+ * bearer tokens were accepted there was a carve-out for them — sound at the
+ * time, since a cross-origin page cannot set that header, but a carve-out all
+ * the same. With the cookie as the only transport, there is nothing to carve
+ * out.
  */
 export function assertOriginAllowed(
   request: FastifyRequest,
   allowedOrigins: readonly string[],
-  usedCookie: boolean,
 ): void {
   const method = (request.method ?? 'GET').toUpperCase();
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return;
-  if (!usedCookie) return;
+  // Empty only outside production; the config schema requires a list there.
   if (allowedOrigins.length === 0) return;
 
   const origin = request.headers.origin;
   if (typeof origin !== 'string' || !allowedOrigins.includes(origin)) {
     throw errors.permissionDenied(
       IDENTITY_ERROR_CODES.AUTH_ORIGIN_REJECTED,
-      'The request origin is not permitted for a cookie-authenticated write.',
+      'The request origin is not permitted for this write.',
     );
   }
-}
-
-export function usedCookieAuth(request: FastifyRequest): boolean {
-  return parseCookies(request.headers.cookie).has(SESSION_COOKIE_NAME);
 }
 
 /** Builds the actor for an authenticated administrator. */

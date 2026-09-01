@@ -133,18 +133,18 @@ Worth recording because each contradicted an earlier stated plan:
 
 ### What exists
 
-| Area           | State                                                                                                                                                                                 |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Schema         | 7 tables in migrations 0005–0006: `admins`, `roles`, `role_permissions`, `admin_roles`, `admin_permission_overrides`, `admin_sessions`, `admin_login_throttle`                        |
-| Authentication | Username and password, scrypt at the OWASP minimum from Node's own crypto, self-describing hashes with rehash-on-login, one generic failure for every bad credential                  |
-| Sessions       | 32 random bytes stored only as SHA-256, httpOnly `SameSite=Strict` cookie plus bearer, permissions resolved per request so a role change lands immediately                            |
-| Throttling     | Durable per-username and per-IP lockout driven by the `Clock` port, keyed on what was submitted rather than on a resolved account                                                     |
-| RBAC           | Roles as tenant-scoped editable data seeded from the frozen `ROLE_SEEDS`, `GRANT`/`DENY` overrides with expiry, `(roles ∪ GRANT) − DENY` resolved per request, deny by default        |
-| Owner safety   | No self-modification of roles or status, last-active-owner protection under a tenant row lock, owner-role changes gated on `admins.permissions.edit`, deferred triggers as a backstop |
-| Bootstrap      | `pnpm admin:bootstrap`, CLI-only, refuses once any admin exists, password from stdin, fenced from surfaces by a boundary check                                                        |
-| Surfaces       | `/auth/login`, `/auth/session`, `/auth/logout`, `/auth/password`, `/admins`, `/admins/:id/status`, `/admins/:id/roles`, `/roles` — plus security headers and an Origin check          |
-| Telegram seam  | `admins.telegram_user_id`, and the webhook route now names the bot instance so update identity is `(bot_instance_id, update_id)`                                                      |
-| Web admin      | Real sign-in against the real endpoint, session display, admin list drawn only when the session carries `admins.view`                                                                 |
+| Area           | State                                                                                                                                                                                                                                                            |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Schema         | 7 tables in migrations 0005–0007, with composite `(tenant_id, id)` foreign keys so the database rejects cross-tenant relationships: `admins`, `roles`, `role_permissions`, `admin_roles`, `admin_permission_overrides`, `admin_sessions`, `admin_login_throttle` |
+| Authentication | Username and password, scrypt at the OWASP minimum from Node's own crypto, self-describing hashes with rehash-on-login, one generic failure for every bad credential                                                                                             |
+| Sessions       | 32 random bytes stored only as SHA-256, httpOnly `SameSite=Strict` cookie plus bearer, permissions resolved per request so a role change lands immediately                                                                                                       |
+| Throttling     | Durable per-username and per-IP lockout driven by the `Clock` port, keyed on what was submitted rather than on a resolved account                                                                                                                                |
+| RBAC           | Roles as tenant-scoped editable data seeded from the frozen `ROLE_SEEDS`, `GRANT`/`DENY` overrides with expiry, `(roles ∪ GRANT) − DENY` resolved per request, deny by default                                                                                   |
+| Owner safety   | No self-modification of roles or status, last-active-owner protection under a tenant row lock, owner-role changes gated on `admins.permissions.edit`, deferred triggers as a backstop                                                                            |
+| Bootstrap      | `pnpm admin:bootstrap`, CLI-only, refuses once any admin exists, password from stdin, fenced from surfaces by a boundary check                                                                                                                                   |
+| Surfaces       | `/auth/login`, `/auth/session`, `/auth/logout`, `/auth/password`, `/admins`, `/admins/:id/status`, `/admins/:id/roles`, `/roles` — plus security headers and an Origin check                                                                                     |
+| Telegram seam  | `admins.telegram_user_id`, and the webhook route now names the bot instance so update identity is `(bot_instance_id, update_id)`                                                                                                                                 |
+| Web admin      | Real sign-in against the real endpoint, session display, admin list drawn only when the session carries `admins.view`                                                                                                                                            |
 
 ### Verification
 

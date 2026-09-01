@@ -2,12 +2,14 @@ import {
   bigint,
   boolean,
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
   pgTable,
   text,
   timestamp,
+  unique,
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
@@ -341,6 +343,9 @@ export const admins = pgTable(
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
+    // Redundant with the primary key on `id` alone, and deliberately so: it is
+    // the candidate key that lets a child row say "this admin, IN THIS TENANT".
+    unique('admins_tenant_id_key').on(table.tenantId, table.id),
     uniqueIndex('admins_tenant_username_key').on(table.tenantId, table.username),
     // Partial: two tenants may each have an admin with no Telegram link.
     uniqueIndex('admins_tenant_telegram_key')
@@ -385,6 +390,7 @@ export const roles = pgTable(
     createdAt: timestamptz('created_at').notNull().defaultNow(),
   },
   (table) => [
+    unique('roles_tenant_id_key').on(table.tenantId, table.id),
     uniqueIndex('roles_tenant_key_key').on(table.tenantId, table.key),
     check('roles_key_shape_check', sql`key ~ '^[a-z][a-z0-9_]{1,63}$'`),
   ],
@@ -404,14 +410,19 @@ export const rolePermissions = pgTable(
     tenantId: uuid('tenant_id')
       .notNull()
       .references(() => tenants.id),
-    roleId: uuid('role_id')
-      .notNull()
-      .references(() => roles.id),
+    roleId: uuid('role_id').notNull(),
     permissionKey: text('permission_key').notNull(),
   },
   (table) => [
     uniqueIndex('role_permissions_pkey').on(table.tenantId, table.roleId, table.permissionKey),
     index('role_permissions_role_idx').on(table.roleId),
+    // Composite: the role must belong to THIS tenant. A single-column reference
+    // would let a row name tenant A while granting tenant B's role.
+    foreignKey({
+      name: 'role_permissions_tenant_role_fk',
+      columns: [table.tenantId, table.roleId],
+      foreignColumns: [roles.tenantId, roles.id],
+    }),
   ],
 );
 
@@ -422,20 +433,37 @@ export const adminRoles = pgTable(
     tenantId: uuid('tenant_id')
       .notNull()
       .references(() => tenants.id),
-    adminId: uuid('admin_id')
-      .notNull()
-      .references(() => admins.id),
-    roleId: uuid('role_id')
-      .notNull()
-      .references(() => roles.id),
+    adminId: uuid('admin_id').notNull(),
+    roleId: uuid('role_id').notNull(),
     assignedAt: timestamptz('assigned_at').notNull().defaultNow(),
-    /** The admin who granted this. Null only for the installation bootstrap. */
+    /**
+     * The admin who granted this. NULL only for the installation bootstrap,
+     * which has no acting administrator because none exists yet — a fabricated
+     * actor there would be the invented identity this codebase refuses. The
+     * audit row, with actor SYSTEM_JOB, carries the full story.
+     */
     assignedByAdminId: uuid('assigned_by_admin_id'),
   },
   (table) => [
     uniqueIndex('admin_roles_pkey').on(table.tenantId, table.adminId, table.roleId),
     index('admin_roles_admin_idx').on(table.adminId),
     index('admin_roles_role_idx').on(table.roleId),
+    foreignKey({
+      name: 'admin_roles_tenant_admin_fk',
+      columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    foreignKey({
+      name: 'admin_roles_tenant_role_fk',
+      columns: [table.tenantId, table.roleId],
+      foreignColumns: [roles.tenantId, roles.id],
+    }),
+    // Only an administrator of this tenant can have granted a role in it.
+    foreignKey({
+      name: 'admin_roles_tenant_assigned_by_fk',
+      columns: [table.tenantId, table.assignedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
   ],
 );
 
@@ -454,9 +482,7 @@ export const adminPermissionOverrides = pgTable(
     tenantId: uuid('tenant_id')
       .notNull()
       .references(() => tenants.id),
-    adminId: uuid('admin_id')
-      .notNull()
-      .references(() => admins.id),
+    adminId: uuid('admin_id').notNull(),
     permissionKey: text('permission_key').notNull(),
     effect: text('effect').notNull(),
     reason: text('reason').notNull(),
@@ -476,6 +502,16 @@ export const adminPermissionOverrides = pgTable(
       'admin_permission_overrides_effect_check',
       enumCheck('effect', PERMISSION_OVERRIDE_EFFECTS),
     ),
+    foreignKey({
+      name: 'admin_permission_overrides_tenant_admin_fk',
+      columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    foreignKey({
+      name: 'admin_permission_overrides_tenant_created_by_fk',
+      columns: [table.tenantId, table.createdByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
   ],
 );
 
@@ -497,9 +533,7 @@ export const adminSessions = pgTable(
     tenantId: uuid('tenant_id')
       .notNull()
       .references(() => tenants.id),
-    adminId: uuid('admin_id')
-      .notNull()
-      .references(() => admins.id),
+    adminId: uuid('admin_id').notNull(),
     tokenHash: text('token_hash').notNull(),
     issuedAt: timestamptz('issued_at').notNull(),
     expiresAt: timestamptz('expires_at').notNull(),
@@ -517,6 +551,14 @@ export const adminSessions = pgTable(
     index('admin_sessions_expiry_idx')
       .on(table.expiresAt)
       .where(sql`revoked_at IS NULL`),
+    // The session lookup is the one read that is unscoped by necessity, and it
+    // RETURNS the tenant everything downstream is scoped to. A row naming the
+    // wrong tenant would hand a caller a scope that is not theirs.
+    foreignKey({
+      name: 'admin_sessions_tenant_admin_fk',
+      columns: [table.tenantId, table.adminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
   ],
 );
 

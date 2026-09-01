@@ -44,6 +44,12 @@ import { generateSessionToken, hashSessionToken } from './session-token.js';
  */
 
 export interface LoginContext {
+  /**
+   * The subject to throttle by IP, already resolved against the trusted-proxy
+   * configuration — null when the address is unusable (absent, unparseable, or
+   * our own proxy's). The surface resolves it, because deciding whether an
+   * address can be believed is a transport question.
+   */
   readonly ip: string | null;
   readonly userAgent: string | null;
 }

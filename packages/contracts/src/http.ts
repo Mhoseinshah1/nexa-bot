@@ -97,12 +97,19 @@ export type AdminSummary = z.infer<typeof adminSummarySchema>;
 /**
  * The login response.
  *
- * `token` is returned exactly once and is also set as an httpOnly cookie. A
- * browser never needs to read it; it exists in the body so a non-browser client
- * has a way in that does not depend on a cookie jar.
+ * It carries NO session credential. The token exists only in the `Set-Cookie`
+ * header, which is `HttpOnly`, so page script cannot read it.
+ *
+ * An earlier version also returned the token in this body, on the reasoning
+ * that a non-browser client would want one. That handed the same bearer
+ * credential to every script running on the admin page and undid most of what
+ * `HttpOnly` buys: one XSS, one `fetch('/auth/login')` away from a token that
+ * outlives the page. A CLI or API credential is a separate surface with its own
+ * lifetime, scope and revocation — not this cookie leaked through a JSON field.
+ *
+ * `expiresAt` stays: it is metadata about the session, not a way to use it.
  */
 export const loginResponseSchema = z.object({
-  token: z.string(),
   expiresAt: z.string(),
   admin: adminSummarySchema,
   /** Resolved server-side. The UI uses it to hide chrome — never to authorize. */

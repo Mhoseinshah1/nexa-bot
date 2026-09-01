@@ -354,11 +354,30 @@ export class AdminManagementService {
     }
 
     adminPasswordSchema.parse(command.newPassword);
+    // Hashed before the transaction opens: the KDF is intentionally slow, and
+    // holding a transaction for its duration turns one request into contention
+    // for every other writer.
     const hash = await this.hasher.hash(command.newPassword);
     const now = this.clock.now();
 
+    // The rotation and the revocation are ONE transaction.
+    //
+    // They used to be two: the password committed, then sessions were revoked
+    // afterwards. If the second step failed — a dropped connection, a restart,
+    // a deadlock — the result was the worst possible outcome of a password
+    // change: the credential the administrator believed they had replaced was
+    // gone, and every session opened with the old one was still live. A partial
+    // success that looks like a success is worse than a clean failure.
+    //
+    // ALL sessions are revoked, including the one making the request. An
+    // administrator rotating a password they think is exposed cannot know which
+    // live session is the attacker's, so keeping "theirs" alive would mean
+    // guessing. They sign in again with the new password; the surface clears
+    // the cookie.
     await this.uow.run(scope, async (tx) => {
       await this.admins.setPasswordHash(scope, adminId, hash, now, tx);
+      await this.sessions.revokeAllForAdmin(scope, adminId, now, 'password_changed', tx);
+
       await this.audit.record(
         scope,
         actor,
@@ -379,11 +398,6 @@ export class AdminManagementService {
         payload: { bySelf: true },
       });
     });
-
-    // Every other session is ended. A password change is what an administrator
-    // does when they believe a credential is exposed, and leaving the other
-    // sessions alive would make it useless for that.
-    await this.sessions.revokeAllForAdmin(scope, adminId, now, 'password_changed');
   }
 
   /**

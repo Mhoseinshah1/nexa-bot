@@ -78,6 +78,35 @@ export const configSchema = z
     LOGIN_LOCKOUT_SECONDS: z.coerce.number().int().min(30).max(86_400).default(900),
 
     /**
+     * Which upstreams may be believed about the client's IP.
+     *
+     * A comma-separated list of IPs or CIDRs — the addresses our own reverse
+     * proxy connects from. EMPTY MEANS TRUST NOTHING: `X-Forwarded-For` is
+     * ignored entirely and the client IP is the socket address.
+     *
+     * `trustProxy=true` is deliberately not offered. It believes the header
+     * from whoever connects, so a client reaching the port directly can claim
+     * any IP it likes — and the two things the client IP is used for here are
+     * brute-force throttling and audit rows. Spoofable means an attacker rotates
+     * a header instead of an address, and the audit trail names whoever they
+     * chose.
+     *
+     * Leaving this empty while actually running behind a proxy has its own
+     * failure, and it is not silent: every request then appears to come from
+     * the proxy, so per-IP throttling would lock out every administrator at
+     * once. `trustedProxy.ts` detects that case and refuses to throttle on it.
+     */
+    TRUSTED_PROXY_IPS: z
+      .string()
+      .default('')
+      .transform((value) =>
+        value
+          .split(',')
+          .map((entry) => entry.trim())
+          .filter((entry) => entry.length > 0),
+      ),
+
+    /**
      * Origins the browser admin may call from. Empty disables the check, which
      * is only legal outside production: the Origin check is the second half of
      * the CSRF defence, behind SameSite=Strict.

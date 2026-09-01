@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   ADMIN_ROUTES,
@@ -73,12 +74,25 @@ describe('admin HTTP surface', () => {
     return response;
   }
 
-  async function tokenFor(username: string, password: string): Promise<string> {
-    const response = await login(username, password);
-    return loginResponseSchema.parse(response.json()).token;
+  /**
+   * The session, as a browser gets it: out of the Set-Cookie header.
+   *
+   * The login body deliberately carries no credential, so there is nowhere else
+   * to read it from — which is the property under test.
+   */
+  function sessionCookieFrom(response: { headers: Record<string, unknown> }): string {
+    const header = String(response.headers['set-cookie'] ?? '');
+    const match = new RegExp(`${SESSION_COOKIE_NAME}=([^;]+)`).exec(header);
+    if (match === null) throw new Error('No session cookie was set.');
+    return `${SESSION_COOKIE_NAME}=${match[1] as string}`;
   }
 
-  const bearer = (token: string) => ({ authorization: `Bearer ${token}`, origin: ORIGIN });
+  async function cookieFor(username: string, password: string): Promise<string> {
+    return sessionCookieFrom(await login(username, password));
+  }
+
+  /** An authenticated request as the browser makes it: cookie plus Origin. */
+  const asAdmin = (cookie: string) => ({ cookie, origin: ORIGIN });
 
   describe('login', () => {
     it('returns a session matching the frozen schema', async () => {
@@ -90,6 +104,29 @@ describe('admin HTTP surface', () => {
       expect(body.permissions).toContain('admins.edit');
       // The response carries no password material of any kind.
       expect(JSON.stringify(body)).not.toContain('the-owners-real-password');
+      expect('token' in body).toBe(false);
+    });
+
+    it('returns no session credential in the body', async () => {
+      // The whole point of HttpOnly. If the same token also arrives as JSON,
+      // any script on the page can read it by calling login again, and the
+      // cookie flag has bought nothing.
+      const response = await login('owner', 'the-owners-real-password');
+      const raw = response.body;
+      const body = JSON.parse(raw) as Record<string, unknown>;
+
+      expect(body).not.toHaveProperty('token');
+      expect(body).not.toHaveProperty('sessionToken');
+      expect(body).not.toHaveProperty('sessionId');
+      expect(Object.keys(body).sort()).toEqual(['admin', 'expiresAt', 'permissions']);
+
+      // And the cookie's token appears nowhere in the payload, under any key.
+      const cookieToken = decodeURIComponent(
+        sessionCookieFrom(response).slice(`${SESSION_COOKIE_NAME}=`.length),
+      );
+      expect(raw).not.toContain(cookieToken);
+      // The stored form must not leak either.
+      expect(raw).not.toContain(createHash('sha256').update(cookieToken, 'utf8').digest('hex'));
     });
 
     it('sets an httpOnly, SameSite=Strict session cookie', async () => {
@@ -153,11 +190,26 @@ describe('admin HTTP surface', () => {
       }
     });
 
-    it('refuses a forged or expired-looking token', async () => {
+    it('refuses a forged session cookie', async () => {
       const response = await inject({
         method: 'GET',
         url: `${API_PREFIX}${ADMIN_ROUTES.list}`,
-        headers: bearer('x'.repeat(43)),
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${'x'.repeat(43)}` },
+      });
+      expect(response.statusCode).toBe(401);
+    });
+
+    it('does not accept a bearer token, even a real session’s', async () => {
+      // The cookie is the only transport. Bearer was removed with the token
+      // from the login body: nothing can obtain one to present, so accepting
+      // the header would be a way in that no legitimate client can use.
+      const cookie = await cookieFor('owner', 'the-owners-real-password');
+      const rawToken = cookie.slice(`${SESSION_COOKIE_NAME}=`.length);
+
+      const response = await inject({
+        method: 'GET',
+        url: `${API_PREFIX}${ADMIN_ROUTES.list}`,
+        headers: { authorization: `Bearer ${decodeURIComponent(rawToken)}` },
       });
       expect(response.statusCode).toBe(401);
     });
@@ -180,12 +232,12 @@ describe('admin HTTP surface', () => {
 
   describe('authenticated but unauthorized calls', () => {
     it('refuses with 403, not 401 — the caller is known, just not permitted', async () => {
-      const token = await tokenFor('support', 'the-support-password');
+      const cookie = await cookieFor('support', 'the-support-password');
 
       const response = await inject({
         method: 'POST',
         url: `${API_PREFIX}${ADMIN_ROUTES.create}`,
-        headers: bearer(token),
+        headers: asAdmin(cookie),
         payload: {
           username: 'newcomer',
           displayName: 'Newcomer',
@@ -200,21 +252,21 @@ describe('admin HTTP surface', () => {
     });
 
     it('refuses reading the admin list without admins.view', async () => {
-      const token = await tokenFor('support', 'the-support-password');
+      const cookie = await cookieFor('support', 'the-support-password');
       const response = await inject({
         method: 'GET',
         url: `${API_PREFIX}${ADMIN_ROUTES.list}`,
-        headers: bearer(token),
+        headers: asAdmin(cookie),
       });
       expect(response.statusCode).toBe(403);
     });
 
     it('permits the same call for an owner', async () => {
-      const token = await tokenFor('owner', 'the-owners-real-password');
+      const cookie = await cookieFor('owner', 'the-owners-real-password');
       const response = await inject({
         method: 'GET',
         url: `${API_PREFIX}${ADMIN_ROUTES.list}`,
-        headers: bearer(token),
+        headers: asAdmin(cookie),
       });
 
       expect(response.statusCode).toBe(200);
@@ -227,11 +279,11 @@ describe('admin HTTP surface', () => {
 
   describe('session lifecycle', () => {
     it('describes the signed-in administrator', async () => {
-      const token = await tokenFor('support', 'the-support-password');
+      const cookie = await cookieFor('support', 'the-support-password');
       const response = await inject({
         method: 'GET',
         url: `${API_PREFIX}${AUTH_ROUTES.session}`,
-        headers: bearer(token),
+        headers: asAdmin(cookie),
       });
 
       expect(response.statusCode).toBe(200);
@@ -241,12 +293,12 @@ describe('admin HTTP surface', () => {
     });
 
     it('stops accepting the token after logout, and clears the cookie', async () => {
-      const token = await tokenFor('owner', 'the-owners-real-password');
+      const cookie = await cookieFor('owner', 'the-owners-real-password');
 
       const logout = await inject({
         method: 'POST',
         url: `${API_PREFIX}${AUTH_ROUTES.logout}`,
-        headers: bearer(token),
+        headers: asAdmin(cookie),
       });
       expect(logout.statusCode).toBe(201);
       expect(String(logout.headers['set-cookie'])).toContain('Max-Age=0');
@@ -254,19 +306,46 @@ describe('admin HTTP surface', () => {
       const after = await inject({
         method: 'GET',
         url: `${API_PREFIX}${AUTH_ROUTES.session}`,
-        headers: bearer(token),
+        headers: asAdmin(cookie),
       });
       expect(after.statusCode).toBe(401);
     });
 
-    it('authenticates by cookie as well as by bearer token', async () => {
-      const response = await login('owner', 'the-owners-real-password');
-      const token = loginResponseSchema.parse(response.json()).token;
+    it('clears the cookie after a password change, and the session is dead', async () => {
+      const cookie = await cookieFor('support', 'the-support-password');
 
+      const changed = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${AUTH_ROUTES.password}`,
+        headers: asAdmin(cookie),
+        payload: {
+          currentPassword: 'the-support-password',
+          newPassword: 'an-entirely-different-password',
+        },
+      });
+      expect(changed.statusCode).toBe(201);
+      // Not the revocation — that committed with the password. This stops the
+      // browser presenting a credential the server will now refuse.
+      expect(String(changed.headers['set-cookie'])).toContain('Max-Age=0');
+
+      const after = await inject({
+        method: 'GET',
+        url: `${API_PREFIX}${AUTH_ROUTES.session}`,
+        headers: { cookie },
+      });
+      expect(after.statusCode).toBe(401);
+
+      // And the new password works.
+      const again = await login('support', 'an-entirely-different-password');
+      expect(again.statusCode).toBe(201);
+    });
+
+    it('authenticates from the cookie alone', async () => {
+      const cookie = await cookieFor('owner', 'the-owners-real-password');
       const withCookie = await inject({
         method: 'GET',
         url: `${API_PREFIX}${AUTH_ROUTES.session}`,
-        headers: { cookie: `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}` },
+        headers: { cookie },
       });
       expect(withCookie.statusCode).toBe(200);
     });
@@ -276,16 +355,12 @@ describe('admin HTTP surface', () => {
     it('refuses a cookie-authenticated write from an unlisted origin', async () => {
       // SameSite is enforced by the browser; the Origin check does not depend
       // on the browser behaving.
-      const response = await login('owner', 'the-owners-real-password');
-      const token = loginResponseSchema.parse(response.json()).token;
+      const cookie = await cookieFor('owner', 'the-owners-real-password');
 
       const forged = await inject({
         method: 'POST',
         url: `${API_PREFIX}${ADMIN_ROUTES.create}`,
-        headers: {
-          cookie: `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
-          origin: 'https://evil.example.test',
-        },
+        headers: { cookie, origin: 'https://evil.example.test' },
         payload: {
           username: 'newcomer',
           displayName: 'Newcomer',
@@ -298,14 +373,29 @@ describe('admin HTTP surface', () => {
       expect(await api.container.admins.findCredentialsByUsername(tenantA, 'newcomer')).toBeNull();
     });
 
-    it('permits a bearer-authenticated write from any origin', async () => {
-      // A cross-origin page cannot set an Authorization header, so there is
-      // nothing for the Origin check to defend here.
-      const token = await tokenFor('owner', 'the-owners-real-password');
+    it('refuses a write with no Origin at all', async () => {
+      // Fails closed. An absent Origin is not evidence of a same-origin caller.
+      const cookie = await cookieFor('owner', 'the-owners-real-password');
       const response = await inject({
         method: 'POST',
         url: `${API_PREFIX}${ADMIN_ROUTES.create}`,
-        headers: { authorization: `Bearer ${token}`, origin: 'https://elsewhere.example.test' },
+        headers: { cookie },
+        payload: {
+          username: 'newcomer',
+          displayName: 'Newcomer',
+          password: 'a-perfectly-fine-password',
+          roleKeys: ['support'],
+        },
+      });
+      expect(response.statusCode).toBe(403);
+    });
+
+    it('permits the same write from the configured origin', async () => {
+      const cookie = await cookieFor('owner', 'the-owners-real-password');
+      const response = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${ADMIN_ROUTES.create}`,
+        headers: asAdmin(cookie),
         payload: {
           username: 'newcomer',
           displayName: 'Newcomer',
@@ -319,11 +409,11 @@ describe('admin HTTP surface', () => {
 
   describe('security headers', () => {
     it('sets them on an admin response', async () => {
-      const token = await tokenFor('owner', 'the-owners-real-password');
+      const cookie = await cookieFor('owner', 'the-owners-real-password');
       const response = await inject({
         method: 'GET',
         url: `${API_PREFIX}${ADMIN_ROUTES.rolesCatalog}`,
-        headers: bearer(token),
+        headers: asAdmin(cookie),
       });
 
       expect(response.headers['x-content-type-options']).toBe('nosniff');
@@ -342,11 +432,11 @@ describe('admin HTTP surface', () => {
     });
 
     it('returns the role catalog in the frozen shape', async () => {
-      const token = await tokenFor('owner', 'the-owners-real-password');
+      const cookie = await cookieFor('owner', 'the-owners-real-password');
       const response = await inject({
         method: 'GET',
         url: `${API_PREFIX}${ADMIN_ROUTES.rolesCatalog}`,
-        headers: bearer(token),
+        headers: asAdmin(cookie),
       });
       const body = roleListResponseSchema.parse(response.json());
       expect(body.roles.some((role) => role.key === 'owner' && role.isSystem)).toBe(true);

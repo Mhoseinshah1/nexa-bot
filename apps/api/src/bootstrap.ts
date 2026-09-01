@@ -4,6 +4,7 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 import { AppModule } from './app.module.js';
 import { createContainer, type Container } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
+import { trustProxyOption } from './infrastructure/trusted-proxy.js';
 import type { AppConfig } from './infrastructure/config/config.schema.js';
 
 /**
@@ -37,7 +38,13 @@ export async function createApiApp(config: AppConfig = loadConfig()): Promise<Ap
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule.forContainer(container),
-    new FastifyAdapter({ bodyLimit: 1_048_576 }),
+    new FastifyAdapter({
+      bodyLimit: 1_048_576,
+      // A LIST of upstreams, or false. Never `true` — that believes
+      // X-Forwarded-For from whoever connected, so a client reaching the port
+      // directly could choose its own IP for throttling and audit purposes.
+      trustProxy: trustProxyOption(config.TRUSTED_PROXY_IPS),
+    }),
     { logger: false },
   );
 

@@ -590,7 +590,7 @@ describe('privilege amplification', () => {
 });
 
 describe('password change', () => {
-  it('rotates the password and ends every other session', async () => {
+  it('rotates the password and ends EVERY session, including the caller’s', async () => {
     const from = { ip: '203.0.113.20', userAgent: 'vitest' };
     const anonymous = {
       type: 'API' as const,
@@ -613,8 +613,8 @@ describe('password change', () => {
     });
 
     // A password change is what an administrator does when they think a
-    // credential is exposed. Leaving the other sessions alive makes it useless
-    // for that.
+    // credential is exposed. They cannot know which live session is the
+    // attacker's, so keeping "theirs" alive would mean guessing.
     await expect(ctx.container.auth.authenticate(first.token)).rejects.toThrow();
 
     await expect(
@@ -643,6 +643,71 @@ describe('password change', () => {
         newPassword: 'a-perfectly-fine-password',
       }),
     ).rejects.toThrow(/differ/i);
+  });
+
+  it('commits the rotation and the revocation together, or neither', async () => {
+    // They used to be two transactions: the password committed, then sessions
+    // were revoked. A failure in between left the worst possible state — the
+    // old credential replaced, and every session opened with it still live.
+    // Forcing the outbox write to throw aborts the whole unit of work.
+    const from = { ip: '203.0.113.30', userAgent: 'vitest' };
+    const anonymous = {
+      type: 'API' as const,
+      id: null,
+      label: null,
+      surface: 'WEB' as const,
+      correlationId: 'corr' as CorrelationId,
+    };
+
+    const session = await ctx.container.auth.login(
+      tenantA,
+      anonymous,
+      { username: 'support', password: 'a-perfectly-fine-password' },
+      from,
+    );
+
+    const outbox = ctx.container.outbox as { write: unknown };
+    const realWrite = outbox.write;
+    outbox.write = async () => {
+      throw new Error('injected failure after the password was written');
+    };
+
+    try {
+      await expect(
+        ctx.container.adminManagement.changeOwnPassword(tenantA, adminActorFor(support), {
+          currentPassword: 'a-perfectly-fine-password',
+          newPassword: 'an-entirely-different-password',
+        }),
+      ).rejects.toThrow(/injected failure/);
+    } finally {
+      outbox.write = realWrite;
+    }
+
+    // Nothing moved. The old password still works, the old session is still
+    // valid, and no audit row claims a change that did not happen.
+    await expect(ctx.container.auth.authenticate(session.token)).resolves.toBeTruthy();
+    await expect(
+      ctx.container.auth.login(
+        tenantA,
+        anonymous,
+        { username: 'support', password: 'a-perfectly-fine-password' },
+        from,
+      ),
+    ).resolves.toBeDefined();
+    await expect(
+      ctx.container.auth.login(
+        tenantA,
+        anonymous,
+        { username: 'support', password: 'an-entirely-different-password' },
+        from,
+      ),
+    ).rejects.toThrow();
+
+    const audits = await ctx.container.database.db
+      .select()
+      .from(auditLogs)
+      .where(eq(auditLogs.action, 'admin.password_change'));
+    expect(audits.filter((row) => row.result === 'SUCCESS')).toHaveLength(0);
   });
 
   it('audits the change without recording either password', async () => {

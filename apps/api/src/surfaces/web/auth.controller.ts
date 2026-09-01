@@ -13,13 +13,13 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
+import { ipThrottleSubject } from '../../infrastructure/trusted-proxy.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import {
   adminActor,
   anonymousActor,
   assertOriginAllowed,
   requireSessionToken,
-  usedCookieAuth,
 } from './authenticated-request.js';
 
 /**
@@ -46,15 +46,20 @@ export class AuthController {
     const scope = this.installationScope();
 
     const result = await this.container.auth.login(scope, actor, body, {
-      ip: request.ip ?? null,
+      // Null when the address cannot be believed as a client's — absent,
+      // unparseable, or our own proxy's, which is what an installation running
+      // behind Caddy with no TRUSTED_PROXY_IPS looks like. Throttling on that
+      // would lock out every administrator on one attacker's failures.
+      ip: ipThrottleSubject(request.ip, this.container.config.TRUSTED_PROXY_IPS),
       userAgent:
         typeof request.headers['user-agent'] === 'string' ? request.headers['user-agent'] : null,
     });
 
+    // The token leaves this method in exactly one place: the Set-Cookie header.
+    // It is deliberately absent from the body — see loginResponseSchema.
     this.setSessionCookie(reply, result.token, result.session.expiresAt);
 
     return {
-      token: result.token,
       expiresAt: result.session.expiresAt.toISOString(),
       admin: toSummary(result.admin, result.roleKeys),
       permissions: [...result.permissions],
@@ -79,7 +84,7 @@ export class AuthController {
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<LogoutResponse> {
     const token = requireSessionToken(request);
-    assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS, usedCookieAuth(request));
+    assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
 
     const { admin, session } = await this.container.auth.authenticate(token);
     const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
@@ -93,10 +98,11 @@ export class AuthController {
   @Post('password')
   async changePassword(
     @Req() request: FastifyRequest,
+    @Res({ passthrough: true }) reply: FastifyReply,
     @Body() body: unknown,
   ): Promise<{ ok: true }> {
     const token = requireSessionToken(request);
-    assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS, usedCookieAuth(request));
+    assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
 
     const { admin } = await this.container.auth.authenticate(token);
     const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
@@ -107,6 +113,13 @@ export class AuthController {
       adminActor(admin, correlationId, request),
       body,
     );
+
+    // A successful rotation revokes every session for this administrator,
+    // including this one. Clearing the cookie is not the revocation — that
+    // already committed with the password — it stops the browser presenting a
+    // credential the server will now refuse, so the user sees a login form
+    // instead of an unexplained 401 on their next click.
+    this.clearSessionCookie(reply);
     return { ok: true };
   }
 
