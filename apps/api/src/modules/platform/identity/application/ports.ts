@@ -134,6 +134,11 @@ export interface AdminRepository {
    * different owner both count two and both commit. The database trigger is a
    * backstop for a forgotten call, not a substitute for this lock.
    */
+  /**
+   * Holds the tenant's status still for a reader, and returns it. `FOR SHARE`,
+   * so concurrent readers do not queue behind one another.
+   */
+  lockTenantForRead(scope: ScopeContext, tx: unknown): Promise<TenantStatus>;
   lockTenantForAdminChange(scope: ScopeContext, tx: unknown): Promise<TenantStatus>;
   /** Active admins holding the owner role. The number the guards defend. */
   countActiveOwners(scope: ScopeContext, tx?: unknown): Promise<number>;

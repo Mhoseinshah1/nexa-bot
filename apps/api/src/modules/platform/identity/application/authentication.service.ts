@@ -282,6 +282,22 @@ export class AuthenticationService {
     // rotation and then revoked by it, or the credential is already gone and no
     // session is created at all.
     const issued = await this.uow.run(scope, async (tx) => {
+      // The tenant, before the credential. Checked earlier too, but that was
+      // outside any transaction and the hash below is deliberately slow — a
+      // stop can commit in between, return to the operator, and this would
+      // still mint a session.
+      //
+      // I argued the other way one commit ago: that such a session is inert
+      // because `authenticate` refuses it. That was wrong, and wrong against my
+      // own decision — sessions are REFUSED, not revoked, precisely so they
+      // survive a restart, which means one minted after the stop works the
+      // moment the tenant comes back. Two decisions that contradicted each
+      // other, and the ADR paragraph defending the boundary did not notice.
+      //
+      // `FOR SHARE`, so concurrent sign-ins do not queue behind one another;
+      // only a status change waits.
+      if ((await this.admins.lockTenantForRead(scope, tx)) !== 'ACTIVE') return false;
+
       const stillCurrent = await this.admins.lockIfPasswordHashMatches(
         scope,
         credentials.admin.id,
@@ -317,9 +333,19 @@ export class AuthenticationService {
     });
 
     if (!issued) {
-      // The password changed under us. Reported as an ordinary credential
-      // failure, because from the caller's side that is exactly what it is:
-      // the password they presented is no longer the account's password.
+      // Either the password changed under us, or the tenant stopped while we
+      // hashed. Both are reported as an ordinary credential failure, because
+      // from the caller's side the first is exactly that and the second must
+      // not be distinguishable from it.
+      //
+      // The reservations go back if the tenant is what refused this: the
+      // credential was correct, and a maintenance window must not lock its
+      // operator out. Re-read rather than remembered, because between the two
+      // checks is the whole point.
+      if (!(await this.tenantIsActive(scope))) {
+        await this.releaseReservations(scope, username, context.ip, reserved);
+        return this.failLogin(scope, actor, username, reserved, 'TENANT_INACTIVE');
+      }
       return this.failLogin(scope, actor, username, reserved, 'BAD_PASSWORD');
     }
 

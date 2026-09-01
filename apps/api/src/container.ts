@@ -179,7 +179,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     maxLagMs: config.OUTBOX_RELAY_MAX_LAG_MS,
   });
 
-  const recordPing = new RecordPingService(guard, uow, outbox, audit, idempotency, clock);
+  const recordPing = new RecordPingService(guard, uow, outbox, audit, idempotency, clock, tenants);
 
   return {
     config,

@@ -367,23 +367,30 @@ and `TENANT_INACTIVE` was declared in the contracts as a login failure reason
 that no code could emit. A status nothing enforces is a label, not a kill
 switch.
 
-Every **administrator mutation** — create, status, roles, password rotation —
-re-reads the tenant's status under the lock it already takes, from the same
-statement that takes it. Authentication establishes a status when the request
+Every write re-reads the tenant's status **under a lock it holds for the rest of
+the write**, from the same statement that takes it. Administrator mutations take
+`FOR UPDATE`, which they need anyway; login and the outbox relay take `FOR SHARE`,
+because they are readers of that status and share locks are compatible with each
+other, so concurrent sign-ins and relay workers do not queue behind one another.
+Only a status change waits. Authentication establishes a status when the request
 arrives, which is a snapshot; a stop committing in between would otherwise be
 observed by the lock and ignored by the work the lock protects. The relay does
 the same at dispatch rather than only at claim, taking `FOR SHARE` on the owning
 tenant — the claim's `FOR UPDATE` locks the message, not its tenant, so a stop
 could otherwise commit between deciding to deliver and delivering.
 
-**Login is deliberately not on that list**, and the boundary is worth stating
-rather than leaving to be discovered. It checks tenant status outside any lock
-and then writes its session under a lock on the ADMIN row, so a stop committing
-in between still issues one. That session is inert: `authenticate` re-reads
-tenant status on every subsequent request and refuses it, so the row grants
-nothing and expires unused. Taking the tenant lock on the login path instead
-would serialise every sign-in against every administrator mutation — a real cost
-on the hottest path, to prevent writing a row that can never be used.
+**Login was briefly exempted from this, and the exemption was wrong.** The
+argument was that a session minted after a stop is inert, because `authenticate`
+refuses it while the tenant is stopped. That contradicted a decision recorded a
+few paragraphs above: sessions are _refused, not revoked_, precisely so they
+survive a restart — so a session minted after the stop is not inert, it is
+dormant, and it works the moment the tenant comes back. Two decisions in one
+document disagreeing with each other, with a paragraph defending the boundary
+between them.
+
+A login that finds the tenant stopped under the lock therefore fails, and gives
+its throttle reservations back: the credential was correct, and a maintenance
+window must not lock out the operator who tried during it.
 
 It closes the Telegram surface and the outbox too. A bot's own status was the
 whole check on the webhook, and the relay claimed any unpublished row — so a

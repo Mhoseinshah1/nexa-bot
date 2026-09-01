@@ -18,8 +18,9 @@ import {
   adminLoginThrottle,
   adminPermissionOverrides,
   adminSessions,
-  outboxMessages,
   auditLogs,
+  botInstances,
+  outboxMessages,
   roles,
   rolePermissions,
   tenants,
@@ -2191,38 +2192,135 @@ describe('the outbox re-checks the tenant at dispatch, not only at claim', () =>
   }, 30_000);
 });
 
-describe('a session issued for a tenant stopped mid-login is inert', () => {
-  it('cannot be used, even though login may still create it', async () => {
-    // Login checks tenant status outside any lock and writes its session under
-    // a lock on the ADMIN row, so a stop committing in between still issues
-    // one. That is a deliberate boundary rather than an oversight: taking the
-    // tenant lock on the login path would serialise every sign-in against every
-    // administrator mutation, to prevent writing a row that can never be used.
+describe('a login refuses a tenant stopped while it was hashing', () => {
+  it('mints no session, and gives the reservations back', async () => {
+    // I argued the opposite one commit ago: that a session minted after a stop
+    // is inert because `authenticate` refuses it. That was wrong against my own
+    // decision — sessions are REFUSED, not revoked, precisely so they survive a
+    // restart, which means one minted after the stop works the moment the
+    // tenant comes back.
     //
-    // This pins the "can never be used" half, which is what makes the trade
-    // sound. If it ever stops holding, the boundary has to move.
-    const issued = await ctx.container.auth.login(
+    // The window is narrow and specific: AFTER the tenant check that follows
+    // verification, and BEFORE the session transaction. The rehash is what
+    // occupies it, so this account is stored below the current cost profile to
+    // make that rehash run. An earlier version of this test stalled inside
+    // `verify` instead and passed against the broken code, because the existing
+    // tenant check comes after that and caught it — it proved nothing.
+    const subject = await createAdmin(ctx.container, tenantA, {
+      username: 'hashing-when-stopped',
+      password: 'the-correct-password',
+      roleKeys: ['support'],
+    });
+    await ctx.container.admins.setPasswordHash(
       tenantA,
-      anonymous,
-      { username: 'owner', password: owner.password },
-      from,
+      subject.id as AdminId,
+      await new ScryptPasswordHasher(LEGACY_SCRYPT).hash('the-correct-password'),
+      ctx.container.clock.now(),
     );
 
+    const hasher = ctx.container.hasher as unknown as Record<string, unknown>;
+    const realHash = ctx.container.hasher.hash.bind(ctx.container.hasher);
+    let release: () => void = () => undefined;
+    const rehashing = new Promise<void>((resolve) => {
+      hasher['hash'] = async (plaintext: string) => {
+        hasher['hash'] = realHash;
+        resolve();
+        await new Promise<void>((r) => {
+          release = r;
+        });
+        return realHash(plaintext);
+      };
+    });
+
+    const login = ctx.container.auth
+      .login(
+        tenantA,
+        anonymous,
+        { username: 'hashing-when-stopped', password: 'the-correct-password' },
+        { ip: '198.51.100.210', userAgent: 'vitest' },
+      )
+      .catch((error: unknown) => error);
+
+    await rehashing;
     await ctx.container.database.db
       .update(tenants)
       .set({ status: 'STOPPED' })
       .where(eq(tenants.id, tenantA.tenantId));
+    release();
 
-    await expect(ctx.container.auth.authenticate(issued.token)).rejects.toMatchObject({
-      kind: 'UNAUTHENTICATED',
-    });
+    const caught = await login;
+    expect((caught as { code?: string }).code).toBe('auth.invalid_credentials');
 
-    // And it is not revoked on the way out — a tenant can be started again, and
-    // the sessions its operators held are not what was suspended.
-    const [row] = await ctx.container.database.db
+    // No session exists for them at all.
+    const sessions = await ctx.container.database.db
       .select()
       .from(adminSessions)
-      .where(eq(adminSessions.id, issued.session.id));
-    expect(row?.revokedAt).toBeNull();
-  });
+      .where(eq(adminSessions.adminId, subject.id));
+    expect(sessions).toHaveLength(0);
+
+    // And the maintenance window did not cost them their attempt budget.
+    const [row] = await ctx.container.database.db
+      .select()
+      .from(adminLoginThrottle)
+      .where(eq(adminLoginThrottle.subject, '198.51.100.210'));
+    expect(row?.failedCount ?? 0).toBe(0);
+  }, 30_000);
+});
+
+describe('the webhook write is refused if the bot stops while it runs', () => {
+  it('writes no audit, idempotency or outbox row for a stopped bot', async () => {
+    // The surface checks the bot and the tenant when the update arrives, which
+    // is a snapshot. A stop committing before the write lands would otherwise
+    // still create rows for an installation somebody had already switched off —
+    // and the relay filters on tenant status only, so a bot-only stop would let
+    // the event go straight out.
+    const scope = {
+      tenantId: SEED_IDS.tenantA as never,
+      botInstanceId: SEED_IDS.botA1 as never,
+    };
+    const actor = {
+      type: 'SYSTEM_JOB' as const,
+      id: null,
+      label: 'telegram-update:test',
+      surface: 'TELEGRAM' as const,
+      correlationId: 'webhook-scope' as CorrelationId,
+    };
+
+    await ctx.container.database.db
+      .update(botInstances)
+      .set({ status: 'STOPPED' })
+      .where(eq(botInstances.id, SEED_IDS.botA1));
+
+    await expect(
+      ctx.container.recordPing.execute(scope, actor, {
+        source: 'telegram',
+        idempotencyKey: 'stopped-bot-write',
+      }),
+    ).rejects.toThrow();
+
+    const keys = await ctx.container.database.db.execute(
+      `SELECT key FROM request_idempotency WHERE key = 'stopped-bot-write'` as never,
+    );
+    expect(JSON.stringify(keys)).not.toContain('stopped-bot-write');
+  }, 30_000);
+
+  it('still writes while both the bot and the tenant are active', async () => {
+    const scope = {
+      tenantId: SEED_IDS.tenantA as never,
+      botInstanceId: SEED_IDS.botA1 as never,
+    };
+    const actor = {
+      type: 'SYSTEM_JOB' as const,
+      id: null,
+      label: 'telegram-update:test',
+      surface: 'TELEGRAM' as const,
+      correlationId: 'webhook-scope-ok' as CorrelationId,
+    };
+    await expect(
+      ctx.container.recordPing.execute(scope, actor, {
+        source: 'telegram',
+        idempotencyKey: 'active-bot-write',
+      }),
+    ).resolves.toBeDefined();
+  }, 30_000);
 });

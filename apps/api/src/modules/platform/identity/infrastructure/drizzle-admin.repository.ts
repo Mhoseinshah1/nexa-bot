@@ -241,6 +241,24 @@ export class DrizzleAdminRepository implements AdminRepository {
       .where(and(eq(admins.tenantId, tenantId), eq(admins.id, id)));
   }
 
+  /**
+   * Holds the tenant's status still for a READER, and returns it.
+   *
+   * `FOR SHARE`, not `FOR UPDATE`: a login is a reader of this status, and
+   * share locks are compatible with each other, so concurrent sign-ins do not
+   * queue behind one another. A status change still waits, which is the point —
+   * it is the writer.
+   */
+  async lockTenantForRead(scope: ScopeContext, tx: unknown): Promise<TenantStatus> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await executorOf(this.db, tx)
+      .select({ status: tenants.status })
+      .from(tenants)
+      .where(eq(tenants.id, tenantId))
+      .for('share');
+    return (row?.status ?? 'DISABLED') as TenantStatus;
+  }
+
   async lockTenantForAdminChange(scope: ScopeContext, tx: unknown): Promise<TenantStatus> {
     const tenantId = requireTenantId(scope);
     // Serialises owner-affecting changes within a tenant. Counting owners is

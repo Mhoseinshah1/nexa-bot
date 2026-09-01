@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  errors,
+  PLATFORM_ERROR_CODES,
   type ActorContext,
   type AuditWriter,
   type Clock,
@@ -49,6 +51,17 @@ export interface RecordPingResult {
 /** The permission this operation requires. Deny by default applies. */
 export const RECORD_PING_PERMISSION: PermissionKey = 'maintenance.run';
 
+/**
+ * Whether this scope is still open for business, held still for a transaction.
+ *
+ * Narrow on purpose: this service has one question to ask, and stating it as
+ * one method keeps a generic write path from depending on the whole tenancy
+ * repository.
+ */
+export interface ScopeActivityReader {
+  scopeIsActive(scope: ScopeContext, tx?: unknown): Promise<boolean>;
+}
+
 export class RecordPingService {
   constructor(
     private readonly guard: PermissionGuard,
@@ -57,6 +70,7 @@ export class RecordPingService {
     private readonly audit: AuditWriter,
     private readonly idempotency: IdempotencyStore,
     private readonly clock: Clock,
+    private readonly scopeActivity: ScopeActivityReader,
   ) {}
 
   async execute(
@@ -100,6 +114,19 @@ export class RecordPingService {
 
     // 6. TRANSACT — the change, its audit row and its outbox row commit together.
     const result = await this.uow.run(scope, async (tx) => {
+      // The scope this work belongs to, held still for the rest of the write.
+      //
+      // A surface checks the tenant and the bot when the update arrives, which
+      // is a snapshot: a stop can commit in between, return to the operator,
+      // and this would still create its audit, idempotency and outbox rows for
+      // an installation somebody had already switched off.
+      if (!(await this.scopeActivity.scopeIsActive(scope, tx))) {
+        throw errors.notFound(
+          PLATFORM_ERROR_CODES.TENANT_NOT_FOUND,
+          'This scope is not accepting work.',
+        );
+      }
+
       const written = await this.outbox.write(tx, actor, {
         eventType: 'SystemPinged',
         aggregateType: 'System',
