@@ -1,4 +1,4 @@
-import { readSecretFrom, type SecretInput, type SecretOutput } from './read-secret.js';
+import { readAnswer, type SecretInput, type SecretOutput } from './read-secret.js';
 
 /**
  * Console prompts for the bootstrap CLI.
@@ -51,13 +51,13 @@ export class Prompter {
 
   /** A visible answer. Echoed on a terminal, as a person expects. */
   async line(prompt: string): Promise<string> {
-    if (this.isTty) return readSecretFrom(this.input, this.output, prompt, { echo: true });
+    if (this.isTty) return readAnswer(this.input, this.output, prompt, { echo: true });
     return this.bufferedLine(prompt);
   }
 
   /** An answer that is never echoed and never written anywhere. */
   async secret(prompt: string): Promise<string> {
-    if (this.isTty) return readSecretFrom(this.input, this.output, prompt, { echo: false });
+    if (this.isTty) return readAnswer(this.input, this.output, prompt, { echo: false });
     return this.bufferedLine(prompt);
   }
 

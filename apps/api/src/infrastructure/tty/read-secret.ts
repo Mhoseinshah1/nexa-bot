@@ -11,6 +11,12 @@
  * `_writeToOutput`, for one reason: that hook is an undocumented internal, and
  * if a future Node stops calling it the failure is silent — the password simply
  * starts appearing again, and nothing fails. This version can be tested, and is.
+ *
+ * The VISIBLE prompts read through the same loop, with `echo` as the only
+ * difference between asking for a username and asking for a password — which is
+ * how it should read, and which means there is no second reader that could
+ * buffer ahead of this one. That is what broke the CLI on a pipe; see
+ * `Prompter`.
  */
 export interface SecretInput extends AsyncIterable<string | Uint8Array> {
   readonly isTTY?: boolean | undefined;
@@ -37,38 +43,18 @@ const DELETE = 0x7f;
  * On a non-TTY input (a pipe, a heredoc, CI) there is no echo to suppress and
  * no raw mode to set, so the line is simply read.
  */
-export function readSecret(
-  input: SecretInput,
-  output: SecretOutput,
-  prompt: string,
-): Promise<string> {
-  output.write(prompt);
-
-  if (input.isTTY !== true || typeof input.setRawMode !== 'function') {
-    return readPlainLine(input, output);
-  }
-
-  return readRaw(input, output, false);
-}
-
-/**
- * The same terminal reader, with the echo decision made explicitly.
- *
- * The visible prompts share this loop rather than using `readline`, because
- * mixing the two on one stream is what silently swallowed the password line on
- * a pipe. See `Prompter`. `echo` is the ONLY difference between asking for a
- * username and asking for a password, which is how it should read.
- */
-export function readSecretFrom(
+export function readAnswer(
   input: SecretInput,
   output: SecretOutput,
   prompt: string,
   options: { echo: boolean },
 ): Promise<string> {
   output.write(prompt);
+
   if (input.isTTY !== true || typeof input.setRawMode !== 'function') {
     return readPlainLine(input, output);
   }
+
   return readRaw(input, output, options.echo);
 }
 

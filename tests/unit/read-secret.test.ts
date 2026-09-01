@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it } from 'vitest';
-import { readSecret } from '../../apps/api/src/infrastructure/tty/read-secret';
+import { readAnswer } from '../../apps/api/src/infrastructure/tty/read-secret';
 
 /**
  * The bootstrap CLI reads the first owner's password. `readline.question()`
@@ -34,12 +34,12 @@ function capture(): { out: string[]; write(chunk: string): void } {
 
 const ENTER = 0x0d;
 
-describe('readSecret', () => {
+describe('readAnswer', () => {
   it('never writes the typed characters anywhere', async () => {
     const tty = new FakeTty();
     const output = capture();
 
-    const answer = readSecret(tty as never, output, 'Password: ');
+    const answer = readAnswer(tty as never, output, 'Password: ', { echo: false });
     tty.type('hunter2');
     tty.press(ENTER);
 
@@ -52,7 +52,7 @@ describe('readSecret', () => {
 
   it('leaves the terminal out of raw mode afterwards', async () => {
     const tty = new FakeTty();
-    const answer = readSecret(tty as never, capture(), 'Password: ');
+    const answer = readAnswer(tty as never, capture(), 'Password: ', { echo: false });
     expect(tty.raw).toBe(true);
     tty.type('x');
     tty.press(ENTER);
@@ -63,7 +63,7 @@ describe('readSecret', () => {
   it('applies backspace without echoing', async () => {
     const tty = new FakeTty();
     const output = capture();
-    const answer = readSecret(tty as never, output, 'Password: ');
+    const answer = readAnswer(tty as never, output, 'Password: ', { echo: false });
     tty.type('abcX');
     tty.press(0x7f);
     tty.press(ENTER);
@@ -73,7 +73,7 @@ describe('readSecret', () => {
 
   it('reassembles multi-byte characters', async () => {
     const tty = new FakeTty();
-    const answer = readSecret(tty as never, capture(), 'Password: ');
+    const answer = readAnswer(tty as never, capture(), 'Password: ', { echo: false });
     tty.type('a-persian-password-رمز');
     tty.press(ENTER);
     expect(await answer).toBe('a-persian-password-رمز');
@@ -85,7 +85,7 @@ describe('readSecret', () => {
     // third of it and left a half-character in the password nobody could see
     // or retype. The comment above it claimed it trimmed a code point.
     const tty = new FakeTty();
-    const answer = readSecret(tty as never, capture(), 'Password: ');
+    const answer = readAnswer(tty as never, capture(), 'Password: ', { echo: false });
     tty.type('ok-');
     tty.type('م'); // two bytes in UTF-8
     tty.press(0x7f);
@@ -96,7 +96,7 @@ describe('readSecret', () => {
 
   it('backspaces a multi-byte character delivered in one chunk with others', async () => {
     const tty = new FakeTty();
-    const answer = readSecret(tty as never, capture(), 'Password: ');
+    const answer = readAnswer(tty as never, capture(), 'Password: ', { echo: false });
     tty.type('رمز');
     tty.press(0x7f);
     tty.press(ENTER);
@@ -107,7 +107,7 @@ describe('readSecret', () => {
     // Raw mode delivers ESC [ D verbatim. Stored, it becomes three bytes of a
     // password the operator cannot see and could never retype.
     const tty = new FakeTty();
-    const answer = readSecret(tty as never, capture(), 'Password: ');
+    const answer = readAnswer(tty as never, capture(), 'Password: ', { echo: false });
     tty.type('pass');
     tty.press(0x1b);
     tty.type('[D'); // left arrow
@@ -121,7 +121,7 @@ describe('readSecret', () => {
   it('ignores a stray control byte rather than storing it', async () => {
     // Ctrl+D mid-password would otherwise be a literal 0x04 in the credential.
     const tty = new FakeTty();
-    const answer = readSecret(tty as never, capture(), 'Password: ');
+    const answer = readAnswer(tty as never, capture(), 'Password: ', { echo: false });
     tty.type('ab');
     tty.press(0x04);
     tty.press(0x0b);
@@ -132,11 +132,38 @@ describe('readSecret', () => {
 
   it('rejects on Ctrl+C rather than returning a partial password', async () => {
     const tty = new FakeTty();
-    const answer = readSecret(tty as never, capture(), 'Password: ');
+    const answer = readAnswer(tty as never, capture(), 'Password: ', { echo: false });
     tty.type('secr');
     tty.press(0x03);
     await expect(answer).rejects.toThrow('Cancelled.');
     expect(tty.raw).toBe(false);
+  });
+
+  it('echoes a visible answer, and rubs out a backspaced character', async () => {
+    // The visible prompts share this loop, so `echo` is the only difference
+    // between asking for a username and asking for a password. Untested, that
+    // is one boolean away from a password on the screen.
+    const tty = new FakeTty();
+    const output = capture();
+    const answer = readAnswer(tty as never, output, 'Owner username: ', { echo: true });
+    tty.type('alix');
+    tty.press(0x7f);
+    tty.type('ce');
+    tty.press(ENTER);
+    expect(await answer).toBe('alice');
+    expect(output.out.join('')).toBe('Owner username: alix\b \bce\n');
+  });
+
+  it('echoes nothing at all when echo is off', async () => {
+    const tty = new FakeTty();
+    const output = capture();
+    const answer = readAnswer(tty as never, output, 'Password: ', { echo: false });
+    tty.type('abc');
+    tty.press(0x7f);
+    tty.press(ENTER);
+    expect(await answer).toBe('ab');
+    // Not even the rub-out, which would disclose the length as it was typed.
+    expect(output.out.join('')).toBe('Password: \n');
   });
 
   it('reads a piped line without touching raw mode', async () => {
@@ -149,7 +176,9 @@ describe('readSecret', () => {
       off() {},
     };
     const output = capture();
-    expect(await readSecret(piped as never, output, 'Password: ')).toBe('from-a-pipe');
+    expect(await readAnswer(piped as never, output, 'Password: ', { echo: false })).toBe(
+      'from-a-pipe',
+    );
     expect(output.out.join('')).toBe('Password: \n');
   });
 });
