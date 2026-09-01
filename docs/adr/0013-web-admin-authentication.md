@@ -416,6 +416,33 @@ answer differently before the password is known. Existing sessions are refused
 but **not revoked** — a tenant can be started again, and the sessions its
 operators held are not what was suspended.
 
+## What the reverse proxy must do
+
+Production requires `DEPLOYMENT_TOPOLOGY=reverse-proxy`, and two things are that
+proxy's job rather than this process's.
+
+**TLS**, because the API serves plain HTTP and a production login issues a
+`Secure __Host-` cookie a browser would otherwise discard.
+
+**The document's security headers.** The API sets `Content-Security-Policy`,
+`X-Frame-Options` and the rest on its own JSON responses, and those headers do
+not govern the page that loaded the application — a CSP on a fetched JSON body
+protects nothing about the document. Nothing in this repository serves
+`index.html`: `apps/web` builds to static files and the API has no static path.
+So the admin document is delivered by whatever fronts it, and that is where its
+headers belong.
+
+This is recorded as a deferral rather than fixed, deliberately. Adding static
+serving to the API to attach headers to it would be new architecture in answer
+to a deployment question, and would put the admin document behind the same
+process the admin API runs in — a coupling worth choosing on purpose, not
+acquiring as a side effect of a header.
+
+A proxy fronting this installation should set, at minimum:
+`Content-Security-Policy` restricting `default-src` to `'self'`,
+`X-Frame-Options: DENY` (or `frame-ancestors 'none'`),
+`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, and HSTS.
+
 ## Costs accepted
 
 A username and password is one more secret for an operator to manage, and there
