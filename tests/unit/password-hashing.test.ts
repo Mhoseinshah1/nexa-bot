@@ -84,6 +84,17 @@ describe('password hashing', () => {
     );
   });
 
+  it('refuses to be constructed with parameters no stored hash could name', () => {
+    // The ceiling applies to stored hashes, and this hasher's parameters are
+    // stored hashes tomorrow. Raising the profile past it would write hashes
+    // that `verify` then refuses — an installation-wide lockout appearing some
+    // time after the deploy, as an unexplained "nobody can log in". A boot
+    // failure naming its cause is the better outcome.
+    expect(() => new ScryptPasswordHasher({ N: 2 ** 22, r: 32, p: 1 })).toThrow(/Refusing scrypt/);
+    // And the profile we actually ship is comfortably inside it.
+    expect(() => new ScryptPasswordHasher(PRODUCTION_SCRYPT)).not.toThrow();
+  });
+
   it('spends work for a username that does not exist', async () => {
     // Equalising the timing of "no such user" and "wrong password" is what
     // stops the login endpoint being a username oracle regardless of how

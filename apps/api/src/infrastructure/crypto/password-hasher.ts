@@ -54,7 +54,21 @@ function memoryFor(params: ScryptParams): number {
 }
 
 export class ScryptPasswordHasher implements PasswordHasher {
-  constructor(private readonly params: ScryptParams = PRODUCTION_SCRYPT) {}
+  constructor(private readonly params: ScryptParams = PRODUCTION_SCRYPT) {
+    // The aggregate ceiling below is what a STORED hash may name, and this
+    // class's own parameters are stored hashes tomorrow. Raising the profile
+    // past the ceiling would hash every password into a value `parse` then
+    // refuses — an installation-wide lockout that would first appear as
+    // "nobody can log in any more" some time after the deploy. Refuse at
+    // construction instead, where it is a boot failure naming its cause.
+    if (memoryFor(params) > MAX_MEMORY_BYTES) {
+      throw new Error(
+        `Refusing scrypt parameters N=${params.N}, r=${params.r}: they ask for more than the ` +
+          `${MAX_MEMORY_BYTES} bytes a stored hash is allowed to name, so every hash written ` +
+          'with them would be unverifiable. Raise MAX_MEMORY_BYTES deliberately if this is intended.',
+      );
+    }
+  }
 
   async hash(plaintext: string): Promise<string> {
     const salt = randomBytes(SALT_LENGTH);
