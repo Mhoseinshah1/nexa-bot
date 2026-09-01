@@ -2,7 +2,7 @@ import type { FastifyRequest } from 'fastify';
 import {
   errors,
   IDENTITY_ERROR_CODES,
-  SESSION_COOKIE_NAME,
+  SESSION_COOKIE_NAMES,
   type ActorContext,
   type Admin,
   type AdminSession,
@@ -40,7 +40,16 @@ export interface AuthenticatedContext {
  * wearing a different header name.
  */
 export function readSessionToken(request: FastifyRequest): string | null {
-  return parseCookies(request.headers.cookie).get(SESSION_COOKIE_NAME) ?? null;
+  const cookies = parseCookies(request.headers.cookie);
+  // Most trusted name first. A `__Host-` cookie could only have been set by
+  // this host over TLS with `Path=/` and no `Domain`, so when both spellings
+  // arrive it wins — whatever order the browser sent them in, and whatever Path
+  // the other one was given to sort itself ahead.
+  for (const name of SESSION_COOKIE_NAMES) {
+    const token = cookies.get(name);
+    if (token !== undefined) return token;
+  }
+  return null;
 }
 
 export function requireSessionToken(request: FastifyRequest): string {

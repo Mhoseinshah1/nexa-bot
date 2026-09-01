@@ -1,14 +1,31 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { OWNER_ROLE_KEY, type AdminId, type CorrelationId } from '@nexa/contracts';
+import {
+  API_PREFIX,
+  AUTH_ROUTES,
+  OWNER_ROLE_KEY,
+  SESSION_COOKIE_NAME,
+  SESSION_COOKIE_NAME_SECURE,
+  type AdminId,
+  type CorrelationId,
+} from '@nexa/contracts';
+import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { ScryptPasswordHasher } from '../../apps/api/src/infrastructure/crypto/password-hasher';
-import { adminSessions } from '../../apps/api/src/infrastructure/persistence/schema';
+import {
+  adminLoginThrottle,
+  adminSessions,
+  auditLogs,
+} from '../../apps/api/src/infrastructure/persistence/schema';
 import {
   adminActorFor,
   createAdmin,
   createTestContext,
+  migrateOnce,
+  resetDatabase,
   tenantA,
   tenantB,
+  testConfig,
   type SeededAdmin,
   type TestContext,
 } from './harness';
@@ -445,4 +462,265 @@ describe('bootstrap creates the first owner once, under concurrency', () => {
     const admins = await ctx.container.admins.list(tenantB);
     expect(admins.map((admin) => admin.username)).toEqual(['second-owner']);
   });
+});
+
+describe('a success does not leave the IP it arrived from locked', () => {
+  it('lifts a lockout that the successful attempt itself established', async () => {
+    // The attempt that REACHES the limit is verified, and may succeed — but the
+    // reservation had already written `lockedUntil`, and giving the attempt back
+    // only decremented the count. Every administrator behind that address was
+    // then refused for the full lockout on the strength of a login that worked.
+    const limit = ctx.container.config.LOGIN_MAX_ATTEMPTS_PER_IP;
+    const ip = '198.51.100.44';
+    const subject = await createAdmin(ctx.container, tenantA, {
+      username: 'ip-sharer',
+      password: 'the-correct-password',
+      roleKeys: ['support'],
+    });
+    expect(subject.username).toBe('ip-sharer');
+
+    // Spend every attempt but the last against a username that does not exist,
+    // so the IP counter — not the username counter — is what fills up.
+    for (let attempt = 0; attempt < limit - 1; attempt += 1) {
+      await expect(
+        ctx.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: `nobody-${attempt}`, password: 'guess' },
+          { ip, userAgent: 'vitest' },
+        ),
+      ).rejects.toThrow();
+    }
+
+    // The attempt that reaches the limit, and it is a correct one.
+    await expect(
+      ctx.container.auth.login(
+        tenantA,
+        anonymous,
+        { username: 'ip-sharer', password: 'the-correct-password' },
+        { ip, userAgent: 'vitest' },
+      ),
+    ).resolves.toMatchObject({ admin: { username: 'ip-sharer' } });
+
+    const [row] = await ctx.container.database.db
+      .select()
+      .from(adminLoginThrottle)
+      .where(eq(adminLoginThrottle.subject, ip));
+    // The count is given back, so the address is below the limit again...
+    expect(row?.failedCount).toBe(limit - 1);
+    // ...and the lock that count established is gone with it.
+    expect(row?.lockedUntil).toBeNull();
+
+    // Decisively: the next login from that address is not refused.
+    await expect(
+      ctx.container.auth.login(
+        tenantA,
+        anonymous,
+        { username: 'ip-sharer', password: 'the-correct-password' },
+        { ip, userAgent: 'vitest' },
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it('leaves a lock standing when failures still hold it', async () => {
+    // Not blanket forgiveness. Giving back one reservation only lifts the lock
+    // if the count actually falls below the limit.
+    const strictIp = await createTestContext({ LOGIN_MAX_ATTEMPTS_PER_IP: '1' });
+    try {
+      await strictIp.reset();
+      await createAdmin(strictIp.container, tenantA, {
+        username: 'solo',
+        password: 'the-correct-password',
+        roleKeys: ['support'],
+      });
+      const ip = '198.51.100.45';
+
+      // The first attempt reaches the limit of one and succeeds.
+      await expect(
+        strictIp.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: 'solo', password: 'the-correct-password' },
+          { ip, userAgent: 'vitest' },
+        ),
+      ).resolves.toBeDefined();
+
+      // Which must not poison the address for everyone behind it.
+      await expect(
+        strictIp.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: 'solo', password: 'the-correct-password' },
+          { ip, userAgent: 'vitest' },
+        ),
+      ).resolves.toBeDefined();
+
+      // A genuine failure at that limit still locks it.
+      await expect(
+        strictIp.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: 'solo', password: 'wrong' },
+          { ip, userAgent: 'vitest' },
+        ),
+      ).rejects.toMatchObject({ kind: 'UNAUTHENTICATED' });
+      await expect(
+        strictIp.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: 'solo', password: 'the-correct-password' },
+          { ip, userAgent: 'vitest' },
+        ),
+      ).rejects.toMatchObject({ kind: 'RATE_LIMITED' });
+    } finally {
+      await strictIp.close();
+    }
+  });
+});
+
+describe('an unauthorized mutation attempt is audited', () => {
+  async function deniedAuditRows(action: string): Promise<unknown[]> {
+    return ctx.container.database.db.select().from(auditLogs).where(eq(auditLogs.action, action));
+  }
+
+  it('records a DENIED row when the pre-lock check refuses', async () => {
+    // The pre-lock check is only a fast rejection, but it is the one an
+    // ordinary unauthorized request hits. It threw straight out of the service:
+    // the guard wrote its operational event and nothing wrote the audit row, so
+    // whether an attempted mutation was auditable depended on WHEN the denial
+    // fired.
+    const nobody = await createAdmin(ctx.container, tenantA, {
+      username: 'nobody',
+      roleKeys: ['support'],
+    });
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'victim',
+      roleKeys: ['support'],
+    });
+
+    await expect(
+      ctx.container.adminManagement.create(tenantA, adminActorFor(nobody), {
+        username: 'planted',
+        displayName: 'Planted',
+        password: 'a-perfectly-fine-password',
+        roleKeys: ['support'],
+      }),
+    ).rejects.toThrow(/permission/i);
+
+    await expect(
+      ctx.container.adminManagement.setStatus(
+        tenantA,
+        adminActorFor(nobody),
+        target.id as AdminId,
+        { status: 'DISABLED', reason: 'Not mine to make.' },
+      ),
+    ).rejects.toThrow(/permission/i);
+
+    await expect(
+      ctx.container.adminManagement.setRoles(tenantA, adminActorFor(nobody), target.id as AdminId, {
+        roleKeys: [OWNER_ROLE_KEY],
+      }),
+    ).rejects.toThrow(/permission/i);
+
+    for (const action of ['admin.create', 'admin.status_change', 'admin.roles_change']) {
+      const rows = (await deniedAuditRows(action)) as { result: string; actorId: string | null }[];
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.result).toBe('DENIED');
+      expect(rows[0]?.actorId).toBe(nobody.id);
+    }
+  });
+});
+
+describe('the session cookie a production deployment issues', () => {
+  let api: ApiApp;
+  const ORIGIN = 'https://admin.example.test';
+
+  const inject = (options: Record<string, unknown>) =>
+    api.app
+      .getHttpAdapter()
+      .getInstance()
+      .inject(options as never);
+
+  beforeAll(async () => {
+    // A real production configuration, which means the real cost profile — the
+    // config schema refuses the fast one here, and rightly. One login pays for
+    // it, which is the price of testing the thing that actually ships.
+    const config = testConfig({
+      NODE_ENV: 'production',
+      PASSWORD_HASH_PROFILE: 'production',
+      WEB_ADMIN_ORIGINS: ORIGIN,
+    });
+    await migrateOnce(config.DATABASE_URL);
+    api = await createApiApp(config);
+    api.container.setInstallationTenant(tenantA.tenantId);
+  }, 60_000);
+
+  afterAll(async () => {
+    await api?.close();
+  });
+
+  // The file-level hook truncates between tests, and this describe's owner
+  // lives in the same database, so it is re-seeded here rather than once.
+  beforeEach(async () => {
+    const config = api.container.config;
+    await resetDatabase(api.container.database.db);
+    await seed(api.container.database.db, config.SECRETS_KEK, config.SECRETS_KEK_ID);
+    await createAdmin(api.container, tenantA, {
+      username: 'owner',
+      password: 'the-owners-real-password',
+      roleKeys: [OWNER_ROLE_KEY],
+    });
+  }, 30_000);
+
+  it('issues it under the __Host- prefix, with the attributes that prefix demands', async () => {
+    // A sibling host under a shared parent domain could otherwise set a cookie
+    // of the same name for the parent with a longer Path, which browsers send
+    // first — enough to keep a victim logged out, and enough to toss an
+    // attacker's own session into their browser.
+    const response = await inject({
+      method: 'POST',
+      url: `${API_PREFIX}${AUTH_ROUTES.login}`,
+      headers: { origin: ORIGIN },
+      payload: { username: 'owner', password: 'the-owners-real-password' },
+    });
+    expect(response.statusCode).toBe(201);
+
+    const setCookie = String(response.headers['set-cookie']);
+    expect(setCookie).toContain(`${SESSION_COOKIE_NAME_SECURE}=`);
+    // The three conditions a browser enforces for the prefix. Miss any one and
+    // it silently refuses to store the cookie at all.
+    expect(setCookie).toContain('Secure');
+    expect(setCookie).toContain('Path=/');
+    expect(setCookie).not.toContain('Domain=');
+    // And the properties that were already right.
+    expect(setCookie).toContain('HttpOnly');
+    expect(setCookie).toContain('SameSite=Strict');
+    // Still no credential in the body.
+    expect(JSON.stringify(response.json())).not.toContain(
+      setCookie.split('=')[1]?.split(';')[0] ?? 'unreachable',
+    );
+  }, 30_000);
+
+  it('accepts the prefixed cookie it issued', async () => {
+    const login = await inject({
+      method: 'POST',
+      url: `${API_PREFIX}${AUTH_ROUTES.login}`,
+      headers: { origin: ORIGIN },
+      payload: { username: 'owner', password: 'the-owners-real-password' },
+    });
+    const token = String(login.headers['set-cookie']).split('=')[1]?.split(';')[0] ?? '';
+    expect(token).not.toBe('');
+
+    // Presented alongside a shadowing plain cookie sent first, exactly as a
+    // browser would order an attacker's longer-path one.
+    const session = await inject({
+      method: 'GET',
+      url: `${API_PREFIX}${AUTH_ROUTES.session}`,
+      headers: {
+        cookie: `${SESSION_COOKIE_NAME}=tossed; ${SESSION_COOKIE_NAME_SECURE}=${token}`,
+      },
+    });
+    expect(session.statusCode).toBe(200);
+    expect(session.json()).toMatchObject({ admin: { username: 'owner' } });
+  }, 30_000);
 });

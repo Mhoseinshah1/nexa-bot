@@ -229,8 +229,20 @@ export interface LoginThrottleRepository {
    * Used for the IP subject on a successful login. Clearing it outright would
    * let anyone holding one valid account spray guesses across administrator
    * names and periodically reset the breadth limiter by signing into their own.
+   *
+   * `maxAttempts` is needed because the reservation being returned may be the
+   * one that ESTABLISHED a lockout — the attempt that reaches the limit is
+   * still verified, and it can succeed. Returning the count while leaving the
+   * lock would refuse every administrator behind that IP for the full lockout
+   * on the strength of a login that worked. The lock is therefore lifted when,
+   * and only when, the returned count falls back below the limit.
    */
-  releaseAttempt(scope: ScopeContext, kind: ThrottleSubjectKind, subject: string): Promise<void>;
+  releaseAttempt(
+    scope: ScopeContext,
+    kind: ThrottleSubjectKind,
+    subject: string,
+    maxAttempts: number,
+  ): Promise<void>;
   /** Erases a subject's counter entirely. For the USERNAME that just succeeded. */
   clear(scope: ScopeContext, kind: ThrottleSubjectKind, subject: string): Promise<void>;
 }

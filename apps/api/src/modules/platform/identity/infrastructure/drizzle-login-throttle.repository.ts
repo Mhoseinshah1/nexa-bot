@@ -129,18 +129,33 @@ export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
 
   /**
    * Returns one reserved attempt. Never drops below zero, and never touches the
-   * window or an existing lockout — this undoes a reservation, it does not
-   * forgive a failure.
+   * window — this undoes a reservation, it does not forgive a failure.
+   *
+   * It DOES undo a lockout the returned reservation established. The attempt
+   * that reaches the limit is still verified and may succeed; leaving its lock
+   * standing would refuse every administrator behind that IP for the full
+   * lockout period on the strength of a login that worked — and at
+   * `LOGIN_MAX_ATTEMPTS_PER_IP=1` the first successful login would poison the
+   * address. The lock is lifted only when the decremented count falls back
+   * below the limit, so failures accumulated by others still hold it.
    */
   async releaseAttempt(
     scope: ScopeContext,
     kind: ThrottleSubjectKind,
     subject: string,
+    maxAttempts: number,
   ): Promise<void> {
     const tenantId = requireTenantId(scope);
+    const releasedCount = sql`GREATEST(${adminLoginThrottle.failedCount} - 1, 0)`;
     await this.db
       .update(adminLoginThrottle)
-      .set({ failedCount: sql`GREATEST(${adminLoginThrottle.failedCount} - 1, 0)` })
+      .set({
+        failedCount: releasedCount,
+        lockedUntil: sql`CASE
+          WHEN (${releasedCount}) < ${maxAttempts} THEN NULL
+          ELSE ${adminLoginThrottle.lockedUntil}
+        END`,
+      })
       .where(
         and(
           eq(adminLoginThrottle.tenantId, tenantId),

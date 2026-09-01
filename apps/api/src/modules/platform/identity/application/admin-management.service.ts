@@ -96,7 +96,10 @@ export class AdminManagementService {
     // does not get to spend a KDF per request. It is NOT the authorization —
     // that is re-run under the lock below, because this one is read on the pool
     // and can be stale by the time the row is written.
-    await this.guard.check(scope, actor, 'admins.edit');
+    await this.assertMayAttempt(scope, actor, 'admins.edit', {
+      action: 'admin.create',
+      entityId: null,
+    });
 
     const now = this.clock.now();
     const adminId = this.ids.uuid() as AdminId;
@@ -217,7 +220,10 @@ export class AdminManagementService {
     // A cheap rejection, NOT the authorization. It is read on the pool, so by
     // the time this request reaches the lock the actor may have been disabled
     // or demoted. The authoritative check is inside the transaction.
-    await this.guard.check(scope, actor, 'admins.edit');
+    await this.assertMayAttempt(scope, actor, 'admins.edit', {
+      action: 'admin.status_change',
+      entityId: targetId,
+    });
     const command = setAdminStatusRequestSchema.parse(input);
 
     // Refused before anything is read: an admin cannot disable themselves, and
@@ -314,7 +320,10 @@ export class AdminManagementService {
     input: unknown,
   ): Promise<{ admin: Admin; roleKeys: string[] }> {
     // A cheap rejection, NOT the authorization — see setStatus.
-    await this.guard.check(scope, actor, 'admins.edit');
+    await this.assertMayAttempt(scope, actor, 'admins.edit', {
+      action: 'admin.roles_change',
+      entityId: targetId,
+    });
     const command = setAdminRolesRequestSchema.parse(input);
 
     // Cheap and state-independent, so it can refuse before any work.
@@ -617,6 +626,46 @@ export class AdminManagementService {
    * mutation is exactly the kind of event an operator needs to see later, and
    * before this it left no trace at all for `setStatus` and `setRoles`.
    */
+  /**
+   * The cheap pre-lock authorization check, with its denial audited.
+   *
+   * The check itself is only a fast rejection — the decision that counts is
+   * re-run under the tenant lock. But it is also the one an ordinary
+   * unauthorized request actually hits, and it used to throw straight out of
+   * the service: the guard wrote its operational event and nothing wrote the
+   * `DENIED` audit row. Whether an attempted administrator mutation appeared in
+   * the audit log therefore depended on WHEN the denial fired — early, and it
+   * vanished; late, because the actor lost authority mid-request, and it was
+   * recorded. That is precisely the "activity feed with no attempt history" the
+   * legacy system had.
+   *
+   * Only the audit row is written here. The guard already records the
+   * operational event for a check made outside a transaction; `runLockedMutation`
+   * records it itself because the in-lock check deliberately does not.
+   */
+  private async assertMayAttempt(
+    scope: ScopeContext,
+    actor: ActorContext,
+    permission: PermissionKey,
+    denial: { action: string; entityId: string | null },
+  ): Promise<void> {
+    try {
+      await this.guard.check(scope, actor, permission);
+    } catch (error) {
+      if (isNexaError(error) && error.kind === 'PERMISSION_DENIED') {
+        await this.audit.record(scope, actor, {
+          action: denial.action,
+          entityType: 'Admin',
+          entityId: denial.entityId,
+          before: null,
+          after: { deniedPermission: permission },
+          result: 'DENIED',
+        });
+      }
+      throw error;
+    }
+  }
+
   private async runLockedMutation<T>(
     scope: ScopeContext,
     actor: ActorContext,

@@ -241,6 +241,20 @@ Phase 1 adds none. `admins.view`, `admins.edit` and `admins.permissions.edit`
 were already in the Phase 0 catalog, and RBAC is built against the frozen
 catalog rather than the catalog being grown to fit the implementation.
 
+## A denial is audited wherever it happens
+
+Each mutation checks `admins.edit` twice: once on the pool as a cheap rejection
+before any expensive work, and once under the tenant lock, which is the check
+that authorizes. Both write an audit row with `result: DENIED`.
+
+They did not always. The preliminary check threw straight out of the service, so
+the guard wrote its operational event and nothing wrote the audit row — meaning
+whether an attempted administrator mutation was traceable depended on _when_ the
+denial fired: early, and it left no record; late, because the actor lost
+authority mid-request, and it was recorded in full. An audit log that captures
+only the rare case is the "activity feed with no attempt history" this project
+exists not to repeat.
+
 ## The bootstrap exception, and why it is not a bypass
 
 `BootstrapOwnerService` creates an administrator without authorizing a caller,

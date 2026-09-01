@@ -87,6 +87,30 @@ cookie is the only transport. SameSite is enforced by the client; a client that
 does not enforce it leaves the cookie exposed, and the server-side check does
 not depend on the browser behaving. An absent `Origin` fails closed.
 
+### The cookie name carries a guarantee
+
+In production the session is issued as **`__Host-nexa_admin_session`**. A browser
+refuses to store a cookie under that prefix unless it is `Secure`, has `Path=/`,
+and names no `Domain` — and the last condition is the one that matters.
+
+Without it, a sibling host under a shared parent domain (`evil.example.com`
+beside `admin.example.com`) can set a cookie of the session's name for
+`Domain=example.com` with a longer `Path`. Browsers send longer-path cookies
+first, and every conventional parser — ours included — takes the first
+occurrence of a name. The attacker's value is then the one read: enough to keep
+a victim permanently logged out, and enough for anyone holding any
+administrator credential to toss their own session into a victim's browser and
+recreate the account confusion the login `Origin` check was added to prevent.
+The prefix removes the possibility rather than arguing about the ordering: such
+a cookie can no longer be set at all.
+
+The prefix requires `Secure`, which a plain-HTTP development server cannot
+offer and for which a browser silently refuses the cookie — presenting as
+"login succeeds and nothing is signed in". So the unprefixed spelling is issued
+outside production, and the reader accepts either, **prefixed first**: when both
+arrive, the one that could only have come from this host wins, whatever order
+the browser sent them in.
+
 ## Client IP behind the reverse proxy
 
 The client IP feeds brute-force throttling and audit rows, and production sits
@@ -222,7 +246,13 @@ makes the request that crosses the line see its own increment and be refused
 before it hashes.
 
 A successful login **clears the username counter and gives back only its own IP
-reservation.** Clearing the IP outright let anyone holding one valid account
+reservation** — including any lockout that reservation itself established. The
+attempt that reaches the limit is still verified and may succeed; returning its
+count while leaving the lock standing would refuse every administrator behind
+that address for the full lockout period on the strength of a login that
+worked, and at `LOGIN_MAX_ATTEMPTS_PER_IP=1` the first successful login would
+poison the address outright. The lock lifts only when the decremented count
+falls back below the limit, so failures accumulated by others still hold it. Clearing the IP outright let anyone holding one valid account
 spray guesses across administrator names and reset the breadth limiter by
 periodically signing into their own. Held in the database rather than in Redis, for two
 reasons: an attacker must not be able to clear their own counter by waiting out

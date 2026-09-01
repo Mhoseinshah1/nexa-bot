@@ -6,6 +6,7 @@ import {
   errors,
   IDENTITY_ERROR_CODES,
   SESSION_COOKIE_NAME,
+  SESSION_COOKIE_NAME_SECURE,
   type AdminSummary,
   type LoginResponse,
   type LogoutResponse,
@@ -155,9 +156,25 @@ export class AuthController {
     return { tenantId, botInstanceId: null };
   }
 
+  /**
+   * The name this deployment issues the session under.
+   *
+   * `__Host-` in production, where `Secure` is set and the prefix's conditions
+   * can all be met. A plain-HTTP development server cannot offer `Secure`, and
+   * a browser silently refuses a `__Host-` cookie without it — which would
+   * present as "login succeeds and then nothing is signed in".
+   */
+  private get sessionCookieName(): string {
+    return this.container.config.NODE_ENV === 'production'
+      ? SESSION_COOKIE_NAME_SECURE
+      : SESSION_COOKIE_NAME;
+  }
+
   private setSessionCookie(reply: FastifyReply, token: string, expiresAt: Date): void {
     const attributes = [
-      `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
+      `${this.sessionCookieName}=${encodeURIComponent(token)}`,
+      // Required by the `__Host-` prefix, and correct without it: a narrower
+      // path is what lets a shadowing cookie sort ahead of the real one.
       'Path=/',
       'HttpOnly',
       // Strict rather than Lax: this cookie authorises administrative writes,
@@ -168,14 +185,20 @@ export class AuthController {
     // Omitted outside production so a plain-HTTP development server can log in;
     // the config schema requires TLS-fronted origins in production.
     if (this.container.config.NODE_ENV === 'production') attributes.push('Secure');
+    // Deliberately no `Domain`: it is what the prefix forbids, and what would
+    // let a sibling host under a shared parent domain claim this cookie.
     void reply.header('set-cookie', attributes.join('; '));
   }
 
   private clearSessionCookie(reply: FastifyReply): void {
-    void reply.header(
-      'set-cookie',
-      `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`,
-    );
+    // Both spellings, because a deployment that has just moved to production
+    // may still have the unprefixed cookie in a browser, and clearing only the
+    // one it now issues would leave the old one presented on every request.
+    for (const name of [SESSION_COOKIE_NAME_SECURE, SESSION_COOKIE_NAME]) {
+      const attributes = [`${name}=`, 'Path=/', 'HttpOnly', 'SameSite=Strict', 'Max-Age=0'];
+      if (this.container.config.NODE_ENV === 'production') attributes.push('Secure');
+      void reply.header('set-cookie', attributes.join('; '));
+    }
   }
 }
 

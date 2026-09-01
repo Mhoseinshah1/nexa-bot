@@ -236,7 +236,9 @@ export class AuthenticationService {
     // guesses across administrator names and reset the breadth limiter by
     // periodically signing into their own.
     await this.throttle.clear(scope, 'USERNAME', username);
-    if (context.ip !== null) await this.throttle.releaseAttempt(scope, 'IP', context.ip);
+    if (context.ip !== null) {
+      await this.throttle.releaseAttempt(scope, 'IP', context.ip, this.policy.maxAttemptsPerIp);
+    }
 
     await this.admins.recordLogin(scope, credentials.admin.id, now);
 
