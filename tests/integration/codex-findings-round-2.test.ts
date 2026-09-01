@@ -6,6 +6,7 @@ import {
   OWNER_ROLE_KEY,
   SESSION_COOKIE_NAME,
   SESSION_COOKIE_NAME_SECURE,
+  systemContext,
   type AdminId,
   type CorrelationId,
 } from '@nexa/contracts';
@@ -1334,5 +1335,56 @@ describe('a throttle release belongs to the period it reserved in', () => {
       .where(eq(adminLoginThrottle.subject, ip));
     expect(row?.failedCount).toBe(0);
     expect(row?.lockedUntil).toBeNull();
+  });
+});
+
+describe('permissionsIfActive answers only for this tenant', () => {
+  it('reports nothing for an administrator of another tenant', async () => {
+    // It differs from `resolve` by the status check and by nothing else. Its
+    // only caller today holds a tenant scope and a target it has already
+    // loaded, so a missing gate would not be exploitable now — it would be a
+    // way in later, in a method whose name invites reuse.
+    const elsewhere = await createAdmin(ctx.container, tenantB, {
+      username: 'other-tenant-owner',
+      roleKeys: [OWNER_ROLE_KEY],
+    });
+
+    // Asked under tenant B, they hold the catalogue.
+    expect(
+      (await ctx.container.guard.permissionsIfActive(tenantB, elsewhere.id as AdminId)).size,
+    ).toBeGreaterThan(0);
+
+    // Asked under tenant A, they hold nothing.
+    expect(
+      (await ctx.container.guard.permissionsIfActive(tenantA, elsewhere.id as AdminId)).size,
+    ).toBe(0);
+  });
+
+  it('reports nothing under a real system scope', async () => {
+    // A genuine `SystemContext`, not a tenant context with a null id — the
+    // difference matters, and an earlier version of this test used the latter
+    // and therefore proved nothing.
+    expect(
+      (
+        await ctx.container.guard.permissionsIfActive(
+          systemContext('test:cross-tenant-check'),
+          owner.id as AdminId,
+        )
+      ).size,
+    ).toBe(0);
+  });
+
+  it('reports the authority a disabled administrator would regain', async () => {
+    // The one difference from `resolve`, and the reason the method exists.
+    const dormant = await createAdmin(ctx.container, tenantA, {
+      username: 'dormant-support',
+      roleKeys: ['support'],
+      status: 'DISABLED',
+    });
+    const restored = await ctx.container.guard.permissionsIfActive(tenantA, dormant.id as AdminId);
+    expect(restored.size).toBeGreaterThan(0);
+
+    // Where `resolve` — via the guard's actor-facing view — gives them nothing.
+    expect((await ctx.container.guard.permissionsOf(tenantA, adminActorFor(dormant))).size).toBe(0);
   });
 });

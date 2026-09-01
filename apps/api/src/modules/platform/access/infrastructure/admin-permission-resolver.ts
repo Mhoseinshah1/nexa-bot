@@ -58,7 +58,7 @@ export class AdminPermissionResolver implements PermissionResolver {
     // roles — history must still name them — and holds none of their powers.
     if (admin === null || admin.status !== 'ACTIVE') return empty;
 
-    return this.permissionsIfActive(scope, adminId, tx);
+    return this.compute(scope, adminId, tx);
   }
 
   /**
@@ -71,8 +71,33 @@ export class AdminPermissionResolver implements PermissionResolver {
    * concept differently is the failure this codebase is built to avoid; here it
    * would mean the amplification rule disagreeing with the guard about what a
    * permission set contains.
+   *
+   * Every gate `resolve` applies is applied here too, MINUS the status check —
+   * which is the whole of the difference and all of it should be. Its only
+   * caller today holds a tenant scope and a target it has already loaded, so
+   * omitting them would not be exploitable now; it would be a way in later, in
+   * a method whose name invites reuse.
    */
   async permissionsIfActive(
+    scope: ScopeContext,
+    adminId: AdminId,
+    tx?: unknown,
+  ): Promise<ReadonlySet<PermissionKey>> {
+    const empty = new Set<PermissionKey>();
+
+    // Authority is always tenant-scoped, exactly as in `resolve`.
+    if (isSystemContext(scope)) return empty;
+
+    // And an administrator of ANOTHER tenant holds nothing here, whatever their
+    // own tenant grants them.
+    const admin = await this.admins.findById(scope, adminId, tx);
+    if (admin === null) return empty;
+
+    return this.compute(scope, adminId, tx);
+  }
+
+  /** The rule itself, with no gates. Reached only through the two above. */
+  private async compute(
     scope: ScopeContext,
     adminId: AdminId,
     tx?: unknown,
