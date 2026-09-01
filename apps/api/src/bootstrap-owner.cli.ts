@@ -1,7 +1,6 @@
-import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { isNexaError, type TenantContext } from '@nexa/contracts';
-import { readSecret } from './infrastructure/tty/read-secret.js';
+import { Prompter, PromptInputError } from './infrastructure/tty/prompt.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 
@@ -56,26 +55,19 @@ async function main(): Promise<void> {
       );
     }
 
-    // Readline first, and CLOSED before the password is read. It owns stdin
-    // while it is open — in terminal mode it puts the tty in raw mode and
-    // echoes what it receives — so reading the secret from the same stream
-    // underneath it would have echoed the password after all.
-    let username: string;
-    let displayName: string;
-    const rl = createInterface({ input: stdin, output: stdout, terminal: stdin.isTTY });
-    try {
-      username = args.username ?? (await rl.question('Owner username: '));
-      displayName = args.displayName ?? (await rl.question('Display name: '));
-    } finally {
-      rl.close();
-    }
+    // ONE reader for all three questions. Mixing `readline` with a direct read
+    // of the same stdin is what silently swallowed the password on a pipe and
+    // exited 0 having created nothing — see `Prompter`.
+    const prompt = new Prompter(stdin, stdout);
+    const username = args.username ?? (await prompt.line('Owner username: '));
+    const displayName = args.displayName ?? (await prompt.line('Display name: '));
 
-    // Read straight from the terminal with echo off, never from argv. This
-    // prompt used to say "(input is not hidden)" — accurately, since
-    // `rl.question` echoes — directly beneath a comment claiming it was not
-    // echoed back. The comment was the aspiration and the prompt was the truth;
-    // now they agree, and a unit test holds them to it.
-    const password = await readSecret(stdin, stdout, 'Password: ');
+    // Never echoed, and never taken from argv. This prompt used to say
+    // "(input is not hidden)" — accurately, since `rl.question` echoes —
+    // directly beneath a comment claiming it was not echoed back. The comment
+    // was the aspiration and the prompt was the truth; now they agree, and unit
+    // tests hold them to it.
+    const password = await prompt.secret('Password: ');
 
     const scope: TenantContext = { tenantId: tenant.id, botInstanceId: null };
     const result = await container.bootstrapOwner.execute(scope, {
@@ -97,6 +89,9 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
     // A NexaError's message is written for an operator; anything else is a bug
     // and keeps its stack.
     if (isNexaError(error)) console.error(`${error.code}: ${error.message}`);
+    // A truncated or empty input is the operator's mistake, not a bug, and one
+    // clear line serves them better than a stack.
+    else if (error instanceof PromptInputError) console.error(error.message);
     else console.error(error);
     process.exitCode = 1;
   });

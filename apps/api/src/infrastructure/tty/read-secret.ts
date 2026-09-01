@@ -48,6 +48,31 @@ export function readSecret(
     return readPlainLine(input, output);
   }
 
+  return readRaw(input, output, false);
+}
+
+/**
+ * The same terminal reader, with the echo decision made explicitly.
+ *
+ * The visible prompts share this loop rather than using `readline`, because
+ * mixing the two on one stream is what silently swallowed the password line on
+ * a pipe. See `Prompter`. `echo` is the ONLY difference between asking for a
+ * username and asking for a password, which is how it should read.
+ */
+export function readSecretFrom(
+  input: SecretInput,
+  output: SecretOutput,
+  prompt: string,
+  options: { echo: boolean },
+): Promise<string> {
+  output.write(prompt);
+  if (input.isTTY !== true || typeof input.setRawMode !== 'function') {
+    return readPlainLine(input, output);
+  }
+  return readRaw(input, output, options.echo);
+}
+
+function readRaw(input: SecretInput, output: SecretOutput, echo: boolean): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     // Raw BYTES, not a string. A password is not necessarily ASCII, and a
     // terminal delivers a multi-byte character as several bytes across one or
@@ -121,8 +146,11 @@ export function readSecret(
           // byte they belong to. Removing one byte instead would leave a
           // half-character in the password, and the operator would have no way
           // to see it or retype it.
+          const before = bytes.length;
           while (bytes.length > 0 && (bytes[bytes.length - 1]! & 0xc0) === 0x80) bytes.pop();
           bytes.pop();
+          // Rub the character off the screen, but only if it was ever on it.
+          if (echo && bytes.length < before) output.write('\b \b');
           continue;
         }
         // Every other C0 control byte is a keystroke, not a character. Ctrl+D
@@ -130,8 +158,10 @@ export function readSecret(
         // literal 0x04 in the credential. A password may contain anything
         // printable, in any script, but not a raw control byte.
         if (byte < 0x20) continue;
-        // Anything else is content. Deliberately NOT written anywhere.
+        // Content. Written back only when this is a visible prompt; a secret is
+        // deliberately not written anywhere.
         bytes.push(byte);
+        if (echo) output.write(String.fromCharCode(byte));
       }
     };
 
