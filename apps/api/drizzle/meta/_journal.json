@@ -57,6 +57,13 @@
       "when": 1788270259992,
       "tag": "0007_tenant_composite_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788306410256,
+      "tag": "0008_retention_indexes",
+      "breakpoints": true
     }
   ]
 }

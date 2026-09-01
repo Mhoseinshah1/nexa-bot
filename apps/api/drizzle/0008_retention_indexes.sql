@@ -1,0 +1,2 @@
+CREATE INDEX "admin_login_throttle_retention_idx" ON "admin_login_throttle" USING btree ("window_started_at","locked_until");--> statement-breakpoint
+CREATE INDEX "admin_sessions_retention_idx" ON "admin_sessions" USING btree ("expires_at");

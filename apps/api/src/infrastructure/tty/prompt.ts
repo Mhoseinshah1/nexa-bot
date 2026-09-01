@@ -1,4 +1,4 @@
-import { readAnswer, type SecretInput, type SecretOutput } from './read-secret.js';
+import { TerminalReader, type SecretInput, type SecretOutput } from './read-secret.js';
 
 /**
  * Console prompts for the bootstrap CLI.
@@ -39,6 +39,7 @@ export class Prompter {
   /** Bytes read from the stream but not yet consumed by a completed line. */
   private leftover: Buffer = Buffer.alloc(0);
   private iterator: AsyncIterator<string | Uint8Array> | null = null;
+  private terminal: TerminalReader | null = null;
 
   constructor(
     private readonly input: SecretInput,
@@ -51,14 +52,32 @@ export class Prompter {
 
   /** A visible answer. Echoed on a terminal, as a person expects. */
   async line(prompt: string): Promise<string> {
-    if (this.isTty) return readAnswer(this.input, this.output, prompt, { echo: true });
+    if (this.isTty) return this.reader().read(prompt, { echo: true });
     return this.bufferedLine(prompt);
   }
 
   /** An answer that is never echoed and never written anywhere. */
   async secret(prompt: string): Promise<string> {
-    if (this.isTty) return readAnswer(this.input, this.output, prompt, { echo: false });
+    if (this.isTty) return this.reader().read(prompt, { echo: false });
     return this.bufferedLine(prompt);
+  }
+
+  /**
+   * Restores the terminal. A process that exits while stdin is still in raw
+   * mode leaves the operator's shell without echo or line editing.
+   */
+  close(): void {
+    this.terminal?.close();
+    this.terminal = null;
+  }
+
+  /**
+   * One reader for the whole session, not one per question: it holds the bytes
+   * a paste delivered past the end of the answer it was asked for.
+   */
+  private reader(): TerminalReader {
+    this.terminal ??= new TerminalReader(this.input, this.output);
+    return this.terminal;
   }
 
   /**

@@ -2708,3 +2708,76 @@ describe('review round 15', () => {
     }
   }, 30_000);
 });
+
+describe('review round 16', () => {
+  it('drains the throttle backlog by index, not by scanning the table', async () => {
+    // The sweeper's predicate had no index: its table's only one leads with
+    // `tenant_id` for the per-subject lookups. Harmless while the table is
+    // small, and not harmless at all now that connections carry a statement
+    // timeout — a backlog big enough to scan past it makes every sweep fail,
+    // which leaves growth an unauthenticated caller can drive permanent.
+    const now = ctx.container.clock.now();
+    const fresh = new Date(now.getTime() - 3_600_000);
+    const stale = new Date(now.getTime() - 40 * 24 * 3_600_000);
+    const rows = [
+      ...Array.from({ length: 400 }, (_, i) => ({ subject: `fresh-${i}`, at: fresh })),
+      ...Array.from({ length: 20 }, (_, i) => ({ subject: `stale-${i}`, at: stale })),
+    ];
+    await ctx.container.database.db.insert(adminLoginThrottle).values(
+      rows.map((row) => ({
+        tenantId: SEED_IDS.tenantA,
+        subjectKind: 'USERNAME' as const,
+        subject: row.subject,
+        failedCount: 1,
+        lockedUntil: null,
+        windowStartedAt: row.at,
+        updatedAt: row.at,
+      })) as never,
+    );
+    await ctx.container.database.db.execute('ANALYZE admin_login_throttle' as never);
+
+    const plan = (await ctx.container.database.db.execute(
+      `EXPLAIN SELECT ctid FROM admin_login_throttle
+         WHERE window_started_at <= now() - interval '30 days'
+           AND (locked_until IS NULL OR locked_until <= now())
+         LIMIT 5000` as never,
+    )) as unknown as { rows: Record<string, string>[] };
+    const text = (plan.rows ?? (plan as unknown as Record<string, string>[]))
+      .map((row) => Object.values(row).join(' '))
+      .join('\n');
+    expect(text).toContain('admin_login_throttle_retention_idx');
+  }, 30_000);
+
+  it('has a NON-PARTIAL expiry index the session sweeper can use', async () => {
+    // `admin_sessions_expiry_idx` is partial on `revoked_at IS NULL`, which is
+    // right for finding live sessions and unusable for retention: the sweep
+    // collects revoked rows too, so its query cannot imply that predicate and
+    // fell back to a sequential scan. With a statement timeout now on every
+    // connection, a backlog big enough to scan past it makes every sweep fail.
+    //
+    // Asserted structurally rather than through EXPLAIN: on a small table the
+    // planner correctly prefers a scan whatever indexes exist, so a plan
+    // assertion here passes for the wrong reason. What must be true is that an
+    // index this predicate CAN use exists at all.
+    const rows = (await ctx.container.database.db.execute(
+      `SELECT indexdef FROM pg_indexes
+        WHERE tablename = 'admin_sessions'` as never,
+    )) as unknown as { rows: { indexdef: string }[] };
+    const definitions = (rows.rows ?? (rows as unknown as { indexdef: string }[])).map(
+      (row) => row.indexdef,
+    );
+
+    const usable = definitions.filter(
+      (definition) => definition.includes('(expires_at)') && !definition.includes('WHERE'),
+    );
+    expect(usable).toHaveLength(1);
+
+    // And the partial one is still there, because live-session lookups want it.
+    expect(
+      definitions.some(
+        (definition) =>
+          definition.includes('expires_at') && definition.includes('revoked_at IS NULL'),
+      ),
+    ).toBe(true);
+  }, 30_000);
+});

@@ -551,6 +551,16 @@ export const adminSessions = pgTable(
     index('admin_sessions_expiry_idx')
       .on(table.expiresAt)
       .where(sql`revoked_at IS NULL`),
+    // Retention, and deliberately NOT partial.
+    //
+    // The index above is partial on `revoked_at IS NULL`, which is right for
+    // finding live sessions and useless to the sweeper: retention collects
+    // revoked rows too, so its query cannot imply that predicate and would fall
+    // back to a sequential scan. Harmless on a small table, and not harmless at
+    // all now that connections carry a statement timeout — a backlog big enough
+    // to scan past it would have made every sweep fail, leaving growth an
+    // attacker can drive permanent.
+    index('admin_sessions_retention_idx').on(table.expiresAt),
     // The session lookup is the one read that is unscoped by necessity, and it
     // RETURNS the tenant everything downstream is scoped to. A row naming the
     // wrong tenant would hand a caller a scope that is not theirs.
@@ -589,6 +599,11 @@ export const adminLoginThrottle = pgTable(
   },
   (table) => [
     uniqueIndex('admin_login_throttle_pkey').on(table.tenantId, table.subjectKind, table.subject),
+    // Retention. The unique index above leads with `tenant_id` and serves the
+    // per-subject lookups; nothing supported the sweeper's predicate, so every
+    // batch scanned the whole table — the one an unauthenticated caller can
+    // grow at will, and the one a statement timeout then makes unsweepable.
+    index('admin_login_throttle_retention_idx').on(table.windowStartedAt, table.lockedUntil),
     check('admin_login_throttle_kind_check', enumCheck('subject_kind', ['USERNAME', 'IP'])),
     check('admin_login_throttle_count_check', sql`failed_count >= 0`),
   ],

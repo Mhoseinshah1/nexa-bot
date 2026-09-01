@@ -59,22 +59,44 @@ async function main(): Promise<void> {
     // of the same stdin is what silently swallowed the password on a pipe and
     // exited 0 having created nothing — see `Prompter`.
     const prompt = new Prompter(stdin, stdout);
-    const username = args.username ?? (await prompt.line('Owner username: '));
-    const displayName = args.displayName ?? (await prompt.line('Display name: '));
+    let result;
+    try {
+      const username = args.username ?? (await prompt.line('Owner username: '));
+      const displayName = args.displayName ?? (await prompt.line('Display name: '));
 
-    // Never echoed, and never taken from argv. This prompt used to say
-    // "(input is not hidden)" — accurately, since `rl.question` echoes —
-    // directly beneath a comment claiming it was not echoed back. The comment
-    // was the aspiration and the prompt was the truth; now they agree, and unit
-    // tests hold them to it.
-    const password = await prompt.secret('Password: ');
+      // Never echoed, and never taken from argv. This prompt used to say
+      // "(input is not hidden)" — accurately, since `rl.question` echoes —
+      // directly beneath a comment claiming it was not echoed back. The comment
+      // was the aspiration and the prompt was the truth; now they agree, and
+      // unit tests hold them to it.
+      const password = await prompt.secret('Password: ');
 
-    const scope: TenantContext = { tenantId: tenant.id, botInstanceId: null };
-    const result = await container.bootstrapOwner.execute(scope, {
-      username,
-      displayName,
-      password,
-    });
+      // Typed twice, because it is typed BLIND.
+      //
+      // Hiding the echo removed the operator's only way to notice a typo, and
+      // this creates the installation's single owner: bootstrap refuses to run
+      // again once that row exists, and there is no other account to rotate the
+      // password from, so a mistyped one means editing the database by hand.
+      // Only on a terminal — a piped password was not typed, and asking a
+      // script to supply it twice buys nothing.
+      if (stdin.isTTY === true) {
+        const again = await prompt.secret('Confirm password: ');
+        if (again !== password) {
+          throw new PromptInputError('The passwords did not match. Nothing was created.');
+        }
+      }
+
+      const scope: TenantContext = { tenantId: tenant.id, botInstanceId: null };
+      result = await container.bootstrapOwner.execute(scope, {
+        username,
+        displayName,
+        password,
+      });
+    } finally {
+      // Leaving stdin in raw mode would hand the operator back a shell with no
+      // echo and no line editing.
+      prompt.close();
+    }
 
     console.warn(
       `Owner "${result.username}" created for tenant "${tenant.slug}" (${result.adminId}).`,
