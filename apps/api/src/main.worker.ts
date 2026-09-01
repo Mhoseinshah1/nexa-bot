@@ -41,6 +41,11 @@ async function main(): Promise<void> {
     container.logger.warn({}, 'outbox relay is disabled; domain events will not be published');
   }
 
+  // Housekeeping the login throttle cannot do for itself: it resets an expired
+  // row only when that exact subject returns, so distinct usernames and
+  // rotating addresses would accumulate for good.
+  container.throttleSweeper.start();
+
   container.logger.info({ env: config.NODE_ENV }, 'worker running');
 }
 

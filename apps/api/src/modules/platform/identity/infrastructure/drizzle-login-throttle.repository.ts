@@ -1,8 +1,11 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { ScopeContext } from '@nexa/contracts';
-import type { Database } from '../../../../infrastructure/persistence/database.js';
+import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import { adminLoginThrottle } from '../../../../infrastructure/persistence/schema.js';
-import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
+import {
+  requireTenantId,
+  type TransactionScope,
+} from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
   LoginThrottleRepository,
   ThrottleState,
@@ -22,6 +25,10 @@ import type {
  * because throttling only real accounts turns the lockout into a username
  * oracle that identical error text does not hide.
  */
+function executorOf(db: Database, tx?: unknown): Executor {
+  return (tx as TransactionScope | undefined)?.tx ?? db;
+}
+
 export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
   constructor(private readonly db: Database) {}
 
@@ -183,10 +190,11 @@ export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
     subject: string,
     maxAttempts: number,
     reservedWindowStartedAt: Date,
+    tx?: unknown,
   ): Promise<void> {
     const tenantId = requireTenantId(scope);
     const releasedCount = sql`GREATEST(${adminLoginThrottle.failedCount} - 1, 0)`;
-    await this.db
+    await executorOf(this.db, tx)
       .update(adminLoginThrottle)
       .set({
         failedCount: releasedCount,
@@ -205,9 +213,43 @@ export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
       );
   }
 
-  async clear(scope: ScopeContext, kind: ThrottleSubjectKind, subject: string): Promise<void> {
+  /**
+   * Deletes rows nothing is counting any more.
+   *
+   * A row matters while its window is open or its lockout has not expired.
+   * Once both are past, it is a record of an attempt nobody will ever ask
+   * about again — and without this, every distinct username an attacker
+   * invents leaves one behind for good.
+   *
+   * Tenant-agnostic on purpose: this is housekeeping over the whole table, run
+   * by a background sweep, not a tenant-scoped read. The `LIMIT` keeps one
+   * sweep short; the next one continues.
+   */
+  async purgeExpired(now: Date, olderThanSeconds: number, limit: number): Promise<number> {
+    const cutoff = new Date(now.getTime() - olderThanSeconds * 1000);
+    const deleted = await this.db
+      .delete(adminLoginThrottle)
+      .where(
+        sql`ctid IN (
+          SELECT ctid FROM ${adminLoginThrottle}
+          WHERE ${adminLoginThrottle.windowStartedAt} <= ${cutoff}
+            AND (${adminLoginThrottle.lockedUntil} IS NULL
+                 OR ${adminLoginThrottle.lockedUntil} <= ${now})
+          LIMIT ${limit}
+        )`,
+      )
+      .returning({ subject: adminLoginThrottle.subject });
+    return deleted.length;
+  }
+
+  async clear(
+    scope: ScopeContext,
+    kind: ThrottleSubjectKind,
+    subject: string,
+    tx?: unknown,
+  ): Promise<void> {
     const tenantId = requireTenantId(scope);
-    await this.db
+    await executorOf(this.db, tx)
       .delete(adminLoginThrottle)
       .where(
         and(

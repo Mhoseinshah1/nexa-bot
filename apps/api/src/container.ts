@@ -40,6 +40,7 @@ import { DrizzleLoginThrottleRepository } from './modules/platform/identity/infr
 import { AuthenticationService } from './modules/platform/identity/application/authentication.service.js';
 import { AdminManagementService } from './modules/platform/identity/application/admin-management.service.js';
 import { BootstrapOwnerService } from './modules/platform/identity/application/bootstrap-owner.service.js';
+import { ThrottleSweeper } from './modules/platform/identity/application/throttle-sweeper.js';
 import { RecordPingService } from './modules/platform/system/application/record-ping.service.js';
 import { PingLogConsumer } from './modules/platform/opslog/application/ping-log.consumer.js';
 
@@ -68,6 +69,7 @@ export interface Container {
   readonly botInstances: DrizzleBotInstanceRepository;
   readonly outbox: OutboxWriter;
   readonly relay: OutboxRelay;
+  readonly throttleSweeper: ThrottleSweeper;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
   readonly idempotency: IdempotencyStore;
@@ -179,6 +181,16 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     maxLagMs: config.OUTBOX_RELAY_MAX_LAG_MS,
   });
 
+  const throttleSweeper = new ThrottleSweeper(loginThrottle, clock, logger, {
+    // Hourly is ample: the rows this removes are already expired, and the
+    // problem it prevents is slow accumulation rather than a spike.
+    intervalMs: 3_600_000,
+    // Comfortably past the longest window plus lockout the schema permits, so
+    // a sweep can never remove a row something is still counting.
+    retentionSeconds: config.LOGIN_THROTTLE_WINDOW_SECONDS + config.LOGIN_LOCKOUT_SECONDS + 3_600,
+    batchSize: 5_000,
+  });
+
   const recordPing = new RecordPingService(guard, uow, outbox, audit, idempotency, clock, tenants);
 
   return {
@@ -195,6 +207,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     botInstances,
     outbox,
     relay,
+    throttleSweeper,
     audit,
     opsLog,
     idempotency,
@@ -215,6 +228,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     recordPing,
     async shutdown() {
       await relay.stop();
+      await throttleSweeper.stop();
       await redis.close();
       await database.close();
     },

@@ -2476,3 +2476,113 @@ describe('an attempted privilege escalation is recorded in full', () => {
     expect(row?.after?.['deniedPermission']).not.toBeNull();
   });
 });
+
+describe('a blank reason is not a reason', () => {
+  it('refuses a whitespace-only reason on a status change', async () => {
+    // These operations disable accounts and alter authority. A mandatory reason
+    // that accepts " " is not mandatory; it just leaves the audit row for the
+    // most consequential event on this surface holding a blank.
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'blank-reason-target',
+      roleKeys: ['support'],
+    });
+
+    for (const reason of ['', '   ', '\t\n ']) {
+      await expect(
+        ctx.container.adminManagement.setStatus(
+          tenantA,
+          adminActorFor(owner),
+          target.id as AdminId,
+          { status: 'DISABLED', reason },
+        ),
+      ).rejects.toThrow();
+    }
+
+    expect((await ctx.container.admins.findById(tenantA, target.id as AdminId))?.status).toBe(
+      'ACTIVE',
+    );
+
+    // A real reason still works, and reaches the audit row trimmed.
+    await expect(
+      ctx.container.adminManagement.setStatus(tenantA, adminActorFor(owner), target.id as AdminId, {
+        status: 'DISABLED',
+        reason: '  Left the company.  ',
+      }),
+    ).resolves.toBeDefined();
+
+    const rows = (await ctx.container.database.db
+      .select()
+      .from(auditLogs)
+      .where(eq(auditLogs.action, 'admin.status_change'))) as { reason: string | null }[];
+    expect(rows.some((row) => row.reason === 'Left the company.')).toBe(true);
+  });
+});
+
+describe('the login throttle does not grow without bound', () => {
+  it('removes rows whose window and lockout are both over', async () => {
+    // Every previously unseen username or IP inserts a durable row, and an
+    // expired one is only reset when that exact subject is used again — so an
+    // endless stream of distinct usernames, or a rotating IPv6 range, would
+    // grow this table for good.
+    for (const username of ['ghost-a', 'ghost-b', 'ghost-c']) {
+      await expect(
+        ctx.container.auth.login(
+          tenantA,
+          anonymous,
+          { username, password: 'guess' },
+          { ip: null, userAgent: 'vitest' },
+        ),
+      ).rejects.toThrow();
+    }
+
+    const before = await ctx.container.database.db.select().from(adminLoginThrottle);
+    expect(before.length).toBeGreaterThanOrEqual(3);
+
+    // Nothing is removed while the rows still count for something.
+    expect(await ctx.container.throttleSweeper.sweep()).toBe(0);
+    expect(await ctx.container.database.db.select().from(adminLoginThrottle)).toHaveLength(
+      before.length,
+    );
+
+    // Once the window and any lockout are past, they are housekeeping.
+    const clock = ctx.container.clock as unknown as Record<string, unknown>;
+    const realNow = ctx.container.clock.now.bind(ctx.container.clock);
+    clock['now'] = () => new Date(realNow().getTime() + 30 * 24 * 3_600_000);
+    try {
+      expect(await ctx.container.throttleSweeper.sweep()).toBeGreaterThanOrEqual(3);
+      expect(await ctx.container.database.db.select().from(adminLoginThrottle)).toHaveLength(0);
+    } finally {
+      clock['now'] = realNow;
+    }
+  }, 30_000);
+
+  it('never removes a lockout somebody is still serving', async () => {
+    // The sweep must not be a way to shorten a lockout.
+    const limit = ctx.container.config.LOGIN_MAX_ATTEMPTS_PER_USERNAME;
+    for (let attempt = 0; attempt < limit; attempt += 1) {
+      await expect(
+        ctx.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: 'owner', password: 'wrong' },
+          { ip: null, userAgent: 'vitest' },
+        ),
+      ).rejects.toThrow();
+    }
+
+    // Far enough forward that the WINDOW has elapsed, but the row carries an
+    // unexpired lockout — the sweep must leave it alone.
+    const [locked] = await ctx.container.database.db
+      .select()
+      .from(adminLoginThrottle)
+      .where(eq(adminLoginThrottle.subject, 'owner'));
+    expect(locked?.lockedUntil).not.toBeNull();
+
+    expect(await ctx.container.throttleSweeper.sweep()).toBe(0);
+    const [survivor] = await ctx.container.database.db
+      .select()
+      .from(adminLoginThrottle)
+      .where(eq(adminLoginThrottle.subject, 'owner'));
+    expect(survivor).toBeDefined();
+  }, 30_000);
+});

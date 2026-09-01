@@ -329,6 +329,32 @@ export class AuthenticationService {
         },
         tx,
       );
+      // The bookkeeping commits WITH the session, not after it.
+      //
+      // Done afterwards, a transient failure in any of these left a live
+      // session persisted while the caller got an error and never received the
+      // token — and the throttle half made that user-visible rather than merely
+      // untidy: at a limit of one, a failed `clear` leaves the successful
+      // login's own lock standing, discards the only copy of the token, and
+      // refuses the retry until the lockout expires.
+      //
+      // The USERNAME counter is erased — the account holder proved who they
+      // are. The IP reservation is merely GIVEN BACK: clearing it would let
+      // anyone with one valid account spray guesses across administrator names
+      // and reset the breadth limiter by periodically signing into their own.
+      await this.throttle.clear(scope, 'USERNAME', username, tx);
+      if (context.ip !== null) {
+        await this.throttle.releaseAttempt(
+          scope,
+          'IP',
+          context.ip,
+          this.policy.maxAttemptsPerIp,
+          (reserved.ip ?? reserved.username).windowStartedAt,
+          tx,
+        );
+      }
+      await this.admins.recordLogin(scope, credentials.admin.id, now, tx);
+
       return 'ISSUED';
     });
 
@@ -351,24 +377,6 @@ export class AuthenticationService {
       }
       return this.failLogin(scope, actor, username, reserved, 'BAD_PASSWORD');
     }
-
-    // Only now, having actually authenticated. The USERNAME counter is erased —
-    // the account holder proved who they are. The IP reservation is merely
-    // GIVEN BACK: clearing it would let anyone with one valid account spray
-    // guesses across administrator names and reset the breadth limiter by
-    // periodically signing into their own.
-    await this.throttle.clear(scope, 'USERNAME', username);
-    if (context.ip !== null) {
-      await this.throttle.releaseAttempt(
-        scope,
-        'IP',
-        context.ip,
-        this.policy.maxAttemptsPerIp,
-        (reserved.ip ?? reserved.username).windowStartedAt,
-      );
-    }
-
-    await this.admins.recordLogin(scope, credentials.admin.id, now);
 
     const identifiedActor = actorFor(actor, credentials.admin);
     await this.audit.record(scope, identifiedActor, {
@@ -443,9 +451,14 @@ export class AuthenticationService {
     // disabled administrator: a tenant can be started again, and the sessions
     // its operators held are not the thing that was suspended.
     if (!(await this.tenantIsActive(scope))) {
+      // A DIFFERENT code from an invalid session, because the two call for
+      // opposite responses: sign in again versus wait. Reported only to a
+      // caller who already presented a valid session, so it tells them nothing
+      // about an installation they could not already reach. The login path
+      // stays generic.
       throw errors.unauthenticated(
-        IDENTITY_ERROR_CODES.AUTH_SESSION_INVALID,
-        'The session is not valid. Sign in again.',
+        IDENTITY_ERROR_CODES.AUTH_TENANT_SUSPENDED,
+        'This installation is paused. Try again once it has been started.',
       );
     }
 

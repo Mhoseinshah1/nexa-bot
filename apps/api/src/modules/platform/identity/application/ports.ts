@@ -125,7 +125,7 @@ export interface AdminRepository {
     now: Date,
     tx?: unknown,
   ): Promise<void>;
-  recordLogin(scope: ScopeContext, id: AdminId, now: Date): Promise<void>;
+  recordLogin(scope: ScopeContext, id: AdminId, now: Date, tx?: unknown): Promise<void>;
   /**
    * Locks the tenant row for the duration of the transaction.
    *
@@ -273,7 +273,24 @@ export interface LoginThrottleRepository {
     subject: string,
     maxAttempts: number,
     reservedWindowStartedAt: Date,
+    tx?: unknown,
   ): Promise<void>;
+  /**
+   * Deletes rows whose counting window AND lockout are both over.
+   *
+   * Every previously unseen username or IP inserts a durable row, and an
+   * expired one is only ever reset when that exact subject is used again — so
+   * an unauthenticated caller submitting an endless stream of distinct
+   * usernames, or arriving from a rotating IPv6 range, grows this table
+   * without bound. Nothing else ever removes those rows. Bounded per call, so
+   * a sweep cannot become a long-running delete.
+   */
+  purgeExpired(now: Date, olderThanSeconds: number, limit: number): Promise<number>;
   /** Erases a subject's counter entirely. For the USERNAME that just succeeded. */
-  clear(scope: ScopeContext, kind: ThrottleSubjectKind, subject: string): Promise<void>;
+  clear(
+    scope: ScopeContext,
+    kind: ThrottleSubjectKind,
+    subject: string,
+    tx?: unknown,
+  ): Promise<void>;
 }

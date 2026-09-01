@@ -1,4 +1,5 @@
 import {
+  IDENTITY_ERROR_CODES,
   ADMIN_ROUTES,
   adminListResponseSchema,
   API_PREFIX,
@@ -104,9 +105,20 @@ export async function fetchSession(): Promise<SessionResponse | null> {
     credentials: 'same-origin',
     headers: { accept: 'application/json' },
   });
-  if (response.status === 401) return null;
-
   const payload: unknown = await response.json().catch(() => null);
+
+  if (response.status === 401) {
+    // A 401 is not automatically "signed out". The server answers 401 both when
+    // there is no valid session AND when the installation is paused — and in
+    // the second case the cookie is deliberately left intact, so it works again
+    // when the tenant restarts. Showing a sign-in form for that told an
+    // operator to authenticate their way out of something authentication cannot
+    // fix.
+    const error = toApiError(response.status, payload);
+    if (error.code === IDENTITY_ERROR_CODES.AUTH_TENANT_SUSPENDED) throw error;
+    return null;
+  }
+
   if (!response.ok) throw toApiError(response.status, payload);
   return sessionResponseSchema.parse(payload);
 }

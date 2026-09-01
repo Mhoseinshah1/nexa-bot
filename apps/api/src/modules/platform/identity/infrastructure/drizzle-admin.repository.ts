@@ -226,9 +226,9 @@ export class DrizzleAdminRepository implements AdminRepository {
     return updated.length === 1;
   }
 
-  async recordLogin(scope: ScopeContext, id: AdminId, now: Date): Promise<void> {
+  async recordLogin(scope: ScopeContext, id: AdminId, now: Date, tx?: unknown): Promise<void> {
     const tenantId = requireTenantId(scope);
-    await this.db
+    await executorOf(this.db, tx)
       .update(admins)
       // Never backwards. `now` is captured before the KDF, so two overlapping
       // logins can reach this statement in the opposite order to the one they
