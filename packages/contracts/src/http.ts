@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { adminDisplayNameSchema } from './identity.js';
+import { adminChangeReasonSchema, adminDisplayNameSchema } from './identity.js';
 
 /**
  * The HTTP seam.
@@ -149,13 +149,13 @@ export type CreateAdminRequest = z.infer<typeof createAdminRequestSchema>;
 
 export const setAdminStatusRequestSchema = z.object({
   status: z.enum(['ACTIVE', 'DISABLED']),
-  reason: z.string().min(1).max(500),
+  reason: adminChangeReasonSchema,
 });
 export type SetAdminStatusRequest = z.infer<typeof setAdminStatusRequestSchema>;
 
 export const setAdminRolesRequestSchema = z.object({
   roleKeys: z.array(z.string()),
-  reason: z.string().min(1).max(500),
+  reason: adminChangeReasonSchema,
 });
 export type SetAdminRolesRequest = z.infer<typeof setAdminRolesRequestSchema>;
 

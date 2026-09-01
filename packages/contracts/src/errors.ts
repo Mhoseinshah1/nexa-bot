@@ -135,6 +135,21 @@ export const IDENTITY_ERROR_CODES = {
   // caller a session EXPIRED tells them it existed, and this block's whole
   // point is that the response is not an account oracle.
   AUTH_SESSION_INVALID: 'auth.session_invalid',
+  /**
+   * The session is fine; the INSTALLATION is paused.
+   *
+   * Distinct from `auth.session_invalid` because the two call for opposite
+   * responses from a client: an invalid session means sign in again, a stopped
+   * tenant means wait. Collapsing them showed an operator holding a perfectly
+   * good cookie a sign-in form during every maintenance window, and invited
+   * them to authenticate their way out of something authentication cannot fix.
+   *
+   * Not an oracle: it is only ever returned to a caller who already presented a
+   * valid session, and it discloses that an installation they can already reach
+   * is paused. The LOGIN path stays generic, and still reports this as the one
+   * indistinguishable credential failure.
+   */
+  AUTH_TENANT_SUSPENDED: 'auth.tenant_suspended',
   AUTH_REQUIRED: 'auth.required',
   AUTH_ORIGIN_REJECTED: 'auth.origin_rejected',
   ADMIN_NOT_FOUND: 'admin.not_found',

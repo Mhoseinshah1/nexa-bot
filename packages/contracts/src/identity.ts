@@ -68,6 +68,17 @@ export const adminPasswordSchema = z.string().min(ADMIN_PASSWORD_MIN).max(ADMIN_
  */
 export const adminDisplayNameSchema = z.string().trim().min(1).max(120);
 
+/**
+ * Why an administrator's status or roles were changed.
+ *
+ * Trimmed BEFORE the length bounds, like the display name. `z.string().min(1)`
+ * accepts a single space, and these operations disable accounts and alter
+ * authority — a mandatory reason that accepts `" "` is not mandatory, it just
+ * leaves the audit row for the most consequential event on this surface holding
+ * a blank.
+ */
+export const adminChangeReasonSchema = z.string().trim().min(1).max(500);
+
 export interface Admin {
   readonly id: AdminId;
   readonly tenantId: TenantId;
