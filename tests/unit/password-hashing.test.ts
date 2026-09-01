@@ -67,6 +67,23 @@ describe('password hashing', () => {
     }
   });
 
+  it('refuses parameters whose product asks for gigabytes, not just each bound', async () => {
+    // `N` and `r` were bounded one at a time. `N=2^22` and `r=32` each pass —
+    // together they ask scrypt for roughly 16 GiB, and a single login against
+    // an imported or corrupted row could exhaust the host before the catch in
+    // `verify` had anything to catch. The aggregate is what has to be bounded.
+    const start = performance.now();
+    expect(await hasher.verify('anything', `scrypt$${2 ** 22}$32$1$c2FsdA==$ZGlnZXN0`)).toBe(false);
+    // Rejected by parsing, so the only work spent is the dummy derivation the
+    // fast profile costs — not an allocation attempt.
+    expect(performance.now() - start).toBeLessThan(5_000);
+
+    // Still accepted at the aggregate the production profile actually uses.
+    expect(hasher.needsRehash(await new ScryptPasswordHasher(PRODUCTION_SCRYPT).hash('x'))).toBe(
+      false,
+    );
+  });
+
   it('spends work for a username that does not exist', async () => {
     // Equalising the timing of "no such user" and "wrong password" is what
     // stops the login endpoint being a username oracle regardless of how

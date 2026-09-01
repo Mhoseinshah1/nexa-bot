@@ -49,7 +49,7 @@ export interface AdminRepository {
    * a password hash into scope it has no use for.
    */
   findByUsername(scope: ScopeContext, username: string, tx?: unknown): Promise<Admin | null>;
-  list(scope: ScopeContext): Promise<Admin[]>;
+  list(scope: ScopeContext, tx?: unknown): Promise<Admin[]>;
   roleKeysFor(scope: ScopeContext, id: AdminId, tx?: unknown): Promise<string[]>;
   /** Role keys for many admins at once, so listing is not N+1. */
   roleKeysForAll(scope: ScopeContext, ids: readonly AdminId[]): Promise<Map<string, string[]>>;

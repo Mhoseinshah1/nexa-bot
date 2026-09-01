@@ -91,9 +91,9 @@ export class DrizzleAdminRepository implements AdminRepository {
     return row ? toAdmin(row) : null;
   }
 
-  async list(scope: ScopeContext): Promise<Admin[]> {
+  async list(scope: ScopeContext, tx?: unknown): Promise<Admin[]> {
     const tenantId = requireTenantId(scope);
-    const rows = await this.db
+    const rows = await executorOf(this.db, tx)
       .select()
       .from(admins)
       .where(eq(admins.tenantId, tenantId))
@@ -207,6 +207,14 @@ export class DrizzleAdminRepository implements AdminRepository {
           eq(admins.tenantId, tenantId),
           eq(admins.id, id),
           eq(admins.passwordHash, expectedHash),
+          // Status is part of the predicate, not merely the hash. A disable
+          // commits and revokes the actor's sessions while a rotation is still
+          // hashing; without this the now-disabled administrator could still
+          // commit a new credential after their access ended, leaving a
+          // password they control ready for any later re-enable. A disable that
+          // commits first now makes the rotation lose, exactly as a concurrent
+          // password change does.
+          eq(admins.status, 'ACTIVE'),
         ),
       )
       .returning({ id: admins.id });

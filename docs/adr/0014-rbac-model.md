@@ -250,7 +250,11 @@ review found in the guard and removed, so it is fenced by construction instead:
 - it is a CLI, never a route, and `scripts/check-boundaries.sh` fails the build
   if a surface imports it;
 - it refuses outright once the tenant has any administrator, so it creates the
-  first owner and nothing else;
+  first owner and nothing else — and that check runs **under the same tenant
+  lock every administrator mutation takes, inside the transaction that creates
+  the owner**. Read outside it, two installer runs (or one retried run) both saw
+  an empty roster and both created an owner. A cheap check before the hash
+  survives as a fast rejection, but it is not the fence;
 - it audits itself as `SYSTEM_JOB`, so the first row in the audit log says how
   the first owner came to exist.
 

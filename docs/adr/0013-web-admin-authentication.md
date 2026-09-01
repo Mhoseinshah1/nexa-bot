@@ -42,6 +42,17 @@ The stored value is self-describing: `scrypt$N$r$p$salt$digest`. Moving to
 Argon2id later is a branch in `verify` plus `needsRehash` returning true, so
 passwords migrate as people log in. No migration, no forced reset.
 
+A hash stored below the current profile is re-stored at full strength on the
+next successful login — the only moment the plaintext exists is the only moment
+that is possible. The new hash is computed outside the transaction, because it
+is deliberately slow, and **written inside it, under the row lock, after the old
+hash has been confirmed still current**. Writing it as a separate
+compare-and-set before the session transaction is what broke every below-cost
+account: the rehash replaced the stored value, and the session's own predicate
+then demanded the hash it had just overwritten, so a correct password was
+refused. A cost increase must never lock out the accounts it is meant to
+protect.
+
 Cost is selected by `PASSWORD_HASH_PROFILE`, which the config schema **refuses**
 in production. Inferring it from `NODE_ENV` would mean a self-hosted install left
 on `development` stored every password at a thousandth of the intended cost
@@ -132,7 +143,15 @@ predicate:
 ```sql
 UPDATE admins SET password_hash = :new
  WHERE tenant_id = :tenant AND id = :admin AND password_hash = :verified
+   AND status = 'ACTIVE'
 ```
+
+Status is part of that predicate, not the hash alone. A disable committing
+inside the hashing window revokes the actor's sessions and ends their access;
+without the status check the now-disabled administrator would still commit a
+credential of their choosing, sitting ready for any later re-enable. A disable
+that commits first now makes the rotation lose, exactly as a concurrent
+password change does.
 
 Check and write become one atomic statement. A request whose view of the
 credential is stale updates no rows, and everything else is abandoned: no
@@ -206,6 +225,29 @@ Keyed on the **submitted** username rather than a resolved admin id. Throttling
 only real accounts would turn the lockout into the username oracle the error
 text refuses to be. A lockout also refuses the _correct_ password — a lockout
 that let it through would only ever throttle an attacker's last guess.
+
+`maxAttempts` is **how many attempts are allowed**, so the attempt that reaches
+the limit is still verified and the one after it is refused. Rejecting the Nth
+would give N−1 credential checks, and at a limit of 1 the very first login —
+correct password and all — would be refused, leaving the installation no way in.
+The lockout is recorded as an operational event from the moment it exists, which
+is one attempt earlier than the moment anything is refused: the failure path is
+not reached by a refused attempt, and the refusal path is not reached by the
+attempt that merely reaches the limit, so neither alone would ever write it
+down.
+
+## Timing, once a cost profile has been raised
+
+An unknown username spends a dummy derivation at the current profile. A stored
+hash below that profile verifies _faster_, so after a cost increase the
+difference says which usernames exist — until each happens to log in and be
+rehashed.
+
+The cheap verification is therefore topped up with the dummy derivation, run
+**concurrently with it rather than after it**: total elapsed becomes
+max(legacy, current), which is what an unknown username costs. Running it
+afterwards made the total nearly twice the unknown-username path — the same
+oracle, pointing the other way.
 
 ## Costs accepted
 

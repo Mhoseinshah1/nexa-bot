@@ -71,16 +71,12 @@ export class BootstrapOwnerService {
     const username = adminUsernameSchema.parse(input.username.trim().toLowerCase());
     adminPasswordSchema.parse(input.password);
 
-    const existing = await this.admins.list(scope);
-    if (existing.length > 0) {
-      // The one condition that makes this safe. An installation with any
-      // administrator is administered through the authenticated surface.
-      throw errors.conflict(
-        IDENTITY_ERROR_CODES.BOOTSTRAP_ALREADY_DONE,
-        'This installation already has administrators. Bootstrap creates the FIRST one only; ' +
-          'use the admin surface, or recover through an existing owner.',
-        { adminCount: existing.length },
-      );
+    // A cheap rejection before the hash. NOT the fence — that is re-run under
+    // the tenant lock below, because this read sees only what has committed so
+    // far and two bootstraps started together would both see nothing.
+    const existingBefore = await this.admins.list(scope);
+    if (existingBefore.length > 0) {
+      throw this.alreadyBootstrapped(existingBefore.length);
     }
 
     const now = this.clock.now();
@@ -90,6 +86,16 @@ export class BootstrapOwnerService {
     const actor: ActorContext = systemJobActor('install:bootstrap-owner', correlationId);
 
     await this.uow.run(scope, async (tx) => {
+      // The fence, for real this time: the same lock every administrator
+      // mutation takes, so a second bootstrap either waits and then sees the
+      // first one's owner, or holds the lock itself and the first waits.
+      await this.admins.lockTenantForAdminChange(scope, tx);
+
+      const existing = await this.admins.list(scope, tx);
+      if (existing.length > 0) {
+        throw this.alreadyBootstrapped(existing.length);
+      }
+
       await this.roles.ensureSystemRoles(scope, tx);
 
       const ownerRole = await this.roles.findByKey(scope, OWNER_ROLE_KEY, tx);
@@ -141,5 +147,19 @@ export class BootstrapOwnerService {
     });
 
     return { adminId, username };
+  }
+
+  /**
+   * The one condition that makes an unauthorized provisioning path safe: an
+   * installation with any administrator is administered through the
+   * authenticated surface, never through this.
+   */
+  private alreadyBootstrapped(adminCount: number): Error {
+    return errors.conflict(
+      IDENTITY_ERROR_CODES.BOOTSTRAP_ALREADY_DONE,
+      'This installation already has administrators. Bootstrap creates the FIRST one only; ' +
+        'use the admin surface, or recover through an existing owner.',
+      { adminCount },
+    );
   }
 }

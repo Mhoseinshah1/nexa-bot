@@ -142,6 +142,16 @@ const MAX_N = 2 ** 22;
 const MAX_R = 32;
 const MAX_P = 16;
 
+/**
+ * The ceiling that actually matters: 128 * N * r is what one derivation
+ * allocates, and the per-field maxima multiply. `N=2^22, r=32` satisfies both
+ * bounds individually and asks for about 16 GiB — enough for a single login
+ * against an imported or corrupted row to exhaust the host before the catch in
+ * `verify` can help. 1 GiB is far above the OWASP profile (128 MiB) and far
+ * below anything that threatens the process.
+ */
+const MAX_MEMORY_BYTES = 1024 * 1024 * 1024;
+
 function isPowerOfTwo(value: number): boolean {
   return value >= 2 && (value & (value - 1)) === 0;
 }
@@ -157,6 +167,7 @@ function parse(encoded: string): ParsedHash | null {
   if (!isPowerOfTwo(N) || N > MAX_N) return null;
   if (r < 1 || r > MAX_R) return null;
   if (p < 1 || p > MAX_P) return null;
+  if (memoryFor({ N, r, p }) > MAX_MEMORY_BYTES) return null;
 
   try {
     const salt = Buffer.from(parts[4] as string, 'base64');

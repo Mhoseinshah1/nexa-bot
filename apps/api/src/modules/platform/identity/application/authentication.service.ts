@@ -138,16 +138,23 @@ export class AuthenticationService {
       return this.failLogin(scope, actor, username, reserved, 'NO_SUCH_ADMIN');
     }
 
-    const passwordMatches = await this.hasher.verify(command.password, credentials.passwordHash);
+    // A stored hash below current cost verifies FASTER than the dummy work an
+    // unknown username spends, so after a cost increase the difference says
+    // which usernames exist — until each happens to log in and be rehashed.
+    //
+    // Equalised by running the dummy derivation CONCURRENTLY with the real one
+    // rather than after it: total elapsed becomes max(legacy, current) ≈ one
+    // current-profile derivation, which is what an unknown username costs. An
+    // earlier version added a full derivation afterwards, which made the total
+    // nearly twice the unknown-username path — the same oracle, pointing the
+    // other way.
+    const belowCurrentCost = this.hasher.needsRehash(credentials.passwordHash);
+    const [passwordMatches] = await Promise.all([
+      this.hasher.verify(command.password, credentials.passwordHash),
+      belowCurrentCost ? this.hasher.spendDummyWork() : Promise.resolve(),
+    ]);
+
     if (!passwordMatches) {
-      // A stored hash below current cost verifies FASTER than the dummy work an
-      // unknown username spends, so after a cost increase the difference says
-      // which usernames exist — until each one happens to log in and be
-      // rehashed. Topping the cheap verification up to a full current-profile
-      // derivation removes the signal.
-      if (this.hasher.needsRehash(credentials.passwordHash)) {
-        await this.hasher.spendDummyWork();
-      }
       return this.failLogin(scope, actor, username, reserved, 'BAD_PASSWORD');
     }
 
@@ -158,29 +165,10 @@ export class AuthenticationService {
     }
 
     // The password was correct and the cost profile has since been raised, so
-    // re-store it at current strength. The only moment the plaintext exists is
-    // the only moment this is possible.
-    //
-    // Compare-and-set, for exactly the reason `changeOwnPassword` uses one: the
-    // hash below takes as long as scrypt is configured to take, and a rotation
-    // can commit inside that window. An unconditional write here would replace
-    // the freshly rotated credential with a re-hash of the OLD password —
-    // silently reverting a rotation whose audit row and event both say SUCCESS,
-    // and leaving live the credential the administrator believed they had
-    // replaced.
-    //
-    // A rehash that loses simply does not need to happen: the winning rotation
-    // already stored a hash at current cost.
-    if (this.hasher.needsRehash(credentials.passwordHash)) {
-      const rehashed = await this.hasher.hash(command.password);
-      await this.admins.compareAndSetPasswordHash(
-        scope,
-        credentials.admin.id,
-        credentials.passwordHash,
-        rehashed,
-        now,
-      );
-    }
+    // re-store it at current strength. Computed here, outside the transaction,
+    // because it is intentionally slow; written below under the row lock, where
+    // the old hash has just been confirmed still current.
+    const rehashed = belowCurrentCost ? await this.hasher.hash(command.password) : null;
 
     const token = generateSessionToken();
     const sessionId = this.ids.uuid() as AdminSessionId;
@@ -208,6 +196,16 @@ export class AuthenticationService {
         tx,
       );
       if (!stillCurrent) return false;
+
+      // Safe unconditionally here: the row is locked and its hash was just
+      // confirmed to be the one this login verified. Doing it as a second
+      // compare-and-set outside the transaction is what broke legacy accounts —
+      // the rehash replaced the stored value, and the session predicate then
+      // demanded the hash it had just overwritten, so every below-cost account
+      // was refused its own correct password.
+      if (rehashed !== null) {
+        await this.admins.setPasswordHash(scope, credentials.admin.id, rehashed, now, tx);
+      }
 
       await this.sessions.create(
         scope,
@@ -414,32 +412,49 @@ export class AuthenticationService {
             lockoutSeconds: this.policy.lockoutSeconds,
           });
 
-    // This attempt is the one that crossed the line. Refused here, before the
-    // KDF runs, which is the whole point of reserving.
-    for (const [kind, state] of [
-      ['USERNAME', usernameState],
-      ['IP', ipState],
-    ] as const) {
-      if (state?.lockedUntil && state.lockedUntil.getTime() > now.getTime()) {
-        await this.recordThrottleDenial(scope, actor, username);
-        // Recorded here rather than on the failure path, because the failure
-        // path is no longer reached once a subject locks: reserving refuses the
-        // attempt before it is verified. Repeated lockouts are worth alerting
-        // on and cannot be if nothing writes them down.
+    const subjects = [
+      ['USERNAME', usernameState, this.policy.maxAttemptsPerUsername, username],
+      ['IP', ipState, this.policy.maxAttemptsPerIp, ip ?? ''],
+    ] as const;
+
+    // The attempt that REACHES the limit establishes the lockout. It is still
+    // verified — see below — but the lockout is worth alerting on from the
+    // moment it exists, and this is the only place that observes it: the
+    // failure path is not reached for a refused attempt, and the refusal path
+    // is not reached by the attempt that merely reaches the limit.
+    for (const [kind, state, limit, subject] of subjects) {
+      if (state !== null && state.failedCount >= limit) {
         await this.opsLog.record(scope, {
           code: 'auth.login_locked_out',
           severity: 'WARN',
           message: `Login attempts were locked out for a ${kind.toLowerCase()} subject.`,
           context: { username, subjectKind: kind, failedCount: state.failedCount },
-          dedupeKey: `auth.login_locked_out:${kind}:${kind === 'USERNAME' ? username : (ip ?? '')}`,
+          dedupeKey: `auth.login_locked_out:${kind}:${subject}`,
           correlationId: actor.correlationId,
         });
+      }
+    }
+
+    // Refused only once the attempt is PAST the configured number, not on the
+    // one that reaches it. `maxAttempts` is how many attempts are allowed, so
+    // rejecting the Nth would give N-1 credential checks — and with a limit of
+    // 1 the very first login, correct password and all, would be refused and
+    // the installation would have no way in.
+    //
+    // The reservation still does its job: in a burst, everything beyond the
+    // limit is refused here, before the KDF runs.
+    for (const [, state, limit] of subjects) {
+      if (state !== null && state.failedCount > limit) {
+        await this.recordThrottleDenial(scope, actor, username);
         throw new NexaError({
           kind: 'RATE_LIMITED',
           code: IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED,
           message: 'Too many attempts. Try again later.',
           details: {
-            retryAfterSeconds: Math.ceil((state.lockedUntil.getTime() - now.getTime()) / 1000),
+            retryAfterSeconds: Math.max(
+              1,
+              Math.ceil(((state.lockedUntil?.getTime() ?? now.getTime()) - now.getTime()) / 1000),
+            ),
           },
         });
       }
