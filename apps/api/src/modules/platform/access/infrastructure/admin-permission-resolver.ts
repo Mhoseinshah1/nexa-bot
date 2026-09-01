@@ -58,6 +58,25 @@ export class AdminPermissionResolver implements PermissionResolver {
     // roles — history must still name them — and holds none of their powers.
     if (admin === null || admin.status !== 'ACTIVE') return empty;
 
+    return this.permissionsIfActive(scope, adminId, tx);
+  }
+
+  /**
+   * What an administrator holds, or WOULD hold if their status were ACTIVE.
+   *
+   * `resolve` above answers "what may this actor do now", and correctly gives a
+   * disabled administrator nothing. Re-enabling one is a different question —
+   * what authority is about to be restored — and it has to be answered by the
+   * same rule, not by a second implementation of it. Two surfaces computing one
+   * concept differently is the failure this codebase is built to avoid; here it
+   * would mean the amplification rule disagreeing with the guard about what a
+   * permission set contains.
+   */
+  async permissionsIfActive(
+    scope: ScopeContext,
+    adminId: AdminId,
+    tx?: unknown,
+  ): Promise<ReadonlySet<PermissionKey>> {
     // Sequential rather than concurrent when a transaction is supplied: a
     // transaction handle is a single connection and cannot serve two queries at
     // once. Concurrency here would buy microseconds and cost correctness.

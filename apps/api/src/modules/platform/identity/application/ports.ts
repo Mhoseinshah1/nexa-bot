@@ -197,6 +197,17 @@ export type ThrottleSubjectKind = (typeof THROTTLE_SUBJECTS)[number];
 export interface ThrottleState {
   readonly failedCount: number;
   readonly lockedUntil: Date | null;
+  /**
+   * The counting period this state belongs to.
+   *
+   * Carried so a release can name the reservation it is returning. A login can
+   * sit in the KDF longer than the throttle window allows for — 30 seconds is
+   * the configured minimum and a saturated crypto pool can exceed it — and by
+   * the time it releases, a later attempt may have started a new period. An
+   * unconditional decrement would then take away the later attempt instead,
+   * and could clear the lock that attempt had just established.
+   */
+  readonly windowStartedAt: Date;
 }
 
 export interface LoginThrottleRepository {
@@ -242,6 +253,7 @@ export interface LoginThrottleRepository {
     kind: ThrottleSubjectKind,
     subject: string,
     maxAttempts: number,
+    reservedWindowStartedAt: Date,
   ): Promise<void>;
   /** Erases a subject's counter entirely. For the USERNAME that just succeeded. */
   clear(scope: ScopeContext, kind: ThrottleSubjectKind, subject: string): Promise<void>;

@@ -241,6 +241,27 @@ Phase 1 adds none. `admins.view`, `admins.edit` and `admins.permissions.edit`
 were already in the Phase 0 catalog, and RBAC is built against the frozen
 catalog rather than the catalog being grown to fit the implementation.
 
+## Re-enabling is granting
+
+Rule 4 — an administrator may not confer a permission they do not hold — binds
+`create` and `setRoles`, and now binds the one path that confers permissions
+without naming any: switching a disabled account back to ACTIVE.
+
+Gating only the owner key was too narrow. The resolver gives a disabled
+administrator nothing, so ACTIVE is exactly where their authority comes back. A
+dormant account holding `refunds.issue`, or a custom role carrying
+`admins.permissions.edit`, could be restored by an actor with plain
+`admins.edit` — an actor who could neither have created that account nor granted
+it those roles. That the account already exists does not make restoring it a
+smaller act.
+
+What would be restored is resolved by the guard's own rule rather than
+recomputed, through `permissionsIfActive`: the same
+`(roles ∪ GRANT) − DENY` the resolver applies, minus only the status gate. Two
+implementations of one concept is the failure this codebase is built to avoid,
+and here it would mean the amplification rule disagreeing with the guard about
+what a permission set contains.
+
 ## A denial is audited wherever it happens
 
 Each mutation checks `admins.edit` twice: once on the pool as a cheap rejection

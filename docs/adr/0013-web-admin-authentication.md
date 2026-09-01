@@ -78,6 +78,12 @@ that outlives the page. Removing it from the body also made bearer an
 authentication path no legitimate client could obtain a credential for, so that
 was removed too: an unreachable way in is not a feature.
 
+The contracts say so too, now. A `SESSION_TRANSPORTS` constant listing `COOKIE`
+and `BEARER` survived that removal, referenced by nothing and advertising as
+supported the very path this decision forbids. A frozen contract is read as
+permission by whoever comes next, so an unused abstraction naming a forbidden
+credential path is a trap rather than a spare part. It is gone.
+
 A CLI or API credential, if one is ever wanted, is a separate surface with its
 own issuance, scope, lifetime and revocation. It is not this cookie wearing a
 different header name.
@@ -275,6 +281,13 @@ periodically signing into their own. Held in the database rather than in Redis, 
 reasons: an attacker must not be able to clear their own counter by waiting out
 a cache eviction or a restart, and the window advances by the injected `Clock`
 so the tests are deterministic without sleeping.
+
+Every release names the **counting period its reservation belongs to**, and
+matches nothing if that period has passed. A login can sit in the KDF longer
+than the whole window — 30 seconds is the configured minimum and a saturated
+crypto pool can exceed it — and by then a later attempt may have started a new
+period. An unconditional decrement would take away that later attempt instead,
+and could clear the lock it had just established.
 
 A request refused for being **past** the limit gives both reservations back
 before it throws. It never reaches the KDF and never checks a credential, so

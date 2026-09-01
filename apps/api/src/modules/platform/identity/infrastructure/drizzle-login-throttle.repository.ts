@@ -42,7 +42,13 @@ export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
         ),
       )
       .limit(1);
-    return row ? { failedCount: row.failedCount, lockedUntil: row.lockedUntil } : null;
+    return row
+      ? {
+          failedCount: row.failedCount,
+          lockedUntil: row.lockedUntil,
+          windowStartedAt: row.windowStartedAt,
+        }
+      : null;
   }
 
   /**
@@ -133,6 +139,7 @@ export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
       .returning({
         failedCount: adminLoginThrottle.failedCount,
         lockedUntil: adminLoginThrottle.lockedUntil,
+        windowStartedAt: adminLoginThrottle.windowStartedAt,
       });
 
     const row = rows[0];
@@ -142,7 +149,11 @@ export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
       // that protects the account.
       throw new Error('The login throttle upsert returned no row.');
     }
-    return { failedCount: row.failedCount, lockedUntil: row.lockedUntil };
+    return {
+      failedCount: row.failedCount,
+      lockedUntil: row.lockedUntil,
+      windowStartedAt: row.windowStartedAt,
+    };
   }
 
   /**
@@ -156,12 +167,22 @@ export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
    * `LOGIN_MAX_ATTEMPTS_PER_IP=1` the first successful login would poison the
    * address. The lock is lifted only when the decremented count falls back
    * below the limit, so failures accumulated by others still hold it.
+   *
+   * Applied ONLY to the counting period the reservation was made in. A login
+   * can sit in the KDF longer than the whole window — 30 seconds is the
+   * configured minimum, and a saturated crypto pool can exceed it — and by the
+   * time it releases, a later attempt may have reset the row into a new period.
+   * Decrementing then would take away that later attempt instead, and could
+   * clear the lock it had just established. A release whose period has passed
+   * matches nothing and does nothing, which is the correct outcome: the
+   * reservation it was returning no longer exists.
    */
   async releaseAttempt(
     scope: ScopeContext,
     kind: ThrottleSubjectKind,
     subject: string,
     maxAttempts: number,
+    reservedWindowStartedAt: Date,
   ): Promise<void> {
     const tenantId = requireTenantId(scope);
     const releasedCount = sql`GREATEST(${adminLoginThrottle.failedCount} - 1, 0)`;
@@ -179,6 +200,7 @@ export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
           eq(adminLoginThrottle.tenantId, tenantId),
           eq(adminLoginThrottle.subjectKind, kind),
           eq(adminLoginThrottle.subject, subject),
+          eq(adminLoginThrottle.windowStartedAt, reservedWindowStartedAt),
         ),
       );
   }

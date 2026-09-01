@@ -14,6 +14,7 @@ import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { ScryptPasswordHasher } from '../../apps/api/src/infrastructure/crypto/password-hasher';
 import {
   adminLoginThrottle,
+  adminPermissionOverrides,
   adminSessions,
   auditLogs,
   roles,
@@ -1167,5 +1168,171 @@ describe('the session last-seen timestamp never moves backwards', () => {
       .from(adminSessions)
       .where(eq(adminSessions.id, issued.session.id));
     expect(row?.lastSeenAt?.toISOString()).toBe(newer.toISOString());
+  });
+});
+
+describe('re-enabling an administrator cannot restore authority the actor lacks', () => {
+  async function managerWithEditOnly(): Promise<SeededAdmin> {
+    const manager = await createAdmin(ctx.container, tenantA, {
+      username: 'roster-manager',
+      roleKeys: ['support'],
+    });
+    await ctx.container.database.db.insert(adminPermissionOverrides).values({
+      tenantId: tenantA.tenantId,
+      adminId: manager.id,
+      permissionKey: 'admins.edit',
+      effect: 'GRANT',
+      reason: 'Administers the roster.',
+      expiresAt: null,
+    });
+    return manager;
+  }
+
+  it('refuses to re-enable a disabled admin holding permissions the actor does not', async () => {
+    // Gating only the owner key was too narrow. The resolver gives a disabled
+    // administrator nothing, so flipping them to ACTIVE is where the authority
+    // comes back — an actor who could neither create that account nor grant it
+    // those roles should not be able to switch it back on.
+    const manager = await managerWithEditOnly();
+    const dormant = await createAdmin(ctx.container, tenantA, {
+      username: 'dormant-finance',
+      roleKeys: ['finance'],
+      status: 'DISABLED',
+    });
+
+    await expect(
+      ctx.container.adminManagement.setStatus(
+        tenantA,
+        adminActorFor(manager),
+        dormant.id as AdminId,
+        { status: 'ACTIVE', reason: 'Bringing back the finance account.' },
+      ),
+    ).rejects.toThrow(/permission|hold/i);
+
+    expect((await ctx.container.admins.findById(tenantA, dormant.id as AdminId))?.status).toBe(
+      'DISABLED',
+    );
+  });
+
+  it('permits an owner to re-enable the same account', async () => {
+    // Not blanket pessimism: an owner holds the whole catalogue, so the rule
+    // never constrains them.
+    const dormant = await createAdmin(ctx.container, tenantA, {
+      username: 'dormant-finance-2',
+      roleKeys: ['finance'],
+      status: 'DISABLED',
+    });
+    await expect(
+      ctx.container.adminManagement.setStatus(
+        tenantA,
+        adminActorFor(owner),
+        dormant.id as AdminId,
+        { status: 'ACTIVE', reason: 'Owner may.' },
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it('permits re-enabling an account whose permissions the actor does hold', async () => {
+    const manager = await managerWithEditOnly();
+    const dormant = await createAdmin(ctx.container, tenantA, {
+      username: 'dormant-peer',
+      roleKeys: ['support'],
+      status: 'DISABLED',
+    });
+    await expect(
+      ctx.container.adminManagement.setStatus(
+        tenantA,
+        adminActorFor(manager),
+        dormant.id as AdminId,
+        { status: 'ACTIVE', reason: 'Same authority as mine.' },
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it('still permits disabling, which takes authority away rather than giving it', async () => {
+    const manager = await managerWithEditOnly();
+    const active = await createAdmin(ctx.container, tenantA, {
+      username: 'active-peer',
+      roleKeys: ['support'],
+    });
+    await expect(
+      ctx.container.adminManagement.setStatus(
+        tenantA,
+        adminActorFor(manager),
+        active.id as AdminId,
+        { status: 'DISABLED', reason: 'Ordinary administration.' },
+      ),
+    ).resolves.toBeDefined();
+  });
+});
+
+describe('a throttle release belongs to the period it reserved in', () => {
+  it('does nothing once a later attempt has started a new counting period', async () => {
+    // A login can sit in the KDF longer than the whole window — 30 seconds is
+    // the configured minimum, and a saturated crypto pool can exceed it. By the
+    // time it releases, a later attempt may have reset the row into a new
+    // period; an unconditional decrement would take away THAT attempt instead,
+    // and could clear the lock it had just established.
+    const ip = '198.51.100.99';
+    const reserved = await ctx.container.auth['throttle'].reserveAttempt(
+      tenantA,
+      'IP',
+      ip,
+      ctx.container.clock.now(),
+      { windowSeconds: 900, maxAttempts: 1, lockoutSeconds: 900 },
+    );
+    expect(reserved.failedCount).toBe(1);
+
+    // A later attempt in a new period: the row is rewritten with a fresh
+    // window, exactly as an expired window or a served lockout would do.
+    const laterWindow = new Date(Date.now() + 60_000);
+    await ctx.container.database.db
+      .update(adminLoginThrottle)
+      .set({ windowStartedAt: laterWindow, failedCount: 1, lockedUntil: laterWindow })
+      .where(eq(adminLoginThrottle.subject, ip));
+
+    // The old login finally releases. It must not touch the new period.
+    await ctx.container.auth['throttle'].releaseAttempt(
+      tenantA,
+      'IP',
+      ip,
+      1,
+      reserved.windowStartedAt,
+    );
+
+    const [row] = await ctx.container.database.db
+      .select()
+      .from(adminLoginThrottle)
+      .where(eq(adminLoginThrottle.subject, ip));
+    expect(row?.failedCount).toBe(1);
+    expect(row?.lockedUntil).not.toBeNull();
+  });
+
+  it('still releases within its own period', async () => {
+    // The narrowing must not stop the ordinary case working.
+    const ip = '198.51.100.100';
+    const reserved = await ctx.container.auth['throttle'].reserveAttempt(
+      tenantA,
+      'IP',
+      ip,
+      ctx.container.clock.now(),
+      { windowSeconds: 900, maxAttempts: 1, lockoutSeconds: 900 },
+    );
+    expect(reserved.lockedUntil).not.toBeNull();
+
+    await ctx.container.auth['throttle'].releaseAttempt(
+      tenantA,
+      'IP',
+      ip,
+      1,
+      reserved.windowStartedAt,
+    );
+
+    const [row] = await ctx.container.database.db
+      .select()
+      .from(adminLoginThrottle)
+      .where(eq(adminLoginThrottle.subject, ip));
+    expect(row?.failedCount).toBe(0);
+    expect(row?.lockedUntil).toBeNull();
   });
 });

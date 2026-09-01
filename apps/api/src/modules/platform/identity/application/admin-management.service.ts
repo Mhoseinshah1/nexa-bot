@@ -276,6 +276,21 @@ export class AdminManagementService {
           await this.assertOwnerSurvivesDisabling(scope, target, tx);
         }
 
+        // Re-enabling RESTORES authority, so it is bound by the same rule as
+        // conferring it: an administrator may not hand out a permission they do
+        // not hold themselves.
+        //
+        // Gating only the owner key was too narrow. A disabled account holding
+        // `refunds.issue`, or a custom role carrying `admins.permissions.edit`,
+        // could be switched back on by an actor with plain `admins.edit` — who
+        // could not have created that account, and could not have granted it
+        // those roles. The account already existing does not make restoring it
+        // a smaller act; the resolver gives a disabled admin nothing, so ACTIVE
+        // is where the authority comes back.
+        if (command.status === 'ACTIVE') {
+          await this.assertRestoresNoMorePrivilegeThanHeld(scope, actor, target.id, tx);
+        }
+
         await this.admins.setStatus(scope, targetId, command.status, now, tx);
 
         // Disabling ends every live session immediately. Waiting for expiry would
@@ -608,6 +623,38 @@ export class AdminManagementService {
       throw errors.permissionDenied(
         IDENTITY_ERROR_CODES.ADMIN_PRIVILEGE_ESCALATION,
         'You cannot grant a permission you do not hold yourself.',
+        { permissions: excess },
+      );
+    }
+  }
+
+  /**
+   * Refuses to restore authority the acting administrator does not hold.
+   *
+   * The counterpart of `assertGrantsNoMorePrivilegeThanHeld` for the one path
+   * that confers permissions without naming any: flipping a disabled account
+   * back to ACTIVE. What comes back is resolved by the guard's own rule rather
+   * than recomputed here, including the target's own overrides — a DENY on the
+   * target still subtracts, and a GRANT on the target still counts as authority
+   * being restored.
+   */
+  private async assertRestoresNoMorePrivilegeThanHeld(
+    scope: ScopeContext,
+    actor: ActorContext,
+    targetId: AdminId,
+    tx?: unknown,
+  ): Promise<void> {
+    if (adminIdOf(actor) === null) return;
+
+    const restoring = await this.guard.permissionsIfActive(scope, targetId, tx);
+    if (restoring.size === 0) return;
+
+    const held = await this.guard.permissionsOf(scope, actor, tx);
+    const excess = [...restoring].filter((permission) => !held.has(permission)).sort();
+    if (excess.length > 0) {
+      throw errors.permissionDenied(
+        IDENTITY_ERROR_CODES.ADMIN_PRIVILEGE_ESCALATION,
+        'You cannot restore an administrator holding permissions you do not hold yourself.',
         { permissions: excess },
       );
     }

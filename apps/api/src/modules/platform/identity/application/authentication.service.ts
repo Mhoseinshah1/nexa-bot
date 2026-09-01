@@ -89,6 +89,18 @@ export interface TenantStatusReader {
   findById(id: TenantId): Promise<{ status: TenantStatus } | null>;
 }
 
+/**
+ * The two throttle reservations one login attempt makes.
+ *
+ * Both are carried, not just the username's, so a release can name the counting
+ * period its reservation belongs to rather than decrementing whatever the row
+ * happens to hold when it gets there.
+ */
+interface Reservation {
+  readonly username: ThrottleState;
+  readonly ip: ThrottleState | null;
+}
+
 export class AuthenticationService {
   constructor(
     private readonly admins: AdminRepository,
@@ -272,7 +284,13 @@ export class AuthenticationService {
     // periodically signing into their own.
     await this.throttle.clear(scope, 'USERNAME', username);
     if (context.ip !== null) {
-      await this.throttle.releaseAttempt(scope, 'IP', context.ip, this.policy.maxAttemptsPerIp);
+      await this.throttle.releaseAttempt(
+        scope,
+        'IP',
+        context.ip,
+        this.policy.maxAttemptsPerIp,
+        (reserved.ip ?? reserved.username).windowStartedAt,
+      );
     }
 
     await this.admins.recordLogin(scope, credentials.admin.id, now);
@@ -444,7 +462,7 @@ export class AuthenticationService {
     actor: ActorContext,
     username: string,
     ip: string | null,
-  ): Promise<ThrottleState> {
+  ): Promise<Reservation> {
     const now = this.clock.now();
 
     const usernameState = await this.throttle.reserveAttempt(scope, 'USERNAME', username, now, {
@@ -502,7 +520,10 @@ export class AuthenticationService {
         // limit and keeps the lock alive. With `LOGIN_MAX_ATTEMPTS_PER_IP=1`,
         // two simultaneous correct logins would refuse one, admit the other,
         // and still lock the address they share.
-        await this.releaseReservations(scope, username, ip);
+        await this.releaseReservations(scope, username, ip, {
+          username: usernameState,
+          ip: ipState,
+        });
         await this.recordThrottleDenial(scope, actor, username);
         throw new NexaError({
           kind: 'RATE_LIMITED',
@@ -518,7 +539,7 @@ export class AuthenticationService {
       }
     }
 
-    return usernameState;
+    return { username: usernameState, ip: ipState };
   }
 
   /**
@@ -531,15 +552,23 @@ export class AuthenticationService {
     scope: TenantContext,
     username: string,
     ip: string | null,
+    reserved: Reservation,
   ): Promise<void> {
     await this.throttle.releaseAttempt(
       scope,
       'USERNAME',
       username,
       this.policy.maxAttemptsPerUsername,
+      reserved.username.windowStartedAt,
     );
-    if (ip !== null) {
-      await this.throttle.releaseAttempt(scope, 'IP', ip, this.policy.maxAttemptsPerIp);
+    if (ip !== null && reserved.ip !== null) {
+      await this.throttle.releaseAttempt(
+        scope,
+        'IP',
+        ip,
+        this.policy.maxAttemptsPerIp,
+        reserved.ip.windowStartedAt,
+      );
     }
   }
 
@@ -562,9 +591,10 @@ export class AuthenticationService {
     scope: TenantContext,
     actor: ActorContext,
     username: string,
-    usernameState: ThrottleState,
+    reserved: Reservation,
     reason: LoginFailureReason,
   ): Promise<never> {
+    const usernameState = reserved.username;
     await this.audit.record(scope, actor, {
       action: 'auth.login',
       entityType: 'Admin',

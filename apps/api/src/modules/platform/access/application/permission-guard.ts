@@ -4,6 +4,7 @@ import {
   resolveEffectivePermissions,
   SYSTEM_JOB_PERMISSIONS,
   type ActorContext,
+  type AdminId,
   type Clock,
   type OperationalEventInput,
   type OperationalEventRecorder,
@@ -49,6 +50,17 @@ export interface PermissionResolver {
   resolve(
     scope: ScopeContext,
     actor: ActorContext,
+    tx?: unknown,
+  ): Promise<ReadonlySet<PermissionKey>>;
+  /**
+   * What an administrator holds, or WOULD hold once ACTIVE.
+   *
+   * Needed because re-enabling a disabled administrator restores authority, and
+   * `resolve` deliberately reports a disabled one as holding nothing.
+   */
+  permissionsIfActive(
+    scope: ScopeContext,
+    adminId: AdminId,
     tx?: unknown,
   ): Promise<ReadonlySet<PermissionKey>>;
 }
@@ -133,6 +145,15 @@ export class PermissionGuard {
     tx?: unknown,
   ): Promise<ReadonlySet<PermissionKey>> {
     return this.effective(scope, actor, tx);
+  }
+
+  /** The authority a re-enable would restore. See `PermissionResolver`. */
+  async permissionsIfActive(
+    scope: ScopeContext,
+    adminId: AdminId,
+    tx?: unknown,
+  ): Promise<ReadonlySet<PermissionKey>> {
+    return this.resolver.permissionsIfActive(scope, adminId, tx);
   }
 
   private async effective(
