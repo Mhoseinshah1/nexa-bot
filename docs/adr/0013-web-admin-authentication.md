@@ -427,6 +427,16 @@ a `SET` per checkout, so no code path can forget them. Migrations are exempt and
 open their own handle without them: a long index build is not a stuck
 transaction, and killing one halfway is worse than waiting for it.
 
+The API's boot-time role sync takes the same exclusive lock, so it is now
+possible for a process to **fail to start** rather than wait, if something else
+holds the tenant row for longer than `lock_timeout`. That is the intended
+trade and not an oversight: the critical section it waits on is a handful of
+conflict-ignoring inserts, the margin is measured in seconds against work
+measured in milliseconds, and a supervised service that exits loudly is easier
+to diagnose than one that hangs at startup with no error. If a deployment ever
+sees this, the answer is a longer bound for that one transaction, not an
+unbounded wait for every other.
+
 Nothing here removes the concentration — it bounds what happens when it goes
 wrong. Turning the tenant row into something less contended (a per-installation
 advisory lock, or a narrower boundary per aggregate) is a change worth making on
