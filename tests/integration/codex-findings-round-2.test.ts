@@ -701,6 +701,35 @@ describe('the session cookie a production deployment issues', () => {
     );
   }, 30_000);
 
+  it('clears both spellings on logout, not just the one it issues', async () => {
+    // Two `set-cookie` headers on one reply. If the framework overwrote rather
+    // than appended, logout would clear one name and leave the other being
+    // presented on every subsequent request — and a deployment that has just
+    // moved to production still has the unprefixed cookie in browsers.
+    const login = await inject({
+      method: 'POST',
+      url: `${API_PREFIX}${AUTH_ROUTES.login}`,
+      headers: { origin: ORIGIN },
+      payload: { username: 'owner', password: 'the-owners-real-password' },
+    });
+    const token = String(login.headers['set-cookie']).split('=')[1]?.split(';')[0] ?? '';
+
+    const logout = await inject({
+      method: 'POST',
+      url: `${API_PREFIX}${AUTH_ROUTES.logout}`,
+      headers: {
+        origin: ORIGIN,
+        cookie: `${SESSION_COOKIE_NAME_SECURE}=${token}`,
+      },
+    });
+    expect(logout.statusCode).toBe(201);
+
+    const cleared = ([] as string[]).concat(logout.headers['set-cookie'] as never).join('\n');
+    expect(cleared).toContain(`${SESSION_COOKIE_NAME_SECURE}=;`);
+    expect(cleared).toContain(`${SESSION_COOKIE_NAME}=;`);
+    expect(cleared).toContain('Max-Age=0');
+  }, 30_000);
+
   it('accepts the prefixed cookie it issued', async () => {
     const login = await inject({
       method: 'POST',
