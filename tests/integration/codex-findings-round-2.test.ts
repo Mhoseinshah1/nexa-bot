@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { OWNER_ROLE_KEY, type AdminId, type CorrelationId } from '@nexa/contracts';
 import { ScryptPasswordHasher } from '../../apps/api/src/infrastructure/crypto/password-hasher';
+import { adminSessions } from '../../apps/api/src/infrastructure/persistence/schema';
 import {
   adminActorFor,
   createAdmin,
@@ -235,6 +237,66 @@ describe('a rotation may not commit after the account is disabled', () => {
     // account restores the password its owner last had, not the one chosen
     // after their access ended.
     expect(await storedHashOf('rotator')).toBe(before);
+  });
+});
+
+describe('a login may not outlive the account access that authorised it', () => {
+  it('creates no session when a disable commits during the login', async () => {
+    // The status was read outside any transaction, and the row lock the session
+    // takes carried only the hash. A disable committing in that gap revokes
+    // every session that EXISTS at that moment; one inserted afterwards was not
+    // one of them. It could never be used — `authenticate` refuses a
+    // non-ACTIVE administrator on every request — but the row should not exist
+    // at all, for the same reason a rotation's does not.
+    const subject = await createAdmin(ctx.container, tenantA, {
+      username: 'disabled-mid-login',
+      password: 'the-original-password',
+      roleKeys: ['support'],
+    });
+
+    const hasher = ctx.container.hasher as unknown as Record<string, unknown>;
+    const realVerify = ctx.container.hasher.verify.bind(ctx.container.hasher);
+    let releaseLogin: () => void = () => undefined;
+    const loginHasVerified = new Promise<void>((resolve) => {
+      hasher['verify'] = async (plaintext: string, encoded: string) => {
+        hasher['verify'] = realVerify;
+        const result = await realVerify(plaintext, encoded);
+        resolve();
+        await new Promise<void>((release) => {
+          releaseLogin = release;
+        });
+        return result;
+      };
+    });
+
+    const login = ctx.container.auth
+      .login(
+        tenantA,
+        anonymous,
+        { username: 'disabled-mid-login', password: 'the-original-password' },
+        from,
+      )
+      .catch((error: unknown) => error);
+
+    await loginHasVerified;
+
+    await ctx.container.adminManagement.setStatus(
+      tenantA,
+      adminActorFor(owner),
+      subject.id as AdminId,
+      { status: 'DISABLED', reason: 'Access revoked mid-login.' },
+    );
+
+    releaseLogin();
+    const caught = await login;
+
+    expect((caught as { code?: string }).code).toBe('auth.invalid_credentials');
+
+    const live = await ctx.container.database.db
+      .select()
+      .from(adminSessions)
+      .where(eq(adminSessions.adminId, subject.id as AdminId));
+    expect(live.filter((row) => row.revokedAt === null)).toHaveLength(0);
   });
 });
 

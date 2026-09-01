@@ -255,6 +255,15 @@ export class DrizzleAdminRepository implements AdminRepository {
           eq(admins.tenantId, tenantId),
           eq(admins.id, id),
           eq(admins.passwordHash, expectedHash),
+          // Status too, for the same reason the rotation's predicate carries
+          // it. The status the login checked was read outside any transaction,
+          // and a disable committing in that gap revokes every session that
+          // exists at that moment — a session inserted afterwards would not be
+          // one of them. It could never be USED (`authenticate` refuses a
+          // non-ACTIVE administrator on every request), but a login must not
+          // outlive the account's access any more than it outlives its
+          // credential.
+          eq(admins.status, 'ACTIVE'),
         ),
       )
       .for('update')

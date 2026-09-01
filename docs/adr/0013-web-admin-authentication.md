@@ -200,6 +200,14 @@ is created first and the rotation then revokes it, or the credential is already
 gone and no session is created. The caller is told the password is incorrect,
 which is precisely true.
 
+The predicate carries the account's **status** as well as its hash, for the same
+reason and against the same shape: the status was read outside any transaction,
+and a disable committing in that gap revokes every session that exists at that
+moment — one inserted afterwards would not be among them. Such a session could
+never be used, since `authenticate` refuses a non-ACTIVE administrator on every
+request, but a login should no more outlive the account's access than it
+outlives its credential.
+
 ## Throttling
 
 Five attempts per username and twenty per IP in a fifteen-minute window, then a
