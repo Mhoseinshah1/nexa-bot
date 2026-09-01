@@ -81,7 +81,14 @@ export class DrizzleSessionRepository implements SessionRepository {
   }
 
   async touch(id: AdminSessionId, now: Date): Promise<void> {
-    await this.db.update(adminSessions).set({ lastSeenAt: now }).where(eq(adminSessions.id, id));
+    // Never backwards, for the same reason `recordLogin` is not: each request
+    // captures `now` before its reads, so two overlapping requests on one
+    // session can reach this write in the opposite order to the one they
+    // started in, and the slower earlier one would replace a newer value.
+    await this.db
+      .update(adminSessions)
+      .set({ lastSeenAt: sql`GREATEST(${adminSessions.lastSeenAt}, ${now})` })
+      .where(eq(adminSessions.id, id));
   }
 
   async revoke(id: AdminSessionId, now: Date, reason: string): Promise<void> {

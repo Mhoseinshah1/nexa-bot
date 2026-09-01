@@ -116,8 +116,13 @@ believed — and nothing could clean it up afterwards, because a host-only
 `Set-Cookie` cannot delete another domain's cookie. The plain name therefore
 survives only where the prefix is unusable, which is a deployment without TLS.
 
-Which is also why **every production admin origin must be `https://`**, checked
-at boot. An `http://` origin would otherwise start, pass the Origin check, log
+Which is also why **every production admin origin must be a canonical `https`
+origin**, checked at boot: parsed as a URL, with `url.origin` required to equal
+the configured string. A trailing slash is enough to break it — a browser sends
+`Origin: https://admin.example.test` and the check compares exactly, so
+`https://admin.example.test/` would validate, boot, and then reject every login
+and every write on a deployment whose configuration looked correct. Parsing also
+disposes of paths, queries and embedded credentials. An `http://` origin would otherwise start, pass the Origin check, log
 in successfully, and leave the administrator unauthenticated with nothing to
 point at, because the browser refused to store a `Secure` cookie from an
 insecure page. HSTS cannot rescue that first response — a browser ignores HSTS
@@ -270,6 +275,15 @@ periodically signing into their own. Held in the database rather than in Redis, 
 reasons: an attacker must not be able to clear their own counter by waiting out
 a cache eviction or a restart, and the window advances by the injected `Clock`
 so the tests are deterministic without sleeping.
+
+A request refused for being **past** the limit gives both reservations back
+before it throws. It never reaches the KDF and never checks a credential, so
+counting it overstates what happened — and the overstatement sticks: an allowed
+request that reserved the limiting count and then succeeded returns only its
+own, leaving the leaked one holding the subject at the limit and the lock alive.
+At `LOGIN_MAX_ATTEMPTS_PER_IP=1`, two simultaneous correct logins would refuse
+one, admit the other, and still lock the address they share. A failure that was
+actually verified keeps its reservation, which is the failure being counted.
 
 A lockout that has **expired** ends the counting period with it. Without that,
 a lockout shorter than the window never actually ended: the first attempt after

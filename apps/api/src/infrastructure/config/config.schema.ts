@@ -224,17 +224,33 @@ export const configSchema = z
       // logs in successfully, and leaves the administrator unauthenticated with
       // nothing to point at. HSTS cannot rescue the first response, because a
       // browser ignores HSTS received over HTTP. Refused at boot instead.
-      const insecure = config.WEB_ADMIN_ORIGINS.filter(
-        (origin) => !origin.toLowerCase().startsWith('https://'),
-      );
-      if (insecure.length > 0) {
+      //
+      // Each entry must also be a CANONICAL serialized origin, because that is
+      // what the Origin check compares against and a browser sends nothing
+      // else. `https://admin.example.com/` — one trailing slash — passes any
+      // prefix test, matches no Origin header, and rejects every login and
+      // every write on a deployment whose configuration validated cleanly.
+      // Parsing settles it, and rejects paths, queries, ports written oddly and
+      // embedded credentials at the same time.
+      const rejected = config.WEB_ADMIN_ORIGINS.filter((origin) => {
+        let parsed: URL;
+        try {
+          parsed = new URL(origin);
+        } catch {
+          return true;
+        }
+        return parsed.protocol !== 'https:' || parsed.origin !== origin;
+      });
+      if (rejected.length > 0) {
         ctx.addIssue({
           code: 'custom',
           path: ['WEB_ADMIN_ORIGINS'],
           message:
-            `Every production admin origin must be https. These are not: ${insecure.join(', ')}. ` +
-            'The session is issued as a Secure __Host- cookie, which a browser refuses to store ' +
-            'from an insecure origin, so login would appear to succeed and authenticate nothing.',
+            `Every production admin origin must be a canonical https origin, such as ` +
+            `https://admin.example.com with no trailing slash or path. These are not: ` +
+            `${rejected.join(', ')}. The session is issued as a Secure __Host- cookie, which a ` +
+            'browser refuses to store from an insecure origin; and the Origin check compares ' +
+            'exactly what the browser sends, which is the serialized origin and nothing else.',
         });
       }
     }

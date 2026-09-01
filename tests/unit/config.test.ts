@@ -114,6 +114,39 @@ describe('configuration', () => {
     ).not.toThrow();
   });
 
+  it('refuses a production origin that is not a canonical serialized origin', () => {
+    // A browser sends `Origin: https://admin.example.test` and nothing else,
+    // and the check compares exactly. `https://admin.example.test/` — one
+    // trailing slash — would validate, boot, and then reject every login and
+    // every write, with the configuration looking correct.
+    for (const origin of [
+      'https://admin.example.test/',
+      'https://admin.example.test/admin',
+      'https://admin.example.test?x=1',
+      'https://user:pass@admin.example.test',
+      'not-a-url',
+    ]) {
+      expect(() =>
+        loadConfig({
+          ...valid,
+          NODE_ENV: 'production',
+          PASSWORD_HASH_PROFILE: 'production',
+          WEB_ADMIN_ORIGINS: origin,
+        }),
+      ).toThrowError(/canonical https origin/);
+    }
+
+    // An explicit port is part of a serialized origin, so it is allowed.
+    expect(() =>
+      loadConfig({
+        ...valid,
+        NODE_ENV: 'production',
+        PASSWORD_HASH_PROFILE: 'production',
+        WEB_ADMIN_ORIGINS: 'https://admin.example.test:8443',
+      }),
+    ).not.toThrow();
+  });
+
   it('parses the admin origin list', () => {
     const config = loadConfig({
       ...valid,

@@ -1041,3 +1041,131 @@ describe('two processes may seed the system roles at once', () => {
     expect(after).toHaveLength(before.length);
   });
 });
+
+describe('a refused attempt does not spend anything', () => {
+  it('returns both reservations when it is rejected over the limit', async () => {
+    // A request refused past the limit never reaches the KDF and never checks a
+    // credential, so counting it overstates what happened — and the
+    // overstatement sticks. An allowed request that reserved the limiting count
+    // and then succeeded returns only its own reservation, so the leaked one
+    // holds the subject at the limit and keeps the lock alive.
+    //
+    // `assertNotThrottled` refuses without reserving, so it hides this
+    // interleaving on its own: both requests have to pass that read before
+    // either writes. A barrier inside the IP reservation forces exactly that.
+    const strict = await createTestContext({
+      LOGIN_MAX_ATTEMPTS_PER_IP: '1',
+      LOGIN_MAX_ATTEMPTS_PER_USERNAME: '100',
+    });
+    try {
+      await strict.reset();
+      await createAdmin(strict.container, tenantA, {
+        username: 'pair',
+        password: 'the-correct-password',
+        roleKeys: ['support'],
+      });
+      const ip = '198.51.100.77';
+
+      const throttle = strict.container.auth['throttle'] as unknown as Record<string, unknown>;
+      const realReserve = (
+        throttle['reserveAttempt'] as (...args: unknown[]) => Promise<unknown>
+      ).bind(throttle);
+
+      let arrived = 0;
+      let openGate: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        openGate = resolve;
+      });
+      throttle['reserveAttempt'] = async (...args: unknown[]) => {
+        if (args[1] === 'IP') {
+          arrived += 1;
+          if (arrived >= 2) openGate();
+          await gate;
+        }
+        return realReserve(...args);
+      };
+
+      // Two simultaneous CORRECT logins. One reserves the limiting count and
+      // succeeds; the other reserves past it and is refused without verifying.
+      const outcomes = await Promise.all(
+        Array.from({ length: 2 }, () =>
+          strict.container.auth
+            .login(
+              tenantA,
+              anonymous,
+              { username: 'pair', password: 'the-correct-password' },
+              { ip, userAgent: 'vitest' },
+            )
+            .then(
+              () => 'ALLOWED',
+              (error: { kind?: string }) => error.kind ?? 'UNKNOWN',
+            ),
+        ),
+      );
+      throttle['reserveAttempt'] = realReserve;
+
+      expect(outcomes).toContain('ALLOWED');
+      expect(outcomes).toContain('RATE_LIMITED');
+
+      // The address they share must not be left locked by a login that worked
+      // plus one that was never checked.
+      const [row] = await strict.container.database.db
+        .select()
+        .from(adminLoginThrottle)
+        .where(eq(adminLoginThrottle.subject, ip));
+      expect(row?.lockedUntil ?? null).toBeNull();
+
+      await expect(
+        strict.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: 'pair', password: 'the-correct-password' },
+          { ip, userAgent: 'vitest' },
+        ),
+      ).resolves.toBeDefined();
+    } finally {
+      await strict.close();
+    }
+  }, 30_000);
+
+  it('still counts an attempt that was actually verified', async () => {
+    // The release is for abandoned attempts only. A wrong password that reached
+    // the KDF is exactly the thing the counter exists to count.
+    await expect(
+      ctx.container.auth.login(
+        tenantA,
+        anonymous,
+        { username: 'owner', password: 'wrong' },
+        { ip: '198.51.100.78', userAgent: 'vitest' },
+      ),
+    ).rejects.toThrow();
+
+    const [row] = await ctx.container.database.db
+      .select()
+      .from(adminLoginThrottle)
+      .where(eq(adminLoginThrottle.subject, '198.51.100.78'));
+    expect(row?.failedCount).toBe(1);
+  });
+});
+
+describe('the session last-seen timestamp never moves backwards', () => {
+  it('keeps the newer value when an older touch lands second', async () => {
+    const issued = await ctx.container.auth.login(
+      tenantA,
+      anonymous,
+      { username: 'owner', password: owner.password },
+      from,
+    );
+
+    const newer = new Date('2030-05-02T00:00:00.000Z');
+    const older = new Date('2030-05-01T00:00:00.000Z');
+    await ctx.container.sessions.touch(issued.session.id, newer);
+    await ctx.container.sessions.touch(issued.session.id, older);
+
+    const [row] = await ctx.container.database.db
+      .select()
+      .from(adminSessions)
+      .where(eq(adminSessions.id, issued.session.id));
+    expect(row?.lastSeenAt?.toISOString()).toBe(newer.toISOString());
+  });
+});

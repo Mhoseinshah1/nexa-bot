@@ -494,6 +494,15 @@ export class AuthenticationService {
     // limit is refused here, before the KDF runs.
     for (const [, state, limit] of subjects) {
       if (state !== null && state.failedCount > limit) {
+        // Give BOTH reservations back before refusing. This request never
+        // reaches the KDF and never checks a credential, so counting it
+        // overstates what actually happened — and the overstatement sticks: an
+        // allowed request that reserved the limiting count and then succeeded
+        // returns only its own, so the leaked one holds the subject at the
+        // limit and keeps the lock alive. With `LOGIN_MAX_ATTEMPTS_PER_IP=1`,
+        // two simultaneous correct logins would refuse one, admit the other,
+        // and still lock the address they share.
+        await this.releaseReservations(scope, username, ip);
         await this.recordThrottleDenial(scope, actor, username);
         throw new NexaError({
           kind: 'RATE_LIMITED',
@@ -510,6 +519,28 @@ export class AuthenticationService {
     }
 
     return usernameState;
+  }
+
+  /**
+   * Returns both reservations this call made.
+   *
+   * Used only where the attempt is abandoned without being verified. A failure
+   * that WAS verified keeps its reservation — that is the failure being counted.
+   */
+  private async releaseReservations(
+    scope: TenantContext,
+    username: string,
+    ip: string | null,
+  ): Promise<void> {
+    await this.throttle.releaseAttempt(
+      scope,
+      'USERNAME',
+      username,
+      this.policy.maxAttemptsPerUsername,
+    );
+    if (ip !== null) {
+      await this.throttle.releaseAttempt(scope, 'IP', ip, this.policy.maxAttemptsPerIp);
+    }
   }
 
   private async recordThrottleDenial(
