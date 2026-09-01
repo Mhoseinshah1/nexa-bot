@@ -163,6 +163,30 @@ mid-request still granted the role they had just lost. It now authorizes under
 the lock like the others; the cheap pre-check survives only so an unprivileged
 caller cannot make the server spend a KDF per request.
 
+**The invariant, stated once:** a security-sensitive admin mutation may commit
+only if the actor still holds the required authority _after_ acquiring the same
+lock that protects the mutation. A permission read before the lock is a fast
+rejection — worth keeping, so an unprivileged caller cannot make the server
+spend a KDF — but it decides nothing.
+
+Getting this half-right was its own bug. `setStatus` and `setRoles` reloaded the
+TARGET under the lock and left the ACTOR's base `admins.edit` on the pre-lock
+read, so a manager disabled or demoted mid-request still mutated another
+administrator. It bites hardest on a remove-only role change: `delta.added` is
+then empty, the amplification check has nothing to examine, and losing every
+permission would not have stopped the write.
+
+The audit across Phase 1's mutations:
+
+| Path                | Actor authority under the lock                                                                                                                                                                                                 |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `create`            | `admins.edit`, plus `admins.permissions.edit` for the owner role                                                                                                                                                               |
+| `setStatus`         | `admins.edit`                                                                                                                                                                                                                  |
+| `setRoles`          | `admins.edit`, plus `admins.permissions.edit` when the locked delta touches the owner role                                                                                                                                     |
+| `changeOwnPassword` | Not applicable — it requires no catalog permission. The current password _is_ the authorization, and it is compare-and-set. A disabled administrator rotating their own password gains nothing: login refuses them regardless. |
+| `bootstrapOwner`    | Not applicable — provisioning has no actor to authorize. Fenced by refusing once any administrator exists.                                                                                                                     |
+| `list`, `listRoles` | Reads, not mutations. No lock, and nothing to make stale beyond one extra read by an administrator demoted microseconds earlier.                                                                                               |
+
 Because these re-checks run inside a transaction, `PermissionResolver.resolve`,
 `permissionsForAdmin`, `overridesForAdmin` and `roles.list` all take the
 transaction handle. That is not tidiness: a nested read on the POOL while

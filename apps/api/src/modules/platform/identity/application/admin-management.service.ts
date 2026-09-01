@@ -205,6 +205,9 @@ export class AdminManagementService {
     targetId: AdminId,
     input: unknown,
   ): Promise<Admin> {
+    // A cheap rejection, NOT the authorization. It is read on the pool, so by
+    // the time this request reaches the lock the actor may have been disabled
+    // or demoted. The authoritative check is inside the transaction.
     await this.guard.check(scope, actor, 'admins.edit');
     const command = setAdminStatusRequestSchema.parse(input);
 
@@ -216,6 +219,13 @@ export class AdminManagementService {
 
     const updated = await this.uow.run(scope, async (tx) => {
       await this.admins.lockTenantForAdminChange(scope, tx);
+
+      // The actor's BASE authority, re-read under the lock. Target state was
+      // already reloaded here; the actor's own right to act was not, so a
+      // manager disabled or demoted while this request was in flight still
+      // mutated another administrator. Disabling empties an actor's
+      // permissions, so this covers both cases with one check.
+      await this.guard.check(scope, actor, 'admins.edit', tx);
 
       // Transaction-aware, for the same reason as setRoles: a read on the pool
       // after the lock does not participate in it, so the status this decision
@@ -274,6 +284,7 @@ export class AdminManagementService {
     targetId: AdminId,
     input: unknown,
   ): Promise<{ admin: Admin; roleKeys: string[] }> {
+    // A cheap rejection, NOT the authorization — see setStatus.
     await this.guard.check(scope, actor, 'admins.edit');
     const command = setAdminRolesRequestSchema.parse(input);
 
@@ -305,6 +316,15 @@ export class AdminManagementService {
     // with a small race; it is authorization on unsound input.
     const result = await this.uow.run(scope, async (tx) => {
       await this.admins.lockTenantForAdminChange(scope, tx);
+
+      // The actor's BASE authority, re-read under the lock — before any target
+      // state, because an actor who has lost `admins.edit` has no business
+      // reading it either.
+      //
+      // This matters most for a REMOVE-ONLY delta: `delta.added` is then empty,
+      // so the amplification check examines nothing and would wave the request
+      // through. Losing all authority has to stop the mutation on its own.
+      await this.guard.check(scope, actor, 'admins.edit', tx);
 
       // Transaction-aware. A read on the pool after the lock does not
       // participate in it and can observe a different snapshot.

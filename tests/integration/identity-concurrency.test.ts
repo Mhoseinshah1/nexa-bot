@@ -9,6 +9,7 @@ import {
 import {
   adminPermissionOverrides,
   auditLogs,
+  outboxMessages,
 } from '../../apps/api/src/infrastructure/persistence/schema';
 import {
   adminActorFor,
@@ -679,6 +680,178 @@ describe('role changes decide under the lock', () => {
       .from(auditLogs)
       .where(eq(auditLogs.action, 'admin.roles_change'));
     expect(audits).toHaveLength(0);
+  });
+});
+
+describe('actor authority is re-checked under the lock', () => {
+  /**
+   * Stalls a request at the moment it reaches `lockTenantForAdminChange`,
+   * BEFORE the lock is actually taken.
+   *
+   * That is the window under test: the cheap outer permission check has already
+   * passed, and nothing is held, so another administrator can take the lock and
+   * commit a change to the ACTOR while the stale request waits.
+   */
+  function stallBeforeLock(): { reached: Promise<void>; release: () => void } {
+    const repo = ctx.container.admins as { lockTenantForAdminChange: unknown };
+    const realLock = repo.lockTenantForAdminChange.bind(ctx.container.admins) as (
+      scope: unknown,
+      tx: unknown,
+    ) => Promise<void>;
+
+    let release: () => void = () => undefined;
+    const reached = new Promise<void>((resolve) => {
+      repo.lockTenantForAdminChange = async (scope: unknown, tx: unknown) => {
+        repo.lockTenantForAdminChange = realLock;
+        resolve();
+        await new Promise<void>((r) => {
+          release = r;
+        });
+        await realLock(scope, tx);
+      };
+    });
+    return { reached, release: () => release() };
+  }
+
+  async function managerWithAdminsEdit(username: string, roleKeys: string[]): Promise<SeededAdmin> {
+    const manager = await createAdmin(ctx.container, tenantA, { username, roleKeys });
+    await ctx.container.database.db.insert(adminPermissionOverrides).values({
+      tenantId: tenantA.tenantId,
+      adminId: manager.id,
+      permissionKey: 'admins.edit',
+      effect: 'GRANT',
+      reason: 'Administers the roster.',
+      expiresAt: null,
+    });
+    return manager;
+  }
+
+  it('refuses a setStatus whose actor was disabled after the cheap check', async () => {
+    // 1. manager passes the outer admins.edit check
+    // 2. stalled before the lock
+    // 3. owner disables the manager and commits
+    // 4. manager proceeds -> must be refused, target untouched
+    const manager = await managerWithAdminsEdit('manager', ['support']);
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'target',
+      roleKeys: ['support'],
+    });
+
+    const stall = stallBeforeLock();
+    const stale = ctx.container.adminManagement.setStatus(
+      tenantA,
+      adminActorFor(manager),
+      target.id as AdminId,
+      { status: 'DISABLED', reason: 'Stale request.' },
+    );
+    const settled = stale.catch((error: unknown) => error);
+
+    await stall.reached;
+
+    await ctx.container.adminManagement.setStatus(
+      tenantA,
+      adminActorFor(owner),
+      manager.id as AdminId,
+      { status: 'DISABLED', reason: 'Manager removed.' },
+    );
+
+    stall.release();
+    const caught = await settled;
+
+    expect((caught as { code?: string }).code).toBe('platform.permission_denied');
+
+    // The target is untouched.
+    expect((await ctx.container.admins.findById(tenantA, target.id as AdminId))?.status).toBe(
+      'ACTIVE',
+    );
+
+    // Exactly one status change was audited: the owner's, not the stale one.
+    const audits = await ctx.container.database.db
+      .select()
+      .from(auditLogs)
+      .where(eq(auditLogs.action, 'admin.status_change'));
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.entityId).toBe(manager.id);
+
+    // And no event claims the stale change happened.
+    const events = await ctx.container.database.db
+      .select()
+      .from(outboxMessages)
+      .where(eq(outboxMessages.eventType, 'AdminStatusChanged'));
+    expect(events).toHaveLength(1);
+    expect(events[0]?.aggregateId).toBe(manager.id);
+  });
+
+  it('refuses a REMOVE-ONLY setRoles whose actor lost admins.edit', async () => {
+    // The case the amplification check cannot catch. A remove-only delta has an
+    // empty `added`, so that check examines nothing and waves the request
+    // through; losing all authority has to stop the mutation on its own.
+    const manager = await managerWithAdminsEdit('manager', ['support', 'finance']);
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'target',
+      roleKeys: ['support', 'finance'],
+    });
+
+    const stall = stallBeforeLock();
+    const stale = ctx.container.adminManagement.setRoles(
+      tenantA,
+      adminActorFor(manager),
+      target.id as AdminId,
+      // Remove-only: finance goes, nothing is added.
+      { roleKeys: ['support'], reason: 'Stale removal.' },
+    );
+    const settled = stale.catch((error: unknown) => error);
+
+    await stall.reached;
+
+    // Revoke the manager's base authority without touching their status, so the
+    // refusal can only come from re-reading `admins.edit`.
+    await ctx.container.database.db
+      .delete(adminPermissionOverrides)
+      .where(eq(adminPermissionOverrides.adminId, manager.id));
+
+    stall.release();
+    const caught = await settled;
+
+    expect((caught as { code?: string }).code).toBe('platform.permission_denied');
+
+    // The target's roles are exactly as they were.
+    expect(await ctx.container.admins.roleKeysFor(tenantA, target.id as AdminId)).toEqual([
+      'finance',
+      'support',
+    ]);
+
+    const audits = await ctx.container.database.db
+      .select()
+      .from(auditLogs)
+      .where(eq(auditLogs.action, 'admin.roles_change'));
+    expect(audits).toHaveLength(0);
+  });
+
+  it('still permits the mutation when the actor keeps their authority', async () => {
+    // The rule is authorization, not pessimism: a request that stalls and finds
+    // nothing changed proceeds normally.
+    const manager = await managerWithAdminsEdit('manager', ['support']);
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'target',
+      roleKeys: ['support'],
+    });
+
+    const stall = stallBeforeLock();
+    const proceeding = ctx.container.adminManagement.setStatus(
+      tenantA,
+      adminActorFor(manager),
+      target.id as AdminId,
+      { status: 'DISABLED', reason: 'Legitimate.' },
+    );
+
+    await stall.reached;
+    stall.release();
+
+    await expect(proceeding).resolves.toBeDefined();
+    expect((await ctx.container.admins.findById(tenantA, target.id as AdminId))?.status).toBe(
+      'DISABLED',
+    );
   });
 });
 
