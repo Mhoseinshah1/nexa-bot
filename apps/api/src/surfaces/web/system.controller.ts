@@ -20,9 +20,15 @@ export class SystemController {
   async ping(@Body() body: unknown): Promise<RecordPingResult> {
     const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
 
-    // Phase 0 has no authentication, so there is no admin actor to resolve.
-    // This runs as system work rather than as a fabricated admin: a fake
-    // identity in an audit row is worse than no endpoint at all.
+    // Runs as system work rather than as an administrator, and deliberately
+    // takes no session: a fabricated identity in an audit row is worse than no
+    // endpoint at all. That is why `AppModule` registers this controller only
+    // in development — an unauthenticated write into append-only tables is a
+    // development affordance and nothing else.
+    //
+    // It said "Phase 0 has no authentication" until Phase 1 gave it some, at
+    // which point the sentence was true of nothing. The registration guard,
+    // not this comment, is what keeps the endpoint off a real deployment.
     const actor = systemJobActor('http:system.ping', correlationId);
 
     return this.container.recordPing.execute(systemContext('http-admin'), actor, body);
