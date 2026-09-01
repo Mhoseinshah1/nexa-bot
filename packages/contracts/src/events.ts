@@ -1,0 +1,115 @@
+import { z } from 'zod';
+import { actorRefSchema, type ActorRef } from './actor.js';
+
+/**
+ * Domain events.
+ *
+ * State changes emit events; work runs as jobs. The distinction is encoded
+ * here so it cannot blur.
+ *
+ * An event is written to `outbox_messages` inside the same transaction as the
+ * state change it describes, then relayed. It exists if and only if the change
+ * committed. The database is the log; Telegram and any webhook are projections.
+ */
+
+export const EVENT_ENVELOPE_VERSION = 1;
+
+export interface DomainEvent<TPayload = unknown> {
+  /** UUIDv7. Consumers dedupe on this. */
+  readonly eventId: string;
+  readonly eventType: string;
+  readonly eventVersion: number;
+  /** Null for platform-level events that belong to no tenant. */
+  readonly tenantId: string | null;
+  readonly aggregateType: string;
+  readonly aggregateId: string;
+  /** Monotonic per `(aggregateType, aggregateId)`. Ordering is per-aggregate only. */
+  readonly sequence: number;
+  /** One business transaction, end to end, across surfaces and queues. */
+  readonly correlationId: string;
+  /** The event or command that caused this one. */
+  readonly causationId: string | null;
+  readonly actor: ActorRef;
+  readonly occurredAt: string;
+  readonly payload: TPayload;
+}
+
+export const domainEventSchema = z.object({
+  eventId: z.string(),
+  eventType: z.string().min(1),
+  eventVersion: z.number().int().positive(),
+  tenantId: z.string().nullable(),
+  aggregateType: z.string().min(1),
+  aggregateId: z.string().min(1),
+  sequence: z.number().int().nonnegative(),
+  correlationId: z.string().min(1),
+  causationId: z.string().nullable(),
+  actor: actorRefSchema,
+  occurredAt: z.iso.datetime(),
+  payload: z.unknown(),
+});
+
+/**
+ * The event name catalog.
+ *
+ * Names are PascalCase, past tense, prefixed by their aggregate. Names are
+ * stable identifiers; payloads are versioned. Adding a payload field is safe,
+ * changing one is a new version.
+ *
+ * Phase 0 registers only the platform events it actually emits. A module that
+ * emits an unregistered event name fails the build — adding one is a contract
+ * change, reviewed on its own.
+ */
+export const EVENT_TYPES = [
+  // Platform — the only group Phase 0 emits
+  'SystemPinged',
+  'TenantCreated',
+  'TenantStatusChanged',
+  'BotInstanceRegistered',
+  'BotInstanceStatusChanged',
+  'SettingChanged',
+  'PermissionDenied',
+] as const;
+
+export type EventType = (typeof EVENT_TYPES)[number];
+
+const EVENT_TYPE_SET = new Set<string>(EVENT_TYPES);
+
+export function isEventType(value: string): value is EventType {
+  return EVENT_TYPE_SET.has(value);
+}
+
+export const AGGREGATE_TYPES = ['System', 'Tenant', 'BotInstance', 'Setting', 'Admin'] as const;
+export type AggregateType = (typeof AGGREGATE_TYPES)[number];
+
+/**
+ * Payload schemas, keyed by event type. A consumer parses with these rather
+ * than trusting the envelope's `unknown`.
+ */
+export const EVENT_PAYLOAD_SCHEMAS = {
+  SystemPinged: z.object({
+    source: z.enum(['telegram', 'http', 'test']),
+    note: z.string().max(200).optional(),
+  }),
+  TenantCreated: z.object({ slug: z.string(), kind: z.string() }),
+  TenantStatusChanged: z.object({ from: z.string(), to: z.string() }),
+  BotInstanceRegistered: z.object({ username: z.string() }),
+  BotInstanceStatusChanged: z.object({ from: z.string(), to: z.string() }),
+  SettingChanged: z.object({ key: z.string(), from: z.unknown(), to: z.unknown() }),
+  PermissionDenied: z.object({ permissionKey: z.string(), reason: z.string() }),
+} as const satisfies Record<EventType, z.ZodType>;
+
+export type EventPayload<T extends EventType> = z.infer<(typeof EVENT_PAYLOAD_SCHEMAS)[T]>;
+
+/**
+ * The publishing port. Application services depend on this; the persistence
+ * layer implements it by writing outbox rows in the caller's transaction.
+ */
+export interface EventPublisher {
+  publish<T extends EventType>(event: {
+    eventType: T;
+    aggregateType: AggregateType;
+    aggregateId: string;
+    payload: EventPayload<T>;
+  }): Promise<void>;
+}

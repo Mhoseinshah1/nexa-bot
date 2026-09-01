@@ -1,0 +1,122 @@
+/**
+ * The error taxonomy.
+ *
+ * Every failure carries a stable machine code. Both the Telegram surface and
+ * the HTTP surface map from these codes, so one failure reads the same way in
+ * both places — which is precisely what the legacy system's `کد خطا : 0`
+ * (indistinguishable DNS, timeout, auth and HTTP failures) does not do.
+ *
+ * `catch {}` fails the build. A caught error is either handled or rethrown as
+ * a typed error from this taxonomy.
+ */
+
+export const ERROR_KINDS = [
+  'VALIDATION',
+  'NOT_FOUND',
+  'CONFLICT',
+  'PERMISSION_DENIED',
+  'UNAUTHENTICATED',
+  'PRECONDITION_FAILED',
+  'RATE_LIMITED',
+  'UPSTREAM_UNAVAILABLE',
+  'UPSTREAM_REJECTED',
+  'TIMEOUT',
+  'CONFIGURATION',
+  'INTERNAL',
+] as const;
+export type ErrorKind = (typeof ERROR_KINDS)[number];
+
+/** HTTP status per kind. Surfaces map from the kind, never from the message. */
+export const ERROR_KIND_HTTP_STATUS: Readonly<Record<ErrorKind, number>> = {
+  VALIDATION: 400,
+  NOT_FOUND: 404,
+  CONFLICT: 409,
+  PERMISSION_DENIED: 403,
+  UNAUTHENTICATED: 401,
+  PRECONDITION_FAILED: 412,
+  RATE_LIMITED: 429,
+  UPSTREAM_UNAVAILABLE: 502,
+  UPSTREAM_REJECTED: 502,
+  TIMEOUT: 504,
+  CONFIGURATION: 500,
+  INTERNAL: 500,
+};
+
+export interface NexaErrorOptions {
+  readonly kind: ErrorKind;
+  readonly code: string;
+  readonly message: string;
+  /** Structured, non-sensitive context. Never put a credential here. */
+  readonly details?: Readonly<Record<string, unknown>>;
+  readonly cause?: unknown;
+  /** True when a retry with the same input could plausibly succeed. */
+  readonly retryable?: boolean;
+}
+
+export class NexaError extends Error {
+  readonly kind: ErrorKind;
+  readonly code: string;
+  readonly details: Readonly<Record<string, unknown>>;
+  readonly retryable: boolean;
+
+  constructor(options: NexaErrorOptions) {
+    super(options.message, options.cause === undefined ? undefined : { cause: options.cause });
+    this.name = 'NexaError';
+    this.kind = options.kind;
+    this.code = options.code;
+    this.details = options.details ?? {};
+    this.retryable = options.retryable ?? DEFAULT_RETRYABLE.has(options.kind);
+  }
+
+  get httpStatus(): number {
+    return ERROR_KIND_HTTP_STATUS[this.kind];
+  }
+
+  toJSON(): Record<string, unknown> {
+    return {
+      kind: this.kind,
+      code: this.code,
+      message: this.message,
+      details: this.details,
+      retryable: this.retryable,
+    };
+  }
+}
+
+const DEFAULT_RETRYABLE = new Set<ErrorKind>(['RATE_LIMITED', 'UPSTREAM_UNAVAILABLE', 'TIMEOUT']);
+
+export function isNexaError(value: unknown): value is NexaError {
+  return value instanceof NexaError;
+}
+
+/** Frequently used constructors, so call sites stay short and codes stay stable. */
+export const errors = {
+  validation: (code: string, message: string, details?: Record<string, unknown>) =>
+    new NexaError({ kind: 'VALIDATION', code, message, ...(details ? { details } : {}) }),
+  notFound: (code: string, message: string, details?: Record<string, unknown>) =>
+    new NexaError({ kind: 'NOT_FOUND', code, message, ...(details ? { details } : {}) }),
+  conflict: (code: string, message: string, details?: Record<string, unknown>) =>
+    new NexaError({ kind: 'CONFLICT', code, message, ...(details ? { details } : {}) }),
+  permissionDenied: (code: string, message: string, details?: Record<string, unknown>) =>
+    new NexaError({ kind: 'PERMISSION_DENIED', code, message, ...(details ? { details } : {}) }),
+  unauthenticated: (code: string, message: string) =>
+    new NexaError({ kind: 'UNAUTHENTICATED', code, message }),
+  configuration: (code: string, message: string, details?: Record<string, unknown>) =>
+    new NexaError({ kind: 'CONFIGURATION', code, message, ...(details ? { details } : {}) }),
+  internal: (code: string, message: string, cause?: unknown) =>
+    new NexaError({ kind: 'INTERNAL', code, message, ...(cause !== undefined ? { cause } : {}) }),
+} as const;
+
+/** Codes emitted by the Phase 0 foundation itself. */
+export const PLATFORM_ERROR_CODES = {
+  TENANT_CONTEXT_MISSING: 'platform.tenant_context_missing',
+  TENANT_MISMATCH: 'platform.tenant_mismatch',
+  TENANT_NOT_FOUND: 'platform.tenant_not_found',
+  PERMISSION_DENIED: 'platform.permission_denied',
+  IDEMPOTENCY_PAYLOAD_MISMATCH: 'platform.idempotency_payload_mismatch',
+  IDEMPOTENCY_IN_FLIGHT: 'platform.idempotency_in_flight',
+  UNKNOWN_EVENT_TYPE: 'platform.unknown_event_type',
+  CONFIG_INVALID: 'platform.config_invalid',
+  SECRET_DECRYPT_FAILED: 'platform.secret_decrypt_failed',
+  TELEGRAM_BAD_SECRET_TOKEN: 'telegram.bad_secret_token',
+} as const;
