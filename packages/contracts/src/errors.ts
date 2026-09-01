@@ -110,11 +110,9 @@ export const errors = {
 /** Codes emitted by the Phase 0 foundation itself. */
 export const PLATFORM_ERROR_CODES = {
   TENANT_CONTEXT_MISSING: 'platform.tenant_context_missing',
-  TENANT_MISMATCH: 'platform.tenant_mismatch',
   TENANT_NOT_FOUND: 'platform.tenant_not_found',
   PERMISSION_DENIED: 'platform.permission_denied',
   IDEMPOTENCY_PAYLOAD_MISMATCH: 'platform.idempotency_payload_mismatch',
-  IDEMPOTENCY_IN_FLIGHT: 'platform.idempotency_in_flight',
   UNKNOWN_EVENT_TYPE: 'platform.unknown_event_type',
   CONFIG_INVALID: 'platform.config_invalid',
   SECRET_DECRYPT_FAILED: 'platform.secret_decrypt_failed',
@@ -148,6 +146,5 @@ export const IDENTITY_ERROR_CODES = {
   ADMIN_PASSWORD_REUSED: 'admin.password_reused',
   ADMIN_PASSWORD_STALE: 'admin.password_stale',
   ROLE_NOT_FOUND: 'role.not_found',
-  ROLE_SYSTEM_IMMUTABLE: 'role.system_immutable',
   BOOTSTRAP_ALREADY_DONE: 'bootstrap.already_completed',
 } as const;

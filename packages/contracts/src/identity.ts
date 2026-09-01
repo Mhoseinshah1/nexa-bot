@@ -148,15 +148,6 @@ export const SESSION_COOKIE_NAME = 'nexa_admin_session';
 export const SESSION_COOKIE_NAME_SECURE = `__Host-${SESSION_COOKIE_NAME}` as const;
 
 /**
- * The names a request may present a session under, most trusted first.
- *
- * Order is load-bearing: a `__Host-` cookie carries a guarantee the plain one
- * does not, so when both arrive the prefixed one wins regardless of the order
- * the browser sent them in.
- */
-export const SESSION_COOKIE_NAMES = [SESSION_COOKIE_NAME_SECURE, SESSION_COOKIE_NAME] as const;
-
-/**
  * Why a login attempt failed.
  *
  * Internal only. Every one of these is reported to the caller as the SAME
