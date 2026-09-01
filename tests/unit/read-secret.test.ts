@@ -79,6 +79,30 @@ describe('readSecret', () => {
     expect(await answer).toBe('a-persian-password-رمز');
   });
 
+  it('backspaces a whole character, not a byte of one', async () => {
+    // The first version of this accumulated bytes into a latin-1 string and
+    // sliced one element off it, so backspacing a Persian character removed a
+    // third of it and left a half-character in the password nobody could see
+    // or retype. The comment above it claimed it trimmed a code point.
+    const tty = new FakeTty();
+    const answer = readSecret(tty as never, capture(), 'Password: ');
+    tty.type('ok-');
+    tty.type('م'); // two bytes in UTF-8
+    tty.press(0x7f);
+    tty.type('z');
+    tty.press(ENTER);
+    expect(await answer).toBe('ok-z');
+  });
+
+  it('backspaces a multi-byte character delivered in one chunk with others', async () => {
+    const tty = new FakeTty();
+    const answer = readSecret(tty as never, capture(), 'Password: ');
+    tty.type('رمز');
+    tty.press(0x7f);
+    tty.press(ENTER);
+    expect(await answer).toBe('رم');
+  });
+
   it('rejects on Ctrl+C rather than returning a partial password', async () => {
     const tty = new FakeTty();
     const answer = readSecret(tty as never, capture(), 'Password: ');

@@ -398,13 +398,13 @@ Making one row the boundary means every administrator mutation, every login,
 every webhook write and the API's own boot all meet on it. That was worth
 measuring rather than asserting, so it was:
 
-| | latency |
-|---|---|
-| login, sequential | 13ms |
-| login, 16 concurrent | ~43ms each |
-| `setRoles`, sequential | 10ms |
-| `setRoles`, 16 concurrent | ~101ms each, 168ms wall |
-| login, during a burst of 16 mutations | ~263ms each |
+|                                       | latency                 |
+| ------------------------------------- | ----------------------- |
+| login, sequential                     | 13ms                    |
+| login, 16 concurrent                  | ~43ms each              |
+| `setRoles`, sequential                | 10ms                    |
+| `setRoles`, 16 concurrent             | ~101ms each, 168ms wall |
+| login, during a burst of 16 mutations | ~263ms each             |
 
 Administrator mutations serialise completely — 16 concurrent take the same wall
 time as 16 sequential — which is exactly what an exclusive lock is for and is

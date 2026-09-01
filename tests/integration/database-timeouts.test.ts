@@ -63,13 +63,12 @@ describe('database connections wait under a bound', () => {
       // 55P03 is `lock_not_available` — Postgres refusing the wait, which is
       // the whole point. Drizzle wraps the message, so the driver's own code is
       // what identifies it; matching on text would pass for any failure.
-      const code = (outcome as { cause?: { code?: string }; code?: string }).cause?.code ??
+      const code =
+        (outcome as { cause?: { code?: string }; code?: string }).cause?.code ??
         (outcome as { code?: string }).code;
       expect(code).toBe('55P03');
       // Bounded by the configured `lock_timeout`, not by the holder letting go.
-      expect(waited).toBeGreaterThanOrEqual(
-        ctx.container.config.DATABASE_LOCK_TIMEOUT_MS - 500,
-      );
+      expect(waited).toBeGreaterThanOrEqual(ctx.container.config.DATABASE_LOCK_TIMEOUT_MS - 500);
       expect(waited).toBeLessThan(ctx.container.config.DATABASE_LOCK_TIMEOUT_MS + 5_000);
       expect(tenantId).toBeDefined();
     } finally {

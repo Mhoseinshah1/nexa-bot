@@ -48,7 +48,12 @@ export function readSecret(
   }
 
   return new Promise<string>((resolve, reject) => {
-    let buffer = '';
+    // Raw BYTES, not a string. A password is not necessarily ASCII, and a
+    // terminal delivers a multi-byte character as several bytes across one or
+    // more chunks; decoding per byte and concatenating would mangle it, and
+    // backspace would then delete a third of a character rather than a
+    // character. Decoded once, at the end.
+    const bytes: number[] = [];
     input.setRawMode?.(true);
     input.resume?.();
 
@@ -61,44 +66,44 @@ export function readSecret(
     };
 
     const onData = (chunk: Buffer | string): void => {
-      const bytes = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
-      for (const byte of bytes) {
+      const chunkBytes = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
+      for (const byte of chunkBytes) {
         if (byte === ETX) {
           finish(() => {
             reject(new Error('Cancelled.'));
           });
           return;
         }
-        if (byte === EOT && buffer.length === 0) {
+        if (byte === EOT && bytes.length === 0) {
           finish(() => {
             reject(new Error('Cancelled.'));
           });
           return;
         }
         if (byte === 0x0a || byte === 0x0d) {
-          const answer = buffer;
+          const answer = Buffer.from(bytes).toString('utf8');
           finish(() => {
             resolve(answer);
           });
           return;
         }
         if (byte === BACKSPACE || byte === DELETE) {
-          // Trim a whole code point, not a byte: a multi-byte character
-          // half-deleted is a password nobody can retype.
-          buffer = [...buffer].slice(0, -1).join('');
+          // Drop a whole CHARACTER, which may be several bytes. UTF-8
+          // continuation bytes are 0b10xxxxxx; discard them, then the lead
+          // byte they belong to. Removing one byte instead would leave a
+          // half-character in the password, and the operator would have no way
+          // to see it or retype it.
+          while (bytes.length > 0 && (bytes[bytes.length - 1]! & 0xc0) === 0x80) bytes.pop();
+          bytes.pop();
           continue;
         }
         // Anything else is content. Deliberately NOT written anywhere.
-        buffer += String.fromCharCode(byte);
+        bytes.push(byte);
       }
     };
 
     input.on('data', onData);
-  }).then((answer) =>
-    // Re-decode: bytes were accumulated one at a time, so a multi-byte
-    // character arrived as several latin-1 chars and must be reassembled.
-    Buffer.from(answer, 'latin1').toString('utf8'),
-  );
+  });
 }
 
 async function readPlainLine(input: SecretInput, output: SecretOutput): Promise<string> {

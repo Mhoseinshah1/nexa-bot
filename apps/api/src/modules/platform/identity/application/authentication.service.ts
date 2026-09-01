@@ -141,10 +141,7 @@ export class AuthenticationService {
    * a surface computing a concept differently from the layer that enforces it
    * is exactly the divergence this codebase is built to avoid.
    */
-  private async displayPermissions(
-    admin: Admin,
-    tx?: unknown,
-  ): Promise<readonly PermissionKey[]> {
+  private async displayPermissions(admin: Admin, tx?: unknown): Promise<readonly PermissionKey[]> {
     const scope: TenantContext = { tenantId: admin.tenantId, botInstanceId: null };
     const actor: ActorContext = {
       type: 'WEB_ADMIN',
