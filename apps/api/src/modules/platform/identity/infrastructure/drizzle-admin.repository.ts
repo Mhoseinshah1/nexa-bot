@@ -61,9 +61,9 @@ export class DrizzleAdminRepository implements AdminRepository {
     return row ? { admin: toAdmin(row), passwordHash: row.passwordHash } : null;
   }
 
-  async findById(scope: ScopeContext, id: AdminId): Promise<Admin | null> {
+  async findById(scope: ScopeContext, id: AdminId, tx?: unknown): Promise<Admin | null> {
     const tenantId = requireTenantId(scope);
-    const [row] = await this.db
+    const [row] = await executorOf(this.db, tx)
       .select()
       .from(admins)
       .where(and(eq(admins.tenantId, tenantId), eq(admins.id, id)))
@@ -91,9 +91,14 @@ export class DrizzleAdminRepository implements AdminRepository {
     return rows.map(toAdmin);
   }
 
-  async roleKeysFor(scope: ScopeContext, id: AdminId): Promise<string[]> {
-    const byAdmin = await this.roleKeysForAll(scope, [id]);
-    return byAdmin.get(id) ?? [];
+  async roleKeysFor(scope: ScopeContext, id: AdminId, tx?: unknown): Promise<string[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await executorOf(this.db, tx)
+      .select({ key: roles.key })
+      .from(adminRoles)
+      .innerJoin(roles, eq(roles.id, adminRoles.roleId))
+      .where(and(eq(adminRoles.tenantId, tenantId), eq(adminRoles.adminId, id)));
+    return rows.map((row) => row.key).sort();
   }
 
   async roleKeysForAll(
@@ -166,18 +171,36 @@ export class DrizzleAdminRepository implements AdminRepository {
       .where(and(eq(admins.tenantId, tenantId), eq(admins.id, id)));
   }
 
-  async setPasswordHash(
+  /**
+   * Compare-and-set. The expected hash is part of the WHERE clause, so the
+   * check and the write are one atomic statement — no window between them for
+   * another rotation to slip through.
+   *
+   * `returning` is how the row count is read: an UPDATE that matched nothing is
+   * not an error to the driver, so a caller that did not ask would be told the
+   * write succeeded.
+   */
+  async compareAndSetPasswordHash(
     scope: ScopeContext,
     id: AdminId,
-    hash: string,
+    expectedHash: string,
+    newHash: string,
     now: Date,
     tx?: unknown,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
-    await executorOf(this.db, tx)
+    const updated = await executorOf(this.db, tx)
       .update(admins)
-      .set({ passwordHash: hash, passwordUpdatedAt: now, updatedAt: now })
-      .where(and(eq(admins.tenantId, tenantId), eq(admins.id, id)));
+      .set({ passwordHash: newHash, passwordUpdatedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(admins.tenantId, tenantId),
+          eq(admins.id, id),
+          eq(admins.passwordHash, expectedHash),
+        ),
+      )
+      .returning({ id: admins.id });
+    return updated.length === 1;
   }
 
   async recordLogin(scope: ScopeContext, id: AdminId, now: Date): Promise<void> {
@@ -197,6 +220,21 @@ export class DrizzleAdminRepository implements AdminRepository {
       .from(tenants)
       .where(eq(tenants.id, tenantId))
       .for('update');
+  }
+
+  /** Used only by the bootstrap and rehash paths, which have no CAS predicate. */
+  async setPasswordHash(
+    scope: ScopeContext,
+    id: AdminId,
+    hash: string,
+    now: Date,
+    tx?: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await executorOf(this.db, tx)
+      .update(admins)
+      .set({ passwordHash: hash, passwordUpdatedAt: now, updatedAt: now })
+      .where(and(eq(admins.tenantId, tenantId), eq(admins.id, id)));
   }
 
   async countActiveOwners(scope: ScopeContext, tx?: unknown): Promise<number> {

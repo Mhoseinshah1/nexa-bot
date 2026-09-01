@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ipThrottleSubject,
+  isValidTrustedEntry,
   matchesTrustedEntry,
   normaliseAddress,
   trustProxyOption,
@@ -124,5 +125,32 @@ describe('IPv4-mapped IPv6 addresses', () => {
 
   it('rejects an embedded IPv4 literal it cannot unwrap, rather than guessing', () => {
     expect(matchesTrustedEntry('64:ff9b::192.0.2.1', '64:ff9b::/96')).toBe(false);
+  });
+});
+
+describe('trusted entry validation', () => {
+  it('accepts plain addresses and sensible CIDRs', () => {
+    for (const entry of ['127.0.0.1', '::1', '10.0.0.0/8', 'fd00::/8', '::ffff:127.0.0.1']) {
+      expect(isValidTrustedEntry(entry)).toBe(true);
+    }
+  });
+
+  it('rejects malformed entries', () => {
+    for (const entry of ['', 'not-an-ip', '1.2.3', '10.0.0.0/', '10.0.0.0/abc', '10.0.0.0/8/8']) {
+      expect(isValidTrustedEntry(entry)).toBe(false);
+    }
+  });
+
+  it('rejects prefixes outside the family’s range', () => {
+    expect(isValidTrustedEntry('10.0.0.0/33')).toBe(false);
+    expect(isValidTrustedEntry('fd00::/129')).toBe(false);
+    expect(isValidTrustedEntry('10.0.0.0/32')).toBe(true);
+    expect(isValidTrustedEntry('fd00::/128')).toBe(true);
+  });
+
+  it('rejects a /0 prefix', () => {
+    // It matches every address, which is `trustProxy: true` with extra steps.
+    expect(isValidTrustedEntry('0.0.0.0/0')).toBe(false);
+    expect(isValidTrustedEntry('::/0')).toBe(false);
   });
 });

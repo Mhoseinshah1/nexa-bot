@@ -34,10 +34,16 @@ export interface AdminRepository {
     scope: ScopeContext,
     username: string,
   ): Promise<AdminCredentials | null>;
-  findById(scope: ScopeContext, id: AdminId): Promise<Admin | null>;
+  /**
+   * `tx` is not optional decoration. A read taken after the tenant lock but on
+   * the POOL does not participate in that lock's serialisation: it can observe
+   * a different snapshot from the one the transaction is about to write into,
+   * which is exactly the stale-state decision the lock exists to prevent.
+   */
+  findById(scope: ScopeContext, id: AdminId, tx?: unknown): Promise<Admin | null>;
   findByTelegramUserId(scope: ScopeContext, telegramUserId: string): Promise<Admin | null>;
   list(scope: ScopeContext): Promise<Admin[]>;
-  roleKeysFor(scope: ScopeContext, id: AdminId): Promise<string[]>;
+  roleKeysFor(scope: ScopeContext, id: AdminId, tx?: unknown): Promise<string[]>;
   /** Role keys for many admins at once, so listing is not N+1. */
   roleKeysForAll(scope: ScopeContext, ids: readonly AdminId[]): Promise<Map<string, string[]>>;
   create(
@@ -59,6 +65,33 @@ export interface AdminRepository {
     now: Date,
     tx?: unknown,
   ): Promise<void>;
+  /**
+   * Compare-and-set on the password hash.
+   *
+   * Returns false when the stored hash is no longer `expectedHash` — i.e. the
+   * password changed between the moment this request verified it and the moment
+   * it tried to write. The caller must then abort everything, because a request
+   * that validated against a superseded credential has no authority to replace
+   * the current one.
+   *
+   * This is what makes rotation safe WITHOUT holding a transaction open across
+   * scrypt. Verification and hashing stay outside the transaction, where they
+   * belong; the check that the world did not move happens atomically in the
+   * UPDATE's own predicate.
+   */
+  compareAndSetPasswordHash(
+    scope: ScopeContext,
+    id: AdminId,
+    expectedHash: string,
+    newHash: string,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean>;
+  /**
+   * Unconditional write, for the two paths with nothing to compare against:
+   * installation bootstrap, and rehashing a verified password at a raised cost
+   * factor. Never use it for a rotation — that is what the CAS above is for.
+   */
   setPasswordHash(
     scope: ScopeContext,
     id: AdminId,

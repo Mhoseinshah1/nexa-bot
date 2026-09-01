@@ -10,6 +10,8 @@ const valid = {
   REDIS_URL: 'redis://localhost:6379',
   SECRETS_KEK: KEK,
   SECRETS_KEK_ID: 'dev-1',
+  // The default topology is `reverse-proxy`, which requires a trusted upstream.
+  TRUSTED_PROXY_IPS: '127.0.0.1,::1',
 } satisfies NodeJS.ProcessEnv;
 
 describe('configuration', () => {
@@ -92,5 +94,58 @@ describe('configuration', () => {
 
   it('rejects a key-encryption key that is not 32 bytes', () => {
     expect(() => loadConfig({ ...valid, SECRETS_KEK: 'dG9vLXNob3J0' })).toThrowError(/SECRETS_KEK/);
+  });
+});
+
+describe('deployment topology and trusted proxies', () => {
+  it('requires a trusted upstream behind a reverse proxy', () => {
+    // Left empty, every request appears to come from the proxy — so one failed
+    // login burst would lock out every administrator at once. Nothing at
+    // runtime can distinguish that from a real client at the proxy's address,
+    // which is why it is a configuration error rather than a detection.
+    expect(() =>
+      loadConfig({ ...valid, DEPLOYMENT_TOPOLOGY: 'reverse-proxy', TRUSTED_PROXY_IPS: '' }),
+    ).toThrowError(/TRUSTED_PROXY_IPS/);
+  });
+
+  it('supports a genuine direct deployment, explicitly', () => {
+    // Modelled rather than inferred: an empty list is correct for this topology
+    // and a serious misconfiguration for the other.
+    const config = loadConfig({
+      ...valid,
+      DEPLOYMENT_TOPOLOGY: 'direct',
+      TRUSTED_PROXY_IPS: '',
+    });
+    expect(config.TRUSTED_PROXY_IPS).toEqual([]);
+  });
+
+  it('refuses trusted upstreams in a direct deployment', () => {
+    expect(() =>
+      loadConfig({ ...valid, DEPLOYMENT_TOPOLOGY: 'direct', TRUSTED_PROXY_IPS: '127.0.0.1' }),
+    ).toThrowError(/TRUSTED_PROXY_IPS/);
+  });
+
+  it('rejects a malformed address or CIDR clearly', () => {
+    // A typo that silently voids the trusted set is the lockout above; one that
+    // silently widens it trusts an upstream nobody chose.
+    for (const entry of ['not-an-ip', '10.0.0.0/', '10.0.0.0/33', '10.0.0.0/abc', '1.2.3']) {
+      expect(() => loadConfig({ ...valid, TRUSTED_PROXY_IPS: entry })).toThrowError(
+        /TRUSTED_PROXY_IPS/,
+      );
+    }
+  });
+
+  it('rejects a /0 prefix, which is trustProxy=true spelled differently', () => {
+    expect(() => loadConfig({ ...valid, TRUSTED_PROXY_IPS: '0.0.0.0/0' })).toThrowError(
+      /TRUSTED_PROXY_IPS/,
+    );
+    expect(() => loadConfig({ ...valid, TRUSTED_PROXY_IPS: '::/0' })).toThrowError(
+      /TRUSTED_PROXY_IPS/,
+    );
+  });
+
+  it('accepts the shapes an operator actually writes', () => {
+    const config = loadConfig({ ...valid, TRUSTED_PROXY_IPS: '127.0.0.1, ::1, 10.0.0.0/8' });
+    expect(config.TRUSTED_PROXY_IPS).toEqual(['127.0.0.1', '::1', '10.0.0.0/8']);
   });
 });

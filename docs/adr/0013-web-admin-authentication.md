@@ -85,21 +85,59 @@ behind Caddy — so the socket address is the proxy's and the real client is in
 `TRUSTED_PROXY_IPS` takes a **list** of upstreams. There is deliberately no
 boolean: `trustProxy: true` believes the header from whoever connected, so a
 client reaching the port directly picks its own IP, rotates it to evade
-throttling, and writes an address of its choosing into the audit log.
+throttling, and writes an address of its choosing into the audit log. A `/0`
+prefix is refused for the same reason — it is the same thing spelled
+differently — and every entry is validated at boot, so a typo fails the boot
+instead of silently voiding or widening the trusted set.
 
-The opposite misconfiguration — behind a proxy with nothing trusted — cannot be
-prevented by configuration, so it is detected at the point of use. Every request
-then appears to come from Caddy, and per-IP throttling would lock out every
-administrator on one attacker's failures. When the resolved client IP is itself
-a configured upstream, per-IP throttling is **skipped** for that attempt and the
-per-username throttle carries the load alone. The username throttle is the one
-that protects an account; the IP throttle limits breadth.
+The opposite misconfiguration is **`DEPLOYMENT_TOPOLOGY`**, which the
+installation must state:
 
-## Password rotation is atomic
+- `reverse-proxy` — the standard deployment. Requires a non-empty list.
+- `direct` — nothing in front of the process. Requires an _empty_ list, so
+  `X-Forwarded-For` is ignored and the client IP is the unforgeable socket
+  address.
+
+An earlier version claimed running behind a proxy with nothing trusted was
+"detected automatically". **That was wrong.** With an empty list `request.ip` is
+simply the proxy's socket address, and nothing at runtime distinguishes it from
+a real client connecting from that address — so the whole installation would
+share one throttle subject and one failed-login burst would lock everyone out.
+An empty list is correct for one topology and dangerous in the other, so the
+topology is declared and the combination is validated.
+
+`ipThrottleSubject`'s trusted-address check survives as a second line, for a
+request that arrives without a forwarded header under a correct configuration.
+It is a safety valve, not a detector. When it fires, per-IP throttling is
+skipped for that attempt and the per-username throttle carries the load alone —
+the username throttle protects an account, the IP throttle limits breadth.
+
+## Password rotation is atomic, and compare-and-set
 
 A successful password change revokes **every** session for that administrator,
 including the one making the request, and the rotation and the revocation commit
 in one transaction with the audit row and the outbox event.
+
+Verification and hashing happen **outside** that transaction, and must: scrypt
+is deliberately slow, and holding a transaction open across it would turn one
+password change into contention for every other writer in the tenant. That
+leaves a time-of-check-to-time-of-use window measured in hundreds of
+milliseconds, in which a second rotation can commit. Both requests validated
+against the same old password; the slower one would then overwrite the newer
+credential — from a session the first rotation had already revoked.
+
+The fix is not a longer lock. The verified hash travels into the UPDATE's own
+predicate:
+
+```sql
+UPDATE admins SET password_hash = :new
+ WHERE tenant_id = :tenant AND id = :admin AND password_hash = :verified
+```
+
+Check and write become one atomic statement. A request whose view of the
+credential is stale updates no rows, and everything else is abandoned: no
+revocation, no success audit row, no event. It is told to sign in again, which
+it must do anyway — the winner revoked its session.
 
 They used to be two steps. If the second failed — dropped connection, restart,
 deadlock — the result was the worst outcome available: the credential the

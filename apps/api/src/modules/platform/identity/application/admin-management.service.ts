@@ -186,7 +186,10 @@ export class AdminManagementService {
     const updated = await this.uow.run(scope, async (tx) => {
       await this.admins.lockTenantForAdminChange(scope, tx);
 
-      const target = await this.requireAdmin(scope, targetId);
+      // Transaction-aware, for the same reason as setRoles: a read on the pool
+      // after the lock does not participate in it, so the status this decision
+      // rests on could differ from the one about to be overwritten.
+      const target = await this.requireAdmin(scope, targetId, tx);
       // Re-checked against the id the DATABASE returned, not the one the caller
       // supplied. The boundary already canonicalises, and this is the check
       // that does not depend on it having: whatever row we are about to write
@@ -243,44 +246,75 @@ export class AdminManagementService {
     await this.guard.check(scope, actor, 'admins.edit');
     const command = setAdminRolesRequestSchema.parse(input);
 
+    // Cheap and state-independent, so it can refuse before any work.
     assertNotSelf(adminIdOf(actor), targetId);
 
-    const current = await this.admins.roleKeysFor(scope, targetId);
     const next = [...new Set(command.roleKeys)].sort();
-    const delta = diffRoles(current, next);
-
-    // Granting or removing the owner role is a change to privilege itself, not
-    // merely to an assignment, so it needs the permission that governs privilege.
-    if (delta.added.includes(OWNER_ROLE_KEY) || delta.removed.includes(OWNER_ROLE_KEY)) {
-      await this.guard.check(scope, actor, 'admins.permissions.edit');
-    }
-    // Only what is being ADDED. Taking a role away is not amplification, and
-    // requiring the remover to hold it would stop a manager cleaning up a role
-    // they were never given.
-    await this.assertGrantsNoMorePrivilegeThanHeld(scope, actor, delta.added);
-
-    const roleIds = await this.resolveRoleIds(scope, next);
     const now = this.clock.now();
 
-    await this.uow.run(scope, async (tx) => {
+    // EVERY authoritative read, decision and write happens under the tenant
+    // lock, in this transaction.
+    //
+    // The delta used to be computed before the lock, and the owner-sensitive
+    // authorization ran against it. That made the security decision a function
+    // of a snapshot that could already be stale by the time it was acted on:
+    //
+    //   target holds [support]
+    //   request B reads [support], intends [support] — delta contains no owner
+    //   request A promotes target to [owner] and commits
+    //   B takes the lock and writes [support]
+    //
+    // B has now removed the owner role without `admins.permissions.edit` ever
+    // being checked, because the delta B computed never mentioned it. The
+    // last-owner trigger does not catch this: another active owner exists, so
+    // nothing is violated — a privileged role was simply removed by a request
+    // that was never authorised to touch it.
+    //
+    // Reading current state before the lock is therefore not an optimisation
+    // with a small race; it is authorization on unsound input.
+    const result = await this.uow.run(scope, async (tx) => {
       await this.admins.lockTenantForAdminChange(scope, tx);
-      const target = await this.requireAdmin(scope, targetId);
+
+      // Transaction-aware. A read on the pool after the lock does not
+      // participate in it and can observe a different snapshot.
+      const target = await this.requireAdmin(scope, targetId, tx);
       assertNotSelf(adminIdOf(actor), target.id);
+
+      const current = await this.admins.roleKeysFor(scope, target.id, tx);
+      const delta = diffRoles(current, next);
+
+      // Authorised from the LOCKED delta. Granting or removing the owner role
+      // is a change to privilege itself, not merely to an assignment.
+      if (delta.added.includes(OWNER_ROLE_KEY) || delta.removed.includes(OWNER_ROLE_KEY)) {
+        await this.guard.check(scope, actor, 'admins.permissions.edit');
+      }
+      // Also from the locked delta: only what is genuinely being ADDED relative
+      // to authoritative state. Removing a role is not amplification.
+      await this.assertGrantsNoMorePrivilegeThanHeld(scope, actor, delta.added);
 
       if (delta.removed.includes(OWNER_ROLE_KEY)) {
         await this.assertOwnerSurvivesDisabling(scope, target, tx);
       }
 
-      await this.roles.setAdminRoles(scope, targetId, roleIds, adminIdOf(actor), tx);
+      // Nothing to do. Returning early avoids an audit row and an event
+      // claiming a change that did not happen.
+      if (delta.added.length === 0 && delta.removed.length === 0) {
+        return { admin: target, roleKeys: current };
+      }
 
+      const roleIds = await this.resolveRoleIds(scope, next, tx);
+      await this.roles.setAdminRoles(scope, target.id, roleIds, adminIdOf(actor), tx);
+
+      // before/after are the locked state, so the audit row describes the
+      // transition that actually occurred rather than the one intended.
       await this.audit.record(
         scope,
         actor,
         {
           action: 'admin.roles_change',
           entityType: 'Admin',
-          entityId: targetId,
-          before: { roleKeys: [...current].sort() },
+          entityId: target.id,
+          before: { roleKeys: current },
           after: { roleKeys: next },
           reason: command.reason,
           result: 'SUCCESS',
@@ -291,15 +325,15 @@ export class AdminManagementService {
       await this.outbox.write(tx, actor, {
         eventType: 'AdminRolesChanged',
         aggregateType: 'Admin',
-        aggregateId: targetId,
+        aggregateId: target.id,
         payload: { added: delta.added, removed: delta.removed },
       });
 
       void now;
+      return { admin: target, roleKeys: next };
     });
 
-    const admin = await this.requireAdmin(scope, targetId);
-    return { admin, roleKeys: next };
+    return result;
   }
 
   /**
@@ -355,27 +389,45 @@ export class AdminManagementService {
 
     adminPasswordSchema.parse(command.newPassword);
     // Hashed before the transaction opens: the KDF is intentionally slow, and
-    // holding a transaction for its duration turns one request into contention
-    // for every other writer.
+    // holding a transaction open for its duration turns one password change into
+    // contention for every other writer in the tenant.
     const hash = await this.hasher.hash(command.newPassword);
     const now = this.clock.now();
 
-    // The rotation and the revocation are ONE transaction.
+    // COMPARE-AND-SET, not a blind write.
     //
-    // They used to be two: the password committed, then sessions were revoked
-    // afterwards. If the second step failed — a dropped connection, a restart,
-    // a deadlock — the result was the worst possible outcome of a password
-    // change: the credential the administrator believed they had replaced was
-    // gone, and every session opened with the old one was still live. A partial
-    // success that looks like a success is worse than a clean failure.
+    // Verification happened outside the transaction — it has to, for the reason
+    // above — so between verifying and writing, another rotation can commit.
+    // Both requests validated against the same old password; without a
+    // predicate, the slower one silently overwrites the newer credential, and
+    // it does so from a session the first rotation already revoked. That is a
+    // time-of-check-to-time-of-use window measured in hundreds of milliseconds,
+    // because scrypt is deliberately slow.
     //
-    // ALL sessions are revoked, including the one making the request. An
-    // administrator rotating a password they think is exposed cannot know which
-    // live session is the attacker's, so keeping "theirs" alive would mean
-    // guessing. They sign in again with the new password; the surface clears
-    // the cookie.
-    await this.uow.run(scope, async (tx) => {
-      await this.admins.setPasswordHash(scope, adminId, hash, now, tx);
+    // The expected hash therefore travels into the UPDATE's WHERE clause. The
+    // check and the write become one atomic statement, and a request whose
+    // view of the credential is stale updates no rows.
+    const rotated = await this.uow.run(scope, async (tx) => {
+      const won = await this.admins.compareAndSetPasswordHash(
+        scope,
+        adminId,
+        credentials.passwordHash,
+        hash,
+        now,
+        tx,
+      );
+      // Nothing else has run yet, so throwing here rolls back an empty
+      // transaction: no revocation, no audit row claiming success, no event.
+      if (!won) return false;
+
+      // Everything below commits with the rotation or not at all. It used to be
+      // two transactions, and a failure in between left the credential replaced
+      // while every session opened with the old one stayed live.
+      //
+      // ALL sessions are revoked, including the one making the request. An
+      // administrator rotating a password they believe is exposed cannot know
+      // which live session is the attacker's, so keeping "theirs" would be a
+      // guess. They sign in again; the surface clears the cookie.
       await this.sessions.revokeAllForAdmin(scope, adminId, now, 'password_changed', tx);
 
       await this.audit.record(
@@ -397,7 +449,29 @@ export class AdminManagementService {
         aggregateId: adminId,
         payload: { bySelf: true },
       });
+
+      return true;
     });
+
+    if (!rotated) {
+      // Recorded outside the aborted transaction, so the denial survives the
+      // rollback that discarded everything else.
+      await this.audit.record(scope, actor, {
+        action: 'admin.password_change',
+        entityType: 'Admin',
+        entityId: adminId,
+        before: null,
+        after: { reason: 'STALE_CREDENTIAL' },
+        result: 'DENIED',
+      });
+      // UNAUTHENTICATED rather than CONFLICT: the credential this request
+      // validated against no longer exists, and the session it arrived on was
+      // revoked by whoever won. There is nothing to retry — sign in again.
+      throw errors.unauthenticated(
+        IDENTITY_ERROR_CODES.ADMIN_PASSWORD_STALE,
+        'The password was changed by another request. Sign in again.',
+      );
+    }
   }
 
   /**
@@ -437,8 +511,8 @@ export class AdminManagementService {
     }
   }
 
-  private async requireAdmin(scope: ScopeContext, id: AdminId): Promise<Admin> {
-    const admin = await this.admins.findById(scope, id);
+  private async requireAdmin(scope: ScopeContext, id: AdminId, tx?: unknown): Promise<Admin> {
+    const admin = await this.admins.findById(scope, id, tx);
     if (admin === null) {
       // Same error whether the id belongs to another tenant or to nobody. A
       // "wrong tenant" message would confirm the id exists somewhere.
@@ -452,14 +526,19 @@ export class AdminManagementService {
     target: Admin,
     tx: unknown,
   ): Promise<void> {
-    const roleKeys = await this.admins.roleKeysFor(scope, target.id);
+    // Read inside the transaction, under the lock the caller already holds.
+    const roleKeys = await this.admins.roleKeysFor(scope, target.id, tx);
     const targetIsActiveOwner = roleKeys.includes(OWNER_ROLE_KEY) && target.status === 'ACTIVE';
     const activeOwnerCount = await this.admins.countActiveOwners(scope, tx);
     assertOwnerSurvives({ activeOwnerCount, targetIsActiveOwner });
   }
 
-  private async resolveRoleIds(scope: ScopeContext, keys: readonly string[]): Promise<RoleId[]> {
-    const { found, missing } = await this.roles.idsForKeys(scope, keys);
+  private async resolveRoleIds(
+    scope: ScopeContext,
+    keys: readonly string[],
+    tx?: unknown,
+  ): Promise<RoleId[]> {
+    const { found, missing } = await this.roles.idsForKeys(scope, keys, tx);
     if (missing.length > 0) {
       throw errors.validation(IDENTITY_ERROR_CODES.ROLE_NOT_FOUND, 'Unknown role.', {
         roleKeys: missing,

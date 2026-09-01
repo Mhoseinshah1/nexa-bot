@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isValidTrustedEntry } from '../trusted-proxy.js';
 
 /**
  * Environment configuration.
@@ -78,23 +79,36 @@ export const configSchema = z
     LOGIN_LOCKOUT_SECONDS: z.coerce.number().int().min(30).max(86_400).default(900),
 
     /**
+     * How this installation is exposed. There is no default in production,
+     * because the two topologies need opposite settings and guessing wrong is a
+     * security bug in one direction and an availability bug in the other.
+     *
+     *   - `reverse-proxy` — the standard deployment, Caddy in front. Requires a
+     *     non-empty TRUSTED_PROXY_IPS naming the addresses Caddy connects from.
+     *   - `direct` — the API is the thing clients connect to. Requires
+     *     TRUSTED_PROXY_IPS to be EMPTY, so `X-Forwarded-For` is ignored
+     *     entirely and the client IP is the unforgeable socket address.
+     *
+     * Modelled explicitly rather than inferred from whether the list happens to
+     * be empty: an empty list is a legitimate configuration for one topology
+     * and a serious misconfiguration for the other, and nothing at runtime can
+     * tell them apart.
+     */
+    DEPLOYMENT_TOPOLOGY: z.enum(['reverse-proxy', 'direct']).default('reverse-proxy'),
+
+    /**
      * Which upstreams may be believed about the client's IP.
      *
      * A comma-separated list of IPs or CIDRs — the addresses our own reverse
-     * proxy connects from. EMPTY MEANS TRUST NOTHING: `X-Forwarded-For` is
-     * ignored entirely and the client IP is the socket address.
+     * proxy connects from. Empty means `X-Forwarded-For` is ignored entirely
+     * and the client IP is the socket address.
      *
      * `trustProxy=true` is deliberately not offered. It believes the header
      * from whoever connects, so a client reaching the port directly can claim
      * any IP it likes — and the two things the client IP is used for here are
-     * brute-force throttling and audit rows. Spoofable means an attacker rotates
-     * a header instead of an address, and the audit trail names whoever they
-     * chose.
-     *
-     * Leaving this empty while actually running behind a proxy has its own
-     * failure, and it is not silent: every request then appears to come from
-     * the proxy, so per-IP throttling would lock out every administrator at
-     * once. `trustedProxy.ts` detects that case and refuses to throttle on it.
+     * brute-force throttling and audit rows. Spoofable means an attacker
+     * rotates a header instead of an address, and the audit trail names
+     * whoever they chose.
      */
     TRUSTED_PROXY_IPS: z
       .string()
@@ -155,6 +169,45 @@ export const configSchema = z
           'It reduces the scrypt work factor by more than two orders of magnitude.',
       });
     }
+    // Every entry must parse. A typo that silently voids the trusted set turns
+    // the proxy's own address into one shared throttle subject for everybody;
+    // a typo that silently widens it trusts an upstream nobody chose.
+    const invalidProxies = config.TRUSTED_PROXY_IPS.filter((entry) => !isValidTrustedEntry(entry));
+    if (invalidProxies.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TRUSTED_PROXY_IPS'],
+        message:
+          `Not a valid IP address or CIDR: ${invalidProxies.join(', ')}. ` +
+          'Entries look like 127.0.0.1, ::1 or 10.0.0.0/8. A /0 prefix is refused: it would ' +
+          'trust every address, which is trustProxy=true spelled differently.',
+      });
+    }
+
+    if (config.DEPLOYMENT_TOPOLOGY === 'reverse-proxy' && config.TRUSTED_PROXY_IPS.length === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TRUSTED_PROXY_IPS'],
+        message:
+          'DEPLOYMENT_TOPOLOGY=reverse-proxy requires TRUSTED_PROXY_IPS to name the addresses ' +
+          'the proxy connects from (for Caddy on the same host, 127.0.0.1,::1). Left empty, ' +
+          'every request appears to come from the proxy and one failed-login burst would lock ' +
+          'out every administrator. Set DEPLOYMENT_TOPOLOGY=direct if there is genuinely no ' +
+          'proxy in front of this process.',
+      });
+    }
+
+    if (config.DEPLOYMENT_TOPOLOGY === 'direct' && config.TRUSTED_PROXY_IPS.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TRUSTED_PROXY_IPS'],
+        message:
+          'DEPLOYMENT_TOPOLOGY=direct means nothing sits in front of this process, so no ' +
+          'upstream may be believed about the client IP. Either clear TRUSTED_PROXY_IPS or ' +
+          'set DEPLOYMENT_TOPOLOGY=reverse-proxy.',
+      });
+    }
+
     if (config.NODE_ENV === 'production' && config.WEB_ADMIN_ORIGINS.length === 0) {
       ctx.addIssue({
         code: 'custom',

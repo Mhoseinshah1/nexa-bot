@@ -125,6 +125,37 @@ exists yet; writing a fabricated actor there would be the invented identity this
 codebase refuses elsewhere. NULL means "the installation did this", and the
 audit row with actor `SYSTEM_JOB` carries the rest.
 
+### Authorization decides under the lock
+
+A security decision computed before the tenant lock is a decision about a
+snapshot that may no longer exist when it is acted on.
+
+`setRoles` used to read the target's current roles, compute the delta, and
+authorize the owner-sensitive part of it — all before taking the lock:
+
+```
+target holds [support]
+request B reads [support], intends [support]  -> delta mentions no owner
+request A promotes target to [owner], commits
+request B takes the lock and writes [support]
+```
+
+B has removed the owner role without `admins.permissions.edit` ever being
+checked, because the delta B authorized against never mentioned it. The
+last-owner trigger does not catch this — another active owner exists, so nothing
+is violated. A privileged role was simply removed by a request never authorized
+to touch it.
+
+So the authoritative read, the delta, the owner-sensitive permission check, the
+privilege-amplification check, the mutation and the audit `before`/`after` all
+happen inside the transaction, after the lock, through transaction-aware
+repository reads. A read on the _pool_ after the lock does not participate in it
+and can observe a different snapshot, which is why `findById` and `roleKeysFor`
+take the transaction handle.
+
+`setStatus` already locked first but read through the pool; it now reads inside
+the transaction for the same reason.
+
 ### On the triggers
 
 The migration repeats the last-owner rule as `AFTER` constraint triggers. They

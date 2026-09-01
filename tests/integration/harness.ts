@@ -39,6 +39,9 @@ export function testConfig(overrides: Partial<NodeJS.ProcessEnv> = {}): AppConfi
     // forbidden this value by the config schema, and a unit test hashes at
     // production strength so the real parameters are still exercised.
     PASSWORD_HASH_PROFILE: 'fast',
+    // The suite drives the app directly, with no proxy in front of it. Stated
+    // explicitly, because an empty trusted list now means something specific.
+    DEPLOYMENT_TOPOLOGY: 'direct',
     OUTBOX_RELAY_ENABLED: 'false',
     OUTBOX_RELAY_POLL_INTERVAL_MS: '50',
     ...overrides,

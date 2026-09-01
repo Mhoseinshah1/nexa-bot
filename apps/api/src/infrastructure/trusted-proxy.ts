@@ -19,12 +19,17 @@ import { isIP } from 'node:net';
  *     subject and locks out the whole installation on somebody else's failed
  *     logins.
  *
- * The first is a security hole and is prevented by configuration — the config
- * schema takes a LIST of upstreams, never a boolean. The second is a
- * misconfiguration that no list can prevent, so it is detected at the point of
- * use: `ipThrottleSubject` returns null when the client IP is itself a trusted
- * proxy, and the login path skips per-IP throttling rather than throttling
- * everybody as one.
+ * Both are prevented by CONFIGURATION, not by inference. The schema takes a
+ * list of upstreams and never a boolean, and it requires the deployment to say
+ * which topology it is: `reverse-proxy` demands a non-empty, validated list,
+ * `direct` demands an empty one. An earlier version claimed the second failure
+ * was "detected automatically" — it is not, and could not be: with an empty
+ * list `request.ip` is simply the proxy's socket address, indistinguishable
+ * from a real client connecting from that address.
+ *
+ * `ipThrottleSubject`'s trusted-address check remains as a second line, for the
+ * case where the list is right but a particular request arrives without a
+ * forwarded header. It is a safety valve, not a detector.
  */
 
 /**
@@ -166,4 +171,31 @@ function expandIpv6(address: string): number[] | null {
     bytes.push((value >> 8) & 0xff, value & 0xff);
   }
   return bytes;
+}
+
+/**
+ * Whether a configured entry is a usable address or CIDR.
+ *
+ * Used by the config schema so a typo fails at boot with a clear message rather
+ * than silently widening — or silently voiding — the trusted set. `10.0.0.0/`
+ * and `0.0.0.0/0` are both rejected: the first is malformed, and the second
+ * would trust the entire internet, which is `trustProxy: true` spelled
+ * differently.
+ */
+export function isValidTrustedEntry(entry: string): boolean {
+  if (!entry.includes('/')) return isIP(normaliseAddress(entry)) !== 0;
+
+  const [network = '', prefixText = '', ...rest] = entry.split('/');
+  if (rest.length > 0) return false;
+  if (!/^\d+$/.test(prefixText)) return false;
+
+  const address = normaliseAddress(network);
+  const version = isIP(address);
+  if (version === 0) return false;
+
+  const prefix = Number(prefixText);
+  const maxPrefix = version === 4 ? 32 : 128;
+  // A zero-length prefix matches every address. Nothing legitimate needs it,
+  // and it would quietly reintroduce "trust everyone".
+  return prefix >= 1 && prefix <= maxPrefix;
 }

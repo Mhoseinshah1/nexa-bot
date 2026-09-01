@@ -142,6 +142,7 @@ export const IDENTITY_ERROR_CODES = {
   ADMIN_LAST_OWNER: 'admin.last_owner_protected',
   ADMIN_PRIVILEGE_ESCALATION: 'admin.privilege_escalation_denied',
   ADMIN_PASSWORD_REUSED: 'admin.password_reused',
+  ADMIN_PASSWORD_STALE: 'admin.password_stale',
   ROLE_NOT_FOUND: 'role.not_found',
   ROLE_SYSTEM_IMMUTABLE: 'role.system_immutable',
   BOOTSTRAP_ALREADY_DONE: 'bootstrap.already_completed',

@@ -49,7 +49,11 @@ describe('with a trusted upstream configured', () => {
   let api: ApiApp;
 
   beforeAll(async () => {
-    const config = testConfig({ WEB_ADMIN_ORIGINS: ORIGIN, TRUSTED_PROXY_IPS: PROXY });
+    const config = testConfig({
+      WEB_ADMIN_ORIGINS: ORIGIN,
+      DEPLOYMENT_TOPOLOGY: 'reverse-proxy',
+      TRUSTED_PROXY_IPS: PROXY,
+    });
     await migrateOnce(config.DATABASE_URL);
     api = await createApiApp(config);
   });
@@ -117,7 +121,11 @@ describe('with no trusted upstream configured', () => {
   let api: ApiApp;
 
   beforeAll(async () => {
-    const config = testConfig({ WEB_ADMIN_ORIGINS: ORIGIN, TRUSTED_PROXY_IPS: '' });
+    const config = testConfig({
+      WEB_ADMIN_ORIGINS: ORIGIN,
+      DEPLOYMENT_TOPOLOGY: 'direct',
+      TRUSTED_PROXY_IPS: '',
+    });
     await migrateOnce(config.DATABASE_URL);
     api = await createApiApp(config);
   });
