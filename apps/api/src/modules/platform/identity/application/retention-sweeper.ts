@@ -37,6 +37,16 @@ export interface RetentionTask {
 export interface RetentionSweeperOptions {
   /** How often to sweep. */
   readonly intervalMs: number;
+  /**
+   * How long after start the FIRST sweep runs.
+   *
+   * `setInterval` alone fires an hour after boot, so a worker that restarts
+   * more often than that — a crash loop, or a day of frequent deploys — would
+   * never sweep at all, and the tables this exists to bound would grow exactly
+   * as if it did not exist. Short, but not zero: housekeeping should not
+   * compete with startup.
+   */
+  readonly initialDelayMs: number;
   /** Rows per batch, so no single statement is long. */
   readonly batchSize: number;
   /** Ceiling on batches in one tick, so a pass is always bounded. */
@@ -45,6 +55,7 @@ export interface RetentionSweeperOptions {
 
 export class RetentionSweeper {
   private timer: NodeJS.Timeout | null = null;
+  private firstRun: NodeJS.Timeout | null = null;
   private running = false;
 
   constructor(
@@ -56,12 +67,18 @@ export class RetentionSweeper {
 
   start(): void {
     if (this.timer !== null) return;
+    this.firstRun = setTimeout(() => void this.tick(), this.options.initialDelayMs);
     this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
     // Never hold the process open for a housekeeping timer.
+    this.firstRun.unref?.();
     this.timer.unref?.();
   }
 
   async stop(): Promise<void> {
+    if (this.firstRun !== null) {
+      clearTimeout(this.firstRun);
+      this.firstRun = null;
+    }
     if (this.timer !== null) {
       clearInterval(this.timer);
       this.timer = null;

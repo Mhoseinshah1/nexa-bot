@@ -202,6 +202,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // Hourly is ample: the rows this removes are already expired, and each
       // tick now drains the backlog rather than taking one batch off it.
       intervalMs: 3_600_000,
+      // A minute after the worker starts, so a short-lived process still
+      // sweeps once and a restart loop does not disable housekeeping.
+      initialDelayMs: 60_000,
       batchSize: 5_000,
       // 5m rows in one pass is far past any plausible backlog; the ceiling
       // exists so housekeeping is bounded, not to ration it.
@@ -220,7 +223,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
     clock,
     logger,
-    { intervalMs: 3_600_000, batchSize: 5_000, maxBatchesPerTick: 1_000 },
+    { intervalMs: 3_600_000, initialDelayMs: 60_000, batchSize: 5_000, maxBatchesPerTick: 1_000 },
   );
 
   const recordPing = new RecordPingService(guard, uow, outbox, audit, idempotency, clock, tenants);

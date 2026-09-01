@@ -41,6 +41,7 @@ describe('RetentionSweeper', () => {
     const table = backlog(25);
     const sweeper = new RetentionSweeper({ name: 't', purge: table.purge }, clock, logger, {
       intervalMs: 3_600_000,
+      initialDelayMs: 3_600_000,
       batchSize: 5,
       maxBatchesPerTick: 1_000,
     });
@@ -56,6 +57,7 @@ describe('RetentionSweeper', () => {
     const table = backlog(1_000);
     const sweeper = new RetentionSweeper({ name: 't', purge: table.purge }, clock, logger, {
       intervalMs: 3_600_000,
+      initialDelayMs: 3_600_000,
       batchSize: 10,
       maxBatchesPerTick: 3,
     });
@@ -72,7 +74,7 @@ describe('RetentionSweeper', () => {
       { name: 'login-throttle', purge: table.purge },
       clock,
       { ...logger, warn } as never,
-      { intervalMs: 3_600_000, batchSize: 10, maxBatchesPerTick: 2 },
+      { intervalMs: 3_600_000, initialDelayMs: 3_600_000, batchSize: 10, maxBatchesPerTick: 2 },
     );
 
     await sweeper.sweep();
@@ -85,12 +87,32 @@ describe('RetentionSweeper', () => {
     const table = backlog(0);
     const sweeper = new RetentionSweeper({ name: 't', purge: table.purge }, clock, logger, {
       intervalMs: 3_600_000,
+      initialDelayMs: 3_600_000,
       batchSize: 5,
       maxBatchesPerTick: 1_000,
     });
 
     expect(await sweeper.sweep()).toBe(0);
     expect(table.calls).toHaveLength(1);
+  });
+
+  it('sweeps soon after start, not only one interval later', async () => {
+    // `setInterval` alone fires an hour after boot, so a worker restarting more
+    // often than that would never sweep and the tables would grow exactly as if
+    // housekeeping did not exist.
+    const table = backlog(3);
+    const sweeper = new RetentionSweeper({ name: 't', purge: table.purge }, clock, logger, {
+      // An interval far longer than this test will ever wait.
+      intervalMs: 3_600_000,
+      initialDelayMs: 5,
+      batchSize: 10,
+      maxBatchesPerTick: 10,
+    });
+
+    sweeper.start();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await sweeper.stop();
+    expect(table.remaining).toBe(0);
   });
 
   it('does not overlap two sweeps', async () => {
@@ -112,7 +134,7 @@ describe('RetentionSweeper', () => {
       },
       clock,
       logger,
-      { intervalMs: 1, batchSize: 5, maxBatchesPerTick: 1_000 },
+      { intervalMs: 1, initialDelayMs: 1, batchSize: 5, maxBatchesPerTick: 1_000 },
     );
 
     sweeper.start();
