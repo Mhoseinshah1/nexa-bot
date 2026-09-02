@@ -1,0 +1,385 @@
+#!/usr/bin/env bash
+# botctl and its library, driven through their success AND failure branches.
+#
+# Every failure state in ADR-0022 is asserted here, because those are the paths
+# that never run on a good day and therefore never get exercised by hand:
+#
+#   - a target that cannot be resolved or pulled leaves the current release
+#   - a failed backup stops the update before it migrates
+#   - a failed migration does not let the target become current
+#   - a target that starts but never becomes ready is backed out
+#   - the previous release survives the update that replaced it
+#   - rollback switches the image and does not touch the database
+#   - the lock refuses a second writer
+#
+# No Docker daemon, no registry, no database: a fake `docker` on PATH records
+# what was asked and answers from a scripted state. That makes it possible to
+# assert things a smoke test cannot, such as "the migration used the TARGET
+# image" and "nothing in the update path ever ran git".
+
+set -uo pipefail
+
+HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd -- "${HERE}/../.." && pwd)"
+# shellcheck source=harness.sh
+. "${HERE}/harness.sh"
+
+BOTCTL="${REPO}/deploy/bin/botctl"
+export NEXA_LIB="${REPO}/deploy/bin/nexa-lib.sh"
+
+DIGEST_A="sha256:$(printf 'a%.0s' {1..64})"
+DIGEST_B="sha256:$(printf 'b%.0s' {1..64})"
+
+# Run botctl and capture its combined output; never let a failure abort the run.
+# This file deliberately does NOT run under `set -e`: a test that stops at the
+# first failure hides every failure behind it. An earlier version restored
+# `set -e` here — turning on an option the file never had — and the whole suite
+# ended at the first red assertion.
+run_botctl() {
+  BOTCTL_OUTPUT="$("$BOTCTL" "$@" 2>&1)"
+  BOTCTL_STATUS=$?
+  return 0
+}
+
+printf 'botctl\n'
+
+# =============================================================================
+# Validation — every value that reaches a path or an image reference
+# =============================================================================
+setup_root
+setup_fake_docker
+# shellcheck source=../../deploy/bin/nexa-lib.sh
+. "$NEXA_LIB"
+
+test_case 'refuses a version containing a path traversal'
+# The version becomes a filename under /var/lib/nexa/releases and a tag in an
+# image reference. `..` must be impossible by construction, not by stripping.
+assert_fails 'accepted ../../etc/passwd' nexa_valid_version '../../etc/passwd'
+assert_fails 'accepted a version with a slash' nexa_valid_version 'v1/../../x'
+assert_fails 'accepted a version with a dot-dot' nexa_valid_version 'v1..2'
+assert_fails 'accepted an empty version' nexa_valid_version ''
+assert_fails 'accepted a version with a space' nexa_valid_version 'v1 2'
+assert_fails 'accepted a shell metacharacter' nexa_valid_version 'v1;rm -rf /'
+assert_fails 'accepted a command substitution' nexa_valid_version 'v$(id)'
+assert_ok 'rejected an ordinary version' nexa_valid_version 'v1.2.3'
+assert_ok 'rejected a pre-release version' nexa_valid_version '1.2.3-rc.1'
+
+test_case 'refuses a domain that is not a bare hostname'
+assert_fails 'accepted a scheme' nexa_valid_domain 'https://admin.example.com'
+assert_fails 'accepted a path' nexa_valid_domain 'admin.example.com/panel'
+assert_fails 'accepted a port' nexa_valid_domain 'admin.example.com:8443'
+assert_fails 'accepted a space' nexa_valid_domain 'admin example.com'
+assert_fails 'accepted a bare label' nexa_valid_domain 'localhost'
+assert_ok 'rejected a real hostname' nexa_valid_domain 'admin.example.com'
+
+test_case 'refuses a malformed digest'
+assert_fails 'accepted a short digest' nexa_valid_digest 'sha256:abc'
+assert_fails 'accepted an unprefixed digest' nexa_valid_digest "$(printf 'a%.0s' {1..64})"
+assert_fails 'accepted uppercase hex' nexa_valid_digest "sha256:$(printf 'A%.0s' {1..64})"
+assert_ok 'rejected a well-formed digest' nexa_valid_digest "$DIGEST_A"
+
+test_case 'reads a config value without executing the file'
+# `source` would run this. A maintenance CLI that executes its own
+# configuration is one editing mistake away from being a shell injection.
+printf 'INNOCENT=value\nEVIL=$(touch %s/pwned)\n' "$NEXA_ROOT" >"${NEXA_ROOT}/probe.env"
+value="$(nexa_env_value "${NEXA_ROOT}/probe.env" INNOCENT)"
+assert_equals 'did not read a plain value' 'value' "$value"
+nexa_env_value "${NEXA_ROOT}/probe.env" EVIL >/dev/null 2>&1 || true
+assert_fails 'the config file was EXECUTED' test -e "${NEXA_ROOT}/pwned"
+
+teardown_root
+
+# =============================================================================
+# version and status
+# =============================================================================
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+
+test_case 'version reports the release identity and no secrets'
+run_botctl version
+assert_equals 'version exited non-zero' 0 "$BOTCTL_STATUS"
+assert_contains 'no version' "$BOTCTL_OUTPUT" 'v1.0.0'
+assert_contains 'no commit' "$BOTCTL_OUTPUT" 'c0ffee'
+assert_contains 'no digest' "$BOTCTL_OUTPUT" "$DIGEST_A"
+assert_not_contains 'leaked the database password' "$BOTCTL_OUTPUT" 'not-a-real-password'
+
+test_case 'status reports readiness without dumping the environment'
+run_botctl status
+assert_contains 'status did not report the version' "$BOTCTL_OUTPUT" 'v1.0.0'
+assert_contains 'status did not report readiness' "$BOTCTL_OUTPUT" 'ready'
+assert_not_contains 'status leaked the database password' "$BOTCTL_OUTPUT" 'not-a-real-password'
+assert_not_contains 'status leaked a KEK' "$BOTCTL_OUTPUT" 'SECRETS_KEK'
+
+test_case 'status reports NOT READY when the api is unhealthy'
+fake_set api_health 'starting'
+run_botctl status
+assert_contains 'an unhealthy api was reported as ready' "$BOTCTL_OUTPUT" 'NOT READY'
+assert_fails 'status exited zero with an unhealthy api' test "$BOTCTL_STATUS" -eq 0
+fake_set api_health 'healthy'
+
+teardown_root
+
+# =============================================================================
+# backup
+# =============================================================================
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+
+test_case 'backup writes a timestamped 0600 dump and verifies it'
+run_botctl backup
+assert_equals 'backup failed' 0 "$BOTCTL_STATUS"
+backup_file="$(find "$NEXA_BACKUP_DIR" -name 'nexa-v1.0.0-*.sql.gz' | head -n 1)"
+assert_ok 'no backup file was written' test -n "$backup_file"
+if [ -n "$backup_file" ]; then
+  assert_file_mode 'the backup is not 0600' "$backup_file" '600'
+  assert_ok 'the backup is not valid gzip' gzip -t "$backup_file"
+fi
+assert_file_mode 'the backup directory is not 0700' "$NEXA_BACKUP_DIR" '700'
+assert_not_contains 'the backup log leaked a password' "$BOTCTL_OUTPUT" 'not-a-real-password'
+
+test_case 'a failed dump is loud and leaves no file behind'
+fake_set exec_exit 1
+rm -f "$NEXA_BACKUP_DIR"/*.sql.gz
+run_botctl backup
+assert_fails 'a failed backup exited zero' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'a failed backup was not reported' "$BOTCTL_OUTPUT" 'FAILED'
+leftover="$(find "$NEXA_BACKUP_DIR" -name '*.sql.gz*' | head -n 1)"
+assert_equals 'a failed backup left a file behind' '' "$leftover"
+fake_set exec_exit 0
+
+teardown_root
+
+# =============================================================================
+# update — the success path, and what it asked Docker to do
+# =============================================================================
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+fake_set resolve_digest "$DIGEST_B"
+
+test_case 'update resolves, pulls by digest, backs up, migrates and activates'
+reset_docker_log
+run_botctl update v2.0.0
+assert_equals 'the update failed' 0 "$BOTCTL_STATUS"
+log="$(docker_log)"
+
+assert_contains 'never resolved the tag to a digest' "$log" 'imagetools inspect registry.test/nexa:v2.0.0'
+assert_contains 'did not pull by digest' "$log" "pull --quiet registry.test/nexa@${DIGEST_B}"
+assert_contains 'did not run the migrator' "$log" 'dist/infrastructure/persistence/migrate.js'
+
+# The migration must run from the TARGET release's own image. Running the
+# outgoing release's migrator would apply the schema the outgoing code expects,
+# which is the wrong schema by definition.
+migrate_line="$(printf '%s\n' "$log" | grep 'migrate.js' | head -n 1)"
+assert_contains 'the migration did not run --no-deps' "$migrate_line" '--no-deps'
+
+# NEVER git. The legacy updater is `git pull`, and this checkpoint exists
+# because that cannot be reasoned about or undone.
+assert_not_contains 'the update shelled out to git' "$log" 'git '
+
+test_case 'the new release becomes current and the old one becomes the rollback target'
+assert_equals 'current was not advanced' 'v2.0.0' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_equals 'previous was not recorded' 'v1.0.0' "$(cat "${NEXA_STATE_DIR}/previous")"
+assert_ok 'the previous release manifest was deleted' test -f "${NEXA_STATE_DIR}/releases/v1.0.0.json"
+assert_equals 'deploy.env does not name the new digest' \
+  "registry.test/nexa@${DIGEST_B}" \
+  "$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE)"
+assert_file_mode 'deploy.env lost its restrictive mode' "${NEXA_CONFIG_DIR}/deploy.env" '600'
+
+test_case 'a backup was taken before the migration'
+# Order matters: the backup must precede the migration, because the migration
+# is the step that switching an image back cannot undo.
+backup_at="$(printf '%s\n' "$log" | grep -n 'exec -T postgres pg_dump' | head -n 1 | cut -d: -f1)"
+migrate_at="$(printf '%s\n' "$log" | grep -n 'migrate.js' | head -n 1 | cut -d: -f1)"
+assert_ok 'no backup was taken during the update' test -n "$backup_at"
+assert_ok 'the migration ran before the backup' test "${backup_at:-9999}" -lt "${migrate_at:-0}"
+
+teardown_root
+
+# =============================================================================
+# update — every failure state leaves the current release alone
+# =============================================================================
+
+# --- the target cannot be resolved -------------------------------------------
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+test_case 'an unresolvable target leaves the current release current'
+fake_set resolve_exit 1
+run_botctl update v2.0.0
+assert_fails 'an unresolvable update exited zero' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'current changed on a failed resolve' 'v1.0.0' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_fails 'a rollback target was invented' test -f "${NEXA_STATE_DIR}/previous"
+teardown_root
+
+# --- the target cannot be pulled ---------------------------------------------
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+test_case 'an unpullable target leaves the current release current'
+fake_set resolve_digest "$DIGEST_B"
+fake_set pull_exit 1
+reset_docker_log
+run_botctl update v2.0.0
+assert_fails 'an unpullable update exited zero' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'current changed on a failed pull' 'v1.0.0' "$(cat "${NEXA_STATE_DIR}/current")"
+# And nothing destructive happened first.
+assert_not_contains 'migrated despite a failed pull' "$(docker_log)" 'migrate.js'
+teardown_root
+
+# --- the backup fails ---------------------------------------------------------
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+test_case 'a failed backup stops the update before it migrates'
+fake_set resolve_digest "$DIGEST_B"
+fake_set exec_exit 1
+reset_docker_log
+run_botctl update v2.0.0
+assert_fails 'the update proceeded after a failed backup' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'current changed after a failed backup' 'v1.0.0' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_not_contains 'MIGRATED after a failed backup' "$(docker_log)" 'migrate.js'
+# The UPDATE's own message, not just the backup's. Deleting the guard in
+# cmd_update left every other assertion here green, because cmd_backup exits
+# on its own — so the operator was told the backup failed and never told the
+# update had been abandoned. This is the assertion that fails without it.
+assert_contains 'the operator was not told the update was abandoned' \
+  "$BOTCTL_OUTPUT" 'the update did NOT proceed'
+teardown_root
+
+# --- the migration fails ------------------------------------------------------
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+test_case 'a failed migration does not let the target become current'
+fake_set resolve_digest "$DIGEST_B"
+fake_set run_exit 1
+run_botctl update v2.0.0
+assert_fails 'a failed migration exited zero' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'a failed migration still advanced current' 'v1.0.0' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_contains 'the failure did not name the migration' "$BOTCTL_OUTPUT" 'migration'
+# The operator is told where the pre-migration backup is.
+assert_contains 'the failure did not point at the backup' "$BOTCTL_OUTPUT" 'backup'
+teardown_root
+
+# --- the target starts but never becomes ready --------------------------------
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+test_case 'a target that never becomes ready does not become current'
+fake_set resolve_digest "$DIGEST_B"
+fake_set api_health 'starting'
+# The readiness wait is bounded; shorten it so the test is not.
+NEXA_READY_TIMEOUT=6 run_botctl update v2.0.0
+assert_fails 'an unready target exited zero' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'an unready target became current' 'v1.0.0' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_equals 'deploy.env was repointed at an unready release' \
+  "registry.test/nexa@sha256:$(printf '1%.0s' {1..64})" \
+  "$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE)"
+teardown_root
+
+# =============================================================================
+# rollback
+# =============================================================================
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+seed_release 'v2.0.0' "$DIGEST_B"
+printf 'v1.0.0\n' >"${NEXA_STATE_DIR}/previous"
+printf 'v2.0.0\n' >"${NEXA_STATE_DIR}/current"
+
+test_case 'rollback returns to the previous release by digest'
+reset_docker_log
+run_botctl rollback
+assert_equals 'the rollback failed' 0 "$BOTCTL_STATUS"
+assert_equals 'current was not returned to the previous release' 'v1.0.0' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_equals 'the rollback did not become undoable' 'v2.0.0' "$(cat "${NEXA_STATE_DIR}/previous")"
+assert_equals 'deploy.env does not name the rolled-back digest' \
+  "registry.test/nexa@${DIGEST_A}" \
+  "$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE)"
+
+test_case 'rollback does NOT restore the database'
+# The most important assertion in this file. The backup predates the
+# migration, so restoring it during a routine rollback would discard every
+# write made since — an outage turned into data loss by the tool meant to fix
+# it. Restoring is a separate, explicitly destructive action.
+log="$(docker_log)"
+assert_not_contains 'the rollback ran pg_restore' "$log" 'pg_restore'
+assert_not_contains 'the rollback ran psql' "$log" 'psql'
+assert_not_contains 'the rollback dropped anything' "$log" 'DROP'
+assert_contains 'the rollback did not say the database was untouched' \
+  "$BOTCTL_OUTPUT" 'database was not touched'
+
+teardown_root
+
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+test_case 'rollback refuses when there is nothing to roll back to'
+run_botctl rollback
+assert_fails 'rolled back with no previous release' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the refusal was not explained' "$BOTCTL_OUTPUT" 'nothing to roll back'
+teardown_root
+
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+printf 'v9.9.9\n' >"${NEXA_STATE_DIR}/previous"
+test_case 'rollback refuses to guess when the previous manifest is missing'
+run_botctl rollback
+assert_fails 'rolled back to a release with no manifest' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the refusal did not mention the manifest' "$BOTCTL_OUTPUT" 'manifest'
+teardown_root
+
+# =============================================================================
+# the lock
+# =============================================================================
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+
+test_case 'a second writer is refused while the lock is held'
+# Held by an unrelated process, exactly as a long update would hold it. Without
+# this, two updates interleave their migrations and their current-release
+# writes, and the installation runs one release while claiming another.
+exec 9>>"$NEXA_LOCK_FILE"
+flock -x 9
+run_botctl update v2.0.0
+assert_fails 'a second update ran while the lock was held' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the lock refusal was not explained' "$BOTCTL_OUTPUT" 'already running'
+run_botctl rollback
+assert_fails 'a rollback ran while the lock was held' test "$BOTCTL_STATUS" -eq 0
+flock -u 9
+exec 9>&-
+
+test_case 'the lock is released when the operation finishes'
+fake_set resolve_digest "$DIGEST_B"
+run_botctl update v2.0.0
+assert_equals 'the update failed after the lock was released' 0 "$BOTCTL_STATUS"
+
+teardown_root
+
+# =============================================================================
+# release retention
+# =============================================================================
+setup_root
+setup_fake_docker
+
+test_case 'pruning never removes the current or the rollback target'
+# shellcheck source=../../deploy/bin/nexa-lib.sh
+. "$NEXA_LIB"
+for i in 1 2 3 4 5 6 7 8; do
+  seed_release "v0.0.${i}" "sha256:$(printf "%064d" "$i")"
+done
+printf 'v0.0.8\n' >"${NEXA_STATE_DIR}/current"
+printf 'v0.0.1\n' >"${NEXA_STATE_DIR}/previous"
+NEXA_KEEP_RELEASES=3 nexa_prune_releases
+assert_ok 'the current release manifest was pruned' test -f "${NEXA_STATE_DIR}/releases/v0.0.8.json"
+assert_ok 'the ROLLBACK TARGET manifest was pruned' test -f "${NEXA_STATE_DIR}/releases/v0.0.1.json"
+remaining="$(find "${NEXA_STATE_DIR}/releases" -name '*.json' | wc -l)"
+assert_ok 'retention is unbounded' test "$remaining" -lt 8
+teardown_root
+
+report

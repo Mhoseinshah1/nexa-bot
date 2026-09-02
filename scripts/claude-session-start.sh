@@ -10,7 +10,7 @@
 # reports what it could not do.
 
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 echo "==> Nexa Bot session setup"
 

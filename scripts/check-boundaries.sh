@@ -7,7 +7,7 @@
 # each check names it.
 
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 FAILED=0
 
@@ -375,8 +375,11 @@ while read -r code; do
   # error mapping or a translation would have passed. Only the API can emit one.
   # Comment lines are stripped for the same reason — a code named in prose is
   # not a code anything can throw.
-  if ! find apps/api/src -name '*.ts' 2>/dev/null \
-    | xargs grep -h "$code" 2>/dev/null \
+  # `-exec +` rather than `| xargs`: a path containing whitespace would be
+  # split into two non-existent paths by xargs, and a grep that finds nothing
+  # because it looked in the wrong place reports the same thing as a code with
+  # no producer.
+  if ! find apps/api/src -name '*.ts' -exec grep -h "$code" {} + 2>/dev/null \
     | grep -vE '^\s*(//|\*|/\*)' \
     | grep -q .; then
     UNPRODUCED="$UNPRODUCED $code"

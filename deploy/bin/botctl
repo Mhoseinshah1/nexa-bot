@@ -1,0 +1,372 @@
+#!/usr/bin/env bash
+# botctl — the supported operational interface for a Nexa installation.
+#
+# Installed to /usr/local/bin/botctl. Every subcommand that can change what is
+# running takes the same exclusive lock, so an update, a rollback and a second
+# update cannot interleave.
+#
+# The failure states are as much a part of this as the success paths, and they
+# are stated where they happen:
+#
+#   - the target image cannot be pulled  -> current release still running
+#   - the backup fails                   -> the update does not proceed
+#   - the migration fails                -> the target does not become current
+#   - the target starts but is not ready -> return to the previous release
+#   - the rollback is not healthy        -> report loudly, delete nothing
+#
+# The previous release is never deleted by the update that replaced it.
+
+set -euo pipefail
+
+# The library is installed beside this script's deployment, not beside the
+# script itself: /usr/local/bin holds one file, and everything else lives under
+# /opt/nexa. A missing library is a broken installation, not a fallback case.
+NEXA_LIB="${NEXA_LIB:-/opt/nexa/lib/nexa-lib.sh}"
+if [ ! -r "$NEXA_LIB" ]; then
+  printf 'error botctl cannot find its library at %s. Is Nexa installed?\n' "$NEXA_LIB" >&2
+  exit 1
+fi
+# shellcheck source=nexa-lib.sh disable=SC1090
+. "$NEXA_LIB"
+
+usage() {
+  cat <<'USAGE'
+botctl — operate a Nexa installation
+
+  botctl status              what is running, and whether it is ready
+  botctl version             installed version, source commit, image digest
+  botctl backup              a consistent PostgreSQL dump, timestamped
+  botctl update [VERSION]    update to VERSION (default: latest release tag)
+  botctl rollback            return to the previous release's image
+  botctl logs [SERVICE]      follow logs
+  botctl restart             restart the stack
+
+Update and rollback take an exclusive lock. Rollback changes the APPLICATION
+only: it never restores a database backup, because the backup predates the
+migration and restoring it would discard every write made since.
+USAGE
+}
+
+require_installed() {
+  [ -r "${NEXA_CONFIG_DIR}/deploy.env" ] ||
+    nexa_die "no installation found at ${NEXA_CONFIG_DIR}. Run the installer first."
+}
+
+# ---------------------------------------------------------------------------
+# version
+# ---------------------------------------------------------------------------
+cmd_version() {
+  require_installed
+  local version commit digest
+  version="$(nexa_current_version || true)"
+  if [ -z "$version" ]; then
+    nexa_die "no current release is recorded. The installation is incomplete."
+  fi
+  commit="$(nexa_manifest_field "$version" commit || printf 'unknown')"
+  digest="$(nexa_manifest_field "$version" digest || printf 'unknown')"
+
+  printf 'version   %s\n' "$version"
+  printf 'commit    %s\n' "$commit"
+  printf 'image     %s@%s\n' "$NEXA_IMAGE_REPO" "$digest"
+
+  local previous
+  previous="$(nexa_previous_version || true)"
+  [ -n "$previous" ] && printf 'previous  %s (rollback target)\n' "$previous"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
+cmd_status() {
+  require_installed
+  local version
+  version="$(nexa_current_version || printf 'unknown')"
+  printf 'installed version: %s\n\n' "$version"
+
+  # Container state. NOT `docker compose config` and not the environment: this
+  # prints what is running, and an operator pasting output into a ticket must
+  # not be pasting a database password with it.
+  nexa_compose ps --format 'table {{.Service}}\t{{.State}}\t{{.Status}}' 2>/dev/null ||
+    nexa_warn "could not read container state."
+
+  printf '\nreadiness: '
+  if nexa_wait_ready 5; then
+    printf 'ready\n'
+  else
+    printf 'NOT READY\n'
+    # SC2016: single quotes are correct — the backticks below are prose, not a
+    # command substitution, and expanding anything here would be the bug.
+    # shellcheck disable=SC2016
+    printf '\nThe API is not answering its readiness probe. `botctl logs api` has the reason;\n'
+    printf 'a signed-in administrator can read the detail at /api/admin/v1/system/readiness.\n'
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# backup
+# ---------------------------------------------------------------------------
+#
+# A real dump through pg_dump, never a copy of the data directory: copying
+# PostgreSQL's files while it is running produces something that looks like a
+# backup and is not one.
+cmd_backup() {
+  require_installed
+  local pg_user pg_db version stamp target
+  pg_user="$(nexa_env_value "${NEXA_CONFIG_DIR}/postgres.env" POSTGRES_USER)" ||
+    nexa_die "cannot read the database user from ${NEXA_CONFIG_DIR}/postgres.env."
+  pg_db="$(nexa_env_value "${NEXA_CONFIG_DIR}/postgres.env" POSTGRES_DB)" ||
+    nexa_die "cannot read the database name from ${NEXA_CONFIG_DIR}/postgres.env."
+  version="$(nexa_current_version || printf 'unknown')"
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  target="${NEXA_BACKUP_DIR}/nexa-${version}-${stamp}.sql.gz"
+
+  mkdir -p "$NEXA_BACKUP_DIR"
+  chmod 0700 "$NEXA_BACKUP_DIR"
+
+  nexa_step "backing up ${pg_db} to ${target}"
+
+  # umask BEFORE the redirection creates the file, so it is never briefly
+  # world-readable. A database dump is every secret the application holds.
+  local previous_umask
+  previous_umask="$(umask)"
+  umask 077
+
+  # Written to a temporary name first. A failure part-way through otherwise
+  # leaves a truncated file with a valid-looking name, which is the backup an
+  # operator reaches for at the worst possible moment.
+  local partial="${target}.partial"
+  # `-T` because there is no terminal; the password comes from the container's
+  # own environment, so nothing lands on a command line.
+  if ! nexa_compose exec -T postgres pg_dump -U "$pg_user" -d "$pg_db" 2>/dev/null | gzip -9 >"$partial"; then
+    rm -f "$partial"
+    umask "$previous_umask"
+    nexa_die "the backup FAILED. Nothing was written."
+  fi
+  umask "$previous_umask"
+
+  # A dump that produced nothing is a failure that exited zero, so the result is
+  # checked three ways — and all three are about the CONTENT, not the file.
+  #
+  # 1. gzip integrity: the stream is complete and readable.
+  if ! gzip -t "$partial" 2>/dev/null; then
+    rm -f "$partial"
+    nexa_die "the backup did not survive a gzip integrity check."
+  fi
+
+  # 2. Size, measured UNCOMPRESSED. Checking the compressed size measures the
+  #    compression ratio as much as the content: a highly repetitive dump
+  #    shrinks to a few hundred bytes and would look like a failure, while a
+  #    near-empty one padded with comments would look like a success.
+  local size
+  size="$(gzip -dc "$partial" | wc -c)"
+  if [ "${size:-0}" -lt 1000 ]; then
+    rm -f "$partial"
+    nexa_die "the backup contains only ${size:-0} bytes of SQL. Treating it as a failure."
+  fi
+
+  # 3. pg_dump's own completion marker, which is the last line it writes. Its
+  #    absence means the stream was cut part-way — the one failure that
+  #    produces a file that looks entirely normal until it is needed.
+  if ! gzip -dc "$partial" | tail -n 5 | grep -q 'PostgreSQL database dump complete'; then
+    rm -f "$partial"
+    nexa_die "the backup does not end with pg_dump's completion marker; it is truncated."
+  fi
+
+  mv "$partial" "$target"
+  chmod 0600 "$target"
+  nexa_ok "backup written: ${target} (${size} bytes of SQL)"
+  printf '%s' "$target"
+}
+
+# ---------------------------------------------------------------------------
+# update
+# ---------------------------------------------------------------------------
+cmd_update() {
+  require_installed
+  local target="${1:-}"
+  [ -n "$target" ] || nexa_die "usage: botctl update VERSION"
+  nexa_require_version "$target"
+
+  # The lock covers everything below, including the backup and the migration.
+  # `-w 0`: a second update reports rather than queueing behind a long one.
+  nexa_acquire_lock 0
+
+  local current
+  current="$(nexa_current_version || true)"
+  [ -n "$current" ] || nexa_die "no current release is recorded; refusing to update."
+
+  if [ "$target" = "$current" ]; then
+    nexa_ok "already running ${target}. Nothing to do."
+    return 0
+  fi
+
+  # 1. RESOLVE. The tag is read once, here.
+  nexa_step "resolving ${NEXA_IMAGE_REPO}:${target}"
+  local digest
+  digest="$(nexa_resolve_digest "$target")" ||
+    nexa_die "cannot resolve ${NEXA_IMAGE_REPO}:${target} to a digest. The current release (${current}) is untouched."
+  nexa_ok "resolved to ${digest}"
+
+  # 2. PULL, by digest, before anything is switched. A registry that is down
+  #    at this point costs nothing.
+  nexa_step "pulling the target image"
+  nexa_pull_release "$digest"
+  nexa_ok "the target image is present locally"
+
+  local target_image="${NEXA_IMAGE_REPO}@${digest}"
+
+  # 3. BACK UP. Before the migration, because the migration is the step that
+  #    cannot be undone by switching an image back.
+  nexa_step "backing up before migrating"
+  # In a SUBSHELL, and that is not cosmetic. `cmd_backup` reports its own
+  # failures through `nexa_die`, which exits — so called directly, it would
+  # terminate the update before this `||` could run, and the operator would
+  # read "the backup FAILED" with nothing telling them the update had been
+  # abandoned or which release is still running. Confirmed by deleting this
+  # guard and watching the suite stay green: it was unreachable.
+  if ! (cmd_backup) >/dev/null; then
+    nexa_die "the backup failed, so the update did NOT proceed. ${current} is still running and is still the current release."
+  fi
+  nexa_ok "backup complete"
+
+  # 4. MIGRATE, using the TARGET release's own compiled migrator.
+  #
+  #    This is the reason the maintenance CLIs live in the application image.
+  #    Running the current release's migrator would apply the schema the
+  #    OUTGOING code expects, which is the wrong schema by definition.
+  nexa_step "migrating with ${target}'s own migrator"
+  if ! NEXA_IMAGE="$target_image" nexa_compose run --rm --no-deps \
+    --entrypoint node api dist/infrastructure/persistence/migrate.js; then
+    nexa_die "the migration FAILED. ${target} did not become current and ${current} is still running. The pre-migration backup is in ${NEXA_BACKUP_DIR}."
+  fi
+  nexa_ok "migrations applied"
+
+  # 5. START the target.
+  nexa_step "starting ${target}"
+  if ! NEXA_IMAGE="$target_image" nexa_compose up -d --remove-orphans; then
+    nexa_warn "the target release did not start; returning to ${current}."
+    nexa_compose up -d --remove-orphans ||
+      nexa_die "${target} failed to start AND ${current} could not be restarted. The installation is down; run 'botctl logs' and 'botctl rollback'."
+    nexa_die "${target} failed to start. ${current} is running again and is still the current release."
+  fi
+
+  # 6. VERIFY. A container that started is not an application that works.
+  nexa_step "waiting for readiness"
+  if ! NEXA_IMAGE="$target_image" nexa_wait_ready 180; then
+    nexa_warn "${target} started but never became ready; returning to ${current}."
+    if nexa_compose up -d --remove-orphans && nexa_wait_ready 180; then
+      nexa_die "${target} failed its readiness check. ${current} is running again and is still the current release."
+    fi
+    nexa_die "${target} failed its readiness check AND ${current} did not come back cleanly. Both releases are intact; run 'botctl logs api'."
+  fi
+
+  # 7. COMMIT. The single durable moment. Everything above this line leaves the
+  #    installation on ${current}; everything below is bookkeeping about a
+  #    release that is already running and already healthy.
+  printf '%s\n' "$current" >"$NEXA_PREVIOUS_FILE"
+  printf '%s\n' "$target" >"$NEXA_CURRENT_FILE"
+  nexa_set_deploy_image "$target_image"
+  nexa_prune_releases
+
+  nexa_ok "updated to ${target} (${digest})"
+  nexa_ok "rollback target is ${current}"
+}
+
+# ---------------------------------------------------------------------------
+# rollback
+# ---------------------------------------------------------------------------
+#
+# APPLICATION rollback. It switches the image back and does NOT restore the
+# database, deliberately: the backup taken before the update predates every
+# write made since, so restoring it would turn a failed release into data loss.
+# Restoring a backup is a separate, explicitly destructive operation.
+#
+# This is sound because migrations are expand-only within a release — see
+# ADR-0022. Rolling back ACROSS more than one release is not promised.
+cmd_rollback() {
+  require_installed
+  nexa_acquire_lock 0
+
+  local current previous previous_image
+  current="$(nexa_current_version || true)"
+  previous="$(nexa_previous_version || true)"
+  [ -n "$previous" ] || nexa_die "no previous release is recorded; there is nothing to roll back to."
+
+  previous_image="$(nexa_release_image "$previous")" ||
+    nexa_die "the manifest for ${previous} is missing or malformed; refusing to guess what it ran."
+
+  nexa_step "rolling back from ${current:-unknown} to ${previous}"
+  nexa_log "The database is NOT restored. Application rollback only."
+
+  # The image must already be here — it is the one that was running before this
+  # update. Pull anyway, by digest: a pruned local cache is not a reason to
+  # fail, and pulling a digest cannot substitute a different image.
+  local digest
+  digest="$(nexa_manifest_field "$previous" digest)" ||
+    nexa_die "cannot read ${previous}'s digest."
+  nexa_pull_release "$digest"
+
+  if ! NEXA_IMAGE="$previous_image" nexa_compose up -d --remove-orphans; then
+    nexa_die "${previous} did not start. NEITHER release has been deleted; run 'botctl logs'."
+  fi
+
+  if ! NEXA_IMAGE="$previous_image" nexa_wait_ready 180; then
+    nexa_die "${previous} started but is NOT ready. Nothing has been deleted, and the current-release pointer still says ${current:-unknown}. Read 'botctl logs api' before doing anything else."
+  fi
+
+  # The pointers swap: the release just left becomes the rollback target, so a
+  # rollback can be undone by another rollback.
+  printf '%s\n' "${current:-$previous}" >"$NEXA_PREVIOUS_FILE"
+  printf '%s\n' "$previous" >"$NEXA_CURRENT_FILE"
+  nexa_set_deploy_image "$previous_image"
+
+  nexa_ok "rolled back to ${previous}"
+  nexa_ok "the database was not touched"
+}
+
+# ---------------------------------------------------------------------------
+# logs, restart
+# ---------------------------------------------------------------------------
+cmd_logs() {
+  require_installed
+  if [ $# -gt 0 ]; then
+    case "$1" in
+      api | worker | postgres | redis | caddy | web-assets) nexa_compose logs -f --tail 200 "$1" ;;
+      *) nexa_die "unknown service \"$1\". One of: api worker postgres redis caddy web-assets." ;;
+    esac
+  else
+    nexa_compose logs -f --tail 200
+  fi
+}
+
+cmd_restart() {
+  require_installed
+  nexa_acquire_lock 0
+  nexa_compose up -d --remove-orphans
+  nexa_wait_ready 180 || nexa_die "the stack restarted but the API is not ready."
+  nexa_ok "restarted"
+}
+
+main() {
+  local command="${1:-}"
+  shift || true
+  case "$command" in
+    version) cmd_version "$@" ;;
+    status) cmd_status "$@" ;;
+    backup) cmd_backup "$@" ;;
+    update) cmd_update "$@" ;;
+    rollback) cmd_rollback "$@" ;;
+    logs) cmd_logs "$@" ;;
+    restart) cmd_restart "$@" ;;
+    -h | --help | help | '') usage ;;
+    *)
+      printf 'error unknown command "%s"\n\n' "$command" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

@@ -15,6 +15,7 @@
     "format:check": "prettier --check .",
     "check:boundaries": "bash scripts/check-boundaries.sh",
     "check:i18n": "node scripts/check-i18n-keys.mjs",
+    "check:shell": "bash scripts/check-shell.sh",
     "test": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "test:watch": "vitest",
@@ -26,13 +27,14 @@
     "admin:bootstrap": "pnpm --filter @nexa/api admin:bootstrap",
     "provision": "pnpm --filter @nexa/api provision",
     "check:runtime": "bash scripts/check-runtime-cli.sh",
+    "test:deploy": "bash tests/deploy/botctl.test.sh",
     "test:exhaustive": "vitest run --project exhaustive",
     "db:migrate:dev": "pnpm --filter @nexa/api db:migrate:dev",
     "db:seed:dev": "pnpm --filter @nexa/api db:seed:dev",
     "admin:bootstrap:dev": "pnpm --filter @nexa/api admin:bootstrap:dev",
     "provision:dev": "pnpm --filter @nexa/api provision:dev",
     "dev:services": "bash scripts/dev-services.sh",
-    "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm check:boundaries && pnpm check:i18n && pnpm test && pnpm build"
+    "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm check:boundaries && pnpm check:i18n && pnpm check:shell && pnpm test && pnpm test:deploy && pnpm build"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

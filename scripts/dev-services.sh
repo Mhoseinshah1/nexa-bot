@@ -11,7 +11,7 @@
 # covers both. Idempotent: safe to run repeatedly.
 
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 PG_USER="${PGUSER_NEXA:-nexa}"
 PG_PASSWORD="${PGPASSWORD_NEXA:-nexa}"
