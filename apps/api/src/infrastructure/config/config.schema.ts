@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isValidTrustedEntry } from '../trusted-proxy.js';
 
 /**
  * Environment configuration.
@@ -48,11 +49,125 @@ export const configSchema = z
     SECRETS_KEK_ID: z.string().min(1),
 
     /**
-     * Phase 0 ships no authentication. `none` is a development-only value and
-     * the refinement below refuses to boot with it anywhere else — a stub login
-     * gets copied into Phase 1, a hard failure does not.
+     * `password` is the real Web Admin authentication surface: username and
+     * password against the `admins` table. `none` remains a development-only
+     * escape hatch and the refinement below still refuses to boot with it
+     * anywhere else.
      */
-    AUTH_MODE: z.enum(['none']).default('none'),
+    AUTH_MODE: z.enum(['none', 'password']).default('password'),
+
+    /** How long a session lives without being renewed. */
+    SESSION_TTL_SECONDS: z.coerce
+      .number()
+      .int()
+      .min(300)
+      .max(30 * 24 * 3600)
+      .default(12 * 3600),
+
+    /**
+     * Password hashing cost. `fast` makes the test suite finish; the refinement
+     * below refuses it in production, the same way it refuses AUTH_MODE=none.
+     * Inferring this from NODE_ENV would mean an install left on `development`
+     * stored every password at a thousandth of the intended cost.
+     */
+    PASSWORD_HASH_PROFILE: z.enum(['production', 'fast']).default('production'),
+
+    /** Failed logins per subject before a lockout, and how long it lasts. */
+    LOGIN_MAX_ATTEMPTS_PER_USERNAME: z.coerce.number().int().min(1).max(100).default(5),
+    LOGIN_MAX_ATTEMPTS_PER_IP: z.coerce.number().int().min(1).max(1000).default(20),
+    LOGIN_THROTTLE_WINDOW_SECONDS: z.coerce.number().int().min(30).max(86_400).default(900),
+    LOGIN_LOCKOUT_SECONDS: z.coerce.number().int().min(30).max(86_400).default(900),
+
+    /**
+     * Bounds on a database connection's waiting and working.
+     *
+     * Postgres defaults all three to 0 — wait forever — which turns one stalled
+     * transaction holding the tenant row into an installation-wide outage with
+     * no error to see. See `DatabaseTimeouts`. Migrations are exempt: they open
+     * their own handle without these.
+     */
+    DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(15_000),
+    DATABASE_LOCK_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(5_000),
+    DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(600_000)
+      .default(30_000),
+
+    /**
+     * How long an EXPIRED session row is kept before housekeeping removes it.
+     *
+     * Not the session's lifetime — `SESSION_TTL_SECONDS` is that. This is how
+     * long the dead row stays readable afterwards, which is a forensic
+     * question: it carries the IP and user agent a sign-in came from, and the
+     * audit log points at it by id. Long enough to investigate an incident
+     * found weeks later; not the life of the installation, which is what
+     * "never delete" amounted to.
+     */
+    SESSION_RETENTION_SECONDS: z.coerce
+      .number()
+      .int()
+      .min(3600)
+      .max(365 * 24 * 3600)
+      .default(30 * 24 * 3600),
+
+    /**
+     * How this installation is exposed. There is no default in production,
+     * because the two topologies need opposite settings and guessing wrong is a
+     * security bug in one direction and an availability bug in the other.
+     *
+     *   - `reverse-proxy` — the standard deployment, Caddy in front. Requires a
+     *     non-empty TRUSTED_PROXY_IPS naming the addresses Caddy connects from.
+     *   - `direct` — the API is the thing clients connect to. Requires
+     *     TRUSTED_PROXY_IPS to be EMPTY, so `X-Forwarded-For` is ignored
+     *     entirely and the client IP is the unforgeable socket address.
+     *
+     * Modelled explicitly rather than inferred from whether the list happens to
+     * be empty: an empty list is a legitimate configuration for one topology
+     * and a serious misconfiguration for the other, and nothing at runtime can
+     * tell them apart.
+     */
+    DEPLOYMENT_TOPOLOGY: z.enum(['reverse-proxy', 'direct']).default('reverse-proxy'),
+
+    /**
+     * Which upstreams may be believed about the client's IP.
+     *
+     * A comma-separated list of IPs or CIDRs — the addresses our own reverse
+     * proxy connects from. Empty means `X-Forwarded-For` is ignored entirely
+     * and the client IP is the socket address.
+     *
+     * `trustProxy=true` is deliberately not offered. It believes the header
+     * from whoever connects, so a client reaching the port directly can claim
+     * any IP it likes — and the two things the client IP is used for here are
+     * brute-force throttling and audit rows. Spoofable means an attacker
+     * rotates a header instead of an address, and the audit trail names
+     * whoever they chose.
+     */
+    TRUSTED_PROXY_IPS: z
+      .string()
+      .default('')
+      .transform((value) =>
+        value
+          .split(',')
+          .map((entry) => entry.trim())
+          .filter((entry) => entry.length > 0),
+      ),
+
+    /**
+     * Origins the browser admin may call from. Empty disables the check, which
+     * is only legal outside production: the Origin check is the second half of
+     * the CSRF defence, behind SameSite=Strict.
+     */
+    WEB_ADMIN_ORIGINS: z
+      .string()
+      .default('')
+      .transform((value) =>
+        value
+          .split(',')
+          .map((origin) => origin.trim())
+          .filter((origin) => origin.length > 0),
+      ),
 
     TELEGRAM_WEBHOOK_ENABLED: booleanish.default(false),
     // The route itself is fixed at /telegram/webhook. A configurable path was
@@ -78,6 +193,112 @@ export const configSchema = z
           'AUTH_MODE=none is permitted only when NODE_ENV=development. Phase 0 ships no authentication; ' +
           'see docs/adr/0009-identity-and-auth.md before deploying.',
       });
+    }
+    if (config.PASSWORD_HASH_PROFILE === 'fast' && config.NODE_ENV === 'production') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['PASSWORD_HASH_PROFILE'],
+        message:
+          'PASSWORD_HASH_PROFILE=fast is a test affordance and must never be used in production. ' +
+          'It reduces the scrypt work factor by more than two orders of magnitude.',
+      });
+    }
+    // Every entry must parse. A typo that silently voids the trusted set turns
+    // the proxy's own address into one shared throttle subject for everybody;
+    // a typo that silently widens it trusts an upstream nobody chose.
+    const invalidProxies = config.TRUSTED_PROXY_IPS.filter((entry) => !isValidTrustedEntry(entry));
+    if (invalidProxies.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TRUSTED_PROXY_IPS'],
+        message:
+          `Not a valid IP address or CIDR: ${invalidProxies.join(', ')}. ` +
+          'Entries look like 127.0.0.1, ::1 or 10.0.0.0/8. A /0 prefix is refused: it would ' +
+          'trust every address, which is trustProxy=true spelled differently.',
+      });
+    }
+
+    if (config.DEPLOYMENT_TOPOLOGY === 'reverse-proxy' && config.TRUSTED_PROXY_IPS.length === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TRUSTED_PROXY_IPS'],
+        message:
+          'DEPLOYMENT_TOPOLOGY=reverse-proxy requires TRUSTED_PROXY_IPS to name the addresses ' +
+          'the proxy connects from (for Caddy on the same host, 127.0.0.1,::1). Left empty, ' +
+          'every request appears to come from the proxy and one failed-login burst would lock ' +
+          'out every administrator. Set DEPLOYMENT_TOPOLOGY=direct if there is genuinely no ' +
+          'proxy in front of this process.',
+      });
+    }
+
+    if (config.DEPLOYMENT_TOPOLOGY === 'direct' && config.TRUSTED_PROXY_IPS.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TRUSTED_PROXY_IPS'],
+        message:
+          'DEPLOYMENT_TOPOLOGY=direct means nothing sits in front of this process, so no ' +
+          'upstream may be believed about the client IP. Either clear TRUSTED_PROXY_IPS or ' +
+          'set DEPLOYMENT_TOPOLOGY=reverse-proxy.',
+      });
+    }
+
+    if (config.NODE_ENV === 'production' && config.WEB_ADMIN_ORIGINS.length === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['WEB_ADMIN_ORIGINS'],
+        message:
+          'WEB_ADMIN_ORIGINS must list the admin origin in production. It is the second half of ' +
+          'the CSRF defence, behind the SameSite=Strict session cookie.',
+      });
+    }
+    if (config.NODE_ENV === 'production' && config.DEPLOYMENT_TOPOLOGY === 'direct') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['DEPLOYMENT_TOPOLOGY'],
+        message:
+          'DEPLOYMENT_TOPOLOGY=direct is not usable in production: this process serves plain ' +
+          'HTTP and has no TLS configuration, while a production login always issues a Secure ' +
+          '__Host- cookie that a browser refuses to store over HTTP. Every login would appear to ' +
+          'succeed and authenticate nothing. Put TLS in front and set ' +
+          'DEPLOYMENT_TOPOLOGY=reverse-proxy with TRUSTED_PROXY_IPS.',
+      });
+    }
+    if (config.NODE_ENV === 'production') {
+      // Not a style preference. Production issues the session as a `Secure`
+      // `__Host-` cookie, and a browser will not store one from an insecure
+      // origin — so an `http://` admin origin boots, passes the Origin check,
+      // logs in successfully, and leaves the administrator unauthenticated with
+      // nothing to point at. HSTS cannot rescue the first response, because a
+      // browser ignores HSTS received over HTTP. Refused at boot instead.
+      //
+      // Each entry must also be a CANONICAL serialized origin, because that is
+      // what the Origin check compares against and a browser sends nothing
+      // else. `https://admin.example.com/` — one trailing slash — passes any
+      // prefix test, matches no Origin header, and rejects every login and
+      // every write on a deployment whose configuration validated cleanly.
+      // Parsing settles it, and rejects paths, queries, ports written oddly and
+      // embedded credentials at the same time.
+      const rejected = config.WEB_ADMIN_ORIGINS.filter((origin) => {
+        let parsed: URL;
+        try {
+          parsed = new URL(origin);
+        } catch {
+          return true;
+        }
+        return parsed.protocol !== 'https:' || parsed.origin !== origin;
+      });
+      if (rejected.length > 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['WEB_ADMIN_ORIGINS'],
+          message:
+            `Every production admin origin must be a canonical https origin, such as ` +
+            `https://admin.example.com with no trailing slash or path. These are not: ` +
+            `${rejected.join(', ')}. The session is issued as a Secure __Host- cookie, which a ` +
+            'browser refuses to store from an insecure origin; and the Origin check compares ' +
+            'exactly what the browser sends, which is the serialized origin and nothing else.',
+        });
+      }
     }
     if (config.TELEGRAM_WEBHOOK_ENABLED && config.TELEGRAM_WEBHOOK_SECRET.length < 16) {
       ctx.addIssue({

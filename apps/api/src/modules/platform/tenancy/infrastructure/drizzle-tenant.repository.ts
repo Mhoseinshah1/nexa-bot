@@ -1,5 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import {
+  isSystemContext,
   asId,
   errors,
   PLATFORM_ERROR_CODES,
@@ -14,9 +15,12 @@ import {
   type TenantKind,
   type TenantStatus,
 } from '@nexa/contracts';
-import type { Database } from '../../../../infrastructure/persistence/database.js';
+import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import { botInstances, tenants } from '../../../../infrastructure/persistence/schema.js';
-import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
+import {
+  requireTenantId,
+  type TransactionScope,
+} from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { BotInstanceRepository, TenantRepository } from '../application/ports.js';
 
 type TenantRow = typeof tenants.$inferSelect;
@@ -48,8 +52,46 @@ function toBotInstance(row: BotInstanceRow): BotInstance {
   };
 }
 
+function executorOf(db: Database, tx?: unknown): Executor {
+  return (tx as TransactionScope | undefined)?.tx ?? db;
+}
+
 export class DrizzleTenantRepository implements TenantRepository {
   constructor(private readonly db: Database) {}
+
+  /**
+   * Holds this scope's tenant and bot rows still, and says whether both are
+   * ACTIVE.
+   *
+   * A surface checks these when the request arrives, which is a snapshot: a
+   * stop can commit in between, return to the operator, and the write still
+   * lands — audit, idempotency and outbox rows created for an installation
+   * somebody had already switched off. `FOR SHARE` holds the answer for the
+   * rest of the transaction, and lets concurrent writers read it at once; only
+   * a status change waits.
+   *
+   * A system scope has no tenant to be inactive, so it passes.
+   */
+  async scopeIsActive(scope: ScopeContext, tx?: unknown): Promise<boolean> {
+    if (isSystemContext(scope)) return true;
+    const executor = executorOf(this.db, tx);
+
+    const [tenant] = await executor
+      .select({ status: tenants.status })
+      .from(tenants)
+      .where(eq(tenants.id, scope.tenantId))
+      .for('share');
+    if (tenant?.status !== 'ACTIVE') return false;
+
+    if (scope.botInstanceId === null) return true;
+
+    const [bot] = await executor
+      .select({ status: botInstances.status })
+      .from(botInstances)
+      .where(eq(botInstances.id, scope.botInstanceId))
+      .for('share');
+    return bot?.status === 'ACTIVE';
+  }
 
   async findById(id: TenantId): Promise<Tenant | null> {
     const [row] = await this.db.select().from(tenants).where(eq(tenants.id, id)).limit(1);
@@ -58,6 +100,19 @@ export class DrizzleTenantRepository implements TenantRepository {
 
   async findBySlug(slug: string): Promise<Tenant | null> {
     const [row] = await this.db.select().from(tenants).where(eq(tenants.slug, slug)).limit(1);
+    return row ? toTenant(row) : null;
+  }
+
+  async findPrimary(): Promise<Tenant | null> {
+    // Ordered by creation so a deployment that somehow acquired two primary
+    // tenants resolves the same one on every boot rather than whichever the
+    // planner returned first.
+    const [row] = await this.db
+      .select()
+      .from(tenants)
+      .where(eq(tenants.kind, 'PRIMARY'))
+      .orderBy(tenants.createdAt, tenants.id)
+      .limit(1);
     return row ? toTenant(row) : null;
   }
 
@@ -73,6 +128,17 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository {
     private readonly db: Database,
     private readonly cipher: SecretCipher,
   ) {}
+
+  /**
+   * Unscoped by necessity, and safe for the same reason `TenantRepository`'s is:
+   * it resolves WHICH tenant an inbound update belongs to. It returns no secret
+   * — `tokenSecretRef` is a reference — and everything downstream runs under the
+   * tenant it yields.
+   */
+  async findById(id: BotInstanceId): Promise<BotInstance | null> {
+    const [row] = await this.db.select().from(botInstances).where(eq(botInstances.id, id)).limit(1);
+    return row ? toBotInstance(row) : null;
+  }
 
   async listForTenant(scope: ScopeContext): Promise<BotInstance[]> {
     const tenantId = requireTenantId(scope);

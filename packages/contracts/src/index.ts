@@ -19,6 +19,7 @@ export * from './time.js';
 export * from './actor.js';
 export * from './tenant.js';
 export * from './permissions.js';
+export * from './identity.js';
 export * from './ledger.js';
 export * from './events.js';
 export * from './errors.js';

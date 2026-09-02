@@ -38,6 +38,20 @@ export interface ActorContext {
   readonly requestId?: string;
   readonly ip?: string;
   readonly userAgent?: string;
+  /**
+   * The session this actor is acting on, when one exists.
+   *
+   * Carried so a mutation can confirm, under the lock it already takes, that
+   * the session authorising it has not been revoked in the meantime. Session
+   * validity is established once per request and then the request does work;
+   * without re-reading it, a logout or a password rotation can revoke a session
+   * and still have it commit a write — which would make "rotation revokes every
+   * session" true of the rows and false of the requests already in flight.
+   *
+   * Optional because system work has no session, and a `SYSTEM_JOB` actor is
+   * not a signed-in administrator wearing a different hat.
+   */
+  readonly sessionId?: string;
 }
 
 export const actorRefSchema = z.object({

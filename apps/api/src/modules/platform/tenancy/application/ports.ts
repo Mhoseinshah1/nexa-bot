@@ -11,11 +11,25 @@ export interface TenantRepository {
   /** Looked up by id under the system scope — resolving a tenant precedes having one. */
   findById(id: TenantId): Promise<Tenant | null>;
   findBySlug(slug: string): Promise<Tenant | null>;
+  /**
+   * The installation's primary tenant, resolved at boot.
+   *
+   * A RESELLER_BOT tenant is never it: reseller tenants are children, and the
+   * Web Admin authenticates against the installation's own tenant.
+   */
+  findPrimary(): Promise<Tenant | null>;
   /** Scoped read: returns the tenant only if the scope permits seeing it. */
   findInScope(scope: ScopeContext): Promise<Tenant | null>;
 }
 
 export interface BotInstanceRepository {
+  /**
+   * Resolves a bot by id without a tenant, the way `TenantRepository.findById`
+   * does: an inbound Telegram update names the bot, and the tenant is what this
+   * lookup PRODUCES. Every call made afterwards is scoped to the tenant it
+   * returns.
+   */
+  findById(id: BotInstance['id']): Promise<BotInstance | null>;
   /** Scoped: a tenant may only list its own bot instances. */
   listForTenant(scope: ScopeContext): Promise<BotInstance[]>;
   findByUsername(scope: ScopeContext, username: string): Promise<BotInstance | null>;

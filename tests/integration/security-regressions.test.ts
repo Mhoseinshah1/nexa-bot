@@ -207,4 +207,38 @@ describe('security regressions', () => {
       expect(JSON.stringify(row?.context)).toContain('[redacted]');
     });
   });
+  describe('Phase 1 — credentials never reach durable storage', () => {
+    it('redacts a password if one ever reaches an audit payload', async () => {
+      // Nothing writes a password into an audit row, and a boundary check fails
+      // the build if a call site tries. This is the layer beneath that: if one
+      // ever slips through, it must not land in the backups as cleartext.
+      await ctx.container.audit.record(tenantA, systemJobActor('test-job', correlationId), {
+        action: 'test.redaction',
+        entityType: 'Admin',
+        entityId: 'admin-1',
+        before: null,
+        after: { username: 'owner', password: 'the-real-password', passwordHash: 'scrypt$x' },
+        result: 'SUCCESS',
+      });
+
+      const [row] = await ctx.container.database.db.select().from(auditLogs);
+      const serialised = JSON.stringify(row?.after);
+      expect(serialised).not.toContain('the-real-password');
+      expect(serialised).not.toContain('scrypt$x');
+      expect(serialised).toContain('owner');
+    });
+
+    it('redacts a session token in a log or audit payload', async () => {
+      await ctx.container.opsLog.record(tenantA, {
+        code: 'test.redaction',
+        severity: 'INFO',
+        message: 'x',
+        context: { sessionToken: 'a-real-session-token', adminId: 'admin-1' },
+      });
+
+      const [row] = await ctx.container.database.db.select().from(operationalEvents);
+      expect(JSON.stringify(row?.context)).not.toContain('a-real-session-token');
+      expect(JSON.stringify(row?.context)).toContain('admin-1');
+    });
+  });
 });

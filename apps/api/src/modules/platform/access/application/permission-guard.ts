@@ -4,7 +4,9 @@ import {
   resolveEffectivePermissions,
   SYSTEM_JOB_PERMISSIONS,
   type ActorContext,
+  type AdminId,
   type Clock,
+  type OperationalEventInput,
   type OperationalEventRecorder,
   type PermissionKey,
   type PermissionOverride,
@@ -27,14 +29,40 @@ import {
  * explicit, narrow permission set (`SYSTEM_JOB_PERMISSIONS`) like everyone else,
  * so a job that gains a new power gains it visibly, in a contract diff.
  *
- * Phase 0 ships the guard and the catalog. There is no authentication yet and
- * no admin records to resolve, so the human-actor resolver grants nothing. That
- * is deliberate: a stub that grants everything would be copied into Phase 1.
+ * Phase 1 supplies the real resolver (`AdminPermissionResolver`), backed by
+ * `admins`, `roles`, `role_permissions` and per-admin overrides, and resolving
+ * on every call rather than caching authority into a session. Phase 0's
+ * placeholder resolver has been deleted rather than left in place: a resolver
+ * that grants nothing is a correct answer when there are no admins and a
+ * dangerous one the moment there are.
  */
 
 export interface PermissionResolver {
-  /** The permissions this actor effectively holds in this scope. */
-  resolve(scope: ScopeContext, actor: ActorContext): Promise<ReadonlySet<PermissionKey>>;
+  /**
+   * The permissions this actor effectively holds in this scope.
+   *
+   * `tx` makes the read participate in the caller's transaction. A permission
+   * re-checked under a lock must be read on the LOCKED connection: a pool read
+   * neither participates in the lock nor draws from the same connection, and
+   * with every pool connection held by a transaction waiting for one, the
+   * process deadlocks itself.
+   */
+  resolve(
+    scope: ScopeContext,
+    actor: ActorContext,
+    tx?: unknown,
+  ): Promise<ReadonlySet<PermissionKey>>;
+  /**
+   * What an administrator holds, or WOULD hold once ACTIVE.
+   *
+   * Needed because re-enabling a disabled administrator restores authority, and
+   * `resolve` deliberately reports a disabled one as holding nothing.
+   */
+  permissionsIfActive(
+    scope: ScopeContext,
+    adminId: AdminId,
+    tx?: unknown,
+  ): Promise<ReadonlySet<PermissionKey>>;
 }
 
 export class PermissionGuard {
@@ -43,19 +71,33 @@ export class PermissionGuard {
     private readonly opsLog: OperationalEventRecorder,
   ) {}
 
-  async check(scope: ScopeContext, actor: ActorContext, permission: PermissionKey): Promise<void> {
-    const held = await this.effective(scope, actor);
+  async check(
+    scope: ScopeContext,
+    actor: ActorContext,
+    permission: PermissionKey,
+    tx?: unknown,
+  ): Promise<void> {
+    const held = await this.effective(scope, actor, tx);
     if (held.has(permission)) return;
 
-    // Every denial is an operational event. Repeated denials from one actor are
-    // a signal worth alerting on, and they cannot be if they are never recorded.
-    await this.opsLog.record(scope, {
-      code: 'access.permission_denied',
-      severity: 'WARN',
-      message: `Actor ${actor.type}:${actor.id ?? 'anonymous'} was denied ${permission}.`,
-      context: { permission, actorType: actor.type, actorId: actor.id, surface: actor.surface },
-      correlationId: actor.correlationId,
-    });
+    // Every denial is an operational event — repeated denials from one actor
+    // are a signal worth alerting on, and cannot be if nothing records them.
+    //
+    // But NOT from inside a caller's transaction. The recorder writes on the
+    // pool, so recording here while the caller holds a pool connection AND the
+    // tenant row lock would take a SECOND connection from the same pool. With
+    // `DATABASE_POOL_MAX` concurrent denials, every connection is held by a
+    // transaction waiting for a connection that will never come, and the
+    // transaction never rolls back, so the tenant lock is never released
+    // either: the process wedges until restart. Reproduced at pool size 1.
+    //
+    // The row would roll back with the denial in any case, so writing it here
+    // buys nothing even when it does not deadlock. A transactional caller owns
+    // recording its own denial, AFTER the transaction unwinds — the pattern
+    // `AdminManagementService` uses.
+    if (tx === undefined) {
+      await this.opsLog.record(scope, this.denialEvent(actor, permission));
+    }
 
     throw errors.permissionDenied(
       PLATFORM_ERROR_CODES.PERMISSION_DENIED,
@@ -64,30 +106,65 @@ export class PermissionGuard {
     );
   }
 
-  async has(scope: ScopeContext, actor: ActorContext, permission: PermissionKey): Promise<boolean> {
-    return (await this.effective(scope, actor)).has(permission);
+  async has(
+    scope: ScopeContext,
+    actor: ActorContext,
+    permission: PermissionKey,
+    tx?: unknown,
+  ): Promise<boolean> {
+    return (await this.effective(scope, actor, tx)).has(permission);
+  }
+
+  /**
+   * The operational event a denial produces.
+   *
+   * Exposed so a transactional caller can record the same event once its
+   * transaction has unwound, rather than the guard writing it under a lock.
+   */
+  denialEvent(actor: ActorContext, permission: PermissionKey): OperationalEventInput {
+    return {
+      code: 'access.permission_denied',
+      severity: 'WARN',
+      message: `Actor ${actor.type}:${actor.id ?? 'anonymous'} was denied ${permission}.`,
+      context: { permission, actorType: actor.type, actorId: actor.id, surface: actor.surface },
+      ...(actor.correlationId ? { correlationId: actor.correlationId } : {}),
+    };
+  }
+
+  /**
+   * The actor's effective permissions, by the ONE resolution rule.
+   *
+   * Exposed because anything deciding what an actor may do must decide it the
+   * same way `check` does. A caller that assembles its own view of an actor's
+   * authority will eventually disagree with the guard, and the disagreement
+   * will be the security hole.
+   */
+  async permissionsOf(
+    scope: ScopeContext,
+    actor: ActorContext,
+    tx?: unknown,
+  ): Promise<ReadonlySet<PermissionKey>> {
+    return this.effective(scope, actor, tx);
+  }
+
+  /** The authority a re-enable would restore. See `PermissionResolver`. */
+  async permissionsIfActive(
+    scope: ScopeContext,
+    adminId: AdminId,
+    tx?: unknown,
+  ): Promise<ReadonlySet<PermissionKey>> {
+    return this.resolver.permissionsIfActive(scope, adminId, tx);
   }
 
   private async effective(
     scope: ScopeContext,
     actor: ActorContext,
+    tx?: unknown,
   ): Promise<ReadonlySet<PermissionKey>> {
     if (actor.type === 'SYSTEM_JOB') {
       return new Set<PermissionKey>(SYSTEM_JOB_PERMISSIONS);
     }
-    return this.resolver.resolve(scope, actor);
-  }
-}
-
-/**
- * Phase 0's resolver for human actors: nobody holds any permission, because
- * there are no admins and no authentication. Phase 1 replaces this with a
- * resolver backed by `admins`, `roles`, `role_permissions` and per-admin
- * overrides.
- */
-export class NoAdminsPermissionResolver implements PermissionResolver {
-  async resolve(): Promise<ReadonlySet<PermissionKey>> {
-    return new Set<PermissionKey>();
+    return this.resolver.resolve(scope, actor, tx);
   }
 }
 

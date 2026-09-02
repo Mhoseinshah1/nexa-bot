@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import type { ActorContext, AdminId, CorrelationId, RoleId, TenantContext } from '@nexa/contracts';
 import { createContainer, type Container } from '../../apps/api/src/container';
 import { loadConfig } from '../../apps/api/src/infrastructure/config/load-config';
 import type { AppConfig } from '../../apps/api/src/infrastructure/config/config.schema';
@@ -32,7 +33,15 @@ export function testConfig(overrides: Partial<NodeJS.ProcessEnv> = {}): AppConfi
     REDIS_URL: process.env.REDIS_URL ?? 'redis://127.0.0.1:6379',
     SECRETS_KEK: TEST_KEK,
     SECRETS_KEK_ID: 'test-1',
-    AUTH_MODE: 'none',
+    AUTH_MODE: 'password',
+    // Real scrypt, weak parameters. The suite hashes on nearly every test; at
+    // production cost it would spend minutes doing nothing else. Production is
+    // forbidden this value by the config schema, and a unit test hashes at
+    // production strength so the real parameters are still exercised.
+    PASSWORD_HASH_PROFILE: 'fast',
+    // The suite drives the app directly, with no proxy in front of it. Stated
+    // explicitly, because an empty trusted list now means something specific.
+    DEPLOYMENT_TOPOLOGY: 'direct',
     OUTBOX_RELAY_ENABLED: 'false',
     OUTBOX_RELAY_POLL_INTERVAL_MS: '50',
     ...overrides,
@@ -59,6 +68,8 @@ export async function resetDatabase(db: Database): Promise<void> {
     `TRUNCATE TABLE
        audit_logs, operational_events, outbox_messages, processed_messages,
        request_idempotency, aggregate_sequences,
+       admin_login_throttle, admin_sessions, admin_permission_overrides,
+       admin_roles, role_permissions, roles, admins,
        bot_instances, tenants
      RESTART IDENTITY CASCADE` as never,
   );
@@ -94,3 +105,78 @@ export { SEED_IDS };
 
 export const tenantA = { tenantId: SEED_IDS.tenantA as never, botInstanceId: null };
 export const tenantB = { tenantId: SEED_IDS.tenantB as never, botInstanceId: null };
+
+// ---------------------------------------------------------------------------
+// Identity fixtures
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates an administrator directly, bypassing the management service.
+ *
+ * Deliberate: a test that needs "an operator exists" should not have to first
+ * authenticate an owner and call an endpoint, and the tests that DO exercise
+ * the service must not have their subject created by it. Passwords go through
+ * the real hasher, so nothing here stores a credential in a way production
+ * would not.
+ */
+export interface SeededAdmin {
+  readonly id: AdminId;
+  readonly username: string;
+  readonly password: string;
+}
+
+export async function createAdmin(
+  container: Container,
+  scope: TenantContext,
+  options: {
+    username: string;
+    password?: string;
+    roleKeys?: readonly string[];
+    status?: 'ACTIVE' | 'DISABLED';
+    displayName?: string;
+    telegramUserId?: string | null;
+  },
+): Promise<SeededAdmin> {
+  const password = options.password ?? 'a-perfectly-fine-password';
+  const now = container.clock.now();
+  const id = container.ids.uuid() as AdminId;
+
+  await container.roles.ensureSystemRoles(scope);
+  await container.admins.create(scope, {
+    id,
+    username: options.username,
+    displayName: options.displayName ?? options.username,
+    passwordHash: await container.hasher.hash(password),
+    telegramUserId: options.telegramUserId ?? null,
+    now,
+  });
+
+  const roleKeys = options.roleKeys ?? [];
+  if (roleKeys.length > 0) {
+    const { found, missing } = await container.roles.idsForKeys(scope, roleKeys);
+    if (missing.length > 0) throw new Error(`Unknown seed role(s): ${missing.join(', ')}`);
+    await container.roles.setAdminRoles(
+      scope,
+      id,
+      roleKeys.map((key) => found.get(key) as RoleId),
+      null,
+    );
+  }
+
+  if (options.status === 'DISABLED') {
+    await container.admins.setStatus(scope, id, 'DISABLED', now);
+  }
+
+  return { id, username: options.username, password };
+}
+
+/** The actor an authenticated administrator acts as in service-level tests. */
+export function adminActorFor(admin: SeededAdmin): ActorContext {
+  return {
+    type: 'WEB_ADMIN',
+    id: admin.id,
+    label: admin.username,
+    surface: 'WEB',
+    correlationId: 'test-correlation' as CorrelationId,
+  };
+}

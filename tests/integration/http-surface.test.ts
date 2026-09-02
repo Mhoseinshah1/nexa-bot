@@ -8,9 +8,21 @@ import {
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { auditLogs, outboxMessages } from '../../apps/api/src/infrastructure/persistence/schema';
 import { migrateOnce, resetDatabase, testConfig } from './harness';
-import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
+import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
+import { telegramUpdateKey } from '../../apps/api/src/surfaces/telegram/webhook.controller';
 
 const WEBHOOK_SECRET = 'a-sufficiently-long-secret';
+
+/**
+ * The webhook route names the bot instance.
+ *
+ * Telegram's `update_id` is a per-bot sequence, so two bots in one installation
+ * routinely produce the same id. The route carries the bot so the idempotency
+ * identity can be `(bot_instance_id, update_id)` rather than `update_id` alone.
+ */
+const BOT_A = SEED_IDS.botA1;
+const BOT_B = SEED_IDS.botB1;
+const webhookUrl = (botInstanceId: string) => `/telegram/webhook/${botInstanceId}`;
 
 describe('HTTP surface', () => {
   let api: ApiApp;
@@ -128,7 +140,7 @@ describe('HTTP surface', () => {
     it('rejects an update with no secret token', async () => {
       const response = await inject({
         method: 'POST',
-        url: '/telegram/webhook',
+        url: webhookUrl(BOT_A),
         payload: { update_id: 1 },
       });
       expect(response.statusCode).toBe(401);
@@ -137,17 +149,29 @@ describe('HTTP surface', () => {
     it('rejects an update with the wrong secret token', async () => {
       const response = await inject({
         method: 'POST',
-        url: '/telegram/webhook',
+        url: webhookUrl(BOT_A),
         headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: 'wrong' },
         payload: { update_id: 2 },
       });
       expect(response.statusCode).toBe(401);
     });
 
-    it('accepts an authenticated update and records the ping', async () => {
+    it('rejects an update for a bot instance that does not exist', async () => {
+      // Checked AFTER the secret token, so the endpoint cannot be used to probe
+      // which bot ids exist.
       const response = await inject({
         method: 'POST',
-        url: '/telegram/webhook',
+        url: webhookUrl('01900000-0000-7000-8000-0000000000ff'),
+        headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET },
+        payload: { update_id: 3 },
+      });
+      expect(response.statusCode).toBe(404);
+    });
+
+    it('accepts an authenticated update and records the ping under the bot’s tenant', async () => {
+      const response = await inject({
+        method: 'POST',
+        url: webhookUrl(BOT_A),
         headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET },
         payload: {
           update_id: 100,
@@ -159,7 +183,42 @@ describe('HTTP surface', () => {
       expect(response.json()).toEqual({ ok: true });
 
       const audits = await api.container.database.db.select().from(auditLogs);
-      expect(audits.some((a) => a.actorId === 'telegram-update:100')).toBe(true);
+      const row = audits.find((a) => a.actorId === `telegram-update:${BOT_A}:100`);
+      expect(row).toBeDefined();
+      // Resolving the bot is also what supplies the tenant, so the update no
+      // longer writes rows that belong to nobody.
+      expect(row?.tenantId).toBe(SEED_IDS.tenantA);
+    });
+
+    it('keeps two bots’ identically numbered updates distinct', async () => {
+      // The property this route shape exists for. `update_id` is unique per
+      // bot, not globally: with a shared key, bot B's update 500 would look
+      // like a replay of bot A's — silently dropped, 200, nothing logged.
+      const send = (bot: string) =>
+        inject({
+          method: 'POST',
+          url: webhookUrl(bot),
+          headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET },
+          payload: {
+            update_id: 500,
+            message: { message_id: 9, date: 0, chat: { id: 1, type: 'private' }, text: '/ping' },
+          },
+        });
+
+      await send(BOT_A);
+      await send(BOT_B);
+
+      const audits = await api.container.database.db.select().from(auditLogs);
+      expect(audits.some((a) => a.actorId === `telegram-update:${BOT_A}:500`)).toBe(true);
+      expect(audits.some((a) => a.actorId === `telegram-update:${BOT_B}:500`)).toBe(true);
+
+      // And the keys they were stored under differ by the bot, not by luck.
+      expect(telegramUpdateKey(BOT_A, '500')).not.toBe(telegramUpdateKey(BOT_B, '500'));
+      const keys = await api.container.database.db.execute(
+        `SELECT key FROM request_idempotency WHERE key LIKE 'telegram:%:update:500'` as never,
+      );
+      expect(JSON.stringify(keys)).toContain(telegramUpdateKey(BOT_A, '500'));
+      expect(JSON.stringify(keys)).toContain(telegramUpdateKey(BOT_B, '500'));
     });
 
     it('treats a redelivered update as a replay, not a second ping', async () => {
@@ -168,7 +227,7 @@ describe('HTTP surface', () => {
       const send = () =>
         inject({
           method: 'POST',
-          url: '/telegram/webhook',
+          url: webhookUrl(BOT_A),
           headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET },
           payload: {
             update_id: 200,
@@ -183,7 +242,7 @@ describe('HTTP surface', () => {
       const forUpdate200 = messages.filter((m) => m.correlationId !== null);
       // Exactly one ping event exists for that update, across both deliveries.
       const audits = await api.container.database.db.select().from(auditLogs);
-      expect(audits.filter((a) => a.actorId === 'telegram-update:200')).toHaveLength(1);
+      expect(audits.filter((a) => a.actorId === `telegram-update:${BOT_A}:200`)).toHaveLength(1);
       expect(forUpdate200.length).toBeGreaterThan(0);
     });
 
@@ -192,7 +251,7 @@ describe('HTTP surface', () => {
       // update we do not handle is not an error.
       const response = await inject({
         method: 'POST',
-        url: '/telegram/webhook',
+        url: webhookUrl(BOT_A),
         headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET },
         payload: {
           update_id: 300,

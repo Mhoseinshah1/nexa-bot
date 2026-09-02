@@ -110,13 +110,56 @@ export const errors = {
 /** Codes emitted by the Phase 0 foundation itself. */
 export const PLATFORM_ERROR_CODES = {
   TENANT_CONTEXT_MISSING: 'platform.tenant_context_missing',
-  TENANT_MISMATCH: 'platform.tenant_mismatch',
   TENANT_NOT_FOUND: 'platform.tenant_not_found',
   PERMISSION_DENIED: 'platform.permission_denied',
   IDEMPOTENCY_PAYLOAD_MISMATCH: 'platform.idempotency_payload_mismatch',
-  IDEMPOTENCY_IN_FLIGHT: 'platform.idempotency_in_flight',
   UNKNOWN_EVENT_TYPE: 'platform.unknown_event_type',
   CONFIG_INVALID: 'platform.config_invalid',
   SECRET_DECRYPT_FAILED: 'platform.secret_decrypt_failed',
   TELEGRAM_BAD_SECRET_TOKEN: 'telegram.bad_secret_token',
+} as const;
+
+/**
+ * Codes emitted by identity, authentication and authorization.
+ *
+ * `AUTH_INVALID_CREDENTIALS` is deliberately the ONLY code a failed login can
+ * produce. Unknown username, wrong password and disabled account all map to it,
+ * so the response is not an account oracle; the audit row records which it was.
+ */
+export const IDENTITY_ERROR_CODES = {
+  AUTH_INVALID_CREDENTIALS: 'auth.invalid_credentials',
+  AUTH_RATE_LIMITED: 'auth.rate_limited',
+  // One code for every way a session fails to authenticate: unknown, revoked,
+  // expired. `auth.session_expired` used to sit here beside it and was emitted
+  // by nothing — which was the only thing keeping it honest, because telling a
+  // caller a session EXPIRED tells them it existed, and this block's whole
+  // point is that the response is not an account oracle.
+  AUTH_SESSION_INVALID: 'auth.session_invalid',
+  /**
+   * The session is fine; the INSTALLATION is paused.
+   *
+   * Distinct from `auth.session_invalid` because the two call for opposite
+   * responses from a client: an invalid session means sign in again, a stopped
+   * tenant means wait. Collapsing them showed an operator holding a perfectly
+   * good cookie a sign-in form during every maintenance window, and invited
+   * them to authenticate their way out of something authentication cannot fix.
+   *
+   * Not an oracle: it is only ever returned to a caller who already presented a
+   * valid session, and it discloses that an installation they can already reach
+   * is paused. The LOGIN path stays generic, and still reports this as the one
+   * indistinguishable credential failure.
+   */
+  AUTH_TENANT_SUSPENDED: 'auth.tenant_suspended',
+  AUTH_REQUIRED: 'auth.required',
+  AUTH_ORIGIN_REJECTED: 'auth.origin_rejected',
+  ADMIN_NOT_FOUND: 'admin.not_found',
+  ADMIN_USERNAME_TAKEN: 'admin.username_taken',
+  ADMIN_TELEGRAM_ID_TAKEN: 'admin.telegram_id_taken',
+  ADMIN_SELF_MODIFICATION: 'admin.self_modification_denied',
+  ADMIN_LAST_OWNER: 'admin.last_owner_protected',
+  ADMIN_PRIVILEGE_ESCALATION: 'admin.privilege_escalation_denied',
+  ADMIN_PASSWORD_REUSED: 'admin.password_reused',
+  ADMIN_PASSWORD_STALE: 'admin.password_stale',
+  ROLE_NOT_FOUND: 'role.not_found',
+  BOOTSTRAP_ALREADY_DONE: 'bootstrap.already_completed',
 } as const;

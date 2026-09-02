@@ -1,0 +1,357 @@
+# ADR-0014 — Roles, permissions and administrator scope
+
+**Status:** Accepted for Phase 1.
+
+## Decision
+
+An administrator's authority is `(roles ∪ GRANT overrides) − DENY overrides`,
+resolved per request, within one tenant, denied by default.
+
+Administrators belong to the **tenant**, not to a bot instance.
+
+## Roles are data, not an enum
+
+`ROLE_SEEDS` in the frozen contract is seeded into a tenant's `roles` and
+`role_permissions` rows. The seeds give an operator a shape they recognise on
+day one; the rows are what they can actually change afterwards.
+
+This is the single biggest departure from the legacy model, where the role is a
+bare string column with four values in one surface and seven in the other
+(`CON-WEB-001`), no role can be changed at all — demotion means delete and
+recreate — and no privilege change is audited anywhere.
+
+Seeded roles are marked `is_system` and cannot be deleted; a database trigger
+refuses it. An installation that deleted its owner role would be recoverable
+only by hand-editing the database.
+
+## Overrides
+
+Per-admin `GRANT` and `DENY`, with a mandatory reason and an optional expiry.
+Justified by the resolution rule already frozen in Phase 0's contract rather
+than added speculatively: `DENY` always wins, and an expired override stops
+applying without anyone running a cleanup job.
+
+An unexplained standing exception is indistinguishable from a mistake six months
+later, which is why `reason` is `NOT NULL`.
+
+## Tenant scope, not bot scope
+
+`UNK-ADM-004` — whether an admin is global or per-bot — is still unresolved. The
+web surface carries a bot column; the Telegram surface shows no scope at all;
+all four production admins hold full access, so no restricted role was ever
+exercised and the evidence cannot settle it.
+
+Tenant-wide is the model that can be **narrowed** later. Adding
+`bot_instance_id` to `admin_roles` is additive. Removing a scope that turned out
+to be wrong is not.
+
+Reseller sub-bots are explicitly out of scope for Phase 1.
+
+## Self-protection
+
+Three rules, all enforced in the application under a tenant row lock, and two of
+them repeated by database triggers as a backstop.
+
+1. **An administrator never changes their own roles or status.** Holding
+   `admins.edit` is authority over _other_ administrators. Without this rule,
+   anyone who can edit administrators can grant themselves everything, and every
+   other boundary is decorative. This is the concrete answer to `UNK-ADM-005`,
+   which asks whether a restricted admin can reach admin management and escalate
+   — here they cannot, whatever they hold.
+2. **The last active owner cannot be disabled or demoted.** Losing it is not a
+   permission problem to be solved by granting more; it means editing the
+   database by hand to get back in.
+3. **Granting or removing the owner role needs `admins.permissions.edit`**, not
+   merely `admins.edit`. Creating an administrator and creating an _owner_ are
+   different acts.
+
+4. **An administrator may not grant a permission they do not hold themselves.**
+   Rule 1 stops self-promotion; without this one it is trivially routed around
+   by creating a puppet: an admin with `admins.edit` gives a new account the
+   `finance` role, sets its password, and signs in as it. The two rules only
+   work together. An owner holds the whole catalog, so this never constrains
+   them — it constrains a _delegated_ admin manager, which is the case it
+   exists for. Removing a role is exempt: taking authority away is not
+   amplification, and requiring the remover to hold it would stop a manager
+   cleaning up a role they were never given.
+
+Rule 3 covers an owner's **status** as well as their role. Disabling an owner
+empties their authority exactly as completely as removing the role does — the
+resolver grants a non-ACTIVE administrator nothing — so gating one and not the
+other would have let plain `admins.edit` neutralise an owner by the back door.
+Re-enabling is gated for the same reason in the other direction. The cost is
+that an operator holding only `admins.edit` cannot disable a compromised owner
+account in an emergency; the answer to that is another owner, or the same
+recovery path as a lost owner.
+
+Rule 4 resolves the actor's authority through `PermissionGuard.permissionsOf`,
+the same `(roles ∪ GRANT) − DENY` rule every other check uses. It first read the
+raw union of the actor's roles, which consults no overrides — so an actor DENIED
+`refunds.issue` was refused it directly and could still hand it out by creating
+an administrator with a role that carries it and choosing that account's
+password. A permission the system says you do not have is not one you may
+delegate. One resolution rule, one place.
+
+Changing one's own **password** is deliberately not covered by rule 1: it
+requires the current password, grants nothing, and refusing it would mean an
+administrator could never rotate a credential they believe is exposed.
+
+### Identifiers are canonicalised at the boundary
+
+Rule 1 was, in its first implementation, a `===` between two strings. The
+security review defeated it in one request: Postgres compares `uuid` values
+case-insensitively, so `…89AB` and `…89ab` are **one row**, while JavaScript
+says they are two different strings. Upper-casing your own admin id in the URL
+made the guard see somebody else, and every query afterwards resolved it back to
+you. Both self-protected operations were reachable that way.
+
+The lesson is not "add `toLowerCase` to that comparison". It is that **a check
+which decides in the application about a row the database will resolve is only
+as good as the two agreeing on identity.** So `uuidV7Schema` now lower-cases on
+parse — every branded id in the system is canonical by construction, which fixes
+the class rather than the instance — and the self-guard additionally re-runs
+inside the transaction against the id the database _returned_, so it holds even
+if some future path skips the boundary.
+
+### The database enforces tenant ownership too
+
+Migration 0005 put `tenant_id` on every identity table and made every unique
+index composite on it — enough for the application to scope its predicates. The
+foreign keys, though, still referenced globally unique ids alone, so a row could
+name tenant A while pointing at tenant B's admin and tenant C's role and the
+database would accept it. Because every read filters on `tenant_id`, such a row
+is **invisible to the tenant that owns the id**: it simply grants, or fails to
+grant, in silence.
+
+Migration 0007 makes them composite — `(tenant_id, admin_id) → admins(tenant_id,
+id)` and the same for roles — across `admin_roles`, `role_permissions`,
+`admin_permission_overrides`, `admin_sessions`, and the `assigned_by` /
+`created_by` actor references. Each parent gains a `UNIQUE (tenant_id, id)`
+candidate key, redundant with its primary key and deliberately so: it is what
+lets a child say "this admin, _in this tenant_".
+
+This is not RLS by another name, and it does not reopen ADR-0004. RLS answers
+"which rows may this session see"; a foreign key answers "may these two rows be
+related at all". The second question has a cheap, declarative answer that does
+not depend on anyone remembering a predicate, and v1 declining the first is no
+reason to decline both.
+
+`assigned_by_admin_id` and `created_by_admin_id` stay **nullable**. Installation
+bootstrap grants the first owner role with no acting administrator, because none
+exists yet; writing a fabricated actor there would be the invented identity this
+codebase refuses elsewhere. NULL means "the installation did this", and the
+audit row with actor `SYSTEM_JOB` carries the rest.
+
+### Authorization decides under the lock
+
+A security decision computed before the tenant lock is a decision about a
+snapshot that may no longer exist when it is acted on.
+
+`setRoles` used to read the target's current roles, compute the delta, and
+authorize the owner-sensitive part of it — all before taking the lock:
+
+```
+target holds [support]
+request B reads [support], intends [support]  -> delta mentions no owner
+request A promotes target to [owner], commits
+request B takes the lock and writes [support]
+```
+
+B has removed the owner role without `admins.permissions.edit` ever being
+checked, because the delta B authorized against never mentioned it. The
+last-owner trigger does not catch this — another active owner exists, so nothing
+is violated. A privileged role was simply removed by a request never authorized
+to touch it.
+
+So the authoritative read, the delta, the owner-sensitive permission check, the
+privilege-amplification check, the mutation and the audit `before`/`after` all
+happen inside the transaction, after the lock, through transaction-aware
+repository reads. A read on the _pool_ after the lock does not participate in it
+and can observe a different snapshot, which is why `findById` and `roleKeysFor`
+take the transaction handle.
+
+`setStatus` already locked first but read through the pool; it now reads inside
+the transaction for the same reason. `create` — which mints a new credential
+with roles attached and a password the caller chooses, the most privileged act
+on the surface — took no lock at all, and put scrypt inside the gap between
+deciding and writing. A manager disabled mid-request still created a live
+administrator after the revocation had committed, and a manager demoted
+mid-request still granted the role they had just lost. It now authorizes under
+the lock like the others; the cheap pre-check survives only so an unprivileged
+caller cannot make the server spend a KDF per request.
+
+**The invariant, stated once:** a security-sensitive admin mutation may commit
+only if the actor still holds the required authority _after_ acquiring the same
+lock that protects the mutation. A permission read before the lock is a fast
+rejection — worth keeping, so an unprivileged caller cannot make the server
+spend a KDF — but it decides nothing.
+
+Getting this half-right was its own bug. `setStatus` and `setRoles` reloaded the
+TARGET under the lock and left the ACTOR's base `admins.edit` on the pre-lock
+read, so a manager disabled or demoted mid-request still mutated another
+administrator. It bites hardest on a remove-only role change: `delta.added` is
+then empty, the amplification check has nothing to examine, and losing every
+permission would not have stopped the write.
+
+The audit across Phase 1's mutations:
+
+| Path                | Actor authority under the lock                                                                                                                                                                                                 |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `create`            | `admins.edit`, plus `admins.permissions.edit` for the owner role                                                                                                                                                               |
+| `setStatus`         | `admins.edit`                                                                                                                                                                                                                  |
+| `setRoles`          | `admins.edit`, plus `admins.permissions.edit` when the locked delta touches the owner role                                                                                                                                     |
+| `changeOwnPassword` | Not applicable — it requires no catalog permission. The current password _is_ the authorization, and it is compare-and-set. A disabled administrator rotating their own password gains nothing: login refuses them regardless. |
+| `bootstrapOwner`    | Not applicable — provisioning has no actor to authorize. Fenced by refusing once any administrator exists.                                                                                                                     |
+| `list`, `listRoles` | Reads, not mutations. No lock, and nothing to make stale beyond one extra read by an administrator demoted microseconds earlier.                                                                                               |
+
+Because these re-checks run inside a transaction, `PermissionResolver.resolve`,
+`permissionsForAdmin`, `overridesForAdmin` and `roles.list` all take the
+transaction handle. That is not tidiness: a nested read on the POOL while
+holding a transaction both misses the lock and occupies a second connection, so
+`DATABASE_POOL_MAX` concurrent admin mutations would each hold one connection
+while waiting for another that never comes.
+
+The same reasoning applies to the guard's own denial event, and it bit. Every
+denial wrote an operational event on the pool — including denials raised while
+the caller held a connection and the tenant lock. At pool size 1 that never
+settles, and at the default 10 it takes ten concurrent denials to wedge the
+process permanently: the transaction cannot roll back, so the tenant lock is
+never released either. The guard now records inline only when it is NOT inside a
+transaction; a transactional caller records the denial after the transaction has
+unwound, where the write is both safe and durable — inside, it would have rolled
+back with the denial anyway. `AdminManagementService.runLockedMutation` does
+this for all three mutations, and audits the refusal while it is there, which
+`setStatus` and `setRoles` previously did not do at all.
+
+### On the triggers
+
+The migration repeats the last-owner rule as `AFTER` constraint triggers. They
+are **defence in depth, not the concurrency control**: a trigger that counts
+rows can still be raced by two transactions that each see the other's row. The
+row lock in the application is what makes the rule correct; the triggers are what
+catch a future code path that forgets to take it.
+
+They are deferred to commit time so a legitimate hand-over — grant the successor,
+then disable the predecessor — passes, while a transaction that _ends_ with no
+active owner fails.
+
+## No new permission keys
+
+Phase 1 adds none. `admins.view`, `admins.edit` and `admins.permissions.edit`
+were already in the Phase 0 catalog, and RBAC is built against the frozen
+catalog rather than the catalog being grown to fit the implementation.
+
+## What a session reports is what the guard will enforce
+
+The `permissions` in the login and session responses are for DISPLAY — hiding
+chrome an administrator cannot use — and authorize nothing; every endpoint
+re-checks server-side. They are nevertheless resolved by the guard's own rule,
+`(roles ∪ GRANT) − DENY`, and not by reading the role union.
+
+Reading the union ignored overrides in both directions: an administrator with a
+GRANT saw the button hidden, and one with a DENY saw a button that then answered 403. Neither is an authorization failure, and both are the same shape as the
+legacy system's two surfaces reporting revenue figures 38% apart — one concept,
+two implementations, no mechanism forcing them to agree.
+
+## Mutation timestamps are taken after the lock
+
+A request can queue on the tenant lock for as long as its holder takes, and a
+timestamp captured before waiting describes a moment when the transition had not
+happened. The sharp case: a target logs in and is issued a session while a
+disable waits, and the revocation then stamps `revoked_at` earlier than that
+session's `issued_at` — a record saying the session was revoked before it
+existed. All three mutations take their `now` inside the transaction, after the
+lock.
+
+## Re-enabling is granting
+
+Rule 4 — an administrator may not confer a permission they do not hold — binds
+`create` and `setRoles`, and now binds the one path that confers permissions
+without naming any: switching a disabled account back to ACTIVE.
+
+Gating only the owner key was too narrow. The resolver gives a disabled
+administrator nothing, so ACTIVE is exactly where their authority comes back. A
+dormant account holding `refunds.issue`, or a custom role carrying
+`admins.permissions.edit`, could be restored by an actor with plain
+`admins.edit` — an actor who could neither have created that account nor granted
+it those roles. That the account already exists does not make restoring it a
+smaller act.
+
+What would be restored is resolved by the guard's own rule rather than
+recomputed, through `permissionsIfActive`: the same
+`(roles ∪ GRANT) − DENY` the resolver applies, minus only the status gate. Two
+implementations of one concept is the failure this codebase is built to avoid,
+and here it would mean the amplification rule disagreeing with the guard about
+what a permission set contains.
+
+## A denial is audited wherever it happens
+
+Each mutation checks `admins.edit` twice: once on the pool as a cheap rejection
+before any expensive work, and once under the tenant lock, which is the check
+that authorizes. Both write an audit row with `result: DENIED`.
+
+They did not always. The preliminary check threw straight out of the service, so
+the guard wrote its operational event and nothing wrote the audit row — meaning
+whether an attempted administrator mutation was traceable depended on _when_ the
+denial fired: early, and it left no record; late, because the actor lost
+authority mid-request, and it was recorded in full. An audit log that captures
+only the rare case is the "activity feed with no attempt history" this project
+exists not to repeat.
+
+## System roles are synchronised at boot, not only at bootstrap
+
+`ensureSystemRoles` is idempotent so that a release adding a permission to a
+seeded role reaches installations that already exist. It ran in exactly one
+production place — inside the first-owner bootstrap, which returns the moment
+any administrator exists — so the upgrade path it promised was unreachable for
+precisely the installations that needed it. A permission newly added to the
+`owner` seed would never reach existing owners, and the amplification rule would
+then stop _anyone_ granting it, because nobody would hold it.
+
+It now also runs when the API resolves its installation tenant at boot, in a
+transaction holding **the same tenant lock every administrator mutation takes**,
+and it is **creation-only**: a role that already exists is left exactly as it is.
+
+That last part is a choice between two reported problems, and it is worth
+recording which one was taken. Writing the seed unconditionally let an upgrade
+add a permission to an existing role — and made every restart silently restore
+one an operator had deliberately withdrawn, with no audit row and nothing to
+notice it. Writing it only at creation means a permission newly added to a
+seeded role does _not_ reach installations that already have that role; adding
+one is an explicit migration.
+
+The second failure is the safer one. It is visible: the amplification rule
+refuses to grant a permission nobody holds, loudly and immediately. The first is
+invisible and hands back authority that was taken away on purpose. Restoring
+privilege by accident is worse than failing to extend it on time.
+
+Roles an operator created are never touched, and the writes ignore conflicts, so
+a boot that changes nothing costs a few statements.
+
+The lock is not tidiness. Without it a rolling upgrade has a window with teeth: a
+concurrent `setRoles` reads a role's permissions, passes the no-amplification
+check against an actor who does not hold the permission this boot is about to
+add, and assigns the role — and when the seeder commits, the target silently
+holds authority nobody ever checked. Role contents must not change between an
+authorization and the assignment it authorised.
+
+## The bootstrap exception, and why it is not a bypass
+
+`BootstrapOwnerService` creates an administrator without authorizing a caller,
+because provisioning has no caller. That is the same shape the Phase 0 security
+review found in the guard and removed, so it is fenced by construction instead:
+
+- it is a CLI, never a route, and `scripts/check-boundaries.sh` fails the build
+  if a surface imports it;
+- it refuses outright once the tenant has any administrator, so it creates the
+  first owner and nothing else — and that check runs **under the same tenant
+  lock every administrator mutation takes, inside the transaction that creates
+  the owner**. Read outside it, two installer runs (or one retried run) both saw
+  an empty roster and both created an owner. A cheap check before the hash
+  survives as a fast rejection, but it is not the fence;
+- it audits itself as `SYSTEM_JOB`, so the first row in the audit log says how
+  the first owner came to exist.
+
+"No caller to authorize" is a true statement about a provisioning step and a
+false one about a request handler. The boundary check is what keeps the
+difference real.

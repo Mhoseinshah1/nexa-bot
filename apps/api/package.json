@@ -14,7 +14,8 @@
     "db:migrate": "tsx src/infrastructure/persistence/migrate.ts",
     "db:check": "bash ../../scripts/check-migration-drift.sh",
     "db:seed": "tsx src/infrastructure/persistence/seed.ts",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "admin:bootstrap": "tsx src/bootstrap-owner.cli.ts"
   },
   "dependencies": {
     "@nexa/contracts": "workspace:*",

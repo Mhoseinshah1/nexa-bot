@@ -7,7 +7,8 @@ a record.
 
 ## Phase 0 — Foundation and frozen contracts
 
-**Status: complete.** Branch `claude/nexa-bot-phase-0-xpc0rr`.
+**Status: complete and accepted.** Its history is the repository's initial
+history on `main`; the task branch it was built on no longer exists.
 
 ### What exists
 
@@ -126,12 +127,109 @@ Worth recording because each contradicted an earlier stated plan:
 
 ---
 
-## Phase 1 — Identity, tenancy, admins, RBAC
+## Phase 1 — Identity, authentication, admins, RBAC
 
-**Status: not started.** Blocked on nothing technical; see
-`docs/open-questions.md` for the product decisions it needs, most importantly
-`UNK-ADM-004` (is an admin global or scoped per bot) and the authentication
-model in ADR-0009, which is deliberately left open.
+**Status: complete.** Branch `feat/identity-rbac`.
+
+### What exists
+
+| Area           | State                                                                                                                                                                                                                                                            |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Schema         | 7 tables in migrations 0005–0007, with composite `(tenant_id, id)` foreign keys so the database rejects cross-tenant relationships: `admins`, `roles`, `role_permissions`, `admin_roles`, `admin_permission_overrides`, `admin_sessions`, `admin_login_throttle` |
+| Authentication | Username and password, scrypt at the OWASP minimum from Node's own crypto, self-describing hashes with rehash-on-login, one generic failure for every bad credential                                                                                             |
+| Sessions       | 32 random bytes stored only as SHA-256, httpOnly `SameSite=Strict` cookie plus bearer, permissions resolved per request so a role change lands immediately                                                                                                       |
+| Throttling     | Durable per-username and per-IP lockout driven by the `Clock` port, keyed on what was submitted rather than on a resolved account                                                                                                                                |
+| RBAC           | Roles as tenant-scoped editable data seeded from the frozen `ROLE_SEEDS`, `GRANT`/`DENY` overrides with expiry, `(roles ∪ GRANT) − DENY` resolved per request, deny by default                                                                                   |
+| Owner safety   | No self-modification of roles or status, last-active-owner protection under a tenant row lock, owner-role changes gated on `admins.permissions.edit`, deferred triggers as a backstop                                                                            |
+| Bootstrap      | `pnpm admin:bootstrap`, CLI-only, refuses once any admin exists, password from stdin, fenced from surfaces by a boundary check                                                                                                                                   |
+| Surfaces       | `/auth/login`, `/auth/session`, `/auth/logout`, `/auth/password`, `/admins`, `/admins/:id/status`, `/admins/:id/roles`, `/roles` — plus security headers and an Origin check                                                                                     |
+| Telegram seam  | `admins.telegram_user_id`, and the webhook route now names the bot instance so update identity is `(bot_instance_id, update_id)`                                                                                                                                 |
+| Web admin      | Real sign-in against the real endpoint, session display, admin list drawn only when the session carries `admins.view`                                                                                                                                            |
+
+### Verification
+
+| Check                   | Result         |
+| ----------------------- | -------------- |
+| `pnpm typecheck`        | pass           |
+| `pnpm lint`             | pass           |
+| `pnpm format:check`     | pass           |
+| `pnpm check:boundaries` | 14 checks pass |
+| `pnpm check:i18n`       | 3 checks pass  |
+| `pnpm test` (unit)      | 112 passed     |
+| `pnpm test:integration` | 139 passed     |
+| `pnpm db:check` (drift) | pass           |
+| `pnpm build`            | pass           |
+
+### Decisions taken
+
+- **ADR-0013** — username and password, not the Telegram Login Widget. It would
+  make Telegram an availability dependency of fixing Telegram, and account
+  recovery would stop being something an operator can do locally.
+- **ADR-0014** — roles are tenant-scoped editable data; administrators belong to
+  the tenant, not to a bot instance, because that scope can be narrowed later
+  and a wrong one cannot be removed.
+- **ADR-0015** — trial allowance semantics recorded as product policy and
+  deliberately **not** implemented. A `trial_allowance` table with no producer
+  would be the placeholder pattern this codebase exists to avoid.
+
+### Corrections made during the build
+
+- **scrypt, not Argon2id.** Argon2id is the first recommendation. Every Node
+  binding for it is a native build or a single-maintainer prebuilt binary, and
+  neither belongs on the path between an operator and their own admin panel.
+  The stored hash names its algorithm, so the choice is reversible without a
+  migration.
+- **The cache-control header matched nothing.** It was conditioned on
+  `request.url.startsWith('/api/')`, and the raw URL seen in middleware is
+  prefix-stripped by the mount — so the header was absent from exactly the
+  responses it was written for. Now unconditional; this process serves JSON and
+  nothing else.
+- **`describeSession` extracted.** The session endpoint assembled a permission
+  list in the controller, which meant the new "no surface resolves permissions"
+  boundary check needed a per-file exception. Removing the reason for the
+  exception was better than writing one.
+
+### Security review
+
+An independent review of the branch ran before the phase closed. It confirmed
+clean: the session path (expiry and revocation both enforced, verified
+empirically), the Origin/CSRF check on every cookie-reachable write, permission
+resolution (no actor type or scope returns a full set), tenant scoping in every
+identity repository, the last-owner lock, the bootstrap fence, the Telegram
+webhook, credential leakage, and injection.
+
+It found **one HIGH**, reproduced end-to-end, and raised one design question
+that turned out to be the same hole from another direction. Both are fixed, each
+with a regression test.
+
+- **The self-modification guard was bypassable by re-casing an id.** It compared
+  two strings with `===`. Postgres compares `uuid` values case-insensitively, so
+  an upper-cased copy of the caller's own admin id looked like a different
+  administrator to the guard and resolved back to the caller in every query
+  afterwards — letting an admin rewrite their own roles and disable themselves
+  through paths the service explicitly refuses. Fixed at the boundary
+  (`uuidV7Schema` now canonicalises, which fixes the class) and again inside the
+  transaction, where the guard re-runs against the id the database returned.
+- **`admins.edit` implicitly conferred every assignable role's permissions.**
+  Not reported as a finding — but the self-guard never stopped it, because a
+  puppet account is somebody else: create an administrator with the `finance`
+  role, set its password, sign in as it. An administrator may now not grant a
+  permission they do not hold themselves. Removing a role stays exempt; taking
+  authority away is not amplification. An owner holds the whole catalog, so this
+  constrains only a delegated admin manager.
+
+The first one is worth stating plainly: the guard was written, reviewed,
+described in a commit message as load-bearing, and covered by a passing test —
+and it did not work, because the test only ever exercised the canonical form. A
+check that decides in the application about a row the database resolves is only
+as good as the two agreeing on identity.
+
+### Deliberately absent
+
+No commerce, products, providers, payments, wallet, orders, reseller bots or
+reseller admin scoping. No self-service password reset and no second factor —
+recovery is another owner, or the bootstrap CLI against a database with no
+administrators. Both are additive and both are recorded in ADR-0013.
 
 ---
 
