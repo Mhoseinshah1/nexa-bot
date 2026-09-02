@@ -169,19 +169,6 @@ export const SETTINGS = [
     classification: 'PUBLIC',
     configures: 'ops_notifications',
   },
-  {
-    key: 'opslog.retention_days',
-    description:
-      'How long a resolved operational event is kept. Zero keeps them forever. An unresolved ' +
-      'event is never swept while it is still open, whatever this is set to.',
-    schema: z.number().int().min(0).max(3650),
-    defaultValue: 90,
-    // The one key in this registry where zero carries a meaning, and it says so.
-    zeroMeaning: 'UNLIMITED',
-    mutability: 'RUNTIME',
-    classification: 'PUBLIC',
-    configures: 'opslog_retention',
-  },
 ] as const satisfies readonly SettingDefinition[];
 
 export type SettingKey = (typeof SETTINGS)[number]['key'];

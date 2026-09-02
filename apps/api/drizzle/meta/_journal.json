@@ -71,6 +71,20 @@
       "when": 1788308116517,
       "tag": "0009_outbox_tenant_index",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788333087263,
+      "tag": "0010_control_plane",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1788333088263,
+      "tag": "0011_control_plane_guards",
+      "breakpoints": true
     }
   ]
 }

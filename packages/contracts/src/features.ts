@@ -86,15 +86,6 @@ export const FEATURE_FLAGS = [
     ],
   },
   {
-    key: 'opslog_retention',
-    description:
-      'Run the retention sweep over resolved operational events. Turning it off freezes history ' +
-      'while an incident is being investigated, without changing the retention window itself.',
-    defaultEnabled: true,
-    blastRadius: 'LOCAL',
-    configuredBy: ['opslog.retention_days'],
-  },
-  {
     key: 'template_overrides',
     description:
       'Apply this tenant’s template overrides when rendering. Off falls every message back to ' +

@@ -81,6 +81,15 @@ operator states what they are turning off, and the audit row records the reason.
 `settings.destructive` is not a "more powerful settings" permission and is not
 used here.
 
+## What was drafted and removed
+
+`opslog_retention`, with an `opslog.retention_days` setting behind it. Both were
+written before anybody checked whether the retention sweep they configured could
+exist, and it cannot: `operational_events` carries a `BEFORE DELETE` trigger
+(ADR-0020). Keeping the flag would have put a switch on a screen that turns
+nothing on — the exact thing this ADR says not to do — so it went, rather than
+the trigger going.
+
 ## Rejected
 
 **One registry for flags and settings, with a boolean-typed setting for the

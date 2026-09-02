@@ -83,12 +83,38 @@ severity threshold (ADR-0018), which is the corpus's own recommendation:
 that fires sixty times produces one row, one counter and one notification —
 which is what BUG-LGR-028 asks for.
 
-### Retention is a policy, not an absence
+### There is no retention sweep, and that is a decision
 
-Operational events are swept by the existing `RetentionSweeper` mechanism, on a
-window that is a setting. Unresolved events are never swept while open. The
-legacy system has no retention at all, and "Telegram keeps everything"
-(`UNK-LGR-011`) is not a policy.
+The first draft of this ADR said operational events would be swept on a
+configurable window, and it was wrong. `operational_events` carries a
+`BEFORE DELETE` trigger installed in migration 0001: no row may be removed, by
+any role, including the owner. A retention sweep would require weakening that
+guard.
+
+We are not weakening it in this phase. Two reasons, and the second is the one
+that decided it:
+
+- The guard is a Phase 0 decision taken deliberately, and "we needed a consumer
+  for a setting we had already written" is not a reason to overturn one.
+- The Phase 2 rule is that history is never removed because a condition
+  recovered. Deleting resolved events at ninety days is that rule with a delay
+  attached, and the delay is not the part that makes it wrong.
+
+So there is no `opslog.retention_days` setting and no `opslog_retention` flag.
+Both were drafted, and both were removed when the trigger was checked rather
+than assumed — a flag whose feature does not exist is exactly what ADR-0019
+refuses.
+
+The underlying problem is real: an append-only table on a busy installation
+grows without bound, and "Telegram keeps everything" (`UNK-LGR-011`) is what the
+legacy system does instead of having a policy. Dedupe already collapses a
+repeating condition onto one row with a counter, which removes the growth mode
+that actually hurt the legacy log group — sixty identical TLS errors in a day
+became sixty messages there and is one row here. What remains unanswered is what
+happens after some number of years, and the honest answers are archival to cold
+storage or an explicit, argued decision to make the guard permit aged deletion.
+Both are their own design, and neither is Phase 2's. It is recorded as a
+DECISION in `docs/open-questions.md`.
 
 ## Rejected
 

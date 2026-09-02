@@ -40,10 +40,12 @@ describe('the settings registry', () => {
     }
   });
 
-  it('accepts zero where the declaration says zero means something', () => {
-    const retention = settingDefinition('opslog.retention_days');
-    expect(retention.zeroMeaning).toBe('UNLIMITED');
-    expect(retention.schema.safeParse(0).success).toBe(true);
+  it('accepts empty where the declaration says empty means something', () => {
+    // The destination is the one key here whose zero case carries a meaning:
+    // empty is "not configured", and nothing is sent.
+    const destination = settingDefinition('ops.notifications.telegram_chat_id');
+    expect(destination.zeroMeaning).toBe('DISABLES');
+    expect(destination.schema.safeParse('').success).toBe(true);
   });
 
   it('fails closed on an unknown key', () => {
@@ -130,7 +132,6 @@ describe('the feature flag registry', () => {
     // that turns nothing on is worse than an absent feature.
     expect([...FEATURE_FLAGS].map((f) => f.key).sort()).toEqual([
       'ops_notifications',
-      'opslog_retention',
       'template_overrides',
     ]);
   });
