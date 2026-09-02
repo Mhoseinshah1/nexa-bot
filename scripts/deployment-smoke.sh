@@ -59,6 +59,12 @@ dump_diagnostics() {
   compose logs --tail 60 api 2>&1 | tail -60 || true
   printf '\n--- caddy ---\n'
   compose logs --tail 20 caddy 2>&1 | tail -20 || true
+  # The one-shot that publishes the Web Admin bundle. It exits, so its failure
+  # shows up as "the stack did not start" with nothing else to look at unless
+  # its log is dumped here too — which is exactly how its first failure
+  # presented.
+  printf '\n--- web-assets ---\n'
+  compose logs --tail 20 web-assets 2>&1 | tail -20 || true
 }
 
 cleanup() {

@@ -151,8 +151,26 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    # `cp -r`, NOT `cp -a`. `-a` preserves ownership, which means chown, which
+    # needs CAP_CHOWN — and every capability is dropped above. The first
+    # version used `-a` and this container exited 1 on every start, which the
+    # Ubuntu CI job caught and no local check could: nothing about the
+    # application looks different, the API even reports healthy, and only the
+    # edge has nothing to serve.
+    #
+    # Ownership is not worth a capability here. These are static files Caddy
+    # mounts read-only, and their names are content-hashed, so neither owner
+    # nor mtime carries meaning.
+    #
+    # `set -e` so a failure is loud. Without it the exit status is whatever the
+    # last command returned, and a failed clean-up followed by a successful
+    # copy would look like a success — or the reverse.
     command:
-      ['sh', '-c', 'rm -rf /srv/web/* /srv/web/.[!.]* 2>/dev/null; cp -a /app/web/. /srv/web/']
+      [
+        'sh',
+        '-c',
+        'set -e; find /srv/web -mindepth 1 -maxdepth 1 -exec rm -rf {} +; cp -r /app/web/. /srv/web/',
+      ]
     volumes:
       - webassets:/srv/web
 
