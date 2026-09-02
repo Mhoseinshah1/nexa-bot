@@ -64,6 +64,35 @@ export const HEALTH_ROUTES = {
 export const CORRELATION_ID_HEADER = 'x-correlation-id';
 export const TELEGRAM_SECRET_TOKEN_HEADER = 'x-telegram-bot-api-secret-token';
 
+/**
+ * The Telegram update, parsed at the boundary.
+ *
+ * Deliberately MINIMAL. This is not an attempt to model Telegram's `Update`,
+ * which is large, versioned by somebody else, and mostly irrelevant to a phase
+ * that handles one command. It states only what this installation actually
+ * depends on, and lets everything else through untouched.
+ *
+ * It exists because `@Body() update: Update` is a TypeScript type and nothing
+ * more: at runtime the body was whatever was posted. Every other command on
+ * this codebase is parsed at the boundary, and this one was not — so a body
+ * with no `update_id` reached the write path and was keyed as the literal
+ * string `unknown`, collapsing every malformed update from one bot onto a
+ * single idempotency key.
+ *
+ * `update_id` is an integer in Telegram's own schema. It is required and
+ * checked as one here, so a string, a float or an object is refused before
+ * anything is written rather than being coerced into a key.
+ */
+export const telegramUpdateSchema = z
+  .object({
+    update_id: z.number().int(),
+  })
+  // Unknown keys pass through: Telegram adds fields without asking, and a
+  // strict object here would reject valid traffic on their release schedule
+  // rather than on ours.
+  .passthrough();
+export type TelegramUpdate = z.infer<typeof telegramUpdateSchema>;
+
 // ---------------------------------------------------------------------------
 // Web Admin authentication and administration
 // ---------------------------------------------------------------------------
