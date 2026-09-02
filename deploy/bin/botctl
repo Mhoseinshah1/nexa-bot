@@ -254,9 +254,9 @@ cmd_update() {
 
   # 6. VERIFY. A container that started is not an application that works.
   nexa_step "waiting for readiness"
-  if ! NEXA_IMAGE="$target_image" nexa_wait_ready 180; then
+  if ! NEXA_IMAGE="$target_image" nexa_wait_ready; then
     nexa_warn "${target} started but never became ready; returning to ${current}."
-    if nexa_compose up -d --remove-orphans && nexa_wait_ready 180; then
+    if nexa_compose up -d --remove-orphans && nexa_wait_ready; then
       nexa_die "${target} failed its readiness check. ${current} is running again and is still the current release."
     fi
     nexa_die "${target} failed its readiness check AND ${current} did not come back cleanly. Both releases are intact; run 'botctl logs api'."
@@ -312,7 +312,7 @@ cmd_rollback() {
     nexa_die "${previous} did not start. NEITHER release has been deleted; run 'botctl logs'."
   fi
 
-  if ! NEXA_IMAGE="$previous_image" nexa_wait_ready 180; then
+  if ! NEXA_IMAGE="$previous_image" nexa_wait_ready; then
     nexa_die "${previous} started but is NOT ready. Nothing has been deleted, and the current-release pointer still says ${current:-unknown}. Read 'botctl logs api' before doing anything else."
   fi
 
@@ -345,7 +345,7 @@ cmd_restart() {
   require_installed
   nexa_acquire_lock 0
   nexa_compose up -d --remove-orphans
-  nexa_wait_ready 180 || nexa_die "the stack restarted but the API is not ready."
+  nexa_wait_ready || nexa_die "the stack restarted but the API is not ready."
   nexa_ok "restarted"
 }
 

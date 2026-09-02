@@ -260,10 +260,16 @@ nexa_pull_release() {
 # the compose healthcheck. Polling from the host would need the edge, TLS and
 # DNS to be working to answer a question about the application.
 nexa_wait_ready() {
-  # The caller names a timeout; NEXA_READY_TIMEOUT overrides it. An operator on
-  # a slow host can raise it without editing a script, and the test harness
-  # lowers it so a failure case does not take three minutes to prove.
-  local timeout="${NEXA_READY_TIMEOUT:-${1:-180}}" waited=0 state
+  # An explicit argument WINS; NEXA_READY_TIMEOUT is the default when there is
+  # none. The other way round — the environment overriding the caller — meant
+  # an operator who raised the variable for a slow host also made
+  # `botctl status`'s deliberately quick five-second probe wait that long, and
+  # a status command that hangs is one nobody runs while something is wrong.
+  #
+  # So: `status` passes 5 and always gets 5; `update` and `rollback` pass
+  # nothing and take the variable, which is what the smoke test lowers so a
+  # failure case does not take three minutes to prove.
+  local timeout="${1:-${NEXA_READY_TIMEOUT:-180}}" waited=0 state
   while [ "$waited" -lt "$timeout" ]; do
     # SC2016: the single quotes are the point. This is Python source, and the
     # shell must not expand anything inside it — an interpolated value here
