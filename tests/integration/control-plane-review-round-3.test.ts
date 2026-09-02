@@ -516,6 +516,56 @@ describe('control plane, third review round', () => {
     });
 
     /**
+     * The sweep's own failure mode, which would be the worst one here.
+     *
+     * `(tenant_id, notification_id, attempt_number)` is unique. If the
+     * synthetic attempt row ever collided, the violation would abort the sweep
+     * transaction, `tick()` would throw before claiming anything, and the
+     * installation would stop delivering notifications for every tenant on
+     * every tick. A sweep whose job is to stop silence must not be able to
+     * cause it — so the insert ignores a conflict, and this proves it.
+     */
+    it('sweeps even when an attempt row already exists at that number', async () => {
+      const [intent] = await ctx.container.notifications.list(tenantA, owner);
+      await ctx.container.database.withClient((client) =>
+        client.query(
+          `UPDATE notifications
+              SET attempt_count = max_attempts, next_attempt_at = now() - interval '1 hour'
+            WHERE id = $1`,
+          [intent!.id],
+        ),
+      );
+      const [row] = await ctx.container.database.db
+        .select()
+        .from(notifications)
+        .where(eq(notifications.id, intent!.id));
+
+      await ctx.container.notificationRepository.recordAttempt({
+        attemptId: '01900000-0000-7000-8000-0000000fc001',
+        tenantId: SEED_IDS.tenantA,
+        notificationId: intent!.id,
+        attemptNumber: row!.attemptCount,
+        transport: 'RECORDING',
+        outcome: 'FAILED_RETRYABLE',
+        startedAt: new Date(),
+        finishedAt: new Date(),
+        errorCode: 'telegram.unreachable',
+        errorMessage: 'socket hang up',
+        retryAfterMs: 0,
+        // PENDING, so the row stays sweepable with its attempt row already
+        // written — the state the collision would need.
+        nextStatus: 'PENDING',
+        nextAttemptAt: new Date(Date.now() - 3_600_000),
+      });
+
+      const result = await ctx.container.notificationDispatcher.tick();
+      expect(result.exhausted).toBe(1);
+      expect(
+        (await ctx.container.notifications.get(tenantA, owner, intent!.id)).intent.status,
+      ).toBe('FAILED');
+    });
+
+    /**
      * And the correction that makes the margin an acceptable guess rather than
      * a verdict: a send that lands after the sweep gave up still ends the
      * intent as SENT.

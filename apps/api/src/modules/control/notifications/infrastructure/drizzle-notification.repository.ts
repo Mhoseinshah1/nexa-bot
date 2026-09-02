@@ -346,26 +346,41 @@ export class DrizzleNotificationRepository implements NotificationRepository {
 
       if (swept.length === 0) return 0;
 
-      await tx.insert(notificationDeliveryAttempts).values(
-        swept.map((row) => ({
-          id: this.ids.uuid(),
-          tenantId: row.tenantId,
-          notificationId: row.id,
-          // The attempt this row accounts for is the one whose outcome was
-          // never written down: the claim incremented the counter and nothing
-          // recorded what happened next.
-          attemptNumber: row.attemptCount,
-          transport: options.transport,
-          outcome: 'FAILED_PERMANENT' as const,
-          startedAt: now,
-          finishedAt: now,
-          errorCode: 'notification.attempts_exhausted',
-          errorMessage:
-            'The last attempt was claimed and its outcome was never recorded; ' +
-            'the lease expired with no attempts left.',
-          retryAfterMs: null,
-        })),
-      );
+      // `onConflictDoNothing`, because the alternative failure is catastrophic
+      // and the insurance is one clause.
+      //
+      // `(tenant_id, notification_id, attempt_number)` is unique. I could not
+      // construct a state where a row already exists at the swept intent's
+      // current attempt number — every path that writes one also moves the
+      // intent out of PENDING, which is what this sweep selects on. But if one
+      // ever did, the violation would abort this transaction, `tick()` would
+      // throw before claiming anything, and the installation would stop
+      // delivering notifications entirely, for every tenant, on every tick,
+      // until somebody deleted a row by hand. A sweep whose job is to stop
+      // silence must not be able to cause it.
+      await tx
+        .insert(notificationDeliveryAttempts)
+        .values(
+          swept.map((row) => ({
+            id: this.ids.uuid(),
+            tenantId: row.tenantId,
+            notificationId: row.id,
+            // The attempt this row accounts for is the one whose outcome was
+            // never written down: the claim incremented the counter and nothing
+            // recorded what happened next.
+            attemptNumber: row.attemptCount,
+            transport: options.transport,
+            outcome: 'FAILED_PERMANENT' as const,
+            startedAt: now,
+            finishedAt: now,
+            errorCode: 'notification.attempts_exhausted',
+            errorMessage:
+              'The last attempt was claimed and its outcome was never recorded; ' +
+              'the lease expired with no attempts left.',
+            retryAfterMs: null,
+          })),
+        )
+        .onConflictDoNothing();
 
       return swept.length;
     });

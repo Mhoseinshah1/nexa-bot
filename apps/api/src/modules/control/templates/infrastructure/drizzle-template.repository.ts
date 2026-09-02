@@ -201,6 +201,13 @@ export class DrizzleTemplateRepository implements TemplateRepository {
           eq(templateOverrides.version, input.expectedVersion),
           // And the revision. See `deleteOverride` for why a version alone
           // cannot identify this row across a revert.
+          //
+          // The `?? 0` is unreachable and fails CLOSED if it ever is not:
+          // reaching this branch means the caller stated a version, the service
+          // has already refused any request whose stated version and revision
+          // do not both match the row it read, and a stored revision is always
+          // at least 1 — so a null revision here matches nothing and the caller
+          // gets a conflict rather than a write it did not fully specify.
           eq(templateOverrides.revision, input.expectedRevision ?? 0),
         ),
       )
