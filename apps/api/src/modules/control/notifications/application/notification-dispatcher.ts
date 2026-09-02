@@ -84,6 +84,13 @@ export interface DispatchTickResult {
    * failure this whole module exists to prevent.
    */
   readonly unrecorded: number;
+  /**
+   * Claims handed back because the tenant stopped while the batch was running.
+   *
+   * Not a failure and not a send: the intent is due again with its attempt
+   * returned, and stays queued until the installation is active.
+   */
+  readonly released: number;
 }
 
 /**
@@ -219,6 +226,7 @@ export class NotificationDispatcher {
         exhausted,
         superseded: 0,
         unrecorded: 0,
+        released: 0,
       };
     }
 
@@ -233,8 +241,38 @@ export class NotificationDispatcher {
     let abandoned = 0;
     let superseded = 0;
     let unrecorded = 0;
+    let released = 0;
 
     for (const intent of claimed) {
+      // The tenant's status is asked again, per intent, immediately before the
+      // send. `claimDue` already refuses an inactive tenant, but it answers
+      // ONCE for a batch of up to ten that is then delivered one at a time: a
+      // stop that lands while the first send is outstanding was invisible to
+      // every intent behind it, so the kill switch governed whichever message
+      // happened to be first in the batch and nothing else.
+      //
+      // This does not close the window, and pretending otherwise would be the
+      // dishonest version. A tenant can still be stopped between this read and
+      // the transport call. What it does is bound the window to one send
+      // instead of a whole batch, which is the same bound `claimDue` gives the
+      // first intent — the guarantee is "no send STARTS after the stop is
+      // visible", never "no send is in flight when the stop lands".
+      if (!(await this.stillActive(intent))) {
+        // Put back, NOT failed. A stop is a pause, not a verdict on the
+        // message, and the attempt is returned so a tenant stopped and started
+        // three times has not silently spent a message's whole allowance and
+        // left `failExhausted` to report a permanent delivery failure for
+        // something no transport was ever asked to carry.
+        const { released: didRelease } = await this.notifications.releaseClaim({
+          tenantId: intent.tenantId,
+          notificationId: intent.id,
+          attemptNumber: intent.attemptCount,
+          now: this.clock.now(),
+        });
+        if (didRelease) released += 1;
+        continue;
+      }
+
       let delivery: DeliveryOutcomeReport;
       try {
         delivery = await this.deliver(intent);
@@ -312,10 +350,44 @@ export class NotificationDispatcher {
       if (delivery.reachedTransport) this.sentInWindow += 1;
     }
 
-    return { claimed: claimed.length, sent, failed, abandoned, exhausted, superseded, unrecorded };
+    // Said out loud, because a delivery stop that nobody can see is the exact
+    // failure this module exists to prevent. `released` is the only outcome
+    // that is neither a send nor a recorded failure, so a bug that made
+    // `stillActive` answer no for everybody would otherwise deliver nothing,
+    // for every tenant, for ever, in complete silence — and no caller reads
+    // this result object, so the count alone rescues nobody.
+    if (released > 0) {
+      this.logger.warn(
+        { released, claimed: claimed.length },
+        'Handed claimed notifications back: the tenant is no longer active',
+      );
+    }
+
+    return {
+      claimed: claimed.length,
+      sent,
+      failed,
+      abandoned,
+      exhausted,
+      superseded,
+      unrecorded,
+      released,
+    };
   }
 
   /** One intent: render, send outside any transaction, record what happened. */
+  /**
+   * Is this intent's tenant still open for business?
+   *
+   * Asked per intent rather than once per batch, and deliberately NOT cached
+   * across the loop: a cached answer is the batch-wide answer this exists to
+   * replace.
+   */
+  private async stillActive(intent: NotificationIntent): Promise<boolean> {
+    const active = await this.notifications.activeTenants([intent.tenantId]);
+    return active.has(intent.tenantId);
+  }
+
   private async deliver(intent: NotificationIntent): Promise<DeliveryOutcomeReport> {
     const scope: ScopeContext = {
       tenantId: asId<'TenantId'>(intent.tenantId) as TenantId,

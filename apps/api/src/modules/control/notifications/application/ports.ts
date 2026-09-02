@@ -94,6 +94,36 @@ export interface NotificationRepository {
   claimDue(now: Date, limit: number, leaseMs: number): Promise<NotificationIntent[]>;
 
   /**
+   * Which of these tenants are open for business, right now.
+   *
+   * `claimDue` already refuses an inactive tenant, but it answers once for a
+   * whole batch and the batch is then delivered one intent at a time. A stop
+   * that lands while the first send is outstanding has to be seen by the
+   * intents behind it, or the kill switch only governs whichever message
+   * happened to be first in the batch.
+   */
+  activeTenants(tenantIds: readonly string[]): Promise<Set<string>>;
+
+  /**
+   * Puts a claimed intent back, as though it had never been claimed.
+   *
+   * NOT a failure: the intent is due again immediately, with the attempt it
+   * never spent returned to it. The tenant filter in `claimDue` is what then
+   * keeps it queued rather than sent, so a stopped installation accumulates
+   * its alerts instead of losing them.
+   *
+   * Ownership is the predicate, exactly as in `recordAttempt`: the claim's
+   * `attempt_count` names the attempt in flight, so a releaser whose send
+   * outlived its lease finds it changed and releases nothing.
+   */
+  releaseClaim(input: {
+    readonly tenantId: string;
+    readonly notificationId: string;
+    readonly attemptNumber: number;
+    readonly now: Date;
+  }): Promise<{ readonly released: boolean }>;
+
+  /**
    * Moves intents that have spent every attempt, and are still PENDING, to
    * FAILED, writing an attempt row for each. Returns how many moved.
    *

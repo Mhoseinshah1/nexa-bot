@@ -1,7 +1,8 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { ActorContext } from '@nexa/contracts';
-import { notifications } from '../../apps/api/src/infrastructure/persistence/schema';
+import { notifications, tenants } from '../../apps/api/src/infrastructure/persistence/schema';
+import type { TransportResult } from '../../apps/api/src/modules/control/notifications/application/ports';
 import type { RecordingTransport } from '../../apps/api/src/modules/control/notifications/infrastructure/recording-transport';
 import {
   adminActorFor,
@@ -96,6 +97,16 @@ describe('notification state machine invariants', () => {
     'EXPIRE_LEASE',
     'LOSE_OUTCOME',
   ];
+
+  /** Records an operational event, which projects into one notification intent. */
+  async function raiseOnly(dedupeKey: string): Promise<void> {
+    await ctx.container.opsLog.record(tenantA, {
+      code: 'panel.unreachable',
+      severity: 'ERROR',
+      message: 'The panel did not answer.',
+      dedupeKey,
+    });
+  }
 
   async function raise(dedupeKey: string) {
     await ctx.container.opsLog.record(tenantA, {
@@ -230,6 +241,13 @@ describe('notification state machine invariants', () => {
     //    letting a third failed call through with `maxAttempts = 2` left it at
     //    zero and passed. `calls` counts every invocation, which is what the
     //    ceiling is about.
+    //    Honesty about the first half: a unique index on
+    //    `(tenant_id, notification_id, attempt_number)` means no application
+    //    change can PERSIST a duplicate — an attempted one aborts its
+    //    transaction and surfaces as invariant 1 or as `unrecorded`, never as
+    //    this message. It is a guard against a migration dropping that index,
+    //    not against a code change, and it only fires if the index is dropped
+    //    AND something then writes a duplicate.
     const numbers = attempts.map((attempt) => attempt.attemptNumber);
     if (new Set(numbers).size !== numbers.length) {
       broken.push(`[${where}] duplicate attempt numbers: ${numbers.join(',')}`);
@@ -239,8 +257,16 @@ describe('notification state machine invariants', () => {
     }
 
     // 5. A terminal status always carries a completion time, and a pending one
-    //    never does — the CHECK constraint's rule, asserted from outside it so
-    //    a future migration cannot quietly drop it.
+    //    never does — the CHECK constraint's rule, asserted from outside it.
+    //
+    //    Same honesty as 4a, and it was overclaimed here first: while
+    //    `notifications_completed_check` exists, writing the wrong pair raises
+    //    a constraint violation rather than producing the row this inspects,
+    //    so no code change can make this fire. Dropping the constraint alone
+    //    does not either. It fires only if the constraint goes AND the code
+    //    then disagrees — which is the migration this is here to survive, but
+    //    it is not a live assertion about today's code, and calling it one
+    //    would credit the enumeration with work it is not doing.
     const terminalWithoutTime = row!.status !== 'PENDING' && row!.completedAt === null;
     const pendingWithTime = row!.status === 'PENDING' && row!.completedAt !== null;
     if (terminalWithoutTime || pendingWithTime) {
@@ -266,12 +292,7 @@ describe('notification state machine invariants', () => {
     for (const sequence of all) {
       const intent = await begin(`panel:${sequence.join('-')}`);
       for (const step of sequence) await apply(step);
-      await checkInvariants(
-        intent,
-        sequence.join(' → '),
-        sequence.at(-1) === 'TICK' && sequence.includes('EXPIRE_LEASE'),
-        broken,
-      );
+      await checkInvariants(intent, sequence.join(' → '), sweepHadItsChance(sequence), broken);
     }
 
     expect(
@@ -299,7 +320,43 @@ describe('notification state machine invariants', () => {
    * So the transport parks here. The send is entered — the row claimed, its
    * counter incremented, its lease held — and then three arbitrary things
    * happen before the outcome is allowed to land.
+   *
+   * WHAT IS STILL FIXED, stated because an undeclared fixed dimension is how
+   * both of this file's holes were made. Every ordering below uses ONE intent,
+   * ONE tenant, ONE dispatcher object and `max_attempts = 2`, with unique
+   * dedupe keys. So none of these is enumerated here, and each is covered, if
+   * at all, by a named scenario elsewhere:
+   *
+   *   - a batch of more than one (`stops sending the rest of a batch when the
+   *     tenant stops mid-send`, below — and it took an outside reviewer to
+   *     notice that a batch of one cannot show a batch rule);
+   *   - two dispatcher PROCESSES racing on `FOR UPDATE SKIP LOCKED`, which
+   *     nothing in this suite tests: every "second dispatcher" here is a
+   *     re-entrant `tick()` on the same object;
+   *   - the rate ceiling's boundary, which `resetRateWindow()` per ordering
+   *     deliberately keeps out of reach (`notification-delivery.test.ts` owns
+   *     it);
+   *   - the sweep's safety MARGIN, which `EXPIRE_LEASE` backdates an hour past
+   *     — so no ordering here can tell `now - leaseMs` from `now`
+   *     (`control-plane-review-round-3.test.ts` owns that).
    */
+  /**
+   * The steps that run a whole `tick()`, and therefore run the sweep.
+   *
+   * The gate on invariant 2 originally named `TICK` alone, which was simply
+   * wrong: `FAIL_RETRYABLE`, `FAIL_PERMANENT` and `THROW` each arm the
+   * transport and then run the same `tick()`. Naming one of the four excluded
+   * 33 orderings of the 216 that had in fact given the sweep its chance, so
+   * the invariant `failExhausted` exists to protect was asserted about 11
+   * orderings where it could have been asserted about 44.
+   */
+  const RUNS_A_TICK: readonly Step[] = ['TICK', 'FAIL_RETRYABLE', 'FAIL_PERMANENT', 'THROW'];
+
+  const sweepHadItsChance = (sequence: readonly Step[]): boolean => {
+    const last = sequence.at(-1);
+    return last !== undefined && RUNS_A_TICK.includes(last) && sequence.includes('EXPIRE_LEASE');
+  };
+
   const INTERLEAVED: readonly Step[] = [
     'TICK',
     'FAIL_RETRYABLE',
@@ -329,24 +386,59 @@ describe('notification state machine invariants', () => {
     ['THROW', 'EXPIRE_LEASE'],
   ];
 
+  /**
+   * How the outstanding send eventually lands.
+   *
+   * The first version of this block parked a send and never said what it would
+   * report, so it always reported the default — SUCCEEDED. That made the whole
+   * enumeration one landing wide: "send in flight → sweep → a RETRYABLE
+   * failure lands" and "→ a PERMANENT failure lands" were unreachable, and
+   * four of the five invariants had an antecedent that was never true, leaving
+   * exactly one doing work. A fixed dimension nobody had declared is the same
+   * hole the preludes were added to close, one level up.
+   */
+  const LANDINGS: readonly { readonly name: string; readonly result: TransportResult }[] = [
+    { name: 'succeeds', result: { outcome: 'SUCCEEDED' } },
+    {
+      name: 'fails retryably',
+      result: {
+        outcome: 'FAILED_RETRYABLE',
+        errorCode: 'telegram.unreachable',
+        errorMessage: 'socket hang up',
+        retryAfterMs: 0,
+      },
+    },
+    {
+      name: 'fails permanently',
+      result: {
+        outcome: 'FAILED_PERMANENT',
+        errorCode: 'telegram.rejected.400',
+        errorMessage: 'chat not found',
+      },
+    },
+  ];
+
   it('holds every invariant when a send is still in flight', async () => {
     const broken: string[] = [];
     let correctedAfterSweep = 0;
     let sweptWhileInFlight = 0;
+    let sweptThenFailingLanding = 0;
 
     let windows: Step[][] = [[]];
     for (let i = 0; i < 3; i += 1) {
       windows = windows.flatMap((prefix) => INTERLEAVED.map((step) => [...prefix, step]));
     }
-    const orderings = PRELUDES.flatMap((prelude) => windows.map((window) => ({ prelude, window })));
+    const orderings = PRELUDES.flatMap((prelude) =>
+      LANDINGS.flatMap((landing) => windows.map((window) => ({ prelude, landing, window }))),
+    );
 
-    for (const { prelude, window: sequence } of orderings) {
+    for (const { prelude, landing, window: sequence } of orderings) {
       const opening = prelude.length === 0 ? 'first attempt' : prelude.join(' → ');
-      const where = `${opening} → send in flight → ${sequence.join(' → ')} → send lands`;
-      const intent = await begin(`slow:${prelude.join('-')}:${sequence.join('-')}`);
+      const where = `${opening} → send in flight → ${sequence.join(' → ')} → send ${landing.name}`;
+      const intent = await begin(`slow:${prelude.join('-')}:${landing.name}:${sequence.join('-')}`);
       for (const step of prelude) await apply(step);
 
-      const hold = transport.holdNextSend();
+      const hold = transport.holdNextSend(landing.result);
       // NOT awaited. This is the whole point: the tick owns a claimed row and
       // is parked inside the transport while the steps below run.
       const slow = ctx.container.notificationDispatcher
@@ -379,14 +471,10 @@ describe('notification state machine invariants', () => {
       if (beforeLanding === 'FAILED') {
         sweptWhileInFlight += 1;
         if (afterLanding === 'SENT') correctedAfterSweep += 1;
+        if (landing.name !== 'succeeds') sweptThenFailingLanding += 1;
       }
 
-      await checkInvariants(
-        intent,
-        where,
-        sequence.at(-1) === 'TICK' && sequence.includes('EXPIRE_LEASE'),
-        broken,
-      );
+      await checkInvariants(intent, where, sweepHadItsChance(sequence), broken);
     }
 
     expect(
@@ -405,5 +493,66 @@ describe('notification state machine invariants', () => {
       correctedAfterSweep,
       'a send that landed after its intent was swept never corrected it to SENT',
     ).toBeGreaterThan(0);
+    // The landing dimension, asserted rather than assumed — the same guard the
+    // preludes needed. Without it every ordering could be parking a success
+    // again and the two failing landings would be decoration.
+    expect(
+      sweptThenFailingLanding,
+      'no ordering swept an intent whose outstanding send then FAILED',
+    ).toBeGreaterThan(0);
   }, 600_000);
+
+  /**
+   * The kill switch governs the WHOLE batch, not whichever message was first.
+   *
+   * `claimDue` refuses an inactive tenant, and for one intent per tick that is
+   * the whole rule. Production claims up to ten and delivers them one at a
+   * time: the tenant is checked once, before the batch, and a stop that lands
+   * while the first send is outstanding was invisible to every intent behind
+   * it. So a stopped installation kept sending — bounded only by the batch
+   * size, which is exactly the number of messages nobody wanted.
+   *
+   * Every ordering above raises ONE intent, so none of them can reach this. It
+   * took an outside reviewer asking what a batch of one cannot show; the
+   * dimension was fixed and invisible, the same way the attempt number was
+   * before the preludes.
+   */
+  it('stops sending the rest of a batch when the tenant stops mid-send', async () => {
+    await begin('batch:first');
+    await raiseOnly('batch:second');
+
+    const queued = await ctx.container.database.db.select().from(notifications);
+    expect(queued, 'the batch needs more than one intent to mean anything').toHaveLength(2);
+
+    const hold = transport.holdNextSend();
+    const tick = ctx.container.notificationDispatcher.tick();
+    await hold.entered;
+
+    // The batch is claimed and the first send is outstanding. NOW the operator
+    // stops the installation.
+    await ctx.container.database.db
+      .update(tenants)
+      .set({ status: 'STOPPED' })
+      .where(eq(tenants.id, tenantA.tenantId));
+
+    hold.release();
+    await tick;
+
+    // The send already in flight lands — a stop cannot un-send it, and
+    // pretending otherwise would file a delivered message as undelivered.
+    expect(transport.calls, 'the stopped tenant was still sent to').toBe(1);
+    expect(transport.messages).toHaveLength(1);
+
+    const rows = await ctx.container.database.db.select().from(notifications);
+    expect(rows).toHaveLength(2);
+    const held = rows.filter((row) => row.status === 'PENDING');
+    expect(held, 'the rest of the batch did not stay queued').toHaveLength(1);
+
+    // Queued, not failed, and not charged for the attempt it never spent. A
+    // counter left spent would be swept to FAILED by `failExhausted` after a
+    // few stops, reporting a permanent delivery failure for a message no
+    // transport was ever asked to carry.
+    expect(held[0]!.attemptCount, 'the released intent was charged an attempt').toBe(0);
+    expect(held[0]!.completedAt).toBeNull();
+  }, 60_000);
 });

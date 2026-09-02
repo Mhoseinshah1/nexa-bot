@@ -286,7 +286,90 @@ export class DrizzleNotificationRepository implements NotificationRepository {
   }
 
   /**
+   * Which of these tenants are ACTIVE, asked fresh.
+   *
+   * Cross-tenant by the same argument as `claimDue`: it is asked BY the
+   * dispatcher, about the batch the dispatcher is already holding, and there
+   * is no actor to authorize. The boundary check names it alongside the other
+   * two, so a surface that reached for it fails the build.
+   */
+  async activeTenants(tenantIds: readonly string[]): Promise<Set<string>> {
+    if (tenantIds.length === 0) return new Set();
+    const rows = await this.db.transaction(async (tx) =>
+      tx
+        .select({ id: tenants.id })
+        .from(tenants)
+        .where(and(eq(tenants.status, 'ACTIVE'), inArray(tenants.id, [...tenantIds]))),
+    );
+    return new Set(rows.map((row) => String(row.id)));
+  }
+
+  /**
+   * Un-claims an intent: due again now, with its attempt given back.
+   *
+   * `attempt_count - 1` is the half that matters. Leaving the counter spent
+   * would mean a tenant stopped and started three times had silently consumed
+   * a message's whole allowance without ever sending it — the row would then
+   * be swept to FAILED by `failExhausted`, reporting a permanent delivery
+   * failure for a message no transport was ever asked to carry.
+   */
+  async releaseClaim(input: {
+    readonly tenantId: string;
+    readonly notificationId: string;
+    readonly attemptNumber: number;
+    readonly now: Date;
+  }): Promise<{ released: boolean }> {
+    const released = await this.db.transaction(async (tx) =>
+      tx
+        .update(notifications)
+        .set({
+          attemptCount: sql`${notifications.attemptCount} - 1`,
+          nextAttemptAt: input.now,
+          // Back to the last attempt that actually HAPPENED, which is the last
+          // one with a row behind it, or null when there is none.
+          //
+          // `claimDue` sets `last_attempt_at` to the claim time, so leaving it
+          // alone would have the screen report "last attempted at 14:02" for a
+          // message no transport was ever asked to carry — this module's own
+          // prohibited shape, reintroduced by the fix for a different instance
+          // of it.
+          lastAttemptAt: sql`(
+            SELECT max(${notificationDeliveryAttempts.finishedAt})
+              FROM ${notificationDeliveryAttempts}
+             WHERE ${notificationDeliveryAttempts.tenantId} = ${notifications.tenantId}
+               AND ${notificationDeliveryAttempts.notificationId} = ${notifications.id}
+          )`,
+        })
+        .where(
+          and(
+            eq(notifications.tenantId, input.tenantId),
+            eq(notifications.id, input.notificationId),
+            eq(notifications.status, 'PENDING'),
+            eq(notifications.attemptCount, input.attemptNumber),
+          ),
+        )
+        .returning({ id: notifications.id }),
+    );
+    return { released: released.length > 0 };
+  }
+
+  /**
    * Fails intents that have spent every attempt and are still PENDING.
+   *
+   * Deliberately NOT filtered by tenant status, unlike `claimDue` and unlike
+   * the per-intent recheck in the dispatcher's batch loop, and the asymmetry is
+   * the point rather than an oversight. Those two govern SENDING, and a stopped
+   * installation must not send. This governs bookkeeping about sends that have
+   * already happened: an intent only reaches `attempt_count = max_attempts` by
+   * being claimed, which a stopped tenant cannot be, so its attempts were
+   * genuinely spent while it was active. Refusing to say so until the tenant
+   * comes back would leave the row PENDING for as long as the pause lasts —
+   * the "reported as pending forever" state this sweep exists to end.
+   *
+   * A pause is still not a verdict, and nothing here makes it one: a late
+   * SUCCEEDED can move a swept row from FAILED to SENT whenever it arrives,
+   * and a claim handed back by `releaseClaim` has its attempt returned, so a
+   * paused tenant's queued work never reaches this predicate at all.
    *
    * Cross-tenant by necessity and by design, on exactly `claimDue`'s argument:
    * this is installation housekeeping with no actor to authorize and no one

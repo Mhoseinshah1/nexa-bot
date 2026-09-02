@@ -191,12 +191,13 @@ fi
 # Two comments in the codebase claimed this check existed before it did. It does
 # now.
 #
-# `failExhausted` and `claimDue` are named too. Both are cross-tenant
-# installation housekeeping, and the argument that this is safe rests entirely
-# on their being unreachable from a request — an argument the check previously
-# made only about the DISPATCHER's name, while the repository methods
-# themselves were one `container.notificationRepository` away from a controller.
-RESOLVER_LEAK=$(grep -rnE "settingsResolver|featureFlagResolver|templateResolver|notifications\.queue\(|notificationDispatcher|NotificationDispatcher|failExhausted|claimDue" \
+# `failExhausted`, `claimDue`, `activeTenants` and `releaseClaim` are named too.
+# All four are cross-tenant installation housekeeping, and the argument that
+# this is safe rests entirely on their being unreachable from a request — an
+# argument the check previously made only about the DISPATCHER's name, while
+# the repository methods themselves were one `container.notificationRepository`
+# away from a controller.
+RESOLVER_LEAK=$(grep -rnE "settingsResolver|featureFlagResolver|templateResolver|notifications\.queue\(|notificationDispatcher|NotificationDispatcher|failExhausted|claimDue|activeTenants|releaseClaim" \
   apps/api/src/surfaces 2>/dev/null || true)
 if [ -n "$RESOLVER_LEAK" ]; then
   fail "A surface reaches an unguarded resolver, the notification queue, the dispatcher, or cross-tenant housekeeping" \

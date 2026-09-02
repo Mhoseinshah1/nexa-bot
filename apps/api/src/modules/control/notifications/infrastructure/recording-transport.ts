@@ -14,6 +14,13 @@ import type {
  * happen" pattern this codebase exists to avoid. `loadConfig` refuses it outside
  * development, so choosing it in production fails at boot rather than at 3am.
  */
+interface Hold {
+  readonly entered: Promise<void>;
+  readonly markEntered: () => void;
+  readonly released: Promise<void>;
+  readonly release: () => void;
+}
+
 export class RecordingTransport implements NotificationTransport {
   readonly kind: NotificationTransportKind = 'RECORDING';
 
@@ -33,12 +40,20 @@ export class RecordingTransport implements NotificationTransport {
    * the outcome arriving afterwards. A held send is how that ordering is
    * reached, rather than approximated by driving the repository directly.
    */
-  private held: {
-    readonly entered: Promise<void>;
-    readonly markEntered: () => void;
-    readonly released: Promise<void>;
-    readonly release: () => void;
-  } | null = null;
+  private held: Hold | null = null;
+
+  /**
+   * A hold that has ALREADY entered and is parked.
+   *
+   * Separate from `held` on purpose, and the separation was a correction. The
+   * first version cleared `held` when the send entered, so `reset()`'s release
+   * could only ever reach a hold that had been armed and never used — the
+   * harmless case — while the docblock claimed it rescued a forgotten one. A
+   * genuinely parked send stayed parked, its tick holding a claimed row while
+   * the next ordering truncated the tables underneath it, and the file hung to
+   * its 600-second timeout instead of failing.
+   */
+  private parked: Hold | null = null;
 
   get messages(): readonly OutboundMessage[] {
     return this.sent;
@@ -79,9 +94,16 @@ export class RecordingTransport implements NotificationTransport {
    * caller can expire that lease, run a sweep, or start a second dispatcher
    * while the first send is genuinely outstanding. The outcome is fixed when
    * the send enters, so a failure armed while it is parked belongs to the NEXT
-   * call rather than silently rewriting this one's result.
+   * call rather than silently rewriting this one's result — which is exactly
+   * why the outcome this send will eventually report is a parameter here. An
+   * enumeration that can only park a SUCCESS varies its orderings over one
+   * landing, and says nothing about the two that fail.
    */
-  holdNextSend(): { readonly entered: Promise<void>; readonly release: () => void } {
+  holdNextSend(result?: TransportResult): {
+    readonly entered: Promise<void>;
+    readonly release: () => void;
+  } {
+    if (result) this.nextResult = result;
     let markEntered!: () => void;
     const entered = new Promise<void>((resolve) => {
       markEntered = resolve;
@@ -95,11 +117,14 @@ export class RecordingTransport implements NotificationTransport {
   }
 
   reset(): void {
-    // A hold that is still parked would deadlock whatever runs next, and a
-    // test that forgot to release one should fail on its assertions rather
-    // than by hanging the suite.
+    // Both, because they are different states: `held` is armed and waiting for
+    // a send, `parked` is a send that has already entered. A forgotten one of
+    // either kind should make the next ordering fail on its assertions rather
+    // than hang the suite.
     this.held?.release();
     this.held = null;
+    this.parked?.release();
+    this.parked = null;
     this.sent.length = 0;
     this.invocations = 0;
     this.nextResult = { outcome: 'SUCCEEDED' };
@@ -118,8 +143,10 @@ export class RecordingTransport implements NotificationTransport {
     const held = this.held;
     if (held) {
       this.held = null;
+      this.parked = held;
       held.markEntered();
       await held.released;
+      if (this.parked === held) this.parked = null;
     }
 
     if (result.outcome === 'SUCCEEDED') this.sent.push(message);
