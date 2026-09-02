@@ -30,4 +30,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.unknown_command': 'این دستور شناخته نشد.',
   'error.internal': 'خطایی رخ داد. لطفاً بعداً دوباره تلاش کنید.',
   'error.permission_denied': 'شما به این بخش دسترسی ندارید.',
+
+  // Operations. Persian like everything else: the people running this
+  // installation read Persian too, and a mixed-language operations channel is
+  // how a message stops being read at all.
+  'ops.notification.operational_event':
+    '{severity} — <code>{code}</code>\n{message}\nتعداد رخداد: {occurrences}\nنخستین بار: {firstSeenAt}',
+  'ops.notification.test':
+    'این یک پیام آزمایشی است. مقصد اعلان‌های عملیاتی به درستی پیکربندی شده است.\nدرخواست‌کننده: {requestedBy}\nزمان: {at}',
 };
