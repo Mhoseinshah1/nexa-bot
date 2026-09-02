@@ -22,15 +22,15 @@ import {
   type TemplateValues,
   type UnitOfWork,
 } from '@nexa/contracts';
-import { renderTemplateBody, type Locale } from '@nexa/i18n';
+
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { FeatureFlagResolver } from '../../features/application/feature-flags.service.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
-import type { TemplateRepository, TemplateRevision } from './ports.js';
-import { defaultBody, DEFAULT_TEMPLATE_LOCALE } from './template-resolver.js';
+import type { TemplateCatalogue, TemplateRepository, TemplateRevision } from './ports.js';
+import { DEFAULT_TEMPLATE_LOCALE, type Locale } from './template-resolver.js';
 
 export const TEMPLATES_VIEW: PermissionKey = 'templates.view';
 export const TEMPLATES_EDIT: PermissionKey = 'templates.edit';
@@ -114,6 +114,7 @@ export class TemplateManagementService {
     private readonly uow: UnitOfWork<TransactionScope>,
     private readonly templates: TemplateRepository,
     private readonly features: FeatureFlagResolver,
+    private readonly catalogue: TemplateCatalogue,
     private readonly audit: AuditWriter,
     private readonly outbox: OutboxWriter,
     private readonly idempotency: IdempotencyStore,
@@ -204,7 +205,12 @@ export class TemplateManagementService {
       );
     }
 
-    const rendered = renderTemplateBody(definition, command.body, values, DEFAULT_TEMPLATE_LOCALE);
+    const rendered = this.catalogue.render(
+      definition,
+      command.body,
+      values,
+      DEFAULT_TEMPLATE_LOCALE,
+    );
     const unresolved = definition.placeholders
       .map((placeholder) => placeholder.token)
       .filter((token) => values[token] === undefined && command.body.includes(`{${token}}`));
@@ -345,7 +351,7 @@ export class TemplateManagementService {
         actor.surface,
         command.idempotencyKey,
         requestHash,
-        { template, revision },
+        { template, revision, changed: true },
         tx,
       );
       return { template, revision, changed: true };
@@ -515,7 +521,7 @@ export class TemplateManagementService {
     overridesApplied: boolean,
   ): TemplateView {
     const definition = templateDefinition(key);
-    const fallback = defaultBody(key, locale);
+    const fallback = this.catalogue.defaultBody(key, locale);
     const applied = override !== null && overridesApplied;
     return {
       key,

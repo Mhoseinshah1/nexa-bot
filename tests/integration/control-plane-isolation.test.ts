@@ -5,6 +5,7 @@ import {
   settingValues,
   templateOverrides,
 } from '../../apps/api/src/infrastructure/persistence/schema';
+import { TemplateResolver } from '../../apps/api/src/modules/control/templates/application/template-resolver';
 import {
   adminActorFor,
   createAdmin,
@@ -402,6 +403,28 @@ describe('control-plane isolation and concurrency', () => {
       expect(view.overrideBody).toBe('A: {correlationId}');
       expect(view.overrideSuppressed).toBe(true);
       expect(view.source).toBe('DEFAULT');
+    });
+  });
+
+  describe('the catalogue behind the port', () => {
+    it('renders a substituted catalogue, which is what the port is for', async () => {
+      // The point of declaring `TemplateCatalogue` rather than importing
+      // `@nexa/i18n` into the application layer. Before it, `defaultBody` read a
+      // module constant and threw for any locale but `fa`, so the second-locale
+      // path ADR-0016 describes could not be exercised at all.
+      const resolver = new TemplateResolver(
+        ctx.container.templateRepository,
+        ctx.container.featureFlagResolver,
+        {
+          defaultBody: (key) => `[en] ${key} {correlationId}`,
+          render: (_definition, body, values) =>
+            body.replace('{correlationId}', String(values.correlationId ?? '')),
+        },
+      );
+
+      expect(await resolver.render(tenantA, 'bot.ping.reply', { correlationId: 'x' }, 'en')).toBe(
+        '[en] bot.ping.reply x',
+      );
     });
   });
 

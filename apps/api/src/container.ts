@@ -56,6 +56,7 @@ import {
 } from './modules/control/features/application/feature-flags.service.js';
 import { DrizzleTemplateRepository } from './modules/control/templates/infrastructure/drizzle-template.repository.js';
 import { TemplateResolver } from './modules/control/templates/application/template-resolver.js';
+import { I18nTemplateCatalogue } from './modules/control/templates/infrastructure/i18n-template-catalogue.js';
 import { TemplateManagementService } from './modules/control/templates/application/template-management.service.js';
 import { DrizzleNotificationRepository } from './modules/control/notifications/infrastructure/drizzle-notification.repository.js';
 import { NotificationService } from './modules/control/notifications/application/notification.service.js';
@@ -124,6 +125,8 @@ export interface Container {
   readonly featureFlagResolver: FeatureFlagResolver;
   readonly templatesService: TemplateManagementService;
   readonly templateResolver: TemplateResolver;
+  /** Exposed for the tests that drive the resolver against a substituted catalogue. */
+  readonly templateRepository: DrizzleTemplateRepository;
   readonly notifications: NotificationService;
   /**
    * The repository behind it.
@@ -172,7 +175,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   // up going through it. Without this the guard, the throttle and the resolver
   // would each hold the bare writer and their events would never be announced.
   const opsLog: OperationalEventRecorder = {
-    record: (scope, event) => opsLogRef.current.record(scope, event),
+    // Every parameter forwarded, `tx` included. Dropping it here silently
+    // un-did the atomicity the projector exists to provide: the recorder would
+    // open its own connection, and an event written inside a caller's
+    // transaction survived that transaction rolling back.
+    record: (scope, event, tx) => opsLogRef.current.record(scope, event, tx),
   };
 
   const hasher = new ScryptPasswordHasher(scryptParamsFor(config.PASSWORD_HASH_PROFILE));
@@ -331,12 +338,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   );
 
   const templateRepository = new DrizzleTemplateRepository(database.db);
-  const templateResolver = new TemplateResolver(templateRepository, featureFlagResolver);
+  const templateCatalogue = new I18nTemplateCatalogue();
+  const templateResolver = new TemplateResolver(
+    templateRepository,
+    featureFlagResolver,
+    templateCatalogue,
+  );
   const templatesService = new TemplateManagementService(
     guard,
     uow,
     templateRepository,
     featureFlagResolver,
+    templateCatalogue,
     audit,
     outbox,
     idempotency,
@@ -364,6 +377,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
     audit,
+    idempotency,
+    uow,
   );
 
   // Recording and announcing become one call from here on. Everything that
@@ -372,6 +387,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLogWriter,
     notifications,
     projectionSettings,
+    uow,
     logger,
   );
 
@@ -451,6 +467,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     featureFlagResolver,
     templatesService,
     templateResolver,
+    templateRepository,
     notifications,
     notificationRepository,
     notificationDispatcher,

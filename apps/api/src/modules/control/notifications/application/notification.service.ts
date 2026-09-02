@@ -2,10 +2,12 @@ import {
   CONTROL_ERROR_CODES,
   errors,
   isMoneyValue,
+  sendTestNotificationRequestSchema,
   templateDefinition,
   type ActorContext,
   type AuditWriter,
   type Clock,
+  type IdempotencyStore,
   type IdGenerator,
   type NotificationDestination,
   type NotificationKind,
@@ -14,8 +16,11 @@ import {
   type SettingKey,
   type TemplateKey,
   type TemplateValues,
+  type UnitOfWork,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
+import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { FeatureFlagResolver } from '../../features/application/feature-flags.service.js';
 import type { SettingsResolver } from '../../settings/application/settings-resolver.js';
 import type { DeliveryAttemptRecord, NotificationIntent, NotificationRepository } from './ports.js';
@@ -44,6 +49,8 @@ export class NotificationService {
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     private readonly audit: AuditWriter,
+    private readonly idempotency: IdempotencyStore,
+    private readonly uow: UnitOfWork<TransactionScope>,
   ) {}
 
   /**
@@ -145,8 +152,14 @@ export class NotificationService {
   async sendTest(
     scope: ScopeContext,
     actor: ActorContext,
-  ): Promise<{ readonly intent: NotificationIntent; readonly created: boolean }> {
+    input: unknown,
+  ): Promise<{
+    readonly intent: NotificationIntent;
+    readonly created: boolean;
+    readonly replayed: boolean;
+  }> {
     await this.guard.check(scope, actor, 'settings.edit');
+    const command = sendTestNotificationRequestSchema.parse(input);
 
     const destination = await this.destination(scope);
     if (destination === null) {
@@ -156,45 +169,83 @@ export class NotificationService {
       );
     }
 
+    // A state-changing command, so it takes an idempotency key like every
+    // other one. That is a different mechanism from the intent's dedupe key
+    // below and answers a different question: the key stops a double-clicked
+    // button producing two messages, while the dedupe key expresses that two
+    // DELIBERATE tests are two separate questions.
+    const requestHash = hashRequest({ destination: describeDestination(destination) });
+    const existing = await this.idempotency.find<{ notificationId: string }>(
+      scope,
+      actor.surface,
+      command.idempotencyKey,
+      requestHash,
+    );
+    if (existing) {
+      const intent = await this.notifications.findById(scope, existing.result.notificationId);
+      if (intent !== null) return { intent, created: false, replayed: true };
+    }
+
     const now = this.clock.now();
     const maxAttempts = await this.settings.valueOf<number>(
       scope,
       'ops.notifications.max_attempts' as SettingKey,
     );
 
-    // The intent's own id is its dedupe key.
-    //
-    // Each test is its own question: two tests half an hour apart are two
-    // questions, and collapsing them would make the second silently answer with
-    // the first one's result. A timestamp was the obvious key and is wrong at
-    // the edge — two clicks inside one millisecond would collide, and the
-    // second would report success while pointing at the first test's outcome.
+    // The intent's own id is its dedupe key. A timestamp was the obvious choice
+    // and is wrong at the edge: two clicks inside one millisecond would
+    // collide, and the second would report success while pointing at the first
+    // test's outcome.
     const id = this.ids.uuid();
 
-    const result = await this.notifications.create(scope, {
-      id,
-      kind: 'OPERATIONS_TEST',
-      dedupeKey: `ops-test:${id}`,
-      destination,
-      // `label` is nullable on an actor; the template requires a name, so say
-      // what we actually know rather than rendering the word "null".
-      payload: serialiseValues({ requestedBy: actor.label ?? actor.type, at: now }),
-      templateKey: 'ops.notification.test',
-      maxAttempts,
-      correlationId: actor.correlationId,
-      now,
-    });
+    // The intent, its audit row and the idempotency record commit together.
+    // An audit row outside the transaction of the write it describes can
+    // survive a write that rolled back, and then it is a record of something
+    // that did not happen.
+    return this.uow.run(scope, async (tx) => {
+      const result = await this.notifications.create(
+        scope,
+        {
+          id,
+          kind: 'OPERATIONS_TEST',
+          dedupeKey: `ops-test:${id}`,
+          destination,
+          // `label` is nullable on an actor; the template requires a name, so
+          // say what we actually know rather than rendering the word "null".
+          payload: serialiseValues({ requestedBy: actor.label ?? actor.type, at: now }),
+          templateKey: 'ops.notification.test',
+          maxAttempts,
+          correlationId: actor.correlationId,
+          now,
+        },
+        tx,
+      );
 
-    await this.audit.record(scope, actor, {
-      action: 'notifications.test',
-      entityType: 'Notification',
-      entityId: result.intent.id,
-      before: null,
-      after: { destination: describeDestination(destination) },
-      result: 'SUCCESS',
-    });
+      await this.audit.record(
+        scope,
+        actor,
+        {
+          action: 'notifications.test',
+          entityType: 'Notification',
+          entityId: result.intent.id,
+          before: null,
+          after: { destination: describeDestination(destination) },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
 
-    return result;
+      await this.idempotency.remember(
+        scope,
+        actor.surface,
+        command.idempotencyKey,
+        requestHash,
+        { notificationId: result.intent.id },
+        tx,
+      );
+
+      return { ...result, replayed: false };
+    });
   }
 
   /** The configured destination, or null when there is none. */

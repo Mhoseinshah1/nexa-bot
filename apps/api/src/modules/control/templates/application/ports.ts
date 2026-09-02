@@ -1,4 +1,35 @@
-import type { ScopeContext, TemplateKey } from '@nexa/contracts';
+import type {
+  ScopeContext,
+  TemplateDefinition,
+  TemplateKey,
+  TemplateRevisionAction,
+  TemplateValues,
+} from '@nexa/contracts';
+
+/**
+ * The built-in default bodies, and the renderer.
+ *
+ * A port rather than a direct import of `@nexa/i18n`, for the reason ADR-0002
+ * gives: the application layer declares what it needs and infrastructure
+ * supplies it. The concrete catalogue was reached for directly at first, and the
+ * cost showed immediately — `defaultBody` read a module constant and threw for
+ * any locale but `fa`, so the second-locale story ADR-0016 tells (overrides are
+ * keyed by locale from the first migration) could not be exercised by a test.
+ *
+ * There is one implementation, and it is bound in `container.ts` like every
+ * other adapter.
+ */
+export interface TemplateCatalogue {
+  /** The built-in body for a key. Raw, with placeholders intact. */
+  defaultBody(key: TemplateKey, locale: string): string;
+  /** Substitutes declared tokens. Escapes values for an HTML-format key. */
+  render(
+    definition: TemplateDefinition,
+    body: string,
+    values: TemplateValues,
+    locale: string,
+  ): string;
+}
 
 /** A tenant's current override of one key. Absent means "uses the default". */
 export interface StoredTemplateOverride {
@@ -11,9 +42,6 @@ export interface StoredTemplateOverride {
   readonly updatedAt: Date;
   readonly updatedByAdminId: string | null;
 }
-
-export const TEMPLATE_REVISION_ACTIONS = ['SET', 'REVERT'] as const;
-export type TemplateRevisionAction = (typeof TEMPLATE_REVISION_ACTIONS)[number];
 
 export interface TemplateRevision {
   readonly key: TemplateKey;

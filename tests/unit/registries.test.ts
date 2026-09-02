@@ -31,8 +31,13 @@ describe('the settings registry', () => {
   it('marks NOT_APPLICABLE only where the schema really does forbid zero or empty', () => {
     for (const setting of SETTINGS) {
       if (setting.zeroMeaning !== 'NOT_APPLICABLE') continue;
+      // `null` too. Leaving it out is how a key whose ABSENCE is its most
+      // interesting state came to declare that its absence cannot occur, with
+      // this test passing against the mis-declaration.
       const zeroIsRejected =
-        !setting.schema.safeParse(0).success && !setting.schema.safeParse('').success;
+        !setting.schema.safeParse(0).success &&
+        !setting.schema.safeParse('').success &&
+        !setting.schema.safeParse(null).success;
       expect(
         zeroIsRejected,
         `${setting.key} claims zero cannot occur, but the schema allows it`,

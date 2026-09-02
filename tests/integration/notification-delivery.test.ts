@@ -124,6 +124,52 @@ describe('notification delivery', () => {
     });
   });
 
+  describe('the event and its notification commit together', () => {
+    it('leaves neither behind when the enclosing transaction rolls back', async () => {
+      // Without this, a process that dies between the two loses the alert
+      // permanently: the condition's next occurrence is a repeat rather than a
+      // new one, so nothing would announce it until it resolved and came back.
+      await expect(
+        ctx.container.uow.run(tenantA, async (tx) => {
+          await ctx.container.opsLog.record(
+            tenantA,
+            {
+              code: 'panel.unreachable',
+              severity: 'ERROR',
+              message: 'The panel did not answer.',
+              dedupeKey: 'atomic:1',
+            },
+            tx,
+          );
+          throw new Error('the caller failed after recording');
+        }),
+      ).rejects.toThrow('the caller failed after recording');
+
+      expect(await ctx.container.opsLogService.list(tenantA, owner, { limit: 50 })).toHaveLength(0);
+      expect(await ctx.container.notifications.list(tenantA, owner)).toHaveLength(0);
+    });
+
+    it('keeps the event when the projection itself fails', async () => {
+      // The event is the authoritative record and the notification is a
+      // projection of it. Where both cannot be committed, the projection is the
+      // half to lose — never the other way round.
+      const real = ctx.container.notifications.queue.bind(ctx.container.notifications);
+      ctx.container.notifications.queue = () => {
+        throw new Error('the queue is broken');
+      };
+      try {
+        const recorded = await raiseError('projection-fails');
+        expect(recorded.isNew).toBe(true);
+      } finally {
+        ctx.container.notifications.queue = real;
+      }
+
+      const events = await ctx.container.opsLogService.list(tenantA, owner, { limit: 50 });
+      expect(events.map((event) => event.code)).toContain('panel.unreachable');
+      expect(await ctx.container.notifications.list(tenantA, owner)).toHaveLength(0);
+    });
+  });
+
   describe('the dispatcher', () => {
     it('sends a pending intent and records the attempt', async () => {
       await raiseError();
@@ -269,6 +315,51 @@ describe('notification delivery', () => {
       });
 
       await ctx.container.notificationDispatcher.tick();
+      expect(await ctx.container.notificationDispatcher.tick()).toMatchObject({ claimed: 0 });
+    });
+
+    it('does not let one undeliverable intent stall the batch', async () => {
+      // A PENDING row can outlive the template key it names, across a release
+      // that removes one from the frozen catalogue. Without a per-intent catch
+      // that throw aborts the loop, and every intent behind it is left leased
+      // with its counter incremented and no attempt row — climbing forever,
+      // delivering nothing.
+      await raiseError('good:1');
+      await ctx.container.database.db.execute(
+        `INSERT INTO notifications
+           (id, tenant_id, kind, dedupe_key, destination, payload, template_key, max_attempts, next_attempt_at)
+         VALUES ('${ctx.container.ids.uuid()}', '${tenantA.tenantId}', 'OPERATIONAL_EVENT', 'poison',
+                 '{"transport":"RECORDING"}', '{}', 'bot.no_such_key', 5, now() - interval '1 second')` as never,
+      );
+
+      const result = await ctx.container.notificationDispatcher.tick();
+      expect(result.claimed).toBe(2);
+      // The good one still went out.
+      expect(transport.messages).toHaveLength(1);
+
+      const all = await ctx.container.notifications.list(tenantA, owner);
+      const poison = all.find((n) => n.templateKey === 'bot.no_such_key');
+      expect(poison?.status).toBe('FAILED');
+
+      const detail = await ctx.container.notifications.get(tenantA, owner, poison!.id);
+      expect(detail.attempts).toHaveLength(1);
+      expect(detail.attempts[0]?.outcome).toBe('FAILED_PERMANENT');
+
+      // And it is not claimed again.
+      expect(await ctx.container.notificationDispatcher.tick()).toMatchObject({ claimed: 0 });
+    });
+
+    it('stops claiming an intent that has spent its attempts', async () => {
+      // The backstop for the case above: abandonment normally happens in
+      // `recordAttempt`, which is the code that does not run when a dispatch
+      // throws before reaching it.
+      await raiseError('spent:1');
+      const [intent] = await ctx.container.notifications.list(tenantA, owner);
+      await ctx.container.database.db.execute(
+        `UPDATE notifications SET attempt_count = max_attempts, next_attempt_at = now() - interval '1 second'
+         WHERE id = '${intent!.id}'` as never,
+      );
+
       expect(await ctx.container.notificationDispatcher.tick()).toMatchObject({ claimed: 0 });
     });
 

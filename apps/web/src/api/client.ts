@@ -28,7 +28,7 @@ import {
   settingListResponseSchema,
   templateListResponseSchema,
   templateRevisionListResponseSchema,
-  templateViewSchema,
+  templateWriteResponseSchema,
   type FeatureFlagListResponse,
   type NotificationDetailResponse,
   type NotificationListResponse,
@@ -39,7 +39,7 @@ import {
   type SettingListResponse,
   type TemplateListResponse,
   type TemplateRevisionListResponse,
-  type TemplateViewResponse,
+  type TemplateWriteResponse,
 } from '@nexa/contracts';
 
 /**
@@ -100,6 +100,16 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /**
+     * The structured half of the error.
+     *
+     * Carried because the server's `details` is where the useful part lives: a
+     * rejected template body names the offending token, which is the entire
+     * point of reporting `UNKNOWN_PLACEHOLDER { token }` rather than a
+     * sentence. Dropping it here left an administrator with "this body is not
+     * valid" and no way to see which of their placeholders was wrong.
+     */
+    readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -109,7 +119,12 @@ export class ApiError extends Error {
 function toApiError(status: number, payload: unknown): ApiError {
   const parsed = errorResponseSchema.safeParse(payload);
   if (parsed.success) {
-    return new ApiError(status, parsed.data.error.code, parsed.data.error.message);
+    return new ApiError(
+      status,
+      parsed.data.error.code,
+      parsed.data.error.message,
+      parsed.data.error.details,
+    );
   }
   return new ApiError(status, 'unknown', `Request failed with ${status}`);
 }
@@ -225,18 +240,18 @@ export function saveTemplate(input: {
   body: string;
   expectedVersion: number | null;
   idempotencyKey: string;
-}): Promise<TemplateViewResponse> {
+}): Promise<TemplateWriteResponse> {
   const { key, ...rest } = input;
-  return post(CONTROL_ROUTES.template(key), rest, templateViewSchema);
+  return post(CONTROL_ROUTES.template(key), rest, templateWriteResponseSchema);
 }
 
 export function revertTemplate(input: {
   key: string;
   expectedVersion: number;
   idempotencyKey: string;
-}): Promise<TemplateViewResponse> {
+}): Promise<TemplateWriteResponse> {
   const { key, ...rest } = input;
-  return post(CONTROL_ROUTES.templateRevert(key), rest, templateViewSchema);
+  return post(CONTROL_ROUTES.templateRevert(key), rest, templateWriteResponseSchema);
 }
 
 /**
@@ -277,6 +292,10 @@ export function fetchNotification(id: string): Promise<NotificationDetailRespons
   return authedGet(CONTROL_ROUTES.notification(id), notificationDetailResponseSchema);
 }
 
-export function sendTestNotification(): Promise<NotificationDetailResponse> {
-  return post(CONTROL_ROUTES.notificationTest, {}, notificationDetailResponseSchema);
+export function sendTestNotification(idempotencyKey: string): Promise<NotificationDetailResponse> {
+  return post(
+    CONTROL_ROUTES.notificationTest,
+    { idempotencyKey },
+    notificationDetailResponseSchema,
+  );
 }

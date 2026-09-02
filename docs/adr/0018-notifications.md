@@ -112,13 +112,40 @@ for one concept and it is unknown which is authoritative — is answered by not
 reproducing the ambiguity: one destination per tenant, configured once, named in
 one setting.
 
-### Rate limiting is built, not inherited
+### Rate limiting is built, not inherited — and it is a fixed window per process
 
 Because the corpus shows none, and because absence of evidence here is not
 evidence of absence, the transport treats Telegram's limits as real: attempts
 are bounded, back-off is exponential with jitter, and a `retry_after` from the
-API overrides the computed delay. Notification sending is a queue with a
-concurrency ceiling rather than a loop.
+API overrides the computed delay.
+
+What the ceiling actually is, stated plainly rather than flatteringly: a fixed
+one-minute window counted **in the dispatcher's own memory**. Two worker
+processes therefore allow twice the configured rate, and a restart resets the
+window. Sends are sequential within a tick, not concurrent.
+
+That is adequate for one worker sending operational messages to one group, and
+it is not a distributed rate limiter. Making it one means moving the counter
+into Redis or Postgres, and it is the change to make when a second worker is
+deployed rather than a thing to claim now.
+
+### A message can be sent twice, and the design bounds how often
+
+The lease is longer than any plausible send, so a slow Telegram does not
+normally produce a second dispatcher sending the same message. "Normally" is the
+honest word: there is no ownership token, so a send that outlives
+`NOTIFICATION_CLAIM_LEASE_MS` can be claimed and sent again.
+
+Two things bound it. The attempt ceiling caps how many times that can happen,
+and the terminal-status predicate on `recordAttempt` stops the slow sender
+resurrecting an intent a second dispatcher has already completed — so the late
+writer cannot restart the cycle. What remains is one duplicate operational
+message in a case where Telegram took longer than two minutes to answer, which
+is a better failure than the alternative (a stalled sender holding its work
+forever, so the alert never arrives at all).
+
+An ownership token — claim with a nonce, record only if the nonce still matches
+— would close it, and is the change to make if duplicates are ever observed.
 
 ## Rejected
 

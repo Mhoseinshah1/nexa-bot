@@ -178,7 +178,21 @@ export interface RecordedOperationalEvent {
 }
 
 export interface OperationalEventRecorder {
-  record(scope: ScopeContext, event: OperationalEventInput): Promise<RecordedOperationalEvent>;
+  /**
+   * Records what happened.
+   *
+   * `tx` joins the caller's transaction, the same way the audit writer and the
+   * idempotency store do. It matters for the projection into a notification:
+   * without it, the event and the decision to tell somebody about it are two
+   * separate commits, and a process that dies between them loses the alert
+   * PERMANENTLY — the condition's next occurrence is a repeat, not a new one,
+   * so nothing would announce it until it resolved and came back.
+   */
+  record(
+    scope: ScopeContext,
+    event: OperationalEventInput,
+    tx?: unknown,
+  ): Promise<RecordedOperationalEvent>;
 }
 
 /**

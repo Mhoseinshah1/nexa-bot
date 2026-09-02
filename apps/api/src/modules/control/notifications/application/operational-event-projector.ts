@@ -2,6 +2,7 @@ import {
   OPERATIONAL_SEVERITIES,
   isSystemContext,
   type Logger,
+  type UnitOfWork,
   type OperationalEventInput,
   type OperationalEventRecorder,
   type OperationalSeverity,
@@ -9,6 +10,7 @@ import {
   type ScopeContext,
   type SettingKey,
 } from '@nexa/contracts';
+import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { SettingsResolver } from '../../settings/application/settings-resolver.js';
 import type { NotificationService } from './notification.service.js';
 
@@ -38,10 +40,14 @@ const SEVERITY_RANK = new Map<OperationalSeverity, number>(
  *     condition is news even though its row is not new — the legacy log never
  *     follows an error with a resolution at all (BUG-LGR-029).
  *
- * The projection never fails the recording. An operational event that was
- * written but not announced is a lesser problem than one that was not written
- * because announcing it went wrong — and the write is the authoritative half,
- * with Telegram as a projection of it.
+ * The event and the intent commit TOGETHER. That matters more here than it
+ * looks: without it, a process that dies between the two loses the alert
+ * permanently, because the condition's next occurrence is a repeat rather than
+ * a new one and nothing would announce it until it resolved and came back.
+ *
+ * Where the two cannot be committed together, the projection is what is lost
+ * and the write stands — the event is the authoritative record and Telegram is
+ * a projection of it, never the other way round.
  */
 export class NotifyingOperationalEventRecorder implements OperationalEventRecorder {
   /**
@@ -66,48 +72,87 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
     private readonly inner: OperationalEventRecorder,
     private readonly notifications: NotificationService,
     private readonly settings: SettingsResolver,
+    private readonly uow: UnitOfWork<TransactionScope>,
     private readonly logger: Logger,
   ) {}
 
   async record(
     scope: ScopeContext,
     event: OperationalEventInput,
+    tx?: unknown,
   ): Promise<RecordedOperationalEvent> {
-    const recorded = await this.inner.record(scope, event);
-
     // Platform-scoped events belong to no tenant, so there is no tenant whose
     // destination or threshold would apply. They are still recorded; they are
-    // simply not projected anywhere yet.
-    if (isSystemContext(scope)) return recorded;
+    // simply not projected anywhere yet, and there is nothing to be atomic with.
+    if (isSystemContext(scope)) return this.inner.record(scope, event, tx);
+
+    // Already inside somebody's transaction: join it rather than opening a
+    // second one, and let their commit carry both.
+    if (tx !== undefined) return this.recordAndProject(scope, event, tx);
+
+    try {
+      return await this.uow.run(scope, (opened) => this.recordAndProject(scope, event, opened));
+    } catch (error) {
+      // The WRITE must stand. The event is the authoritative record and the
+      // notification is a projection of it, so if the two cannot be committed
+      // together the right thing to lose is the projection.
+      //
+      // Nothing was committed — the transaction rolled back — so recording
+      // again here is not a duplicate.
+      this.logger.error(
+        {
+          err: error instanceof Error ? error.message : String(error),
+          code: event.code,
+        },
+        'Could not record an operational event and its notification together; recording the event alone',
+      );
+      return this.inner.record(scope, event);
+    }
+  }
+
+  private async recordAndProject(
+    scope: ScopeContext,
+    event: OperationalEventInput,
+    tx: unknown,
+  ): Promise<RecordedOperationalEvent> {
+    const recorded = await this.inner.record(scope, event, tx);
     if (!recorded.isNew && !recorded.reopened) return recorded;
 
     try {
       const threshold = await this.settings.valueOf<OperationalSeverity>(
         scope,
         'ops.notifications.min_severity' as SettingKey,
+        tx,
       );
       if (rank(recorded.severity) < rank(threshold)) return recorded;
 
-      await this.notifications.queue(scope, {
-        kind: 'OPERATIONAL_EVENT',
-        // The occurrence count is part of the identity so that a condition which
-        // resolves and recurs is announced again, while the same open condition
-        // firing repeatedly is not.
-        dedupeKey: `opslog:${recorded.id}:${recorded.occurrenceCount}`,
-        templateKey: 'ops.notification.operational_event',
-        values: {
-          severity: recorded.severity,
-          code: recorded.code,
-          message: recorded.message,
-          occurrences: recorded.occurrenceCount,
-          firstSeenAt: recorded.firstSeenAt,
+      await this.notifications.queue(
+        scope,
+        {
+          kind: 'OPERATIONAL_EVENT',
+          // The occurrence count is part of the identity so that a condition which
+          // resolves and recurs is announced again, while the same open condition
+          // firing repeatedly is not.
+          dedupeKey: `opslog:${recorded.id}:${recorded.occurrenceCount}`,
+          templateKey: 'ops.notification.operational_event',
+          values: {
+            severity: recorded.severity,
+            code: recorded.code,
+            message: recorded.message,
+            occurrences: recorded.occurrenceCount,
+            firstSeenAt: recorded.firstSeenAt,
+          },
+          ...(event.correlationId ? { correlationId: event.correlationId } : {}),
         },
-        ...(event.correlationId ? { correlationId: event.correlationId } : {}),
-      });
+        tx,
+      );
     } catch (error) {
-      // Deliberately not rethrown, and deliberately not silent. The caller
-      // recorded what happened; that write stands. This says the announcement
-      // did not, on the one channel that is definitely still working.
+      // Not rethrown, and not silent.
+      //
+      // Rethrowing would roll back the event write along with the projection,
+      // and the event is the half worth keeping. Swallowing without saying so
+      // would leave a condition unannounced with nothing anywhere recording
+      // that it should have been.
       this.logger.error(
         {
           err: error instanceof Error ? error.message : String(error),

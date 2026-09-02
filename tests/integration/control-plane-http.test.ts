@@ -13,7 +13,7 @@ import {
   settingWriteResponseSchema,
   templateListResponseSchema,
   templateRevisionListResponseSchema,
-  templateViewSchema,
+  templateWriteResponseSchema,
 } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
@@ -314,19 +314,19 @@ describe('control plane HTTP surface', () => {
         idempotencyKey: idempotencyKey(),
       });
       expect(set.statusCode).toBe(201);
-      const stored = templateViewSchema.parse(set.json());
+      const stored = templateWriteResponseSchema.parse(set.json()).template;
       expect(stored.source).toBe('TENANT');
       expect(stored.overrideBody).toBe('درود {correlationId}');
       expect(stored.version).toBe(1);
 
-      const reverted = templateViewSchema.parse(
+      const reverted = templateWriteResponseSchema.parse(
         (
           await post(CONTROL_ROUTES.templateRevert(key), ownerCookie, {
             expectedVersion: 1,
             idempotencyKey: idempotencyKey(),
           })
         ).json(),
-      );
+      ).template;
 
       // Reverting REMOVES the override. It does not copy today's default into
       // tenant storage, which is what lets an improved default reach them later.
@@ -441,7 +441,9 @@ describe('control plane HTTP surface', () => {
 
   describe('the notification test-send', () => {
     it('refuses when no destination is configured', async () => {
-      const response = await post(CONTROL_ROUTES.notificationTest, ownerCookie, {});
+      const response = await post(CONTROL_ROUTES.notificationTest, ownerCookie, {
+        idempotencyKey: idempotencyKey(),
+      });
       expect(response.statusCode).toBe(400);
       expect(response.json()).toMatchObject({
         error: { code: 'control.destination_not_configured' },
@@ -455,7 +457,9 @@ describe('control plane HTTP surface', () => {
         idempotencyKey: idempotencyKey(),
       });
 
-      const response = await post(CONTROL_ROUTES.notificationTest, ownerCookie, {});
+      const response = await post(CONTROL_ROUTES.notificationTest, ownerCookie, {
+        idempotencyKey: idempotencyKey(),
+      });
       expect(response.statusCode).toBe(201);
 
       const body = notificationDetailResponseSchema.parse(response.json());

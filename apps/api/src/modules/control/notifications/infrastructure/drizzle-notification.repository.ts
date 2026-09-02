@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, lt, lte, inArray, sql } from 'drizzle-orm';
+import { notificationDestinationSchema } from '@nexa/contracts';
 import type {
   DeliveryOutcome,
   NotificationDestination,
@@ -17,6 +18,7 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { redactRecord } from '../../../../infrastructure/redaction.js';
 import type {
   DeliveryAttemptRecord,
   NotificationIntent,
@@ -32,7 +34,11 @@ function toIntent(row: Row): NotificationIntent {
     tenantId: row.tenantId,
     kind: row.kind as NotificationKind,
     dedupeKey: row.dedupeKey,
-    destination: row.destination as NotificationDestination,
+    // PARSED, not cast. A jsonb round-trip believed rather than checked is
+    // exactly what put a chat id back as a number and had the API answer 201
+    // for a setting that was not set. A destination that decoded wrong would
+    // otherwise reach the transport and be posted to whatever `chatId` became.
+    destination: notificationDestinationSchema.parse(row.destination),
     payload: row.payload as Record<string, unknown>,
     templateKey: row.templateKey as TemplateKey,
     status: row.status as NotificationStatus,
@@ -59,6 +65,19 @@ function toAttempt(row: AttemptRow): DeliveryAttemptRecord {
     errorMessage: row.errorMessage,
     retryAfterMs: row.retryAfterMs,
   };
+}
+
+/**
+ * A transport's error text, redacted and bounded.
+ *
+ * `redactRecord` works on objects, so the message is wrapped, redacted and
+ * unwrapped rather than given its own second implementation of the rules.
+ */
+function redactErrorMessage(message: string | null): string | null {
+  if (message === null) return null;
+  const redacted = redactRecord({ message: message.slice(0, 2000) });
+  const value = redacted?.message;
+  return typeof value === 'string' ? value : null;
 }
 
 function executorOf(db: Database, tx?: unknown): Executor {
@@ -194,7 +213,17 @@ export class DrizzleNotificationRepository implements NotificationRepository {
       const due = await tx
         .select({ id: notifications.id })
         .from(notifications)
-        .where(and(eq(notifications.status, 'PENDING'), lte(notifications.nextAttemptAt, now)))
+        .where(
+          and(
+            eq(notifications.status, 'PENDING'),
+            lte(notifications.nextAttemptAt, now),
+            // The backstop. Abandonment normally happens in `recordAttempt`,
+            // which is exactly the code that does not run when a dispatch
+            // throws before it — so an intent that has already spent its
+            // attempts is refused here rather than being claimed forever.
+            lt(notifications.attemptCount, notifications.maxAttempts),
+          ),
+        )
         .orderBy(asc(notifications.nextAttemptAt))
         .limit(limit)
         .for('update', { skipLocked: true });
@@ -245,7 +274,11 @@ export class DrizzleNotificationRepository implements NotificationRepository {
         startedAt: input.startedAt,
         finishedAt: input.finishedAt,
         errorCode: input.errorCode,
-        errorMessage: input.errorMessage?.slice(0, 2000) ?? null,
+        // Through the one redactor, like the audit log and the operational log.
+        // This table is a fourth sink for third-party text, it is append-only —
+        // so an accidental secret could never be removed — and it is returned
+        // over HTTP. The rule is stated as universal; this path was outside it.
+        errorMessage: redactErrorMessage(input.errorMessage),
         retryAfterMs: input.retryAfterMs,
       });
 

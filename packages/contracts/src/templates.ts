@@ -81,6 +81,15 @@ export function placeholderTokensIn(body: string): string[] {
 export const TEMPLATE_FORMATS = ['PLAIN_TEXT', 'TELEGRAM_HTML'] as const;
 export type TemplateFormat = (typeof TEMPLATE_FORMATS)[number];
 
+/**
+ * What a revision records.
+ *
+ * A `SET` stores the body; a `REVERT` stores none, because reverting goes back
+ * to the default rather than copying it into tenant storage.
+ */
+export const TEMPLATE_REVISION_ACTIONS = ['SET', 'REVERT'] as const;
+export type TemplateRevisionAction = (typeof TEMPLATE_REVISION_ACTIONS)[number];
+
 export interface PlaceholderDefinition {
   readonly token: string;
   readonly type: PlaceholderType;

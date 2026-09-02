@@ -61,13 +61,13 @@ export class SettingsResolver {
     for (const definition of SETTINGS) {
       const key = definition.key as SettingKey;
       const row = stored.get(key);
-      resolved.push(await this.resolveOne(scope, key, row ?? null));
+      resolved.push(await this.resolveOne(scope, key, row ?? null, tx));
     }
     return resolved;
   }
 
   async resolve(scope: ScopeContext, key: SettingKey, tx?: unknown): Promise<ResolvedSetting> {
-    return this.resolveOne(scope, key, await this.settings.find(scope, key, tx));
+    return this.resolveOne(scope, key, await this.settings.find(scope, key, tx), tx);
   }
 
   /** The parsed value alone, for code that only needs to behave correctly. */
@@ -84,6 +84,7 @@ export class SettingsResolver {
       updatedAt: Date;
       updatedByAdminId: string | null;
     } | null,
+    tx?: unknown,
   ): Promise<ResolvedSetting> {
     const definition = settingDefinition(key);
     const base = {
@@ -115,13 +116,22 @@ export class SettingsResolver {
       // other half — a stored value that is silently ignored is exactly the
       // legacy failure where a screen reports success and the system behaves as
       // though nothing was set.
-      await this.opsLog.record(scope, {
-        code: INVALID_STORED_SETTING_CODE,
-        severity: 'WARN',
-        message: `The stored value for ${key} does not match its declaration; the default is in force.`,
-        context: { key, issues: parsed.error.issues.map((issue) => issue.message) },
-        dedupeKey: `${INVALID_STORED_SETTING_CODE}:${key}`,
-      });
+      // In the CALLER'S transaction when there is one. This is a write from a
+      // read path, and on a second connection it would survive the caller's
+      // rollback — an operational event, and via the projector a notification,
+      // recording a state that was never committed. It also holds a second pool
+      // connection while the first is open.
+      await this.opsLog.record(
+        scope,
+        {
+          code: INVALID_STORED_SETTING_CODE,
+          severity: 'WARN',
+          message: `The stored value for ${key} does not match its declaration; the default is in force.`,
+          context: { key, issues: parsed.error.issues.map((issue) => issue.message) },
+          dedupeKey: `${INVALID_STORED_SETTING_CODE}:${key}`,
+        },
+        tx,
+      );
       return asDefault();
     }
 

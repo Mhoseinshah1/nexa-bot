@@ -77,25 +77,43 @@ END;
 $$ LANGUAGE plpgsql;
 --> statement-breakpoint
 
--- Backfill: templates.view and templates.edit for existing owners -------------
+-- Backfill: the newly added template permissions ------------------------------
 --
 -- Seeded roles are written when a role is CREATED and never reasserted, so that
 -- a restart cannot silently restore a permission an operator withdrew. The role
 -- repository's own comment names the consequence and the remedy: a permission
--- newly added to a seed does not reach installations that already have the role,
--- and the fix is "a migration that says what it is doing". This is that
+-- newly added to a seed does not reach installations that already have the
+-- role, and the fix is "a migration that says what it is doing". This is that
 -- migration.
 --
--- Only `owner`. That role holds the entire catalogue by construction, so adding
--- to it restores an invariant rather than making a judgement. Every other seeded
--- role may have been customised by whoever runs the installation, and quietly
--- widening one would be exactly the silent privilege restoration the
--- create-only rule exists to prevent — an operator who wants their operator role
--- to edit copy can grant it, with an audit row saying they did.
+-- The create-only rule protects against RESTORING a permission somebody took
+-- away. `templates.view` and `templates.edit` did not exist until this release,
+-- so nobody can have taken them away — there was nothing to withdraw. That is
+-- what makes backfilling them safe, and it is why this backfill covers exactly
+-- the roles whose seed gained them and no others.
+--
+-- Without it, `operator` means one thing on an installation created last month
+-- and another on one created next month: same key, same name on screen, two
+-- different permission sets depending on install date, with nothing recording
+-- the divergence.
+--
+--   owner     — holds the whole catalogue by construction
+--   operator  — the seed gained templates.view and templates.edit
+--   observer  — its seed is every LOW-risk permission, and templates.view is one
+--
+-- Roles an operator created themselves are untouched: they were never seeded
+-- from the catalogue, so nothing here is theirs to widen.
 
 INSERT INTO "role_permissions" ("tenant_id", "role_id", "permission_key")
 SELECT r."tenant_id", r."id", p."key"
 FROM "roles" r
-CROSS JOIN (VALUES ('templates.view'), ('templates.edit')) AS p("key")
-WHERE r."key" = 'owner'
+JOIN (VALUES
+        ('owner',    'templates.view'),
+        ('owner',    'templates.edit'),
+        ('operator', 'templates.view'),
+        ('operator', 'templates.edit'),
+        ('observer', 'templates.view')
+     ) AS p("role_key", "key")
+  ON p."role_key" = r."key"
+WHERE r."is_system" = true
 ON CONFLICT DO NOTHING;

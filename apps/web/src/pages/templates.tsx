@@ -10,7 +10,7 @@ import {
   saveTemplate,
 } from '../api/client';
 import { t } from '../i18n/web.fa';
-import { messageFor } from './settings';
+import { issuesFrom, messageFor } from './settings';
 
 /**
  * The template screen.
@@ -175,7 +175,16 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
         <button type="button" onClick={() => preview.mutate()} disabled={preview.isPending}>
           {t('web.preview')}
         </button>
-        {preview.isError && <p className="error">{messageFor(preview.error)}</p>}
+        {preview.isError && (
+          <>
+            <p className="error">{messageFor(preview.error)}</p>
+            <ul className="error">
+              {issuesFrom(preview.error).map((issue) => (
+                <li key={issue}>{issue}</li>
+              ))}
+            </ul>
+          </>
+        )}
         {preview.data && (
           <>
             <pre dir="auto">{preview.data.rendered}</pre>
@@ -234,9 +243,23 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
       )}
       {mayEdit && template.version !== null && <p className="notice">{t('web.revert_note')}</p>}
 
-      {save.isError && <p className="error">{messageFor(save.error)}</p>}
+      {save.isError && (
+        <>
+          <p className="error">{messageFor(save.error)}</p>
+          {/* Which placeholder was wrong, not just that something was. */}
+          <ul className="error">
+            {issuesFrom(save.error).map((issue) => (
+              <li key={issue}>{issue}</li>
+            ))}
+          </ul>
+        </>
+      )}
       {undo.isError && <p className="error">{messageFor(undo.error)}</p>}
-      {save.isSuccess && <p className="notice">{t('web.saved')}</p>}
+      {/* A no-op says so, exactly as a setting write does. Answering "saved"
+          for a save that stored nothing is the legacy pattern verbatim. */}
+      {save.isSuccess && (
+        <p className="notice">{save.data.changed ? t('web.saved') : t('web.unchanged')}</p>
+      )}
     </form>
   );
 }

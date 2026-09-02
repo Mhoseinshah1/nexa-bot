@@ -15,6 +15,7 @@ import {
   type TemplateListResponse,
   type TemplateRevisionListResponse,
   type TemplateViewResponse,
+  type TemplateWriteResponse,
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
@@ -139,13 +140,17 @@ export class ControlController {
     @Req() request: FastifyRequest,
     @Param('key') key: string,
     @Body() body: unknown,
-  ): Promise<TemplateViewResponse> {
+  ): Promise<TemplateWriteResponse> {
     const { scope, actor } = await this.authenticate(request, { write: true });
     const result = await this.container.templatesService.set(scope, actor, {
       ...(body as Record<string, unknown>),
       key,
     });
-    return toTemplateResponse(result.template);
+    return {
+      template: toTemplateResponse(result.template),
+      revision: result.revision,
+      changed: result.changed,
+    };
   }
 
   @Post('templates/:key/revert')
@@ -153,13 +158,17 @@ export class ControlController {
     @Req() request: FastifyRequest,
     @Param('key') key: string,
     @Body() body: unknown,
-  ): Promise<TemplateViewResponse> {
+  ): Promise<TemplateWriteResponse> {
     const { scope, actor } = await this.authenticate(request, { write: true });
     const result = await this.container.templatesService.revert(scope, actor, {
       ...(body as Record<string, unknown>),
       key,
     });
-    return toTemplateResponse(result.template);
+    return {
+      template: toTemplateResponse(result.template),
+      revision: result.revision,
+      changed: result.changed,
+    };
   }
 
   /**
@@ -243,9 +252,12 @@ export class ControlController {
    * incident.
    */
   @Post('notifications/test')
-  async testNotification(@Req() request: FastifyRequest): Promise<NotificationDetailResponse> {
+  async testNotification(
+    @Req() request: FastifyRequest,
+    @Body() body: unknown,
+  ): Promise<NotificationDetailResponse> {
     const { scope, actor } = await this.authenticate(request, { write: true });
-    const { intent } = await this.container.notifications.sendTest(scope, actor);
+    const { intent } = await this.container.notifications.sendTest(scope, actor, body);
     return { notification: toNotificationResponse(intent), attempts: [] };
   }
 

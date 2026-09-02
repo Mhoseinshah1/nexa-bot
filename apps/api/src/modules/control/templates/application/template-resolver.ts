@@ -4,9 +4,11 @@ import {
   type TemplateKey,
   type TemplateValues,
 } from '@nexa/contracts';
-import { CATALOGUE_FA, renderTemplateBody, type Locale } from '@nexa/i18n';
 import type { FeatureFlagResolver } from '../../features/application/feature-flags.service.js';
-import type { TemplateRepository } from './ports.js';
+import type { TemplateCatalogue, TemplateRepository } from './ports.js';
+
+/** The one locale this product ships. A second is a catalogue, not a refactor. */
+export type Locale = string;
 
 /**
  * Resolves the body a message will actually be sent with.
@@ -38,6 +40,7 @@ export class TemplateResolver {
   constructor(
     private readonly templates: TemplateRepository,
     private readonly features: FeatureFlagResolver,
+    private readonly catalogue: TemplateCatalogue,
   ) {}
 
   async resolve(
@@ -55,7 +58,7 @@ export class TemplateResolver {
     return {
       key,
       locale,
-      body: defaultBody(key, locale),
+      body: this.catalogue.defaultBody(key, locale),
       source: 'DEFAULT',
       overrideSuppressed: override !== null,
     };
@@ -77,14 +80,6 @@ export class TemplateResolver {
     tx?: unknown,
   ): Promise<string> {
     const resolved = await this.resolve(scope, key, locale, tx);
-    return renderTemplateBody(templateDefinition(key), resolved.body, values, locale);
+    return this.catalogue.render(templateDefinition(key), resolved.body, values, locale);
   }
-}
-
-/** The built-in body for a key. The catalogue is the default; there is no copy of it in the database. */
-export function defaultBody(key: TemplateKey, locale: Locale = DEFAULT_TEMPLATE_LOCALE): string {
-  if (locale !== 'fa') {
-    throw new Error(`No catalogue for locale ${locale}.`);
-  }
-  return CATALOGUE_FA[key];
 }

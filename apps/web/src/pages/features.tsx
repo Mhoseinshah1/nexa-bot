@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { FeatureFlagResponse } from '@nexa/contracts';
 import { fetchFeatureFlags, newIdempotencyKey, saveFeatureFlag } from '../api/client';
 import { t } from '../i18n/web.fa';
-import { messageFor } from './settings';
+import { issuesFrom, messageFor } from './settings';
 
 /**
  * The feature-flag screen.
@@ -128,10 +128,19 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
 
       {mayEdit && (
         <button type="submit" disabled={toggle.isPending}>
-          {toggle.isPending ? t('web.saving') : flag.enabled ? t('web.disabled') : t('web.enabled')}
+          {toggle.isPending ? t('web.saving') : flag.enabled ? t('web.disable') : t('web.enable')}
         </button>
       )}
-      {toggle.isError && <p className="error">{messageFor(toggle.error)}</p>}
+      {toggle.isError && (
+        <>
+          <p className="error">{messageFor(toggle.error)}</p>
+          <ul className="error">
+            {issuesFrom(toggle.error).map((issue) => (
+              <li key={issue}>{issue}</li>
+            ))}
+          </ul>
+        </>
+      )}
     </form>
   );
 }

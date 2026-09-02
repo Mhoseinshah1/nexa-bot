@@ -104,7 +104,16 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
           {save.isPending ? t('web.saving') : t('web.save')}
         </button>
       )}
-      {save.isError && <p className="error">{messageFor(save.error)}</p>}
+      {save.isError && (
+        <>
+          <p className="error">{messageFor(save.error)}</p>
+          <ul className="error">
+            {issuesFrom(save.error).map((issue) => (
+              <li key={issue}>{issue}</li>
+            ))}
+          </ul>
+        </>
+      )}
       {/* A no-op says so. The legacy screens answer "✅ updated" either way,
           and one of them said it three times while nothing changed. */}
       {save.isSuccess && (
@@ -146,6 +155,24 @@ function fromEditable(draft: string, previous: unknown): unknown {
   } catch {
     return draft;
   }
+}
+
+/**
+ * The structured issues behind a rejection, if there are any.
+ *
+ * A template body refused for an undeclared placeholder names the token; a
+ * setting refused by its schema names the field. Both arrive in the error's
+ * `details.issues`, and both are what the person editing needs to see.
+ */
+export function issuesFrom(error: unknown): string[] {
+  if (!(error instanceof ApiError)) return [];
+  const issues = error.details?.issues;
+  if (!Array.isArray(issues)) return [];
+  return issues.map((issue) =>
+    typeof issue === 'string'
+      ? issue
+      : ((issue as { detail?: string }).detail ?? JSON.stringify(issue)),
+  );
 }
 
 export function messageFor(error: unknown): string {

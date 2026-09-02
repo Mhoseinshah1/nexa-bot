@@ -5,6 +5,7 @@ import {
   fetchNotification,
   fetchNotifications,
   fetchOpsLog,
+  newIdempotencyKey,
   sendTestNotification,
 } from '../api/client';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -142,7 +143,7 @@ export function NotificationsPage({ mayTest }: { mayTest: boolean }) {
   });
 
   const test = useMutation({
-    mutationFn: sendTestNotification,
+    mutationFn: () => sendTestNotification(newIdempotencyKey()),
     onSuccess: async () => {
       await client.invalidateQueries({ queryKey: ['notifications'] });
     },

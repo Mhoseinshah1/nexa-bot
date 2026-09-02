@@ -41,7 +41,11 @@ export const ZERO_MEANINGS = [
   'DISABLES',
   /** Zero means no ceiling. */
   'UNLIMITED',
-  /** Zero is an ordinary value with no special meaning. */
+  /**
+   * Zero, empty or absent is an ordinary permitted value. What it DOES is in
+   * the key's own description — this says only that it is not a sentinel that
+   * switches the feature off or removes a limit.
+   */
   'LITERAL',
   /** Zero or empty cannot occur: the schema forbids it. */
   'NOT_APPLICABLE',
@@ -124,7 +128,13 @@ export const SETTINGS = [
       'why this is explicit configuration with a test-send rather than an assumption.',
     schema: z.number().int().positive().nullable(),
     defaultValue: null,
-    zeroMeaning: 'NOT_APPLICABLE',
+    // Absent is permitted, is the default, and means something — "post to the
+    // group itself". It is therefore LITERAL and not NOT_APPLICABLE, which
+    // claims the schema forbids it. This was the one key in the registry whose
+    // absence carried a behaviour and it declared that its absence could not
+    // happen; the registries test now checks null as well as 0 and '', which is
+    // why it stopped passing against the mis-declaration.
+    zeroMeaning: 'LITERAL',
     mutability: 'RUNTIME',
     classification: 'SENSITIVE',
     configures: 'ops_notifications',

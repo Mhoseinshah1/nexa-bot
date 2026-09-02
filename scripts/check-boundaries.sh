@@ -94,6 +94,48 @@ else
   pass "the owner bootstrap is not reachable from any surface"
 fi
 
+# --- The application layer names what it needs, not who provides it ---------
+# `@nexa/contracts` is the shared specification and may be imported anywhere.
+# `@nexa/i18n` is an IMPLEMENTATION of part of it — a catalogue and a renderer —
+# and belongs behind a port like any other adapter.
+#
+# This drifted once already: three application files reached for `CATALOGUE_FA`
+# and `renderTemplateBody` directly, and the cost showed up as a `defaultBody`
+# that threw for every locale but `fa`, so the second-locale path ADR-0016
+# describes could not be exercised by a test.
+if [ -n "$INNER_DIRS" ]; then
+  I18N_LEAK=$(grep -rn "from '@nexa/i18n'" $INNER_DIRS 2>/dev/null || true)
+  if [ -n "$I18N_LEAK" ]; then
+    fail "A domain or application file imports @nexa/i18n directly" "$I18N_LEAK" \
+         "Declare a port and bind the catalogue in container.ts."
+  else
+    pass "domain and application layers reach the catalogue through a port"
+  fi
+fi
+
+# --- Unguarded resolvers stay out of the surfaces ---------------------------
+# `SettingsResolver`, `FeatureFlagResolver` and `TemplateResolver` deliberately
+# skip the permission guard, because the code that uses them — a worker deciding
+# how to behave — has no actor to authorize. That argument holds only while a
+# SURFACE cannot reach them: from a controller they are an unauthenticated read
+# of every setting in the session's tenant.
+#
+# `NotificationService.queue` is here for the same reason in the other
+# direction: it is an unguarded WRITE, correct for a projection that nobody
+# asked for and wrong for anything a request can reach.
+#
+# Two comments in the codebase claimed this check existed before it did. It does
+# now.
+RESOLVER_LEAK=$(grep -rnE "settingsResolver|featureFlagResolver|templateResolver|notifications\.queue\(|notificationDispatcher|NotificationDispatcher" \
+  apps/api/src/surfaces 2>/dev/null || true)
+if [ -n "$RESOLVER_LEAK" ]; then
+  fail "A surface reaches an unguarded resolver, the notification queue, or the dispatcher" \
+       "$RESOLVER_LEAK" \
+       "Call the guarded service. The resolvers exist for code with no actor to authorize."
+else
+  pass "surfaces reach no unguarded resolver, queue or dispatcher"
+fi
+
 # --- Authorization is not decided in a surface ------------------------------
 # UI visibility is not authorization. A controller that resolves permissions
 # itself is a controller that can decide differently from the service the

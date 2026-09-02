@@ -13,7 +13,6 @@ import {
   type TenantId,
 } from '@nexa/contracts';
 import { asId } from '@nexa/contracts';
-import { renderTemplateBody } from '@nexa/i18n';
 import type { SettingsResolver } from '../../settings/application/settings-resolver.js';
 import type { TemplateResolver } from '../../templates/application/template-resolver.js';
 import { DEFAULT_TEMPLATE_LOCALE } from '../../templates/application/template-resolver.js';
@@ -128,14 +127,79 @@ export class NotificationDispatcher {
     let abandoned = 0;
 
     for (const intent of claimed) {
-      const outcome = await this.deliver(intent);
+      let outcome: 'SENT' | 'RETRY' | 'FAILED';
+      try {
+        outcome = await this.deliver(intent);
+      } catch (error) {
+        // One intent must not be able to stop the batch.
+        //
+        // Without this, a single throw aborts the loop and leaves every intent
+        // claimed after it leased, with its attempt counter already incremented
+        // and no attempt row written — and since abandonment happens in
+        // `record`, which is the code that did not run, the counter climbs
+        // forever and nothing behind it is ever delivered. That is ADR-0018's
+        // own "sixty identical errors with a scheduler in front of it",
+        // reproduced by the thing built to prevent it.
+        this.logger.error(
+          {
+            err: error instanceof Error ? error.message : String(error),
+            notificationId: intent.id,
+          },
+          'Notification delivery threw; abandoning this intent and continuing the batch',
+        );
+        abandoned += 1;
+        this.sentInWindow += 1;
+        await this.abandon(intent, error);
+        continue;
+      }
+
       if (outcome === 'SENT') sent += 1;
       else if (outcome === 'FAILED') abandoned += 1;
       else failed += 1;
-      this.sentInWindow += 1;
+
+      // Only work that reached the transport counts against the ceiling. A
+      // burst of unrenderable intents would otherwise spend the whole minute's
+      // budget without a single byte leaving the process.
+      if (outcome !== 'FAILED' || intent.status === 'PENDING') this.sentInWindow += 1;
     }
 
     return { claimed: claimed.length, sent, failed, abandoned };
+  }
+
+  /**
+   * Records an intent as permanently failed after an unexpected throw.
+   *
+   * Best effort by necessity: if this fails too, the intent stays claimed until
+   * its lease expires and the loop meets it again — bounded by the claim
+   * predicate, which refuses an intent that has already used its attempts.
+   */
+  private async abandon(intent: NotificationIntent, cause: unknown): Promise<void> {
+    const now = this.clock.now();
+    try {
+      await this.notifications.recordAttempt({
+        attemptId: this.ids.uuid(),
+        tenantId: intent.tenantId,
+        notificationId: intent.id,
+        attemptNumber: intent.attemptCount,
+        transport: this.transport.kind,
+        outcome: 'FAILED_PERMANENT',
+        startedAt: now,
+        finishedAt: now,
+        errorCode: 'notification.dispatch_failed',
+        errorMessage: cause instanceof Error ? cause.message : String(cause),
+        retryAfterMs: null,
+        nextStatus: 'FAILED',
+        nextAttemptAt: now,
+      });
+    } catch (error) {
+      this.logger.error(
+        {
+          err: error instanceof Error ? error.message : String(error),
+          notificationId: intent.id,
+        },
+        'Could not record the failure of a notification that could not be dispatched',
+      );
+    }
   }
 
   /** One intent: render, send outside any transaction, record what happened. */
@@ -144,23 +208,22 @@ export class NotificationDispatcher {
       tenantId: asId<'TenantId'>(intent.tenantId) as TenantId,
       botInstanceId: null,
     };
-    const definition = templateDefinition(intent.templateKey);
     const startedAt = this.clock.now();
 
     let text: string;
+    let definition;
     try {
+      // Inside the try. `templateDefinition` throws for a key the frozen
+      // catalogue no longer declares, which a PENDING row can outlive across a
+      // release, and a throw out here would take the whole batch with it.
+      definition = templateDefinition(intent.templateKey);
       // Rendering reads the tenant's override, so an operator who reworded the
       // alert gets their wording. It happens before the send and outside any
       // transaction — a template read is cheap, and holding a transaction across
       // the send is the thing this class exists to avoid.
-      const resolved = await this.templates.resolve(
+      text = await this.templates.render(
         scope,
         intent.templateKey,
-        DEFAULT_TEMPLATE_LOCALE,
-      );
-      text = renderTemplateBody(
-        definition,
-        resolved.body,
         deserialiseValues(intent),
         DEFAULT_TEMPLATE_LOCALE,
       );

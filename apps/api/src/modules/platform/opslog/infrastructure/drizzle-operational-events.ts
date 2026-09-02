@@ -8,9 +8,13 @@ import {
   type RecordedOperationalEvent,
   type ScopeContext,
 } from '@nexa/contracts';
-import type { Database } from '../../../../infrastructure/persistence/database.js';
+import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import { operationalEvents } from '../../../../infrastructure/persistence/schema.js';
-import { scopeRef, scopeTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
+import {
+  scopeRef,
+  scopeTenantId,
+  type TransactionScope,
+} from '../../../../infrastructure/persistence/unit-of-work.js';
 import { redactRecord } from '../../../../infrastructure/redaction.js';
 
 /**
@@ -35,8 +39,10 @@ export class DrizzleOperationalEventRecorder implements OperationalEventRecorder
   async record(
     scope: ScopeContext,
     event: OperationalEventInput,
+    tx?: unknown,
   ): Promise<RecordedOperationalEvent> {
     const now = this.clock.now();
+    const caller = (tx as TransactionScope | undefined)?.tx;
     const values = {
       id: this.ids.uuid(),
       tenantId: scopeTenantId(scope),
@@ -62,7 +68,7 @@ export class DrizzleOperationalEventRecorder implements OperationalEventRecorder
     let reopened = false;
 
     if (event.dedupeKey === undefined) {
-      [row] = await this.db.insert(operationalEvents).values(values).returning();
+      [row] = await (caller ?? this.db).insert(operationalEvents).values(values).returning();
       isNew = true;
     } else {
       // The deduplicated path runs in one transaction, so that "was this already
@@ -78,7 +84,10 @@ export class DrizzleOperationalEventRecorder implements OperationalEventRecorder
       // returning no row means somebody else won the race and the update path
       // takes over.
       const dedupeKey = event.dedupeKey;
-      const outcome = await this.db.transaction(async (tx) => {
+      // Inside the caller's transaction when there is one, and in its own
+      // otherwise. The row lock below is what serialises two reports of one
+      // condition, and it does that identically either way.
+      const dedupe = async (tx: Executor) => {
         const lockExisting = async () => {
           const [found] = await tx
             .select({ id: operationalEvents.id, resolvedAt: operationalEvents.resolvedAt })
@@ -134,7 +143,9 @@ export class DrizzleOperationalEventRecorder implements OperationalEventRecorder
           .where(eq(operationalEvents.id, existing.id))
           .returning();
         return { row: updated, isNew: false, reopened: existing.resolvedAt !== null };
-      });
+      };
+
+      const outcome = caller ? await dedupe(caller) : await this.db.transaction(dedupe);
 
       row = outcome.row;
       isNew = outcome.isNew;
@@ -149,7 +160,7 @@ export class DrizzleOperationalEventRecorder implements OperationalEventRecorder
     // deletes them: an operator asking "was this broken last night" needs the
     // failure row to still be there, with its counter and its first-seen time.
     if (event.recoversCode !== undefined) {
-      await this.db
+      await (caller ?? this.db)
         .update(operationalEvents)
         .set({ resolvedAt: now, resolvedByEventId: row.id })
         .where(

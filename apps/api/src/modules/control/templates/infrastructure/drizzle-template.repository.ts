@@ -1,5 +1,6 @@
 import { and, desc, eq, sql } from 'drizzle-orm';
-import type { ScopeContext, TemplateKey } from '@nexa/contracts';
+import { CONTROL_ERROR_CODES, errors } from '@nexa/contracts';
+import type { ScopeContext, TemplateKey, TemplateRevisionAction } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   templateOverrides,
@@ -13,7 +14,6 @@ import type {
   StoredTemplateOverride,
   TemplateRepository,
   TemplateRevision,
-  TemplateRevisionAction,
 } from '../application/ports.js';
 
 type OverrideRow = typeof templateOverrides.$inferSelect;
@@ -207,6 +207,20 @@ export class DrizzleTemplateRepository implements TemplateRepository {
     return deleted[0] ? toOverride(deleted[0]) : null;
   }
 
+  /**
+   * Appends a revision, turning a collision into a conflict.
+   *
+   * The override row is normally the serialisation point: its version predicate
+   * refuses a concurrent edit before a revision number is claimed. A REVERT
+   * DELETES that row, so between the delete and the commit there is no row to
+   * predicate on — a concurrent `set` claiming `expectedVersion: null` can then
+   * insert successfully and reach for the same revision number.
+   *
+   * Postgres refuses the second one on the unique index, which is correct and
+   * unhelpful: the caller gets a driver error where the rest of this module
+   * answers `control.version_conflict`. Translating it here means one answer for
+   * one situation, whichever statement happens to detect it.
+   */
   async appendRevision(
     scope: ScopeContext,
     input: {
@@ -222,16 +236,46 @@ export class DrizzleTemplateRepository implements TemplateRepository {
     tx?: unknown,
   ): Promise<void> {
     const tenantId = requireTenantId(scope);
-    await executorOf(this.db, tx).insert(templateRevisions).values({
-      id: input.id,
-      tenantId,
-      templateKey: input.key,
-      locale: input.locale,
-      revision: input.revision,
-      action: input.action,
-      body: input.body,
-      createdAt: input.now,
-      createdByAdminId: input.adminId,
-    });
+    try {
+      await executorOf(this.db, tx).insert(templateRevisions).values({
+        id: input.id,
+        tenantId,
+        templateKey: input.key,
+        locale: input.locale,
+        revision: input.revision,
+        action: input.action,
+        body: input.body,
+        createdAt: input.now,
+        createdByAdminId: input.adminId,
+      });
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw errors.conflict(
+          CONTROL_ERROR_CODES.VERSION_CONFLICT,
+          `${input.key} changed while you were editing it. Reload and reapply your change.`,
+          { key: input.key, revision: input.revision },
+        );
+      }
+      throw error;
+    }
   }
+}
+
+/** Postgres `unique_violation`. */
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && findCode(error) === '23505';
+}
+
+/**
+ * The SQLSTATE, wherever the driver put it.
+ *
+ * `node-postgres` sets `code` on its own error; Drizzle wraps that in a
+ * `DrizzleQueryError` and puts the original on `cause`. Reading only the outer
+ * object would make this check quietly never match.
+ */
+function findCode(error: object): string | undefined {
+  const direct = (error as { code?: unknown }).code;
+  if (typeof direct === 'string') return direct;
+  const cause = (error as { cause?: unknown }).cause;
+  return typeof cause === 'object' && cause !== null ? findCode(cause) : undefined;
 }

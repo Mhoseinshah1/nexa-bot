@@ -66,6 +66,19 @@ The append-only guard installed in migration 0001 is extended to permit exactly
 these two columns to change, and nothing else. Immutability is enforced by the
 database rather than by reviewers remembering.
 
+### The latest context wins, and the first one is lost
+
+A deduplicated occurrence overwrites `context` and `correlation_id` on the row
+it collapses onto. That is a decision, not an oversight: an operator looking at
+an open condition wants the most recent evidence, and keeping every occurrence's
+context would make the dedupe that stops sixty rows produce sixty JSON blobs
+instead.
+
+The cost is real and worth stating: "what did this look like the first time" is
+not answerable. `first_seen_at` and the occurrence count survive; the first
+occurrence's context does not. If that turns out to matter, the answer is a
+separate occurrences table rather than an unbounded array on the row.
+
 ### No acknowledgement
 
 Monitoring products usually have one. This one does not, because there is no

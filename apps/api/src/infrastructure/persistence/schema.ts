@@ -28,6 +28,7 @@ import {
   OPERATIONAL_SEVERITIES,
   PERMISSION_OVERRIDE_EFFECTS,
   SOURCE_SURFACES,
+  TEMPLATE_REVISION_ACTIONS,
   TENANT_KINDS,
   TENANT_STATUSES,
 } from '@nexa/contracts';
@@ -734,7 +735,7 @@ export const templateRevisions = pgTable(
       table.locale,
       table.revision,
     ),
-    check('template_revisions_action_check', enumCheck('action', ['SET', 'REVERT'])),
+    check('template_revisions_action_check', enumCheck('action', TEMPLATE_REVISION_ACTIONS)),
     check('template_revisions_revision_check', sql`revision >= 1`),
     // A SET carries a body; a REVERT never does. Without this the two shapes
     // drift and "which revision restored the default" stops being answerable.

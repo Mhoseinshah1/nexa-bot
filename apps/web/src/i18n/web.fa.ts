@@ -92,6 +92,10 @@ export const WEB_FA = {
     'هر قابلیت یک کلید روشن یا خاموش است. تنظیمات مربوط به آن در همین‌جا کنار خودش نمایش داده می‌شود.',
   'web.enabled': 'روشن',
   'web.disabled': 'خاموش',
+  // The state and the action are different words. One string doing both jobs is
+  // how a label comes to mean two things on one screen.
+  'web.enable': 'روشن کردن',
+  'web.disable': 'خاموش کردن',
   'web.inert': 'تا روشن‌شدن این قابلیت، این مقدار بی‌اثر است.',
   'web.tenant_wide': 'اثر گسترده',
   'web.confirm_key': 'برای تأیید، کلید قابلیت را بنویسید',

@@ -1,5 +1,20 @@
 import { z } from 'zod';
 import { adminChangeReasonSchema, adminDisplayNameSchema } from './identity.js';
+import {
+  DELIVERY_OUTCOMES,
+  NOTIFICATION_KINDS,
+  NOTIFICATION_STATUSES,
+  NOTIFICATION_TRANSPORTS,
+} from './notifications.js';
+import { OPERATIONAL_SEVERITIES } from './ports.js';
+import {
+  SETTING_CLASSIFICATIONS,
+  SETTING_MUTABILITIES,
+  SETTING_SOURCES,
+  ZERO_MEANINGS,
+} from './settings.js';
+import { FEATURE_FLAG_SOURCES, FLAG_BLAST_RADII } from './features.js';
+import { PLACEHOLDER_TYPES, TEMPLATE_FORMATS, TEMPLATE_REVISION_ACTIONS } from './templates.js';
 
 /**
  * The HTTP seam.
@@ -236,16 +251,16 @@ const nullableIsoTimestamp = isoTimestamp.nullable();
 export const resolvedSettingSchema = z.object({
   key: z.string(),
   value: z.unknown(),
-  source: z.enum(['DEFAULT', 'TENANT']),
+  source: z.enum(SETTING_SOURCES),
   /** Null when the value is the default: no row, so no version to state. */
   version: z.number().int().positive().nullable(),
   updatedAt: nullableIsoTimestamp,
   updatedByAdminId: z.string().nullable(),
   description: z.string(),
   /** What `0`, empty or absent means for THIS key. Returned with every read. */
-  zeroMeaning: z.enum(['DISABLES', 'UNLIMITED', 'LITERAL', 'NOT_APPLICABLE']),
-  mutability: z.enum(['RUNTIME', 'RESTART_REQUIRED']),
-  classification: z.enum(['PUBLIC', 'SENSITIVE']),
+  zeroMeaning: z.enum(ZERO_MEANINGS),
+  mutability: z.enum(SETTING_MUTABILITIES),
+  classification: z.enum(SETTING_CLASSIFICATIONS),
   configures: z.string().nullable(),
 });
 export type ResolvedSettingResponse = z.infer<typeof resolvedSettingSchema>;
@@ -284,14 +299,14 @@ export type SettingWriteResponse = z.infer<typeof settingWriteResponseSchema>;
 export const featureFlagSchema = z.object({
   key: z.string(),
   enabled: z.boolean(),
-  source: z.enum(['DEFAULT', 'TENANT']),
+  source: z.enum(FEATURE_FLAG_SOURCES),
   version: z.number().int().positive().nullable(),
   updatedAt: nullableIsoTimestamp,
   updatedByAdminId: z.string().nullable(),
   reason: z.string().nullable(),
   description: z.string(),
   /** TENANT_WIDE toggles go through the confirmation protocol (ADR-0010). */
-  blastRadius: z.enum(['LOCAL', 'TENANT_WIDE']),
+  blastRadius: z.enum(FLAG_BLAST_RADII),
   /**
    * The settings this flag governs, each marked inert when the flag is off.
    *
@@ -324,7 +339,7 @@ export type SetFeatureFlagRequest = z.infer<typeof setFeatureFlagRequestSchema>;
 
 export const placeholderSchema = z.object({
   token: z.string(),
-  type: z.enum(['STRING', 'NUMBER', 'MONEY', 'DATETIME', 'DURATION_DAYS', 'BYTES']),
+  type: z.enum(PLACEHOLDER_TYPES),
   description: z.string(),
   required: z.boolean(),
   repeatable: z.boolean(),
@@ -334,7 +349,7 @@ export const templateViewSchema = z.object({
   key: z.string(),
   locale: z.string(),
   description: z.string(),
-  format: z.enum(['PLAIN_TEXT', 'TELEGRAM_HTML']),
+  format: z.enum(TEMPLATE_FORMATS),
   placeholders: z.array(placeholderSchema),
   maxLength: z.number().int().positive(),
   /** The body in force — what a customer would actually receive. */
@@ -356,6 +371,21 @@ export type TemplateViewResponse = z.infer<typeof templateViewSchema>;
 
 export const templateListResponseSchema = z.object({ templates: z.array(templateViewSchema) });
 export type TemplateListResponse = z.infer<typeof templateListResponseSchema>;
+
+/**
+ * What a template write answers with.
+ *
+ * The same rule as a setting write: the persisted view, the revision it
+ * produced, and whether anything actually changed. Re-saving an identical body
+ * is a no-op and says so, rather than answering "saved" and writing a duplicate
+ * revision.
+ */
+export const templateWriteResponseSchema = z.object({
+  template: templateViewSchema,
+  revision: z.number().int().positive(),
+  changed: z.boolean(),
+});
+export type TemplateWriteResponse = z.infer<typeof templateWriteResponseSchema>;
 
 export const setTemplateRequestSchema = z.object({
   body: z.string().min(1),
@@ -386,7 +416,7 @@ export type PreviewTemplateResponse = z.infer<typeof previewTemplateResponseSche
 
 export const templateRevisionSchema = z.object({
   revision: z.number().int().positive(),
-  action: z.enum(['SET', 'REVERT']),
+  action: z.enum(TEMPLATE_REVISION_ACTIONS),
   /** The body a SET stored. Null for a REVERT, which stores none. */
   body: z.string().nullable(),
   createdAt: isoTimestamp,
@@ -402,7 +432,7 @@ export type TemplateRevisionListResponse = z.infer<typeof templateRevisionListRe
 export const operationalEventSchema = z.object({
   id: z.string(),
   code: z.string(),
-  severity: z.enum(['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL']),
+  severity: z.enum(OPERATIONAL_SEVERITIES),
   message: z.string(),
   context: z.record(z.string(), z.unknown()).nullable(),
   occurrenceCount: z.number().int().positive(),
@@ -423,8 +453,8 @@ export type OperationalEventListResponse = z.infer<typeof operationalEventListRe
 
 export const notificationSchema = z.object({
   id: z.string(),
-  kind: z.enum(['OPERATIONAL_EVENT', 'OPERATIONS_TEST']),
-  status: z.enum(['PENDING', 'SENT', 'FAILED']),
+  kind: z.enum(NOTIFICATION_KINDS),
+  status: z.enum(NOTIFICATION_STATUSES),
   templateKey: z.string(),
   attemptCount: z.number().int().nonnegative(),
   maxAttempts: z.number().int().positive(),
@@ -442,8 +472,8 @@ export type NotificationListResponse = z.infer<typeof notificationListResponseSc
 
 export const deliveryAttemptSchema = z.object({
   attemptNumber: z.number().int().positive(),
-  transport: z.enum(['TELEGRAM', 'RECORDING']),
-  outcome: z.enum(['SUCCEEDED', 'FAILED_RETRYABLE', 'FAILED_PERMANENT']),
+  transport: z.enum(NOTIFICATION_TRANSPORTS),
+  outcome: z.enum(DELIVERY_OUTCOMES),
   startedAt: isoTimestamp,
   finishedAt: isoTimestamp,
   errorCode: z.string().nullable(),
@@ -464,6 +494,21 @@ export const notificationDetailResponseSchema = z.object({
   attempts: z.array(deliveryAttemptSchema),
 });
 export type NotificationDetailResponse = z.infer<typeof notificationDetailResponseSchema>;
+
+/**
+ * The test-send request.
+ *
+ * It carries an idempotency key because it is a state-changing command and
+ * every one of those takes one — a double-clicked button, a browser retry or a
+ * proxy replay must not produce two messages and two audit rows. That is a
+ * different mechanism from the intent's dedupe key, which answers a different
+ * question: each test IS its own question, so two deliberate tests are two
+ * intents.
+ */
+export const sendTestNotificationRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type SendTestNotificationRequest = z.infer<typeof sendTestNotificationRequestSchema>;
 
 export const CONTROL_ROUTES = {
   settings: '/settings',
