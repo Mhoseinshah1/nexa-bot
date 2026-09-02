@@ -196,7 +196,7 @@ const BARE_SCHEMES = ['Bearer', 'Basic', 'Digest', 'Negotiate'];
  * Wider than `BARE_SCHEMES` because here there IS a sensitive name in front of
  * it — the evidence is stronger, so the list can be.
  */
-const ANY_SCHEME = `(?:${[...BARE_SCHEMES, 'Token', 'ApiKey', 'Mutual', 'SSWS', 'NTLM', 'DPoP'].join('|')})`;
+const AUTH_SCHEME_WORDS = [...BARE_SCHEMES, 'Token', 'ApiKey', 'Mutual', 'SSWS', 'NTLM', 'DPoP'];
 
 // The name's quotes are captured so they can be put back: redacting inside a
 // JSON fragment should leave something a person still recognises as JSON.
@@ -209,9 +209,24 @@ const LABELLED_SECRET = new RegExp(
   String.raw`(["']?)([A-Za-z0-9_.-]{0,64}(?:` +
     TEXT_SENSITIVE_FRAGMENTS.map(escapeForRegExp).join('|') +
     String.raw`)[A-Za-z0-9_.-]{0,64})(["']?)(\s*[=:]\s*)` +
-    // A quoted value in full, spaces included; or a quoted run whose closing
-    // quote is NOT within the bound; or a known scheme plus the credential
-    // after it; or one whitespace-delimited token.
+    // A quoted value in full — INCLUDING escaped quotes, because
+    // `password="abc\"secret"` used to end the match at the escaped delimiter
+    // and leave everything after it; or a quoted run whose closing quote is not
+    // within the bound; or a scheme plus the credential after it; or one
+    // whitespace-delimited token.
+    //
+    // The scheme alternative accepts any Capitalised word, not only the ones
+    // `AUTH_SCHEME_WORDS` names. `token=GoogleLogin dXNlcjpwYXNz` leaked because the
+    // scheme was unlisted AND its credential was letters-only, so the
+    // trailing-credential pass below — which needs a digit or punctuation —
+    // refused it too. A capital is what distinguishes a scheme from the next
+    // word of a sentence: `token: abc reported by alice` keeps its sentence.
+    //
+    // Every bound is 8 192 rather than 4 096, which is the whole input's own
+    // ceiling. At 4 096 an over-long UNQUOTED value had its first 4 096
+    // characters collapsed to the marker and its tail left in place — and the
+    // collapse moved that tail into the first 2 000 characters the attempt
+    // table then stored.
     //
     // That third alternative is the fail-closed one. Without it a
     // `privateKey="<5000 characters>"` matched nothing at all — the bounded
@@ -227,7 +242,13 @@ const LABELLED_SECRET = new RegExp(
     // and kept the password. The end-of-line case belongs to
     // `CREDENTIAL_HEADER_LINE`, which is the only place the whole remainder is
     // known to be one value.
-    String.raw`("[^"]{0,4096}"|'[^']{0,4096}'|["'][^\r\n]{0,8192}|(?:${ANY_SCHEME}\s+)?[^\s"',&}]{1,4096})`,
+    String.raw`("(?:[^"\\]|\\.){0,8192}"|'(?:[^'\\]|\\.){0,8192}'|["'][^\r\n]{0,8192}` +
+    // The leading word is its own group so the replacer can judge its CASE.
+    // It cannot be judged here: this pattern carries the `i` flag for the
+    // name, and under `i` a class like `[A-Z]` matches lowercase too — which
+    // turned `token: abc reported by alice` into `token: [redacted] by alice`,
+    // eating the word after the value.
+    String.raw`|(?:([A-Za-z][A-Za-z0-9-]{1,30})\s+)?([^\s"',&}]{1,8192}))`,
   'gi',
 );
 
@@ -334,12 +355,31 @@ export function redactSecretText(text: string): string {
           closeQuote: string,
           separator: string,
           value: string,
+          leadingWord: string | undefined,
+          rest: string | undefined,
         ) => {
+          const label = `${openQuote}${name}${closeQuote}${separator}`;
+
           // The value's quotes come back as quotes. `{"token":[redacted]}` does
           // not parse, and the comment above promises something a person still
           // recognises as JSON.
-          const replacement = /^["']/.test(value) ? `"${REDACTED}"` : REDACTED;
-          return `${openQuote}${name}${closeQuote}${separator}${replacement}`;
+          if (/^["']/.test(value)) return `${label}"${REDACTED}"`;
+
+          // A leading word is a SCHEME — and the credential after it goes with
+          // it — when it is capitalised, or is one this module names. The case
+          // test lives HERE because the pattern is case-insensitive for the
+          // name's sake, and under `i` a `[A-Z]` class matches lowercase too.
+          const isScheme =
+            leadingWord !== undefined &&
+            (/^[A-Z]/.test(leadingWord) ||
+              AUTH_SCHEME_WORDS.some(
+                (scheme) => scheme.toLowerCase() === leadingWord.toLowerCase(),
+              ));
+          if (isScheme || leadingWord === undefined) return `${label}${REDACTED}`;
+
+          // Otherwise the leading word WAS the value, and what the pattern
+          // swallowed after it is the next word of a sentence. It goes back.
+          return `${label}${REDACTED} ${rest ?? ''}`;
         },
       )
       .replace(BARE_CREDENTIAL, (match) => `${/^\S+/.exec(match)?.[0] ?? ''} ${REDACTED}`)

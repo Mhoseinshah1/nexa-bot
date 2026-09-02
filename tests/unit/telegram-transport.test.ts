@@ -85,6 +85,48 @@ describe('the Telegram notification transport', () => {
     expect(await transport.send(message)).toMatchObject({ outcome: 'FAILED_PERMANENT' });
   });
 
+  it('treats an accepted response it cannot read as retryable, not as a rejection', async () => {
+    // Telegram accepted the request and the body did not parse — a truncated
+    // response, a proxy's error page under a 200. Collapsing the parse failure
+    // to `{}` sent this down the permanent-rejection branch as
+    // `telegram.rejected.200`, so a message that had very likely been
+    // delivered was recorded as permanently failed after one attempt.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError('Unexpected end of JSON input');
+        },
+      })),
+    );
+    expect(await transport.send(message)).toMatchObject({
+      outcome: 'FAILED_RETRYABLE',
+      errorCode: 'telegram.unreadable_response',
+    });
+  });
+
+  it('still treats an unreadable body under a 4xx as a rejection', async () => {
+    // The distinction is about what the STATUS said. A 400 whose body is
+    // unreadable is still a refusal, and retrying it is the repeated-identical
+    // -error pattern this module exists to avoid.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 400,
+        json: async () => {
+          throw new SyntaxError('Unexpected end of JSON input');
+        },
+      })),
+    );
+    expect(await transport.send(message)).toMatchObject({
+      outcome: 'FAILED_PERMANENT',
+      errorCode: 'telegram.rejected.400',
+    });
+  });
+
   it('treats an unreachable API as retryable', async () => {
     vi.stubGlobal(
       'fetch',

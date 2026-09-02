@@ -120,6 +120,23 @@ export class NotificationDispatcher {
     this.rateLimitScope = scope;
   }
 
+  /**
+   * Forgets what has been sent in the current minute.
+   *
+   * The rate window is PROCESS state: it lives on this object and outlives
+   * anything done to the database. That is correct in production — the ceiling
+   * is a courtesy to Telegram and Telegram does not care what our tables say —
+   * and it is a trap for anything that resets the world and expects a clean
+   * dispatcher. The ordering enumeration in the integration suite hit exactly
+   * that: 216 sequences share one dispatcher, and after twenty sends the
+   * budget was zero, so later sequences claimed nothing and passed their
+   * invariants without exercising anything.
+   */
+  resetRateWindow(): void {
+    this.windowStartedAt = 0;
+    this.sentInWindow = 0;
+  }
+
   constructor(
     private readonly notifications: NotificationRepository,
     private readonly transport: NotificationTransport,

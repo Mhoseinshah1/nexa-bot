@@ -21,8 +21,21 @@ export class RecordingTransport implements NotificationTransport {
   private nextResult: TransportResult = { outcome: 'SUCCEEDED' };
   private nextThrow: Error | null = null;
 
+  private invocations = 0;
+
   get messages(): readonly OutboundMessage[] {
     return this.sent;
+  }
+
+  /**
+   * How many times `send` was CALLED, successful or not.
+   *
+   * Distinct from `messages`, which holds only what succeeded. A ceiling is
+   * about calls: an assertion counting messages reported zero while a
+   * regression made three failing calls, and passed.
+   */
+  get calls(): number {
+    return this.invocations;
   }
 
   /** Makes the next send fail, so retry and abandonment can be exercised. */
@@ -43,11 +56,13 @@ export class RecordingTransport implements NotificationTransport {
 
   reset(): void {
     this.sent.length = 0;
+    this.invocations = 0;
     this.nextResult = { outcome: 'SUCCEEDED' };
     this.nextThrow = null;
   }
 
   async send(message: OutboundMessage): Promise<TransportResult> {
+    this.invocations += 1;
     const thrown = this.nextThrow;
     this.nextThrow = null;
     if (thrown) throw thrown;

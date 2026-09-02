@@ -18,8 +18,25 @@ import { redactSecretText } from '../../apps/api/src/infrastructure/redaction';
  * dimensions rather than in somebody's imagination.
  */
 
-/** A distinctive secret, so a survival is unambiguous in the assertion. */
-const SECRET = 'sk-live-ZQ7hV2pR8nX4mK6tW9bY3cF5';
+/**
+ * Distinctive secrets, so a survival is unambiguous in the assertion.
+ *
+ * More than one SHAPE, and that is the point. The first version used a single
+ * secret containing digits and punctuation, which hid a real leak: the pass
+ * that redacts a credential after an unlisted scheme required a non-letter, so
+ * a letters-only base64 credential survived and every one of the thousand
+ * cases still passed. A cross product over labels proves nothing about the
+ * secret if the secret itself only has one shape.
+ */
+const SECRETS = [
+  // Digits and punctuation.
+  'sk-live-ZQ7hV2pR8nX4mK6tW9bY3cF5',
+  // Letters only, as base64 of a short credential often is.
+  'dXNlcjpwYXNzd29yZGhlcmU',
+  // Carrying a quote, which a naive quoted-value matcher ends at.
+  'abc\\"SUPERSECRETtail',
+];
+const SECRET = SECRETS[0] as string;
 
 const NAMES = [
   'token',
@@ -75,12 +92,15 @@ const PREFIXES = [
 ];
 
 describe('every labelled shape of a secret is redacted', () => {
-  const built: string[] = [];
+  /** Every shape, paired with the secret it hides. */
+  const built: { line: string; secret: string }[] = [];
   for (const name of NAMES) {
     for (const separator of SEPARATORS) {
       for (const prefix of PREFIXES) {
-        const closing = separator.endsWith('"') ? '"' : separator.endsWith("'") ? "'" : '';
-        built.push(`${name}${separator}${prefix}${SECRET}${closing}`);
+        for (const secret of SECRETS) {
+          const closing = separator.endsWith('"') ? '"' : separator.endsWith("'") ? "'" : '';
+          built.push({ line: `${name}${separator}${prefix}${secret}${closing}`, secret });
+        }
       }
     }
   }
@@ -88,35 +108,36 @@ describe('every labelled shape of a secret is redacted', () => {
   it('covers a meaningful number of shapes', () => {
     // If a refactor collapses the tables, the sweep below would still pass
     // while checking almost nothing.
-    expect(built.length).toBeGreaterThan(500);
+    expect(built.length).toBeGreaterThan(1_500);
+    expect(new Set(built.map((entry) => entry.secret)).size).toBe(SECRETS.length);
   });
 
   it('leaves the secret in none of them, bare', () => {
-    const survived = built.filter((line) => redactSecretText(line).includes(SECRET));
-    expect(survived, `${survived.length} shapes leaked; first: ${survived[0]}`).toEqual([]);
+    const survived = built.filter(({ line, secret }) => redactSecretText(line).includes(secret));
+    expect(survived, `${survived.length} shapes leaked; first: ${survived[0]?.line}`).toEqual([]);
   });
 
   it('leaves the secret in none of them, inside a sentence', () => {
-    const survived = built.filter((line) =>
-      redactSecretText(`the panel refused the request: ${line} — retrying in 30s`).includes(SECRET),
+    const survived = built.filter(({ line, secret }) =>
+      redactSecretText(`the panel refused the request: ${line} — retrying in 30s`).includes(secret),
     );
-    expect(survived, `${survived.length} shapes leaked; first: ${survived[0]}`).toEqual([]);
+    expect(survived, `${survived.length} shapes leaked; first: ${survived[0]?.line}`).toEqual([]);
   });
 
   it('leaves the secret in none of them, inside a JSON body', () => {
-    const survived = built.filter((line) =>
-      redactSecretText(`{"error":"unauthorized","detail":"${line}"}`).includes(SECRET),
+    const survived = built.filter(({ line, secret }) =>
+      redactSecretText(`{"error":"unauthorized","detail":"${line}"}`).includes(secret),
     );
-    expect(survived, `${survived.length} shapes leaked; first: ${survived[0]}`).toEqual([]);
+    expect(survived, `${survived.length} shapes leaked; first: ${survived[0]?.line}`).toEqual([]);
   });
 
   it('leaves the secret in none of them, when a second secret follows on the line', () => {
     // The rule matched once per line at one point, so the first secret was
     // redacted and everything after it survived.
-    const survived = built.filter((line) =>
-      redactSecretText(`${line} and password=${SECRET}`).includes(SECRET),
+    const survived = built.filter(({ line, secret }) =>
+      redactSecretText(`${line} and password=${secret}`).includes(secret),
     );
-    expect(survived, `${survived.length} shapes leaked; first: ${survived[0]}`).toEqual([]);
+    expect(survived, `${survived.length} shapes leaked; first: ${survived[0]?.line}`).toEqual([]);
   });
 
   it('leaves the secret out of a parameterised credential', () => {
@@ -129,11 +150,23 @@ describe('every labelled shape of a secret is redacted', () => {
   });
 
   it('leaves the secret in none of them, when the value is long', () => {
-    // A value beyond the internal bound matched nothing at all and was
-    // returned untouched.
-    const long = SECRET + 'x'.repeat(5_000);
-    const survived = NAMES.filter((name) => redactSecretText(`${name}="${long}"`).includes(SECRET));
-    expect(survived, `${survived.length} names leaked`).toEqual([]);
+    // The sentinel goes at BOTH ends. Placing it only at the front hid a
+    // second bug: an over-long UNQUOTED value had its first 4 096 characters
+    // collapsed to the marker and its tail left in place, and the collapse
+    // moved that tail into the first 2 000 characters that get stored.
+    const survived: string[] = [];
+    for (const name of NAMES) {
+      for (const quote of ['"', '']) {
+        const leading = `${SECRET}${'x'.repeat(5_000)}`;
+        const trailing = `${'x'.repeat(5_000)}${SECRET}`;
+        for (const value of [leading, trailing]) {
+          if (redactSecretText(`${name}=${quote}${value}${quote}`).includes(SECRET)) {
+            survived.push(`${name}=${quote}…${quote}`);
+          }
+        }
+      }
+    }
+    expect(survived, `${survived.length} long-value shapes leaked`).toEqual([]);
   });
 });
 

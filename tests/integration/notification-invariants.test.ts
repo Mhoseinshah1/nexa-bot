@@ -184,6 +184,12 @@ describe('notification state machine invariants', () => {
       );
       await configure();
       transport.reset();
+      // The rate window is PROCESS state on a dispatcher these 216 sequences
+      // share, and `ctx.reset()` cannot touch it. Without this, twenty sends
+      // exhausted the per-minute budget and every later sequence claimed
+      // nothing — passing its invariants by doing no work, with the coverage
+      // silently depending on how fast the suite happened to run.
+      ctx.container.notificationDispatcher.resetRateWindow();
 
       const intent = await raise(`panel:${sequence.join('-')}`);
       const delivered = () => transport.messages.length > 0;
@@ -219,14 +225,19 @@ describe('notification state machine invariants', () => {
         broken.push(`[${where}] ${row!.status} with no attempt behind it`);
       }
 
-      // 4. Attempt numbers are unique, and the transport is not called more
+      // 4. Attempt numbers are unique, and the transport is not CALLED more
       //    often than the intent's own ceiling allows.
+      //
+      //    `transport.messages` counts only successful sends, so a regression
+      //    letting a third failed call through with `maxAttempts = 2` left it
+      //    at zero and passed. `calls` counts every invocation, which is what
+      //    the ceiling is about.
       const numbers = attempts.map((attempt) => attempt.attemptNumber);
       if (new Set(numbers).size !== numbers.length) {
         broken.push(`[${where}] duplicate attempt numbers: ${numbers.join(',')}`);
       }
-      if (transport.messages.length > row!.maxAttempts) {
-        broken.push(`[${where}] sent ${transport.messages.length} times`);
+      if (transport.calls > row!.maxAttempts) {
+        broken.push(`[${where}] transport called ${transport.calls} times`);
       }
 
       // 5. A terminal status always carries a completion time, and a pending

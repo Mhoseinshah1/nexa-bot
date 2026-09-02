@@ -103,17 +103,41 @@ export class TelegramNotificationTransport implements NotificationTransport {
         signal: controller.signal,
       });
 
-      const payload = (await response.json().catch(() => ({}))) as {
+      // A body that will not parse is kept DISTINCT from a body that parsed
+      // and said no. Collapsing them to `{}` lost the difference, and the
+      // difference decides an outcome: a 2xx whose body was truncated fell
+      // through to the permanent-rejection branch as `telegram.rejected.200`,
+      // so a message Telegram had accepted — and very likely delivered — was
+      // recorded as permanently failed after one attempt, which is the exact
+      // shape of failure this module keeps being corrected for.
+      let payload: {
         ok?: boolean;
         description?: string;
         error_code?: number;
         parameters?: { retry_after?: number };
-      };
+      } | null;
+      try {
+        payload = (await response.json()) as typeof payload;
+      } catch {
+        payload = null;
+      }
 
-      if (response.ok && payload.ok === true) return { outcome: 'SUCCEEDED' };
+      if (response.ok && payload?.ok === true) return { outcome: 'SUCCEEDED' };
 
-      const description = payload.description ?? `HTTP ${response.status}`;
-      const retryAfter = payload.parameters?.retry_after;
+      if (payload === null && response.ok) {
+        // Accepted, and we cannot read what it said. RETRYABLE, because the
+        // send may well have landed: the dedupe key and the attempt ceiling
+        // bound the cost of trying again, and nothing bounds the cost of
+        // filing a delivered message as permanently failed.
+        return {
+          outcome: 'FAILED_RETRYABLE',
+          errorCode: 'telegram.unreadable_response',
+          errorMessage: `HTTP ${response.status} with a body that could not be parsed.`,
+        };
+      }
+
+      const description = payload?.description ?? `HTTP ${response.status}`;
+      const retryAfter = payload?.parameters?.retry_after;
 
       // 429 is the one Telegram tells us how to handle. Honour what it asked
       // for; a back-off we invented would either be rude or too slow.
@@ -140,7 +164,7 @@ export class TelegramNotificationTransport implements NotificationTransport {
 
       return {
         outcome: 'FAILED_PERMANENT',
-        errorCode: `telegram.rejected.${payload.error_code ?? response.status}`,
+        errorCode: `telegram.rejected.${payload?.error_code ?? response.status}`,
         errorMessage: description,
       };
     } catch (error) {
