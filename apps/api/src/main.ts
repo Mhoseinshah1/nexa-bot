@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { isNexaError } from '@nexa/contracts';
 import { createApiApp } from './bootstrap.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
+import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
 
 /**
  * Process role: `api`.
@@ -15,12 +16,18 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const { app, container } = await createApiApp(config);
 
-  const shutdown = async (signal: string): Promise<void> => {
-    container.logger.info({ signal }, 'Shutting down api');
-    await app.close();
-    await container.shutdown();
-    process.exit(0);
-  };
+  const { shutdown } = createShutdownCoordinator({
+    name: 'api',
+    logger: container.logger,
+    timeoutMs: config.SHUTDOWN_TIMEOUT_MS,
+    exit: (code) => process.exit(code),
+    close: async () => {
+      // Nest first, so no new request is accepted and in-flight ones finish;
+      // then the container, which owns the pool those requests are using.
+      await app.close();
+      await container.shutdown();
+    },
+  });
 
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));

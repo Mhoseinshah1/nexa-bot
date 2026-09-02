@@ -172,6 +172,14 @@ describe('the Telegram notification transport', () => {
     expect(calls[0]?.body).not.toHaveProperty('parse_mode');
     expect(calls[0]?.body).not.toHaveProperty('message_thread_id');
 
+    // The link-preview suppression, pinned to Telegram's CURRENT field.
+    // `disable_web_page_preview` is deprecated, and a deprecated parameter is
+    // one release from being ignored — at which point an alert quoting a URL
+    // starts rendering a preview card in the administrators' group with no
+    // code change to explain it.
+    expect(calls[0]?.body).toMatchObject({ link_preview_options: { is_disabled: true } });
+    expect(calls[0]?.body).not.toHaveProperty('disable_web_page_preview');
+
     await transport.send({
       ...message,
       html: true,

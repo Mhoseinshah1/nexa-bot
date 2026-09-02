@@ -181,6 +181,15 @@ export const configSchema = z
     OUTBOX_RELAY_MAX_LAG_MS: z.coerce.number().int().min(1000).default(300_000),
 
     /**
+     * How long a graceful shutdown may take before the process leaves anyway.
+     *
+     * Shorter than an orchestrator's grace period, deliberately: the point is
+     * to exit with a log line saying what was stuck, rather than to be killed
+     * mid-sentence and leave the operator guessing.
+     */
+    SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(15_000),
+
+    /**
      * Which transport carries operational notifications.
      *
      * `recording` keeps messages in memory instead of sending them, for tests.
@@ -191,7 +200,10 @@ export const configSchema = z
      * job is to tell somebody things are broken.
      */
     NOTIFICATION_TRANSPORT: z.enum(['telegram', 'recording']).default('telegram'),
-    // Overridable so tests can point at a local stub rather than the real API.
+    /**
+     * Overridable so tests can point at a local stub rather than the real API.
+     * Production insists on HTTPS; see the cross-field check below.
+     */
     TELEGRAM_API_BASE_URL: z.string().url().default('https://api.telegram.org'),
     NOTIFICATION_SEND_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(10_000),
     NOTIFICATION_DISPATCH_ENABLED: booleanish.default(true),
@@ -218,10 +230,40 @@ export const configSchema = z
         code: 'custom',
         path: ['AUTH_MODE'],
         message:
-          'AUTH_MODE=none is permitted only when NODE_ENV=development. Phase 0 ships no authentication; ' +
-          'see docs/adr/0009-identity-and-auth.md before deploying.',
+          'AUTH_MODE=none is permitted only when NODE_ENV=development. Authentication is real from ' +
+          'Phase 1 onward — this setting disables it, and outside development that is a deployment ' +
+          'with no front door. See docs/adr/0013-web-admin-authentication.md.',
       });
     }
+    if (config.NODE_ENV === 'production') {
+      // Parsed, not prefix-matched. `https://evil/?x=http://api.telegram.org`
+      // starts with the wrong thing and `HTTPS://…` with the right one, and a
+      // `startsWith` gets both backwards. The protocol is a field; read the
+      // field.
+      //
+      // Not silently rewritten to https either. A bot token travels in the URL
+      // path of every Telegram call, so an http:// base means every send
+      // publishes the credential to the network — and quietly "fixing" the
+      // value would hide that somebody had configured it, which is worth
+      // knowing about a deployment.
+      let protocol: string | null = null;
+      try {
+        protocol = new URL(config.TELEGRAM_API_BASE_URL).protocol;
+      } catch {
+        protocol = null;
+      }
+      if (protocol !== 'https:') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['TELEGRAM_API_BASE_URL'],
+          message:
+            'TELEGRAM_API_BASE_URL must use https in production. The bot token is part of every ' +
+            'request path, so an insecure base URL publishes the credential on the wire. A local ' +
+            'http stub is permitted outside production.',
+        });
+      }
+    }
+
     if (config.PASSWORD_HASH_PROFILE === 'fast' && config.NODE_ENV === 'production') {
       ctx.addIssue({
         code: 'custom',

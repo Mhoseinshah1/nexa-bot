@@ -22,6 +22,57 @@ describe('configuration', () => {
     expect(config.OUTBOX_RELAY_ENABLED).toBe(true);
   });
 
+  describe('the Telegram API base URL', () => {
+    // A bot token is part of the PATH of every Telegram call, so an http://
+    // base publishes the credential on the wire with each send.
+    const production = {
+      ...valid,
+      NODE_ENV: 'production',
+      WEB_ADMIN_ORIGINS: 'https://admin.example.com',
+      SESSION_COOKIE_SECURE: 'true',
+    };
+
+    it('refuses an insecure base URL in production', () => {
+      expect(() =>
+        loadConfig({ ...production, TELEGRAM_API_BASE_URL: 'http://api.telegram.org' }),
+      ).toThrowError(/TELEGRAM_API_BASE_URL must use https/);
+    });
+
+    it('is not fooled by a URL that merely contains https', () => {
+      // `startsWith` gets this backwards in both directions, which is why the
+      // check parses the URL and reads its protocol.
+      expect(() =>
+        loadConfig({
+          ...production,
+          TELEGRAM_API_BASE_URL: 'http://evil.example.com/?x=https://api.telegram.org',
+        }),
+      ).toThrowError(/TELEGRAM_API_BASE_URL must use https/);
+    });
+
+    it('accepts an uppercase scheme, which is the same scheme', () => {
+      expect(() =>
+        loadConfig({ ...production, TELEGRAM_API_BASE_URL: 'HTTPS://api.telegram.org' }),
+      ).not.toThrow();
+    });
+
+    it('does not rewrite an insecure URL into a secure one', () => {
+      // Silently upgrading it would hide that somebody configured it, which is
+      // exactly the thing worth knowing about a deployment.
+      let caught: unknown;
+      try {
+        loadConfig({ ...production, TELEGRAM_API_BASE_URL: 'http://api.telegram.org' });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeDefined();
+    });
+
+    it('still allows a local http stub outside production', () => {
+      const config = loadConfig({ ...valid, TELEGRAM_API_BASE_URL: 'http://127.0.0.1:8081' });
+      expect(config.TELEGRAM_API_BASE_URL).toBe('http://127.0.0.1:8081');
+    });
+  });
+
   it('reports every problem at once, not just the first', () => {
     // A misconfigured deployment should be diagnosed in one pass, not four restarts.
     let caught: unknown;

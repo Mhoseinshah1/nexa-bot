@@ -79,7 +79,12 @@ export class TelegramNotificationTransport implements NotificationTransport {
     const body: Record<string, unknown> = {
       chat_id: message.destination.chatId,
       text: message.text,
-      disable_web_page_preview: true,
+      // Telegram's current field. `disable_web_page_preview` is deprecated in
+      // favour of the structured `link_preview_options`, and a deprecated
+      // parameter is one release away from being ignored — at which point an
+      // operational alert quoting a URL would start rendering a preview card
+      // in the administrators' group with no code change to explain it.
+      link_preview_options: { is_disabled: true },
     };
     if (message.destination.topicId !== null) {
       body.message_thread_id = message.destination.topicId;

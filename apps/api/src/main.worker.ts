@@ -3,6 +3,7 @@ import { isNexaError } from '@nexa/contracts';
 import { resolveInstallationTenant } from './bootstrap.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
+import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
 
 /**
  * Process role: `worker`.
@@ -24,14 +25,16 @@ async function main(): Promise<void> {
   // while its rate ceiling is a tenant setting.
   await resolveInstallationTenant(container);
 
-  let shuttingDown = false;
-  const shutdown = async (signal: string): Promise<void> => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    container.logger.info({ signal }, 'Shutting down worker');
-    await container.shutdown();
-    process.exit(0);
-  };
+  // The same coordinator as the API. The worker's own boolean guard was the
+  // better half of the two and still had no deadline; one policy is easier to
+  // reason about than two that differ in which failure they survive.
+  const { shutdown } = createShutdownCoordinator({
+    name: 'worker',
+    logger: container.logger,
+    timeoutMs: config.SHUTDOWN_TIMEOUT_MS,
+    exit: (code) => process.exit(code),
+    close: () => container.shutdown(),
+  });
 
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
