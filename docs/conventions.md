@@ -253,8 +253,12 @@ however carefully the service works it out.
 ## Secrets
 
 **Rule.** Stored credentials are envelope-encrypted with a data key wrapped by a
-key-encryption key held outside the database. The `keyId` travels with the
-ciphertext so keys rotate. Masking is computed server-side. No API response ever
+key-encryption key held outside the database. The `keyId` is recorded against
+each row so a future rotation can tell which key wrote it — v1 cannot yet
+perform that rotation, because exactly one KEK is configured and rows written
+by a retired key become unreadable. That is `BLOCKER-SECRETS-V2` in
+`docs/open-questions.md`, and it must land before Phase 3 introduces provider
+credentials. Masking is computed server-side. No API response ever
 contains a credential, and credentials are never entered through Telegram.
 
 **Why.** The legacy panel detail page renders a masked field followed by the
