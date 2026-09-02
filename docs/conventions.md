@@ -171,9 +171,15 @@ namespaced (`web.*`) and checked by the same script.
 
 **Why.** In the legacy system the Persian caption _is_ the identifier, so
 renaming a button renames its key. The template editor echoes the **rendered**
-string, so saving from that view once baked an admin's own name into
-`{first_name}` for roughly 13,700 customers. Placeholders are unvalidated and
-overloaded: `{time}` means both "now" and "service duration".
+string — `{first_name}` resolves in the viewing admin's own context — so the raw
+template cannot be read back from the edit screen, and saving from that view
+would bake the editor's own name into the template. That last consequence is a
+hazard rather than a recorded event: the investigation deliberately never sent a
+character to the bot (TBR-TXT-004; `bot-text-management-knowledge/incidents.md`).
+The corruption that _did_ happen is INCIDENT-FIN-001, where a typed menu label
+was swallowed by a value-capture prompt and overwrote a production tutorial text.
+Placeholders are unvalidated and overloaded: `{time}` means both "now" and
+"service duration".
 
 **Enforced by.** `check-i18n-keys.mjs` fails on a missing key, an undeclared
 token, or a hard-coded Persian string in a surface.

@@ -6,8 +6,11 @@
  *
  * Three legacy defects motivate every rule here:
  *   - the Persian caption IS the identifier, so renaming a button renames its key;
- *   - the edit screen echoes the RENDERED text, so editing a template once baked
- *     an admin's own name into `{first_name}` for ~13,700 customers;
+ *   - the edit screen echoes the RENDERED text — `{first_name}` resolves in the
+ *     viewing admin's own context — so the raw template cannot be read back from
+ *     it, and saving from that view would bake the editor's own name into the
+ *     template. The rendering is observed (TBR-TXT-004); the consequence is a
+ *     HAZARD that was deliberately never tested, not a recorded event;
  *   - placeholders are unvalidated and overloaded — `{time}` means both "now"
  *     and "service duration", and units are hard-coded in copy, so one
  *     card-to-card template says تومان where its twin says ریال for the same
@@ -45,8 +48,19 @@ export interface TemplateDefinition {
 }
 
 /**
- * Keys registered in Phase 0. Deliberately few: only what the foundation
- * actually sends. The ~650-key catalog is authored alongside Phase 2.
+ * The registered keys.
+ *
+ * Deliberately few, and they stay that way: a key is added when something in
+ * this codebase actually sends it. Phase 0's docstring said "the ~650-key
+ * catalog is authored alongside Phase 2", and that was wrong twice over. The
+ * figure came from one of two irreconcilable readings of the legacy store
+ * (`C-TXT-COUNT` in docs/open-questions.md), and the corpus warns explicitly
+ * that a template's existence proves nothing about whether its feature is
+ * enabled — three well-maintained legacy templates serve paths nobody walks
+ * (TBR-TXT-010/011). Harvesting a catalogue would therefore import a feature
+ * list we have not built.
+ *
+ * See docs/adr/0016-template-defaults-and-overrides.md.
  */
 export const TEMPLATES = [
   {
