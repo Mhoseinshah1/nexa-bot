@@ -463,9 +463,6 @@ export class AdminManagementService {
         // not a less-privileged actor; it is not an actor.
         await this.assertSessionStillLive(scope, actor, tx);
 
-        // Taken after the lock, for the reason `setStatus` states.
-        const now = this.clock.now();
-
         // The actor's BASE authority, re-read under the lock — before any target
         // state, because an actor who has lost `admins.edit` has no business
         // reading it either.
@@ -528,8 +525,6 @@ export class AdminManagementService {
           aggregateId: target.id,
           payload: { added: delta.added, removed: delta.removed },
         });
-
-        void now;
         return { admin: target, roleKeys: next };
       },
     );

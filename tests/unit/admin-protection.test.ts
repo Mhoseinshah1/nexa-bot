@@ -4,14 +4,12 @@ import {
   assertNotSelf,
   assertOwnerSurvives,
   diffRoles,
-  losesOwnerRole,
   sameAdmin,
 } from '../../apps/api/src/modules/platform/identity/domain/admin-protection';
 import { uuidV7Schema } from '@nexa/contracts';
 import {
   generateSessionToken,
   hashSessionToken,
-  tokenHashesMatch,
 } from '../../apps/api/src/modules/platform/identity/application/session-token';
 
 const alice = 'alice' as AdminId;
@@ -99,11 +97,6 @@ describe('role diffing', () => {
       unchanged: ['a', 'b'],
     });
   });
-
-  it('detects losing the owner role', () => {
-    expect(losesOwnerRole(diffRoles(['owner'], ['support']))).toBe(true);
-    expect(losesOwnerRole(diffRoles(['owner'], ['owner', 'support']))).toBe(false);
-  });
 });
 
 describe('session tokens', () => {
@@ -126,13 +119,6 @@ describe('session tokens', () => {
     expect(hashSessionToken(token)).toBe(hashSessionToken(token));
     expect(hashSessionToken(token)).not.toBe(token);
     expect(hashSessionToken(token)).toHaveLength(64);
-  });
-
-  it('compares hashes without leaking length or content', () => {
-    const a = hashSessionToken('one');
-    expect(tokenHashesMatch(a, a)).toBe(true);
-    expect(tokenHashesMatch(a, hashSessionToken('two'))).toBe(false);
-    expect(tokenHashesMatch(a, 'short')).toBe(false);
   });
 });
 

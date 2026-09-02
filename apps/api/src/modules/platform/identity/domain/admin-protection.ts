@@ -95,8 +95,3 @@ export function diffRoles(current: readonly string[], next: readonly string[]): 
     unchanged: [...nextSet].filter((key) => currentSet.has(key)).sort(),
   };
 }
-
-/** True when a role change takes the owner role away from this admin. */
-export function losesOwnerRole(delta: RoleDelta): boolean {
-  return delta.removed.includes(OWNER_ROLE_KEY);
-}
