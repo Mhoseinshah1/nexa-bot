@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { FeatureFlagResponse } from '@nexa/contracts';
-import { fetchFeatureFlags, newIdempotencyKey, saveFeatureFlag } from '../api/client';
+import { fetchFeatureFlags, saveFeatureFlag } from '../api/client';
+import { useSubmissionKey } from '../submission-key';
 import { t } from '../i18n/web.fa';
 import { ErrorReport, messageFor } from './settings';
 
@@ -42,6 +43,13 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
   const [confirmKey, setConfirmKey] = useState('');
   const [reason, setReason] = useState('');
 
+  const refresh = async () => {
+    await client.invalidateQueries({ queryKey: ['features'] });
+    await client.invalidateQueries({ queryKey: ['settings'] });
+  };
+
+  const submission = useSubmissionKey();
+
   const toggle = useMutation({
     // Minted once per submission and passed as a variable, so a retry carries
     // the key the first attempt used.
@@ -54,16 +62,19 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
         ...(wide ? { confirmKey, reason } : {}),
       }),
     onSuccess: async () => {
+      submission.settle();
       setConfirmKey('');
       setReason('');
-      await client.invalidateQueries({ queryKey: ['features'] });
-      await client.invalidateQueries({ queryKey: ['settings'] });
+      await refresh();
     },
+    // A conflict means the cached row is stale; refreshing is what makes a
+    // second attempt able to succeed.
+    onError: refresh,
   });
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    toggle.mutate(newIdempotencyKey());
+    toggle.mutate(submission.current());
   };
 
   return (

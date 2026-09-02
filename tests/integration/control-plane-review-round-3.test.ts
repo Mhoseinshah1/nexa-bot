@@ -160,6 +160,40 @@ describe('control plane, third review round', () => {
       expect(await eventsOfType('FeatureFlagChanged')).toHaveLength(1);
     });
 
+    it('records a test send, and its denial', async () => {
+      // The one control-plane write this block did not cover, which meant its
+      // audit call could have been deleted and the suite would still have been
+      // green — under a docblock claiming otherwise.
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.telegram_chat_id',
+        value: '-100999',
+        expectedVersion: null,
+        idempotencyKey: `chat-${Math.random()}`,
+      });
+      await ctx.container.notifications.sendTest(tenantA, owner, {
+        idempotencyKey: `test-${Math.random()}`,
+      });
+
+      const [audit] = await auditFor('notifications.test');
+      expect(audit?.entityType).toBe('Notification');
+      expect(audit?.result).toBe('SUCCESS');
+      // The destination it went to, as values. A record naming only the fact
+      // of a test does not answer "which channel did we prove works".
+      expect(audit?.after).toMatchObject({ destination: expect.anything() });
+
+      const observer = adminActorFor(
+        await createAdmin(ctx.container, tenantA, {
+          username: 'observer-test',
+          roleKeys: ['observer'],
+        }),
+      );
+      await expect(
+        ctx.container.notifications.sendTest(tenantA, observer, {
+          idempotencyKey: `denied-${Math.random()}`,
+        }),
+      ).rejects.toMatchObject({ code: 'platform.permission_denied' });
+    });
+
     it('records a refused write as DENIED and writes no event', async () => {
       const observer = adminActorFor(
         await createAdmin(ctx.container, tenantA, {

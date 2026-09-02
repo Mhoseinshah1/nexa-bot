@@ -5,10 +5,10 @@ import {
   fetchNotification,
   fetchNotifications,
   fetchOpsLog,
-  newIdempotencyKey,
   sendTestNotification,
 } from '../api/client';
 import { formatTimestamp } from '../format';
+import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
 
@@ -177,12 +177,16 @@ export function NotificationsPage({ mayTest }: { mayTest: boolean }) {
     enabled: selected !== null,
   });
 
+  const submission = useSubmissionKey();
+
   const test = useMutation({
-    // Minted once per press. A retry of THAT press reuses it and reads back the
-    // one message it queued; a second deliberate press is a second question and
-    // gets its own key.
+    // The key is HELD across a failure. A dropped response leaves the person
+    // pressing the button again to ask whether it worked, and minting a fresh
+    // key there would answer by queueing a second message. It is retired only
+    // once a response has actually been seen.
     mutationFn: (idempotencyKey: string) => sendTestNotification(idempotencyKey),
     onSuccess: async () => {
+      submission.settle();
       await client.invalidateQueries({ queryKey: ['notifications'] });
       // The open detail panel too: a test send against an intent already on
       // screen adds an attempt, and a panel that does not refresh reports the
@@ -200,7 +204,7 @@ export function NotificationsPage({ mayTest }: { mayTest: boolean }) {
         <div className="actions">
           <button
             type="button"
-            onClick={() => test.mutate(newIdempotencyKey())}
+            onClick={() => test.mutate(submission.current())}
             disabled={test.isPending}
           >
             {test.isPending ? t('web.saving') : t('web.send_test')}

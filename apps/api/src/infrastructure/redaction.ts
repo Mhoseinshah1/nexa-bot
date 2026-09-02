@@ -147,13 +147,28 @@ const TEXT_SENSITIVE_FRAGMENTS = [
  *     docblock listed a limitation ("an unlabelled secret in prose") that was
  *     not the gap: `{"token":"…"}` is a labelled secret in exactly the shape
  *     the rule claimed to cover, and it passed through untouched;
- *   - an `Authorization: Bearer …` credential, and a bare `Bearer …`.
+ *   - an authorization credential, labelled or bare, for any of the schemes in
+ *     `AUTH_SCHEMES`. Naming only `Bearer` was a bug rather than a
+ *     simplification: `Authorization: Basic dXNlcjpwYXNz` matched the labelled
+ *     rule with `Basic` as its whole value, so the credential after it was
+ *     stored verbatim — and the same held for `Digest`, `Token` and every
+ *     other scheme. A rule about one scheme is not a rule about the header.
  *
  * What this genuinely does NOT do is find an unlabelled secret in prose — a
  * bare high-entropy string with nothing around it to identify it. That is not
  * solvable by matching.
  */
 const TELEGRAM_BOT_TOKEN = /\d{5,}:[A-Za-z0-9_-]{20,}/g;
+
+/**
+ * Authorization schemes, so a credential is redacted WITH the word in front of
+ * it rather than left behind by it.
+ *
+ * A list rather than "any word followed by a token", which would have eaten an
+ * extra word out of every ordinary `token: abc reported by alice`.
+ */
+const AUTH_SCHEMES = ['Bearer', 'Basic', 'Digest', 'Token', 'ApiKey', 'Negotiate', 'Mutual'];
+const SCHEME = `(?:${AUTH_SCHEMES.join('|')})`;
 
 // The name's quotes are captured so they can be put back: redacting inside a
 // JSON fragment should leave something a person still recognises as JSON.
@@ -166,12 +181,14 @@ const LABELLED_SECRET = new RegExp(
   String.raw`(["']?)([A-Za-z0-9_.-]{0,64}(?:` +
     TEXT_SENSITIVE_FRAGMENTS.map(escapeForRegExp).join('|') +
     String.raw`)[A-Za-z0-9_.-]{0,64})(["']?)(\s*[=:]\s*)` +
-    String.raw`("[^"]{0,4096}"|'[^']{0,4096}'|(?:Bearer\s+)?[^\s"',&}]{1,4096})`,
+    // A quoted value in full, spaces included, or an optional scheme word plus
+    // the credential after it.
+    String.raw`("[^"]{0,4096}"|'[^']{0,4096}'|(?:${SCHEME}\s+)?[^\s"',&}]{1,4096})`,
   'gi',
 );
 
-/** An unlabelled bearer credential, for text that does not name the header. */
-const BEARER = /\bBearer\s+[A-Za-z0-9._~+/-]{4,}=*/g;
+/** An unlabelled credential, for text that does not name the header. */
+const BEARER = new RegExp(String.raw`\b${SCHEME}\s+[A-Za-z0-9._~+/-]{4,}=*`, 'gi');
 
 /**
  * A fragment as a literal, not as a pattern.
@@ -203,7 +220,7 @@ export function redactSecretText(text: string): string {
       (_match, openQuote: string, name: string, closeQuote: string, separator: string) =>
         `${openQuote}${name}${closeQuote}${separator}${REDACTED}`,
     )
-    .replace(BEARER, `Bearer ${REDACTED}`);
+    .replace(BEARER, (match) => `${match.split(/\s+/)[0] ?? ''} ${REDACTED}`);
 }
 
 /** Every fragment the text rule interpolates, for the test that keeps it simple. */

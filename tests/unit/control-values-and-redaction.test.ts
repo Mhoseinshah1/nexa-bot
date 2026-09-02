@@ -166,6 +166,37 @@ describe('redacting a transport error message', () => {
     expect(redacted).toBe(`Authorization: ${REDACTED} refused`);
   });
 
+  it('removes a credential under any authorization scheme, not just Bearer', () => {
+    // Naming only `Bearer` left every other scheme's credential in the table:
+    // the labelled rule matched `Authorization: Basic` with `Basic` as the
+    // whole value and stored what followed. A rule about one scheme is not a
+    // rule about the header.
+    expect(redactSecretText('Authorization: Basic dXNlcjpwYXNz')).toBe(
+      `Authorization: ${REDACTED}`,
+    );
+    expect(redactSecretText('Authorization: Digest abc123def456')).toBe(
+      `Authorization: ${REDACTED}`,
+    );
+    expect(redactSecretText('X-Auth-Token: Token abc123def456')).toBe(`X-Auth-Token: ${REDACTED}`);
+  });
+
+  it('removes a quoted value containing spaces', () => {
+    expect(redactSecretText('password="correct horse battery staple"')).toBe(
+      `password=${REDACTED}`,
+    );
+    expect(redactSecretText("password='correct horse battery staple'")).toBe(
+      `password=${REDACTED}`,
+    );
+  });
+
+  it('does not eat the sentence after an ordinary labelled value', () => {
+    // The scheme list is a LIST rather than "any word", because
+    // "any word followed by a token" would have consumed an extra word here.
+    expect(redactSecretText('token: abc reported by alice')).toBe(
+      `token: ${REDACTED} reported by alice`,
+    );
+  });
+
   it('removes an unlabelled bearer credential', () => {
     const redacted = redactSecretText('sent Bearer abc.def.ghi and it was refused');
     expect(redacted).not.toContain('abc.def.ghi');

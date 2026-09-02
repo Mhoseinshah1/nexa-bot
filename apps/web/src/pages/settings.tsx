@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ResolvedSettingResponse } from '@nexa/contracts';
-import { ApiError, fetchSettings, newIdempotencyKey, saveSetting } from '../api/client';
+import { ApiError, fetchSettings, saveSetting } from '../api/client';
 import { formatTimestamp } from '../format';
+import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 
 /**
@@ -64,10 +65,17 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
 
   const changedElsewhere = basis.version !== setting.version;
 
+  const refresh = async () => {
+    await client.invalidateQueries({ queryKey: ['settings'] });
+    await client.invalidateQueries({ queryKey: ['features'] });
+  };
+
   const adopt = (fresh: ResolvedSettingResponse) => {
     setBasis(fresh);
     setDraft(toEditable(fresh.value));
   };
+
+  const submission = useSubmissionKey();
 
   const save = useMutation({
     // The key is a VARIABLE of the mutation, minted once per submission below.
@@ -85,15 +93,21 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
     onSuccess: async (result) => {
       // Adopt our own write before the refetch lands, so the row does not
       // report itself as having changed elsewhere.
+      submission.settle();
       adopt(result.setting);
-      await client.invalidateQueries({ queryKey: ['settings'] });
-      await client.invalidateQueries({ queryKey: ['features'] });
+      await refresh();
     },
+    // A conflict means the cached row is stale, and only a success refreshed
+    // it — so `changedElsewhere` stayed false, the reload button was never
+    // offered, and every resubmission repeated the same conflict until an
+    // unrelated refetch happened. The draft survives; what is refreshed is the
+    // row it will be compared against.
+    onError: refresh,
   });
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    save.mutate(newIdempotencyKey());
+    save.mutate(submission.current());
   };
 
   return (

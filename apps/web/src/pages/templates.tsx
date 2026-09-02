@@ -4,12 +4,12 @@ import type { TemplateViewResponse } from '@nexa/contracts';
 import {
   fetchTemplateRevisions,
   fetchTemplates,
-  newIdempotencyKey,
   previewTemplate,
   revertTemplate,
   saveTemplate,
 } from '../api/client';
 import { formatTimestamp } from '../format';
+import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { ErrorReport, messageFor } from './settings';
 
@@ -80,14 +80,16 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
   const [sample, setSample] = useState<Record<string, string>>({});
   const [showHistory, setShowHistory] = useState(false);
   /**
-   * The body the last preview was rendered from.
+   * The INPUT the last preview was rendered from — the body and the sample
+   * values together.
    *
-   * Without it the rendered output stays on screen while the body it came from
-   * is edited away underneath, which is a small version of exactly the legacy
+   * Without it the rendered output stays on screen while what it came from is
+   * edited away underneath, which is a small version of exactly the legacy
    * confusion this screen exists to end: a preview that is not of the thing you
-   * are looking at.
+   * are looking at. Comparing only the body was half a fix: changing
+   * `occurrences` from 3 to 10 left a preview of 3 on screen with nothing said.
    */
-  const [previewedBody, setPreviewedBody] = useState<string | null>(null);
+  const [previewedInput, setPreviewedInput] = useState<string | null>(null);
 
   const storedBody = template.overrideBody ?? template.defaultBody;
   // Revision AND version. A revert restarts the version at 1, so comparing
@@ -107,9 +109,15 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
     await client.invalidateQueries({ queryKey: ['revisions', template.key] });
   };
 
+  // Two independent submissions on this card, so two keys. Saving and
+  // reverting are different commands and must not share one.
+  const saving = useSubmissionKey();
+  const reverting = useSubmissionKey();
+
   const save = useMutation({
-    // Minted once per submission and passed as a variable, so a retry carries
-    // the key the first attempt used.
+    // Held across a failure, so a person pressing the button again after a
+    // dropped response is asking "did that work?" rather than issuing a second
+    // command.
     mutationFn: (idempotencyKey: string) =>
       saveTemplate({
         key: template.key,
@@ -123,9 +131,16 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
         idempotencyKey,
       }),
     onSuccess: async (result) => {
+      saving.settle();
       adopt(result.template);
       await invalidate();
     },
+    // A conflict means the cached row is stale, and only a success invalidated
+    // it — so `changedElsewhere` stayed false, the reload button was never
+    // offered, and every resubmission repeated the same conflict until an
+    // unrelated refetch happened. The draft survives; what is refreshed is the
+    // row it will be compared against.
+    onError: invalidate,
   });
 
   const undo = useMutation({
@@ -143,17 +158,23 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
         idempotencyKey,
       }),
     onSuccess: async (result) => {
+      reverting.settle();
       adopt(result.template);
       await invalidate();
     },
+    onError: invalidate,
   });
+
+  // The whole input, in a stable order, so a re-render cannot make it look
+  // changed when it is not.
+  const previewInput = JSON.stringify([draft, Object.entries(sample).sort()]);
 
   const preview = useMutation({
     mutationFn: () => previewTemplate(template.key, draft, sample),
-    onSuccess: () => setPreviewedBody(draft),
+    onSuccess: () => setPreviewedInput(previewInput),
   });
 
-  const previewStale = preview.isSuccess && previewedBody !== draft;
+  const previewStale = preview.isSuccess && previewedInput !== previewInput;
 
   const revisions = useQuery({
     queryKey: ['revisions', template.key],
@@ -163,7 +184,7 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    save.mutate(newIdempotencyKey());
+    save.mutate(saving.current());
   };
 
   return (
@@ -319,7 +340,7 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
           {template.version !== null && (
             <button
               type="button"
-              onClick={() => undo.mutate(newIdempotencyKey())}
+              onClick={() => undo.mutate(reverting.current())}
               disabled={undo.isPending}
             >
               {t('web.revert')}

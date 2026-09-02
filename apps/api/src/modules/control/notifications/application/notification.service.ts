@@ -222,12 +222,19 @@ export class NotificationService {
           { notificationId: existing.result.notificationId },
         );
       }
-      return {
-        intent,
-        attempts: await this.notifications.attempts(scope, intent.id),
-        created: false,
-        replayed: true,
-      };
+      // Both reads in ONE transaction. Separately, the dispatcher could
+      // process the intent between them, and the reply would pair an older
+      // status with newer attempts — reporting PENDING beside a successful
+      // send, which is a state the database never held.
+      return this.uow.run(scope, async (tx) => {
+        const current = await this.notifications.findById(scope, intent.id, tx);
+        return {
+          intent: current ?? intent,
+          attempts: await this.notifications.attempts(scope, intent.id, tx),
+          created: false,
+          replayed: true,
+        };
+      });
     }
 
     // Only a NEW test needs a destination to send to.
