@@ -304,7 +304,11 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
             {save.isPending ? t('web.saving') : t('web.save')}
           </button>
           {template.version !== null && (
-            <button type="button" onClick={() => undo.mutate(newIdempotencyKey())} disabled={undo.isPending}>
+            <button
+              type="button"
+              onClick={() => undo.mutate(newIdempotencyKey())}
+              disabled={undo.isPending}
+            >
               {t('web.revert')}
             </button>
           )}

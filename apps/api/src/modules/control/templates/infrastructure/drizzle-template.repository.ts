@@ -15,7 +15,11 @@ import type {
   TemplateRepository,
   TemplateRevision,
 } from '../application/ports.js';
-import { DEFAULT_TEMPLATE_LOCALE, isLocale, type Locale } from '../application/template-resolver.js';
+import {
+  DEFAULT_TEMPLATE_LOCALE,
+  isLocale,
+  type Locale,
+} from '../application/template-resolver.js';
 
 /**
  * A stored locale narrowed back to one this build supports.

@@ -198,7 +198,11 @@ export function NotificationsPage({ mayTest }: { mayTest: boolean }) {
 
       {mayTest && (
         <div className="actions">
-          <button type="button" onClick={() => test.mutate(newIdempotencyKey())} disabled={test.isPending}>
+          <button
+            type="button"
+            onClick={() => test.mutate(newIdempotencyKey())}
+            disabled={test.isPending}
+          >
             {test.isPending ? t('web.saving') : t('web.send_test')}
           </button>
           {/* A replay says it replayed. Answering "queued" for a call that

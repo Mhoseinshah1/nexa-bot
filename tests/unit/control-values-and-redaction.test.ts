@@ -6,10 +6,7 @@ import {
   templateDefinition,
   type PlaceholderDefinition,
 } from '@nexa/contracts';
-import {
-  redactSecretText,
-  REDACTED,
-} from '../../apps/api/src/infrastructure/redaction';
+import { redactSecretText, REDACTED } from '../../apps/api/src/infrastructure/redaction';
 import { deserialiseValues } from '../../apps/api/src/modules/control/notifications/application/notification-dispatcher';
 
 const placeholder = (type: PlaceholderDefinition['type']): PlaceholderDefinition => ({
