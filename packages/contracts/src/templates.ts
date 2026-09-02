@@ -375,9 +375,21 @@ export function coerceTemplateValue(
       if (Number.isNaN(at.getTime())) {
         return bad('an ISO-8601 date such as 2026-09-02T08:00:00Z');
       }
-      // A date that does not round-trip is one Date silently rolled over:
-      // `2026-02-30` parses and comes back as March.
-      if (!at.toISOString().startsWith(trimmed.slice(0, 10))) {
+      // A date that does not round-trip is one `Date` silently rolled over:
+      // `2026-02-30` parses and comes back as the 2nd of March.
+      //
+      // Compared against the date AS WRITTEN, not against its UTC form. The
+      // first version compared `toISOString()` with the typed prefix, which
+      // rejected every valid offset that crosses midnight —
+      // `2026-09-02T00:30:00+02:00` is the 1st of September in UTC — after the
+      // pattern above had explicitly accepted offsets.
+      const [year = 0, month = 0, day = 0] = trimmed.slice(0, 10).split('-').map(Number);
+      const asWritten = new Date(Date.UTC(year, month - 1, day));
+      if (
+        asWritten.getUTCFullYear() !== year ||
+        asWritten.getUTCMonth() !== month - 1 ||
+        asWritten.getUTCDate() !== day
+      ) {
         return bad('a real calendar date');
       }
       return { ok: true, value: at };
