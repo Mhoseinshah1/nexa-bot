@@ -69,7 +69,7 @@ export async function resetDatabase(db: Database): Promise<void> {
     `TRUNCATE TABLE
        audit_logs, operational_events, outbox_messages, processed_messages,
        request_idempotency, aggregate_sequences,
-       notification_delivery_attempts, notifications,
+       notification_delivery_attempts, notification_released_claims, notifications,
        template_revisions, template_overrides, setting_values, feature_flag_states,
        admin_login_throttle, admin_sessions, admin_permission_overrides,
        admin_roles, role_permissions, roles, admins,

@@ -105,23 +105,37 @@ export interface NotificationRepository {
   activeTenants(tenantIds: readonly string[]): Promise<Set<string>>;
 
   /**
-   * Puts a claimed intent back, as though it had never been claimed.
+   * Records that one claim was handed back without reaching the transport.
    *
-   * NOT a failure: the intent is due again immediately, with the attempt it
-   * never spent returned to it. The tenant filter in `claimDue` is what then
-   * keeps it queued rather than sent, so a stopped installation accumulates
-   * its alerts instead of losing them.
+   * NOT a failure: the intent is due again immediately, and the attempt it
+   * never spent stops counting against its allowance. The tenant filter in
+   * `claimDue` is what then keeps it queued rather than sent, so a stopped
+   * installation accumulates its alerts instead of losing them.
    *
-   * Ownership is the predicate, exactly as in `recordAttempt`: the claim's
-   * `attempt_count` names the attempt in flight, so a releaser whose send
-   * outlived its lease finds it changed and releases nothing.
+   * The release is keyed by the ATTEMPT NUMBER it releases, not matched
+   * against the intent's current state. That is what makes it correct with
+   * several workers: two claims outstanding at once hand back in either order
+   * and each restores its own capacity, a repeat after an ambiguous commit is
+   * a no-op, and a sweep that terminalised the row in between does not make
+   * the hand-back impossible — it is undone instead, since an intent whose
+   * claims were never sent is not exhausted.
+   *
+   * Refused for an attempt that DID reach the transport: an attempt row is the
+   * proof one did, and capacity is never returned for a message that was sent.
    */
   releaseClaim(input: {
     readonly tenantId: string;
     readonly notificationId: string;
     readonly attemptNumber: number;
     readonly now: Date;
-  }): Promise<{ readonly released: boolean }>;
+    /** A machine code for why the claim was handed back. Never a sentence. */
+    readonly reason: string;
+  }): Promise<{
+    /** True when THIS call recorded the release; false when it was already recorded. */
+    readonly released: boolean;
+    /** True when the release took the intent back out of a sweep's verdict. */
+    readonly restored: boolean;
+  }>;
 
   /**
    * Moves intents that have spent every attempt, and are still PENDING, to

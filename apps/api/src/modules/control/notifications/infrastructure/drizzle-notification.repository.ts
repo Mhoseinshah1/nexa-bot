@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, lt, lte, inArray, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, lt, lte, inArray, ne, sql } from 'drizzle-orm';
 import type {
   DeliveryOutcome,
   IdGenerator,
@@ -12,6 +12,7 @@ import type {
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   notificationDeliveryAttempts,
+  notificationReleasedClaims,
   notifications,
   tenants,
 } from '../../../../infrastructure/persistence/schema.js';
@@ -25,6 +26,38 @@ import type {
   NotificationIntent,
   NotificationRepository,
 } from '../application/ports.js';
+
+/**
+ * What an intent has actually spent, as SQL.
+ *
+ * `attempt_count` counts claims ISSUED and never goes down — a claim whose
+ * process died with the socket open has to count, or a crash-looping worker
+ * retries for ever. Capacity is returned instead by recording the claims that
+ * provably never reached the transport, so what remains is the difference.
+ *
+ * Derived rather than stored, because a stored counter has to be decremented,
+ * and a decrement has to decide WHICH claim it belongs to. That decision is
+ * what could not be made correctly: matching the current `attempt_count` meant
+ * two claims releasing out of order lost one of them.
+ */
+const spentAttempts = sql`(
+  ${notifications.attemptCount} - (
+    SELECT count(*)
+      FROM ${notificationReleasedClaims}
+     WHERE ${notificationReleasedClaims.tenantId} = ${notifications.tenantId}
+       AND ${notificationReleasedClaims.notificationId} = ${notifications.id}
+  )
+)`;
+
+/**
+ * The sweep's own bookkeeping row, not a transport refusal.
+ *
+ * `failExhausted` writes a FAILED_PERMANENT attempt so a terminal intent always
+ * has a record of why. That row is a judgement this module made about a missing
+ * outcome — unlike a real FAILED_PERMANENT, which is the transport's own
+ * refusal — so it is the one such row a later hand-back is allowed to overturn.
+ */
+const ATTEMPTS_EXHAUSTED_CODE = 'notification.attempts_exhausted';
 
 type Row = typeof notifications.$inferSelect;
 type AttemptRow = typeof notificationDeliveryAttempts.$inferSelect;
@@ -258,7 +291,12 @@ export class DrizzleNotificationRepository implements NotificationRepository {
             // which is exactly the code that does not run when a dispatch
             // throws before it — so an intent that has already spent its
             // attempts is refused here rather than being claimed forever.
-            lt(notifications.attemptCount, notifications.maxAttempts),
+            //
+            // SPENT, not claimed. A claim handed back without reaching the
+            // transport did not use an attempt, and reading `attempt_count`
+            // directly meant a tenant stopped and restarted a few times could
+            // exhaust a message that had never been sent once.
+            sql`${spentAttempts} < ${notifications.maxAttempts}`,
           ),
         )
         .orderBy(asc(notifications.nextAttemptAt))
@@ -318,39 +356,155 @@ export class DrizzleNotificationRepository implements NotificationRepository {
     readonly notificationId: string;
     readonly attemptNumber: number;
     readonly now: Date;
-  }): Promise<{ released: boolean }> {
-    const released = await this.db.transaction(async (tx) =>
-      tx
+    readonly reason: string;
+  }): Promise<{ released: boolean; restored: boolean }> {
+    return this.db.transaction(async (tx) => {
+      // The release is a FACT about one attempt number, and the primary key is
+      // its identity. Two consequences that the old decrement did not have:
+      // order does not matter, so two outstanding claims handing back in
+      // either order each restore their own capacity; and a repeat is a no-op,
+      // so a caller whose commit outcome is unknown may safely try again
+      // instead of guessing.
+      //
+      // Refused if that attempt actually reached the transport. A release
+      // means "no transport call happened", and an attempt row is the proof
+      // that one did — without this guard a late release could hand back
+      // capacity for a message that was really sent.
+      const inserted = await tx
+        .insert(notificationReleasedClaims)
+        .select(
+          tx
+            .select({
+              tenantId: sql`${input.tenantId}::uuid`.as('tenant_id'),
+              notificationId: sql`${input.notificationId}::uuid`.as('notification_id'),
+              attemptNumber: sql`${input.attemptNumber}::integer`.as('attempt_number'),
+              releasedAt: sql`${input.now}::timestamptz`.as('released_at'),
+              reason: sql`${input.reason}::text`.as('reason'),
+            })
+            .from(notifications)
+            .where(
+              and(
+                eq(notifications.tenantId, input.tenantId),
+                eq(notifications.id, input.notificationId),
+                sql`NOT EXISTS (
+                  SELECT 1 FROM ${notificationDeliveryAttempts}
+                   WHERE ${notificationDeliveryAttempts.tenantId} = ${input.tenantId}
+                     AND ${notificationDeliveryAttempts.notificationId} = ${input.notificationId}
+                     AND ${notificationDeliveryAttempts.attemptNumber} = ${input.attemptNumber}
+                )`,
+              ),
+            ),
+        )
+        .onConflictDoNothing()
+        .returning({ attemptNumber: notificationReleasedClaims.attemptNumber });
+
+      const released = inserted.length > 0;
+
+      // Whether or not this call was the one that recorded it, the intent's
+      // derived state is brought up to date: due again now, `last_attempt_at`
+      // back to the last attempt that actually happened, and — if a sweep had
+      // already written the intent off while this claim was outstanding — out
+      // of that verdict again.
+      //
+      // FAILED back to PENDING is the same class of correction as the accepted
+      // rule that a late SUCCEEDED moves FAILED to SENT: newer, better
+      // evidence about an attempt overrides a judgement made without it. It is
+      // deliberately narrow. Only an EXHAUSTION verdict is reversible, and
+      // only while the intent is no longer exhausted; a `FAILED_PERMANENT`
+      // attempt row is the transport's own refusal and is never overridden by
+      // a claim that never spoke to it.
+      const restoredRows = await tx
         .update(notifications)
         .set({
-          attemptCount: sql`${notifications.attemptCount} - 1`,
           nextAttemptAt: input.now,
-          // Back to the last attempt that actually HAPPENED, which is the last
-          // one with a row behind it, or null when there is none.
-          //
-          // `claimDue` sets `last_attempt_at` to the claim time, so leaving it
-          // alone would have the screen report "last attempted at 14:02" for a
-          // message no transport was ever asked to carry — this module's own
-          // prohibited shape, reintroduced by the fix for a different instance
-          // of it.
           lastAttemptAt: sql`(
             SELECT max(${notificationDeliveryAttempts.finishedAt})
               FROM ${notificationDeliveryAttempts}
              WHERE ${notificationDeliveryAttempts.tenantId} = ${notifications.tenantId}
                AND ${notificationDeliveryAttempts.notificationId} = ${notifications.id}
           )`,
+          status: sql`CASE WHEN ${notifications.status} = 'FAILED' THEN 'PENDING' ELSE ${notifications.status} END`,
+          // The CHECK constraint insists a terminal status carries a
+          // completion time and a pending one does not, so the two move
+          // together or the write is refused.
+          completedAt: sql`CASE WHEN ${notifications.status} = 'FAILED' THEN NULL ELSE ${notifications.completedAt} END`,
         })
         .where(
           and(
             eq(notifications.tenantId, input.tenantId),
             eq(notifications.id, input.notificationId),
-            eq(notifications.status, 'PENDING'),
-            eq(notifications.attemptCount, input.attemptNumber),
+            // PENDING is the ordinary case; FAILED is the sweep-raced one. A
+            // SENT intent is left entirely alone — delivery is terminal truth.
+            inArray(notifications.status, ['PENDING', 'FAILED']),
+            sql`${spentAttempts} < ${notifications.maxAttempts}`,
+            // A REAL permanent refusal is never overturned. The sweep's own
+            // synthetic row is also FAILED_PERMANENT, and excluding it by code
+            // is what separates "the transport said no" from "we gave up
+            // waiting for an outcome" — only the second is a judgement a
+            // hand-back can correct.
+            sql`NOT EXISTS (
+              SELECT 1 FROM ${notificationDeliveryAttempts}
+               WHERE ${notificationDeliveryAttempts.tenantId} = ${notifications.tenantId}
+                 AND ${notificationDeliveryAttempts.notificationId} = ${notifications.id}
+                 AND ${notificationDeliveryAttempts.outcome} = 'FAILED_PERMANENT'
+                 AND ${notificationDeliveryAttempts.errorCode} IS DISTINCT FROM ${ATTEMPTS_EXHAUSTED_CODE}
+            )`,
           ),
         )
-        .returning({ id: notifications.id }),
-    );
-    return { released: released.length > 0 };
+        .returning({ status: notifications.status });
+
+      const restored = restoredRows.length > 0;
+      if (restored) {
+        // Retire the number the sweep already used.
+        //
+        // `failExhausted` writes its bookkeeping row at `attempt_count + 1`,
+        // chosen so it cannot collide with the attempt that was in flight. That
+        // was safe while a swept intent stayed terminal for ever. Now that a
+        // hand-back can withdraw the verdict, the very next claim would be
+        // handed that same number and its `recordAttempt` would die on the
+        // unique index — a message sent and then unrecordable, which is the one
+        // outcome this module exists to prevent.
+        //
+        // So the number is retired: recorded as released, because nothing was
+        // sent on it, and `attempt_count` advanced past it so the pair still
+        // subtracts to the attempts genuinely spent. One real attempt in, one
+        // real attempt left.
+        await tx.execute(sql`
+          INSERT INTO ${notificationReleasedClaims}
+            (tenant_id, notification_id, attempt_number, released_at, reason)
+          SELECT ${notificationDeliveryAttempts.tenantId},
+                 ${notificationDeliveryAttempts.notificationId},
+                 ${notificationDeliveryAttempts.attemptNumber},
+                 ${input.now},
+                 'sweep.withdrawn'
+            FROM ${notificationDeliveryAttempts}
+           WHERE ${notificationDeliveryAttempts.tenantId} = ${input.tenantId}
+             AND ${notificationDeliveryAttempts.notificationId} = ${input.notificationId}
+             AND ${notificationDeliveryAttempts.outcome} = 'FAILED_PERMANENT'
+             AND ${notificationDeliveryAttempts.errorCode} = ${ATTEMPTS_EXHAUSTED_CODE}
+          ON CONFLICT DO NOTHING
+        `);
+
+        await tx
+          .update(notifications)
+          .set({
+            attemptCount: sql`greatest(${notifications.attemptCount}, (
+              SELECT coalesce(max(${notificationDeliveryAttempts.attemptNumber}), 0)
+                FROM ${notificationDeliveryAttempts}
+               WHERE ${notificationDeliveryAttempts.tenantId} = ${notifications.tenantId}
+                 AND ${notificationDeliveryAttempts.notificationId} = ${notifications.id}
+            ))`,
+          })
+          .where(
+            and(
+              eq(notifications.tenantId, input.tenantId),
+              eq(notifications.id, input.notificationId),
+            ),
+          );
+      }
+
+      return { released, restored };
+    });
   }
 
   /**
@@ -427,7 +581,11 @@ export class DrizzleNotificationRepository implements NotificationRepository {
                 and(
                   eq(notifications.status, 'PENDING'),
                   lte(notifications.nextAttemptAt, deadline),
-                  gte(notifications.attemptCount, notifications.maxAttempts),
+                  // Spent, on the same reasoning as `claimDue`: an intent
+                  // whose claims were handed back unsent is not exhausted, and
+                  // sweeping it would report a permanent delivery failure for
+                  // a message no transport was ever asked to carry.
+                  sql`${spentAttempts} >= ${notifications.maxAttempts}`,
                 ),
               )
               .orderBy(asc(notifications.nextAttemptAt))
@@ -481,7 +639,7 @@ export class DrizzleNotificationRepository implements NotificationRepository {
             outcome: 'FAILED_PERMANENT' as const,
             startedAt: now,
             finishedAt: now,
-            errorCode: 'notification.attempts_exhausted',
+            errorCode: ATTEMPTS_EXHAUSTED_CODE,
             errorMessage:
               'The last attempt was claimed and its outcome was never recorded; ' +
               'the lease expired with no attempts left.',

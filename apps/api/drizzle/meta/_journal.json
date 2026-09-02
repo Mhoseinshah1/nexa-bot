@@ -85,6 +85,13 @@
       "when": 1788334002796,
       "tag": "0011_control_plane_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788372544738,
+      "tag": "0012_notification_released_claims",
+      "breakpoints": true
     }
   ]
 }

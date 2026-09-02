@@ -1,7 +1,11 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { ActorContext } from '@nexa/contracts';
-import { notifications, tenants } from '../../apps/api/src/infrastructure/persistence/schema';
+import {
+  notificationReleasedClaims,
+  notifications,
+  tenants,
+} from '../../apps/api/src/infrastructure/persistence/schema';
 import { NotificationDispatcher } from '../../apps/api/src/modules/control/notifications/application/notification-dispatcher';
 import type { TemplateResolver } from '../../apps/api/src/modules/control/templates/application/template-resolver';
 import type { RecordingTransport } from '../../apps/api/src/modules/control/notifications/infrastructure/recording-transport';
@@ -183,6 +187,22 @@ describe('notification state machine invariants', () => {
     // how fast the suite happened to run.
     ctx.container.notificationDispatcher.resetRateWindow();
     return raise(name);
+  }
+
+  /**
+   * What an intent has actually spent: claims issued, minus the claims
+   * recorded as handed back without ever reaching the transport.
+   */
+  async function spentBy(id: string): Promise<number> {
+    const [row] = await ctx.container.database.db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.id, id as never));
+    const released = await ctx.container.database.db
+      .select()
+      .from(notificationReleasedClaims)
+      .where(eq(notificationReleasedClaims.notificationId, id as never));
+    return row!.attemptCount - released.length;
   }
 
   async function statusOf(intent: Awaited<ReturnType<typeof raise>>): Promise<string> {
@@ -415,7 +435,8 @@ describe('notification state machine invariants', () => {
       .from(notifications)
       .where(eq(notifications.id, intent.id));
     expect(row!.status).toBe('PENDING');
-    expect(row!.attemptCount, 'the released intent was charged an attempt').toBe(0);
+    // Spend, not the raw counter — see the batch case below for why.
+    expect(await spentBy(row!.id), 'the released intent was charged an attempt').toBe(0);
   }, 60_000);
 
   /**
@@ -451,6 +472,7 @@ describe('notification state machine invariants', () => {
       notificationId: intent.id,
       attemptNumber: 2,
       now: ctx.container.clock.now(),
+      reason: 'tenant.not_active',
     });
     expect(released, 'the release did not match the claim it was meant to undo').toBe(true);
 
@@ -513,10 +535,16 @@ describe('notification state machine invariants', () => {
     expect(held, 'the rest of the batch did not stay queued').toHaveLength(1);
 
     // Queued, not failed, and not charged for the attempt it never spent. A
-    // counter left spent would be swept to FAILED by `failExhausted` after a
-    // few stops, reporting a permanent delivery failure for a message no
-    // transport was ever asked to carry.
-    expect(held[0]!.attemptCount, 'the released intent was charged an attempt').toBe(0);
+    // slot left spent would be swept to FAILED by `failExhausted` after a few
+    // stops, reporting a permanent delivery failure for a message no transport
+    // was ever asked to carry.
+    //
+    // Asserted on SPEND rather than on `attempt_count`. The counter records
+    // claims ISSUED and is deliberately monotonic — a claim whose process died
+    // with the socket open has to count — so capacity is the counter minus the
+    // claims recorded as handed back. A stronger statement than the one this
+    // used to make about a single column.
+    expect(await spentBy(held[0]!.id), 'the released intent was charged an attempt').toBe(0);
     expect(held[0]!.completedAt).toBeNull();
   }, 60_000);
 });

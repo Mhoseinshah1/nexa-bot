@@ -91,6 +91,15 @@ export interface DispatchTickResult {
    * returned, and stays queued until the installation is active.
    */
   readonly released: number;
+  /**
+   * Hand-backs whose recording FAILED.
+   *
+   * Distinct from `released`, and not a delivery outcome: no transport call
+   * happened, so there is nothing to file as sent or failed. The intent keeps
+   * its lease and is met again; because a release is idempotent, repeating it
+   * then is safe where retrying it inside the failure would have been a guess.
+   */
+  readonly unreleased: number;
 }
 
 /**
@@ -249,6 +258,7 @@ export class NotificationDispatcher {
         superseded: 0,
         unrecorded: 0,
         released: 0,
+        unreleased: 0,
       };
     }
 
@@ -264,6 +274,7 @@ export class NotificationDispatcher {
     let superseded = 0;
     let unrecorded = 0;
     let released = 0;
+    let unreleased = 0;
 
     for (const intent of claimed) {
       // `claimDue` already refused an inactive tenant, but it answered ONCE for
@@ -318,17 +329,47 @@ export class NotificationDispatcher {
 
       if (delivery.result === 'RELEASED') {
         // Put back, NOT failed. A stop is a pause, not a verdict on the
-        // message, and the attempt is returned so a tenant stopped and started
-        // three times has not silently spent a message's whole allowance and
-        // left `failExhausted` to report a permanent delivery failure for
-        // something no transport was ever asked to carry.
-        const { released: didRelease } = await this.notifications.releaseClaim({
-          tenantId: intent.tenantId,
-          notificationId: intent.id,
-          attemptNumber: intent.attemptCount,
-          now: this.clock.now(),
-        });
-        if (didRelease) released += 1;
+        // message, and the attempt stops counting so a tenant stopped and
+        // started three times has not silently spent a message's whole
+        // allowance and left `failExhausted` to report a permanent delivery
+        // failure for something no transport was ever asked to carry.
+        //
+        // In its OWN try. This await sat outside the per-intent guard above,
+        // so a transient database failure here threw out of the loop and
+        // stranded every intent claimed behind it — leased, counter
+        // incremented, no attempt row, and nothing to explain it. The whole
+        // point of that guard is that one intent cannot stop the batch, and
+        // the hand-back was the one step still able to.
+        try {
+          const { released: didRelease } = await this.notifications.releaseClaim({
+            tenantId: intent.tenantId,
+            notificationId: intent.id,
+            attemptNumber: intent.attemptCount,
+            now: this.clock.now(),
+            reason: 'tenant.not_active',
+          });
+          if (didRelease) released += 1;
+        } catch (error) {
+          // Nothing is retried here and nothing is invented. The release may
+          // or may not have committed, and a second attempt at it from this
+          // catch would be a guess — the operation is idempotent, so the safe
+          // place to repeat it is the next claim of this intent, after its
+          // lease expires, not inside the failure.
+          //
+          // No transport call happened, so no delivery outcome is fabricated
+          // either. The intent keeps its lease and comes back; the only cost
+          // of the unrecorded hand-back is one attempt of its allowance, and
+          // that is recoverable rather than lost.
+          this.logger.error(
+            {
+              err: error instanceof Error ? error.message : String(error),
+              notificationId: intent.id,
+              attemptNumber: intent.attemptCount,
+            },
+            'Could not record a notification hand-back; leaving it to its lease',
+          );
+          unreleased += 1;
+        }
         continue;
       }
 
@@ -387,6 +428,7 @@ export class NotificationDispatcher {
       superseded,
       unrecorded,
       released,
+      unreleased,
     };
   }
 

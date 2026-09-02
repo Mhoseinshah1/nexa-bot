@@ -7,6 +7,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
@@ -917,6 +918,53 @@ export const notifications = pgTable(
  * `retry_after_ms` holds what the transport ASKED FOR, when it said anything. A
  * 429 that names a wait is honoured rather than second-guessed.
  */
+/**
+ * Claims handed back without ever reaching the transport.
+ *
+ * `attempt_count` on the intent counts claims ISSUED, and it is deliberately
+ * monotonic: a claim whose process died with the socket open has to count, or a
+ * crash-looping worker retries for ever. So capacity cannot be returned by
+ * decrementing it, and the first attempt to do so was wrong in two ways at
+ * once. A decrement matched on `attempt_count = attemptNumber` could only be
+ * applied by whichever claim happened to be current, so two outstanding claims
+ * releasing out of order silently lost one attempt's capacity; and it required
+ * `status = 'PENDING'`, so a sweep that terminalised the row a moment earlier
+ * made the hand-back impossible.
+ *
+ * A release is a FACT about one attempt number, recorded here. Spend is then
+ * derived — `attempt_count` minus the releases — so order does not matter, a
+ * repeated release is a no-op against the primary key, and a release can be
+ * recorded after the intent has been written off.
+ */
+export const notificationReleasedClaims = pgTable(
+  'notification_released_claims',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    notificationId: uuid('notification_id').notNull(),
+    attemptNumber: integer('attempt_number').notNull(),
+    releasedAt: timestamptz('released_at').notNull(),
+    /** Why the claim was handed back. A machine code, never a sentence. */
+    reason: text('reason').notNull(),
+  },
+  (table) => [
+    // The identity of a release IS the attempt it releases. Idempotent by
+    // construction: a retry after an ambiguous commit inserts nothing new,
+    // which is what makes a release safe to repeat when its outcome is unknown.
+    primaryKey({
+      name: 'notification_released_claims_pk',
+      columns: [table.tenantId, table.notificationId, table.attemptNumber],
+    }),
+    check('notification_released_claims_number_check', sql`attempt_number >= 1`),
+    foreignKey({
+      name: 'notification_released_claims_tenant_notification_fk',
+      columns: [table.tenantId, table.notificationId],
+      foreignColumns: [notifications.tenantId, notifications.id],
+    }),
+  ],
+);
+
 export const notificationDeliveryAttempts = pgTable(
   'notification_delivery_attempts',
   {

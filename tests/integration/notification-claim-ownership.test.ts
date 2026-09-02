@@ -1,0 +1,409 @@
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { and, eq } from 'drizzle-orm';
+import type { ActorContext } from '@nexa/contracts';
+import {
+  notificationReleasedClaims,
+  notifications,
+  tenants,
+} from '../../apps/api/src/infrastructure/persistence/schema';
+import type { RecordingTransport } from '../../apps/api/src/modules/control/notifications/infrastructure/recording-transport';
+import {
+  adminActorFor,
+  createAdmin,
+  createTestContext,
+  tenantA,
+  type TestContext,
+} from './harness';
+
+/**
+ * Who owns a claim, and what a hand-back costs.
+ *
+ * `attempt_count` counts claims ISSUED and never goes down. Capacity comes back
+ * by recording the claims that provably never reached the transport, so spend
+ * is `attempt_count` minus those records. Three defects fall out of the old
+ * model — a decrement matched against the current counter — and each has a
+ * case here.
+ *
+ * All three are deterministic. Interleavings are driven by explicit barriers
+ * and by calling the repository at the exact points a second worker would;
+ * there are no sleeps and nothing depends on which promise the scheduler
+ * happens to prefer.
+ */
+describe('notification claim ownership', () => {
+  let ctx: TestContext;
+  let owner: ActorContext;
+  let transport: RecordingTransport;
+
+  beforeEach(async () => {
+    ctx ??= await createTestContext({ NOTIFICATION_TRANSPORT: 'recording' });
+    await ctx.reset();
+    transport = ctx.container.notificationTransport as RecordingTransport;
+    transport.reset();
+    ctx.container.notificationDispatcher.resetRateWindow();
+    owner = adminActorFor(
+      await createAdmin(ctx.container, tenantA, { username: 'owner', roleKeys: ['owner'] }),
+    );
+
+    await ctx.container.settingsService.set(tenantA, owner, {
+      key: 'ops.notifications.max_attempts',
+      value: 2,
+      expectedVersion: null,
+      idempotencyKey: `max-${Math.random()}`,
+    });
+    await ctx.container.settingsService.set(tenantA, owner, {
+      key: 'ops.notifications.telegram_chat_id',
+      value: '-100999',
+      expectedVersion: null,
+      idempotencyKey: `chat-${Math.random()}`,
+    });
+    await ctx.container.featureFlags.set(tenantA, owner, {
+      key: 'ops_notifications',
+      enabled: true,
+      expectedVersion: null,
+      idempotencyKey: `flag-${Math.random()}`,
+      confirmKey: 'ops_notifications',
+      reason: 'Ownership setup.',
+    });
+  });
+
+  afterAll(async () => {
+    await ctx?.close();
+  });
+
+  const db = () => ctx.container.database.db;
+  const repo = () => ctx.container.notificationRepository;
+  const sql = (text: string) => ctx.container.database.withClient((c) => c.query(text));
+
+  async function raise(dedupeKey: string) {
+    await ctx.container.opsLog.record(tenantA, {
+      code: 'panel.unreachable',
+      severity: 'ERROR',
+      message: 'The panel did not answer.',
+      dedupeKey,
+    });
+    const [intent] = await ctx.container.notifications.list(tenantA, owner);
+    return intent!;
+  }
+
+  const rowOf = async (id: string) => {
+    const [row] = await db()
+      .select()
+      .from(notifications)
+      .where(eq(notifications.id, id as never));
+    return row!;
+  };
+
+  const releasesFor = async (id: string) =>
+    db()
+      .select()
+      .from(notificationReleasedClaims)
+      .where(eq(notificationReleasedClaims.notificationId, id as never));
+
+  const stopTenant = () =>
+    db().update(tenants).set({ status: 'STOPPED' }).where(eq(tenants.id, tenantA.tenantId));
+  const startTenant = () =>
+    db().update(tenants).set({ status: 'ACTIVE' }).where(eq(tenants.id, tenantA.tenantId));
+
+  /**
+   * FINDING 1. Two claims outstanding, handed back in the WRONG order.
+   *
+   * The old release matched `attempt_count = attemptNumber`, so of the two only
+   * the current one applied: attempt N-1 releasing first was refused outright,
+   * nothing retried it, and one attempt of the allowance stayed spent for a
+   * message no transport had been asked to carry.
+   */
+  it('restores capacity when two outstanding claims are handed back out of order', async () => {
+    const intent = await raise('out-of-order');
+
+    // Attempt 1 is claimed and its worker stalls past the lease.
+    const [first] = await repo().claimDue(ctx.container.clock.now(), 10, 60_000);
+    expect(first!.attemptCount).toBe(1);
+    await sql(`UPDATE notifications SET next_attempt_at = now() - interval '1 hour'`);
+
+    // A second worker claims attempt 2. BOTH are now outstanding.
+    const [second] = await repo().claimDue(ctx.container.clock.now(), 10, 60_000);
+    expect(second!.attemptCount).toBe(2);
+    expect((await rowOf(intent.id)).attemptCount).toBe(2);
+
+    // The installation stops before either reaches the transport, so both
+    // deliveries decide RELEASED.
+    await stopTenant();
+
+    // The OLDER claim hands back FIRST. This is the ordering the old model
+    // could not represent.
+    const older = await repo().releaseClaim({
+      tenantId: tenantA.tenantId,
+      notificationId: intent.id,
+      attemptNumber: 1,
+      now: ctx.container.clock.now(),
+      reason: 'tenant.not_active',
+    });
+    expect(older.released, 'the older hand-back was refused').toBe(true);
+
+    const newer = await repo().releaseClaim({
+      tenantId: tenantA.tenantId,
+      notificationId: intent.id,
+      attemptNumber: 2,
+      now: ctx.container.clock.now(),
+      reason: 'tenant.not_active',
+    });
+    expect(newer.released, 'the newer hand-back was refused').toBe(true);
+
+    // Nothing was sent, and every claimed attempt is accounted for as unspent.
+    expect(transport.calls, 'a stopped tenant was sent to').toBe(0);
+    const released = await releasesFor(intent.id);
+    expect(released.map((r) => r.attemptNumber).sort()).toEqual([1, 2]);
+
+    const row = await rowOf(intent.id);
+    expect(row.status).toBe('PENDING');
+    // The counter is monotonic by design; capacity is the DERIVED figure.
+    expect(row.attemptCount).toBe(2);
+    const spent = row.attemptCount - released.length;
+    expect(spent, 'an unsent claim consumed an attempt').toBe(0);
+
+    // And the message can still be delivered its full allowance once the
+    // installation comes back.
+    await startTenant();
+    await ctx.container.notificationDispatcher.tick();
+    expect(transport.calls, 'the restored capacity was not usable').toBe(1);
+    expect((await rowOf(intent.id)).status).toBe('SENT');
+  }, 60_000);
+
+  /**
+   * FINDING 2. The sweep terminalises a final claim that is about to be
+   * released.
+   *
+   * The tenant is ACTIVE when its last permitted attempt is claimed; the worker
+   * is still rendering when the tenant stops; the safety margin passes and
+   * another worker's `failExhausted` writes the intent off. The old release
+   * then required `status = 'PENDING'` and refused, so a message that no
+   * transport had ever been asked to carry was permanently FAILED because its
+   * tenant paused.
+   *
+   * The owner decision is preserved: `failExhausted` still has no tenant-status
+   * filter and still performs historical bookkeeping. What changed is that an
+   * intent whose claims were handed back unsent is no longer EXHAUSTED, so the
+   * verdict does not apply to it and is withdrawn.
+   */
+  it('does not permanently fail a final claim that was never sent', async () => {
+    const intent = await raise('sweep-vs-release');
+
+    // Attempt 1 spends itself for real, so the next claim is the final one.
+    transport.failNextWith({
+      outcome: 'FAILED_RETRYABLE',
+      errorCode: 'telegram.unreachable',
+      errorMessage: 'socket hang up',
+      retryAfterMs: 0,
+    });
+    await ctx.container.notificationDispatcher.tick();
+    expect(transport.calls).toBe(1);
+    await sql(`UPDATE notifications SET next_attempt_at = now() - interval '1 hour'`);
+
+    // The FINAL permitted attempt is claimed while the tenant is ACTIVE.
+    const [final] = await repo().claimDue(ctx.container.clock.now(), 10, 60_000);
+    expect(final!.attemptCount).toBe(2);
+
+    // Its worker is still rendering. The tenant stops, and enough logical time
+    // passes for the exhaustion margin.
+    await stopTenant();
+    await sql(`UPDATE notifications SET next_attempt_at = now() - interval '1 hour'`);
+
+    // Another worker sweeps. It is deliberately tenant-blind — the owner
+    // decision — and at this instant the intent still looks exhausted.
+    const swept = await repo().failExhausted(ctx.container.clock.now(), 10, {
+      leaseMs: 60_000,
+      transport: 'RECORDING',
+    });
+    expect(swept, 'the sweep did not run').toBe(1);
+    expect((await rowOf(intent.id)).status).toBe('FAILED');
+
+    // Only now does the original worker finish rendering, see the stop, and
+    // hand its claim back.
+    const handBack = await repo().releaseClaim({
+      tenantId: tenantA.tenantId,
+      notificationId: intent.id,
+      attemptNumber: 2,
+      now: ctx.container.clock.now(),
+      reason: 'tenant.not_active',
+    });
+    expect(handBack.released, 'the hand-back was refused').toBe(true);
+    expect(handBack.restored, 'the sweep verdict was not withdrawn').toBe(true);
+
+    // No outbound traffic for the stopped tenant, and the intent is not a
+    // permanent delivery failure.
+    expect(transport.calls, 'a stopped tenant was sent to').toBe(1);
+    const row = await rowOf(intent.id);
+    expect(row.status, 'an unsent final claim became a permanent failure').toBe('PENDING');
+    expect(row.completedAt, 'a pending intent kept a completion time').toBeNull();
+
+    // Real send capacity survives the pause: one genuine attempt was spent, one
+    // remains, and it is usable once the tenant resumes.
+    await startTenant();
+    await ctx.container.notificationDispatcher.tick();
+    expect(transport.calls, 'the preserved capacity was not usable').toBe(2);
+    expect((await rowOf(intent.id)).status).toBe('SENT');
+  }, 60_000);
+
+  /**
+   * A release must never hand back capacity for a message that WAS sent.
+   *
+   * The guard is the attempt row: it is the proof a transport call happened.
+   * Without it, a late or duplicated release could give an allowance back to a
+   * delivered message and have it sent again.
+   */
+  it('refuses to release an attempt that reached the transport', async () => {
+    const intent = await raise('released-after-send');
+
+    await ctx.container.notificationDispatcher.tick();
+    expect(transport.calls).toBe(1);
+    expect((await rowOf(intent.id)).status).toBe('SENT');
+
+    const outcome = await repo().releaseClaim({
+      tenantId: tenantA.tenantId,
+      notificationId: intent.id,
+      attemptNumber: 1,
+      now: ctx.container.clock.now(),
+      reason: 'tenant.not_active',
+    });
+    expect(outcome.released, 'capacity was returned for a message that was sent').toBe(false);
+    expect(await releasesFor(intent.id)).toEqual([]);
+    expect((await rowOf(intent.id)).status, 'a delivered message was un-sent').toBe('SENT');
+  }, 60_000);
+
+  /**
+   * A release is idempotent, which is what makes it safe to repeat after a
+   * commit whose outcome is unknown.
+   */
+  it('records a repeated hand-back once', async () => {
+    const intent = await raise('idempotent-release');
+    await repo().claimDue(ctx.container.clock.now(), 10, 60_000);
+    await stopTenant();
+
+    const args = {
+      tenantId: tenantA.tenantId,
+      notificationId: intent.id,
+      attemptNumber: 1,
+      now: ctx.container.clock.now(),
+      reason: 'tenant.not_active',
+    };
+    const first = await repo().releaseClaim(args);
+    const again = await repo().releaseClaim(args);
+
+    expect(first.released).toBe(true);
+    // The second call recorded nothing NEW — and reported that truthfully
+    // rather than counting a second hand-back that never happened.
+    expect(again.released).toBe(false);
+    expect(await releasesFor(intent.id)).toHaveLength(1);
+
+    const row = await rowOf(intent.id);
+    expect(row.attemptCount - (await releasesFor(intent.id)).length).toBe(0);
+  }, 60_000);
+
+  /**
+   * FINDING 3. A hand-back whose storage fails must not strand the rest of the
+   * batch.
+   *
+   * The dispatcher guards `deliver` per intent, but the release ran outside
+   * that guard, so a transient database failure there threw out of the loop and
+   * left every intent claimed behind it leased, counted and unexplained.
+   */
+  it('processes the rest of the batch when a hand-back cannot be recorded', async () => {
+    await raise('batch-first');
+    await raise('batch-second');
+    const queued = await db().select().from(notifications);
+    expect(queued, 'the batch needs more than one intent to mean anything').toHaveLength(2);
+
+    // The tenant is ACTIVE when the batch is claimed and inactive by the time
+    // either is delivered — the real ordering, since `claimDue` refuses an
+    // inactive tenant outright. The per-send recheck is the seam, so it is the
+    // seam this drives.
+    const activeTenants = repo().activeTenants.bind(repo());
+    (repo() as { activeTenants: typeof activeTenants }).activeTenants = async () => new Set();
+
+    const real = repo().releaseClaim.bind(repo());
+    let failures = 0;
+    (repo() as { releaseClaim: typeof real }).releaseClaim = async (input) => {
+      if (failures === 0) {
+        failures += 1;
+        throw new Error('the hand-back could not be stored');
+      }
+      return real(input);
+    };
+
+    try {
+      const result = await ctx.container.notificationDispatcher.tick();
+
+      // The batch was not abandoned: the second intent still got its own
+      // hand-back, and the failure was reported as itself.
+      expect(result.claimed, 'the whole batch was not claimed').toBe(2);
+      expect(result.unreleased, 'the failed hand-back was not reported').toBe(1);
+      expect(result.released, 'the second hand-back did not happen').toBe(1);
+
+      // No delivery outcome was invented for either.
+      expect(transport.calls, 'a stopped tenant was sent to').toBe(0);
+      expect(result.sent + result.failed + result.abandoned).toBe(0);
+
+      // No double decrement, and nothing terminal: exactly one release is
+      // recorded, and the intent whose hand-back failed keeps its lease and
+      // stays PENDING, so the next claim can repeat the idempotent release.
+      const rows = await db().select().from(notifications);
+      expect(rows.every((r) => r.status === 'PENDING')).toBe(true);
+      const allReleases = await db().select().from(notificationReleasedClaims);
+      expect(allReleases, 'the failed hand-back was recorded anyway').toHaveLength(1);
+      expect(rows.every((r) => r.attemptCount === 1)).toBe(true);
+    } finally {
+      (repo() as { releaseClaim: typeof real }).releaseClaim = real;
+      (repo() as { activeTenants: typeof activeTenants }).activeTenants = activeTenants;
+    }
+  }, 60_000);
+
+  /**
+   * And the recovery the case above leaves open actually works: the unrecorded
+   * hand-back is repeated on the next claim, once the lease expires.
+   */
+  it('recovers an unrecorded hand-back on the next claim', async () => {
+    const intent = await raise('recoverable');
+    await stopTenant();
+
+    // A hand-back that never reached storage: the claim is taken, nothing is
+    // recorded, and the lease is left to expire.
+    await sql(
+      `UPDATE notifications SET attempt_count = 1, next_attempt_at = now() - interval '1 hour'`,
+    );
+    expect(await releasesFor(intent.id)).toEqual([]);
+
+    await startTenant();
+    await ctx.container.notificationDispatcher.tick();
+
+    // The intent was claimable again and was delivered. Nothing was lost.
+    expect(transport.calls).toBe(1);
+    expect((await rowOf(intent.id)).status).toBe('SENT');
+  }, 60_000);
+
+  /** Releases are tenant-scoped like every other row in this module. */
+  it('scopes a release to its own tenant', async () => {
+    const intent = await raise('tenant-scoped');
+    await repo().claimDue(ctx.container.clock.now(), 10, 60_000);
+    await stopTenant();
+
+    await repo().releaseClaim({
+      tenantId: tenantA.tenantId,
+      notificationId: intent.id,
+      attemptNumber: 1,
+      now: ctx.container.clock.now(),
+      reason: 'tenant.not_active',
+    });
+
+    const [row] = await db()
+      .select()
+      .from(notificationReleasedClaims)
+      .where(
+        and(
+          eq(notificationReleasedClaims.tenantId, tenantA.tenantId as never),
+          eq(notificationReleasedClaims.notificationId, intent.id as never),
+        ),
+      );
+    expect(row!.tenantId).toBe(tenantA.tenantId);
+    expect(row!.reason).toBe('tenant.not_active');
+  }, 60_000);
+});
