@@ -42,7 +42,7 @@ export interface DispatcherOptions {
  * courtesy to Telegram, and an intent that failed to render never touched it.
  */
 interface DeliveryOutcomeReport {
-  readonly result: 'SENT' | 'RETRY' | 'FAILED' | 'SUPERSEDED';
+  readonly result: 'SENT' | 'RETRY' | 'FAILED' | 'SUPERSEDED' | 'RELEASED';
   readonly reachedTransport: boolean;
   /** SUPERSEDED because the intent already said what this attempt reported. */
   readonly alreadyTrue?: boolean;
@@ -244,35 +244,12 @@ export class NotificationDispatcher {
     let released = 0;
 
     for (const intent of claimed) {
-      // The tenant's status is asked again, per intent, immediately before the
-      // send. `claimDue` already refuses an inactive tenant, but it answers
-      // ONCE for a batch of up to ten that is then delivered one at a time: a
-      // stop that lands while the first send is outstanding was invisible to
-      // every intent behind it, so the kill switch governed whichever message
-      // happened to be first in the batch and nothing else.
-      //
-      // This does not close the window, and pretending otherwise would be the
-      // dishonest version. A tenant can still be stopped between this read and
-      // the transport call. What it does is bound the window to one send
-      // instead of a whole batch, which is the same bound `claimDue` gives the
-      // first intent — the guarantee is "no send STARTS after the stop is
-      // visible", never "no send is in flight when the stop lands".
-      if (!(await this.stillActive(intent))) {
-        // Put back, NOT failed. A stop is a pause, not a verdict on the
-        // message, and the attempt is returned so a tenant stopped and started
-        // three times has not silently spent a message's whole allowance and
-        // left `failExhausted` to report a permanent delivery failure for
-        // something no transport was ever asked to carry.
-        const { released: didRelease } = await this.notifications.releaseClaim({
-          tenantId: intent.tenantId,
-          notificationId: intent.id,
-          attemptNumber: intent.attemptCount,
-          now: this.clock.now(),
-        });
-        if (didRelease) released += 1;
-        continue;
-      }
-
+      // `claimDue` already refused an inactive tenant, but it answered ONCE for
+      // a batch of up to ten that is then delivered one at a time: a stop that
+      // landed while the first send was outstanding was invisible to every
+      // intent behind it, so the kill switch governed whichever message
+      // happened to be first in the batch and nothing else. `deliver` asks
+      // again, on the line before its send.
       let delivery: DeliveryOutcomeReport;
       try {
         delivery = await this.deliver(intent);
@@ -314,6 +291,22 @@ export class NotificationDispatcher {
         // happened before the recorder failed, and over-counting only slows us
         // down while under-counting could exceed Telegram's limit.
         this.sentInWindow += 1;
+        continue;
+      }
+
+      if (delivery.result === 'RELEASED') {
+        // Put back, NOT failed. A stop is a pause, not a verdict on the
+        // message, and the attempt is returned so a tenant stopped and started
+        // three times has not silently spent a message's whole allowance and
+        // left `failExhausted` to report a permanent delivery failure for
+        // something no transport was ever asked to carry.
+        const { released: didRelease } = await this.notifications.releaseClaim({
+          tenantId: intent.tenantId,
+          notificationId: intent.id,
+          attemptNumber: intent.attemptCount,
+          now: this.clock.now(),
+        });
+        if (didRelease) released += 1;
         continue;
       }
 
@@ -459,6 +452,24 @@ export class NotificationDispatcher {
     // an ordinary retryable outcome with a reason in its attempt row, and the
     // attempt ceiling decides when to stop, exactly as it does for a transport
     // that returns a failure instead of raising one.
+    // The tenant's status, asked HERE — after rendering, on the line before the
+    // send — and not before `deliver` was called.
+    //
+    // Before the call was the obvious place and it was wrong: rendering reads
+    // the tenant's template override and the feature flags governing it, which
+    // is several awaited queries. A stop landing in that window found a check
+    // that had already returned true, and the send went out anyway. The comment
+    // claimed the window was the unavoidable read-to-send race; it was a
+    // multi-query window with a check at the wrong end of it.
+    //
+    // The unavoidable race is real and remains: a tenant can be stopped between
+    // this read and the transport call, and nothing short of a transaction held
+    // across the send could close it — which is the thing this class exists not
+    // to do. What is closed is every window that did not have to be open.
+    if (!(await this.stillActive(intent))) {
+      return { result: 'RELEASED', reachedTransport: false };
+    }
+
     let result: Awaited<ReturnType<NotificationTransport['send']>>;
     try {
       result = await this.transport.send({

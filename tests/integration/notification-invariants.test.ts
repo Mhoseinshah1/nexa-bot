@@ -2,6 +2,8 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { ActorContext } from '@nexa/contracts';
 import { notifications, tenants } from '../../apps/api/src/infrastructure/persistence/schema';
+import { NotificationDispatcher } from '../../apps/api/src/modules/control/notifications/application/notification-dispatcher';
+import type { TemplateResolver } from '../../apps/api/src/modules/control/templates/application/template-resolver';
 import type { TransportResult } from '../../apps/api/src/modules/control/notifications/application/ports';
 import type { RecordingTransport } from '../../apps/api/src/modules/control/notifications/infrastructure/recording-transport';
 import {
@@ -517,6 +519,148 @@ describe('notification state machine invariants', () => {
    * dimension was fixed and invisible, the same way the attempt number was
    * before the preludes.
    */
+  /**
+   * The recheck has to be on the line before the send, not before `deliver`.
+   *
+   * Before `deliver` was the obvious place, and it was wrong for a reason the
+   * test above cannot see: `deliver` renders first, and rendering reads the
+   * tenant's template override and the feature flags governing it — several
+   * awaited queries. A stop landing in THAT window met a check that had
+   * already returned true, and the message went out. The comment claimed the
+   * remaining window was the unavoidable read-to-send race; it was a
+   * multi-query window with the check at the wrong end of it.
+   *
+   * Reaching it needs a render that can be paused, so this builds its own
+   * dispatcher over the container's real repository and transport with a
+   * template resolver that parks. The dispatcher takes all of it by
+   * constructor, so nothing production-side has a test hook in it.
+   */
+  it('does not send when the tenant stops while the message is being rendered', async () => {
+    const intent = await begin('render-window');
+
+    let markRendering!: () => void;
+    const rendering = new Promise<void>((resolve) => {
+      markRendering = resolve;
+    });
+    let releaseRender!: () => void;
+    const renderReleased = new Promise<void>((resolve) => {
+      releaseRender = resolve;
+    });
+
+    const real = ctx.container.templateResolver;
+    // Only `render` is reached from `deliver`; the cast says so rather than
+    // pretending this is a whole resolver.
+    const pausing = {
+      render: async (...args: Parameters<TemplateResolver['render']>) => {
+        markRendering();
+        await renderReleased;
+        return real.render(...args);
+      },
+    } as unknown as TemplateResolver;
+
+    const dispatcher = new NotificationDispatcher(
+      ctx.container.notificationRepository,
+      transport,
+      pausing,
+      ctx.container.settingsResolver,
+      ctx.container.clock,
+      ctx.container.ids,
+      ctx.container.logger,
+      {
+        pollIntervalMs: 1_000,
+        batchSize: 10,
+        leaseMs: 60_000,
+        baseBackoffMs: 1_000,
+        maxBackoffMs: 60_000,
+      },
+    );
+
+    const tick = dispatcher.tick();
+    await rendering;
+
+    // Claimed, leased, and now rendering. The operator stops the installation.
+    await ctx.container.database.db
+      .update(tenants)
+      .set({ status: 'STOPPED' })
+      .where(eq(tenants.id, tenantA.tenantId));
+
+    releaseRender();
+    const result = await tick;
+
+    expect(transport.calls, 'a stopped tenant was sent to after rendering').toBe(0);
+    expect(result.released, 'the claim was not handed back').toBe(1);
+
+    const [row] = await ctx.container.database.db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.id, intent.id));
+    expect(row!.status).toBe('PENDING');
+    expect(row!.attemptCount, 'the released intent was charged an attempt').toBe(0);
+  }, 60_000);
+
+  /**
+   * A release must not be able to rewind the clock on an attempt still in the
+   * air.
+   *
+   * `releaseClaim` recomputes `last_attempt_at` from the attempt rows, because
+   * the claim had set it to the claim time and a released claim never
+   * happened. But an attempt whose send outlived its lease has no row yet — it
+   * is still running — so the recomputation cannot see it and winds the
+   * timestamp back to an older attempt, or to null. The straggler's own
+   * `recordAttempt` then wrote its row without touching the timestamp, so the
+   * operations view reported "never attempted" for a delivery that had
+   * completed. Two correct-looking rules, and the gap between them.
+   */
+  it('keeps the last attempt time when a straggler lands after a release', async () => {
+    const intent = await begin('straggler');
+    const now = ctx.container.clock.now();
+
+    // Attempt 1 is claimed and its send outlives the lease. Attempt 2 is then
+    // claimed by the next tick.
+    await ctx.container.notificationRepository.claimDue(now, 10, 60_000);
+    await sql(`UPDATE notifications SET next_attempt_at = now() - interval '1 hour'`);
+    await ctx.container.notificationRepository.claimDue(ctx.container.clock.now(), 10, 60_000);
+
+    // The installation stops, so attempt 2 is handed back before it sends.
+    await ctx.container.database.db
+      .update(tenants)
+      .set({ status: 'STOPPED' })
+      .where(eq(tenants.id, tenantA.tenantId));
+    const { released } = await ctx.container.notificationRepository.releaseClaim({
+      tenantId: tenantA.tenantId,
+      notificationId: intent.id,
+      attemptNumber: 2,
+      now: ctx.container.clock.now(),
+    });
+    expect(released, 'the release did not match the claim it was meant to undo').toBe(true);
+
+    // Only NOW does attempt 1 report. It succeeded, and the record of when it
+    // finished is the whole point.
+    const finishedAt = new Date(ctx.container.clock.now().getTime() + 1_000);
+    await ctx.container.notificationRepository.recordAttempt({
+      attemptId: ctx.container.ids.uuid(),
+      tenantId: tenantA.tenantId,
+      notificationId: intent.id,
+      attemptNumber: 1,
+      transport: 'RECORDING',
+      outcome: 'SUCCEEDED',
+      startedAt: now,
+      finishedAt,
+      errorCode: null,
+      errorMessage: null,
+      retryAfterMs: null,
+      nextStatus: 'SENT',
+      nextAttemptAt: finishedAt,
+    });
+
+    const [row] = await ctx.container.database.db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.id, intent.id));
+    expect(row!.lastAttemptAt, 'a completed attempt left no last-attempt time').not.toBeNull();
+    expect(row!.lastAttemptAt!.getTime()).toBe(finishedAt.getTime());
+  }, 60_000);
+
   it('stops sending the rest of a batch when the tenant stops mid-send', async () => {
     await begin('batch:first');
     await raiseOnly('batch:second');

@@ -569,6 +569,33 @@ export class DrizzleNotificationRepository implements NotificationRepository {
               eq(notifications.attemptCount, input.attemptNumber),
             ];
 
+      // `last_attempt_at` moves forward for this attempt, unconditionally and
+      // separately from the status update below.
+      //
+      // Separately, because the status update has a predicate that can refuse:
+      // a straggler whose send outlived its lease still HAPPENED, and the row
+      // recording it is written either way, so the timestamp saying when the
+      // intent was last attempted must be written either way too.
+      //
+      // `greatest` rather than assignment, because outcomes do not arrive in
+      // order. A straggler landing after a newer attempt must not drag the
+      // timestamp backwards — and `releaseClaim` recomputes it from the attempt
+      // rows, which cannot see an attempt still in flight, so without this a
+      // release would rewind the timestamp and the late outcome would never
+      // push it forward again. The operations view then reported an older
+      // attempt, or none, for a delivery that had completed.
+      await tx
+        .update(notifications)
+        .set({
+          lastAttemptAt: sql`greatest(coalesce(${notifications.lastAttemptAt}, ${input.finishedAt}), ${input.finishedAt})`,
+        })
+        .where(
+          and(
+            eq(notifications.tenantId, input.tenantId),
+            eq(notifications.id, input.notificationId),
+          ),
+        );
+
       // The attempt row above is written either way, because it happened.
       const moved = await tx
         .update(notifications)
