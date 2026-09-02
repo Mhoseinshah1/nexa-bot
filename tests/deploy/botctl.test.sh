@@ -126,6 +126,60 @@ chmod 0600 "$env_file"
 printf '%s\n' "$before" >"$env_file"
 chmod 0600 "$env_file"
 
+test_case 'the installer refuses to be used as an updater'
+# It takes no backup, never writes `previous`, and repoints deploy.env at the
+# new image before anything is pulled, migrated or started — so a failed
+# migration left the old release running and reporting itself as current while
+# deploy.env named the new one, and the next reboot started an un-migrated
+# image. It also destroyed the rollback relationship silently.
+printf 'v1.0.0\n' >"${NEXA_STATE_DIR}/current"
+# SOURCED and driven through `preflight` alone, never executed: an installer
+# run for real on a build machine would install Docker on it.
+installer_output="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --version "$2" >/dev/null 2>&1
+  preflight 2>&1' _ "${REPO}/deploy/install.sh" v2.0.0 || true)"
+assert_contains 'the installer did not refuse a version change' \
+  "$installer_output" 'the installer is not an updater'
+assert_contains 'the refusal did not point at botctl update' \
+  "$installer_output" 'botctl update v2.0.0'
+
+test_case 'the installer accepts a rerun of the version it already installed'
+# Idempotency is the documented behaviour and it must survive the guard above.
+# It gets past the version check and fails later, on something else.
+installer_output="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --version "$2" >/dev/null 2>&1
+  preflight 2>&1' _ "${REPO}/deploy/install.sh" v1.0.0 || true)"
+assert_not_contains 'a rerun of the same version was refused' \
+  "$installer_output" 'the installer is not an updater'
+rm -f "${NEXA_STATE_DIR}/current"
+
+test_case 'a truncated secret file is not mistaken for a finished one'
+# `[ -s "$file" ]` blessed a postgres.env with a user and a database and no
+# password, and a nexa.env truncated part-way — which is exactly what ENOSPC or
+# EIO during the write leaves, because `set -e` aborts with the partial file
+# already under its final name. The install then proceeded: Postgres cannot
+# initialise without a password and sat out the entire 180s health wait, a long
+# way from the cause.
+secrets_probe() {
+  bash -c '
+    . "$1" --domain admin.example.test --acme-email ops@example.test --version v1.0.0 >/dev/null 2>&1
+    generate_secrets 2>&1' _ "${REPO}/deploy/install.sh"
+}
+printf 'POSTGRES_USER=nexa\nPOSTGRES_DB=nexa\n' >"${NEXA_CONFIG_DIR}/postgres.env"
+printf 'REDIS_PASSWORD=x\n' >"${NEXA_CONFIG_DIR}/redis.env"
+printf 'SECRETS_KEK=k\nSECRETS_KEK_ID=i\nDATABASE_URL=d\nREDIS_URL=r\n' >"${NEXA_CONFIG_DIR}/nexa.env"
+probe="$(secrets_probe || true)"
+assert_not_contains 'a postgres.env with no password was accepted as complete' \
+  "$probe" 'secrets already exist'
+assert_contains 'the operator was not told the configuration is incomplete' \
+  "$probe" 'incomplete'
+
+test_case 'a complete set of secrets is left alone'
+printf 'POSTGRES_USER=nexa\nPOSTGRES_DB=nexa\nPOSTGRES_PASSWORD=p\n' >"${NEXA_CONFIG_DIR}/postgres.env"
+probe="$(secrets_probe || true)"
+assert_contains 'a complete configuration was not recognised' "$probe" 'secrets already exist'
+rm -f "${NEXA_CONFIG_DIR}/postgres.env" "${NEXA_CONFIG_DIR}/redis.env" "${NEXA_CONFIG_DIR}/nexa.env"
+
 test_case 'reads a config value without executing the file'
 # `source` would run this. A maintenance CLI that executes its own
 # configuration is one editing mistake away from being a shell injection.

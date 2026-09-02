@@ -150,6 +150,25 @@ preflight() {
   [ -n "$VERSION" ] || nexa_die "--version is required. A deployment without a version is a deployment nobody can support."
   nexa_require_version "$VERSION"
 
+  # --- Not an updater ---
+  #
+  # Before anything else that touches the host, because this is the one refusal
+  # the operator must get instead of a half-changed installation.
+  #
+  # A rerun of the installer is supported and documented; a rerun with a
+  # DIFFERENT --version is not, and it used to be accepted. It takes no backup,
+  # never writes `previous`, and repoints deploy.env at the new image BEFORE
+  # anything is pulled, migrated or started. So a failed migration left the
+  # installation still running and still reporting the old release, with
+  # deploy.env naming the new one — and the next restart or reboot started an
+  # un-migrated image. It also silently destroyed the rollback relationship
+  # `botctl rollback` depends on.
+  local installed
+  installed="$(nexa_current_version || true)"
+  if [ -n "$installed" ] && [ "$installed" != "$VERSION" ]; then
+    nexa_die "this host already runs ${installed}, and the installer is not an updater: it takes no backup, records no rollback target, and would repoint the deployment at ${VERSION} before anything had been migrated or started. Run instead: botctl update ${VERSION}"
+  fi
+
   # --- The platform ---
   local id="" release="" arch
   if [ -r /etc/os-release ]; then
@@ -309,6 +328,31 @@ create_layout() {
 random_base64() { head -c 32 /dev/urandom | base64 -w0; }
 random_password() { head -c 24 /dev/urandom | base64 -w0 | tr -d '=+/' | cut -c1-32; }
 
+# Does this file exist AND carry every key it is supposed to carry, each with a
+# value? A file that exists is not a file that is finished.
+secrets_complete() {
+  local file="$1" key
+  shift
+  [ -s "$file" ] || return 1
+  for key in "$@"; do
+    [ -n "$(nexa_env_value "$file" "$key" 2>/dev/null || true)" ] || return 1
+  done
+  return 0
+}
+
+# Write, then name. A secret file must never be reachable under its final name
+# until it is complete, because the next run decides what to do by looking at
+# it — and a rerun that blesses a truncated file is worse than one that
+# regenerates.
+write_secret_file() {
+  local target="$1" tmp
+  tmp="$(mktemp "${target}.XXXXXX")" || nexa_die "cannot write ${target}."
+  chmod 0600 "$tmp"
+  cat >"$tmp" || { rm -f "$tmp"; nexa_die "cannot write ${target} (is /var full?)."; }
+  sync "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$target"
+}
+
 generate_secrets() {
   nexa_step "generating secrets"
 
@@ -320,12 +364,27 @@ generate_secrets() {
   # installation out of its own data, and a rerun that regenerated the KEK
   # would make every stored secret undecryptable. This is the single most
   # important idempotency rule in the file.
-  if [ -s "$pg_env" ] && [ -s "$redis_env" ] && [ -s "$app_env" ]; then
+  #
+  # "Already generated" is decided by the KEYS the files must contain, not by
+  # their being non-empty. A non-emptiness test blessed a postgres.env holding
+  # a user and a database but no password, and a nexa.env truncated part-way
+  # through — both of which are what ENOSPC or EIO during the write leaves
+  # behind, because `set -e` aborts with the partial file already named. The
+  # install then proceeded: Postgres cannot initialise without a password and
+  # sat out the whole health timeout, and a nexa.env without SECRETS_KEK failed
+  # the application's config schema at first boot. Both a long way from the
+  # cause.
+  local have=0 missing=0
+  if secrets_complete "$pg_env" POSTGRES_USER POSTGRES_DB POSTGRES_PASSWORD; then have=$((have + 1)); else missing=$((missing + 1)); fi
+  if secrets_complete "$redis_env" REDIS_PASSWORD; then have=$((have + 1)); else missing=$((missing + 1)); fi
+  if secrets_complete "$app_env" SECRETS_KEK SECRETS_KEK_ID DATABASE_URL REDIS_URL; then have=$((have + 1)); else missing=$((missing + 1)); fi
+
+  if [ "$missing" -eq 0 ]; then
     nexa_ok "secrets already exist; leaving them alone"
     return 0
   fi
-  if [ -s "$pg_env" ] || [ -s "$redis_env" ] || [ -s "$app_env" ]; then
-    nexa_die "the configuration in ${NEXA_CONFIG_DIR} is incomplete: some files exist and some do not. Refusing to half-generate secrets over it. Inspect the directory and either complete it or move it aside."
+  if [ "$have" -gt 0 ]; then
+    nexa_die "the configuration in ${NEXA_CONFIG_DIR} is incomplete: some files are complete and some are missing or truncated. Refusing to half-generate secrets over it. Inspect the directory and either complete it or move it aside."
   fi
 
   umask 077
@@ -336,14 +395,18 @@ generate_secrets() {
   kek="$(random_base64)"
   kek_id="install-$(date -u +%Y%m%d)"
 
-  # Written by redirection, never echoed. Nothing below prints a value.
-  {
-    printf 'POSTGRES_USER=nexa\n'
-    printf 'POSTGRES_DB=nexa\n'
-    printf 'POSTGRES_PASSWORD=%s\n' "$pg_password"
-  } >"$pg_env"
+  # Written by redirection, never echoed. Nothing below prints a value. Each
+  # file lands complete or not at all, so a kill or an ENOSPC between them
+  # leaves a state the next run can read correctly and resume from.
+  write_secret_file "$pg_env" <<EOF
+POSTGRES_USER=nexa
+POSTGRES_DB=nexa
+POSTGRES_PASSWORD=${pg_password}
+EOF
 
-  printf 'REDIS_PASSWORD=%s\n' "$redis_password" >"$redis_env"
+  write_secret_file "$redis_env" <<EOF
+REDIS_PASSWORD=${redis_password}
+EOF
 
   # The application configuration comes from the template, which the unit tests
   # parse through the application's own schema. Substituted with a Python
@@ -359,7 +422,7 @@ for token, value in replacements.items():
     text = text.replace(token, value)
 with open(target, "w", encoding="utf-8") as handle:
     handle.write(text)
-' "${NEXA_DEPLOY_DIR}/nexa.env.template" "$app_env" \
+' "${NEXA_DEPLOY_DIR}/nexa.env.template" "${app_env}.partial" \
     "__POSTGRES_PASSWORD__=${pg_password}" \
     "__REDIS_PASSWORD__=${redis_password}" \
     "__SECRETS_KEK__=${kek}" \
@@ -369,6 +432,11 @@ with open(target, "w", encoding="utf-8") as handle:
     "__BUILD_VERSION__=${VERSION}" \
     "__BUILD_COMMIT__=pending" \
     "__BUILD_TIME__=pending"
+
+  # Same rule for the substituted template: it is complete before it is named.
+  chmod 0600 "${app_env}.partial"
+  sync "${app_env}.partial" 2>/dev/null || true
+  mv -f "${app_env}.partial" "$app_env"
 
   chmod 0600 "$pg_env" "$redis_env" "$app_env"
   nexa_ok "secrets generated (0600, root-owned, never printed)"
@@ -567,4 +635,10 @@ moment and make sure its DNS points at this host.
 SUMMARY
 }
 
-main "$@"
+# Executed, not sourced. Sourcing runs the argument parsing above and defines
+# the functions without installing anything, which is how the test suite drives
+# `preflight` through its refusals without a Docker daemon and without any risk
+# of an installer running for real on a build machine.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi
