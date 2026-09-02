@@ -265,6 +265,22 @@ export const setSettingRequestSchema = z.object({
 });
 export type SetSettingRequest = z.infer<typeof setSettingRequestSchema>;
 
+/**
+ * What a setting write answers with.
+ *
+ * The persisted row AND whether it changed anything. `docs/conventions.md`
+ * requires that a no-op says it was a no-op: three unrelated legacy subsystems
+ * report success for writes that touched nothing, and one of them answered
+ * "✅ updated" three times in a row while a product stayed broken
+ * (SOURCE_BUG-002). A response that cannot express "nothing changed" cannot
+ * comply with that rule however carefully the service computes it.
+ */
+export const settingWriteResponseSchema = z.object({
+  setting: resolvedSettingSchema,
+  changed: z.boolean(),
+});
+export type SettingWriteResponse = z.infer<typeof settingWriteResponseSchema>;
+
 export const featureFlagSchema = z.object({
   key: z.string(),
   enabled: z.boolean(),
@@ -289,6 +305,12 @@ export type FeatureFlagResponse = z.infer<typeof featureFlagSchema>;
 
 export const featureFlagListResponseSchema = z.object({ flags: z.array(featureFlagSchema) });
 export type FeatureFlagListResponse = z.infer<typeof featureFlagListResponseSchema>;
+
+export const featureFlagWriteResponseSchema = z.object({
+  flag: featureFlagSchema,
+  changed: z.boolean(),
+});
+export type FeatureFlagWriteResponse = z.infer<typeof featureFlagWriteResponseSchema>;
 
 export const setFeatureFlagRequestSchema = z.object({
   enabled: z.boolean(),
