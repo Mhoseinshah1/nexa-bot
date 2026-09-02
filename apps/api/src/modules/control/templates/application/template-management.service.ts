@@ -190,7 +190,10 @@ export class TemplateManagementService {
     }
 
     const values = command.values as TemplateValues;
-    const typeProblems = validateTemplateValues(definition, values);
+    // Types are checked for the values that WERE supplied; absent ones are
+    // reported as unresolved below rather than refused. A preview with no sample
+    // values is the normal first thing an administrator does.
+    const typeProblems = validateTemplateValues(definition, values, { requireAll: false });
     if (typeProblems.length > 0) {
       throw errors.validation(
         CONTROL_ERROR_CODES.INVALID_VALUE,

@@ -393,16 +393,26 @@ export function validateTemplateBody(
  * Separate from body validation because it answers a different question at a
  * different time: a body is validated when an administrator saves it, values are
  * validated when a message is rendered.
+ *
+ * `requireAll` distinguishes the two callers. Sending a message with a required
+ * placeholder unsupplied is a bug, and refusing it is right. PREVIEWING one is
+ * not: an administrator asking what a body will look like has usually typed no
+ * sample values at all, and the honest answer is the body with its placeholders
+ * still visible, reported as unresolved — not an error message.
  */
 export function validateTemplateValues(
   definition: TemplateDefinition,
   values: TemplateValues,
+  options: { readonly requireAll?: boolean } = {},
 ): string[] {
+  const requireAll = options.requireAll ?? true;
   const problems: string[] = [];
   for (const placeholder of definition.placeholders) {
     const value = values[placeholder.token];
     if (value === undefined) {
-      if (placeholder.required) problems.push(`Missing value for {${placeholder.token}}.`);
+      if (placeholder.required && requireAll) {
+        problems.push(`Missing value for {${placeholder.token}}.`);
+      }
       continue;
     }
     const wrong = (expected: string) =>
