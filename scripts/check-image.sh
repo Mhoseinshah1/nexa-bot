@@ -118,7 +118,11 @@ pass "no source tree or build configuration in the runtime image"
 
 # --- 5. The Web Admin bundle, without its source maps -------------------------
 run test -f /app/web/index.html 2>/dev/null || fail "the Web Admin bundle is missing from /app/web"
-MAPS=$(run sh -c 'find /app/web -name "*.map" 2>/dev/null | head -5')
+# `-print -quit` rather than `| head -5`. The pipeline runs inside the
+# container's `sh`, which has no `pipefail`, so it was safe — but "safe because
+# the inner shell lacks an option" is not a property the next edit preserves,
+# and a bundle with several maps is exactly when it would bite.
+MAPS=$(run sh -c 'find /app/web -name "*.map" -print -quit 2>/dev/null')
 [ -z "$MAPS" ] || fail "the Web Admin bundle ships source maps: $MAPS"
 pass "the Web Admin bundle is present and publishes no source maps"
 

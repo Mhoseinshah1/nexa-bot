@@ -321,7 +321,7 @@ if [ -d docs/research ]; then
       hits=$(grep -rnE "$pattern" docs/research 2>/dev/null || true)
     fi
     if [ -n "$hits" ]; then
-      fail "$description appears in docs/research" "$(echo "$hits" | head -5)"
+      fail "$description appears in docs/research" "$(printf '%s\n' "$hits" | sed -n '1,5p')"
       RESEARCH_CLEAN=0
     fi
   }

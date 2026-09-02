@@ -119,7 +119,7 @@ pass "the built output imports no devDependency"
 # shipped without anyone deciding they should; `NEXA_WEB_SOURCEMAP=1` is the
 # deliberate opt-in, and this refuses to let the default come back by accident.
 if [ -d apps/web/dist ]; then
-  MAPS=$(find apps/web/dist -name '*.map' 2>/dev/null | head -5)
+  MAPS=$(find apps/web/dist -name '*.map' -print -quit 2>/dev/null)
   if [ -n "$MAPS" ] && [ "${NEXA_WEB_SOURCEMAP:-}" != "1" ]; then
     fail "the Web Admin build published source maps:
 $MAPS"

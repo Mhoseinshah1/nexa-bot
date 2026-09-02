@@ -60,24 +60,35 @@ printf '\033[32mok\033[0m    %d helper scripts clean at shellcheck warning\n' "$
 
 # --- Tier 3: one pattern shellcheck does not catch ---------------------------
 #
-# `producer | grep -q PATTERN` under `set -o pipefail`.
+# A pipeline that ends in a consumer which EXITS EARLY, under `set -o pipefail`.
 #
-# When grep FINDS its match it exits immediately. The producer ahead of it then
-# dies of SIGPIPE writing the rest, and `pipefail` makes the whole pipeline
-# return 141 — so the test fails exactly when it should pass, and reports the
-# opposite of the truth.
+# `grep -q` exits on its first match. `head -n N` exits after N lines. Either
+# way the producer ahead of it then dies of SIGPIPE writing the rest, `pipefail`
+# makes the pipeline return 141, and — this is the sharp part — with `set -e`
+# an assignment from that substitution ABORTS THE SCRIPT. So the check fails
+# exactly when it should pass, and the script dies exactly when it found what
+# it was looking for.
 #
-# This is not theoretical. It cost two CI runs here: a backup assertion that
-# announced "the backup contains no schema" about a perfectly good dump, and a
-# version assertion that announced a missing digest that was present. Both were
-# invisible locally and both looked like real product failures.
+# This is not theoretical, in either spelling. `grep -q` cost two CI runs here:
+# a backup assertion that announced "the backup contains no schema" about a
+# perfectly good dump, and a version assertion that announced a missing digest
+# that was present. Both were invisible locally and both looked like real
+# product failures. `| head -n 1` was then found by this very check being too
+# narrow — `find "$BACKUP_DIR" -name '*.sql.gz' | head -n 1` in the smoke test
+# returns 141 the moment a second backup exists, which is to say on the second
+# run of a real installation.
 #
-# The fixes are all cheap: `case`/`[[ ]]` for strings already in memory,
-# `grep -c` or `wc -l` when a stream must be read.
-OFFENDERS="$(grep -rnE '\| *grep [^|]*-[a-zA-Z]*q' deploy scripts tests/deploy 2>/dev/null |
-  grep -v 'check-shell.sh' | grep -vE '^[^:]*:[0-9]+: *#' || true)"
+# The fixes are all cheap and all remove the pipe rather than working around it:
+# `case`/`[[ ]]` for strings already in memory, `grep -c` or `wc -l` when a
+# stream must be read to the end, `find -print -quit` when one path is wanted,
+# `sed -n '1,5p'` where `head -5` was.
+#
+# A line ending in `|| true` is exempt: it has already decided the exit status
+# does not matter, which is the correct answer for a diagnostic dump.
+OFFENDERS="$(grep -rnE '\| *(grep [^|]*-[a-zA-Z]*q|head( |$))' deploy scripts tests/deploy 2>/dev/null |
+  grep -v 'check-shell.sh' | grep -vE '^[^:]*:[0-9]+: *#' | grep -vE '\|\| *true *$' || true)"
 if [ -n "$OFFENDERS" ]; then
   printf '%s\n' "$OFFENDERS" >&2
-  fail "a pipeline ends in 'grep -q'. Under pipefail that FAILS when the pattern is found, because the writer dies of SIGPIPE. Use a case match, grep -c or wc -l."
+  fail "a pipeline ends in a consumer that exits early ('grep -q' or 'head'). Under pipefail that returns 141 when it SUCCEEDS, because the writer dies of SIGPIPE — and under 'set -e' that aborts the script. Use a case match, grep -c, wc -l, find -print -quit, or sed -n '1,Np'."
 fi
-printf '\033[32mok\033[0m    no pipeline ends in a quiet grep\n'
+printf '\033[32mok\033[0m    no pipeline ends in a consumer that exits early\n'

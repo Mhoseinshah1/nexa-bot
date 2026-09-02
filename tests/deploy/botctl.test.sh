@@ -279,7 +279,7 @@ seed_release 'v1.0.0' "$DIGEST_A"
 test_case 'backup writes a timestamped 0600 dump and verifies it'
 run_botctl backup
 assert_equals 'backup failed' 0 "$BOTCTL_STATUS"
-backup_file="$(find "$NEXA_BACKUP_DIR" -name 'nexa-v1.0.0-*.sql.gz' | head -n 1)"
+backup_file="$(find "$NEXA_BACKUP_DIR" -name 'nexa-v1.0.0-*.sql.gz' -print -quit)"
 assert_ok 'no backup file was written' test -n "$backup_file"
 if [ -n "$backup_file" ]; then
   assert_file_mode 'the backup is not 0600' "$backup_file" '600'
@@ -298,7 +298,7 @@ rm -f "$NEXA_BACKUP_DIR"/*.sql.gz
 run_botctl backup
 assert_fails 'an empty-database dump was accepted' test "$BOTCTL_STATUS" -eq 0
 assert_contains 'the refusal did not name the real problem' "$BOTCTL_OUTPUT" 'no tables'
-assert_equals 'an empty dump was kept' '' "$(find "$NEXA_BACKUP_DIR" -name '*.sql.gz*' | head -n 1)"
+assert_equals 'an empty dump was kept' '' "$(find "$NEXA_BACKUP_DIR" -name '*.sql.gz*' -print -quit)"
 fake_set empty_dump 0
 
 test_case 'a failed dump is loud and leaves no file behind'
@@ -307,7 +307,7 @@ rm -f "$NEXA_BACKUP_DIR"/*.sql.gz
 run_botctl backup
 assert_fails 'a failed backup exited zero' test "$BOTCTL_STATUS" -eq 0
 assert_contains 'a failed backup was not reported' "$BOTCTL_OUTPUT" 'FAILED'
-leftover="$(find "$NEXA_BACKUP_DIR" -name '*.sql.gz*' | head -n 1)"
+leftover="$(find "$NEXA_BACKUP_DIR" -name '*.sql.gz*' -print -quit)"
 assert_equals 'a failed backup left a file behind' '' "$leftover"
 fake_set exec_exit 0
 
@@ -334,7 +334,7 @@ assert_contains 'did not run the migrator' "$log" 'dist/infrastructure/persisten
 # The migration must run from the TARGET release's own image. Running the
 # outgoing release's migrator would apply the schema the outgoing code expects,
 # which is the wrong schema by definition.
-migrate_line="$(printf '%s\n' "$log" | grep 'migrate.js' | head -n 1)"
+migrate_line="$(printf '%s\n' "$log" | grep 'migrate.js' | sed -n '1p')"
 assert_contains 'the migration did not run --no-deps' "$migrate_line" '--no-deps'
 
 # NEVER git. The legacy updater is `git pull`, and this checkpoint exists
@@ -388,8 +388,8 @@ assert_contains 'the backup does not name the incoming release' "$dump" 'v2.0.0'
 test_case 'a backup was taken before the migration'
 # Order matters: the backup must precede the migration, because the migration
 # is the step that switching an image back cannot undo.
-backup_at="$(printf '%s\n' "$log" | grep -n 'exec -T postgres pg_dump' | head -n 1 | cut -d: -f1)"
-migrate_at="$(printf '%s\n' "$log" | grep -n 'migrate.js' | head -n 1 | cut -d: -f1)"
+backup_at="$(printf '%s\n' "$log" | grep -n 'exec -T postgres pg_dump' | sed -n '1p' | cut -d: -f1)"
+migrate_at="$(printf '%s\n' "$log" | grep -n 'migrate.js' | sed -n '1p' | cut -d: -f1)"
 assert_ok 'no backup was taken during the update' test -n "$backup_at"
 assert_ok 'the migration ran before the backup' test "${backup_at:-9999}" -lt "${migrate_at:-0}"
 

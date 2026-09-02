@@ -310,7 +310,11 @@ json.dump({"version": sys.argv[2], "commit": sys.argv[3], "digest": sys.argv[4],
 # already-running container by project and service label. So this exercises the
 # real `botctl backup` against the real database rather than a rehearsal of it.
 BOTCTL_OUT="$("$BOTCTL" backup 2>&1)" || fail "botctl backup failed: ${BOTCTL_OUT}"
-backup_file="$(find "$NEXA_BACKUP_DIR" -name '*.sql.gz' | head -n 1)"
+# `-print -quit`, not `| head -n 1`: find stops by itself, so nothing is ever
+# writing into a closed pipe. The pipeline form returns 141 under pipefail as
+# soon as a SECOND backup exists — which is to say on the second run of a real
+# installation — and `set -e` turns that into an abort.
+backup_file="$(find "$NEXA_BACKUP_DIR" -name '*.sql.gz' -print -quit)"
 [ -n "$backup_file" ] || fail "botctl backup wrote no file"
 [ "$(stat -c '%a' "$backup_file")" = "600" ] || fail "the backup is not 0600"
 gzip -t "$backup_file" || fail "the backup is not readable gzip"
