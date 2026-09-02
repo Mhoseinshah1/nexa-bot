@@ -535,6 +535,21 @@ describe('notification claim ownership', () => {
       reason: 'tenant.not_active',
     });
     expect(handBack.restored, 'the sweep verdict was not withdrawn').toBe(true);
+
+    // A repeat withdraws nothing. The retry in the dispatcher's hand-back path
+    // runs when the first call's outcome is unknown, so it may follow a restore
+    // that did commit — and it must not report a second correction. The restore
+    // branch requires the intent to be FAILED, which the first call already
+    // undid.
+    const again = await repo().releaseClaim({
+      tenantId: tenantA.tenantId,
+      notificationId: intent.id,
+      attemptNumber: 2,
+      now: ctx.container.clock.now(),
+      reason: 'tenant.not_active',
+    });
+    expect(again.released, 'a repeated hand-back returned capacity twice').toBe(false);
+    expect(again.restored, 'a repeated hand-back reported a second withdrawal').toBe(false);
     await startTenant();
 
     // What the operations view is handed.

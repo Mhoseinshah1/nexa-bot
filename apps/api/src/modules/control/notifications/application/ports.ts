@@ -145,21 +145,32 @@ export interface NotificationRepository {
   /**
    * Records that one claim was handed back without reaching the transport.
    *
-   * NOT a failure: the intent is due again immediately, and the attempt it
-   * never spent stops counting against its allowance. The tenant filter in
-   * `claimDue` is what then keeps it queued rather than sent, so a stopped
-   * installation accumulates its alerts instead of losing them.
+   * NOT a failure: the attempt it never spent stops counting against its
+   * allowance, and the intent becomes due again — but only if this release owns
+   * the current claim, or if it is withdrawing a sweep's verdict. A straggler
+   * whose send outlived its lease returns its capacity without touching the
+   * schedule of whoever holds the claim now; saying "due again immediately"
+   * without that qualification described a version that cancelled live leases.
+   * The tenant filter in `claimDue` is what then keeps the intent queued rather
+   * than sent, so a stopped installation accumulates its alerts instead of
+   * losing them.
    *
    * The release is keyed by the ATTEMPT NUMBER it releases, not matched
    * against the intent's current state. That is what makes it correct with
    * several workers: two claims outstanding at once hand back in either order
-   * and each restores its own capacity, a repeat after an ambiguous commit is
-   * a no-op, and a sweep that terminalised the row in between does not make
-   * the hand-back impossible — it is undone instead, since an intent whose
-   * claims were never sent is not exhausted.
+   * and each restores its own capacity, and a repeat after an ambiguous commit
+   * is a no-op.
+   *
+   * A sweep that terminalised the row in between does not make the hand-back
+   * impossible, and MAY be undone — but only when the sweep is still the reason
+   * the intent is failed. A `FAILED_PERMANENT` attempt row that the transport
+   * itself wrote is an answer, not a guess, and a claim that never spoke to the
+   * transport does not overturn it.
    *
    * Refused for an attempt that DID reach the transport: an attempt row is the
    * proof one did, and capacity is never returned for a message that was sent.
+   * Refused by the statement's own predicate AND, since migration 0014, by a
+   * database trigger — so it holds for a caller that stops asking.
    */
   releaseClaim(input: {
     readonly tenantId: string;
@@ -171,7 +182,16 @@ export interface NotificationRepository {
   }): Promise<{
     /** True when THIS call recorded the release; false when it was already recorded. */
     readonly released: boolean;
-    /** True when the release took the intent back out of a sweep's verdict. */
+    /**
+     * True when the release took the intent back out of a sweep's verdict —
+     * FAILED to PENDING, and nothing else.
+     *
+     * It means that and only that. The derived-state update used to cover both
+     * statuses in one statement, so this was true for every ordinary hand-back
+     * as well; the two are separate statements now precisely so this flag can
+     * be counted and reported without describing a stopped tenant's routine
+     * work as a correction.
+     */
     readonly restored: boolean;
   }>;
 
@@ -202,6 +222,11 @@ export interface NotificationRepository {
 
   /**
    * Records one attempt and moves the intent, in one transaction.
+   *
+   * Refused for an attempt number whose claim was handed back: a released claim
+   * never reached the transport, so an attempt row on that number would say two
+   * contradictory things about it. Enforced by a database trigger rather than
+   * here, because nothing serialises this against `releaseClaim`.
    *
    * The two halves have to commit together. An attempt row with no status
    * change means a retry loop that never terminates; a status change with no

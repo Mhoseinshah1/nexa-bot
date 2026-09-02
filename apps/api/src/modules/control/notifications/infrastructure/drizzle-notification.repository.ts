@@ -303,6 +303,15 @@ export class DrizzleNotificationRepository implements NotificationRepository {
    * becomes due again when the lease expires instead of being held by a
    * dispatcher that no longer exists, and the attempt counter already reflects
    * the try that vanished.
+   *
+   * GUARANTEED BY MECHANISM: two dispatchers never take the same row (`FOR
+   * UPDATE SKIP LOCKED`), an exhausted intent is never claimed (the spend
+   * predicate), and no surface can reach this at all (the boundary check names
+   * it). GUARANTEED BY ARGUMENT: that a second claim does not overlap a live
+   * send. Nothing enforces that — it holds only while `leaseMs` is longer than
+   * any send the transport can make, which is a configuration decision, and it
+   * is why `failExhausted` waits a further full lease before concluding
+   * anything.
    */
   async claimDue(now: Date, limit: number, leaseMs: number): Promise<NotificationIntent[]> {
     return this.db.transaction(async (tx) => {
@@ -400,13 +409,27 @@ export class DrizzleNotificationRepository implements NotificationRepository {
   }
 
   /**
-   * Un-claims an intent: due again now, with its attempt given back.
+   * Un-claims an intent: its attempt given back, and due again if this release
+   * owns the current claim.
    *
-   * `attempt_count - 1` is the half that matters. Leaving the counter spent
+   * Returning the capacity is the half that matters. Leaving the claim spent
    * would mean a tenant stopped and started three times had silently consumed
    * a message's whole allowance without ever sending it — the row would then
    * be swept to FAILED by `failExhausted`, reporting a permanent delivery
    * failure for a message no transport was ever asked to carry.
+   *
+   * GUARANTEED BY MECHANISM: capacity is returned exactly once per attempt
+   * number (primary key, `ON CONFLICT DO NOTHING`); out-of-order hand-backs
+   * each return their own, because the key is the attempt number and not the
+   * counter; capacity is never returned for an attempt that reached the
+   * transport (this insert's `NOT EXISTS`, and since 0014 a `BEFORE INSERT`
+   * trigger that holds whether or not a caller asks); a stale hand-back cannot
+   * reschedule a live claim (the ownership predicate); and only a sweep verdict
+   * with no real refusal beside it is withdrawn (the restore branch).
+   *
+   * GUARANTEED BY ARGUMENT: nothing, now. These statements take no lock and are
+   * not serialised against `recordAttempt`, so the exclusivity of the two
+   * ledgers is the trigger's guarantee rather than this method's.
    */
   async releaseClaim(input: {
     readonly tenantId: string;
@@ -634,11 +657,12 @@ export class DrizzleNotificationRepository implements NotificationRepository {
    * the per-intent recheck in the dispatcher's batch loop, and the asymmetry is
    * the point rather than an oversight. Those two govern SENDING, and a stopped
    * installation must not send. This governs bookkeeping about sends that have
-   * already happened: an intent only reaches `attempt_count = max_attempts` by
-   * being claimed, which a stopped tenant cannot be, so its attempts were
-   * genuinely spent while it was active. Refusing to say so until the tenant
-   * comes back would leave the row PENDING for as long as the pause lasts —
-   * the "reported as pending forever" state this sweep exists to end.
+   * already happened: an intent only reaches `spend = max_attempts` by being
+   * claimed and not handing the claim back, and a stopped tenant cannot be
+   * claimed, so those attempts were genuinely spent while it was active.
+   * Refusing to say so until the tenant comes back would leave the row PENDING
+   * for as long as the pause lasts — the "reported as pending forever" state
+   * this sweep exists to end.
    *
    * A pause is still not a verdict, and nothing here makes it one: a late
    * SUCCEEDED can move a swept row from FAILED to SENT whenever it arrives,
@@ -679,6 +703,22 @@ export class DrizzleNotificationRepository implements NotificationRepository {
    * FAILED with a gap where the deciding attempt should be, and the verdict is
    * invented somewhere the history does not show — which is the same "a state
    * nothing recorded" failure this module exists to make hard.
+   *
+   * GUARANTEED BY MECHANISM: no two sweeps take the same row (`FOR UPDATE SKIP
+   * LOCKED`), the read and the write cannot disagree (one statement), an intent
+   * whose claims came back unsent is never swept (the spend predicate), and the
+   * synthetic row can never abort the sweep (`ON CONFLICT DO NOTHING`, which is
+   * insurance rather than expectation).
+   *
+   * GUARANTEED BY ARGUMENT: that the synthetic row's attempt number stays free
+   * for a later claim. It is `attempt_count + 1`, which the NEXT claim would
+   * take — and the argument that it never does has two halves, both about
+   * callers. A swept intent is FAILED, and `claimDue` only claims PENDING; and
+   * the one thing that makes it PENDING again, `releaseClaim`'s restore,
+   * retires this number by recording it released and advancing `attempt_count`
+   * past it. Break either half and a delivered message becomes unrecordable —
+   * `recordAttempt`'s insert would hit the unique index, abort, and leave the
+   * status update unrun.
    */
   async failExhausted(
     now: Date,
@@ -750,10 +790,17 @@ export class DrizzleNotificationRepository implements NotificationRepository {
             // delivered message filed as permanently failed, by the change
             // written to stop exactly that.
             //
-            // `max_attempts + 1` is a number no claim can produce — `claimDue`
-            // only increments rows still below `max_attempts` — so the two
-            // records coexist: the sweep's conclusion, and then, if it lands,
-            // what actually happened.
+            // One past the counter, so the two records coexist: the sweep's
+            // conclusion, and then, if it lands, what actually happened.
+            //
+            // Nothing in the schema keeps this number free for the sweep — it
+            // is exactly the number the next claim would take. What keeps them
+            // apart is that a swept intent is FAILED and `claimDue` claims only
+            // PENDING, and that the one path back to PENDING is
+            // `releaseClaim`'s restore, which retires this number before
+            // anything can reuse it. Both are arguments about callers, not
+            // constraints, and the second one exists only because the first
+            // stopped being true when a sweep became reversible.
             attemptNumber: row.attemptCount + 1,
             transport: options.transport,
             outcome: 'FAILED_PERMANENT' as const,
@@ -787,6 +834,21 @@ export class DrizzleNotificationRepository implements NotificationRepository {
     readonly nextStatus: NotificationStatus;
     readonly nextAttemptAt: Date;
   }): Promise<{ readonly moved: boolean }> {
+    // GUARANTEED BY MECHANISM: the attempt row and the status change commit
+    // together (one transaction); one attempt number carries at most one
+    // attempt row (the unique index); a stale writer cannot move the intent
+    // (the ownership predicate) while a late SUCCEEDED still can (the wider
+    // one); and an attempt cannot be written on a number whose claim was handed
+    // back (a `BEFORE INSERT` trigger, since 0014 — this statement asks
+    // nothing, and before the trigger the mirror of `releaseClaim`'s guard did
+    // not exist anywhere).
+    //
+    // GUARANTEED BY ARGUMENT: that `attemptNumber` is the caller's own claim.
+    // Nothing here checks it against the counter before writing — the
+    // dispatcher passes `intent.attemptCount` from the claim it holds, and a
+    // caller passing somebody else's number would file an attempt against
+    // their claim. The status update would refuse to move the row, so the
+    // damage is confined to the evidence.
     return this.db.transaction(async (tx) => {
       await tx.insert(notificationDeliveryAttempts).values({
         id: input.attemptId,
@@ -835,10 +897,9 @@ export class DrizzleNotificationRepository implements NotificationRepository {
       // guess rather than a verdict. The only status it may not overwrite is
       // SENT, which already says the same thing.
       //
-      // Everything else requires OWNERSHIP of the claim. `attempt_count` is the
-      // claim's identity: it is incremented by the claim and names the attempt
-      // in flight, so a writer whose send outlived its lease finds it changed
-      // and its update matches nothing.
+      // Everything else requires OWNERSHIP of the claim, on the identity
+      // described above: a writer whose send outlived its lease finds
+      // `attempt_count` changed and its update matches nothing.
       const predicate =
         input.outcome === 'SUCCEEDED'
           ? [ne(notifications.status, 'SENT')]

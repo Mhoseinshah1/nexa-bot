@@ -89,8 +89,10 @@ export interface DispatchTickResult {
   /**
    * Claims handed back because the tenant stopped while the batch was running.
    *
-   * Not a failure and not a send: the intent is due again with its attempt
-   * returned, and stays queued until the installation is active.
+   * Not a failure and not a send: the attempt is returned, and the intent stays
+   * queued until the installation is active. Due again NOW only when the
+   * hand-back owns the current claim — a straggler returns its capacity without
+   * moving a live attempt's schedule.
    */
   readonly released: number;
   /**
@@ -424,6 +426,17 @@ export class NotificationDispatcher {
         // incremented, no attempt row, and nothing to explain it. The whole
         // point of that guard is that one intent cannot stop the batch, and
         // the hand-back was the one step still able to.
+        //
+        // GUARANTEED BY MECHANISM: the hand-back is idempotent (primary key on
+        // the attempt number), it cannot return capacity for a message that
+        // was sent (a trigger, since 0014), and it cannot cancel another
+        // worker's lease (the ownership predicate).
+        //
+        // GUARANTEED BY ARGUMENT: that `intent.attemptCount` is THIS tick's
+        // claim. It is, because `claimDue` returned the row after incrementing
+        // it and nothing between here and there re-reads the counter — but it
+        // is an argument about this loop, not a check, and passing a stale
+        // number here would return capacity for a claim somebody else holds.
         try {
           const handBack = await this.notifications.releaseClaim({
             tenantId: intent.tenantId,
@@ -442,8 +455,13 @@ export class NotificationDispatcher {
           //
           // A release is keyed by the attempt number it releases, so repeating
           // it is a no-op against the primary key whether or not the first
-          // call committed. That is what makes retrying correct here when
-          // retrying a decrement would have been a guess.
+          // call committed. Mechanism, not hope: that is what makes retrying
+          // correct here when retrying a decrement would have been a guess.
+          //
+          // The retry may report `restored` where the first call already did
+          // the restoring, which would double-count. It cannot: the restore is
+          // an UPDATE whose predicate requires the intent to be FAILED, and the
+          // first call left it PENDING, so a second pass matches nothing.
           //
           // Retried HERE because nothing else can. A claim that recorded
           // neither an attempt row nor a release is indistinguishable, in the
