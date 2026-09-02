@@ -61,6 +61,34 @@ export interface Logger {
  */
 export interface UnitOfWork<TTransaction = unknown> {
   run<T>(scope: ScopeContext, fn: (tx: TTransaction) => Promise<T>): Promise<T>;
+
+  /**
+   * A transaction whose statements all see ONE snapshot.
+   *
+   * `run` is READ COMMITTED: every statement takes its own snapshot, which is
+   * what an optimistic write predicate needs and what a multi-statement READ
+   * must not rely on. Two reads inside `run` can straddle another writer's
+   * commit and produce a reply describing a state that never existed. Use this
+   * where a reply is assembled from more than one read.
+   */
+  runSnapshot<T>(scope: ScopeContext, fn: (tx: TTransaction) => Promise<T>): Promise<T>;
+  /**
+   * A savepoint inside an existing transaction.
+   *
+   * For work that may fail WITHOUT taking the caller's transaction with it.
+   * That is not something a `try`/`catch` can provide: in Postgres a failed
+   * statement aborts the whole transaction, so catching the error leaves every
+   * later statement failing with `current transaction is aborted` and loses the
+   * caller's own write — while the catch block reports that it kept it.
+   *
+   * Used by the operational-event projector, whose contract is that the event
+   * survives a projection that could not be built.
+   */
+  runNested<T>(
+    scope: ScopeContext,
+    tx: TTransaction,
+    fn: (tx: TTransaction) => Promise<T>,
+  ): Promise<T>;
 }
 
 /**
@@ -96,6 +124,21 @@ export interface IdempotencyStore {
     key: string,
     requestHash: string,
   ): Promise<IdempotencyRecord<TResult> | null>;
+  /**
+   * Stores the result of a completed command against its key.
+   *
+   * Returns FALSE when a record for this key already existed, which is the
+   * signal that a concurrent request with the same key won the race. It is not
+   * decoration: `find` runs before the work and cannot see a request that has
+   * not committed yet, so two simultaneous submissions of one key both find
+   * nothing and both do the work. The insert is where they meet, and a caller
+   * that ignores the answer has an idempotency key that stops a SEQUENTIAL
+   * replay and nothing else — precisely the case a double-clicked button
+   * produces.
+   *
+   * The loser should abandon its transaction, so its half of the duplicate work
+   * is rolled back rather than committed beside the winner's.
+   */
   remember<TResult>(
     scope: ScopeContext,
     namespace: IdempotencyNamespace,
@@ -103,7 +146,7 @@ export interface IdempotencyStore {
     requestHash: string,
     result: TResult,
     tx?: unknown,
-  ): Promise<void>;
+  ): Promise<boolean>;
 }
 
 export const AUDIT_RESULTS = ['SUCCESS', 'DENIED', 'FAILED'] as const;
@@ -153,8 +196,46 @@ export interface OperationalEventInput {
   readonly recoversCode?: string;
 }
 
+/**
+ * What was actually recorded.
+ *
+ * `isNew` is the field that matters. A deduplicated condition collapses onto one
+ * row and increments a counter, so a projection driven by these — an alert, a
+ * notification — fires once per CONDITION rather than once per occurrence. The
+ * legacy log group posted the same expired-TLS error 36 + 15 + 8 + 1 times in a
+ * single day because nothing anywhere could tell those apart (BUG-LGR-028).
+ *
+ * `reopened` says the row had been marked resolved and this occurrence opened it
+ * again, which is worth telling somebody about even though the row is not new.
+ */
+export interface RecordedOperationalEvent {
+  readonly id: string;
+  readonly code: string;
+  readonly severity: OperationalSeverity;
+  readonly message: string;
+  readonly occurrenceCount: number;
+  readonly firstSeenAt: Date;
+  readonly lastSeenAt: Date;
+  readonly isNew: boolean;
+  readonly reopened: boolean;
+}
+
 export interface OperationalEventRecorder {
-  record(scope: ScopeContext, event: OperationalEventInput): Promise<void>;
+  /**
+   * Records what happened.
+   *
+   * `tx` joins the caller's transaction, the same way the audit writer and the
+   * idempotency store do. It matters for the projection into a notification:
+   * without it, the event and the decision to tell somebody about it are two
+   * separate commits, and a process that dies between them loses the alert
+   * PERMANENTLY — the condition's next occurrence is a repeat, not a new one,
+   * so nothing would announce it until it resolved and came back.
+   */
+  record(
+    scope: ScopeContext,
+    event: OperationalEventInput,
+    tx?: unknown,
+  ): Promise<RecordedOperationalEvent>;
 }
 
 /**

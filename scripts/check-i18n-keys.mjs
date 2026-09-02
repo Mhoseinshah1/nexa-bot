@@ -55,20 +55,56 @@ function walk(dir, out = []) {
 }
 
 const offenders = [];
-for (const file of walk('apps/api/src/surfaces')) {
-  const source = readFileSync(file, 'utf8');
-  source.split('\n').forEach((line, index) => {
-    // Comments explaining the legacy behaviour may quote Persian; code may not.
-    const trimmed = line.trim();
-    if (trimmed.startsWith('*') || trimmed.startsWith('//')) return;
-    if (PERSIAN.test(line)) offenders.push(`${file}:${index + 1}: ${trimmed}`);
-  });
+
+/**
+ * Both surfaces are checked, not just the server's.
+ *
+ * `docs/conventions.md` has said since Phase 0 that web-only chrome is
+ * namespaced `web.*` and "checked by the same script" — and it was not: this
+ * walked `apps/api/src/surfaces` only. The claim is now true. The web
+ * catalogue itself is the one file allowed to contain Persian, since holding it
+ * is its entire job.
+ */
+const SURFACE_DIRS = ['apps/api/src/surfaces', 'apps/web/src'];
+const CATALOGUE_FILES = new Set(['apps/web/src/i18n/web.fa.ts']);
+
+for (const dir of SURFACE_DIRS) {
+  for (const file of walk(dir)) {
+    if (CATALOGUE_FILES.has(file)) continue;
+    const source = readFileSync(file, 'utf8');
+    source.split('\n').forEach((line, index) => {
+      // Comments explaining the legacy behaviour may quote Persian; code may not.
+      const trimmed = line.trim();
+      if (trimmed.startsWith('*') || trimmed.startsWith('//')) return;
+      if (PERSIAN.test(line)) offenders.push(`${file}:${index + 1}: ${trimmed}`);
+    });
+  }
 }
 
 if (offenders.length > 0) {
   fail('Hard-coded Persian strings in a surface', offenders);
 } else {
-  console.log('ok    no hard-coded customer-facing strings in surfaces');
+  console.log(`ok    no hard-coded customer-facing strings in ${SURFACE_DIRS.join(' or ')}`);
+}
+
+// --- every web.* key is used, and every used key exists ---------------------
+// The type system already catches a MISSING key, because `t()` is typed against
+// the catalogue. What it cannot catch is a key nobody renders any more, which is
+// how a catalogue turns into an archaeological record.
+const catalogueSource = readFileSync('apps/web/src/i18n/web.fa.ts', 'utf8');
+const declaredWebKeys = [...catalogueSource.matchAll(/'(web\.[a-z0-9_]+)':/g)].map((m) => m[1]);
+
+const webUsage = walk('apps/web/src')
+  .filter((file) => !CATALOGUE_FILES.has(file))
+  .map((file) => readFileSync(file, 'utf8'))
+  .join('\n');
+
+const unusedWebKeys = declaredWebKeys.filter((key) => !webUsage.includes(`'${key}'`));
+
+if (unusedWebKeys.length > 0) {
+  fail('Web catalogue keys nothing renders', unusedWebKeys);
+} else {
+  console.log(`ok    all ${declaredWebKeys.length} web.* keys are rendered somewhere`);
 }
 
 console.log();

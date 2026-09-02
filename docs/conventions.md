@@ -171,12 +171,22 @@ namespaced (`web.*`) and checked by the same script.
 
 **Why.** In the legacy system the Persian caption _is_ the identifier, so
 renaming a button renames its key. The template editor echoes the **rendered**
-string, so saving from that view once baked an admin's own name into
-`{first_name}` for roughly 13,700 customers. Placeholders are unvalidated and
-overloaded: `{time}` means both "now" and "service duration".
+string — `{first_name}` resolves in the viewing admin's own context — so the raw
+template cannot be read back from the edit screen, and saving from that view
+would bake the editor's own name into the template. That last consequence is a
+hazard rather than a recorded event: the investigation deliberately never sent a
+character to the bot (TBR-TXT-004; `bot-text-management-knowledge/incidents.md`).
+The corruption that _did_ happen is INCIDENT-FIN-001, where a typed menu label
+was swallowed by a value-capture prompt and overwrote a production tutorial text.
+Placeholders are unvalidated and overloaded: `{time}` means both "now" and
+"service duration".
 
 **Enforced by.** `check-i18n-keys.mjs` fails on a missing key, an undeclared
-token, or a hard-coded Persian string in a surface.
+token, a hard-coded Persian string in **either** surface, or a `web.*` key
+nothing renders any more. `validateTemplateBody` in `@nexa/contracts` refuses a
+body that uses an undeclared token, drops a required one, or repeats a
+single-use one; the web editor, the service and the tests all call that one
+function, so they cannot disagree about what is valid.
 
 ---
 
@@ -190,8 +200,11 @@ resolved source, and what `0` or empty means. No write-only setters.
 captures the next message whatever it is, this is exactly how a production
 gateway setting was overwritten by an ordinary chat message.
 
-**Enforced by.** Nothing yet; no settings surface exists. The rule is recorded
-so the first one is built correctly.
+**Enforced by.** The settings registry (`@nexa/contracts`), where declaring what
+`0` or empty means is a required field rather than a comment, and
+`SettingsService`, whose every read returns the value, its resolved source and
+that declaration. Asserted over HTTP in `tests/integration/control-plane-http`.
+There is no write-to-read path anywhere in the module.
 
 ---
 
@@ -207,8 +220,15 @@ the money. A single "optimisation" button deletes six order classes with no
 count, no dry run, no undo and no record of prior runs. The whole-bot kill
 switch is rendered identically to the dice toggle.
 
-**Enforced by.** Nothing yet; no bulk operation exists. See
-`docs/adr/0010-destructive-operations.md`.
+**Enforced by.** Partially, and only where something destructive exists yet. A
+feature flag declares its blast radius, and a `TENANT_WIDE` one is refused
+unless the caller types the flag's own key and gives a reason — which the audit
+row then carries. The web admin draws such a flag differently from a local one,
+because the legacy capability screen renders the whole-bot kill switch
+identically to the dice toggle.
+
+No bulk operation exists yet, so the dry-run and counted-preview steps have
+nothing to apply to. See `docs/adr/0010-destructive-operations.md`.
 
 ---
 
@@ -222,15 +242,23 @@ changed nothing — re-adding an existing admin, a settings write, a panel
 creation against an unreachable host. It is a cultural pattern there, which
 makes it a review responsibility here.
 
-**Enforced by.** `check-boundaries.sh` and the ESLint `no-empty` rule.
+**Enforced by.** `check-boundaries.sh` and the ESLint `no-empty` rule. From
+Phase 2 the control-plane write responses also carry `changed`, so a save that
+landed on the value already stored says so instead of answering "saved" — a
+response that cannot express "nothing changed" cannot comply with this rule
+however carefully the service works it out.
 
 ---
 
 ## Secrets
 
 **Rule.** Stored credentials are envelope-encrypted with a data key wrapped by a
-key-encryption key held outside the database. The `keyId` travels with the
-ciphertext so keys rotate. Masking is computed server-side. No API response ever
+key-encryption key held outside the database. The `keyId` is recorded against
+each row so a future rotation can tell which key wrote it — v1 cannot yet
+perform that rotation, because exactly one KEK is configured and rows written
+by a retired key become unreadable. That is `BLOCKER-SECRETS-V2` in
+`docs/open-questions.md`, and it must land before Phase 3 introduces provider
+credentials. Masking is computed server-side. No API response ever
 contains a credential, and credentials are never entered through Telegram.
 
 **Why.** The legacy panel detail page renders a masked field followed by the
@@ -241,13 +269,28 @@ backup of both.
 **Enforced by.** Unit tests for round-trip, wrong key, tampering and masking; an
 integration test asserts the repository read model never carries the plaintext.
 
-**One redactor, used everywhere.** `apps/api/src/infrastructure/redaction.ts` is
-the single implementation, shared by the logger, the audit log and the
-operational log. It traverses arrays as well as objects, bounds its recursion,
-survives a cyclic value, and **fails closed on a key it cannot read** — a
-homoglyph or a non-Latin key is redacted rather than passed through, because a
-false positive costs a log line and a false negative costs a secret. Two
-divergent implementations existed before, and both had holes.
+**One redaction module, two rules.** `apps/api/src/infrastructure/redaction.ts`
+is the single implementation of both, and which one applies depends on the shape
+of what is being written rather than on which caller is writing it.
+
+`redactSecrets` decides by KEY, and is what the logger, the audit log and the
+operational log use for their structured records. It traverses arrays as well as
+objects, bounds its recursion, survives a cyclic value, and **fails closed on a
+key it cannot read** — a homoglyph or a non-Latin key is redacted rather than
+passed through, because a false positive costs a log line and a false negative
+costs a secret.
+
+`redactSecretText` decides by CONTENT, and is for free text from a third party.
+A key rule has nothing to match on in a sentence: wrapping a message in
+`{ message }` and passing it to the key rule matched nothing at all, and that is
+how the notification-attempt column spent a commit being truncated under a
+comment that said it was redacted. Its one sink today is that column, which is
+append-only and is returned over HTTP. Its fragment list is deliberately
+NARROWER than the key rule's — over-matching a key costs one field, over-matching
+prose costs the operator the sentence they needed.
+
+Two divergent implementations of the key rule existed before this module, and
+both had holes.
 
 ---
 

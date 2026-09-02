@@ -35,6 +35,55 @@ export class DrizzleUnitOfWork implements UnitOfWork<TransactionScope> {
   }
 
   /**
+   * A transaction whose statements all see ONE snapshot.
+   *
+   * `run` is READ COMMITTED, which is the connection default and the right
+   * choice for a write: each statement sees the newest committed state, which
+   * is what an optimistic predicate needs. It is the wrong choice for a
+   * multi-statement READ that has to be internally consistent — two reads in a
+   * `run` can straddle somebody else's commit and produce a reply describing a
+   * state that never existed.
+   *
+   * That distinction is why this is a separate method rather than an option:
+   * the previous code wrapped two reads in `run` under a comment saying they
+   * were therefore atomic, and they were not.
+   */
+  async runSnapshot<T>(scope: ScopeContext, fn: (tx: TransactionScope) => Promise<T>): Promise<T> {
+    return this.db.transaction(async (tx) => fn({ tx, scope }), {
+      isolationLevel: 'repeatable read',
+    });
+  }
+
+  /**
+   * A savepoint inside the caller's transaction.
+   *
+   * Drizzle turns a nested `transaction()` into `SAVEPOINT` / `ROLLBACK TO`,
+   * which is the only thing that makes "this part may fail and the rest
+   * stands" true in Postgres. A plain try/catch does not: the failed statement
+   * has already aborted the transaction, so the catch keeps nothing and the
+   * caller's write dies with `current transaction is aborted` instead of with
+   * the error that actually happened.
+   */
+  async runNested<T>(
+    scope: ScopeContext,
+    tx: TransactionScope,
+    fn: (tx: TransactionScope) => Promise<T>,
+  ): Promise<T> {
+    // A SAVEPOINT requires a live transaction. Drizzle's `transaction()` exists
+    // on the pooled database too, where it opens an independent `BEGIN` — and
+    // an independent transaction commits on its own, so a caller believing it
+    // had a savepoint would silently have a second, unrelated write. The
+    // callers here reach this through a `tx?: unknown` parameter and an
+    // unchecked cast, so the type system is not what keeps that from happening.
+    if (!isTransactionScope(tx)) {
+      throw new Error(
+        'runNested was given something that is not a transaction scope; a SAVEPOINT needs a live transaction.',
+      );
+    }
+    return tx.tx.transaction(async (nested) => fn({ tx: nested, scope }));
+  }
+
+  /**
    * Convenience wrapper for the common tenant-scoped case.
    *
    * DELIBERATELY UNUSED, and not to be removed as dead code.
@@ -91,4 +140,23 @@ export function scopeRef(scope: ScopeContext, namespace: string): string {
 /** The nullable `tenant_id` column value for a scope. */
 export function scopeTenantId(scope: ScopeContext): string | null {
   return isSystemContext(scope) ? null : scope.tenantId;
+}
+
+/**
+ * Whether a value really is a live transaction scope.
+ *
+ * Structural, because the shape is what matters: `tx.tx` must be a Drizzle
+ * transaction object rather than the pool. A pooled `Database` also has
+ * `transaction`, which is exactly why `typeof tx.tx.transaction === 'function'`
+ * is not sufficient on its own — the discriminator is the `rollback` method
+ * that only a transaction carries.
+ */
+function isTransactionScope(value: unknown): value is TransactionScope {
+  if (typeof value !== 'object' || value === null) return false;
+  const inner = (value as { tx?: unknown }).tx;
+  return (
+    typeof inner === 'object' &&
+    inner !== null &&
+    typeof (inner as { rollback?: unknown }).rollback === 'function'
+  );
 }

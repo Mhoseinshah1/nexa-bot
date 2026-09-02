@@ -180,6 +180,46 @@ export const configSchema = z
     OUTBOX_RELAY_POLL_INTERVAL_MS: z.coerce.number().int().min(50).max(60_000).default(1000),
     OUTBOX_RELAY_MAX_LAG_MS: z.coerce.number().int().min(1000).default(300_000),
 
+    /**
+     * How long a graceful shutdown may take before the process leaves anyway.
+     *
+     * Shorter than an orchestrator's grace period, deliberately: the point is
+     * to exit with a log line saying what was stuck, rather than to be killed
+     * mid-sentence and leave the operator guessing.
+     */
+    SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(15_000),
+
+    /**
+     * Which transport carries operational notifications.
+     *
+     * `recording` keeps messages in memory instead of sending them, for tests.
+     * The refinement below refuses it outside development: a deployment that
+     * selected it would report every notification delivered while nothing left
+     * the process, which is the "reports success for a write that did not
+     * happen" pattern this codebase exists to avoid — on the one channel whose
+     * job is to tell somebody things are broken.
+     */
+    NOTIFICATION_TRANSPORT: z.enum(['telegram', 'recording']).default('telegram'),
+    /**
+     * Overridable so tests can point at a local stub rather than the real API.
+     * Production insists on HTTPS; see the cross-field check below.
+     */
+    TELEGRAM_API_BASE_URL: z.string().url().default('https://api.telegram.org'),
+    NOTIFICATION_SEND_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(10_000),
+    NOTIFICATION_DISPATCH_ENABLED: booleanish.default(true),
+    NOTIFICATION_DISPATCH_INTERVAL_MS: z.coerce.number().int().min(50).max(60_000).default(2000),
+    NOTIFICATION_DISPATCH_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(10),
+    /**
+     * How long a claimed intent stays claimed.
+     *
+     * Longer than any plausible send, so a slow Telegram cannot produce a second
+     * dispatcher sending the same message; short enough that a process killed
+     * mid-send releases its work in minutes rather than never.
+     */
+    NOTIFICATION_CLAIM_LEASE_MS: z.coerce.number().int().min(5_000).max(600_000).default(120_000),
+    NOTIFICATION_BACKOFF_BASE_MS: z.coerce.number().int().min(100).max(60_000).default(5_000),
+    NOTIFICATION_BACKOFF_MAX_MS: z.coerce.number().int().min(1000).max(3_600_000).default(300_000),
+
     BUILD_VERSION: z.string().default('0.0.0-dev'),
     BUILD_COMMIT: z.string().default('unknown'),
     BUILD_TIME: z.string().default('unknown'),
@@ -190,10 +230,41 @@ export const configSchema = z
         code: 'custom',
         path: ['AUTH_MODE'],
         message:
-          'AUTH_MODE=none is permitted only when NODE_ENV=development. Phase 0 ships no authentication; ' +
-          'see docs/adr/0009-identity-and-auth.md before deploying.',
+          'AUTH_MODE=none is permitted only when NODE_ENV=development. Authentication is real from ' +
+          'Phase 1 onward — this setting disables it, and outside development that is a deployment ' +
+          'with no front door. See docs/adr/0013-web-admin-authentication.md.',
       });
     }
+    if (config.NODE_ENV === 'production') {
+      // Parsed, not string-matched. An `includes('https')` accepts
+      // `http://evil.example.com/?x=https://api.telegram.org`, and a
+      // `startsWith('https')` rejects `HTTPS://api.telegram.org`, which is the
+      // same scheme spelled differently. The protocol is a field; read the
+      // field.
+      //
+      // Not silently rewritten to https either. A bot token travels in the URL
+      // path of every Telegram call, so an http:// base means every send
+      // publishes the credential to the network — and quietly "fixing" the
+      // value would hide that somebody had configured it, which is worth
+      // knowing about a deployment.
+      let protocol: string | null;
+      try {
+        protocol = new URL(config.TELEGRAM_API_BASE_URL).protocol;
+      } catch {
+        protocol = null;
+      }
+      if (protocol !== 'https:') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['TELEGRAM_API_BASE_URL'],
+          message:
+            'TELEGRAM_API_BASE_URL must use https in production. The bot token is part of every ' +
+            'request path, so an insecure base URL publishes the credential on the wire. A local ' +
+            'http stub is permitted outside production.',
+        });
+      }
+    }
+
     if (config.PASSWORD_HASH_PROFILE === 'fast' && config.NODE_ENV === 'production') {
       ctx.addIssue({
         code: 'custom',
@@ -299,6 +370,25 @@ export const configSchema = z
             'exactly what the browser sends, which is the serialized origin and nothing else.',
         });
       }
+    }
+    if (config.NOTIFICATION_TRANSPORT === 'recording' && config.NODE_ENV !== 'development') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['NOTIFICATION_TRANSPORT'],
+        message:
+          'NOTIFICATION_TRANSPORT=recording is permitted only when NODE_ENV=development. It keeps ' +
+          'messages in memory instead of sending them, so an installation running it would look ' +
+          'healthy while every operational alert went nowhere.',
+      });
+    }
+    if (config.NOTIFICATION_BACKOFF_MAX_MS < config.NOTIFICATION_BACKOFF_BASE_MS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['NOTIFICATION_BACKOFF_MAX_MS'],
+        message:
+          'NOTIFICATION_BACKOFF_MAX_MS must be at least NOTIFICATION_BACKOFF_BASE_MS; otherwise the ' +
+          'cap is shorter than the first wait and the back-off never grows.',
+      });
     }
     if (config.TELEGRAM_WEBHOOK_ENABLED && config.TELEGRAM_WEBHOOK_SECRET.length < 16) {
       ctx.addIssue({

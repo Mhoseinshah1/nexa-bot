@@ -1,9 +1,13 @@
 import {
   CURRENCY_EXPONENT,
+  isMoneyValue,
+  placeholderTokensIn,
   templateDefinition,
   TEMPLATE_KEYS,
   type Money,
+  type TemplateDefinition,
   type TemplateKey,
+  type TemplateValue,
   type TemplateValues,
   type Translator,
 } from '@nexa/contracts';
@@ -66,9 +70,57 @@ const CURRENCY_UNIT: Record<Locale, Partial<Record<Money['currency'], string>>> 
   fa: { IRT: 'تومان', IRR: 'ریال', USD: 'دلار', EUR: 'یورو', USDT: 'تتر' },
 };
 
-function renderValue(value: string | number | bigint | Date): string {
+/**
+ * Escapes the five characters Telegram's HTML parser treats as markup.
+ *
+ * Applied to INTERPOLATED VALUES, never to the template body. The body's markup
+ * was written by an administrator and is the point of choosing that format; a
+ * value comes from an event message, a code or a display name and has no
+ * business closing a tag. Without this, an operational event whose message
+ * contains `<` breaks the parse and the notification fails to send — silently,
+ * on the one channel that exists to tell somebody things are failing.
+ */
+export function escapeTelegramHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderValue(value: TemplateValue, locale: Locale): string {
+  if (isMoneyValue(value)) return formatMoney(value, locale);
   if (value instanceof Date) return value.toISOString();
   return String(value);
+}
+
+/**
+ * Renders one body against one key's declaration.
+ *
+ * The single renderer. The built-in catalogue and a tenant's override go
+ * through this same function, so a message cannot render differently depending
+ * on whether somebody has customised it.
+ *
+ * Only DECLARED tokens are substituted. An undeclared token is left exactly as
+ * written — which is what lets `اشتراک رایگان {تست}` survive, and what makes an
+ * undeclared token in the built-in catalogue a CI failure rather than the string
+ * "undefined" reaching a customer.
+ */
+export function renderTemplateBody(
+  definition: TemplateDefinition,
+  body: string,
+  values: TemplateValues,
+  locale: Locale = DEFAULT_LOCALE,
+): string {
+  const declared = new Set(definition.placeholders.map((p) => p.token));
+  const escape = definition.format === 'TELEGRAM_HTML' ? escapeTelegramHtml : (s: string) => s;
+
+  return body.replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, token: string) => {
+    if (!declared.has(token)) return match;
+    const value = values[token];
+    return value === undefined ? match : escape(renderValue(value, locale));
+  });
 }
 
 export class CatalogueTranslator implements Translator {
@@ -81,16 +133,7 @@ export class CatalogueTranslator implements Translator {
   translate(key: TemplateKey, values: TemplateValues = {}): string {
     const template = CATALOGUES[this.locale][key];
     if (template === undefined) throw new MissingTranslationError(key, this.locale);
-
-    // Only declared placeholders are substituted. An undeclared token in the
-    // template is left alone and reported by the missing-key check, rather than
-    // being silently replaced with "undefined".
-    const declared = new Set(templateDefinition(key).placeholders.map((p) => p.token));
-    return template.replace(/\{(\w+)\}/g, (match, token: string) => {
-      if (!declared.has(token)) return match;
-      const value = values[token];
-      return value === undefined ? match : renderValue(value);
-    });
+    return renderTemplateBody(templateDefinition(key), template, values, this.locale);
   }
 }
 
@@ -114,8 +157,7 @@ export function auditCatalogue(locale: Locale): {
       continue;
     }
     const declared = new Set(templateDefinition(key).placeholders.map((p) => p.token));
-    for (const match of text.matchAll(/\{(\w+)\}/g)) {
-      const token = match[1] as string;
+    for (const token of placeholderTokensIn(text)) {
       if (!declared.has(token)) undeclaredTokens.push({ key, token });
     }
   }

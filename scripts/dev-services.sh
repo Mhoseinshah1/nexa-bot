@@ -108,5 +108,5 @@ cat <<EOF
     DATABASE_URL=postgres://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/nexa_dev
     REDIS_URL=redis://127.0.0.1:6379
 
-    Next: pnpm db:migrate && pnpm db:seed
+    Next: pnpm db:migrate:dev && pnpm db:seed:dev   (or pnpm build first, then the compiled db:migrate)
 EOF

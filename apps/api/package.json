@@ -11,11 +11,14 @@
     "start:api": "node dist/main.js",
     "start:worker": "node dist/main.worker.js",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/infrastructure/persistence/migrate.ts",
+    "db:migrate": "node dist/infrastructure/persistence/migrate.js",
     "db:check": "bash ../../scripts/check-migration-drift.sh",
-    "db:seed": "tsx src/infrastructure/persistence/seed.ts",
+    "db:seed": "node dist/infrastructure/persistence/seed.js",
     "clean": "rm -rf dist",
-    "admin:bootstrap": "tsx src/bootstrap-owner.cli.ts"
+    "admin:bootstrap": "node dist/bootstrap-owner.cli.js",
+    "db:migrate:dev": "tsx src/infrastructure/persistence/migrate.ts",
+    "db:seed:dev": "tsx src/infrastructure/persistence/seed.ts",
+    "admin:bootstrap:dev": "tsx src/bootstrap-owner.cli.ts"
   },
   "dependencies": {
     "@nexa/contracts": "workspace:*",
@@ -23,10 +26,8 @@
     "@nestjs/common": "12.0.1",
     "@nestjs/core": "12.0.1",
     "@nestjs/platform-fastify": "12.0.1",
-    "bullmq": "6.3.4",
     "drizzle-orm": "0.45.2",
     "fastify": "5.12.1",
-    "grammy": "1.46.0",
     "ioredis": "5.9.0",
     "pg": "8.23.0",
     "pino": "10.3.1",

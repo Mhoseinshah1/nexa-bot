@@ -77,6 +77,13 @@ export const EVENT_TYPES = [
   'AdminStatusChanged',
   'AdminRolesChanged',
   'AdminPasswordChanged',
+
+  // Control plane — Phase 2. Configuration changes are events because other
+  // modules must be able to react to them; the audit row beside each one
+  // answers a different question and is not a substitute.
+  'TemplateOverrideChanged',
+  'TemplateOverrideReverted',
+  'FeatureFlagChanged',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -87,7 +94,15 @@ export function isEventType(value: string): value is EventType {
   return EVENT_TYPE_SET.has(value);
 }
 
-export const AGGREGATE_TYPES = ['System', 'Tenant', 'BotInstance', 'Setting', 'Admin'] as const;
+export const AGGREGATE_TYPES = [
+  'System',
+  'Tenant',
+  'BotInstance',
+  'Setting',
+  'Admin',
+  'Template',
+  'FeatureFlag',
+] as const;
 export type AggregateType = (typeof AGGREGATE_TYPES)[number];
 
 /**
@@ -116,6 +131,24 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   }),
   // Carries no password material of any kind, not even a length.
   AdminPasswordChanged: z.object({ bySelf: z.boolean() }),
+
+  // Carries the revision number, not the body. A domain event is relayed and
+  // may be projected anywhere; a template body is up to four kilobytes of
+  // customer-facing copy and belongs in the revision table it was written to.
+  TemplateOverrideChanged: z.object({
+    key: z.string(),
+    locale: z.string(),
+    revision: z.number().int().positive(),
+    /** Null when this is the tenant's first override of the key. */
+    previousRevision: z.number().int().positive().nullable(),
+  }),
+  TemplateOverrideReverted: z.object({
+    key: z.string(),
+    locale: z.string(),
+    /** The revision that records the revert itself. History is not rewound. */
+    revision: z.number().int().positive(),
+  }),
+  FeatureFlagChanged: z.object({ key: z.string(), from: z.boolean(), to: z.boolean() }),
 } as const satisfies Record<EventType, z.ZodType>;
 
 export type EventPayload<T extends EventType> = z.infer<(typeof EVENT_PAYLOAD_SCHEMAS)[T]>;

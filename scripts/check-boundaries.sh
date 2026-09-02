@@ -25,6 +25,50 @@ pass() {
   echo "ok    $1"
 }
 
+# A directory a check below assumes exists.
+#
+# Without this a rename makes `grep -r` on a missing path return nothing, which
+# reads as "no violations" and passes. A check that cannot fail is worse than no
+# check, because it is on the CI report saying the rule holds.
+require_dir() {
+  if [ ! -d "$1" ]; then
+    fail "Expected directory $1 does not exist" \
+         "Every check over it would pass vacuously. Update this script for the new layout."
+    return 1
+  fi
+  return 0
+}
+
+# Source lines with comment lines removed.
+#
+# `grep -r` matches a rule's own documentation: the money check fired on a
+# comment reading `amount: number` that was EXPLAINING why that is banned, and
+# the only way past it was to reword the comment. Prose about a rule is not a
+# violation of it.
+scan_source() {
+  local pattern="$1"
+  shift
+  grep -rnE "$pattern" "$@" --include=*.ts 2>/dev/null \
+    | grep -vE ':[0-9]+:[[:space:]]*(//|\*|/\*)' || true
+}
+
+# EVERY root a check below scans, not a sample of them. The first version
+# listed five and left four unasserted — including `apps/api/drizzle`, which
+# carries the balance-column rule, one of CLAUDE.md's non-negotiables, and
+# `docs/research`, whose sanitization scan was wrapped in an `if [ -d ]` with no
+# else, so a rename skipped it and printed nothing at all.
+for dir in \
+  packages/contracts/src \
+  packages/i18n/src \
+  apps/api/src \
+  apps/api/src/surfaces \
+  apps/api/src/modules \
+  apps/api/drizzle \
+  apps/web/src \
+  docs/research; do
+  require_dir "$dir" || true
+done
+
 # --- @nexa/contracts is the root of the dependency graph --------------------
 # It holds declarations only. A framework import here means an implementation
 # has leaked into the specification.
@@ -94,6 +138,83 @@ else
   pass "the owner bootstrap is not reachable from any surface"
 fi
 
+# --- The application layer names what it needs, not who provides it ---------
+# `@nexa/contracts` is the shared specification and may be imported anywhere.
+# `@nexa/i18n` is an IMPLEMENTATION of part of it — a catalogue and a renderer —
+# and belongs behind a port like any other adapter.
+#
+# This drifted once already: three application files reached for `CATALOGUE_FA`
+# and `renderTemplateBody` directly, and the cost showed up as a `defaultBody`
+# that threw for every locale but `fa`, so the second-locale path ADR-0016
+# describes could not be exercised by a test.
+if [ -n "$INNER_DIRS" ]; then
+  # Both quote styles and any subpath. The first version matched the exact
+  # string `from '@nexa/i18n'`, so `from "@nexa/i18n"` and
+  # `from '@nexa/i18n/catalogue.js'` — the two forms a leak is most likely to
+  # take once someone is reaching past a rule — went straight through it.
+  I18N_LEAK=$(scan_source "from ['\"]@nexa/i18n(/[^'\"]*)?['\"]" $INNER_DIRS)
+  if [ -n "$I18N_LEAK" ]; then
+    fail "A domain or application file imports @nexa/i18n directly" "$I18N_LEAK" \
+         "Declare a port and bind the catalogue in container.ts."
+  else
+    pass "domain and application layers reach the catalogue through a port"
+  fi
+fi
+
+# And the surfaces. A controller that renders from the catalogue itself is a
+# second renderer beside `TemplateResolver`, which is how the legacy system came
+# to hold 36 editable texts in one surface and 608 in the other.
+#
+# OUTSIDE the block above, deliberately. It was nested inside `[ -n
+# "$INNER_DIRS" ]` — a variable it does not use — so renaming the MODULES tree
+# would have silently skipped this check over the SURFACES tree and printed
+# neither ok nor FAIL.
+SURFACE_I18N=$(scan_source "from ['\"]@nexa/i18n(/[^'\"]*)?['\"]" apps/api/src/surfaces)
+if [ -n "$SURFACE_I18N" ]; then
+  fail "A surface imports @nexa/i18n directly" "$SURFACE_I18N" \
+       "Surfaces send a template KEY. The catalogue is resolved behind the application layer."
+else
+  pass "surfaces do not render from the catalogue themselves"
+fi
+
+# --- Unguarded resolvers stay out of the surfaces ---------------------------
+# `SettingsResolver`, `FeatureFlagResolver` and `TemplateResolver` deliberately
+# skip the permission guard, because the code that uses them — a worker deciding
+# how to behave — has no actor to authorize. That argument holds only while a
+# SURFACE cannot reach them: from a controller they are an unauthenticated read
+# of every setting in the session's tenant.
+#
+# `NotificationService.queue` is here for the same reason in the other
+# direction: it is an unguarded WRITE, correct for a projection that nobody
+# asked for and wrong for anything a request can reach.
+#
+# Two comments in the codebase claimed this check existed before it did. It does
+# now.
+#
+# `opsLogWriter` is named for the same reason in the other direction. It is the
+# recorder WITHOUT the notification projection, exposed on the container so the
+# projection's own settings resolver and the dispatcher can avoid being
+# producers of the work they consume. A surface reaching it would record a
+# condition that never becomes a message — the projector's docblock says the
+# projection "cannot be forgotten at a call site", and that is true only while
+# nothing a request can reach holds the raw recorder.
+#
+# `failExhausted`, `claimDue`, `activeTenants` and `releaseClaim` are named too.
+# All four are cross-tenant installation housekeeping, and the argument that
+# this is safe rests entirely on their being unreachable from a request — an
+# argument the check previously made only about the DISPATCHER's name, while
+# the repository methods themselves were one `container.notificationRepository`
+# away from a controller.
+RESOLVER_LEAK=$(grep -rnE "settingsResolver|featureFlagResolver|templateResolver|notifications\.queue\(|notificationDispatcher|NotificationDispatcher|failExhausted|claimDue|activeTenants|releaseClaim|opsLogWriter" \
+  apps/api/src/surfaces 2>/dev/null || true)
+if [ -n "$RESOLVER_LEAK" ]; then
+  fail "A surface reaches an unguarded resolver, the notification queue, the dispatcher, or cross-tenant housekeeping" \
+       "$RESOLVER_LEAK" \
+       "Call the guarded service. The resolvers exist for code with no actor to authorize."
+else
+  pass "surfaces reach no unguarded resolver, queue or dispatcher"
+fi
+
 # --- Authorization is not decided in a surface ------------------------------
 # UI visibility is not authorization. A controller that resolves permissions
 # itself is a controller that can decide differently from the service the
@@ -110,8 +231,8 @@ fi
 # --- No password or session material is logged or persisted raw -------------
 # A password reaching a log or an audit column is unrecoverable: it is in the
 # backups before anyone notices.
-SECRET_LEAK=$(grep -rnE "(after|before|context):\s*\{[^}]*\b(password|passwordHash|token)\b" \
-  apps/api/src --include=*.ts 2>/dev/null | grep -v "tokenSecretRef" || true)
+SECRET_LEAK=$(scan_source "(after|before|context):\s*\{[^}]*\b(password|passwordHash|token)\b" apps/api/src \
+  | grep -v "tokenSecretRef" || true)
 if [ -n "$SECRET_LEAK" ]; then
   fail "A credential is written into an audit or log payload" "$SECRET_LEAK" \
        "Audit the fact of the change, never the material."
@@ -121,10 +242,9 @@ fi
 
 # --- Money is never a float or a bare number -------------------------------
 # A float that reaches production is very expensive to find.
-if grep -rnE "(amount|price|balance|total)\s*:\s*number" \
-     packages/contracts/src apps/api/src 2>/dev/null >/dev/null; then
-  fail "A monetary field is typed as number" \
-       "$(grep -rnE "(amount|price|balance|total)\s*:\s*number" packages/contracts/src apps/api/src 2>/dev/null)" \
+MONEY_AS_NUMBER=$(scan_source "(amount|price|balance|total)\s*:\s*number" packages/contracts/src apps/api/src)
+if [ -n "$MONEY_AS_NUMBER" ]; then
+  fail "A monetary field is typed as number" "$MONEY_AS_NUMBER" \
        "Use the branded Money type: bigint minor units plus an explicit currency."
 else
   pass "no monetary field is typed as number"
@@ -183,6 +303,9 @@ fi
 # --- Research is committed sanitized ---------------------------------------
 # The corpus documents a third party's production deployment. Identifiers,
 # credentials and endpoints do not belong in this repository.
+# `require_dir` above already fails when this is missing, so the guard here is
+# about not running a scan over nothing rather than about tolerating its
+# absence.
 if [ -d docs/research ]; then
   # Every pattern runs. An earlier version used if/elif, so a token hit skipped
   # the remaining scans entirely, and it checked only two of the four patterns

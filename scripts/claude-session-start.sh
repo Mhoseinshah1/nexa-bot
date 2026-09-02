@@ -53,8 +53,8 @@ if [ -f .env ]; then
   # shellcheck disable=SC1091
   . ./.env
   set +a
-  pnpm db:migrate >/dev/null 2>&1 && echo "    migrations applied" || echo "    migrations skipped"
-  DATABASE_URL="${DATABASE_URL%/nexa_dev}/nexa_test" pnpm db:migrate >/dev/null 2>&1 || true
+  pnpm db:migrate:dev >/dev/null 2>&1 && echo "    migrations applied" || echo "    migrations skipped"
+  DATABASE_URL="${DATABASE_URL%/nexa_dev}/nexa_test" pnpm db:migrate:dev >/dev/null 2>&1 || true
 fi
 
 cat <<'EOF'

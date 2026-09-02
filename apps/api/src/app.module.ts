@@ -1,9 +1,11 @@
 import { Inject, Module, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import { CONTAINER, type Container } from './container.js';
+import { ReadinessProbe } from './surfaces/web/readiness.probe.js';
 import { HealthController } from './surfaces/web/health.controller.js';
 import { AuthController } from './surfaces/web/auth.controller.js';
 import { AdminsController } from './surfaces/web/admins.controller.js';
+import { ControlController } from './surfaces/web/control.controller.js';
 import { SystemController } from './surfaces/web/system.controller.js';
 import { TelegramWebhookController } from './surfaces/telegram/webhook.controller.js';
 import { CorrelationMiddleware } from './surfaces/web/correlation.middleware.js';
@@ -39,7 +41,11 @@ export class AppModule implements NestModule {
     // is configured — unlike the ping endpoint below, these endpoints check a
     // session and a permission on every call, so there is nothing to gate.
     if (container.config.AUTH_MODE === 'password') {
-      controllers.push(AuthController as never, AdminsController as never);
+      controllers.push(
+        AuthController as never,
+        AdminsController as never,
+        ControlController as never,
+      );
     }
 
     // The system ping endpoint runs the canonical write path over HTTP with no
@@ -60,6 +66,10 @@ export class AppModule implements NestModule {
       controllers,
       providers: [
         { provide: CONTAINER, useValue: container },
+        // Shared by the anonymous `/health/ready` and the authenticated
+        // readiness detail, so there is one readiness computation rather than
+        // two that can disagree.
+        ReadinessProbe,
         { provide: APP_FILTER, useClass: DomainErrorFilter },
       ],
     };

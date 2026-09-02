@@ -5,18 +5,43 @@ import {
   API_PREFIX,
   AUTH_ROUTES,
   errorResponseSchema,
-  HEALTH_ROUTES,
   healthInfoResponseSchema,
-  healthReadyResponseSchema,
   loginResponseSchema,
   logoutResponseSchema,
   sessionResponseSchema,
   type AdminListResponse,
   type HealthInfoResponse,
-  type HealthReadyResponse,
   type LoginResponse,
   type LogoutResponse,
   type SessionResponse,
+  CONTROL_ROUTES,
+  HEALTH_ROUTES,
+  featureFlagListResponseSchema,
+  featureFlagWriteResponseSchema,
+  settingWriteResponseSchema,
+  notificationDetailResponseSchema,
+  sendTestNotificationResponseSchema,
+  notificationListResponseSchema,
+  operationalEventListResponseSchema,
+  previewTemplateResponseSchema,
+  settingListResponseSchema,
+  templateListResponseSchema,
+  templateRevisionListResponseSchema,
+  templateWriteResponseSchema,
+  type FeatureFlagListResponse,
+  type NotificationDetailResponse,
+  type SendTestNotificationResponse,
+  type NotificationListResponse,
+  type OperationalEventListResponse,
+  type PreviewTemplateResponse,
+  type FeatureFlagWriteResponse,
+  type SettingWriteResponse,
+  type SettingListResponse,
+  type TemplateListResponse,
+  type TemplateRevisionListResponse,
+  type TemplateWriteResponse,
+  systemReadinessResponseSchema,
+  type SystemReadinessResponse,
 } from '@nexa/contracts';
 
 /**
@@ -27,22 +52,21 @@ import {
  * in the API at the same time — which is the whole reason the seam exists.
  */
 
-async function get<T>(path: string, schema: { parse: (v: unknown) => T }): Promise<T> {
-  const response = await fetch(path, { headers: { accept: 'application/json' } });
-  const body: unknown = await response.json();
-  // A 503 from readiness is a valid, well-shaped answer, not a transport error.
-  if (!response.ok && response.status !== 503) {
-    throw new Error(`Request to ${path} failed with ${response.status}`);
-  }
-  return schema.parse(body);
+/** Readiness with dependency detail. Requires a session. */
+export function fetchReadiness(): Promise<SystemReadinessResponse> {
+  return authedGet(CONTROL_ROUTES.systemReadiness, systemReadinessResponseSchema);
 }
 
-export function fetchReadiness(): Promise<HealthReadyResponse> {
-  return get(HEALTH_ROUTES.ready, healthReadyResponseSchema);
-}
-
+/**
+ * Build metadata. Requires a session, so it goes through `authedGet`.
+ *
+ * It worked through the anonymous `get()` only because the Fetch spec defaults
+ * `credentials` to `same-origin` — the implicit behaviour this file elsewhere
+ * says it does not rely on. Relying on it here would have been the same bet,
+ * made silently.
+ */
 export function fetchInfo(): Promise<HealthInfoResponse> {
-  return get(HEALTH_ROUTES.info, healthInfoResponseSchema);
+  return authedGet(HEALTH_ROUTES.info, healthInfoResponseSchema, { absolute: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -77,6 +101,16 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /**
+     * The structured half of the error.
+     *
+     * Carried because the server's `details` is where the useful part lives: a
+     * rejected template body names the offending token, which is the entire
+     * point of reporting `UNKNOWN_PLACEHOLDER { token }` rather than a
+     * sentence. Dropping it here left an administrator with "this body is not
+     * valid" and no way to see which of their placeholders was wrong.
+     */
+    readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -86,7 +120,12 @@ export class ApiError extends Error {
 function toApiError(status: number, payload: unknown): ApiError {
   const parsed = errorResponseSchema.safeParse(payload);
   if (parsed.success) {
-    return new ApiError(status, parsed.data.error.code, parsed.data.error.message);
+    return new ApiError(
+      status,
+      parsed.data.error.code,
+      parsed.data.error.message,
+      parsed.data.error.details,
+    );
   }
   return new ApiError(status, 'unknown', `Request failed with ${status}`);
 }
@@ -131,4 +170,165 @@ export async function fetchAdmins(): Promise<AdminListResponse> {
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) throw toApiError(response.status, payload);
   return adminListResponseSchema.parse(payload);
+}
+
+// ---------------------------------------------------------------------------
+// The control plane
+// ---------------------------------------------------------------------------
+
+/** An authenticated GET that parses with the frozen schema. */
+/**
+ * An authenticated GET.
+ *
+ * `absolute` is for the health routes, which live outside `API_PREFIX` but are
+ * no longer anonymous. `credentials: 'same-origin'` is explicit throughout: it
+ * is the spec's default, and a default nobody wrote down is a default nobody
+ * notices changing.
+ */
+async function authedGet<T>(
+  path: string,
+  schema: { parse: (v: unknown) => T },
+  options: { absolute?: boolean } = {},
+): Promise<T> {
+  const response = await fetch(options.absolute === true ? path : `${API_PREFIX}${path}`, {
+    credentials: 'same-origin',
+    headers: { accept: 'application/json' },
+  });
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) throw toApiError(response.status, payload);
+  return schema.parse(payload);
+}
+
+/**
+ * A key for one SUBMISSION, minted when the submission begins.
+ *
+ * Every state-changing command takes one, so a retry after a dropped connection
+ * produces one change rather than two. That only holds if the key survives the
+ * retry: minting it inside the call meant every attempt carried a NEW key, and
+ * an idempotency key that changes per attempt protects nothing at all. So the
+ * callers mint it once and pass it as the mutation's VARIABLE, which react-query
+ * hands back unchanged on a retry and on an offline-paused mutation's resume.
+ *
+ * `main.tsx` sets `mutations.retry`, without which there are no retries to
+ * protect and this whole paragraph would be describing something unreachable —
+ * which is what it was doing when it was first written.
+ *
+ * `randomUUID` is available in every browser this admin supports and in the test
+ * environment.
+ */
+export function newIdempotencyKey(): string {
+  return crypto.randomUUID();
+}
+
+export function fetchSettings(): Promise<SettingListResponse> {
+  return authedGet(CONTROL_ROUTES.settings, settingListResponseSchema);
+}
+
+export function saveSetting(input: {
+  key: string;
+  value: unknown;
+  expectedVersion: number | null;
+  idempotencyKey: string;
+}): Promise<SettingWriteResponse> {
+  const { key, ...body } = input;
+  return post(CONTROL_ROUTES.setting(key), body, settingWriteResponseSchema);
+}
+
+export function fetchFeatureFlags(): Promise<FeatureFlagListResponse> {
+  return authedGet(CONTROL_ROUTES.features, featureFlagListResponseSchema);
+}
+
+export function saveFeatureFlag(input: {
+  key: string;
+  enabled: boolean;
+  expectedVersion: number | null;
+  idempotencyKey: string;
+  confirmKey?: string;
+  reason?: string;
+}): Promise<FeatureFlagWriteResponse> {
+  const { key, ...body } = input;
+  return post(CONTROL_ROUTES.feature(key), body, featureFlagWriteResponseSchema);
+}
+
+export function fetchTemplates(): Promise<TemplateListResponse> {
+  return authedGet(CONTROL_ROUTES.templates, templateListResponseSchema);
+}
+
+export function fetchTemplateRevisions(key: string): Promise<TemplateRevisionListResponse> {
+  return authedGet(CONTROL_ROUTES.templateRevisions(key), templateRevisionListResponseSchema);
+}
+
+export function saveTemplate(input: {
+  key: string;
+  body: string;
+  expectedVersion: number | null;
+  expectedRevision: number | null;
+  idempotencyKey: string;
+}): Promise<TemplateWriteResponse> {
+  const { key, ...rest } = input;
+  return post(CONTROL_ROUTES.template(key), rest, templateWriteResponseSchema);
+}
+
+export function revertTemplate(input: {
+  key: string;
+  expectedVersion: number;
+  expectedRevision: number;
+  idempotencyKey: string;
+}): Promise<TemplateWriteResponse> {
+  const { key, ...rest } = input;
+  return post(CONTROL_ROUTES.templateRevert(key), rest, templateWriteResponseSchema);
+}
+
+/**
+ * Renders a body with sample values and stores nothing.
+ *
+ * The values are the ones the administrator typed into the preview fields. They
+ * are never taken from their own account — which is the difference between this
+ * and the legacy edit screen, where `{first_name}` renders as the viewer's own
+ * name and saving that view stores it.
+ */
+export function previewTemplate(
+  key: string,
+  body: string,
+  values: Record<string, string>,
+): Promise<PreviewTemplateResponse> {
+  return post(CONTROL_ROUTES.templatePreview(key), { body, values }, previewTemplateResponseSchema);
+}
+
+export function fetchOpsLog(query: {
+  severity?: string;
+  open?: boolean;
+  /** The `lastSeenAt` of the oldest row already shown; returns older ones. */
+  before?: string;
+  /** Its id, which breaks ties when several rows share that timestamp. */
+  beforeId?: string;
+}): Promise<OperationalEventListResponse> {
+  const params = new URLSearchParams();
+  if (query.severity) params.set('severity', query.severity);
+  if (query.open !== undefined) params.set('open', String(query.open));
+  if (query.before) params.set('before', query.before);
+  if (query.beforeId) params.set('beforeId', query.beforeId);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${CONTROL_ROUTES.opsLog}?${suffix}` : CONTROL_ROUTES.opsLog,
+    operationalEventListResponseSchema,
+  );
+}
+
+export function fetchNotifications(): Promise<NotificationListResponse> {
+  return authedGet(CONTROL_ROUTES.notifications, notificationListResponseSchema);
+}
+
+export function fetchNotification(id: string): Promise<NotificationDetailResponse> {
+  return authedGet(CONTROL_ROUTES.notification(id), notificationDetailResponseSchema);
+}
+
+export function sendTestNotification(
+  idempotencyKey: string,
+): Promise<SendTestNotificationResponse> {
+  return post(
+    CONTROL_ROUTES.notificationTest,
+    { idempotencyKey },
+    sendTestNotificationResponseSchema,
+  );
 }

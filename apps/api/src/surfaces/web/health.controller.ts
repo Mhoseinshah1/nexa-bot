@@ -1,13 +1,14 @@
-import { Controller, Get, Inject, Res } from '@nestjs/common';
-import type { FastifyReply } from 'fastify';
+import { Controller, Get, Inject, Req, Res } from '@nestjs/common';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   HEALTH_ROUTES,
-  type DependencyStatus,
   type HealthInfoResponse,
   type HealthLiveResponse,
   type HealthReadyResponse,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
+import { requireSessionToken } from './authenticated-request.js';
+import { ReadinessProbe } from './readiness.probe.js';
 
 /**
  * Health.
@@ -16,13 +17,43 @@ import { CONTAINER, type Container } from '../../container.js';
  * keeps them apart. Liveness answers "is this process alive" and deliberately
  * says nothing about dependencies — reporting a dead database as "not live"
  * makes an orchestrator restart a healthy process and lose in-flight work.
- * Readiness answers "can this process serve traffic" and names what is broken.
+ * Readiness answers "can this process serve traffic", as a status code.
+ *
+ * Who may ask is the other axis, and it was wrong. `live` and `ready` are
+ * anonymous because the caller is an orchestrator with no credentials; `info`
+ * is not, because nothing without a session needs the build's identity. And
+ * readiness now answers with a word rather than a description of the
+ * deployment. The reasons are served to a signed-in administrator by
+ * `ControlController.systemReadiness`, which shares this controller's
+ * `ReadinessProbe` so there is one readiness computation rather than two that
+ * can disagree.
  */
 @Controller()
 export class HealthController {
   private readonly startedAt = Date.now();
 
-  constructor(@Inject(CONTAINER) private readonly container: Container) {}
+  constructor(
+    @Inject(CONTAINER) private readonly container: Container,
+    // Explicitly injected by token rather than by parameter type. A
+    // type-only import would satisfy the lint rule and emit no runtime value
+    // for `design:paramtypes`, so Nest would have nothing to resolve — the
+    // fix the linter suggests here is the one that breaks dependency
+    // injection at boot.
+    @Inject(ReadinessProbe) private readonly probe: ReadinessProbe,
+  ) {}
+
+  /**
+   * A live Web Admin session, or 401.
+   *
+   * The same token and the same authenticator every other administrative
+   * request uses. Nothing here resolves a permission: build metadata is the
+   * shape of the deployment rather than a tenant's data, and a permission
+   * nobody can be denied is decoration.
+   */
+  private async requireSession(request: FastifyRequest): Promise<void> {
+    const token = requireSessionToken(request, this.container.config.NODE_ENV === 'production');
+    await this.container.auth.authenticate(token);
+  }
 
   @Get(HEALTH_ROUTES.live)
   live(): HealthLiveResponse {
@@ -32,22 +63,24 @@ export class HealthController {
     };
   }
 
+  /**
+   * Anonymous, and a status code is all it says.
+   *
+   * The probes still run — the answer has to be real — but their names,
+   * latencies, migration counts, relay lag and failure classifications stay
+   * here. `ControlController.systemReadiness` runs the same probe and reports
+   * them to a session.
+   */
   @Get(HEALTH_ROUTES.ready)
   async ready(@Res({ passthrough: true }) reply: FastifyReply): Promise<HealthReadyResponse> {
-    const dependencies = await Promise.all([
-      this.checkDatabase(),
-      this.checkRedis(),
-      this.checkMigrations(),
-      this.checkOutboxLag(),
-    ]);
-
-    const degraded = dependencies.some((d) => d.status === 'down');
+    const { degraded } = await this.probe.run();
     reply.status(degraded ? 503 : 200);
-    return { status: degraded ? 'degraded' : 'ok', dependencies };
+    return { status: degraded ? 'degraded' : 'ok' };
   }
 
   @Get(HEALTH_ROUTES.info)
-  info(): HealthInfoResponse {
+  async info(@Req() request: FastifyRequest): Promise<HealthInfoResponse> {
+    await this.requireSession(request);
     return {
       name: 'nexa-bot',
       version: this.container.config.BUILD_VERSION,
@@ -57,91 +90,4 @@ export class HealthController {
       environment: this.container.config.NODE_ENV,
     };
   }
-
-  private async timed(
-    name: string,
-    probe: () => Promise<{ ok: boolean; detail?: string }>,
-  ): Promise<DependencyStatus> {
-    const started = Date.now();
-    try {
-      const result = await probe();
-      return {
-        name,
-        status: result.ok ? 'up' : 'down',
-        latencyMs: Date.now() - started,
-        ...(result.detail ? { detail: result.detail } : {}),
-      };
-    } catch (error) {
-      // Readiness is unauthenticated. A driver message here would hand an
-      // anonymous caller internal hostnames, ports, database and role names —
-      // precisely when the system is broken. The real message goes to the log
-      // with the correlation id; the response gets a fixed word.
-      this.container.logger.error(
-        { dependency: name, err: error instanceof Error ? error.stack : String(error) },
-        'Readiness probe failed',
-      );
-      return {
-        name,
-        status: 'down',
-        latencyMs: Date.now() - started,
-        detail: classifyProbeFailure(error),
-      };
-    }
-  }
-
-  private checkDatabase(): Promise<DependencyStatus> {
-    return this.timed('postgres', async () => {
-      await this.container.database.withClient((client) => client.query('SELECT 1'));
-      return { ok: true };
-    });
-  }
-
-  private checkRedis(): Promise<DependencyStatus> {
-    // The Redis handle swallows its own connection errors so a blip degrades
-    // readiness rather than crashing the process, which means this probe never
-    // throws — it still has to say something when the answer is no.
-    return this.timed('redis', async () => {
-      const ok = await this.container.redis.ping();
-      return ok ? { ok } : { ok, detail: 'unreachable' };
-    });
-  }
-
-  /**
-   * A process running against a schema older than its code is not ready. This
-   * catches the deployment that starts before its migration finishes.
-   */
-  private checkMigrations(): Promise<DependencyStatus> {
-    return this.timed('migrations', async () => {
-      const result = await this.container.database.withClient((client) =>
-        client.query<{ count: string }>(
-          `SELECT count(*)::text AS count FROM drizzle.__drizzle_migrations`,
-        ),
-      );
-      const applied = Number(result.rows[0]?.count ?? '0');
-      return applied > 0
-        ? { ok: true, detail: `${applied} applied` }
-        : { ok: false, detail: 'no migrations applied' };
-    });
-  }
-
-  private checkOutboxLag(): Promise<DependencyStatus> {
-    return this.timed('outbox', async () => {
-      const lag = await this.container.relay.lagMs();
-      const healthy = lag <= this.container.config.OUTBOX_RELAY_MAX_LAG_MS;
-      return { ok: healthy, detail: `oldest unpublished ${lag}ms` };
-    });
-  }
-}
-
-/**
- * A closed vocabulary. Enough for an operator to know where to look, not enough
- * to describe the deployment to a stranger.
- */
-function classifyProbeFailure(error: unknown): string {
-  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
-  if (message.includes('econnrefused') || message.includes('enotfound')) return 'unreachable';
-  if (message.includes('etimedout') || message.includes('timeout')) return 'timeout';
-  if (message.includes('password') || message.includes('authentication')) return 'auth failed';
-  if (message.includes('does not exist')) return 'missing';
-  return 'unavailable';
 }

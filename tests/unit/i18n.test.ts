@@ -15,8 +15,10 @@ describe('shared catalogue', () => {
   });
 
   it('stores templates raw, with placeholders un-substituted', () => {
-    // The legacy editor echoed the RENDERED string, so saving from that view
-    // baked an admin's own name into {first_name} for ~13,700 customers.
+    // The legacy editor echoes the RENDERED string — {first_name} resolves in
+    // the viewing admin's context — so saving from that view would bake the
+    // editor's own name into the template. Observed rendering, untested
+    // consequence: a hazard to design against, not a recorded event.
     expect(CATALOGUE_FA['bot.ping.reply']).toContain('{correlationId}');
   });
 

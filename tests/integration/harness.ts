@@ -59,15 +59,18 @@ export async function migrateOnce(databaseUrl: string): Promise<void> {
 /**
  * Truncates every table between tests.
  *
- * `audit_logs` and `processed_messages` refuse DELETE by trigger, which is the
- * point of them — TRUNCATE bypasses row triggers, so the guard stays in force
- * for application code while tests can still reset.
+ * `audit_logs`, `processed_messages`, `template_revisions` and
+ * `notification_delivery_attempts` refuse DELETE by trigger, which is the point
+ * of them — TRUNCATE bypasses row triggers, so the guard stays in force for
+ * application code while tests can still reset.
  */
 export async function resetDatabase(db: Database): Promise<void> {
   await db.execute(
     `TRUNCATE TABLE
        audit_logs, operational_events, outbox_messages, processed_messages,
        request_idempotency, aggregate_sequences,
+       notification_delivery_attempts, notification_released_claims, notifications,
+       template_revisions, template_overrides, setting_values, feature_flag_states,
        admin_login_throttle, admin_sessions, admin_permission_overrides,
        admin_roles, role_permissions, roles, admins,
        bot_instances, tenants

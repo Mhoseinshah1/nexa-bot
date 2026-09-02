@@ -97,14 +97,6 @@ th {
   font-weight: 600;
 }
 
-td.up {
-  color: var(--up);
-}
-
-td.down {
-  color: var(--down);
-}
-
 .error {
   color: var(--down);
 }
@@ -124,4 +116,148 @@ dt {
 dd {
   margin: 0;
   font-variant-numeric: tabular-nums;
+}
+
+/* --- The control plane ---------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0;
+  border-bottom: 1px solid var(--line, #d8d8d8);
+  padding-bottom: 0.5rem;
+}
+
+.tabs button {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+  padding: 0.4rem 0.8rem;
+}
+
+.tabs button.active {
+  border-color: var(--line, #d8d8d8);
+  border-bottom-color: transparent;
+  font-weight: 600;
+}
+
+.card {
+  border: 1px solid var(--line, #d8d8d8);
+  border-radius: 6px;
+  margin: 1rem 0;
+  padding: 1rem;
+}
+
+/*
+ * A tenant-wide toggle is drawn differently from a local one, deliberately.
+ * The legacy capability screen renders the whole-bot kill switch identically to
+ * the dice toggle, and that is a documented defect rather than a style choice.
+ */
+.card.wide {
+  border-inline-start: 4px solid #b3261e;
+}
+
+.card h3 {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0;
+}
+
+.tag {
+  background: #eee;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 400;
+  padding: 0.1rem 0.4rem;
+}
+
+.tag.danger {
+  background: #fce8e6;
+  color: #b3261e;
+}
+
+.meta {
+  color: #555;
+  font-size: 0.85rem;
+}
+
+.meta dt {
+  font-weight: 600;
+  margin-top: 0.3rem;
+}
+
+/* A setting whose flag is off says so rather than looking configured. */
+tr.inert {
+  opacity: 0.6;
+}
+
+.filters {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+textarea {
+  font-family: inherit;
+  inline-size: 100%;
+  resize: vertical;
+}
+
+pre {
+  background: #f6f6f6;
+  border-radius: 4px;
+  overflow-x: auto;
+  padding: 0.75rem;
+  white-space: pre-wrap;
+}
+
+details {
+  margin: 0.75rem 0;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+/*
+ * A button that reads as a link. Used where an action belongs inside a
+ * sentence — "this changed elsewhere; get the fresh value" — and a boxed
+ * button would break the line it is part of. Still a <button>, because it
+ * performs an action rather than navigating.
+ */
+button.link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+
+/*
+ * The status column, wherever it appears. These were styled as `td.up` and
+ * `td.down` only, so the same words rendered in a <span> or a <dd> — the
+ * notification and template screens both do — lost their colour silently.
+ */
+.up {
+  color: var(--up);
+}
+
+.down {
+  color: var(--down);
 }

@@ -24,6 +24,11 @@
     "db:check": "pnpm --filter @nexa/api db:check",
     "db:seed": "pnpm --filter @nexa/api db:seed",
     "admin:bootstrap": "pnpm --filter @nexa/api admin:bootstrap",
+    "check:runtime": "bash scripts/check-runtime-cli.sh",
+    "test:exhaustive": "vitest run --project exhaustive",
+    "db:migrate:dev": "pnpm --filter @nexa/api db:migrate:dev",
+    "db:seed:dev": "pnpm --filter @nexa/api db:seed:dev",
+    "admin:bootstrap:dev": "pnpm --filter @nexa/api admin:bootstrap:dev",
     "dev:services": "bash scripts/dev-services.sh",
     "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm check:boundaries && pnpm check:i18n && pnpm test && pnpm build"
   },

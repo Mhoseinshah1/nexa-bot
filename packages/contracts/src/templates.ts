@@ -1,3 +1,5 @@
+import { CURRENCY_CODES, currencyCodeSchema, money, type Money } from './money.js';
+
 /**
  * Customer-facing text.
  *
@@ -6,8 +8,11 @@
  *
  * Three legacy defects motivate every rule here:
  *   - the Persian caption IS the identifier, so renaming a button renames its key;
- *   - the edit screen echoes the RENDERED text, so editing a template once baked
- *     an admin's own name into `{first_name}` for ~13,700 customers;
+ *   - the edit screen echoes the RENDERED text — `{first_name}` resolves in the
+ *     viewing admin's own context — so the raw template cannot be read back from
+ *     it, and saving from that view would bake the editor's own name into the
+ *     template. The rendering is observed (TBR-TXT-004); the consequence is a
+ *     HAZARD that was deliberately never tested, not a recorded event;
  *   - placeholders are unvalidated and overloaded — `{time}` means both "now"
  *     and "service duration", and units are hard-coded in copy, so one
  *     card-to-card template says تومان where its twin says ریال for the same
@@ -17,8 +22,11 @@
  * is rendered by the single Money formatter, so a unit cannot be typed by hand
  * into a template.
  *
- * Phase 0 ships the key/placeholder machinery and the Translator port. The
- * template management UI, revisions and preview are Phase 2.
+ * Phase 0 shipped the key/placeholder machinery and the Translator port. Phase 2
+ * adds what an administrator needs to change a body safely: a declared format
+ * per key, required and repeatable placeholders, a body-length ceiling, and the
+ * validator all three surfaces share. See
+ * docs/adr/0016-template-defaults-and-overrides.md.
  */
 
 export const PLACEHOLDER_TYPES = [
@@ -31,45 +39,218 @@ export const PLACEHOLDER_TYPES = [
 ] as const;
 export type PlaceholderType = (typeof PLACEHOLDER_TYPES)[number];
 
+/**
+ * What a placeholder token may look like.
+ *
+ * An ASCII identifier, and deliberately nothing wider. `اشتراک رایگان {تست}` is
+ * a live legacy button caption in which the braces are DECORATION, not a token:
+ * "a substitution engine that treats every `{…}` as a variable would erase this
+ * caption" (C-TXT-009). Restricting the syntax means such text passes through
+ * untouched, which in turn lets validation be strict about the expressions that
+ * really are tokens — a mistyped `{first_nam}` is rejected instead of being
+ * shipped to customers as literal text.
+ *
+ * A leading digit is excluded so a token is always a name.
+ */
+export const PLACEHOLDER_TOKEN_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** The same syntax, as a scanner over a template body. Stateless: no `g` flag. */
+const PLACEHOLDER_EXPRESSION_SOURCE = '\\{([A-Za-z_][A-Za-z0-9_]*)\\}';
+
+/** Every token-shaped expression in a body, in order, including repeats. */
+export function placeholderTokensIn(body: string): string[] {
+  const found: string[] = [];
+  for (const match of body.matchAll(new RegExp(PLACEHOLDER_EXPRESSION_SOURCE, 'g'))) {
+    found.push(match[1] as string);
+  }
+  return found;
+}
+
+/**
+ * How a rendered body is handed to the transport.
+ *
+ * `UNK-TXT-002` records that the legacy renderer's HTML contract is unstated:
+ * the web help text says `<b>` is supported and must be preserved, while none of
+ * the twenty Telegram templates that were read contained a tag. The corpus calls
+ * that a contradiction and does not resolve it.
+ *
+ * We do not resolve it either. We decline to have one global answer: the format
+ * is declared per key, so a key that needs markup says so and a key that does
+ * not is sent as plain text with no parse mode at all.
+ */
+export const TEMPLATE_FORMATS = ['PLAIN_TEXT', 'TELEGRAM_HTML'] as const;
+export type TemplateFormat = (typeof TEMPLATE_FORMATS)[number];
+
+/**
+ * What a revision records.
+ *
+ * A `SET` stores the body; a `REVERT` stores none, because reverting goes back
+ * to the default rather than copying it into tenant storage.
+ */
+export const TEMPLATE_REVISION_ACTIONS = ['SET', 'REVERT'] as const;
+export type TemplateRevisionAction = (typeof TEMPLATE_REVISION_ACTIONS)[number];
+
 export interface PlaceholderDefinition {
   readonly token: string;
   readonly type: PlaceholderType;
   readonly description: string;
+  /**
+   * Whether a body must contain this token.
+   *
+   * A required token that an override drops is a rejection. Dropping
+   * `{correlationId}` from the ping reply does not fail; it silently removes the
+   * only thing that made the message useful.
+   */
+  readonly required: boolean;
+  /** Whether the token may appear more than once in one body. */
+  readonly repeatable: boolean;
 }
 
 export interface TemplateDefinition {
   /** Stable machine key. Never a display string. */
   readonly key: string;
   readonly description: string;
+  readonly format: TemplateFormat;
   readonly placeholders: readonly PlaceholderDefinition[];
 }
 
 /**
- * Keys registered in Phase 0. Deliberately few: only what the foundation
- * actually sends. The ~650-key catalog is authored alongside Phase 2.
+ * The longest body an override may store.
+ *
+ * Telegram's own message limit is 4,096 UTF-16 code units, so a longer body
+ * could only ever fail at send time — with the failure landing on a customer's
+ * message rather than on the administrator who typed it.
+ *
+ * The legacy limits are no help and are recorded as a conflict: the web phase
+ * reports a 1,000-character cap while the text phase reports a counter reading
+ * `n/8192` (`UNK-TXT-003`). Neither is adopted.
+ */
+export const TEMPLATE_BODY_MAX_LENGTH = 4096;
+
+/**
+ * The registered keys.
+ *
+ * Deliberately few, and they stay that way: a key is added when something in
+ * this codebase actually sends it. Phase 0's docstring said "the ~650-key
+ * catalog is authored alongside Phase 2", and that was wrong twice over. The
+ * figure came from one of two irreconcilable readings of the legacy store
+ * (`C-TXT-COUNT` in docs/open-questions.md), and the corpus warns explicitly
+ * that a template's existence proves nothing about whether its feature is
+ * enabled — three well-maintained legacy templates serve paths nobody walks
+ * (TBR-TXT-010/011). Harvesting a catalogue would therefore import a feature
+ * list we have not built.
+ *
+ * See docs/adr/0016-template-defaults-and-overrides.md.
  */
 export const TEMPLATES = [
   {
     key: 'bot.ping.reply',
     description: 'Reply to the /ping health command.',
+    format: 'PLAIN_TEXT',
     placeholders: [
-      { token: 'correlationId', type: 'STRING', description: 'Correlation id of the update.' },
+      {
+        token: 'correlationId',
+        type: 'STRING',
+        description: 'Correlation id of the update.',
+        required: true,
+        repeatable: false,
+      },
     ],
   },
   {
     key: 'bot.unknown_command',
     description: 'Shown when the bot receives a command it does not handle.',
+    format: 'PLAIN_TEXT',
     placeholders: [],
   },
   {
     key: 'error.internal',
     description: 'Generic failure message shown to a customer.',
+    format: 'PLAIN_TEXT',
     placeholders: [],
   },
   {
     key: 'error.permission_denied',
     description: 'Shown when an actor lacks a required permission.',
+    format: 'PLAIN_TEXT',
     placeholders: [],
+  },
+
+  // Operations. Addressed to the people running the installation, not to
+  // customers — but they are still text with placeholders, so they are still
+  // templates, and an operator may still want to word them differently.
+  {
+    key: 'ops.notification.operational_event',
+    description:
+      'An operational event, projected into the operations destination. Sent once per ' +
+      'deduplicated condition rather than once per occurrence, which is why the occurrence ' +
+      'count is part of the message.',
+    // The code is rendered in <code> so an operator can copy it into a filter.
+    // This is the key that makes the per-key format contract real rather than
+    // declarative: values interpolated here are HTML-escaped, values in a
+    // PLAIN_TEXT template are not.
+    format: 'TELEGRAM_HTML',
+    placeholders: [
+      {
+        token: 'severity',
+        type: 'STRING',
+        description: 'DEBUG, INFO, WARN, ERROR or CRITICAL.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'code',
+        type: 'STRING',
+        description: 'The machine code of the condition.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'message',
+        type: 'STRING',
+        description: 'The human-readable message recorded with the event.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'occurrences',
+        type: 'NUMBER',
+        description: 'How many times this condition has fired since it was first seen.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'firstSeenAt',
+        type: 'DATETIME',
+        description: 'When the condition was first recorded.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'ops.notification.test',
+    description:
+      'Sent by an explicit test of the operations destination. The legacy log group could not ' +
+      'be tested at all, and its forum topic id was never captured anywhere (UNK-GS-002), so a ' +
+      'misconfigured destination was only ever discovered during an incident.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'requestedBy',
+        type: 'STRING',
+        description: 'Display name of the administrator who asked for the test.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When the test was requested.',
+        required: true,
+        repeatable: false,
+      },
+    ],
   },
 ] as const satisfies readonly TemplateDefinition[];
 
@@ -91,8 +272,346 @@ export function isTemplateKey(value: string): value is TemplateKey {
   return TEMPLATE_BY_KEY.has(value);
 }
 
+/**
+ * A value supplied for one declared placeholder.
+ *
+ * `Money` is a member so that a `MONEY` placeholder cannot be satisfied by a
+ * bare number. The legacy system's `{price}` is a bare number with its unit
+ * typed into the surrounding copy, which is how one card-to-card template came
+ * to say تومان where its twin says ریال for the same token.
+ */
+export type TemplateValue = string | number | bigint | Date | Money;
+
 /** Values supplied for a template's declared placeholders. */
-export type TemplateValues = Readonly<Record<string, string | number | bigint | Date>>;
+export type TemplateValues = Readonly<Record<string, TemplateValue>>;
+
+export function isMoneyValue(value: TemplateValue): value is Money {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !(value instanceof Date) &&
+    'amountMinor' in value &&
+    'currency' in value
+  );
+}
+
+/**
+ * One sample value, as a text field can hold it, turned into the type its
+ * placeholder declares.
+ *
+ * A preview form is text inputs, and a `DATETIME` placeholder needs a `Date`
+ * while a `MONEY` one needs an amount AND a currency. Without a coercion at the
+ * seam, those two placeholder types were unreachable from the admin screen and
+ * a `NUMBER` one was rejected on every attempt — the field could only ever send
+ * a string, and the validator only ever accepted a number.
+ *
+ * The text forms are stated once, here, rather than in each surface:
+ *
+ *   - `NUMBER`, `DURATION_DAYS`, `BYTES` — a whole number, e.g. `30`.
+ *   - `DATETIME` — anything `Date` parses, in practice ISO-8601, e.g.
+ *     `2026-09-02T08:00:00Z`.
+ *   - `MONEY` — minor units and a currency, e.g. `1250000 IRR`. Two parts on
+ *     purpose: the legacy `{price}` is a bare number whose unit lives in the
+ *     surrounding copy, which is how one card-to-card template came to say
+ *     تومان where its twin says ریال for the same token.
+ *   - `STRING` — itself.
+ *
+ * A refusal names the token and the form expected, because the person typing is
+ * the person who has to fix it.
+ */
+export type CoercedTemplateValue =
+  | { readonly ok: true; readonly value: TemplateValue }
+  | { readonly ok: false; readonly problem: string };
+
+export function coerceTemplateValue(
+  placeholder: PlaceholderDefinition,
+  raw: string,
+): CoercedTemplateValue {
+  const bad = (expected: string): CoercedTemplateValue => ({
+    ok: false,
+    problem: `{${placeholder.token}} is declared ${placeholder.type} and needs ${expected}; received ${JSON.stringify(raw)}.`,
+  });
+
+  switch (placeholder.type) {
+    case 'STRING':
+      return { ok: true, value: raw };
+
+    case 'NUMBER':
+    case 'DURATION_DAYS':
+    case 'BYTES': {
+      const trimmed = raw.trim();
+      // A whole number, and `Number('')` is 0 — which would silently turn an
+      // empty field into a supplied zero, and zero means something specific
+      // enough in this system to have its own registry field.
+      if (!/^-?\d{1,20}$/.test(trimmed)) return bad('a whole number such as 30');
+
+      // And a number JavaScript can actually hold. `Number('9'.repeat(400))` is
+      // `Infinity` and `Number('9007199254740993')` is a DIFFERENT integer —
+      // both of which would have been rendered into a preview whose whole
+      // purpose is showing the administrator what they will really get.
+      // `money()` refuses an unsafe integer for the same reason; this branch
+      // was the one that did not.
+      const value = Number(trimmed);
+      if (!Number.isSafeInteger(value)) {
+        return bad('a whole number JavaScript can represent exactly');
+      }
+      return { ok: true, value };
+    }
+
+    case 'DATETIME': {
+      const trimmed = raw.trim();
+      // ISO-8601 or nothing. `new Date` alone accepts JavaScript's legacy
+      // parsing, under which `'0'` is the year 2000 and `'2026-02-30'` is the
+      // 2nd of March — a typo silently becoming a plausible date, in a
+      // preview that exists to show what will really be sent.
+      if (
+        !/^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})?)?$/.test(
+          trimmed,
+        )
+      ) {
+        return bad('an ISO-8601 date such as 2026-09-02T08:00:00Z');
+      }
+      const at = new Date(trimmed);
+      if (Number.isNaN(at.getTime())) {
+        return bad('an ISO-8601 date such as 2026-09-02T08:00:00Z');
+      }
+      // A date that does not round-trip is one `Date` silently rolled over:
+      // `2026-02-30` parses and comes back as the 2nd of March.
+      //
+      // Compared against the date AS WRITTEN, not against its UTC form. The
+      // first version compared `toISOString()` with the typed prefix, which
+      // rejected every valid offset that crosses midnight —
+      // `2026-09-02T00:30:00+02:00` is the 1st of September in UTC — after the
+      // pattern above had explicitly accepted offsets.
+      const [year = 0, month = 0, day = 0] = trimmed.slice(0, 10).split('-').map(Number);
+      const asWritten = new Date(Date.UTC(year, month - 1, day));
+      if (
+        asWritten.getUTCFullYear() !== year ||
+        asWritten.getUTCMonth() !== month - 1 ||
+        asWritten.getUTCDate() !== day
+      ) {
+        return bad('a real calendar date');
+      }
+      return { ok: true, value: at };
+    }
+
+    case 'MONEY': {
+      // The amount is BOUNDED. `BigInt` accepts a million digits and the money
+      // formatter's thousands-separator regex is quadratic in the digit count,
+      // so an unbounded amount from a `templates.view` holder was a one-request
+      // way to stall the event loop.
+      const match = /^(-?\d{1,30})\s+([A-Za-z]{3,4})$/.exec(raw.trim());
+      if (!match?.[1] || !match[2]) {
+        return bad('minor units and a currency, such as 1250000 IRR');
+      }
+      const currency = currencyCodeSchema.safeParse(match[2].toUpperCase());
+      if (!currency.success) {
+        return bad(`a known currency, one of ${CURRENCY_CODES.join(', ')}`);
+      }
+      return { ok: true, value: money(BigInt(match[1]), currency.data) };
+    }
+  }
+}
+
+/**
+ * A whole form of sample values, coerced together.
+ *
+ * Every field is attempted even after one fails, so a form with three wrong
+ * fields reports three problems rather than the first one three times.
+ */
+export function coerceTemplateValues(
+  definition: TemplateDefinition,
+  raw: Readonly<Record<string, string>>,
+): { readonly values: TemplateValues; readonly problems: readonly string[] } {
+  const values: Record<string, TemplateValue> = {};
+  const problems: string[] = [];
+
+  for (const placeholder of definition.placeholders) {
+    // `hasOwnProperty`, not a bare index. A token is an ASCII identifier, and
+    // `toString` and `constructor` are ASCII identifiers: reading one straight
+    // off the object returns a function from `Object.prototype`, and the
+    // `.trim()` below then throws a TypeError out of a preview. No template
+    // declares such a token today, which is precisely why it would have been
+    // found by whoever added the first one.
+    const supplied = Object.prototype.hasOwnProperty.call(raw, placeholder.token)
+      ? raw[placeholder.token]
+      : undefined;
+    // An absent field and an empty one both mean "no sample for this token".
+    // The preview reports it as unresolved and leaves the token in place.
+    if (typeof supplied !== 'string' || supplied.trim() === '') continue;
+
+    const coerced = coerceTemplateValue(placeholder, supplied);
+    if (coerced.ok) values[placeholder.token] = coerced.value;
+    else problems.push(coerced.problem);
+  }
+
+  // A token the catalogue does not declare cannot be rendered and is not
+  // silently dropped: an administrator who typed one is told, rather than
+  // shown a preview that ignored their input.
+  for (const token of Object.keys(raw)) {
+    if (!definition.placeholders.some((placeholder) => placeholder.token === token)) {
+      problems.push(`{${token}} is not declared for this template.`);
+    }
+  }
+
+  return { values, problems };
+}
+
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Why a body was refused.
+ *
+ * Structured rather than a string, because three surfaces render these: the web
+ * editor beside the field, the HTTP layer as an error payload, and the tests as
+ * assertions. A prose sentence would be re-parsed by at least one of them.
+ */
+export const TEMPLATE_BODY_ISSUES = [
+  'EMPTY',
+  'TOO_LONG',
+  'UNKNOWN_PLACEHOLDER',
+  'MISSING_REQUIRED_PLACEHOLDER',
+  'REPEATED_PLACEHOLDER',
+] as const;
+export type TemplateBodyIssueKind = (typeof TEMPLATE_BODY_ISSUES)[number];
+
+export interface TemplateBodyIssue {
+  readonly kind: TemplateBodyIssueKind;
+  /** The offending token, where the issue is about one. */
+  readonly token?: string;
+  readonly detail: string;
+}
+
+/**
+ * Validates a raw body against one key's declaration.
+ *
+ * Pure, and exported from the frozen contracts on purpose: the web editor, the
+ * application service and the tests must agree on what is valid, and the way to
+ * guarantee that is for there to be one function rather than three that look
+ * alike.
+ *
+ * Takes a definition rather than a key so the rules can be exercised against a
+ * declaration that is not in the registry. Every branch of the type check below
+ * is reachable that way, including the ones for placeholder types no registered
+ * key uses yet — the type vocabulary is a Phase 0 contract, and a rule that
+ * cannot be tested until some future phase registers a key is a rule nobody has
+ * checked.
+ *
+ * Placeholders are checked against THIS KEY's declaration and never against a
+ * global vocabulary. In the legacy system `{time}` means "now" in the start text
+ * and "service duration" in the renewal invoice; a global vocabulary would have
+ * to pick one and would be wrong in the other template.
+ */
+export function validateTemplateBody(
+  definition: TemplateDefinition,
+  body: string,
+): TemplateBodyIssue[] {
+  const key = definition.key;
+  const issues: TemplateBodyIssue[] = [];
+
+  if (body.trim().length === 0) {
+    issues.push({ kind: 'EMPTY', detail: 'A template body may not be empty or only whitespace.' });
+  }
+  if (body.length > TEMPLATE_BODY_MAX_LENGTH) {
+    issues.push({
+      kind: 'TOO_LONG',
+      detail: `A template body may be at most ${TEMPLATE_BODY_MAX_LENGTH} characters; this one is ${body.length}.`,
+    });
+  }
+
+  const declared = new Map(definition.placeholders.map((p) => [p.token, p]));
+  const used = placeholderTokensIn(body);
+  const counts = new Map<string, number>();
+  for (const token of used) counts.set(token, (counts.get(token) ?? 0) + 1);
+
+  for (const [token, count] of counts) {
+    const placeholder = declared.get(token);
+    if (!placeholder) {
+      issues.push({
+        kind: 'UNKNOWN_PLACEHOLDER',
+        token,
+        detail: `{${token}} is not declared for ${key}. A token this key does not declare would be sent to customers as literal text.`,
+      });
+      continue;
+    }
+    if (count > 1 && !placeholder.repeatable) {
+      issues.push({
+        kind: 'REPEATED_PLACEHOLDER',
+        token,
+        detail: `{${token}} may appear only once in ${key}; it appears ${count} times.`,
+      });
+    }
+  }
+
+  for (const placeholder of definition.placeholders) {
+    if (placeholder.required && !counts.has(placeholder.token)) {
+      issues.push({
+        kind: 'MISSING_REQUIRED_PLACEHOLDER',
+        token: placeholder.token,
+        detail: `${key} requires {${placeholder.token}}: ${placeholder.description}`,
+      });
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Checks that supplied values match their declared types.
+ *
+ * Separate from body validation because it answers a different question at a
+ * different time: a body is validated when an administrator saves it, values are
+ * validated when a message is rendered.
+ *
+ * `requireAll` distinguishes the two callers. Sending a message with a required
+ * placeholder unsupplied is a bug, and refusing it is right. PREVIEWING one is
+ * not: an administrator asking what a body will look like has usually typed no
+ * sample values at all, and the honest answer is the body with its placeholders
+ * still visible, reported as unresolved — not an error message.
+ */
+export function validateTemplateValues(
+  definition: TemplateDefinition,
+  values: TemplateValues,
+  options: { readonly requireAll?: boolean } = {},
+): string[] {
+  const requireAll = options.requireAll ?? true;
+  const problems: string[] = [];
+  for (const placeholder of definition.placeholders) {
+    const value = values[placeholder.token];
+    if (value === undefined) {
+      if (placeholder.required && requireAll) {
+        problems.push(`Missing value for {${placeholder.token}}.`);
+      }
+      continue;
+    }
+    const wrong = (expected: string) =>
+      problems.push(
+        `{${placeholder.token}} is declared ${placeholder.type} and needs ${expected}; received ${
+          isMoneyValue(value) ? 'Money' : value instanceof Date ? 'Date' : typeof value
+        }.`,
+      );
+
+    switch (placeholder.type) {
+      case 'MONEY':
+        if (!isMoneyValue(value)) wrong('a Money value');
+        break;
+      case 'DATETIME':
+        if (!(value instanceof Date)) wrong('a Date');
+        break;
+      case 'NUMBER':
+      case 'DURATION_DAYS':
+      case 'BYTES':
+        if (typeof value !== 'number' && typeof value !== 'bigint') wrong('a number or bigint');
+        break;
+      case 'STRING':
+        if (typeof value !== 'string') wrong('a string');
+        break;
+    }
+  }
+  return problems;
+}
 
 /**
  * The translation port.

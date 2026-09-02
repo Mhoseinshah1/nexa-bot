@@ -113,6 +113,8 @@ export const PLATFORM_ERROR_CODES = {
   TENANT_NOT_FOUND: 'platform.tenant_not_found',
   PERMISSION_DENIED: 'platform.permission_denied',
   IDEMPOTENCY_PAYLOAD_MISMATCH: 'platform.idempotency_payload_mismatch',
+  /** Another request holding the same idempotency key committed first. */
+  IDEMPOTENCY_IN_FLIGHT: 'platform.idempotency_in_flight',
   UNKNOWN_EVENT_TYPE: 'platform.unknown_event_type',
   CONFIG_INVALID: 'platform.config_invalid',
   SECRET_DECRYPT_FAILED: 'platform.secret_decrypt_failed',
@@ -162,4 +164,40 @@ export const IDENTITY_ERROR_CODES = {
   ADMIN_PASSWORD_STALE: 'admin.password_stale',
   ROLE_NOT_FOUND: 'role.not_found',
   BOOTSTRAP_ALREADY_DONE: 'bootstrap.already_completed',
+} as const;
+
+/**
+ * Codes emitted by the control plane — templates, settings, feature flags,
+ * notifications and the operational-event surface.
+ *
+ * `VERSION_CONFLICT` is the one worth reading twice. It is returned when a write
+ * carried an expectation about the row it was replacing and the row had already
+ * moved. It is NOT an error the client should retry blindly: the change was
+ * built on state that is now stale, so the correct response is to re-read and
+ * decide again. The legacy alternative is that the second save silently
+ * discards the first, with nothing anywhere to notice it by.
+ */
+export const CONTROL_ERROR_CODES = {
+  UNKNOWN_KEY: 'control.unknown_key',
+  INVALID_VALUE: 'control.invalid_value',
+  VERSION_CONFLICT: 'control.version_conflict',
+  /** A template body that would ship a broken message to customers. */
+  TEMPLATE_INVALID: 'control.template_invalid',
+  /** A revert with nothing to revert: this tenant has no override of the key. */
+  TEMPLATE_NOT_OVERRIDDEN: 'control.template_not_overridden',
+  /** A TENANT_WIDE flag toggled without the confirmation the protocol requires. */
+  CONFIRMATION_REQUIRED: 'control.confirmation_required',
+  /** A notification asked for with no destination configured. */
+  DESTINATION_NOT_CONFIGURED: 'control.destination_not_configured',
+  NOTIFICATION_NOT_FOUND: 'control.notification_not_found',
+  /**
+   * An idempotency record names a notification that no longer exists.
+   *
+   * Distinct from NOT_FOUND on purpose. That one answers "no such notification
+   * in this tenant" to somebody who asked for one; this one says a COMPLETED
+   * command's record points at nothing, which is a corrupt store rather than a
+   * bad request, and a client that could not tell them apart would retry the
+   * one that cannot succeed.
+   */
+  NOTIFICATION_RECORD_ORPHANED: 'control.notification_record_orphaned',
 } as const;

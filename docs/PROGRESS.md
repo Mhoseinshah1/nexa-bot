@@ -23,7 +23,7 @@ history on `main`; the task branch it was built on no longer exists.
 | Idempotency              | Durable store, replay returns the first result, payload mismatch rejected, per-scope keys                                                                                                                                                                                                                      |
 | Audit and ops log        | Separate models, both with real producers, database-enforced immutability                                                                                                                                                                                                                                      |
 | Access                   | Deny-by-default guard with no actor-type bypass, DENY-wins override resolution, denials audited and recorded as `WARN` operational events                                                                                                                                                                      |
-| Secrets                  | AES-256-GCM envelope encryption with `keyId` for rotation, server-side masking, one redactor shared by the logger, the audit log and the ops log                                                                                                                                                               |
+| Secrets                  | AES-256-GCM envelope encryption, with `keyId` RECORDED against each row for a future rotation that v1 cannot yet perform (see BLOCKER-SECRETS-V2), server-side masking, one redactor shared by the logger, the audit log and the ops log                                                                       |
 | Surfaces                 | `api` and `worker` entrypoints over one module graph, health live/ready/info, Telegram webhook receiver behind a secret token, React RTL admin shell rendering live readiness                                                                                                                                  |
 | Docs                     | Architecture, conventions, glossary, open questions, 12 ADRs, 92 sanitized research files                                                                                                                                                                                                                      |
 | Claude config            | SessionStart hook, 2 skills, 2 agents, permission allowlist                                                                                                                                                                                                                                                    |
@@ -270,6 +270,96 @@ Recorded so they are decisions rather than oversights:
   indexes to tables written on every login, every failed login and every domain
   event. The read side of all three is measured; the write side is not.
 
-## Phases 2–8
+## Phase 2 — The control plane
+
+**Status: complete, pending review.** Built on `feat/phase2-control-plane`.
+
+Templates, settings, feature flags, notifications and a read model over the
+operational log. No product features: nothing here buys, charges, provisions or
+messages a customer.
+
+### What exists
+
+| Area               | State                                                                                                                                                                                                                                      |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Templates          | Raw bodies, per-key format and placeholder declarations, one shared validator, tenant overrides with optimistic versions, append-only revisions, revert-by-removal, preview that stores nothing                                            |
+| Settings           | A typed registry of six keys — schema, default, mutability, classification, and a mandatory declaration of what `0` or empty means. Reads return the value, its resolved source and that declaration. Unknown keys fail closed everywhere. |
+| Feature flags      | A separate registry of two boolean flags, each naming the settings it parameterises, checked symmetric by a test. `TENANT_WIDE` toggles require a typed confirmation and a reason.                                                         |
+| Notifications      | Intent and delivery attempt as two tables; a dispatcher that claims with `FOR UPDATE SKIP LOCKED`, sends outside every transaction, and records what happened; a real Telegram transport honouring `retry_after`                           |
+| Operational events | The recorder now reports whether it opened a condition or repeated one; recovery links rather than deletes; a filtered read model behind `opslog.view`                                                                                     |
+| Surfaces           | One HTTP controller and five Web Admin screens, all drawing from the session's permissions and all re-checked server-side                                                                                                                  |
+| Migrations         | 0010 (six tables, two columns, one partial index) and 0011 (append-only triggers, the extended immutability guard, one backfill)                                                                                                           |
+
+### What was found rather than built
+
+Five things went in wrong first. They are listed because the commits that fixed
+them are the useful part of this phase's history.
+
+- **The retention sweep could not exist.** ADR-0020 was drafted saying
+  operational events would be swept on a configurable window, and a setting and
+  a feature flag were written to configure it. `operational_events` carries a
+  `BEFORE DELETE` trigger from migration 0001. The guard did not move; the
+  setting and the flag were removed and the unbounded-growth question is
+  recorded as a DECISION in `docs/open-questions.md`.
+- **The notification dispatcher could not be an outbox consumer.** The relay
+  runs consumers INSIDE its claim transaction, so a consumer that sent would
+  hold a transaction open across a Telegram call. The `NotificationQueued` event
+  was removed and the dispatcher became a poller.
+- **A re-entrancy flag was not concurrency-safe.** The projector guarded against
+  the settings resolver's own error reporting looping back into it with a
+  boolean; two events arriving together would find it set and the second would
+  be recorded and never announced. The cycle is now removed structurally.
+- **A lock on a row that does not exist locks nothing.** The operational-event
+  dedupe path used `SELECT ... FOR UPDATE` before inserting, so two first
+  reports of one condition both inserted and one died on the unique index. It
+  surfaced as an unexplained login failure.
+- **Drizzle cannot round-trip a JSON string through `jsonb`.** `pg` parses the
+  column and `mapFromDriverValue` parses it again, so a stored `"-1001234567890"`
+  came back as a number, failed its own schema, and the resolver fell back to
+  the default — while the API answered 201. Every string-valued setting was
+  affected. Both directions are now explicit in the repository.
+
+### Deliberately absent
+
+No customer-facing notifications, because the things they would notify about do
+not exist. No retention or archival for operational events (above). No bulk
+operation, so ADR-0010's dry-run and counted-preview steps have nothing to apply
+to yet. No second locale, though overrides are keyed by one from the first
+migration.
+
+**No retention or archive for notifications either**, and it is worth saying
+separately because the tables are the ones that grow fastest. A notification
+intent is never deleted and a delivery attempt is append-only evidence — the
+question a stuck notification provokes is "what did the third attempt fail
+with", and a row removed on a schedule cannot answer it. So both tables grow
+without bound on a long-lived installation. That is an accepted Phase 2
+tradeoff, not an oversight: no duration is invented here, and ADR-0018 lists
+what a future policy must decide (archival, duration, evidence and history,
+referential integrity, storage bounds, and any change to the append-only rule).
+
+### Not deployable, and two things block Phase 3
+
+There is no Dockerfile, no TLS or reverse-proxy topology, no release wiring, no
+`botctl` and no installer. Phase 2 makes the maintenance commands run from
+compiled output so a runtime image needs neither `tsx` nor devDependencies —
+that is groundwork for the Deployment MVP, not the MVP.
+
+The secret envelope is still v1: ciphertext is not bound to its context, and a
+single configured KEK means rotation cannot decrypt what the previous key
+wrote. Both are recorded as `BLOCKER-DEPLOY` and `BLOCKER-SECRETS-V2` in
+`docs/open-questions.md` and must land before Phase 3 introduces provider
+credentials.
+
+### Deferred
+
+- **Keyset pagination on the operational log and the notification list.** Both
+  take a limit and the log takes a `before` cursor, but neither surface pages
+  yet. The index that would serve it exists.
+- **The rate ceiling is read from the primary tenant.** The dispatcher is
+  installation-wide and the setting is tenant-scoped. One install serves one
+  customer (ADR-0001), so this is right today and explicitly wrong the day an
+  installation serves several tenants at volume.
+
+## Phases 3–8
 
 Not started. Scope in `docs/architecture.md`.

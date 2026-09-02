@@ -1,5 +1,20 @@
 import { z } from 'zod';
 import { adminChangeReasonSchema, adminDisplayNameSchema } from './identity.js';
+import {
+  DELIVERY_OUTCOMES,
+  NOTIFICATION_KINDS,
+  NOTIFICATION_STATUSES,
+  NOTIFICATION_TRANSPORTS,
+} from './notifications.js';
+import { OPERATIONAL_SEVERITIES } from './ports.js';
+import {
+  SETTING_CLASSIFICATIONS,
+  SETTING_MUTABILITIES,
+  SETTING_SOURCES,
+  ZERO_MEANINGS,
+} from './settings.js';
+import { FEATURE_FLAG_SOURCES, FLAG_BLAST_RADII } from './features.js';
+import { PLACEHOLDER_TYPES, TEMPLATE_FORMATS, TEMPLATE_REVISION_ACTIONS } from './templates.js';
 
 /**
  * The HTTP seam.
@@ -27,13 +42,50 @@ export const healthLiveResponseSchema = z.object({
 });
 export type HealthLiveResponse = z.infer<typeof healthLiveResponseSchema>;
 
-/** Readiness: can this process serve traffic. Names the failing dependency. */
+/**
+ * Readiness: can this process serve traffic. 200 or 503, and nothing else.
+ *
+ * Deliberately minimal, and it used to carry the dependency list. This endpoint
+ * is anonymous — it has to be, because the thing asking is a load balancer or a
+ * container orchestrator with no credentials — and what it answered told that
+ * anonymous caller which dependencies the deployment has, what each one is
+ * called, how long each took to answer, how many migrations are applied, how far
+ * behind the outbox relay is, and a classification of the current failure. That
+ * is a description of the system's internals, served fastest at exactly the
+ * moment it is broken.
+ *
+ * A load balancer needs the status code. It has never needed the reasons.
+ *
+ * The detail did not disappear: `systemReadinessResponseSchema` carries it to
+ * an authenticated Web Admin session.
+ */
 export const healthReadyResponseSchema = z.object({
   status: z.enum(['ok', 'degraded']),
-  dependencies: z.array(dependencyStatusSchema),
 });
 export type HealthReadyResponse = z.infer<typeof healthReadyResponseSchema>;
 
+/**
+ * Readiness with its reasons, for an operator who has signed in.
+ *
+ * Authentication is the whole gate, and no new permission guards it. What this
+ * exposes is the shape of the deployment rather than any tenant's data, every
+ * administrator needs it when something is wrong, and a permission nobody can
+ * be denied is a permission that exists to be looked at rather than enforced.
+ */
+export const systemReadinessResponseSchema = z.object({
+  status: z.enum(['ok', 'degraded']),
+  dependencies: z.array(dependencyStatusSchema),
+});
+export type SystemReadinessResponse = z.infer<typeof systemReadinessResponseSchema>;
+
+/**
+ * Build metadata. Requires an authenticated session.
+ *
+ * Version, commit, build time, Node version and environment are not secrets and
+ * they are not for strangers either: together they name the exact revision an
+ * attacker would go and read, and the Node build whose advisories they would
+ * check first. An administrator sees it; an anonymous caller does not.
+ */
 export const healthInfoResponseSchema = z.object({
   name: z.string(),
   version: z.string(),
@@ -216,4 +268,396 @@ export const ADMIN_ROUTES = {
   status: (id: string) => `/admins/${id}/status`,
   roles: (id: string) => `/admins/${id}/roles`,
   rolesCatalog: '/roles',
+} as const;
+
+// ---------------------------------------------------------------------------
+// The control plane
+// ---------------------------------------------------------------------------
+
+/**
+ * Timestamps cross this seam as ISO-8601 strings in UTC.
+ *
+ * JSON has no date type, so the alternative is a number whose unit nobody
+ * states. The legacy log group mixes Jalali and Gregorian in one stream, which
+ * is the same mistake one layer up: Jalali is a display concern and this is a
+ * wire format.
+ */
+const isoTimestamp = z.iso.datetime();
+const nullableIsoTimestamp = isoTimestamp.nullable();
+
+export const resolvedSettingSchema = z.object({
+  key: z.string(),
+  value: z.unknown(),
+  source: z.enum(SETTING_SOURCES),
+  /**
+   * The stored row's version, or null when there is genuinely no row.
+   *
+   * A row whose value no longer parses reports `source: 'DEFAULT'` — the
+   * default is what is in force — but still reports ITS OWN version, because
+   * that is what a caller must state to overwrite it. Reporting null there made
+   * the key permanently unwritable: the write took its first-write branch, the
+   * insert conflicted with the row that was there all along, and every reload
+   * returned null again.
+   */
+  version: z.number().int().positive().nullable(),
+  updatedAt: nullableIsoTimestamp,
+  updatedByAdminId: z.string().nullable(),
+  description: z.string(),
+  /** What `0`, empty or absent means for THIS key. Returned with every read. */
+  zeroMeaning: z.enum(ZERO_MEANINGS),
+  mutability: z.enum(SETTING_MUTABILITIES),
+  classification: z.enum(SETTING_CLASSIFICATIONS),
+  configures: z.string().nullable(),
+  /**
+   * A row exists whose value no longer parses against its declaration, so the
+   * default is in force. A surface should say so rather than present the
+   * default as a deliberate choice, and submitting a valid value repairs it.
+   */
+  storedValueInvalid: z.boolean(),
+});
+export type ResolvedSettingResponse = z.infer<typeof resolvedSettingSchema>;
+
+export const settingListResponseSchema = z.object({ settings: z.array(resolvedSettingSchema) });
+export type SettingListResponse = z.infer<typeof settingListResponseSchema>;
+
+export const setSettingRequestSchema = z.object({
+  value: z.unknown(),
+  /**
+   * The version the caller read. Required, and null means "I read this as
+   * unset". An optional expectation becomes an omitted one, and an omitted one
+   * is last-writer-wins with extra steps.
+   */
+  expectedVersion: z.number().int().positive().nullable(),
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type SetSettingRequest = z.infer<typeof setSettingRequestSchema>;
+
+/**
+ * What a setting write answers with.
+ *
+ * The persisted row AND whether it changed anything. `docs/conventions.md`
+ * requires that a no-op says it was a no-op: three unrelated legacy subsystems
+ * report success for writes that touched nothing, and one of them answered
+ * "✅ updated" three times in a row while a product stayed broken
+ * (SOURCE_BUG-002). A response that cannot express "nothing changed" cannot
+ * comply with that rule however carefully the service computes it.
+ */
+export const settingWriteResponseSchema = z.object({
+  setting: resolvedSettingSchema,
+  changed: z.boolean(),
+});
+export type SettingWriteResponse = z.infer<typeof settingWriteResponseSchema>;
+
+export const featureFlagSchema = z.object({
+  key: z.string(),
+  enabled: z.boolean(),
+  source: z.enum(FEATURE_FLAG_SOURCES),
+  version: z.number().int().positive().nullable(),
+  updatedAt: nullableIsoTimestamp,
+  updatedByAdminId: z.string().nullable(),
+  reason: z.string().nullable(),
+  description: z.string(),
+  /** TENANT_WIDE toggles go through the confirmation protocol (ADR-0010). */
+  blastRadius: z.enum(FLAG_BLAST_RADII),
+  /**
+   * The settings this flag governs, each marked inert when the flag is off.
+   *
+   * Travelling together is the point: in the legacy system the flag and its
+   * threshold sit on different screens, and the flag being off silently makes
+   * the value do nothing (CBR-007, GSR-008).
+   */
+  configuration: z.array(resolvedSettingSchema.extend({ inert: z.boolean() })),
+});
+export type FeatureFlagResponse = z.infer<typeof featureFlagSchema>;
+
+export const featureFlagListResponseSchema = z.object({ flags: z.array(featureFlagSchema) });
+export type FeatureFlagListResponse = z.infer<typeof featureFlagListResponseSchema>;
+
+export const featureFlagWriteResponseSchema = z.object({
+  flag: featureFlagSchema,
+  changed: z.boolean(),
+});
+export type FeatureFlagWriteResponse = z.infer<typeof featureFlagWriteResponseSchema>;
+
+export const setFeatureFlagRequestSchema = z.object({
+  enabled: z.boolean(),
+  expectedVersion: z.number().int().positive().nullable(),
+  idempotencyKey: z.string().min(8).max(255),
+  /** Typed confirmation of the flag's own key. Required for TENANT_WIDE. */
+  confirmKey: z.string().optional(),
+  reason: z.string().min(3).max(500).optional(),
+});
+export type SetFeatureFlagRequest = z.infer<typeof setFeatureFlagRequestSchema>;
+
+export const placeholderSchema = z.object({
+  token: z.string(),
+  type: z.enum(PLACEHOLDER_TYPES),
+  description: z.string(),
+  required: z.boolean(),
+  repeatable: z.boolean(),
+});
+
+export const templateViewSchema = z.object({
+  key: z.string(),
+  locale: z.string(),
+  description: z.string(),
+  format: z.enum(TEMPLATE_FORMATS),
+  placeholders: z.array(placeholderSchema),
+  maxLength: z.number().int().positive(),
+  /** The body in force — what a customer would actually receive. */
+  body: z.string(),
+  /**
+   * The tenant's RAW override, if stored, whether or not it is applied.
+   * This is what the edit field is populated from. Never a rendered string.
+   */
+  overrideBody: z.string().nullable(),
+  defaultBody: z.string(),
+  source: z.enum(['DEFAULT', 'TENANT']),
+  overrideSuppressed: z.boolean(),
+  version: z.number().int().positive().nullable(),
+  revision: z.number().int().positive().nullable(),
+  updatedAt: nullableIsoTimestamp,
+  updatedByAdminId: z.string().nullable(),
+});
+export type TemplateViewResponse = z.infer<typeof templateViewSchema>;
+
+export const templateListResponseSchema = z.object({ templates: z.array(templateViewSchema) });
+export type TemplateListResponse = z.infer<typeof templateListResponseSchema>;
+
+/**
+ * What a template write answers with.
+ *
+ * The same rule as a setting write: the persisted view, the revision it
+ * produced, and whether anything actually changed. Re-saving an identical body
+ * is a no-op and says so, rather than answering "saved" and writing a duplicate
+ * revision.
+ */
+export const templateWriteResponseSchema = z.object({
+  template: templateViewSchema,
+  revision: z.number().int().positive(),
+  changed: z.boolean(),
+});
+export type TemplateWriteResponse = z.infer<typeof templateWriteResponseSchema>;
+
+export const setTemplateRequestSchema = z.object({
+  body: z.string().min(1),
+  expectedVersion: z.number().int().positive().nullable(),
+  /**
+   * The revision the caller read, alongside the version.
+   *
+   * BOTH, because a version alone does not identify a row here. A revert
+   * DELETES the override, and the next save inserts a fresh row at version 1 —
+   * so an administrator holding a stale version 1 could state it, match the new
+   * row's version 1, and silently overwrite work done after the revert. The
+   * version check was doing exactly what it was written to do and could not
+   * see the difference.
+   *
+   * `revision` cannot restart: it is `max(template_revisions.revision) + 1`
+   * over an append-only table that the revert does not touch, and the revert is
+   * itself a revision. Carrying it makes the expectation name a point in the
+   * key's history rather than a position in one row's lifetime.
+   */
+  expectedRevision: z.number().int().positive().nullable(),
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type SetTemplateRequest = z.infer<typeof setTemplateRequestSchema>;
+
+export const revertTemplateRequestSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  /** See `setTemplateRequestSchema.expectedRevision`. */
+  expectedRevision: z.number().int().positive(),
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type RevertTemplateRequest = z.infer<typeof revertTemplateRequestSchema>;
+
+export const previewTemplateRequestSchema = z.object({
+  /** The body on screen, so a preview shows what is being edited. */
+  body: z.string(),
+  /**
+   * Sample values supplied by the caller, never taken from their own account.
+   *
+   * TEXT, because a preview form is text fields, and coerced server-side to
+   * each placeholder's declared type by `coerceTemplateValues`. Accepting
+   * `string | number` here instead made a `NUMBER` placeholder rejected on
+   * every attempt from the admin screen and made `DATETIME` and `MONEY` ones
+   * impossible to supply at all: the field could only send a string, and the
+   * validator only accepted a `Date` or a `Money`.
+   */
+  values: z
+    .record(
+      z.string().max(200),
+      // BOUNDED. The values reach `coerceTemplateValues`, and an unbounded one
+      // was a way for any `templates.view` holder to hand the server a
+      // megabyte to parse as a number.
+      z.string().max(1_000),
+    )
+    .optional(),
+});
+export type PreviewTemplateRequest = z.infer<typeof previewTemplateRequestSchema>;
+
+export const previewTemplateResponseSchema = z.object({
+  rendered: z.string(),
+  unresolved: z.array(z.string()),
+});
+export type PreviewTemplateResponse = z.infer<typeof previewTemplateResponseSchema>;
+
+export const templateRevisionSchema = z.object({
+  revision: z.number().int().positive(),
+  action: z.enum(TEMPLATE_REVISION_ACTIONS),
+  /** The body a SET stored. Null for a REVERT, which stores none. */
+  body: z.string().nullable(),
+  createdAt: isoTimestamp,
+  createdByAdminId: z.string().nullable(),
+});
+export type TemplateRevisionResponse = z.infer<typeof templateRevisionSchema>;
+
+export const templateRevisionListResponseSchema = z.object({
+  revisions: z.array(templateRevisionSchema),
+});
+export type TemplateRevisionListResponse = z.infer<typeof templateRevisionListResponseSchema>;
+
+export const operationalEventSchema = z.object({
+  id: z.string(),
+  code: z.string(),
+  severity: z.enum(OPERATIONAL_SEVERITIES),
+  message: z.string(),
+  context: z.record(z.string(), z.unknown()).nullable(),
+  occurrenceCount: z.number().int().positive(),
+  firstSeenAt: isoTimestamp,
+  lastSeenAt: isoTimestamp,
+  correlationId: z.string().nullable(),
+  recoversCode: z.string().nullable(),
+  /** Set when the condition cleared. The row is never removed either way. */
+  resolvedAt: nullableIsoTimestamp,
+  resolvedByEventId: z.string().nullable(),
+});
+export type OperationalEventResponse = z.infer<typeof operationalEventSchema>;
+
+export const operationalEventListResponseSchema = z.object({
+  events: z.array(operationalEventSchema),
+});
+export type OperationalEventListResponse = z.infer<typeof operationalEventListResponseSchema>;
+
+export const notificationSchema = z.object({
+  id: z.string(),
+  kind: z.enum(NOTIFICATION_KINDS),
+  status: z.enum(NOTIFICATION_STATUSES),
+  templateKey: z.string(),
+  attemptCount: z.number().int().nonnegative(),
+  maxAttempts: z.number().int().positive(),
+  createdAt: isoTimestamp,
+  lastAttemptAt: nullableIsoTimestamp,
+  completedAt: nullableIsoTimestamp,
+  correlationId: z.string().nullable(),
+});
+export type NotificationResponse = z.infer<typeof notificationSchema>;
+
+export const notificationListResponseSchema = z.object({
+  notifications: z.array(notificationSchema),
+});
+export type NotificationListResponse = z.infer<typeof notificationListResponseSchema>;
+
+export const deliveryAttemptSchema = z.object({
+  attemptNumber: z.number().int().positive(),
+  transport: z.enum(NOTIFICATION_TRANSPORTS),
+  outcome: z.enum(DELIVERY_OUTCOMES),
+  startedAt: isoTimestamp,
+  finishedAt: isoTimestamp,
+  errorCode: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+  retryAfterMs: z.number().int().nonnegative().nullable(),
+});
+export type DeliveryAttemptResponse = z.infer<typeof deliveryAttemptSchema>;
+
+/**
+ * A claim that was handed back without ever reaching the transport.
+ *
+ * The counterpart to a delivery attempt: an attempt row says what happened on
+ * the wire, and one of these says that on this number nothing did. Together
+ * they are what the intent's `attemptCount` is made of, so an operator reading
+ * a history where the two disagree in number can see why.
+ *
+ * `reason` is a machine code, never a sentence — `tenant.not_active` for a
+ * claim returned because the installation was stopped mid-batch, and
+ * `sweep.withdrawn` for the one case that reads strangely without it: the
+ * exhaustion sweep's own FAILED_PERMANENT row, retired when a hand-back showed
+ * the intent had never actually spent its attempts. Without this array that row
+ * is an ordinary permanent failure sitting in the history of an intent that is
+ * somehow PENDING again.
+ */
+export const releasedClaimSchema = z.object({
+  attemptNumber: z.number().int().positive(),
+  releasedAt: isoTimestamp,
+  reason: z.string(),
+});
+export type ReleasedClaimResponse = z.infer<typeof releasedClaimSchema>;
+
+/**
+ * One intent and everything that happened to it.
+ *
+ * The two halves are returned together and stay distinguishable, which is the
+ * question the legacy system cannot answer about its own notification report
+ * (UNK-LGR-015). `releasedClaims` is the third: the claims that were issued and
+ * given back, which is the only thing that explains an `attemptCount` larger
+ * than the attempt list under it.
+ */
+export const notificationDetailResponseSchema = z.object({
+  notification: notificationSchema,
+  attempts: z.array(deliveryAttemptSchema),
+  releasedClaims: z.array(releasedClaimSchema),
+});
+export type NotificationDetailResponse = z.infer<typeof notificationDetailResponseSchema>;
+
+/**
+ * The test-send request.
+ *
+ * It carries an idempotency key because it is a state-changing command and
+ * every one of those takes one — a double-clicked button, a browser retry or a
+ * proxy replay must not produce two messages and two audit rows. That is a
+ * different mechanism from the intent's dedupe key, which answers a different
+ * question: each test IS its own question, so two deliberate tests are two
+ * intents.
+ */
+export const sendTestNotificationRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type SendTestNotificationRequest = z.infer<typeof sendTestNotificationRequestSchema>;
+
+/**
+ * What a test send answers with.
+ *
+ * The intent, its REAL attempts, its returned claims, and whether this call
+ * created anything. Answering with the detail shape and a hard-coded empty
+ * attempt list said "nothing has been tried yet" for a replay of a key whose
+ * message had already failed twice — a screen reporting a state the database
+ * does not hold, which is the legacy pattern this module exists to end. A
+ * replay whose claims were handed back has the same gap, so the same three
+ * fields answer here as on the detail route.
+ */
+export const sendTestNotificationResponseSchema = z.object({
+  notification: notificationSchema,
+  attempts: z.array(deliveryAttemptSchema),
+  releasedClaims: z.array(releasedClaimSchema),
+  /** False when this call replayed an earlier one rather than queueing anything. */
+  created: z.boolean(),
+  replayed: z.boolean(),
+});
+export type SendTestNotificationResponse = z.infer<typeof sendTestNotificationResponseSchema>;
+
+export const CONTROL_ROUTES = {
+  settings: '/settings',
+  setting: (key: string) => `/settings/${encodeURIComponent(key)}`,
+  features: '/features',
+  feature: (key: string) => `/features/${encodeURIComponent(key)}`,
+  templates: '/templates',
+  template: (key: string) => `/templates/${encodeURIComponent(key)}`,
+  templateRevert: (key: string) => `/templates/${encodeURIComponent(key)}/revert`,
+  templatePreview: (key: string) => `/templates/${encodeURIComponent(key)}/preview`,
+  templateRevisions: (key: string) => `/templates/${encodeURIComponent(key)}/revisions`,
+  opsLog: '/ops-log',
+  notifications: '/notifications',
+  notification: (id: string) => `/notifications/${encodeURIComponent(id)}`,
+  notificationTest: '/notifications/test',
+  /** Readiness with dependency detail. Authenticated; see the schema. */
+  systemReadiness: '/system/readiness',
 } as const;

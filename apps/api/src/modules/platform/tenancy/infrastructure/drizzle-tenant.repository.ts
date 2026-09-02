@@ -175,4 +175,26 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository {
     }
     return this.cipher.decrypt({ keyId: row.tokenKeyId, ciphertext: row.tokenCiphertext });
   }
+
+  /**
+   * The token of the tenant's active bot, for sending on the tenant's behalf.
+   *
+   * Returns null rather than throwing when the tenant has no active bot: that is
+   * a configuration state an operator can be told about, not an exception. A
+   * suspended bot is not used — stopping a bot should stop it sending.
+   *
+   * Ordered by creation so a tenant with several bots resolves the same one on
+   * every call instead of whichever the planner happened to return.
+   */
+  async activeTokenForTenant(scope: ScopeContext): Promise<string | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.db
+      .select()
+      .from(botInstances)
+      .where(and(eq(botInstances.tenantId, tenantId), eq(botInstances.status, 'ACTIVE')))
+      .orderBy(botInstances.createdAt, botInstances.id)
+      .limit(1);
+    if (!row) return null;
+    return this.cipher.decrypt({ keyId: row.tokenKeyId, ciphertext: row.tokenCiphertext });
+  }
 }

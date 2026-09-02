@@ -1,13 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  healthInfoResponseSchema,
+  API_PREFIX,
+  AUTH_ROUTES,
+  CONTROL_ROUTES,
   healthLiveResponseSchema,
   healthReadyResponseSchema,
+  SESSION_COOKIE_NAME,
+  systemReadinessResponseSchema,
   TELEGRAM_SECRET_TOKEN_HEADER,
 } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { auditLogs, outboxMessages } from '../../apps/api/src/infrastructure/persistence/schema';
-import { migrateOnce, resetDatabase, testConfig } from './harness';
+import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { telegramUpdateKey } from '../../apps/api/src/surfaces/telegram/webhook.controller';
 
@@ -56,27 +60,39 @@ describe('HTTP surface', () => {
       expect(() => healthLiveResponseSchema.parse(response.json())).not.toThrow();
     });
 
-    it('reports readiness with a per-dependency breakdown', async () => {
+    it('reports readiness to an anonymous caller as a status and nothing else', async () => {
       const response = await inject({ method: 'GET', url: '/health/ready' });
-      const body = healthReadyResponseSchema.parse(response.json());
-
       expect(response.statusCode).toBe(200);
-      expect(body.status).toBe('ok');
-      expect(body.dependencies.map((d) => d.name).sort()).toEqual([
-        'migrations',
-        'outbox',
-        'postgres',
-        'redis',
-      ]);
-      expect(body.dependencies.every((d) => d.status === 'up')).toBe(true);
+      const body: unknown = response.json();
+      expect(healthReadyResponseSchema.parse(body).status).toBe('ok');
+
+      // The point of the endpoint, asserted on the RAW body rather than on the
+      // parsed one: a schema that strips extra keys would report a clean shape
+      // for a response that shipped everything anyway.
+      //
+      // A load balancer needs the status code. It has never needed to know
+      // which dependencies exist, what they are called, how long each took,
+      // how many migrations are applied, or how far behind the relay is —
+      // served fastest, and in most detail, exactly when the system is broken.
+      expect(Object.keys(body as object)).toEqual(['status']);
+      expect(JSON.stringify(body)).not.toMatch(/postgres|redis|migrations|outbox|latencyMs/);
     });
 
-    it('returns build information', async () => {
+    it('refuses build information to an anonymous caller', async () => {
       const response = await inject({ method: 'GET', url: '/health/info' });
-      expect(response.statusCode).toBe(200);
-      const body = healthInfoResponseSchema.parse(response.json());
-      expect(body.name).toBe('nexa-bot');
-      expect(body.nodeVersion).toBe(process.version);
+      expect(response.statusCode).toBe(401);
+      // Version, commit and Node build together name the exact revision to go
+      // and read, and the advisories to check first.
+      expect(response.body).not.toMatch(/nexa-bot|v\d+\.\d+\.\d+/);
+    });
+
+    it('refuses readiness detail to an anonymous caller', async () => {
+      const response = await inject({
+        method: 'GET',
+        url: `${API_PREFIX}${CONTROL_ROUTES.systemReadiness}`,
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.body).not.toMatch(/postgres|redis|migrations|outbox/);
     });
 
     it('echoes a caller-supplied correlation id when it is a UUID', async () => {
@@ -334,6 +350,8 @@ describe('HTTP surface', () => {
 
 describe('readiness when a dependency is down', () => {
   let api: ApiApp;
+  let cookie: string;
+  const ORIGIN = 'http://localhost:5173';
 
   beforeAll(async () => {
     const config = testConfig();
@@ -341,13 +359,48 @@ describe('readiness when a dependency is down', () => {
     // An unreachable Redis, rather than stopping the shared one out from under
     // the other tests.
     api = await createApiApp({ ...config, REDIS_URL: 'redis://127.0.0.1:6399' });
+    await resetDatabase(api.container.database.db);
+    await seed(api.container.database.db, config.SECRETS_KEK, config.SECRETS_KEK_ID);
+    await createAdmin(api.container, tenantA, {
+      username: 'reader',
+      password: 'a-perfectly-fine-password',
+      roleKeys: ['observer'],
+    });
+
+    const login = await api.app
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: `${API_PREFIX}${AUTH_ROUTES.login}`,
+        headers: { origin: ORIGIN },
+        payload: { username: 'reader', password: 'a-perfectly-fine-password' },
+      });
+    const match = new RegExp(`${SESSION_COOKIE_NAME}=([^;]+)`).exec(
+      String(login.headers['set-cookie'] ?? ''),
+    );
+    if (match === null) throw new Error('No session cookie was set.');
+    cookie = `${SESSION_COOKIE_NAME}=${match[1] as string}`;
   });
 
   afterAll(async () => {
     await api?.close();
   });
 
-  it('stays live while reporting not ready, and names the failing dependency', async () => {
+  const readinessDetail = async () => {
+    const response = await api.app
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'GET',
+        url: `${API_PREFIX}${CONTROL_ROUTES.systemReadiness}`,
+        headers: { cookie, origin: ORIGIN },
+      });
+    expect(response.statusCode).toBe(200);
+    return systemReadinessResponseSchema.parse(response.json());
+  };
+
+  it('stays live while reporting not ready', async () => {
     // This distinction is the entire point of having two endpoints: reporting a
     // dead dependency as "not live" makes an orchestrator restart a healthy
     // process and lose in-flight work.
@@ -358,23 +411,25 @@ describe('readiness when a dependency is down', () => {
 
     const ready = await instance.inject({ method: 'GET', url: '/health/ready' });
     expect(ready.statusCode).toBe(503);
+    // The 503 is the whole answer for an anonymous caller. Which dependency
+    // failed is exactly what a stranger does not get, least of all now.
+    expect(Object.keys(ready.json() as object)).toEqual(['status']);
+    expect(healthReadyResponseSchema.parse(ready.json()).status).toBe('degraded');
+  });
 
-    const body = healthReadyResponseSchema.parse(ready.json());
+  it('names the failing dependency to an authenticated administrator', async () => {
+    const body = await readinessDetail();
     expect(body.status).toBe('degraded');
     expect(body.dependencies.find((d) => d.name === 'redis')?.status).toBe('down');
     expect(body.dependencies.find((d) => d.name === 'postgres')?.status).toBe('up');
   });
 
   it('describes the failure from a closed vocabulary, not from the driver', async () => {
-    // Readiness is unauthenticated. A driver message would hand an anonymous
-    // caller internal hostnames, ports, database and role names — precisely
-    // when the system is broken.
-    const ready = await api.app
-      .getHttpAdapter()
-      .getInstance()
-      .inject({ method: 'GET', url: '/health/ready' });
-
-    const body = healthReadyResponseSchema.parse(ready.json());
+    // Authentication is not a licence to leak the deployment. A driver message
+    // carries internal hostnames, ports, database and role names, and an HTTP
+    // body gets pasted into tickets — the real message goes to the log with
+    // its correlation id.
+    const body = await readinessDetail();
     const redis = body.dependencies.find((d) => d.name === 'redis');
 
     expect(['unreachable', 'timeout', 'auth failed', 'missing', 'unavailable']).toContain(
