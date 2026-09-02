@@ -233,6 +233,14 @@ cmd_update() {
 
   local target_image="${NEXA_IMAGE_REPO}@${digest}"
 
+  # The commit the target was built from, read out of the image that was just
+  # pulled rather than assumed. A manifest is only worth having if it is true,
+  # and the label is the only place this fact exists on the host.
+  local commit
+  commit="$(docker image inspect "$target_image" \
+    --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)"
+  [ -n "$commit" ] || commit="unknown"
+
   # 3. BACK UP. Before the migration, because the migration is the step that
   #    cannot be undone by switching an image back.
   nexa_step "backing up before migrating"
@@ -281,8 +289,17 @@ cmd_update() {
   # 7. COMMIT. The single durable moment. Everything above this line leaves the
   #    installation on ${current}; everything below is bookkeeping about a
   #    release that is already running and already healthy.
+  #
+  #    The manifest is written FIRST, and that order matters. A manifest for a
+  #    release nothing points at is inert; a `current` pointer with no manifest
+  #    is an installation that cannot say what it runs and cannot be rolled
+  #    back to — which is exactly what an update that never recorded one left
+  #    behind: `botctl version` reporting `unknown`, and the second rollback
+  #    refusing because the target's digest could not be read.
+  nexa_write_manifest "$target" "$commit" "$digest"
   printf '%s\n' "$current" >"$NEXA_PREVIOUS_FILE"
   printf '%s\n' "$target" >"$NEXA_CURRENT_FILE"
+  chmod 0644 "$NEXA_CURRENT_FILE" "$NEXA_PREVIOUS_FILE"
   nexa_set_deploy_image "$target_image"
   nexa_prune_releases
 

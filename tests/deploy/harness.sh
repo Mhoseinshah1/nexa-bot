@@ -275,6 +275,27 @@ fake_set() { printf '%s' "$2" >"${FAKE_DIR}/$1"; }
 docker_log() { cat "$DOCKER_LOG" 2>/dev/null || true; }
 reset_docker_log() { : >"$DOCKER_LOG"; }
 
+# Read one field out of a release manifest under the CURRENT fake root.
+#
+# Deliberately not `nexa_manifest_field`: the library is sourced once, so its
+# `NEXA_RELEASES_DIR` is frozen to whichever root existed at source time and
+# would answer about a directory that was deleted three tests ago.
+manifest_field() {
+  local version="$1" field="$2"
+  python3 -c '
+import json, sys
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+except OSError:
+    sys.exit(1)
+value = data.get(sys.argv[2])
+if value is None:
+    sys.exit(1)
+print(value)
+' "${NEXA_STATE_DIR}/releases/${version}.json" "$field"
+}
+
 # Record a release as installed.
 seed_release() {
   local version="$1" digest="$2"

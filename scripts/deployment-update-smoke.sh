@@ -208,10 +208,19 @@ backups="$(find "$NEXA_BACKUP_DIR" -name '*.sql.gz' | wc -l)"
 DIGEST_B="$(docker buildx imagetools inspect "${IMAGE_REPO}:v2.0.0" --format '{{.Manifest.Digest}}')"
 grep -qF "NEXA_IMAGE=${IMAGE_REPO}@${DIGEST_B}" "${NEXA_CONFIG_DIR}/deploy.env" ||
   fail "deploy.env does not name v2.0.0's digest; the release would not survive a reboot"
+# The manifest is what makes the three release facts survive the update. The
+# installer writes one; for a long time the UPDATER did not, and this is where
+# that showed up — `botctl version` reporting a version with `unknown` for the
+# commit and the digest, on an installation that was running perfectly.
+[ -f "${NEXA_STATE_DIR}/releases/v2.0.0.json" ] ||
+  fail "the update activated v2.0.0 without recording a release manifest for it"
 version_output="$("$BOTCTL" version)"
 case "$version_output" in
   *"$DIGEST_B"*) : ;;
   *) fail "botctl version does not report the new digest" ;;
+esac
+case "$version_output" in
+  *unknown*) fail "botctl version reports an unknown fact about a release it just installed" ;;
 esac
 pass "v2.0.0 is current, by digest, with v1.0.0 preserved as the rollback target"
 

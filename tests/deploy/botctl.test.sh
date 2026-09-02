@@ -29,6 +29,7 @@ export NEXA_LIB="${REPO}/deploy/bin/nexa-lib.sh"
 
 DIGEST_A="sha256:$(printf 'a%.0s' {1..64})"
 DIGEST_B="sha256:$(printf 'b%.0s' {1..64})"
+DIGEST_C="sha256:$(printf 'c%.0s' {1..64})"
 
 # Run botctl and capture its combined output; never let a failure abort the run.
 # This file deliberately does NOT run under `set -e`: a test that stops at the
@@ -201,6 +202,32 @@ assert_equals 'deploy.env does not name the new digest' \
   "$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE)"
 assert_file_mode 'deploy.env lost its restrictive mode' "${NEXA_CONFIG_DIR}/deploy.env" '600'
 
+test_case 'the update records a manifest for the release it activated'
+# The three facts that identify a release must be recorded by the update, not
+# only by the installer. Without this, an updated installation has a `current`
+# pointer to a release with no manifest: `botctl version` reports `unknown`,
+# and the NEXT update makes that release the rollback target — so `rollback`
+# then refuses, because it will not guess what a release ran. That is how a
+# working rollback disappears on the second update rather than the first.
+target_manifest="${NEXA_STATE_DIR}/releases/v2.0.0.json"
+assert_ok 'the update wrote no manifest for the release it activated' test -f "$target_manifest"
+assert_equals 'the manifest does not record the activated digest' \
+  "$DIGEST_B" "$(manifest_field v2.0.0 digest)"
+assert_equals 'the manifest does not record the version' \
+  'v2.0.0' "$(manifest_field v2.0.0 version)"
+# Read out of the image's OCI label, not assumed: the fake image is labelled
+# `cafebabe`. A manifest that records a commit nobody can check is decoration.
+assert_equals 'the manifest does not record the commit from the image' \
+  'cafebabe' "$(manifest_field v2.0.0 commit)"
+
+test_case 'botctl version reports the release the update installed'
+run_botctl version
+assert_equals 'version failed after an update' 0 "$BOTCTL_STATUS"
+assert_contains 'version does not report the new release' "$BOTCTL_OUTPUT" 'v2.0.0'
+assert_contains 'version does not report the commit' "$BOTCTL_OUTPUT" 'cafebabe'
+assert_contains 'version does not report the digest' "$BOTCTL_OUTPUT" "$DIGEST_B"
+assert_not_contains 'version reports an unknown fact after an update' "$BOTCTL_OUTPUT" 'unknown'
+
 test_case 'a backup was taken before the migration'
 # Order matters: the backup must precede the migration, because the migration
 # is the step that switching an image back cannot undo.
@@ -291,6 +318,47 @@ assert_equals 'an unready target became current' 'v1.0.0' "$(cat "${NEXA_STATE_D
 assert_equals 'deploy.env was repointed at an unready release' \
   "registry.test/nexa@sha256:$(printf '1%.0s' {1..64})" \
   "$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE)"
+teardown_root
+
+# =============================================================================
+# two consecutive updates, then rollback
+# =============================================================================
+#
+# The case a single update cannot catch. After one update, the rollback target
+# is the release the INSTALLER recorded, so a manifest the update failed to
+# write is never read. It is the second update that promotes the first
+# update's release to rollback target — and only then does the missing
+# manifest surface, as a rollback that refuses on an installation whose
+# rollback worked yesterday.
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+
+test_case 'rollback still works after two consecutive updates'
+fake_set resolve_digest "$DIGEST_B"
+run_botctl update v2.0.0
+assert_equals 'the first update failed' 0 "$BOTCTL_STATUS"
+
+fake_set resolve_digest "$DIGEST_C"
+run_botctl update v3.0.0
+assert_equals 'the second update failed' 0 "$BOTCTL_STATUS"
+assert_equals 'current is not the second target' 'v3.0.0' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_equals 'the rollback target is not the first target' 'v2.0.0' "$(cat "${NEXA_STATE_DIR}/previous")"
+
+run_botctl rollback
+assert_equals 'rollback failed after two updates' 0 "$BOTCTL_STATUS"
+assert_equals 'rollback did not return to v2.0.0' 'v2.0.0' "$(cat "${NEXA_STATE_DIR}/current")"
+# By DIGEST, not by tag: the rollback must run the exact image that release
+# ran, which is only knowable from its manifest.
+assert_equals 'rollback did not repoint at the first target digest' \
+  "registry.test/nexa@${DIGEST_B}" \
+  "$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE)"
+
+test_case 'every release the installation passed through kept its manifest'
+assert_ok 'v1.0.0 lost its manifest' test -f "${NEXA_STATE_DIR}/releases/v1.0.0.json"
+assert_ok 'v2.0.0 lost its manifest' test -f "${NEXA_STATE_DIR}/releases/v2.0.0.json"
+assert_ok 'v3.0.0 lost its manifest' test -f "${NEXA_STATE_DIR}/releases/v3.0.0.json"
+
 teardown_root
 
 # =============================================================================
