@@ -8,7 +8,9 @@ import {
   operationalEventListResponseSchema,
   previewTemplateResponseSchema,
   SESSION_COOKIE_NAME,
+  featureFlagWriteResponseSchema,
   settingListResponseSchema,
+  settingWriteResponseSchema,
   templateListResponseSchema,
   templateRevisionListResponseSchema,
   templateViewSchema,
@@ -121,10 +123,11 @@ describe('control plane HTTP surface', () => {
       );
       expect(response.statusCode).toBe(201);
 
-      const body = response.json() as { value: unknown; version: number; source: string };
-      expect(body.value).toBe(3);
-      expect(body.source).toBe('TENANT');
-      expect(body.version).toBe(1);
+      const body = settingWriteResponseSchema.parse(response.json());
+      expect(body.setting.value).toBe(3);
+      expect(body.setting.source).toBe('TENANT');
+      expect(body.setting.version).toBe(1);
+      expect(body.changed).toBe(true);
 
       // And it is readable afterwards, which is the whole rule.
       const readBack = settingListResponseSchema.parse(
@@ -133,6 +136,27 @@ describe('control plane HTTP surface', () => {
       expect(readBack.settings.find((s) => s.key === 'ops.notifications.max_attempts')?.value).toBe(
         3,
       );
+    });
+
+    it('says so when a write changes nothing', async () => {
+      // "A no-op says so." The legacy screens answer success either way, and
+      // one repair path said it three times while the product stayed broken.
+      const key = CONTROL_ROUTES.setting('ops.notifications.max_attempts');
+      await post(key, ownerCookie, {
+        value: 3,
+        expectedVersion: null,
+        idempotencyKey: idempotencyKey(),
+      });
+      const again = await post(key, ownerCookie, {
+        value: 3,
+        expectedVersion: 1,
+        idempotencyKey: idempotencyKey(),
+      });
+
+      const body = settingWriteResponseSchema.parse(again.json());
+      expect(body.changed).toBe(false);
+      // And the version did not move, because nothing was written.
+      expect(body.setting.version).toBe(1);
     });
 
     it('refuses an unknown key rather than storing it', async () => {
@@ -239,9 +263,10 @@ describe('control plane HTTP surface', () => {
       });
       expect(response.statusCode).toBe(201);
 
-      const body = response.json() as { enabled: boolean; configuration: { inert: boolean }[] };
-      expect(body.enabled).toBe(true);
-      expect(body.configuration.every((setting) => !setting.inert)).toBe(true);
+      const body = featureFlagWriteResponseSchema.parse(response.json());
+      expect(body.flag.enabled).toBe(true);
+      expect(body.changed).toBe(true);
+      expect(body.flag.configuration.every((setting) => !setting.inert)).toBe(true);
     });
   });
 
@@ -342,7 +367,10 @@ describe('control plane HTTP surface', () => {
         { value: '-1001234567890', expectedVersion: null, idempotencyKey: idempotencyKey() },
       );
       expect(digits.statusCode).toBe(201);
-      expect(digits.json()).toMatchObject({ value: '-1001234567890', source: 'TENANT' });
+      expect(digits.json()).toMatchObject({
+        setting: { value: '-1001234567890', source: 'TENANT' },
+        changed: true,
+      });
 
       const readBack = settingListResponseSchema.parse(
         (await get(CONTROL_ROUTES.settings, ownerCookie)).json(),

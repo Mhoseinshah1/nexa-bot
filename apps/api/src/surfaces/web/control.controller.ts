@@ -8,8 +8,10 @@ import {
   type NotificationListResponse,
   type OperationalEventListResponse,
   type PreviewTemplateResponse,
+  type FeatureFlagWriteResponse,
   type ResolvedSettingResponse,
   type SettingListResponse,
+  type SettingWriteResponse,
   type TemplateListResponse,
   type TemplateRevisionListResponse,
   type TemplateViewResponse,
@@ -60,16 +62,17 @@ export class ControlController {
     @Req() request: FastifyRequest,
     @Param('key') key: string,
     @Body() body: unknown,
-  ): Promise<ResolvedSettingResponse> {
+  ): Promise<SettingWriteResponse> {
     const { scope, actor } = await this.authenticate(request, { write: true });
     const result = await this.container.settingsService.set(scope, actor, {
       ...(body as Record<string, unknown>),
       key,
     });
-    // The PERSISTED row, re-read inside the transaction. A response built from
-    // the request would report success for a write that may not have happened —
-    // which three unrelated legacy subsystems do.
-    return toSettingResponse(result.setting);
+    // The PERSISTED row, re-read inside the transaction, and whether it changed
+    // anything. A response built from the request would report success for a
+    // write that may not have happened — which three unrelated legacy
+    // subsystems do.
+    return { setting: toSettingResponse(result.setting), changed: result.changed };
   }
 
   // --- Feature flags -------------------------------------------------------
@@ -86,13 +89,13 @@ export class ControlController {
     @Req() request: FastifyRequest,
     @Param('key') key: string,
     @Body() body: unknown,
-  ): Promise<FeatureFlagResponse> {
+  ): Promise<FeatureFlagWriteResponse> {
     const { scope, actor } = await this.authenticate(request, { write: true });
     const result = await this.container.featureFlags.set(scope, actor, {
       ...(body as Record<string, unknown>),
       key,
     });
-    return toFlagResponse(result.flag);
+    return { flag: toFlagResponse(result.flag), changed: result.changed };
   }
 
   // --- Templates -----------------------------------------------------------

@@ -17,6 +17,29 @@ import {
   type LoginResponse,
   type LogoutResponse,
   type SessionResponse,
+  CONTROL_ROUTES,
+  featureFlagListResponseSchema,
+  featureFlagWriteResponseSchema,
+  settingWriteResponseSchema,
+  notificationDetailResponseSchema,
+  notificationListResponseSchema,
+  operationalEventListResponseSchema,
+  previewTemplateResponseSchema,
+  settingListResponseSchema,
+  templateListResponseSchema,
+  templateRevisionListResponseSchema,
+  templateViewSchema,
+  type FeatureFlagListResponse,
+  type NotificationDetailResponse,
+  type NotificationListResponse,
+  type OperationalEventListResponse,
+  type PreviewTemplateResponse,
+  type FeatureFlagWriteResponse,
+  type SettingWriteResponse,
+  type SettingListResponse,
+  type TemplateListResponse,
+  type TemplateRevisionListResponse,
+  type TemplateViewResponse,
 } from '@nexa/contracts';
 
 /**
@@ -131,4 +154,129 @@ export async function fetchAdmins(): Promise<AdminListResponse> {
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) throw toApiError(response.status, payload);
   return adminListResponseSchema.parse(payload);
+}
+
+// ---------------------------------------------------------------------------
+// The control plane
+// ---------------------------------------------------------------------------
+
+/** An authenticated GET that parses with the frozen schema. */
+async function authedGet<T>(path: string, schema: { parse: (v: unknown) => T }): Promise<T> {
+  const response = await fetch(`${API_PREFIX}${path}`, {
+    credentials: 'same-origin',
+    headers: { accept: 'application/json' },
+  });
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) throw toApiError(response.status, payload);
+  return schema.parse(payload);
+}
+
+/**
+ * A key for a write, minted per submission.
+ *
+ * Every state-changing command takes one, so a double-submitted form or a retry
+ * after a dropped connection produces one change rather than two. `randomUUID`
+ * is available in every browser this admin supports and in the test environment.
+ */
+export function newIdempotencyKey(): string {
+  return crypto.randomUUID();
+}
+
+export function fetchSettings(): Promise<SettingListResponse> {
+  return authedGet(CONTROL_ROUTES.settings, settingListResponseSchema);
+}
+
+export function saveSetting(input: {
+  key: string;
+  value: unknown;
+  expectedVersion: number | null;
+  idempotencyKey: string;
+}): Promise<SettingWriteResponse> {
+  const { key, ...body } = input;
+  return post(CONTROL_ROUTES.setting(key), body, settingWriteResponseSchema);
+}
+
+export function fetchFeatureFlags(): Promise<FeatureFlagListResponse> {
+  return authedGet(CONTROL_ROUTES.features, featureFlagListResponseSchema);
+}
+
+export function saveFeatureFlag(input: {
+  key: string;
+  enabled: boolean;
+  expectedVersion: number | null;
+  idempotencyKey: string;
+  confirmKey?: string;
+  reason?: string;
+}): Promise<FeatureFlagWriteResponse> {
+  const { key, ...body } = input;
+  return post(CONTROL_ROUTES.feature(key), body, featureFlagWriteResponseSchema);
+}
+
+export function fetchTemplates(): Promise<TemplateListResponse> {
+  return authedGet(CONTROL_ROUTES.templates, templateListResponseSchema);
+}
+
+export function fetchTemplateRevisions(key: string): Promise<TemplateRevisionListResponse> {
+  return authedGet(CONTROL_ROUTES.templateRevisions(key), templateRevisionListResponseSchema);
+}
+
+export function saveTemplate(input: {
+  key: string;
+  body: string;
+  expectedVersion: number | null;
+  idempotencyKey: string;
+}): Promise<TemplateViewResponse> {
+  const { key, ...rest } = input;
+  return post(CONTROL_ROUTES.template(key), rest, templateViewSchema);
+}
+
+export function revertTemplate(input: {
+  key: string;
+  expectedVersion: number;
+  idempotencyKey: string;
+}): Promise<TemplateViewResponse> {
+  const { key, ...rest } = input;
+  return post(CONTROL_ROUTES.templateRevert(key), rest, templateViewSchema);
+}
+
+/**
+ * Renders a body with sample values and stores nothing.
+ *
+ * The values are the ones the administrator typed into the preview fields. They
+ * are never taken from their own account — which is the difference between this
+ * and the legacy edit screen, where `{first_name}` renders as the viewer's own
+ * name and saving that view stores it.
+ */
+export function previewTemplate(
+  key: string,
+  body: string,
+  values: Record<string, string>,
+): Promise<PreviewTemplateResponse> {
+  return post(CONTROL_ROUTES.templatePreview(key), { body, values }, previewTemplateResponseSchema);
+}
+
+export function fetchOpsLog(query: {
+  severity?: string;
+  open?: boolean;
+}): Promise<OperationalEventListResponse> {
+  const params = new URLSearchParams();
+  if (query.severity) params.set('severity', query.severity);
+  if (query.open !== undefined) params.set('open', String(query.open));
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${CONTROL_ROUTES.opsLog}?${suffix}` : CONTROL_ROUTES.opsLog,
+    operationalEventListResponseSchema,
+  );
+}
+
+export function fetchNotifications(): Promise<NotificationListResponse> {
+  return authedGet(CONTROL_ROUTES.notifications, notificationListResponseSchema);
+}
+
+export function fetchNotification(id: string): Promise<NotificationDetailResponse> {
+  return authedGet(CONTROL_ROUTES.notification(id), notificationDetailResponseSchema);
+}
+
+export function sendTestNotification(): Promise<NotificationDetailResponse> {
+  return post(CONTROL_ROUTES.notificationTest, {}, notificationDetailResponseSchema);
 }

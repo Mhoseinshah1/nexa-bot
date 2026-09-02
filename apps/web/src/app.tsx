@@ -10,7 +10,11 @@ import {
   signOut,
 } from './api/client';
 import type { SessionResponse } from '@nexa/contracts';
-import { t } from './i18n/web.fa';
+import { t, type WebKey } from './i18n/web.fa';
+import { SettingsPage } from './pages/settings';
+import { FeaturesPage } from './pages/features';
+import { TemplatesPage } from './pages/templates';
+import { NotificationsPage, OperationsPage } from './pages/operations';
 
 /**
  * The Phase 1 admin shell.
@@ -144,6 +148,30 @@ function messageFor(error: unknown): string {
   return t('web.sign_in_failed');
 }
 
+/**
+ * The sections of the admin.
+ *
+ * `permission` decides what is DRAWN. It never decides what is allowed: every
+ * endpoint behind these screens re-checks on the server, and this component
+ * would be exactly as safe if it drew all of them. In the legacy system
+ * "enforcement" may well have meant nothing more than menu hiding
+ * (`UNK-ADM-001`).
+ */
+const SECTIONS = [
+  { id: 'overview', label: 'web.nav_overview', permission: null },
+  { id: 'settings', label: 'web.nav_settings', permission: 'settings.view' },
+  { id: 'features', label: 'web.nav_features', permission: 'settings.view' },
+  { id: 'templates', label: 'web.nav_templates', permission: 'templates.view' },
+  { id: 'operations', label: 'web.nav_operations', permission: 'opslog.view' },
+  { id: 'notifications', label: 'web.nav_notifications', permission: 'opslog.view' },
+] as const satisfies readonly {
+  id: string;
+  label: WebKey;
+  permission: string | null;
+}[];
+
+type SectionId = (typeof SECTIONS)[number]['id'];
+
 function SignedIn({
   admin,
   permissions,
@@ -151,6 +179,10 @@ function SignedIn({
   admin: { username: string; displayName: string; roleKeys: string[] };
   permissions: string[];
 }) {
+  const [section, setSection] = useState<SectionId>('overview');
+  const visible = SECTIONS.filter(
+    (entry) => entry.permission === null || permissions.includes(entry.permission),
+  );
   const client = useQueryClient();
   const readiness = useQuery({
     queryKey: ['readiness'],
@@ -181,83 +213,110 @@ function SignedIn({
         <h1>{t('web.title')}</h1>
         <p className="subtitle">
           {t('web.signed_in_as')} {admin.displayName} ({admin.username}) — {t('web.roles')}:{' '}
-          {admin.roleKeys.join('، ') || '—'}
+          {admin.roleKeys.join(t('web.list_separator')) || '—'}
         </p>
         <button type="button" onClick={() => leave.mutate()}>
           {t('web.sign_out')}
         </button>
       </header>
 
-      <section>
-        <h2>{t('web.administrators')}</h2>
-        {!mayListAdmins && <p className="notice">{t('web.no_permission')}</p>}
-        {mayListAdmins && admins.data && (
-          <table>
-            <thead>
-              <tr>
-                <th>{t('web.username')}</th>
-                <th>{t('web.status')}</th>
-                <th>{t('web.roles')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {admins.data.admins.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.username}</td>
-                  <td className={row.status === 'ACTIVE' ? 'up' : 'down'}>
-                    {row.status === 'ACTIVE' ? t('web.up') : t('web.down')}
-                  </td>
-                  <td>{row.roleKeys.join('، ') || '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      <nav className="tabs">
+        {visible.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            className={entry.id === section ? 'active' : undefined}
+            onClick={() => setSection(entry.id)}
+          >
+            {t(entry.label)}
+          </button>
+        ))}
+      </nav>
 
-      <section>
-        <h2>{t('web.system_status')}</h2>
-        {readiness.isPending && <p>{t('web.loading')}</p>}
-        {readiness.isError && <p className="error">{t('web.error')}</p>}
-        {readiness.data && (
-          <table>
-            <thead>
-              <tr>
-                <th>{t('web.dependency')}</th>
-                <th>{t('web.status')}</th>
-                <th>{t('web.latency')}</th>
-                <th>{t('web.detail')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {readiness.data.dependencies.map((dependency) => (
-                <tr key={dependency.name}>
-                  <td>{dependency.name}</td>
-                  <td className={dependency.status === 'up' ? 'up' : 'down'}>
-                    {dependency.status === 'up' ? t('web.up') : t('web.down')}
-                  </td>
-                  <td>{dependency.latencyMs ?? '—'}</td>
-                  <td>{dependency.detail ?? '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      {section === 'settings' && <SettingsPage mayEdit={permissions.includes('settings.edit')} />}
+      {section === 'features' && <FeaturesPage mayEdit={permissions.includes('settings.edit')} />}
+      {section === 'templates' && (
+        <TemplatesPage mayEdit={permissions.includes('templates.edit')} />
+      )}
+      {section === 'operations' && <OperationsPage />}
+      {section === 'notifications' && (
+        <NotificationsPage mayTest={permissions.includes('settings.edit')} />
+      )}
 
-      <section>
-        <h2>{t('web.build_info')}</h2>
-        {info.data && (
-          <dl>
-            <dt>{t('web.version')}</dt>
-            <dd>{info.data.version}</dd>
-            <dt>{t('web.commit')}</dt>
-            <dd>{info.data.commit}</dd>
-            <dt>{t('web.environment')}</dt>
-            <dd>{info.data.environment}</dd>
-          </dl>
-        )}
-      </section>
+      {section === 'overview' && (
+        <>
+          <section>
+            <h2>{t('web.administrators')}</h2>
+            {!mayListAdmins && <p className="notice">{t('web.no_permission')}</p>}
+            {mayListAdmins && admins.data && (
+              <table>
+                <thead>
+                  <tr>
+                    <th>{t('web.username')}</th>
+                    <th>{t('web.status')}</th>
+                    <th>{t('web.roles')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {admins.data.admins.map((row) => (
+                    <tr key={row.id}>
+                      <td>{row.username}</td>
+                      <td className={row.status === 'ACTIVE' ? 'up' : 'down'}>
+                        {row.status === 'ACTIVE' ? t('web.up') : t('web.down')}
+                      </td>
+                      <td>{row.roleKeys.join(t('web.list_separator')) || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+
+          <section>
+            <h2>{t('web.system_status')}</h2>
+            {readiness.isPending && <p>{t('web.loading')}</p>}
+            {readiness.isError && <p className="error">{t('web.error')}</p>}
+            {readiness.data && (
+              <table>
+                <thead>
+                  <tr>
+                    <th>{t('web.dependency')}</th>
+                    <th>{t('web.status')}</th>
+                    <th>{t('web.latency')}</th>
+                    <th>{t('web.detail')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {readiness.data.dependencies.map((dependency) => (
+                    <tr key={dependency.name}>
+                      <td>{dependency.name}</td>
+                      <td className={dependency.status === 'up' ? 'up' : 'down'}>
+                        {dependency.status === 'up' ? t('web.up') : t('web.down')}
+                      </td>
+                      <td>{dependency.latencyMs ?? '—'}</td>
+                      <td>{dependency.detail ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+
+          <section>
+            <h2>{t('web.build_info')}</h2>
+            {info.data && (
+              <dl>
+                <dt>{t('web.version')}</dt>
+                <dd>{info.data.version}</dd>
+                <dt>{t('web.commit')}</dt>
+                <dd>{info.data.commit}</dd>
+                <dt>{t('web.environment')}</dt>
+                <dd>{info.data.environment}</dd>
+              </dl>
+            )}
+          </section>
+        </>
+      )}
     </main>
   );
 }
