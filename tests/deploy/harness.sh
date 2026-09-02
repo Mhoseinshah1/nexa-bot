@@ -312,4 +312,19 @@ with open(sys.argv[1], "w", encoding="utf-8") as handle:
     }, handle)
 ' "${NEXA_STATE_DIR}/releases/${version}.json" "$version" "$digest"
   printf '%s\n' "$version" >"${NEXA_STATE_DIR}/current"
+  # deploy.env has to agree with the manifest, because a real installation's
+  # does: they are written together by the same commit. A fixture where they
+  # disagree is an installation mid-interrupted-update, which is a state worth
+  # testing deliberately and not worth every other test starting from.
+  set_deploy_image "registry.test/nexa@${digest}"
+}
+
+# Rewrite deploy.env's NEXA_IMAGE without going through the library, so a test
+# can construct a state the library would refuse to write.
+set_deploy_image() {
+  local image="$1" file="${NEXA_CONFIG_DIR}/deploy.env"
+  grep -v '^NEXA_IMAGE=' -- "$file" >"${file}.new" || true
+  printf 'NEXA_IMAGE=%s\n' "$image" >>"${file}.new"
+  mv -f "${file}.new" "$file"
+  chmod 0600 "$file"
 }

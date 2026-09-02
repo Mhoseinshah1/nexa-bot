@@ -357,11 +357,22 @@ nexa_acquire_lock() {
 # is what makes a release survive a reboot: Docker restarts the containers, and
 # any later `docker compose up` without an override starts the same digest.
 #
-# Written atomically. A partially-rewritten deploy.env is an installation that
-# cannot start at all, and this runs immediately after an update has been
-# proven healthy — the worst possible moment to leave a truncated file.
+# Written atomically, and — the part that was missing — VERIFIED before the
+# rename. A partially-rewritten deploy.env is an installation that cannot start
+# at all: every botctl subcommand goes through compose, and compose.yml requires
+# NEXA_DOMAIN. This runs immediately after an update has been proven healthy,
+# which is the worst possible moment to leave a truncated file.
+#
+# The rename being atomic was never the whole problem. `grep ... || true` is
+# there for grep's exit 1, "no lines selected" — but it swallowed exit 2 just as
+# happily, and exit 2 is a read error, an I/O error, or ENOSPC on the write into
+# the temporary file. A full /var is the likely trigger, and an update makes one
+# likelier by writing a pg_dump just beforehand. The result was a deploy.env
+# holding only NEXA_IMAGE, an installation that could not be started, restarted,
+# updated, rolled back, backed up or logged, and an update that printed
+# "ok updated to ...".
 nexa_set_deploy_image() {
-  local image="$1" file="${NEXA_CONFIG_DIR}/deploy.env" tmp
+  local image="$1" file="${NEXA_CONFIG_DIR}/deploy.env" tmp status
   [ -n "$image" ] || nexa_die "refusing to record an empty image reference."
   case "$image" in
     *@sha256:*) : ;;
@@ -371,9 +382,103 @@ nexa_set_deploy_image() {
   # Same ownership and mode as the file being replaced, set BEFORE any content
   # is written into place.
   chmod 0600 "$tmp"
-  { grep -v '^NEXA_IMAGE=' -- "$file" || true; } >"$tmp"
-  printf 'NEXA_IMAGE=%s\n' "$image" >>"$tmp"
+
+  # 0 (lines kept) and 1 (none matched) are both fine. Anything else is an
+  # error, and the file we would write is not the file we meant to write.
+  status=0
+  grep -v '^NEXA_IMAGE=' -- "$file" >"$tmp" || status=$?
+  if [ "$status" -gt 1 ]; then
+    rm -f "$tmp"
+    nexa_die "could not read ${file} (grep exited ${status}); deploy.env is UNCHANGED and ${image} was not recorded. Check free space on /var."
+  fi
+  printf 'NEXA_IMAGE=%s\n' "$image" >>"$tmp" || {
+    rm -f "$tmp"
+    nexa_die "could not write ${file} (is /var full?); deploy.env is UNCHANGED."
+  }
+
+  # The candidate must still be a usable deploy.env. NEXA_DOMAIN is the one
+  # compose refuses to start without, so its absence is the cheapest true test
+  # of "this file would brick the installation".
+  if [ -z "$(nexa_env_value "$tmp" NEXA_DOMAIN)" ]; then
+    rm -f "$tmp"
+    nexa_die "the rewritten deploy.env lost NEXA_DOMAIN, so it would not start anything. The original is UNCHANGED and ${image} was not recorded."
+  fi
+
+  # On disk before the rename: a rename is atomic with respect to other
+  # processes, not with respect to power loss.
+  sync "$tmp" 2>/dev/null || true
   mv -f "$tmp" "$file"
+}
+
+# --- Committing a release ----------------------------------------------------
+#
+# Three files, and the order they are written in is the whole design. A machine
+# can lose power between any two of them, so the question is not "can this be
+# interrupted" but "what does each interruption leave, and is it recoverable".
+#
+# `deploy.env` first, because it is the only one of the three that decides what
+# actually RUNS on the next `compose up`. `current` last, because it is what
+# every command reports. That ordering makes an interrupted commit fail toward
+# "the update has not been recorded yet" rather than toward "the tool believes
+# something that is not true":
+#
+#   interrupted after      current    previous   runs on next `up`   recoverable by
+#   ---------------------  ---------  ---------  ------------------  ---------------
+#   nothing                previous   —          previous            nothing to do
+#   deploy.env             previous   —          TARGET              re-run update
+#   previous               previous   previous   TARGET              re-run update
+#   (complete)             target     previous   target              —
+#
+# The old order wrote `current` before `deploy.env`, which produced the one row
+# that is not in this table: `botctl version` reporting the target while
+# `botctl restart` silently started the PREVIOUS release against the target's
+# schema, with nothing anywhere reporting a problem.
+#
+# `nexa_check_divergence` below detects every non-final row, because "recoverable
+# by re-running the update" is only true if somebody is told.
+nexa_commit_release() {
+  local target="$1" previous="$2" image="$3"
+  nexa_set_deploy_image "$image"
+  nexa_write_atomic "$NEXA_PREVIOUS_FILE" "$previous"
+  nexa_write_atomic "$NEXA_CURRENT_FILE" "$target"
+}
+
+# One line, into place, or not at all. `printf > file` truncates first, so an
+# interruption mid-write leaves an empty `current` — an installation that
+# reports no release at all.
+nexa_write_atomic() {
+  local path="$1" content="$2" tmp
+  tmp="$(mktemp "${path}.XXXXXX")" || nexa_die "cannot write ${path}."
+  chmod 0644 "$tmp"
+  printf '%s\n' "$content" >"$tmp" || {
+    rm -f "$tmp"
+    nexa_die "cannot write ${path} (is /var full?)."
+  }
+  sync "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$path"
+}
+
+# Does the release the installation CLAIMS match the one it would START?
+#
+# They can only differ through an interrupted commit or a hand-edited
+# deploy.env, and the difference is invisible in every other output: `version`
+# reads the manifests, `status` reads the containers, and neither reads the
+# other's source. Reported rather than repaired — repairing means choosing which
+# of the two is right, and that is the operator's decision, not this script's.
+nexa_check_divergence() {
+  local version recorded configured
+  version="$(nexa_current_version || true)"
+  [ -n "$version" ] || return 0
+  recorded="$(nexa_manifest_field "$version" digest 2>/dev/null || true)"
+  [ -n "$recorded" ] || return 0
+  configured="$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE 2>/dev/null || true)"
+  [ -n "$configured" ] || return 0
+  case "$configured" in
+    *"@${recorded}") return 0 ;;
+  esac
+  nexa_warn "DIVERGENCE: this installation records ${version} (${recorded}) as current, but deploy.env would start ${configured}."
+  nexa_warn "A restart or a reboot would start the second, not the first. This is what an interrupted update leaves; re-running 'botctl update ${version}' resolves it."
+  return 1
 }
 
 # --- Release retention -------------------------------------------------------

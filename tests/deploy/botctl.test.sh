@@ -95,6 +95,37 @@ assert_not_contains 'the lock is under a world-writable directory' "$default_loc
 assert_fails 'the installer creates a directory under /var/lock' \
   grep -q 'install -d .*var/lock' "${REPO}/deploy/install.sh"
 
+test_case 'a deploy.env rewrite that goes wrong changes nothing'
+# `grep -v ... || true` swallowed grep's exit 2 as happily as its exit 1, and
+# exit 2 is a read error, an I/O error or ENOSPC. What landed was a deploy.env
+# holding only NEXA_IMAGE — no NEXA_DOMAIN, so compose refuses to start
+# anything, so the installation could not be started, restarted, updated,
+# rolled back, backed up or logged. And the update reported success.
+env_file="${NEXA_CONFIG_DIR}/deploy.env"
+before="$(cat "$env_file")"
+mkdir -p "${NEXA_ROOT}/stub"
+printf '#!/bin/sh\nexit 2\n' >"${NEXA_ROOT}/stub/grep"
+chmod +x "${NEXA_ROOT}/stub/grep"
+(
+  PATH="${NEXA_ROOT}/stub:${PATH}"
+  nexa_set_deploy_image "registry.test/nexa@${DIGEST_B}"
+) >/dev/null 2>&1 && fail_test 'a failed read reported success'
+assert_equals 'deploy.env was rewritten from a failed read' "$before" "$(cat "$env_file")"
+assert_fails 'a temporary file was left behind' \
+  test -n "$(find "$NEXA_CONFIG_DIR" -name 'deploy.env.*' -print -quit)"
+
+test_case 'a deploy.env that would not start anything is refused'
+# The rename is atomic with respect to other processes. That says nothing about
+# whether the CONTENT is usable, which is the part that was never checked.
+printf 'NEXA_IMAGE=registry.test/nexa@%s\n' "$DIGEST_A" >"$env_file"
+chmod 0600 "$env_file"
+# In a subshell: `nexa_die` exits, and this file must survive its own
+# failure cases to report them.
+(nexa_set_deploy_image "registry.test/nexa@${DIGEST_B}") >/dev/null 2>&1 &&
+  fail_test 'accepted a deploy.env with no NEXA_DOMAIN'
+printf '%s\n' "$before" >"$env_file"
+chmod 0600 "$env_file"
+
 test_case 'reads a config value without executing the file'
 # `source` would run this. A maintenance CLI that executes its own
 # configuration is one editing mistake away from being a shell injection.
@@ -332,8 +363,40 @@ NEXA_READY_TIMEOUT=6 run_botctl update v2.0.0
 assert_fails 'an unready target exited zero' test "$BOTCTL_STATUS" -eq 0
 assert_equals 'an unready target became current' 'v1.0.0' "$(cat "${NEXA_STATE_DIR}/current")"
 assert_equals 'deploy.env was repointed at an unready release' \
-  "registry.test/nexa@sha256:$(printf '1%.0s' {1..64})" \
+  "registry.test/nexa@${DIGEST_A}" \
   "$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE)"
+teardown_root
+
+# =============================================================================
+# an interrupted commit is visible, not silent
+# =============================================================================
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+
+test_case 'a recorded release that disagrees with deploy.env is REPORTED'
+# The state a power cut in the middle of the commit block leaves. It used to be
+# undetectable: `version` reads the manifests, `status` reads the containers,
+# and neither reads what compose would actually start. So `botctl version`
+# answered with one release while `botctl restart` started another — against a
+# schema that had already been migrated for the first.
+set_deploy_image "registry.test/nexa@${DIGEST_B}"
+run_botctl version
+assert_fails 'a divergent installation reported success' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the divergence was not named' "$BOTCTL_OUTPUT" 'DIVERGENCE'
+assert_contains 'the operator was not told what would actually start' \
+  "$BOTCTL_OUTPUT" "$DIGEST_B"
+assert_contains 'the operator was not told how to resolve it' \
+  "$BOTCTL_OUTPUT" 'botctl update v1.0.0'
+
+test_case 'an update repairs the divergence it is re-run to fix'
+fake_set resolve_digest "$DIGEST_C"
+run_botctl update v2.0.0
+assert_equals 'the update failed on a divergent installation' 0 "$BOTCTL_STATUS"
+run_botctl version
+assert_equals 'the installation is still divergent after an update' 0 "$BOTCTL_STATUS"
+assert_not_contains 'a divergence survived the update' "$BOTCTL_OUTPUT" 'DIVERGENCE'
+
 teardown_root
 
 # =============================================================================

@@ -72,6 +72,11 @@ cmd_version() {
   local previous
   previous="$(nexa_previous_version || true)"
   [ -n "$previous" ] && printf 'previous  %s (rollback target)\n' "$previous"
+
+  # An interrupted commit leaves the recorded release and the configured image
+  # disagreeing. Every other line above reads the manifests, so only this
+  # compares them against what would actually start.
+  nexa_check_divergence || return 1
   return 0
 }
 
@@ -90,9 +95,13 @@ cmd_status() {
   nexa_compose ps --format 'table {{.Service}}\t{{.State}}\t{{.Status}}' 2>/dev/null ||
     nexa_warn "could not read container state."
 
+  local diverged=0
+  nexa_check_divergence || diverged=1
+
   printf '\nreadiness: '
   if nexa_wait_ready 5; then
     printf 'ready\n'
+    [ "$diverged" -eq 0 ] || return 1
   else
     printf 'NOT READY\n'
     # SC2016: single quotes are correct — the backticks below are prose, not a
@@ -297,10 +306,7 @@ cmd_update() {
   #    behind: `botctl version` reporting `unknown`, and the second rollback
   #    refusing because the target's digest could not be read.
   nexa_write_manifest "$target" "$commit" "$digest"
-  printf '%s\n' "$current" >"$NEXA_PREVIOUS_FILE"
-  printf '%s\n' "$target" >"$NEXA_CURRENT_FILE"
-  chmod 0644 "$NEXA_CURRENT_FILE" "$NEXA_PREVIOUS_FILE"
-  nexa_set_deploy_image "$target_image"
+  nexa_commit_release "$target" "$current" "$target_image"
   nexa_prune_releases
 
   nexa_ok "updated to ${target} (${digest})"
@@ -350,10 +356,9 @@ cmd_rollback() {
   fi
 
   # The pointers swap: the release just left becomes the rollback target, so a
-  # rollback can be undone by another rollback.
-  printf '%s\n' "${current:-$previous}" >"$NEXA_PREVIOUS_FILE"
-  printf '%s\n' "$previous" >"$NEXA_CURRENT_FILE"
-  nexa_set_deploy_image "$previous_image"
+  # rollback can be undone by another rollback. Same ordered commit as an
+  # update, for the same reason.
+  nexa_commit_release "$previous" "${current:-$previous}" "$previous_image"
 
   nexa_ok "rolled back to ${previous}"
   nexa_ok "the database was not touched"
