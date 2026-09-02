@@ -76,6 +76,20 @@ services:
       - data
     security_opt:
       - no-new-privileges:true
+    # The only service that was left with the full default capability set.
+    # Postgres's entrypoint really does need five of them: it starts as root to
+    # create and chown PGDATA, then drops to the postgres user with setuid and
+    # setgid. Everything else — raw sockets, mknod, ptrace, module loading — it
+    # has never used, and the container that holds every customer record is a
+    # poor place to leave them lying around.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     healthcheck:
       # The credentials come from the environment inside the container, so
       # nothing here lands in the command line.
@@ -101,13 +115,32 @@ services:
     # guarantee nothing relies on. When Redis acquires queues or locks, this
     # decision has to be revisited, and this comment is where to start.
     #
-    # `sh -c` with an unexpanded `$$REDIS_PASSWORD`: the literal stays in the
-    # image's command line and the value comes from the environment, so the
-    # password is not written into the compose file or into `docker inspect`'s
-    # Cmd. It is still visible to anything that can already exec into this
-    # container, which by then already has Redis.
+    # Two things this command is arranged to avoid.
+    #
+    # The password never reaches redis-server's ARGV. Passing it as a command
+    # line flag put it there, where `docker top`, a `ps` from any other process
+    # in the container's PID namespace, and /proc/<pid>/cmdline could all read
+    # it. It goes into a 0600 config file in the container's own /tmp instead,
+    # written under `umask 077` before the server starts.
+    #
+    # And redis does not run as root. The official image's entrypoint drops to
+    # the redis user only when the command starts with `redis-server` — ours
+    # starts with `sh`, so the check did not fire and the whole container ran as
+    # uid 0. `user: redis` makes it explicit rather than relying on a string
+    # comparison in somebody else's entrypoint.
+    #
+    # The literal `$$REDIS_PASSWORD` is unexpanded on purpose: compose writes a
+    # single `$`, so the value comes from the container's environment and is
+    # never written into the compose file or into `docker inspect`'s Cmd.
+    user: redis
     command:
-      ['sh', '-c', 'exec redis-server --requirepass "$$REDIS_PASSWORD" --save "" --appendonly no']
+      - sh
+      - -c
+      - |
+        set -e
+        umask 077
+        printf 'requirepass %s\nsave ""\nappendonly no\n' "$$REDIS_PASSWORD" >/tmp/redis.conf
+        exec redis-server /tmp/redis.conf
     env_file:
       - ${NEXA_CONFIG_DIR:-/etc/nexa}/redis.env
     networks:

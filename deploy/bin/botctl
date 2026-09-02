@@ -21,6 +21,38 @@ set -euo pipefail
 # The library is installed beside this script's deployment, not beside the
 # script itself: /usr/local/bin holds one file, and everything else lives under
 # /opt/nexa. A missing library is a broken installation, not a fallback case.
+# --- Delegated invocations get no environment ---------------------------------
+#
+# Every path this script uses is overridable from the environment, which is what
+# lets the test suite run it against a temporary root. That is also a root
+# escalation the moment an operator delegates it — `%ops ALL=(root) NOPASSWD:
+# /usr/local/bin/botctl` is the obvious way to let a colleague run an update,
+# and `NEXA_LIB=/tmp/mine.sh sudo botctl status` would then execute /tmp/mine.sh
+# as root. `NEXA_IMAGE_REPO` is the same class: it decides which registry an
+# update pulls from.
+#
+# sudo's own `env_reset` normally strips these, but that is a default an
+# `env_keep` or a `SETENV` rule can turn off, and a security property that holds
+# only while somebody else's configuration is untouched is not one worth
+# claiming. SUDO_USER is present exactly in the delegated case and absent when
+# the suite runs, so the refusal is precise.
+if [ -n "${SUDO_USER:-}" ]; then
+  for _nexa_var in NEXA_LIB NEXA_ROOT NEXA_DEPLOY_DIR NEXA_LIB_DIR NEXA_CONFIG_DIR \
+    NEXA_STATE_DIR NEXA_BACKUP_DIR NEXA_LOCK_FILE NEXA_IMAGE_REPO NEXA_IMAGE; do
+    if [ -n "${!_nexa_var:-}" ]; then
+      printf 'error %s is set in the environment of a sudo invocation.\n' "$_nexa_var" >&2
+      printf '      botctl reads its paths and its registry from the installation, not from
+' >&2
+      printf '      the caller: honouring this would let whoever ran sudo choose the code and
+' >&2
+      printf '      the image this host executes as root. Run it without that variable.
+' >&2
+      exit 1
+    fi
+  done
+  unset _nexa_var
+fi
+
 NEXA_LIB="${NEXA_LIB:-/opt/nexa/lib/nexa-lib.sh}"
 if [ ! -r "$NEXA_LIB" ]; then
   printf 'error botctl cannot find its library at %s. Is Nexa installed?\n' "$NEXA_LIB" >&2

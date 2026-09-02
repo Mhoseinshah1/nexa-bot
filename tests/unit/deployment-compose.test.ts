@@ -121,6 +121,40 @@ describe('the production compose topology', () => {
     expect(assets).not.toMatch(/env_file/);
   });
 
+  it('drops capabilities on every service, including the data ones', () => {
+    // Postgres was the one service with the full default set. Its entrypoint
+    // needs five capabilities to create and chown PGDATA and then drop to the
+    // postgres user; it has never needed raw sockets, mknod, ptrace or module
+    // loading, and the container holding every customer record is a poor place
+    // to leave them.
+    for (const service of ['postgres', 'redis', 'caddy']) {
+      expect(serviceBlock(compose, service), `${service} keeps its capabilities`).toMatch(
+        /cap_drop:\s*\n\s+- ALL/,
+      );
+    }
+    const postgres = serviceBlock(compose, 'postgres');
+    for (const capability of ['CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'SETGID', 'SETUID']) {
+      expect(postgres).toContain(`- ${capability}`);
+    }
+    // Nothing beyond those five: an added line here is a decision, not a typo.
+    expect([...postgres.matchAll(/^ {6}- [A-Z_]+$/gm)]).toHaveLength(6);
+  });
+
+  it('keeps the Redis password out of the process it starts', () => {
+    const redis = serviceBlock(compose, 'redis');
+    // `--requirepass "$PASSWORD"` puts the password into redis-server's argv,
+    // where `docker top`, a `ps` inside the container's PID namespace and
+    // /proc/<pid>/cmdline can all read it. A 0600 config file cannot be read
+    // that way.
+    expect(redis, 'the password is passed on the command line').not.toContain('--requirepass');
+    expect(redis).toContain('umask 077');
+    expect(redis).toContain('redis-server /tmp/redis.conf');
+    // The image's entrypoint drops to the redis user only when the command
+    // starts with `redis-server`. Ours starts with `sh`, so it did not, and
+    // the whole container ran as uid 0.
+    expect(redis, 'redis runs as root').toMatch(/^ {4}user: redis$/m);
+  });
+
   it('takes its image as a digest reference that must be supplied', () => {
     // `:?` makes a missing value a hard error rather than an empty string,
     // which compose would otherwise happily interpolate into an image name.
