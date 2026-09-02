@@ -16,3 +16,7 @@ pnpm-debug.log*
 .pgdata/
 .redisdata/
 .vitest/
+
+# Temporary git worktrees for review agents. Each is a full checkout of this
+# repository living inside it — committing one would nest the repo in itself.
+.claude/worktrees/
