@@ -1,13 +1,14 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { Body, Controller, Headers, Inject, Param, Post } from '@nestjs/common';
-import type { Update } from 'grammy/types';
 import {
   errors,
   PLATFORM_ERROR_CODES,
   systemJobActor,
   TELEGRAM_SECRET_TOKEN_HEADER,
+  telegramUpdateSchema,
   uuidV7Schema,
   type BotInstanceId,
+  type TelegramUpdate,
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
@@ -43,7 +44,7 @@ export class TelegramWebhookController {
   async receive(
     @Param('botInstanceId') botInstanceIdParam: string,
     @Headers(TELEGRAM_SECRET_TOKEN_HEADER) secretToken: string | undefined,
-    @Body() update: Update,
+    @Body() body: unknown,
   ): Promise<{ ok: true }> {
     const expected = this.container.config.TELEGRAM_WEBHOOK_SECRET;
 
@@ -86,8 +87,26 @@ export class TelegramWebhookController {
       throw errors.notFound(PLATFORM_ERROR_CODES.TENANT_NOT_FOUND, 'Unknown bot instance.');
     }
 
+    // Parsed at the boundary, like every other command on this codebase.
+    //
+    // `@Body() update: Update` was a TypeScript type and nothing more, so at
+    // runtime this was whatever was posted. A body with no `update_id` reached
+    // the write path and was keyed as the literal string `unknown` — which
+    // makes every malformed update from one bot a replay of the first, silently
+    // swallowed with a 200. Refused here instead, before anything is written.
+    //
+    // Answered as a validation error rather than a 200: a genuine Telegram
+    // update always carries an integer `update_id`, so a body without one is
+    // not traffic to be tolerated. It is also not retried into a loop, because
+    // Telegram is not the sender of it.
+    // Answered 400 by the error filter, like every other malformed command.
+    // Not a 200: a genuine Telegram update always carries an integer
+    // `update_id`, so a body without one is not traffic to be tolerated — and
+    // Telegram is not the sender of it, so there is no retry loop to avoid.
+    const update = telegramUpdateSchema.parse(body);
+
     const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    const updateId = String(update.update_id ?? 'unknown');
+    const updateId = String(update.update_id);
 
     // The update is a trigger; the ping itself is system work, so it acts as
     // SYSTEM_JOB and the audit row names the update that caused it. SYSTEM_JOB
@@ -142,7 +161,16 @@ function secretTokenMatches(supplied: string | undefined, expected: string): boo
   return timingSafeEqual(a, b);
 }
 
-function isPingCommand(update: Update): boolean {
-  const text = update.message?.text;
+/**
+ * Whether this update is the one command Phase 1 handles.
+ *
+ * Reads through the passthrough fields rather than a modelled `message` shape:
+ * the schema states what this installation depends on, and the rest of an
+ * update stays unmodelled on purpose. Anything that is not the expected shape
+ * is simply not a ping.
+ */
+function isPingCommand(update: TelegramUpdate): boolean {
+  const message = (update as { message?: { text?: unknown } }).message;
+  const text = message?.text;
   return typeof text === 'string' && text.trim().startsWith('/ping');
 }
