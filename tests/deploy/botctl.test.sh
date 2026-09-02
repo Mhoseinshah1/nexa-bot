@@ -139,6 +139,19 @@ fi
 assert_file_mode 'the backup directory is not 0700' "$NEXA_BACKUP_DIR" '700'
 assert_not_contains 'the backup log leaked a password' "$BOTCTL_OUTPUT" 'not-a-real-password'
 
+test_case 'a dump of an empty database is refused'
+# The dangerous case, and the one a size check alone cannot catch: pg_dump
+# against a database that exists and has no tables produces about a kilobyte of
+# SET statements and comments, ends with the completion marker, and looks
+# entirely normal. It is a backup of the wrong thing.
+fake_set empty_dump 1
+rm -f "$NEXA_BACKUP_DIR"/*.sql.gz
+run_botctl backup
+assert_fails 'an empty-database dump was accepted' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the refusal did not name the real problem' "$BOTCTL_OUTPUT" 'no tables'
+assert_equals 'an empty dump was kept' '' "$(find "$NEXA_BACKUP_DIR" -name '*.sql.gz*' | head -n 1)"
+fake_set empty_dump 0
+
 test_case 'a failed dump is loud and leaves no file behind'
 fake_set exec_exit 1
 rm -f "$NEXA_BACKUP_DIR"/*.sql.gz

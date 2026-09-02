@@ -146,33 +146,49 @@ cmd_backup() {
   fi
   umask "$previous_umask"
 
-  # A dump that produced nothing is a failure that exited zero, so the result is
-  # checked three ways — and all three are about the CONTENT, not the file.
+  # A dump that produced nothing is a failure that exited zero, so the result
+  # is inspected — in ONE pass, by awk, which reads the whole stream.
   #
-  # 1. gzip integrity: the stream is complete and readable.
-  if ! gzip -t "$partial" 2>/dev/null; then
+  # Not `gzip -dc | grep -q`: under `set -o pipefail` a `grep -q` that finds
+  # its match exits immediately, the decompressor ahead of it dies of SIGPIPE,
+  # and the pipeline reports 141 — so the check fails exactly when it should
+  # pass. That is not hypothetical; it is what the first CI run of the smoke
+  # test did, printing the opposite of the truth.
+  #
+  # Three facts, and each is a different way for a backup to be worthless:
+  #
+  #   bytes   an empty stream, or a few hundred bytes of nothing
+  #   tables  a dump of the WRONG database — one that exists but is empty.
+  #           This is the dangerous one: ~1 KB of SET statements and comments
+  #           passes any size check and looks entirely normal.
+  #   marker  pg_dump's own last line. Its absence means the stream was cut
+  #           part-way, which is the failure that produces a file nobody
+  #           notices until they need it.
+  local verdict bytes tables complete
+  verdict="$(gzip -dc "$partial" | awk '
+    { bytes += length($0) + 1 }
+    /^CREATE TABLE/ { tables += 1 }
+    /PostgreSQL database dump complete/ { complete = 1 }
+    END { printf "%d %d %d", bytes + 0, tables + 0, complete + 0 }
+  ')" || {
     rm -f "$partial"
-    nexa_die "the backup did not survive a gzip integrity check."
-  fi
+    nexa_die "the backup could not be read back; treating it as a failure."
+  }
+  read -r bytes tables complete <<<"$verdict"
 
-  # 2. Size, measured UNCOMPRESSED. Checking the compressed size measures the
-  #    compression ratio as much as the content: a highly repetitive dump
-  #    shrinks to a few hundred bytes and would look like a failure, while a
-  #    near-empty one padded with comments would look like a success.
-  local size
-  size="$(gzip -dc "$partial" | wc -c)"
-  if [ "${size:-0}" -lt 1000 ]; then
+  if [ "${bytes:-0}" -lt 1000 ]; then
     rm -f "$partial"
-    nexa_die "the backup contains only ${size:-0} bytes of SQL. Treating it as a failure."
+    nexa_die "the backup contains only ${bytes:-0} bytes of SQL. Treating it as a failure."
   fi
-
-  # 3. pg_dump's own completion marker, which is the last line it writes. Its
-  #    absence means the stream was cut part-way — the one failure that
-  #    produces a file that looks entirely normal until it is needed.
-  if ! gzip -dc "$partial" | tail -n 5 | grep -q 'PostgreSQL database dump complete'; then
+  if [ "${tables:-0}" -lt 1 ]; then
+    rm -f "$partial"
+    nexa_die "the backup contains no tables. That is a dump of an empty database, not of this installation."
+  fi
+  if [ "${complete:-0}" -ne 1 ]; then
     rm -f "$partial"
     nexa_die "the backup does not end with pg_dump's completion marker; it is truncated."
   fi
+  local size="$bytes"
 
   mv "$partial" "$target"
   chmod 0600 "$target"

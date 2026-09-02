@@ -255,9 +255,13 @@ step "6. the edge serves the panel and proxies the API"
 # ---------------------------------------------------------------------------
 base="http://127.0.0.1:${HTTP_PORT}"
 
+# Matched in the shell rather than through a pipe, for the same SIGPIPE
+# reason as above and because these strings are already in memory.
 health="$(curl -fsS "${base}/health/live" || true)"
-printf '%s' "$health" | grep -q '"status":"ok"' ||
-  fail "the edge does not proxy /health/live (got: ${health})"
+case "$health" in
+  *'"status":"ok"'*) : ;;
+  *) fail "the edge does not proxy /health/live (got: ${health})" ;;
+esac
 pass "the edge proxies the health routes"
 
 ready_code="$(curl -s -o /dev/null -w '%{http_code}' "${base}/health/ready")"
@@ -272,8 +276,10 @@ info_code="$(curl -s -o /dev/null -w '%{http_code}' "${base}/health/info")"
 pass "/health/info still requires a session through the edge"
 
 index="$(curl -fsS "${base}/" || true)"
-printf '%s' "$index" | grep -q '<div id="root">' ||
-  fail "the edge does not serve the Web Admin bundle"
+case "$index" in
+  *'<div id="root">'*) : ;;
+  *) fail "the edge does not serve the Web Admin bundle" ;;
+esac
 pass "the edge serves the Web Admin"
 
 # A deep link must reach the SPA, not a 404 from the file server.
@@ -284,8 +290,9 @@ pass "deep links fall back to the SPA"
 # The API prefix must reach the API, not the SPA. A 401 is the API answering;
 # HTML would mean the fallback swallowed it.
 api_body="$(curl -s "${base}/api/admin/v1/settings" || true)"
-printf '%s' "$api_body" | grep -qi '<!doctype html' &&
-  fail "an API request was answered with the SPA; the handle order is wrong"
+case "$(printf '%s' "$api_body" | tr '[:upper:]' '[:lower:]')" in
+  *'<!doctype html'*) fail "an API request was answered with the SPA; the handle order is wrong" ;;
+esac
 pass "API requests reach the API, not the SPA"
 
 # ---------------------------------------------------------------------------
@@ -308,7 +315,14 @@ backup_file="$(find "$NEXA_BACKUP_DIR" -name '*.sql.gz' | head -n 1)"
 [ -n "$backup_file" ] || fail "botctl backup wrote no file"
 [ "$(stat -c '%a' "$backup_file")" = "600" ] || fail "the backup is not 0600"
 gzip -t "$backup_file" || fail "the backup is not readable gzip"
-gzip -dc "$backup_file" | grep -q 'CREATE TABLE' ||
+# `grep -c`, not `grep -q`. Under `set -o pipefail`, a `grep -q` that finds its
+# match exits immediately, `gzip` gets SIGPIPE writing the rest, and the
+# pipeline reports 141 — so the assertion FAILS precisely when it succeeds.
+# That is what the first CI run of this file did, and the message it printed
+# ("the backup contains no schema") was the opposite of the truth. `grep -c`
+# reads the whole stream, so there is no early close to be killed by.
+schema_count="$(gzip -dc "$backup_file" | grep -c 'CREATE TABLE' || true)"
+[ "${schema_count:-0}" -gt 0 ] ||
   fail "the backup contains no schema; it is not a real dump"
 pass "botctl backup writes a verified 0600 dump of the real database"
 
@@ -318,8 +332,9 @@ step "8. no secret appears in normal output"
 # Everything an operator would see or paste into a ticket.
 OBSERVABLE="$("$BOTCTL" version 2>&1; "$BOTCTL" status 2>&1; printf '%s' "$BOTCTL_OUT"; compose ps 2>&1)"
 for secret in "$PG_PASSWORD" "$REDIS_PASSWORD" "$KEK"; do
-  printf '%s' "$OBSERVABLE" | grep -qF -- "$secret" &&
-    fail "a generated secret appeared in normal botctl output"
+  case "$OBSERVABLE" in
+    *"$secret"*) fail "a generated secret appeared in normal botctl output" ;;
+  esac
 done
 pass "no generated secret appears in botctl output"
 

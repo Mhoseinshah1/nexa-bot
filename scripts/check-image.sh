@@ -93,9 +93,16 @@ done
 # install a binary without a top-level directory of its own.
 BINS=$(run sh -c 'ls /app/node_modules/.bin 2>/dev/null || true')
 for bad in tsc tsx drizzle-kit vitest eslint prettier vite; do
-  if printf '%s\n' "$BINS" | grep -qx "$bad"; then
-    fail "development binary in the runtime image: $bad"
-  fi
+  # Matched in the shell, not through `printf | grep -q`. Under `pipefail` a
+  # `grep -q` that matches exits early and the writer ahead of it dies of
+  # SIGPIPE, so the pipeline reports failure exactly when the pattern is found.
+  case "
+$BINS
+" in
+    *"
+$bad
+"*) fail "development binary in the runtime image: $bad" ;;
+  esac
 done
 pass "no development tooling in the runtime image"
 

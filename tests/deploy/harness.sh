@@ -169,6 +169,7 @@ setup_fake_docker() {
   printf '0' >"${FAKE_DIR}/up_exit"
   printf '0' >"${FAKE_DIR}/run_exit"
   printf '0' >"${FAKE_DIR}/exec_exit"
+  printf '0' >"${FAKE_DIR}/empty_dump"
   printf 'healthy' >"${FAKE_DIR}/api_health"
   printf 'sha256:%s' "$(printf 'a%.0s' {1..64})" >"${FAKE_DIR}/resolve_digest"
   printf '0' >"${FAKE_DIR}/resolve_exit"
@@ -232,6 +233,17 @@ case "${1:-}" in
         # the backup's own integrity checks have something to check.
         if [ "$(read_state exec_exit 0)" != "0" ]; then exit 1; fi
         printf -- '-- PostgreSQL database dump\n'
+        if [ "$(read_state empty_dump 0)" != "0" ]; then
+          # A database that exists and has no tables: plausible-looking, and
+          # worthless.
+          for _ in $(seq 1 40); do
+            printf 'SET statement_timeout = 0;\n'
+          done
+          printf -- '-- PostgreSQL database dump complete\n'
+          exit 0
+        fi
+        printf 'CREATE TABLE public.tenants (id uuid NOT NULL);\n'
+        printf 'CREATE TABLE public.notifications (id uuid NOT NULL);\n'
         for _ in $(seq 1 80); do
           printf -- '-- padding so the size check has something to measure ------------\n'
         done
