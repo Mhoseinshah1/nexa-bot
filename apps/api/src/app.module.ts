@@ -1,6 +1,7 @@
 import { Inject, Module, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import { CONTAINER, type Container } from './container.js';
+import { ReadinessProbe } from './surfaces/web/readiness.probe.js';
 import { HealthController } from './surfaces/web/health.controller.js';
 import { AuthController } from './surfaces/web/auth.controller.js';
 import { AdminsController } from './surfaces/web/admins.controller.js';
@@ -65,6 +66,10 @@ export class AppModule implements NestModule {
       controllers,
       providers: [
         { provide: CONTAINER, useValue: container },
+        // Shared by the anonymous `/health/ready` and the authenticated
+        // readiness detail, so there is one readiness computation rather than
+        // two that can disagree.
+        ReadinessProbe,
         { provide: APP_FILTER, useClass: DomainErrorFilter },
       ],
     };

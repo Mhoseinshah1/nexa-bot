@@ -42,6 +42,8 @@ import {
   type TemplateListResponse,
   type TemplateRevisionListResponse,
   type TemplateWriteResponse,
+  systemReadinessResponseSchema,
+  type SystemReadinessResponse,
 } from '@nexa/contracts';
 
 /**
@@ -66,8 +68,20 @@ async function get<T>(path: string, schema: { parse: (v: unknown) => T }): Promi
   return schema.parse(body);
 }
 
-export function fetchReadiness(): Promise<HealthReadyResponse> {
+/**
+ * The anonymous probe. A status and nothing else, by design.
+ *
+ * Kept because the sign-in screen may need to know the API is reachable before
+ * anybody has a session. The panel's readiness panel uses `fetchReadiness`
+ * below, which is authenticated and carries the reasons.
+ */
+export function fetchLiveness(): Promise<HealthReadyResponse> {
   return get(HEALTH_ROUTES.ready, healthReadyResponseSchema);
+}
+
+/** Readiness with dependency detail. Requires a session. */
+export function fetchReadiness(): Promise<SystemReadinessResponse> {
+  return authedGet(CONTROL_ROUTES.systemReadiness, systemReadinessResponseSchema);
 }
 
 export function fetchInfo(): Promise<HealthInfoResponse> {

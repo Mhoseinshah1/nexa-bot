@@ -19,9 +19,11 @@ import {
   type TemplateRevisionListResponse,
   type TemplateViewResponse,
   type TemplateWriteResponse,
+  type SystemReadinessResponse,
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
+import { ReadinessProbe } from './readiness.probe.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
 import type { ResolvedSetting } from '../../modules/control/settings/application/settings-resolver.js';
@@ -46,7 +48,15 @@ import type {
  */
 @Controller(`${API_PREFIX}`)
 export class ControlController {
-  constructor(@Inject(CONTAINER) private readonly container: Container) {}
+  constructor(
+    @Inject(CONTAINER) private readonly container: Container,
+    // Explicitly injected by token rather than by parameter type. A
+    // type-only import would satisfy the lint rule and emit no runtime value
+    // for `design:paramtypes`, so Nest would have nothing to resolve — the
+    // fix the linter suggests here is the one that breaks dependency
+    // injection at boot.
+    @Inject(ReadinessProbe) private readonly probe: ReadinessProbe,
+  ) {}
 
   private get isProduction(): boolean {
     return this.container.config.NODE_ENV === 'production';
@@ -198,6 +208,30 @@ export class ControlController {
       key,
     });
     return { rendered: result.rendered, unresolved: [...result.unresolved] };
+  }
+
+  // --- System ---------------------------------------------------------------
+
+  /**
+   * Readiness with its reasons, for a signed-in administrator.
+   *
+   * The anonymous `/health/ready` answers with a status code and a word: it is
+   * asked by a load balancer, which needs neither dependency names nor
+   * latencies nor how far behind the relay is. This is where that detail went.
+   *
+   * It shares `ReadinessProbe` with the anonymous endpoint rather than
+   * reimplementing the checks, because two readiness computations would
+   * eventually disagree and the disagreement would be the outage nobody could
+   * explain.
+   */
+  @Get('system/readiness')
+  async systemReadiness(@Req() request: FastifyRequest): Promise<SystemReadinessResponse> {
+    await this.authenticate(request);
+    const { degraded, dependencies } = await this.probe.run();
+    // 200 even when degraded. A 503 here would be a broken API call to the
+    // screen asking the question, and that screen's job is to display the bad
+    // news rather than to fail with it — the verdict is in the body.
+    return { status: degraded ? 'degraded' : 'ok', dependencies };
   }
 
   // --- Operational events --------------------------------------------------
