@@ -172,6 +172,7 @@ setup_fake_docker() {
   printf '0' >"${FAKE_DIR}/empty_dump"
   printf 'healthy' >"${FAKE_DIR}/api_health"
   printf '0' >"${FAKE_DIR}/stale_run"
+  printf '0' >"${FAKE_DIR}/api_gone"
   printf 'sha256:%s' "$(printf 'a%.0s' {1..64})" >"${FAKE_DIR}/resolve_digest"
   printf '0' >"${FAKE_DIR}/resolve_exit"
 
@@ -227,18 +228,36 @@ case "${1:-}" in
         # asked for — and readiness would silently never be detected.
         case "$*" in
           *'--format json'*)
-            # A leftover `compose run` container, if a test asked for one. It
-            # carries Service == "api" and reports NO Health, exactly as a
-            # migration container left behind by a killed update does, and it
-            # is emitted FIRST so a naive first-match parser picks it.
+            # A leftover `compose run` container, if a test asked for one.
+            #
+            # It reports Health "starting", and that detail is the entire
+            # point. Compose builds a one-off from the SAME service config, so
+            # it carries the same HEALTHCHECK and its health monitor records
+            # `starting` before it exits — and Docker retains the last status
+            # after exit. An earlier version of this fixture emitted no Health
+            # field at all, which is the one shape under which a "prefer an
+            # entry that reports a Health" rule looks correct. It was a fixture
+            # chosen to make the test pass rather than to model reality, and it
+            # concealed a parser that preferred the corpse over the running
+            # container.
             #
             # And, like real compose, an EXITED container is listed only with
             # `--all`. Without modelling that, the caller's `--all` is
             # decorative and the fast-fail it makes reachable is untestable.
             if [ "$(read_state stale_run 0)" != "0" ]; then
               case "$*" in
-                *--all*) printf '{"Service":"api","State":"exited"}\n' ;;
+                *--all*) printf '{"Service":"api","State":"exited","Health":"starting"}\n' ;;
               esac
+            fi
+            # The api container itself having DIED is a different fixture from
+            # a leftover one-off: compose lists no running entry at all, only
+            # the corpse, and only with `--all`. Emitting a running api
+            # alongside it would model nothing that happens.
+            if [ "$(read_state api_gone 0)" != "0" ]; then
+              case "$*" in
+                *--all*) printf '{"Service":"api","State":"exited","Health":"starting"}\n' ;;
+              esac
+              exit 0
             fi
             # Health is per-IMAGE when a test asks for it. Without that, the
             # fake has one global health and "the target is unhealthy but the

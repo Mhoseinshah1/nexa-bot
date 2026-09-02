@@ -313,22 +313,32 @@ except json.JSONDecodeError:
                 entries.append(json.loads(line))
             except json.JSONDecodeError:
                 pass
-# `docker compose run` containers carry Service == "api" too. A migration
-# container left behind by a killed update would be picked first on a plain
-# "first match wins", and readiness would report on THAT — backing out a
-# release that was actually healthy. Prefer an entry that reports a Health at
-# all, and fall back to the first api entry only when none does.
-chosen = None
-for entry in entries:
-    if entry.get("Service") != "api":
-        continue
-    if entry.get("Health"):
-        chosen = entry
-        break
-    if chosen is None:
-        chosen = entry
-if chosen is not None:
-    print(chosen.get("Health") or chosen.get("State") or "")
+# STATE first, then health, and that order is the whole correctness argument.
+#
+# `docker compose run` containers carry Service == "api" too, and — because
+# compose builds a one-off from the same service config — they carry the same
+# HEALTHCHECK. So a leftover migration container reports Health "starting",
+# exactly like a real api that is still coming up. Preferring "an entry that
+# reports a Health" therefore picks the CORPSE over the running container, and
+# readiness never returns true while a perfectly healthy release is backed out.
+#
+# The same shape breaks the exited/dead fast-fail: Docker retains the last
+# health status after a container exits, so an api that died after its monitor
+# had written "starting" is reported as starting, not exited, and the update
+# waits out the full timeout it was supposed to short-circuit.
+#
+# A container that is RUNNING is the only one whose health means anything.
+# Among those, prefer one that has a health status; if none is running, report
+# the state of the first api entry, so `exited` and `dead` are seen and acted
+# on. (No apostrophes in this block: it is inside a single-quoted `python3 -c`,
+# and one would end the program early.)
+api = [entry for entry in entries if entry.get("Service") == "api"]
+running = [entry for entry in api if entry.get("State") == "running"]
+if running:
+    chosen = next((entry for entry in running if entry.get("Health")), running[0])
+    print(chosen.get("Health") or "running")
+elif api:
+    print(api[0].get("State") or "")
 ' 2>/dev/null || true)"
 
     case "$state" in
@@ -460,6 +470,13 @@ nexa_set_deploy_image() {
 # by re-running the update" is only true if somebody is told.
 nexa_commit_release() {
   local target="$1" previous="$2" image="$3"
+  # `current == previous` is not a state this installation can be in, and the
+  # cheapest place to say so is before anything is written. A rollback whose
+  # pointers are equal rolls back onto itself, reports success, and repoints
+  # deploy.env AWAY from the release the operator was rolling back to — so the
+  # real target becomes unreachable through the tool and is eventually pruned.
+  [ "$target" != "$previous" ] ||
+    nexa_die "refusing to record ${target} as both the current release and the rollback target."
   nexa_set_deploy_image "$image"
   nexa_write_atomic "$NEXA_PREVIOUS_FILE" "$previous"
   nexa_write_atomic "$NEXA_CURRENT_FILE" "$target"
@@ -488,18 +505,49 @@ nexa_write_atomic() {
 # other's source. Reported rather than repaired — repairing means choosing which
 # of the two is right, and that is the operator's decision, not this script's.
 nexa_check_divergence() {
-  local version recorded configured
+  local version recorded configured expected running
   version="$(nexa_current_version || true)"
   [ -n "$version" ] || return 0
   recorded="$(nexa_manifest_field "$version" digest 2>/dev/null || true)"
   [ -n "$recorded" ] || return 0
   configured="$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE 2>/dev/null || true)"
   [ -n "$configured" ] || return 0
-  case "$configured" in
-    *"@${recorded}") return 0 ;;
-  esac
+
+  # The WHOLE reference, not the digest suffix. `*"@${recorded}"` also matched
+  # `evil.example/nexa@<the right digest>` — a repository this installation
+  # would never pull from, reported as agreement.
+  expected="$(nexa_release_image "$version" 2>/dev/null || true)"
+  [ -n "$expected" ] || return 0
+  [ "$configured" != "$expected" ] || return 0
+
+  # Name the release deploy.env would actually start, by looking its digest up
+  # among the manifests. The target of an interrupted update has already had
+  # its manifest written, so this almost always resolves — and it has to,
+  # because the advice below is otherwise a no-op: `botctl update <current>`
+  # short-circuits with "already running".
+  running="$(nexa_version_for_image "$configured" || true)"
+
   nexa_warn "DIVERGENCE: this installation records ${version} (${recorded}) as current, but deploy.env would start ${configured}."
-  nexa_warn "A restart or a reboot would start the second, not the first. This is what an interrupted update leaves; re-running 'botctl update ${version}' resolves it."
+  if [ -n "$running" ]; then
+    nexa_warn "A restart or a reboot would start ${running}, not ${version}. This is what an interrupted update or rollback leaves; 'botctl update ${running}' resolves it."
+  else
+    nexa_warn "A restart or a reboot would start that image, not ${version}, and no release manifest matches it. Decide which of the two is correct and run 'botctl update' for that version."
+  fi
+  return 1
+}
+
+# Which recorded release, if any, is this image reference? The manifests are the
+# only place the mapping exists on the host.
+nexa_version_for_image() {
+  local image="$1" path candidate
+  [ -d "$NEXA_RELEASES_DIR" ] || return 1
+  for path in "$NEXA_RELEASES_DIR"/*.json; do
+    [ -e "$path" ] || continue
+    candidate="$(basename "$path" .json)"
+    [ "$(nexa_release_image "$candidate" 2>/dev/null || true)" = "$image" ] || continue
+    printf '%s' "$candidate"
+    return 0
+  done
   return 1
 }
 

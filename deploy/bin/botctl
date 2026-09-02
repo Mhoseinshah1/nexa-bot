@@ -262,6 +262,18 @@ cmd_update() {
   [ -n "$current" ] || nexa_die "no current release is recorded; refusing to update."
 
   if [ "$target" = "$current" ]; then
+    # Not unconditionally "nothing to do": if deploy.env disagrees with the
+    # recorded release, re-running the update for the CURRENT version is
+    # precisely the repair an operator would reach for, and returning early
+    # made that advice a no-op. Repair it here instead.
+    if ! nexa_check_divergence >/dev/null 2>&1; then
+      local current_image
+      current_image="$(nexa_release_image "$current")" ||
+        nexa_die "cannot read ${current}'s image from its manifest; refusing to guess what it ran."
+      nexa_set_deploy_image "$current_image"
+      nexa_ok "already running ${target}; repaired deploy.env, which named a different release."
+      return 0
+    fi
     nexa_ok "already running ${target}. Nothing to do."
     return 0
   fi
@@ -378,6 +390,14 @@ cmd_rollback() {
   current="$(nexa_current_version || true)"
   previous="$(nexa_previous_version || true)"
   [ -n "$previous" ] || nexa_die "no previous release is recorded; there is nothing to roll back to."
+  # No `${current:-$previous}` fallback below, and no rollback onto itself.
+  # Both used to produce `current == previous`, from which every subsequent
+  # rollback reported success, changed nothing an operator wanted changed, and
+  # repointed deploy.env AWAY from the release they were trying to reach.
+  [ -n "$current" ] ||
+    nexa_die "no current release is recorded, so there is nothing to roll back FROM. The installation is incomplete; re-run the installer or 'botctl update'."
+  [ "$current" != "$previous" ] ||
+    nexa_die "the current release and the rollback target are both ${current}, which an interrupted rollback leaves behind. 'botctl version' names the image that would actually start; run 'botctl update' for that version to settle it."
 
   previous_image="$(nexa_release_image "$previous")" ||
     nexa_die "the manifest for ${previous} is missing or malformed; refusing to guess what it ran."
@@ -404,7 +424,7 @@ cmd_rollback() {
   # The pointers swap: the release just left becomes the rollback target, so a
   # rollback can be undone by another rollback. Same ordered commit as an
   # update, for the same reason.
-  nexa_commit_release "$previous" "${current:-$previous}" "$previous_image"
+  nexa_commit_release "$previous" "$current" "$previous_image"
 
   nexa_ok "rolled back to ${previous}"
   nexa_ok "the database was not touched"
@@ -428,6 +448,13 @@ cmd_logs() {
 cmd_restart() {
   require_installed
   nexa_acquire_lock 0
+  # `version` and `status` REPORT a divergence; restart is the command that
+  # would act on it, by starting the image deploy.env names instead of the
+  # release this installation says it runs. Refusing is the whole point: an
+  # operator restarting a divergent installation is one keystroke from a
+  # silent downgrade onto a schema that has already moved on.
+  nexa_check_divergence ||
+    nexa_die "refusing to restart while the recorded release and deploy.env disagree, because a restart is exactly what would act on that. Settle it with 'botctl update' first."
   nexa_compose up -d --remove-orphans
   nexa_wait_ready || nexa_die "the stack restarted but the API is not ready."
   nexa_ok "restarted"

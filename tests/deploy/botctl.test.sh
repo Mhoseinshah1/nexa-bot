@@ -162,10 +162,12 @@ printf '%s\n' "$before" >"$env_file"
 chmod 0600 "$env_file"
 
 test_case 'readiness ignores a leftover one-off container'
-# `docker compose run` containers carry Service == "api". A migration container
-# left behind by a killed update, or by a --rm that did not fire, would be
-# picked by a first-match parser — and readiness would report on an exited
-# container while the real api was healthy, backing out a good release.
+# `docker compose run` containers carry Service == "api", and — because compose
+# builds a one-off from the same service config — the same HEALTHCHECK. So the
+# corpse reports Health "starting", exactly like an api that is still coming
+# up. Neither "the first api entry" nor "the first entry that reports a health"
+# can tell them apart; only "is it running" can. Getting this wrong backs out a
+# release that is perfectly healthy.
 fake_set stale_run 1
 assert_ok 'a leftover run container was mistaken for the api' nexa_wait_ready 5
 fake_set stale_run 0
@@ -504,12 +506,16 @@ test_case 'a target that dies is backed out without waiting out the timeout'
 # --all, so the readiness parse yielded nothing, that read as "not ready yet",
 # and the update waited out the whole timeout — twice, counting the back-out's
 # own wait — for a container that was already gone.
-fake_set "api_health_${DIGEST_B}" ''
-fake_set stale_run 1
+#
+# The corpse reports Health "starting", because Docker retains the last health
+# status after a container exits. A parser that reads health before state
+# therefore sees "starting" and keeps waiting; only one that asks "is anything
+# RUNNING" sees that the answer is no.
+fake_set api_gone 1
 started="$(date +%s)"
 NEXA_READY_TIMEOUT=60 run_botctl update v2.0.0
 elapsed=$(( $(date +%s) - started ))
-fake_set stale_run 0
+fake_set api_gone 0
 assert_fails 'a dead target exited zero' test "$BOTCTL_STATUS" -eq 0
 assert_equals 'a dead target became current' 'v1.0.0' "$(cat "${NEXA_STATE_DIR}/current")"
 assert_ok 'the update waited out the readiness timeout for a dead container' \
@@ -529,22 +535,58 @@ test_case 'a recorded release that disagrees with deploy.env is REPORTED'
 # and neither reads what compose would actually start. So `botctl version`
 # answered with one release while `botctl restart` started another — against a
 # schema that had already been migrated for the first.
+seed_release 'v2.0.0' "$DIGEST_B"
+printf 'v1.0.0\n' >"${NEXA_STATE_DIR}/current"
 set_deploy_image "registry.test/nexa@${DIGEST_B}"
 run_botctl version
 assert_fails 'a divergent installation reported success' test "$BOTCTL_STATUS" -eq 0
 assert_contains 'the divergence was not named' "$BOTCTL_OUTPUT" 'DIVERGENCE'
 assert_contains 'the operator was not told what would actually start' \
   "$BOTCTL_OUTPUT" "$DIGEST_B"
-assert_contains 'the operator was not told how to resolve it' \
-  "$BOTCTL_OUTPUT" 'botctl update v1.0.0'
+# The RELEASE that would start, not just its digest — and therefore advice that
+# does something. Naming the CURRENT version here made the advice a guaranteed
+# no-op: `botctl update <current>` short-circuits with "already running".
+assert_contains 'the advice does not name the release that would start' \
+  "$BOTCTL_OUTPUT" 'botctl update v2.0.0'
 
-test_case 'an update repairs the divergence it is re-run to fix'
-fake_set resolve_digest "$DIGEST_C"
-run_botctl update v2.0.0
-assert_equals 'the update failed on a divergent installation' 0 "$BOTCTL_STATUS"
+test_case 'a divergence is only detected against the WHOLE image reference'
+# `*"@${digest}"` also matched a different repository carrying the same digest
+# — a reference this installation would never pull from, reported as agreement.
+set_deploy_image "evil.example/nexa@${DIGEST_A}"
 run_botctl version
-assert_equals 'the installation is still divergent after an update' 0 "$BOTCTL_STATUS"
-assert_not_contains 'a divergence survived the update' "$BOTCTL_OUTPUT" 'DIVERGENCE'
+assert_fails 'a foreign repository was accepted as agreement' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the foreign repository was not reported' "$BOTCTL_OUTPUT" 'evil.example'
+
+test_case 'restart refuses to act on a divergence'
+# `version` and `status` report it; restart is the command that would ACT on
+# it, starting the image deploy.env names. That is a silent downgrade onto a
+# schema that has already moved on.
+set_deploy_image "registry.test/nexa@${DIGEST_B}"
+run_botctl restart
+assert_fails 'restart started a divergent installation' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'restart did not say why it refused' "$BOTCTL_OUTPUT" 'disagree'
+
+test_case 'the advice the divergence gives actually resolves it'
+# The whole point. Following the message must change the state.
+fake_set resolve_digest "$DIGEST_B"
+run_botctl update v2.0.0
+assert_equals 'the advised update failed' 0 "$BOTCTL_STATUS"
+run_botctl version
+assert_equals 'the installation is still divergent afterwards' 0 "$BOTCTL_STATUS"
+assert_not_contains 'a divergence survived the advised update' "$BOTCTL_OUTPUT" 'DIVERGENCE'
+
+test_case 'an update for the CURRENT version repairs a divergence rather than declining'
+# `botctl update <current>` used to return "already running. Nothing to do."
+# unconditionally — so on a divergent installation, the most natural repair an
+# operator would try did nothing at all and reported success.
+set_deploy_image "registry.test/nexa@${DIGEST_A}"
+run_botctl version
+assert_fails 'the fixture is not divergent' test "$BOTCTL_STATUS" -eq 0
+run_botctl update v2.0.0
+assert_equals 'an update for the current version failed' 0 "$BOTCTL_STATUS"
+assert_contains 'the repair was not reported' "$BOTCTL_OUTPUT" 'repaired deploy.env'
+run_botctl version
+assert_equals 'the divergence survived' 0 "$BOTCTL_STATUS"
 
 teardown_root
 
@@ -626,6 +668,37 @@ teardown_root
 setup_root
 setup_fake_docker
 seed_release 'v1.0.0' "$DIGEST_A"
+test_case 'rollback refuses when the two pointers are the same release'
+# What an interrupted ROLLBACK leaves: the commit writes deploy.env, then
+# `previous`, then `current`, and a cut between the last two makes them equal.
+# Accepting it was worse than a stall — the rollback rolled back onto itself,
+# reported success, and repointed deploy.env AWAY from the release the operator
+# was trying to reach, so the real target became unreachable through the tool
+# and was eventually pruned. Every later attempt printed "rolled back" too.
+printf 'v1.0.0\n' >"${NEXA_STATE_DIR}/previous"
+printf 'v1.0.0\n' >"${NEXA_STATE_DIR}/current"
+run_botctl rollback
+assert_fails 'a rollback onto itself reported success' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the equal pointers were not named' "$BOTCTL_OUTPUT" 'both'
+assert_equals 'a refused rollback still repointed deploy.env' \
+  "registry.test/nexa@${DIGEST_A}" \
+  "$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE)"
+
+test_case 'rollback refuses when no current release is recorded'
+# The other way the equal pair used to be built — deliberately, by a
+# `${current:-$previous}` fallback, on an installation whose `current` file was
+# missing because an install or an update was interrupted before it was written.
+rm -f "${NEXA_STATE_DIR}/current"
+printf 'v1.0.0\n' >"${NEXA_STATE_DIR}/previous"
+run_botctl rollback
+assert_fails 'rolled back from nothing' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the refusal did not say what was missing' \
+  "$BOTCTL_OUTPUT" 'nothing to roll back FROM'
+assert_fails 'a refused rollback invented a current release' \
+  test -f "${NEXA_STATE_DIR}/current"
+rm -f "${NEXA_STATE_DIR}/previous"
+printf 'v1.0.0\n' >"${NEXA_STATE_DIR}/current"
+
 test_case 'rollback refuses when there is nothing to roll back to'
 run_botctl rollback
 assert_fails 'rolled back with no previous release' test "$BOTCTL_STATUS" -eq 0
