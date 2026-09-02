@@ -94,6 +94,12 @@ export interface TemplateRepository {
       readonly body: string;
       readonly revision: number;
       readonly expectedVersion: number | null;
+      /**
+       * The revision the caller read. Checked ALONGSIDE the version because a
+       * revert deletes the row and the next save starts a new one at version 1,
+       * so a version alone cannot tell a stale expectation from a current one.
+       */
+      readonly expectedRevision: number | null;
       readonly now: Date;
       readonly adminId: string | null;
     },
@@ -113,6 +119,8 @@ export interface TemplateRepository {
       readonly key: TemplateKey;
       readonly locale: Locale;
       readonly expectedVersion: number;
+      /** See `upsertOverride`: a version alone cannot survive a revert. */
+      readonly expectedRevision: number;
     },
     tx?: unknown,
   ): Promise<StoredTemplateOverride | null>;

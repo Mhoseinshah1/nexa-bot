@@ -156,6 +156,21 @@ export class NotificationService {
     input: unknown,
   ): Promise<{
     readonly intent: NotificationIntent;
+    /**
+     * What has been tried, read here rather than by the caller.
+     *
+     * The controller used to call `get` for these, which guards on
+     * `opslog.view` while this guards on `settings.edit`. They are different
+     * permissions with different risk levels and nothing forces them to be
+     * held together — the roles are a seed and per-admin overrides exist. An
+     * administrator holding `settings.edit` with `opslog.view` denied would
+     * therefore have their test QUEUED and then be answered 403, permanently:
+     * the retry replays the write and fails at the same read, so the caller
+     * could never see the result of a write that had happened. Reading them
+     * inside the already-authorized command removes the second check rather
+     * than widening the first.
+     */
+    readonly attempts: readonly DeliveryAttemptRecord[];
     readonly created: boolean;
     readonly replayed: boolean;
   }> {
@@ -198,13 +213,21 @@ export class NotificationService {
         // that key would mint another message, so N retries of one request
         // would send N of them. Refusing says what is wrong.
         throw errors.conflict(
-          CONTROL_ERROR_CODES.NOTIFICATION_NOT_FOUND,
+          // Its own code. Reusing NOT_FOUND here made "no such notification"
+          // and "your idempotency record points at nothing" indistinguishable,
+          // and only one of those is worth retrying.
+          CONTROL_ERROR_CODES.NOTIFICATION_RECORD_ORPHANED,
           `Idempotency key "${command.idempotencyKey}" names notification ` +
             `${existing.result.notificationId}, which no longer exists.`,
           { notificationId: existing.result.notificationId },
         );
       }
-      return { intent, created: false, replayed: true };
+      return {
+        intent,
+        attempts: await this.notifications.attempts(scope, intent.id),
+        created: false,
+        replayed: true,
+      };
     }
 
     // Only a NEW test needs a destination to send to.
@@ -275,7 +298,9 @@ export class NotificationService {
         tx,
       );
 
-      return { ...result, replayed: false };
+      // A brand-new intent has no attempts yet; saying so is a fact rather
+      // than the hard-coded empty list the controller used to invent.
+      return { ...result, attempts: [], replayed: false };
     });
   }
 

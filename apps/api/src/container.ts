@@ -358,7 +358,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     tenants,
   );
 
-  const notificationRepository = new DrizzleNotificationRepository(database.db);
+  const notificationRepository = new DrizzleNotificationRepository(database.db, ids);
 
   // A second resolver, wired to the RAW recorder rather than to the façade.
   //

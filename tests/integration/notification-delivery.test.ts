@@ -197,6 +197,7 @@ describe('notification delivery', () => {
         key: 'ops.notification.operational_event',
         body: 'هشدار {severity}: {code} — {message}',
         expectedVersion: null,
+        expectedRevision: null,
         idempotencyKey: `tpl-${Date.now()}`,
       });
 

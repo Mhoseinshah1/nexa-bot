@@ -6,6 +6,7 @@ import {
   type CurrencyCode,
   type IdGenerator,
   type Logger,
+  type NotificationDestination,
   type NotificationStatus,
   type ScopeContext,
   type SettingKey,
@@ -69,6 +70,16 @@ export interface DispatchTickResult {
    * are met again when it expires, or are swept by `failExhausted` once their
    * attempts are spent. Counting them as failures would report a state nothing
    * has stored.
+   *
+   * Being met again means being SENT again, and that is worth saying plainly.
+   * If the transport succeeded and only the recorder failed, the next claim
+   * delivers the same message a second time. This subsystem is at-least-once
+   * and has no way to be otherwise: nothing durable records "the send landed"
+   * between the API call returning and the attempt row committing. The
+   * alternative — the previous code's — was to write FAILED on a guess, which
+   * turned a duplicate message into a delivered message filed as permanently
+   * failed. A duplicate operational alert is a nuisance; a lost one is the
+   * failure this whole module exists to prevent.
    */
   readonly unrecorded: number;
 }
@@ -150,7 +161,10 @@ export class NotificationDispatcher {
     // Before anything else, and regardless of budget: an intent that has spent
     // its attempts is never claimed again, so if nothing sweeps it, it stays
     // PENDING for ever and no screen ever reports it as failed.
-    const exhausted = await this.notifications.failExhausted(now, this.options.batchSize);
+    const exhausted = await this.notifications.failExhausted(now, this.options.batchSize, {
+      leaseMs: this.options.leaseMs,
+      transport: this.transport.kind,
+    });
 
     const budget = await this.remainingBudget(now);
     if (budget <= 0) {
@@ -199,10 +213,12 @@ export class NotificationDispatcher {
         // retried; and the throw can happen AFTER a successful send, so it
         // could file a delivered message as permanently failed.
         //
-        // Leaving the row alone is the honest answer. Its lease expires, the
-        // loop meets it again, and if it has spent its attempts by then
-        // `failExhausted` ends it — with an attempt history that says what
-        // actually happened rather than a verdict invented here.
+        // Leaving the row alone is the honest answer. Its lease expires and the
+        // loop meets it again — which means sending it again if the transport
+        // had in fact succeeded; see `unrecorded` for why that is the trade. If
+        // it has spent its attempts by then, `failExhausted` ends it and writes
+        // the attempt row that this failure could not, so the history says the
+        // outcome was never recorded rather than leaving a gap.
         this.logger.error(
           {
             err: error instanceof Error ? error.message : String(error),
@@ -255,20 +271,28 @@ export class NotificationDispatcher {
 
     let text: string;
     let definition;
+    let destination: NotificationDestination;
     try {
       // The destination, checked here rather than when the row was read.
       //
       // A jsonb column is only ever as good as the last thing that wrote it,
       // and this is the one place a bad one can be handled without taking
       // anything else down: it fails this intent and the batch continues.
-      const destination = notificationDestinationSchema.safeParse(intent.destination);
-      if (!destination.success) {
+      const parsed = notificationDestinationSchema.safeParse(intent.destination);
+      if (!parsed.success) {
         throw new Error(
-          `The stored destination is not valid: ${destination.error.issues
+          `The stored destination is not valid: ${parsed.error.issues
             .map((issue) => issue.message)
             .join('; ')}`,
         );
       }
+      // The PARSED value is what gets sent, not the raw cast beside it. Zod
+      // strips unknown keys and would apply any coercion the schema grows, so
+      // validating one value and sending another is the "the guard checks A and
+      // the code uses B" shape — and the obvious future repair here, coercing a
+      // chat id that turns out to be stored as a number, would have passed the
+      // guard while the transport still received the number.
+      destination = parsed.data;
 
       // Inside the try. `templateDefinition` throws for a key the frozen
       // catalogue no longer declares, which a PENDING row can outlive across a
@@ -312,7 +336,7 @@ export class NotificationDispatcher {
     let result: Awaited<ReturnType<NotificationTransport['send']>>;
     try {
       result = await this.transport.send({
-        destination: intent.destination,
+        destination,
         text,
         html: definition.format === 'TELEGRAM_HTML',
         tenantId: intent.tenantId,

@@ -20,6 +20,7 @@ export interface OperationalEventQuery {
   readonly limit: number;
   /** Keyset pagination on `lastSeenAt`, which is also the sort key. */
   readonly before?: Date | undefined;
+  readonly beforeId?: string | undefined;
   readonly severities?: readonly OperationalSeverity[] | undefined;
   readonly code?: string | undefined;
   readonly since?: Date | undefined;

@@ -52,12 +52,21 @@ describe('the settings registry', () => {
     // could declare a meaning for a state its own schema rejects — a registry
     // describing behaviour that no value can ever produce, which is exactly
     // what a settings screen is for reading.
+    // Each declaration names a SPECIFIC state, and the assertion checks that
+    // one. Accepting any of `0`, `''` or `null` would let a key declaring
+    // UNLIMITED — a statement about the NUMBER zero — pass because its schema
+    // happens to accept an empty string.
     for (const setting of SETTINGS) {
       if (setting.zeroMeaning === 'NOT_APPLICABLE') continue;
+
+      const parses = (value: unknown) => setting.schema.safeParse(value).success;
       const accepted =
-        setting.schema.safeParse(0).success ||
-        setting.schema.safeParse('').success ||
-        setting.schema.safeParse(null).success;
+        setting.zeroMeaning === 'UNLIMITED'
+          ? // "Zero means no limit" is a claim about the number.
+            parses(0)
+          : // DISABLES and LITERAL are claims about the key's empty state,
+            // which is `0`, `''` or absent depending on what the value is.
+            parses(0) || parses('') || parses(null);
       expect(
         accepted,
         `${setting.key} declares ${setting.zeroMeaning} for a zero state its schema rejects`,

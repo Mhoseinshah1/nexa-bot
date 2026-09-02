@@ -14,6 +14,7 @@ import {
   type PermissionKey,
   type ScopeContext,
   type SettingKey,
+  type SettingSource,
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
@@ -50,12 +51,68 @@ export type SetSettingCommand = z.infer<typeof setSettingCommandSchema>;
 /**
  * What a completed write stores for its idempotency key.
  *
- * Deliberately tiny and JSON-native: no Date, no nested object, nothing whose
- * type changes on the way through `jsonb`. Everything else a replay needs is
- * re-read from the row.
+ * A SNAPSHOT of what this command produced, and JSON-native throughout: no
+ * Date, no class instance, nothing whose type changes on the way through
+ * `jsonb`. `updatedAt` is an ISO string here and is parsed back on the way out.
+ *
+ * Two wrong answers were tried before this one, in both directions.
+ *
+ * Storing the `ResolvedSetting` object whole put a `Date` into `jsonb`; it came
+ * back a string, the controller called `.toISOString()` on it, and the cheapest
+ * possible success answered 500.
+ *
+ * Storing only `changed` and RE-READING the row on replay fixed that and broke
+ * something worse: the reply then described whatever the key holds NOW. An
+ * administrator whose response was lost, retrying after a colleague changed the
+ * same key, was told their command had succeeded with the colleague's value —
+ * "success for a write that did not happen", reached from the other direction,
+ * and `docs/conventions.md` says plainly that a replay returns the FIRST
+ * result.
+ *
+ * So the snapshot carries everything the response is built from, and the
+ * registry supplies the rest, which cannot have changed without a release.
  */
 interface ReplayRecord {
   readonly changed: boolean;
+  readonly value: unknown;
+  readonly source: SettingSource;
+  readonly version: number | null;
+  /** ISO-8601, because a Date does not survive `jsonb`. */
+  readonly updatedAt: string | null;
+  readonly updatedByAdminId: string | null;
+  readonly storedValueInvalid: boolean;
+}
+
+function toReplayRecord(setting: ResolvedSetting, changed: boolean): ReplayRecord {
+  return {
+    changed,
+    value: setting.value,
+    source: setting.source,
+    version: setting.version,
+    updatedAt: setting.updatedAt?.toISOString() ?? null,
+    updatedByAdminId: setting.updatedByAdminId,
+    storedValueInvalid: setting.storedValueInvalid,
+  };
+}
+
+function fromReplayRecord(key: SettingKey, record: ReplayRecord): ResolvedSetting {
+  const definition = settingDefinition(key);
+  return {
+    key,
+    value: record.value,
+    source: record.source,
+    version: record.version,
+    updatedAt: record.updatedAt === null ? null : new Date(record.updatedAt),
+    updatedByAdminId: record.updatedByAdminId,
+    storedValueInvalid: record.storedValueInvalid,
+    // From the registry, not from the snapshot: these are properties of the
+    // KEY rather than of the write, and they cannot change without a release.
+    description: definition.description,
+    zeroMeaning: definition.zeroMeaning,
+    mutability: definition.mutability,
+    classification: definition.classification,
+    configures: definition.configures,
+  };
 }
 
 export interface SetSettingResult {
@@ -126,14 +183,8 @@ export class SettingsService {
     const value = parsed.value;
 
     const requestHash = hashRequest({ key, value, expectedVersion: command.expectedVersion });
-    // A replay RE-READS rather than returning a stored copy of the result.
-    //
-    // The idempotency record is a `jsonb` column, so a `Date` in a stored
-    // result comes back as an ISO string. Returning that object handed the
-    // controller a string where it expected a Date and answered 500 to the
-    // cheapest possible success — the same "a jsonb round-trip believed rather
-    // than checked" failure that already cost this branch a setting write.
-    // Storing only what identifies the work makes the shape unable to drift.
+    // A replay returns the FIRST result, rebuilt from the snapshot. See
+    // `ReplayRecord` for the two wrong answers this is between.
     const existing = await this.idempotency.find<ReplayRecord>(
       scope,
       actor.surface,
@@ -142,7 +193,7 @@ export class SettingsService {
     );
     if (existing) {
       return {
-        setting: await this.resolver.resolve(scope, key),
+        setting: fromReplayRecord(key, existing.result),
         changed: existing.result.changed,
         replayed: true,
       };
@@ -196,7 +247,7 @@ export class SettingsService {
           actor.surface,
           command.idempotencyKey,
           requestHash,
-          { changed: false } satisfies ReplayRecord,
+          toReplayRecord(before, false),
           tx,
         );
         return { setting: before, changed: false };
@@ -256,7 +307,7 @@ export class SettingsService {
         actor.surface,
         command.idempotencyKey,
         requestHash,
-        { changed: true } satisfies ReplayRecord,
+        toReplayRecord(setting, true),
         tx,
       );
       return { setting, changed: true };

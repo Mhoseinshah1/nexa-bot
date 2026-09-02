@@ -61,11 +61,16 @@ describe('control plane, third review round', () => {
       idempotencyKey: `set-${Math.random()}`,
     });
 
-  const setTemplate = (body: string, expectedVersion: number | null) =>
+  const setTemplate = (
+    body: string,
+    expectedVersion: number | null,
+    expectedRevision: number | null = expectedVersion,
+  ) =>
     ctx.container.templatesService.set(tenantA, owner, {
       key: 'bot.ping.reply',
       body,
       expectedVersion,
+      expectedRevision,
       idempotencyKey: `tpl-${Math.random()}`,
     });
 
@@ -100,8 +105,21 @@ describe('control plane, third review round', () => {
 
     it('records a template set and a template revert', async () => {
       await setTemplate('سلام {correlationId}', null);
-      expect(await auditFor('templates.set')).toHaveLength(1);
-      expect(await eventsOfType('TemplateOverrideChanged')).toHaveLength(1);
+
+      const [setAudit] = await auditFor('templates.set');
+      expect(setAudit?.entityId).toBe('bot.ping.reply');
+      // VALUES, like the settings case. Asserting only that a row exists left
+      // the template audit able to lose its before/after payload silently,
+      // which is the exact failure this describe block is named for.
+      expect(setAudit?.before).toBeNull();
+      expect(setAudit?.after).toMatchObject({ body: 'سلام {correlationId}', revision: 1 });
+
+      const [setEvent] = await eventsOfType('TemplateOverrideChanged');
+      expect(setEvent?.payload).toMatchObject({
+        key: 'bot.ping.reply',
+        revision: 1,
+        previousRevision: null,
+      });
 
       const [override] = await db()
         .select()
@@ -111,9 +129,14 @@ describe('control plane, third review round', () => {
       await ctx.container.templatesService.revert(tenantA, owner, {
         key: 'bot.ping.reply',
         expectedVersion: override!.version,
+        expectedRevision: override!.revision,
         idempotencyKey: `rev-${Math.random()}`,
       });
-      expect(await auditFor('templates.revert')).toHaveLength(1);
+      const [revertAudit] = await auditFor('templates.revert');
+      expect(revertAudit?.entityId).toBe('bot.ping.reply');
+      // What was removed, so the record still means something afterwards.
+      expect(revertAudit?.before).toMatchObject({ body: 'سلام {correlationId}' });
+      expect(revertAudit?.after).toBeNull();
       expect(await eventsOfType('TemplateOverrideReverted')).toHaveLength(1);
     });
 
@@ -322,6 +345,10 @@ describe('control plane, third review round', () => {
       });
       expect(result.rendered).toContain('panel.unreachable');
       expect(result.rendered).not.toContain('{occurrences}');
+      // The NUMBER itself. Asserting only that the token was replaced would
+      // pass for `NaN`, `Infinity`, `0`, or the string it arrived as — which is
+      // most of what the coercion exists to prevent.
+      expect(result.rendered).toContain('3');
     });
 
     it('names the token and the form when a sample does not fit its type', async () => {
@@ -386,11 +413,12 @@ describe('control plane, third review round', () => {
     it('is swept to FAILED rather than sitting PENDING for ever', async () => {
       const [intent] = await ctx.container.notifications.list(tenantA, owner);
 
-      // The state a throw between the claim and the record leaves behind.
+      // The state a throw between the claim and the record leaves behind, a
+      // full lease ago — long enough past the sweep's safety margin.
       await ctx.container.database.withClient((client) =>
         client.query(
           `UPDATE notifications
-              SET attempt_count = max_attempts, next_attempt_at = now() - interval '1 minute'
+              SET attempt_count = max_attempts, next_attempt_at = now() - interval '1 hour'
             WHERE id = $1`,
           [intent!.id],
         ),
@@ -402,9 +430,14 @@ describe('control plane, third review round', () => {
 
       const detail = await ctx.container.notifications.get(tenantA, owner, intent!.id);
       expect(detail.intent.status).toBe('FAILED');
+
+      // And the history says what happened, rather than leaving a gap where
+      // the deciding attempt should be. A verdict with no attempt behind it is
+      // the same "a state nothing recorded" failure in a different file.
+      expect(detail.attempts.at(-1)?.errorCode).toBe('notification.attempts_exhausted');
     });
 
-    it('is not swept while a dispatcher still holds its lease', async () => {
+    it('is not swept while its lease is still in the future', async () => {
       const [intent] = await ctx.container.notifications.list(tenantA, owner);
       await ctx.container.database.withClient((client) =>
         client.query(
@@ -420,6 +453,71 @@ describe('control plane, third review round', () => {
       expect(
         (await ctx.container.notifications.get(tenantA, owner, intent!.id)).intent.status,
       ).toBe('PENDING');
+    });
+
+    /**
+     * The margin, which is the whole correctness argument for the sweep.
+     *
+     * A lease that has merely expired is not proof the send finished — it is
+     * the state a SLOW send is in, and a five-second lease against an
+     * eight-second Telegram call puts a live, about-to-succeed send squarely in
+     * range. Sweeping on `<= now` filed delivered messages as permanently
+     * failed.
+     */
+    it('is not swept in the window just after its lease expires', async () => {
+      const [intent] = await ctx.container.notifications.list(tenantA, owner);
+      await ctx.container.database.withClient((client) =>
+        client.query(
+          `UPDATE notifications
+              SET attempt_count = max_attempts, next_attempt_at = now() - interval '1 second'
+            WHERE id = $1`,
+          [intent!.id],
+        ),
+      );
+
+      expect((await ctx.container.notificationDispatcher.tick()).exhausted).toBe(0);
+      expect(
+        (await ctx.container.notifications.get(tenantA, owner, intent!.id)).intent.status,
+      ).toBe('PENDING');
+    });
+
+    /**
+     * And the correction that makes the margin an acceptable guess rather than
+     * a verdict: a send that lands after the sweep gave up still ends the
+     * intent as SENT.
+     */
+    it('is corrected by a success that arrives after the sweep', async () => {
+      const [intent] = await ctx.container.notifications.list(tenantA, owner);
+      await ctx.container.database.withClient((client) =>
+        client.query(
+          `UPDATE notifications
+              SET attempt_count = max_attempts, next_attempt_at = now() - interval '1 hour'
+            WHERE id = $1`,
+          [intent!.id],
+        ),
+      );
+      expect((await ctx.container.notificationDispatcher.tick()).exhausted).toBe(1);
+
+      const { moved } = await ctx.container.notificationRepository.recordAttempt({
+        attemptId: '01900000-0000-7000-8000-0000000fb001',
+        tenantId: SEED_IDS.tenantA,
+        notificationId: intent!.id,
+        attemptNumber: 1,
+        transport: 'RECORDING',
+        outcome: 'SUCCEEDED',
+        startedAt: new Date(),
+        finishedAt: new Date(),
+        errorCode: null,
+        errorMessage: null,
+        retryAfterMs: null,
+        nextStatus: 'SENT',
+        nextAttemptAt: new Date(),
+      });
+
+      expect(moved).toBe(true);
+      expect(
+        (await ctx.container.notifications.get(tenantA, owner, intent!.id)).intent.status,
+      ).toBe('SENT');
     });
 
     /**
@@ -478,11 +576,34 @@ describe('control plane, third review round', () => {
       // committed, so both of these get past it. The insert of the idempotency
       // record is where they meet, and the loser abandons its transaction
       // rather than committing a second message beside the winner's.
+      //
+      // A BARRIER, not a `Promise.all` and a hope. Without one the two calls
+      // followed identical await sequences and simply serialized: the second
+      // found the first's committed record and replayed, so the test passed
+      // while exercising nothing of the race it is named for. This holds each
+      // call after its lookup until BOTH have looked, which is exactly the
+      // interleaving the mechanism exists for and is otherwise a matter of
+      // microtask luck.
+      const store = ctx.container.idempotency;
+      const realFind = store.find.bind(store);
+      let arrived = 0;
+      let openGate!: () => void;
+      const gate = new Promise<void>((resolve) => (openGate = resolve));
+      store.find = (async (...args: Parameters<typeof realFind>) => {
+        const found = await realFind(...args);
+        arrived += 1;
+        if (arrived >= 2) openGate();
+        else await gate;
+        return found;
+      }) as typeof store.find;
+
       const key = `race-${Math.random()}`;
       const results = await Promise.allSettled([
         ctx.container.notifications.sendTest(tenantA, owner, { idempotencyKey: key }),
         ctx.container.notifications.sendTest(tenantA, owner, { idempotencyKey: key }),
-      ]);
+      ]).finally(() => {
+        store.find = realFind;
+      });
 
       const queued = await db()
         .select()
@@ -502,6 +623,16 @@ describe('control plane, third review round', () => {
         (result) => result.status === 'fulfilled' && result.value.created,
       );
       expect(created).toHaveLength(1);
+
+      // And the two really did race. If they had serialized — the second
+      // finding the first's committed record and replaying — this assertion
+      // fails, and the test above would otherwise have reported success while
+      // exercising nothing. A race test that cannot tell a race from a sequence
+      // is a coverage claim, not coverage.
+      const replayed = results.filter(
+        (result) => result.status === 'fulfilled' && result.value.replayed,
+      );
+      expect(replayed, 'the two calls serialized; this test proved nothing').toHaveLength(0);
     });
 
     it('refuses when its record names an intent that no longer exists', async () => {
@@ -518,14 +649,30 @@ describe('control plane, third review round', () => {
 
       await expect(
         ctx.container.notifications.sendTest(tenantA, owner, { idempotencyKey: key }),
-      ).rejects.toMatchObject({ code: 'control.notification_not_found' });
+      ).rejects.toMatchObject({ code: 'control.notification_record_orphaned' });
     });
   });
 
   // -------------------------------------------------------------------------
 
-  describe('one idempotency key is one command', () => {
-    it('lets exactly one of two simultaneous setting writes win', async () => {
+  describe('two simultaneous writes of one key', () => {
+    /**
+     * Named for what it proves, which is NOT what its first name claimed.
+     *
+     * Both writes state `expectedVersion: null`, so the repository's
+     * `ON CONFLICT DO NOTHING` insert decides the winner and the loser raises
+     * `control.version_conflict` — before `rememberOnce` is reached at all.
+     * The outcome is guaranteed by the optimistic-version predicate, and the
+     * test stays green with `rememberOnce` reverted. It is worth keeping as a
+     * concurrency test of the version predicate; it was worth renaming, because
+     * a test filed under a mechanism it never executes is a coverage claim
+     * rather than coverage.
+     *
+     * The test that DOES pin the key is the test-send race above, where every
+     * call mints its own dedupe key so nothing but `rememberOnce` separates
+     * them.
+     */
+    it('lets exactly one of two simultaneous setting writes win, on the version predicate', async () => {
       const key = `concurrent-${Math.random()}`;
       const write = () =>
         ctx.container.settingsService.set(tenantA, owner, {
@@ -631,6 +778,7 @@ describe('control plane, Codex round', () => {
         key: 'bot.ping.reply',
         body: 'سلام {correlationId}',
         expectedVersion: null,
+        expectedRevision: null,
         idempotencyKey: `tpl-${Math.random()}`,
       });
 
@@ -639,7 +787,84 @@ describe('control plane, Codex round', () => {
           key: 'bot.ping.reply',
           body: 'سلام {correlationId}',
           expectedVersion: null,
+          expectedRevision: null,
           idempotencyKey: `tpl-stale-${Math.random()}`,
+        }),
+      ).rejects.toMatchObject({ code: 'control.version_conflict' });
+    });
+  });
+
+  const setTemplate = (
+    body: string,
+    expectedVersion: number | null,
+    expectedRevision: number | null,
+  ) =>
+    ctx.container.templatesService.set(tenantA, owner, {
+      key: 'bot.ping.reply',
+      body,
+      expectedVersion,
+      expectedRevision,
+      idempotencyKey: `tpl-${Math.random()}`,
+    });
+
+  describe('a version does not survive a revert', () => {
+    /**
+     * The finding that survived three rounds of review, because every layer was
+     * doing exactly what it was written to do.
+     *
+     * A revert DELETES the override row. The next save inserts a fresh one at
+     * version 1. So an administrator holding a stale version 1 states it, the
+     * server's `WHERE version = 1` predicate matches the NEW row, and the work
+     * done after the revert is silently overwritten — by the optimistic
+     * concurrency check itself, which could not tell the two rows apart.
+     *
+     * `revision` comes from an append-only table the revert does not touch, and
+     * the revert is itself a revision, so it cannot restart.
+     */
+    it('refuses a save built on a version that a revert has recycled', async () => {
+      // A reads the override: version 1, revision 1.
+      const first = await setTemplate('اول {correlationId}', null, null);
+      const readByA = { version: first.template.version, revision: first.template.revision };
+      expect(readByA).toEqual({ version: 1, revision: 1 });
+
+      // B reverts and saves again. The new row is version 1 once more — the
+      // same version A is holding — but revision 3.
+      await ctx.container.templatesService.revert(tenantA, owner, {
+        key: 'bot.ping.reply',
+        expectedVersion: 1,
+        expectedRevision: 1,
+        idempotencyKey: `revert-${Math.random()}`,
+      });
+      const byB = await setTemplate('کار ب {correlationId}', null, null);
+      expect(byB.template.version).toBe(1);
+      expect(byB.template.revision).toBe(3);
+
+      // A saves against what they read. Version alone would have matched.
+      await expect(
+        setTemplate('کار الف {correlationId}', readByA.version, readByA.revision),
+      ).rejects.toMatchObject({ code: 'control.version_conflict' });
+
+      // B's work is still there.
+      const current = await ctx.container.templatesService.get(tenantA, owner, 'bot.ping.reply');
+      expect(current.overrideBody).toBe('کار ب {correlationId}');
+    });
+
+    it('refuses a revert built on a version that a revert has recycled', async () => {
+      await setTemplate('اول {correlationId}', null, null);
+      await ctx.container.templatesService.revert(tenantA, owner, {
+        key: 'bot.ping.reply',
+        expectedVersion: 1,
+        expectedRevision: 1,
+        idempotencyKey: `revert-${Math.random()}`,
+      });
+      await setTemplate('کار ب {correlationId}', null, null);
+
+      await expect(
+        ctx.container.templatesService.revert(tenantA, owner, {
+          key: 'bot.ping.reply',
+          expectedVersion: 1,
+          expectedRevision: 1,
+          idempotencyKey: `revert-stale-${Math.random()}`,
         }),
       ).rejects.toMatchObject({ code: 'control.version_conflict' });
     });

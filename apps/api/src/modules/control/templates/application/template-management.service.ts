@@ -78,12 +78,15 @@ export const setTemplateCommandSchema = z.object({
   key: z.string().min(1),
   body: z.string().min(1).max(TEMPLATE_BODY_MAX_LENGTH),
   expectedVersion: z.number().int().positive().nullable(),
+  /** See the contract. A version alone cannot identify a row across a revert. */
+  expectedRevision: z.number().int().positive().nullable(),
 });
 
 export const revertTemplateCommandSchema = z.object({
   idempotencyKey: z.string().min(8).max(255),
   key: z.string().min(1),
   expectedVersion: z.number().int().positive(),
+  expectedRevision: z.number().int().positive(),
 });
 
 export const previewTemplateCommandSchema = z.object({
@@ -94,7 +97,7 @@ export const previewTemplateCommandSchema = z.object({
    * Caller-supplied sample values, as text. Never taken from the acting
    * administrator, and coerced to each placeholder's declared type below.
    */
-  values: z.record(z.string(), z.string()).default({}),
+  values: z.record(z.string().max(200), z.string().max(1_000)).default({}),
 });
 
 /**
@@ -106,6 +109,30 @@ export const previewTemplateCommandSchema = z.object({
 interface TemplateReplayRecord {
   readonly revision: number;
   readonly changed: boolean;
+  /**
+   * The override as this command left it, or null when it left none — which is
+   * what a revert leaves.
+   *
+   * JSON-native, and a SNAPSHOT rather than a re-read, for the reasons set out
+   * at length on `SettingsService`'s `ReplayRecord`: a stored `Date` comes back
+   * a string and answered 500, while re-reading live state on replay reports
+   * whatever somebody else did to the key since — telling an administrator
+   * their save succeeded with a body they never submitted.
+   *
+   * `applied` is snapshotted too. Whether an override is in force is a property
+   * of the `template_overrides` feature flag, and a reply that mixed this
+   * command's body with the flag's current state would describe a template that
+   * never existed.
+   */
+  readonly override: {
+    readonly body: string;
+    readonly version: number;
+    readonly revision: number;
+    /** ISO-8601, because a Date does not survive `jsonb`. */
+    readonly updatedAt: string;
+    readonly updatedByAdminId: string | null;
+  } | null;
+  readonly applied: boolean;
 }
 
 export interface SetTemplateResult {
@@ -259,10 +286,10 @@ export class TemplateManagementService {
       key,
       body: command.body,
       expectedVersion: command.expectedVersion,
+      expectedRevision: command.expectedRevision,
     });
-    // Re-read on replay; see the same note in `SettingsService`. A stored
-    // `TemplateView` carries `updatedAt` as a Date, which comes back from
-    // `jsonb` as a string and made the controller answer 500 to a retry.
+    // A replay returns the FIRST result, rebuilt from the snapshot; see
+    // `TemplateReplayRecord`.
     const existing = await this.idempotency.find<TemplateReplayRecord>(
       scope,
       actor.surface,
@@ -271,7 +298,7 @@ export class TemplateManagementService {
     );
     if (existing) {
       return {
-        template: await this.get(scope, actor, key),
+        template: this.fromReplayRecord(key, locale, existing.result),
         revision: existing.result.revision,
         changed: existing.result.changed,
         replayed: true,
@@ -294,7 +321,10 @@ export class TemplateManagementService {
       // conditional update, so without this a request built on state that has
       // moved is accepted as "no change" whenever its body coincides. The
       // writing path still carries its own predicate.
-      if ((before?.version ?? null) !== command.expectedVersion) {
+      if (
+        (before?.version ?? null) !== command.expectedVersion ||
+        (before?.revision ?? null) !== command.expectedRevision
+      ) {
         throw errors.conflict(
           CONTROL_ERROR_CODES.VERSION_CONFLICT,
           `${key} changed while you were editing it. Reload and reapply your change.`,
@@ -310,7 +340,7 @@ export class TemplateManagementService {
           actor.surface,
           command.idempotencyKey,
           requestHash,
-          { revision: before.revision, changed: false } satisfies TemplateReplayRecord,
+          this.toReplayRecord(template, before.revision, false),
           tx,
         );
         return { template, revision: before.revision, changed: false };
@@ -331,6 +361,7 @@ export class TemplateManagementService {
           body: command.body,
           revision,
           expectedVersion: command.expectedVersion,
+          expectedRevision: command.expectedRevision,
           now: this.clock.now(),
           adminId: actor.type === 'WEB_ADMIN' ? actor.id : null,
         },
@@ -392,7 +423,7 @@ export class TemplateManagementService {
         actor.surface,
         command.idempotencyKey,
         requestHash,
-        { revision, changed: true } satisfies TemplateReplayRecord,
+        this.toReplayRecord(template, revision, true),
         tx,
       );
       return { template, revision, changed: true };
@@ -419,7 +450,11 @@ export class TemplateManagementService {
     const key = this.requireKey(command.key);
     const locale = DEFAULT_TEMPLATE_LOCALE;
 
-    const requestHash = hashRequest({ key, expectedVersion: command.expectedVersion });
+    const requestHash = hashRequest({
+      key,
+      expectedVersion: command.expectedVersion,
+      expectedRevision: command.expectedRevision,
+    });
     const existing = await this.idempotency.find<TemplateReplayRecord>(
       scope,
       actor.surface,
@@ -428,7 +463,7 @@ export class TemplateManagementService {
     );
     if (existing) {
       return {
-        template: await this.get(scope, actor, key),
+        template: this.fromReplayRecord(key, locale, existing.result),
         revision: existing.result.revision,
         changed: existing.result.changed,
         replayed: true,
@@ -440,7 +475,12 @@ export class TemplateManagementService {
 
       const removed = await this.templates.deleteOverride(
         scope,
-        { key, locale, expectedVersion: command.expectedVersion },
+        {
+          key,
+          locale,
+          expectedVersion: command.expectedVersion,
+          expectedRevision: command.expectedRevision,
+        },
         tx,
       );
       if (removed === null) {
@@ -507,7 +547,7 @@ export class TemplateManagementService {
         actor.surface,
         command.idempotencyKey,
         requestHash,
-        { revision, changed: true } satisfies TemplateReplayRecord,
+        this.toReplayRecord(template, revision, true),
         tx,
       );
       return { template, revision, changed: true };
@@ -589,6 +629,51 @@ export class TemplateManagementService {
       updatedAt: override?.updatedAt ?? null,
       updatedByAdminId: override?.updatedByAdminId ?? null,
     };
+  }
+
+  /**
+   * The snapshot a completed write stores, and the view it rebuilds into.
+   *
+   * `toView` derives everything else from the frozen catalogue, so the snapshot
+   * only has to carry what the WRITE decided: the override it left (or that it
+   * left none) and whether overrides were being applied at the time.
+   */
+  private toReplayRecord(
+    template: TemplateView,
+    revision: number,
+    changed: boolean,
+  ): TemplateReplayRecord {
+    const stored =
+      template.overrideBody === null || template.version === null || template.revision === null
+        ? null
+        : {
+            body: template.overrideBody,
+            version: template.version,
+            revision: template.revision,
+            updatedAt: (template.updatedAt ?? new Date(0)).toISOString(),
+            updatedByAdminId: template.updatedByAdminId,
+          };
+    return {
+      revision,
+      changed,
+      override: stored,
+      applied: template.source === 'TENANT',
+    };
+  }
+
+  private fromReplayRecord(
+    key: TemplateKey,
+    locale: Locale,
+    record: TemplateReplayRecord,
+  ): TemplateView {
+    return this.toView(
+      key,
+      locale,
+      record.override === null
+        ? null
+        : { ...record.override, updatedAt: new Date(record.override.updatedAt) },
+      record.applied,
+    );
   }
 
   private requireKey(key: string): TemplateKey {

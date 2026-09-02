@@ -95,15 +95,28 @@ export interface NotificationRepository {
 
   /**
    * Moves intents that have spent every attempt, and are still PENDING, to
-   * FAILED. Returns how many moved.
+   * FAILED, writing an attempt row for each. Returns how many moved.
    *
    * The gap between `claimDue`, which refuses such a row, and `recordAttempt`,
    * which is the code that normally fails it and is exactly the code that does
    * not run when a dispatch throws before it. Without this a row sits PENDING
    * for ever: never claimed, never failed, never listed anywhere as a thing that
    * went wrong.
+   *
+   * CROSS-TENANT, like `claimDue` and for the same reason: installation
+   * housekeeping has no actor to authorize and no one tenant to scope to. That
+   * argument holds only while no surface can reach it, which is a boundary
+   * check rather than a hope.
+   *
+   * `leaseMs` is a safety margin, not decoration: a row whose lease merely
+   * expired may still be mid-send, and marking that FAILED would file a
+   * delivered message as failed.
    */
-  failExhausted(now: Date, limit: number): Promise<number>;
+  failExhausted(
+    now: Date,
+    limit: number,
+    options: { readonly leaseMs: number; readonly transport: NotificationTransportKind },
+  ): Promise<number>;
 
   /**
    * Records one attempt and moves the intent, in one transaction.

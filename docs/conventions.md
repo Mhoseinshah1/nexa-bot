@@ -265,13 +265,28 @@ backup of both.
 **Enforced by.** Unit tests for round-trip, wrong key, tampering and masking; an
 integration test asserts the repository read model never carries the plaintext.
 
-**One redactor, used everywhere.** `apps/api/src/infrastructure/redaction.ts` is
-the single implementation, shared by the logger, the audit log and the
-operational log. It traverses arrays as well as objects, bounds its recursion,
-survives a cyclic value, and **fails closed on a key it cannot read** — a
-homoglyph or a non-Latin key is redacted rather than passed through, because a
-false positive costs a log line and a false negative costs a secret. Two
-divergent implementations existed before, and both had holes.
+**One redaction module, two rules.** `apps/api/src/infrastructure/redaction.ts`
+is the single implementation of both, and which one applies depends on the shape
+of what is being written rather than on which caller is writing it.
+
+`redactSecrets` decides by KEY, and is what the logger, the audit log and the
+operational log use for their structured records. It traverses arrays as well as
+objects, bounds its recursion, survives a cyclic value, and **fails closed on a
+key it cannot read** — a homoglyph or a non-Latin key is redacted rather than
+passed through, because a false positive costs a log line and a false negative
+costs a secret.
+
+`redactSecretText` decides by CONTENT, and is for free text from a third party.
+A key rule has nothing to match on in a sentence: wrapping a message in
+`{ message }` and passing it to the key rule matched nothing at all, and that is
+how the notification-attempt column spent a commit being truncated under a
+comment that said it was redacted. Its one sink today is that column, which is
+append-only and is returned over HTTP. Its fragment list is deliberately
+NARROWER than the key rule's — over-matching a key costs one field, over-matching
+prose costs the operator the sentence they needed.
+
+Two divergent implementations of the key rule existed before this module, and
+both had holes.
 
 ---
 

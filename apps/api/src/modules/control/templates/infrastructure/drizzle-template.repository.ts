@@ -156,6 +156,7 @@ export class DrizzleTemplateRepository implements TemplateRepository {
       readonly body: string;
       readonly revision: number;
       readonly expectedVersion: number | null;
+      readonly expectedRevision: number | null;
       readonly now: Date;
       readonly adminId: string | null;
     },
@@ -198,6 +199,9 @@ export class DrizzleTemplateRepository implements TemplateRepository {
           eq(templateOverrides.templateKey, input.key),
           eq(templateOverrides.locale, input.locale),
           eq(templateOverrides.version, input.expectedVersion),
+          // And the revision. See `deleteOverride` for why a version alone
+          // cannot identify this row across a revert.
+          eq(templateOverrides.revision, input.expectedRevision ?? 0),
         ),
       )
       .returning();
@@ -206,7 +210,12 @@ export class DrizzleTemplateRepository implements TemplateRepository {
 
   async deleteOverride(
     scope: ScopeContext,
-    input: { readonly key: TemplateKey; readonly locale: string; readonly expectedVersion: number },
+    input: {
+      readonly key: TemplateKey;
+      readonly locale: string;
+      readonly expectedVersion: number;
+      readonly expectedRevision: number;
+    },
     tx?: unknown,
   ): Promise<StoredTemplateOverride | null> {
     const tenantId = requireTenantId(scope);
@@ -218,6 +227,11 @@ export class DrizzleTemplateRepository implements TemplateRepository {
           eq(templateOverrides.templateKey, input.key),
           eq(templateOverrides.locale, input.locale),
           eq(templateOverrides.version, input.expectedVersion),
+          // The revision too. A revert deletes this row and the next save
+          // inserts a fresh one at version 1, so a stale version 1 matches a
+          // row it has never seen. The revision comes from an append-only
+          // table the revert does not touch, so it cannot restart.
+          eq(templateOverrides.revision, input.expectedRevision),
         ),
       )
       .returning();

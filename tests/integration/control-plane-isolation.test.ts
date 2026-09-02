@@ -216,6 +216,7 @@ describe('control-plane isolation and concurrency', () => {
         key: templateKey,
         body: 'A: {correlationId}',
         expectedVersion: null,
+        expectedRevision: null,
         idempotencyKey: key(),
       });
 
@@ -235,12 +236,14 @@ describe('control-plane isolation and concurrency', () => {
         key: templateKey,
         body: 'A: {correlationId}',
         expectedVersion: null,
+        expectedRevision: null,
         idempotencyKey: key(),
       });
       const b = await ctx.container.templatesService.set(tenantB, ownerB, {
         key: templateKey,
         body: 'B: {correlationId}',
         expectedVersion: null,
+        expectedRevision: null,
         idempotencyKey: key(),
       });
 
@@ -253,6 +256,7 @@ describe('control-plane isolation and concurrency', () => {
         key: templateKey,
         body: 'A: {correlationId}',
         expectedVersion: null,
+        expectedRevision: null,
         idempotencyKey: key(),
       });
       expect(
@@ -266,12 +270,14 @@ describe('control-plane isolation and concurrency', () => {
           key: templateKey,
           body: 'first {correlationId}',
           expectedVersion: null,
+          expectedRevision: null,
           idempotencyKey: key(),
         }),
         ctx.container.templatesService.set(tenantA, ownerA, {
           key: templateKey,
           body: 'second {correlationId}',
           expectedVersion: null,
+          expectedRevision: null,
           idempotencyKey: key(),
         }),
       ]);
@@ -306,12 +312,14 @@ describe('control-plane isolation and concurrency', () => {
         key: templateKey,
         body: 'same {correlationId}',
         expectedVersion: null,
+        expectedRevision: null,
         idempotencyKey: key(),
       });
       const again = await ctx.container.templatesService.set(tenantA, ownerA, {
         key: templateKey,
         body: 'same {correlationId}',
         expectedVersion: 1,
+        expectedRevision: 1,
         idempotencyKey: key(),
       });
 
@@ -331,12 +339,14 @@ describe('control-plane isolation and concurrency', () => {
         key: templateKey,
         body: 'one {correlationId}',
         expectedVersion: null,
+        expectedRevision: null,
         idempotencyKey: key(),
       });
       await ctx.container.templatesService.set(tenantA, ownerA, {
         key: templateKey,
         body: 'two {correlationId}',
         expectedVersion: 1,
+        expectedRevision: 1,
         idempotencyKey: key(),
       });
 
@@ -344,6 +354,7 @@ describe('control-plane isolation and concurrency', () => {
         ctx.container.templatesService.revert(tenantA, ownerA, {
           key: templateKey,
           expectedVersion: 1,
+          expectedRevision: 1,
           idempotencyKey: key(),
         }),
       ).rejects.toMatchObject({ code: 'control.version_conflict' });
@@ -356,17 +367,20 @@ describe('control-plane isolation and concurrency', () => {
         key: templateKey,
         body: 'one {correlationId}',
         expectedVersion: null,
+        expectedRevision: null,
         idempotencyKey: key(),
       });
       await ctx.container.templatesService.revert(tenantA, ownerA, {
         key: templateKey,
         expectedVersion: 1,
+        expectedRevision: 1,
         idempotencyKey: key(),
       });
       const third = await ctx.container.templatesService.set(tenantA, ownerA, {
         key: templateKey,
         body: 'three {correlationId}',
         expectedVersion: null,
+        expectedRevision: null,
         idempotencyKey: key(),
       });
 
@@ -381,6 +395,7 @@ describe('control-plane isolation and concurrency', () => {
         key: templateKey,
         body: 'A: {correlationId}',
         expectedVersion: null,
+        expectedRevision: null,
         idempotencyKey: key(),
       });
       await ctx.container.featureFlags.set(tenantA, ownerA, {

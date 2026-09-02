@@ -49,6 +49,17 @@ export class DrizzleUnitOfWork implements UnitOfWork<TransactionScope> {
     tx: TransactionScope,
     fn: (tx: TransactionScope) => Promise<T>,
   ): Promise<T> {
+    // A SAVEPOINT requires a live transaction. Drizzle's `transaction()` exists
+    // on the pooled database too, where it opens an independent `BEGIN` — and
+    // an independent transaction commits on its own, so a caller believing it
+    // had a savepoint would silently have a second, unrelated write. The
+    // callers here reach this through a `tx?: unknown` parameter and an
+    // unchecked cast, so the type system is not what keeps that from happening.
+    if (!isTransactionScope(tx)) {
+      throw new Error(
+        'runNested was given something that is not a transaction scope; a SAVEPOINT needs a live transaction.',
+      );
+    }
     return tx.tx.transaction(async (nested) => fn({ tx: nested, scope }));
   }
 
@@ -109,4 +120,23 @@ export function scopeRef(scope: ScopeContext, namespace: string): string {
 /** The nullable `tenant_id` column value for a scope. */
 export function scopeTenantId(scope: ScopeContext): string | null {
   return isSystemContext(scope) ? null : scope.tenantId;
+}
+
+/**
+ * Whether a value really is a live transaction scope.
+ *
+ * Structural, because the shape is what matters: `tx.tx` must be a Drizzle
+ * transaction object rather than the pool. A pooled `Database` also has
+ * `transaction`, which is exactly why `typeof tx.tx.transaction === 'function'`
+ * is not sufficient on its own — the discriminator is the `rollback` method
+ * that only a transaction carries.
+ */
+function isTransactionScope(value: unknown): value is TransactionScope {
+  if (typeof value !== 'object' || value === null) return false;
+  const inner = (value as { tx?: unknown }).tx;
+  return (
+    typeof inner === 'object' &&
+    inner !== null &&
+    typeof (inner as { rollback?: unknown }).rollback === 'function'
+  );
 }

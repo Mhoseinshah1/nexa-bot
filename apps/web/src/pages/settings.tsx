@@ -175,7 +175,9 @@ export function ErrorReport({ error }: { error: unknown }) {
         <ul className="error">
           {issues.map((issue, index) => (
             // The index is part of the key: two schema issues can carry the
-            // same sentence, and React would then drop one of them.
+            // same sentence, and React's own warning for a duplicate key says
+            // children "may be duplicated and/or omitted" — which is a good
+            // enough reason not to find out which.
             <li key={`${index}:${issue}`}>{issue}</li>
           ))}
         </ul>

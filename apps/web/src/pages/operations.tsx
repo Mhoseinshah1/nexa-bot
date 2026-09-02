@@ -31,15 +31,15 @@ export function OperationsPage() {
    * column and new events arrive at the top — an offset would skip and repeat
    * rows while somebody paged through.
    */
-  const [before, setBefore] = useState<string | null>(null);
+  const [before, setBefore] = useState<{ at: string; id: string } | null>(null);
 
   const events = useQuery({
-    queryKey: ['ops-log', severity, openOnly, before],
+    queryKey: ['ops-log', severity, openOnly, before?.at, before?.id],
     queryFn: () =>
       fetchOpsLog({
         ...(severity ? { severity } : {}),
         ...(openOnly ? { open: true } : {}),
-        ...(before ? { before } : {}),
+        ...(before ? { before: before.at, beforeId: before.id } : {}),
       }),
   });
 
@@ -139,7 +139,7 @@ export function OperationsPage() {
           </button>
         )}
         {oldest && (
-          <button type="button" onClick={() => setBefore(oldest.lastSeenAt)}>
+          <button type="button" onClick={() => setBefore({ at: oldest.lastSeenAt, id: oldest.id })}>
             {t('web.older')}
           </button>
         )}

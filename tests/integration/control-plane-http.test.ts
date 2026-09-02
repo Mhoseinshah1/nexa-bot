@@ -292,6 +292,7 @@ describe('control plane HTTP surface', () => {
       const response = await post(CONTROL_ROUTES.template(key), ownerCookie, {
         body: 'سلام {correlationI}',
         expectedVersion: null,
+        expectedRevision: null,
         idempotencyKey: idempotencyKey(),
       });
       expect(response.statusCode).toBe(400);
@@ -302,6 +303,7 @@ describe('control plane HTTP surface', () => {
       const response = await post(CONTROL_ROUTES.template(key), ownerCookie, {
         body: 'سلام',
         expectedVersion: null,
+        expectedRevision: null,
         idempotencyKey: idempotencyKey(),
       });
       expect(response.statusCode).toBe(400);
@@ -311,6 +313,7 @@ describe('control plane HTTP surface', () => {
       const set = await post(CONTROL_ROUTES.template(key), ownerCookie, {
         body: 'درود {correlationId}',
         expectedVersion: null,
+        expectedRevision: null,
         idempotencyKey: idempotencyKey(),
       });
       expect(set.statusCode).toBe(201);
@@ -323,6 +326,7 @@ describe('control plane HTTP surface', () => {
         (
           await post(CONTROL_ROUTES.templateRevert(key), ownerCookie, {
             expectedVersion: 1,
+            expectedRevision: 1,
             idempotencyKey: idempotencyKey(),
           })
         ).json(),
@@ -348,6 +352,7 @@ describe('control plane HTTP surface', () => {
     it('refuses a revert when there is nothing to revert', async () => {
       const response = await post(CONTROL_ROUTES.templateRevert(key), ownerCookie, {
         expectedVersion: 1,
+        expectedRevision: 1,
         idempotencyKey: idempotencyKey(),
       });
       expect(response.statusCode).toBe(404);

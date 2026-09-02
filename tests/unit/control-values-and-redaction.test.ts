@@ -6,7 +6,11 @@ import {
   templateDefinition,
   type PlaceholderDefinition,
 } from '@nexa/contracts';
-import { redactSecretText, REDACTED } from '../../apps/api/src/infrastructure/redaction';
+import {
+  redactSecretText,
+  REDACTED,
+  TEXT_SENSITIVE_FRAGMENTS_FOR_TEST,
+} from '../../apps/api/src/infrastructure/redaction';
 import { deserialiseValues } from '../../apps/api/src/modules/control/notifications/application/notification-dispatcher';
 
 const placeholder = (type: PlaceholderDefinition['type']): PlaceholderDefinition => ({
@@ -166,6 +170,52 @@ describe('redacting a transport error message', () => {
     const redacted = redactSecretText('sent Bearer abc.def.ghi and it was refused');
     expect(redacted).not.toContain('abc.def.ghi');
     expect(redacted).toContain(`Bearer ${REDACTED}`);
+  });
+
+  it('removes a secret quoted the way a JSON error body quotes one', () => {
+    // The gap the first version had, and the reason its docblock was wrong: it
+    // named "an unlabelled secret in prose" as its limitation while every one
+    // of these — labelled, in the shape the rule claimed to cover — went
+    // through untouched. A transport that surfaces a response BODY rather than
+    // a parsed field hands exactly this to the append-only attempt column.
+    expect(redactSecretText('rejected: {"token":"123abcSECRETVALUE","chat_id":-100}')).toBe(
+      `rejected: {"token":${REDACTED},"chat_id":-100}`,
+    );
+    expect(redactSecretText('login failed: {"username":"admin","password":"hunter2"}')).toBe(
+      `login failed: {"username":"admin","password":${REDACTED}}`,
+    );
+  });
+
+  it('removes a single-quoted secret', () => {
+    expect(redactSecretText("panel error: password='hunter2' rejected")).toBe(
+      `panel error: password=${REDACTED} rejected`,
+    );
+  });
+
+  it('leaves a word that merely contains a fragment of a fragment', () => {
+    // The key rule can afford to over-match; in prose it costs the operator
+    // the sentence they needed. `auth` as a bare fragment turned
+    // `author: alice` into `author: [redacted]`.
+    expect(redactSecretText('author: alice reported it')).toBe('author: alice reported it');
+  });
+
+  it('does not stall on a long adversarial input', () => {
+    // The first version's unbounded character classes backtracked
+    // quadratically: 64 KB of `a.a.a.…token` took five seconds on the event
+    // loop, and the function is exported with no internal bound.
+    const hostile = 'a.'.repeat(40_000) + 'token';
+    const started = Date.now();
+    redactSecretText(hostile);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it('keeps every fragment a plain literal, so interpolating them cannot change the pattern', () => {
+    // The list is interpolated into a RegExp. Every entry is simple today,
+    // which is exactly why this is asserted rather than assumed: `x.509` would
+    // silently widen the alternation and `api(v2)` would throw at module load.
+    for (const fragment of TEXT_SENSITIVE_FRAGMENTS_FOR_TEST) {
+      expect(fragment, `${fragment} is not a plain literal`).toMatch(/^[a-z][a-z0-9_-]*$/);
+    }
   });
 
   it('leaves ordinary operational text alone', () => {

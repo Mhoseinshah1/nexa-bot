@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   errors,
+  NexaError,
   PLATFORM_ERROR_CODES,
   type ActorContext,
   type AuditWriter,
@@ -114,7 +115,58 @@ export class RecordPingService {
     }
 
     // 6. TRANSACT — the change, its audit row and its outbox row commit together.
-    const result = await this.uow.run(scope, async (tx) => {
+    //
+    // Wrapped, because `rememberOnce` rejects the loser of a same-key race and
+    // that race is this endpoint's normal weather: Telegram redelivers an
+    // update while the first request is still in flight, both get past the
+    // lookup above, and one of them arrives at the insert second. The webhook's
+    // rule is that it always answers 200 — a non-2xx makes Telegram retry the
+    // same update for ever — so turning that race into a 409 would have broken
+    // the one invariant the surface is built around.
+    //
+    // The loser's work is rolled back, so re-reading the key after the winner
+    // commits is exactly the replay the caller asked for.
+    const result = await this.transactOrReplay(scope, actor, command, requestHash);
+
+    // 7. PROJECT happens asynchronously: the relay picks the outbox row up.
+    return { eventId: result.eventId, sequence: result.sequence, replayed: result.replayed };
+  }
+
+  private async transactOrReplay(
+    scope: ScopeContext,
+    actor: ActorContext,
+    command: RecordPingCommand,
+    requestHash: string,
+  ): Promise<RecordPingResult> {
+    try {
+      return { ...(await this.transact(scope, actor, command, requestHash)), replayed: false };
+    } catch (error) {
+      if (!isIdempotencyRace(error)) throw error;
+
+      // The winner has committed by the time its insert conflicted with ours,
+      // so this read finds its result.
+      const winner = await this.idempotency.find<Omit<RecordPingResult, 'replayed'>>(
+        scope,
+        actor.surface,
+        command.idempotencyKey,
+        requestHash,
+      );
+      if (winner === null) {
+        // Nothing there, so the conflict was not the race it looked like.
+        // Better to report the original failure than to invent a result.
+        throw error;
+      }
+      return { ...winner.result, replayed: true };
+    }
+  }
+
+  private async transact(
+    scope: ScopeContext,
+    actor: ActorContext,
+    command: RecordPingCommand,
+    requestHash: string,
+  ): Promise<Omit<RecordPingResult, 'replayed'>> {
+    return this.uow.run(scope, async (tx) => {
       // The scope this work belongs to, held still for the rest of the write.
       //
       // A surface checks the tenant and the bot when the update arrives, which
@@ -161,8 +213,10 @@ export class RecordPingService {
 
       return written;
     });
-
-    // 7. PROJECT happens asynchronously: the relay picks the outbox row up.
-    return { eventId: result.eventId, sequence: result.sequence, replayed: false };
   }
+}
+
+/** The conflict `rememberOnce` raises when another request claimed the key. */
+function isIdempotencyRace(error: unknown): boolean {
+  return error instanceof NexaError && error.code === PLATFORM_ERROR_CODES.IDEMPOTENCY_IN_FLIGHT;
 }

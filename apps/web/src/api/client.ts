@@ -199,8 +199,12 @@ async function authedGet<T>(path: string, schema: { parse: (v: unknown) => T }):
  * produces one change rather than two. That only holds if the key survives the
  * retry: minting it inside the call meant every attempt carried a NEW key, and
  * an idempotency key that changes per attempt protects nothing at all. So the
- * callers mint it once and pass it as the mutation's variable, which react-query
- * hands back unchanged on each retry.
+ * callers mint it once and pass it as the mutation's VARIABLE, which react-query
+ * hands back unchanged on a retry and on an offline-paused mutation's resume.
+ *
+ * `main.tsx` sets `mutations.retry`, without which there are no retries to
+ * protect and this whole paragraph would be describing something unreachable —
+ * which is what it was doing when it was first written.
  *
  * `randomUUID` is available in every browser this admin supports and in the test
  * environment.
@@ -251,6 +255,7 @@ export function saveTemplate(input: {
   key: string;
   body: string;
   expectedVersion: number | null;
+  expectedRevision: number | null;
   idempotencyKey: string;
 }): Promise<TemplateWriteResponse> {
   const { key, ...rest } = input;
@@ -260,6 +265,7 @@ export function saveTemplate(input: {
 export function revertTemplate(input: {
   key: string;
   expectedVersion: number;
+  expectedRevision: number;
   idempotencyKey: string;
 }): Promise<TemplateWriteResponse> {
   const { key, ...rest } = input;
@@ -287,11 +293,14 @@ export function fetchOpsLog(query: {
   open?: boolean;
   /** The `lastSeenAt` of the oldest row already shown; returns older ones. */
   before?: string;
+  /** Its id, which breaks ties when several rows share that timestamp. */
+  beforeId?: string;
 }): Promise<OperationalEventListResponse> {
   const params = new URLSearchParams();
   if (query.severity) params.set('severity', query.severity);
   if (query.open !== undefined) params.set('open', String(query.open));
   if (query.before) params.set('before', query.before);
+  if (query.beforeId) params.set('beforeId', query.beforeId);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${CONTROL_ROUTES.opsLog}?${suffix}` : CONTROL_ROUTES.opsLog,

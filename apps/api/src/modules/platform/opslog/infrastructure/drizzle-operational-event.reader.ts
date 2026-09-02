@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lt } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, or } from 'drizzle-orm';
 import type { OperationalSeverity, ScopeContext } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { operationalEvents } from '../../../../infrastructure/persistence/schema.js';
@@ -20,7 +20,26 @@ export class DrizzleOperationalEventReader implements OperationalEventReader {
     // 1,700 rows, no pagination and no filter of any kind; every clause below is
     // there because that is what an operator does with a log.
     const filters = [eq(operationalEvents.tenantId, tenantId)];
-    if (query.before) filters.push(lt(operationalEvents.lastSeenAt, query.before));
+    // The cursor is a PAIR, `(last_seen_at, id)`, and the comparison is
+    // lexicographic. `last_seen_at` alone is not unique — a `Clock.now()` is
+    // typically captured once per transaction, so several distinct conditions
+    // share one microsecond — and a strict `<` on it skips the rest of a group
+    // that straddles the page boundary. Rows would simply not appear on any
+    // page, in a subsystem whose stated rule is that silence is the one outcome
+    // it may not produce.
+    if (query.before) {
+      filters.push(
+        query.beforeId === undefined
+          ? lt(operationalEvents.lastSeenAt, query.before)
+          : or(
+              lt(operationalEvents.lastSeenAt, query.before),
+              and(
+                eq(operationalEvents.lastSeenAt, query.before),
+                lt(operationalEvents.id, query.beforeId),
+              ),
+            )!,
+      );
+    }
     if (query.severities && query.severities.length > 0) {
       filters.push(inArray(operationalEvents.severity, [...query.severities]));
     }
@@ -36,7 +55,10 @@ export class DrizzleOperationalEventReader implements OperationalEventReader {
       .select()
       .from(operationalEvents)
       .where(and(...filters))
-      .orderBy(desc(operationalEvents.lastSeenAt))
+      // Both columns, matching the cursor above. Without the tie-break the
+      // order within a shared timestamp is arbitrary and the cursor cannot
+      // resume from it.
+      .orderBy(desc(operationalEvents.lastSeenAt), desc(operationalEvents.id))
       .limit(query.limit);
 
     return rows.map((row) => ({

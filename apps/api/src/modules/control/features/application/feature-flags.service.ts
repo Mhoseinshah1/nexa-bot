@@ -77,6 +77,42 @@ export const setFeatureFlagCommandSchema = z.object({
 });
 export type SetFeatureFlagCommand = z.infer<typeof setFeatureFlagCommandSchema>;
 
+/**
+ * The snapshot a completed flag write stores against its key.
+ *
+ * The FLAG as this command left it, JSON-native, for the reasons set out at
+ * length on `SettingsService`'s `ReplayRecord`: a stored `Date` comes back a
+ * string, and re-reading live state on replay reports whatever somebody else
+ * did since.
+ *
+ * `configuration` is deliberately NOT snapshotted. It is a view of the settings
+ * this flag governs — a different set of keys, written by a different command —
+ * so it is read live and is current at the moment of the reply. What the replay
+ * reproduces exactly is the half this command actually wrote.
+ */
+interface FlagReplayRecord {
+  readonly changed: boolean;
+  readonly enabled: boolean;
+  readonly source: FeatureFlagSource;
+  readonly version: number | null;
+  /** ISO-8601, because a Date does not survive `jsonb`. */
+  readonly updatedAt: string | null;
+  readonly updatedByAdminId: string | null;
+  readonly reason: string | null;
+}
+
+function toFlagReplayRecord(flag: ResolvedFeatureFlag, changed: boolean): FlagReplayRecord {
+  return {
+    changed,
+    enabled: flag.enabled,
+    source: flag.source,
+    version: flag.version,
+    updatedAt: flag.updatedAt?.toISOString() ?? null,
+    updatedByAdminId: flag.updatedByAdminId,
+    reason: flag.reason,
+  };
+}
+
 export interface SetFeatureFlagResult {
   readonly flag: ResolvedFeatureFlag;
   readonly changed: boolean;
@@ -159,18 +195,29 @@ export class FeatureFlagsService {
     });
     // Re-read on replay; see the same note in `SettingsService`. A stored
     // result carries a Date through `jsonb` and comes back a string.
-    const existing = await this.idempotency.find<{ changed: boolean }>(
+    const existing = await this.idempotency.find<FlagReplayRecord>(
       scope,
       actor.surface,
       command.idempotencyKey,
       requestHash,
     );
     if (existing) {
-      const state = await this.resolver.resolve(scope, key);
-      const settings = await this.settings.resolveAll(scope);
+      const record = existing.result;
+      // The flag exactly as this command left it; the settings it governs read
+      // live, because they are not what this command wrote. `description` and
+      // `blastRadius` come from the registry inside `withConfiguration`.
+      const state: ResolvedFlagState = {
+        key,
+        enabled: record.enabled,
+        source: record.source,
+        version: record.version,
+        updatedAt: record.updatedAt === null ? null : new Date(record.updatedAt),
+        updatedByAdminId: record.updatedByAdminId,
+        reason: record.reason,
+      };
       return {
-        flag: this.withConfiguration(state, settings),
-        changed: existing.result.changed,
+        flag: this.withConfiguration(state, await this.settings.resolveAll(scope)),
+        changed: record.changed,
         replayed: true,
       };
     }
@@ -209,7 +256,7 @@ export class FeatureFlagsService {
           actor.surface,
           command.idempotencyKey,
           requestHash,
-          { changed: false },
+          toFlagReplayRecord(flag, false),
           tx,
         );
         return { flag, changed: false };
@@ -266,7 +313,7 @@ export class FeatureFlagsService {
         actor.surface,
         command.idempotencyKey,
         requestHash,
-        { changed: true },
+        toFlagReplayRecord(flag, true),
         tx,
       );
       return { flag, changed: true };

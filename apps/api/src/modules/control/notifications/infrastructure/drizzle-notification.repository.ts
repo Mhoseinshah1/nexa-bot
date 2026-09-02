@@ -1,6 +1,7 @@
-import { and, asc, desc, eq, gte, lt, lte, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, lt, lte, inArray, ne, sql } from 'drizzle-orm';
 import type {
   DeliveryOutcome,
+  IdGenerator,
   NotificationDestination,
   NotificationKind,
   NotificationStatus,
@@ -92,7 +93,11 @@ function toAttempt(row: AttemptRow): DeliveryAttemptRecord {
  * the request URL and the bot token is a segment of it.
  */
 function redactErrorMessage(message: string | null): string | null {
-  return message === null ? null : redactSecretText(message.slice(0, 2000));
+  // REDACT, then truncate. The other order cut a bot token in half at offset
+  // 2000, which took the surviving fragment below the pattern's length
+  // threshold — so the slice defeated the redaction and stored the first half
+  // of a credential.
+  return message === null ? null : redactSecretText(message).slice(0, 2000);
 }
 
 function executorOf(db: Database, tx?: unknown): Executor {
@@ -100,7 +105,10 @@ function executorOf(db: Database, tx?: unknown): Executor {
 }
 
 export class DrizzleNotificationRepository implements NotificationRepository {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly ids: IdGenerator,
+  ) {}
 
   async create(
     scope: ScopeContext,
@@ -266,45 +274,101 @@ export class DrizzleNotificationRepository implements NotificationRepository {
   /**
    * Fails intents that have spent every attempt and are still PENDING.
    *
-   * `claimDue` refuses such a row — it would otherwise be claimed forever — and
-   * `recordAttempt` is the code that normally moves it to FAILED, which is
-   * exactly the code that did not run when a dispatch threw before it. Between
-   * the two, a row could sit PENDING with `attempt_count = max_attempts` and
-   * never be claimed, never be failed, and never appear in any list of things
-   * that went wrong. Silence is the one outcome this subsystem may not produce.
+   * Cross-tenant by necessity and by design, on exactly `claimDue`'s argument:
+   * this is installation housekeeping with no actor to authorize and no one
+   * tenant to scope to. It is reachable only from the worker process — the
+   * boundary check names both the dispatcher and this method, so a controller
+   * that reached for either fails the build.
    *
-   * `next_attempt_at <= now` is the lease check. A row a dispatcher is holding
-   * right now has its lease in the future, so this cannot steal a send that is
-   * still in flight and report it as failed.
+   * It exists because two correct rules leave a gap between them. `claimDue`
+   * refuses a row that has spent its attempts, or it would be claimed for ever;
+   * `recordAttempt` is what normally moves such a row to FAILED, and that is
+   * exactly the code that does not run when a dispatch throws before it. In
+   * between, a row could sit PENDING for ever: never claimed, never failed, and
+   * never appearing in any list of things that went wrong. Silence is the one
+   * outcome this subsystem may not produce.
+   *
+   * `next_attempt_at <= now - leaseMs` is the safety margin, and the margin is
+   * the whole correctness argument. `<= now` alone is only proof the lease
+   * EXPIRED, which is the state a slow send is in — a five-second lease and an
+   * eight-second Telegram call put a live, about-to-succeed send squarely in
+   * range, so the sweep would have marked a delivered message permanently
+   * failed. A full extra lease of quiet is not a proof either, but it means the
+   * sender has been gone for longer than the window the system already treats
+   * as "long enough to assume it died", and a late success can still correct
+   * the record (`recordAttempt` lets a SUCCEEDED outcome move a FAILED row).
+   *
+   * One statement, not a select and then an update. The two-statement version
+   * re-checked less on the write than it had selected on the read, so anything
+   * changing `attempt_count` or `next_attempt_at` in between was invisible to
+   * it — and its `LIMIT` had no `ORDER BY`, so which rows a bounded sweep took
+   * was arbitrary.
+   *
+   * A synthetic attempt row is written for each. Without it the intent ends
+   * FAILED with a gap where the deciding attempt should be, and the verdict is
+   * invented somewhere the history does not show — which is the same "a state
+   * nothing recorded" failure this module exists to make hard.
    */
-  async failExhausted(now: Date, limit: number): Promise<number> {
-    const exhausted = await this.db
-      .select({ id: notifications.id })
-      .from(notifications)
-      .where(
-        and(
-          eq(notifications.status, 'PENDING'),
-          lte(notifications.nextAttemptAt, now),
-          gte(notifications.attemptCount, notifications.maxAttempts),
-        ),
-      )
-      .limit(limit);
-    if (exhausted.length === 0) return 0;
+  async failExhausted(
+    now: Date,
+    limit: number,
+    options: { readonly leaseMs: number; readonly transport: NotificationTransportKind },
+  ): Promise<number> {
+    const deadline = new Date(now.getTime() - options.leaseMs);
 
-    const failed = await this.db
-      .update(notifications)
-      .set({ status: 'FAILED', completedAt: now, nextAttemptAt: now })
-      .where(
-        and(
-          eq(notifications.status, 'PENDING'),
+    return this.db.transaction(async (tx) => {
+      const swept = await tx
+        .update(notifications)
+        .set({ status: 'FAILED', completedAt: now, nextAttemptAt: now })
+        .where(
           inArray(
             notifications.id,
-            exhausted.map((row) => row.id),
+            tx
+              .select({ id: notifications.id })
+              .from(notifications)
+              .where(
+                and(
+                  eq(notifications.status, 'PENDING'),
+                  lte(notifications.nextAttemptAt, deadline),
+                  gte(notifications.attemptCount, notifications.maxAttempts),
+                ),
+              )
+              .orderBy(asc(notifications.nextAttemptAt))
+              .limit(limit)
+              .for('update', { skipLocked: true }),
           ),
-        ),
-      )
-      .returning({ id: notifications.id });
-    return failed.length;
+        )
+        .returning({
+          id: notifications.id,
+          tenantId: notifications.tenantId,
+          attemptCount: notifications.attemptCount,
+        });
+
+      if (swept.length === 0) return 0;
+
+      await tx.insert(notificationDeliveryAttempts).values(
+        swept.map((row) => ({
+          id: this.ids.uuid(),
+          tenantId: row.tenantId,
+          notificationId: row.id,
+          // The attempt this row accounts for is the one whose outcome was
+          // never written down: the claim incremented the counter and nothing
+          // recorded what happened next.
+          attemptNumber: row.attemptCount,
+          transport: options.transport,
+          outcome: 'FAILED_PERMANENT' as const,
+          startedAt: now,
+          finishedAt: now,
+          errorCode: 'notification.attempts_exhausted',
+          errorMessage:
+            'The last attempt was claimed and its outcome was never recorded; ' +
+            'the lease expired with no attempts left.',
+          retryAfterMs: null,
+        })),
+      );
+
+      return swept.length;
+    });
   }
 
   async recordAttempt(input: {
@@ -333,16 +397,18 @@ export class DrizzleNotificationRepository implements NotificationRepository {
         startedAt: input.startedAt,
         finishedAt: input.finishedAt,
         errorCode: input.errorCode,
-        // Through the one redactor, like the audit log and the operational log.
-        // This table is a fourth sink for third-party text, it is append-only —
-        // so an accidental secret could never be removed — and it is returned
-        // over HTTP. The rule is stated as universal; this path was outside it.
+        // Through a redactor, but NOT the same one as the audit log and the
+        // operational log — and this comment said it was, which was the second
+        // half of the same mistake as the function it calls.
+        //
+        // Those two carry structured records and are redacted by KEY. This
+        // column carries a sentence from a third party, so the rule has to be
+        // about CONTENT. Two rules, two coverage sets, one sink each.
         errorMessage: redactErrorMessage(input.errorMessage),
         retryAfterMs: input.retryAfterMs,
       });
 
-      // Only a PENDING intent moves, and — except on success — only at the
-      // hands of the attempt that currently owns the claim.
+      // Which rows this outcome is allowed to move.
       //
       // A dispatcher whose send outlives its lease is not impossible: the lease
       // exists precisely so a stalled sender's work becomes available again.
@@ -358,14 +424,27 @@ export class DrizzleNotificationRepository implements NotificationRepository {
       // and names the attempt in flight. Matching it means a stale writer's
       // status update is a no-op.
       //
-      // SUCCESS is the exception, deliberately. Delivery is terminal truth
-      // whoever observed it, and letting a late success end the intent stops
-      // the NEXT attempt sending the same message again. It costs nothing: an
-      // intent that has been delivered has nothing left to do.
-      const ownership =
+      // SUCCESS is the exception, deliberately, and it is a WIDER predicate
+      // rather than merely a looser one.
+      //
+      // Delivery is terminal truth whoever observed it. A late success ends the
+      // intent, which stops the next attempt sending the same message again;
+      // and it may end an intent `failExhausted` has already written off, which
+      // is the correction that makes the sweep's safety margin an acceptable
+      // guess rather than a verdict. The only status it may not overwrite is
+      // SENT, which already says the same thing.
+      //
+      // Everything else requires OWNERSHIP of the claim. `attempt_count` is the
+      // claim's identity: it is incremented by the claim and names the attempt
+      // in flight, so a writer whose send outlived its lease finds it changed
+      // and its update matches nothing.
+      const predicate =
         input.outcome === 'SUCCEEDED'
-          ? undefined
-          : eq(notifications.attemptCount, input.attemptNumber);
+          ? [ne(notifications.status, 'SENT')]
+          : [
+              eq(notifications.status, 'PENDING'),
+              eq(notifications.attemptCount, input.attemptNumber),
+            ];
 
       // The attempt row above is written either way, because it happened.
       const moved = await tx
@@ -381,8 +460,7 @@ export class DrizzleNotificationRepository implements NotificationRepository {
           and(
             eq(notifications.tenantId, input.tenantId),
             eq(notifications.id, input.notificationId),
-            eq(notifications.status, 'PENDING'),
-            ...(ownership ? [ownership] : []),
+            ...predicate,
           ),
         )
         .returning({ id: notifications.id });

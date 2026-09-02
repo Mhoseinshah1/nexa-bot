@@ -90,7 +90,11 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
   const [previewedBody, setPreviewedBody] = useState<string | null>(null);
 
   const storedBody = template.overrideBody ?? template.defaultBody;
-  const changedElsewhere = basis.version !== template.version;
+  // Revision AND version. A revert restarts the version at 1, so comparing
+  // versions alone reports "unchanged" across a revert-then-save — which is
+  // exactly the sequence that silently overwrote the other administrator.
+  const changedElsewhere =
+    basis.version !== template.version || basis.revision !== template.revision;
   const unsaved = draft !== (basis.overrideBody ?? basis.defaultBody);
 
   const adopt = (fresh: TemplateViewResponse) => {
@@ -110,8 +114,12 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
       saveTemplate({
         key: template.key,
         body: draft,
-        // The version the DRAFT was read at, not whatever the list holds now.
+        // The version AND revision the DRAFT was read at, not whatever the
+        // list holds now. Both, because a revert deletes the override and the
+        // next save starts a new row at version 1 — so a stale version 1 would
+        // match a row it has never seen, and the server would accept it.
         expectedVersion: basis.version,
+        expectedRevision: basis.revision,
         idempotencyKey,
       }),
     onSuccess: async (result) => {
@@ -121,12 +129,17 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
   });
 
   const undo = useMutation({
+    // Only rendered when the DRAFT's row exists, so both expectations are
+    // present. The previous version guarded on the freshly-fetched row while
+    // submitting the draft's, and fell back to `expectedVersion: 0` — a version
+    // that can never exist — under a comment saying the fallback was
+    // unreachable. It was reachable: open the card with no override, let
+    // somebody else create one, and the refetch drew the button.
     mutationFn: (idempotencyKey: string) =>
       revertTemplate({
         key: template.key,
-        // Only reachable when a version exists, which is exactly when there is
-        // an override to remove.
-        expectedVersion: basis.version ?? 0,
+        expectedVersion: basis.version as number,
+        expectedRevision: basis.revision as number,
         idempotencyKey,
       }),
     onSuccess: async (result) => {

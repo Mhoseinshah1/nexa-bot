@@ -25,7 +25,7 @@ pass() {
   echo "ok    $1"
 }
 
-# A directory every check below assumes exists.
+# A directory a check below assumes exists.
 #
 # Without this a rename makes `grep -r` on a missing path return nothing, which
 # reads as "no violations" and passes. A check that cannot fail is worse than no
@@ -52,7 +52,20 @@ scan_source() {
     | grep -vE ':[0-9]+:[[:space:]]*(//|\*|/\*)' || true
 }
 
-for dir in packages/contracts/src apps/api/src apps/api/src/surfaces apps/api/src/modules apps/web/src; do
+# EVERY root a check below scans, not a sample of them. The first version
+# listed five and left four unasserted — including `apps/api/drizzle`, which
+# carries the balance-column rule, one of CLAUDE.md's non-negotiables, and
+# `docs/research`, whose sanitization scan was wrapped in an `if [ -d ]` with no
+# else, so a rename skipped it and printed nothing at all.
+for dir in \
+  packages/contracts/src \
+  packages/i18n/src \
+  apps/api/src \
+  apps/api/src/surfaces \
+  apps/api/src/modules \
+  apps/api/drizzle \
+  apps/web/src \
+  docs/research; do
   require_dir "$dir" || true
 done
 
@@ -146,17 +159,22 @@ if [ -n "$INNER_DIRS" ]; then
   else
     pass "domain and application layers reach the catalogue through a port"
   fi
+fi
 
-  # And the surfaces. A controller that renders from the catalogue itself is a
-  # second renderer beside `TemplateResolver`, which is how the legacy system
-  # came to hold 36 editable texts in one surface and 608 in the other.
-  SURFACE_I18N=$(scan_source "from ['\"]@nexa/i18n(/[^'\"]*)?['\"]" apps/api/src/surfaces)
-  if [ -n "$SURFACE_I18N" ]; then
-    fail "A surface imports @nexa/i18n directly" "$SURFACE_I18N" \
-         "Surfaces send a template KEY. The catalogue is resolved behind the application layer."
-  else
-    pass "surfaces do not render from the catalogue themselves"
-  fi
+# And the surfaces. A controller that renders from the catalogue itself is a
+# second renderer beside `TemplateResolver`, which is how the legacy system came
+# to hold 36 editable texts in one surface and 608 in the other.
+#
+# OUTSIDE the block above, deliberately. It was nested inside `[ -n
+# "$INNER_DIRS" ]` — a variable it does not use — so renaming the MODULES tree
+# would have silently skipped this check over the SURFACES tree and printed
+# neither ok nor FAIL.
+SURFACE_I18N=$(scan_source "from ['\"]@nexa/i18n(/[^'\"]*)?['\"]" apps/api/src/surfaces)
+if [ -n "$SURFACE_I18N" ]; then
+  fail "A surface imports @nexa/i18n directly" "$SURFACE_I18N" \
+       "Surfaces send a template KEY. The catalogue is resolved behind the application layer."
+else
+  pass "surfaces do not render from the catalogue themselves"
 fi
 
 # --- Unguarded resolvers stay out of the surfaces ---------------------------
@@ -172,10 +190,16 @@ fi
 #
 # Two comments in the codebase claimed this check existed before it did. It does
 # now.
-RESOLVER_LEAK=$(grep -rnE "settingsResolver|featureFlagResolver|templateResolver|notifications\.queue\(|notificationDispatcher|NotificationDispatcher" \
+#
+# `failExhausted` and `claimDue` are named too. Both are cross-tenant
+# installation housekeeping, and the argument that this is safe rests entirely
+# on their being unreachable from a request — an argument the check previously
+# made only about the DISPATCHER's name, while the repository methods
+# themselves were one `container.notificationRepository` away from a controller.
+RESOLVER_LEAK=$(grep -rnE "settingsResolver|featureFlagResolver|templateResolver|notifications\.queue\(|notificationDispatcher|NotificationDispatcher|failExhausted|claimDue" \
   apps/api/src/surfaces 2>/dev/null || true)
 if [ -n "$RESOLVER_LEAK" ]; then
-  fail "A surface reaches an unguarded resolver, the notification queue, or the dispatcher" \
+  fail "A surface reaches an unguarded resolver, the notification queue, the dispatcher, or cross-tenant housekeeping" \
        "$RESOLVER_LEAK" \
        "Call the guarded service. The resolvers exist for code with no actor to authorize."
 else
@@ -270,6 +294,9 @@ fi
 # --- Research is committed sanitized ---------------------------------------
 # The corpus documents a third party's production deployment. Identifiers,
 # credentials and endpoints do not belong in this repository.
+# `require_dir` above already fails when this is missing, so the guard here is
+# about not running a scan over nothing rather than about tolerating its
+# absence.
 if [ -d docs/research ]; then
   # Every pattern runs. An earlier version used if/elif, so a token hit skipped
   # the remaining scans entirely, and it checked only two of the four patterns

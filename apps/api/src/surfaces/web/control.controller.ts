@@ -2,6 +2,8 @@ import { Body, Controller, Get, Inject, Param, Post, Query, Req } from '@nestjs/
 import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
+  CONTROL_ERROR_CODES,
+  errors,
   type FeatureFlagListResponse,
   type FeatureFlagResponse,
   type NotificationDetailResponse,
@@ -212,11 +214,17 @@ export class ControlController {
       ...(query.severity ? { severities: query.severity.split(',') } : {}),
       ...(query.since ? { since: new Date(query.since) } : {}),
       ...(query.until ? { until: new Date(query.until) } : {}),
-      // The cursor: the `lastSeenAt` of the oldest row already shown. Rows are
-      // ordered by that column descending, so "older than this" is the next
-      // page. An offset would have skipped and duplicated rows as events were
-      // recorded underneath the reader.
-      ...(query.before ? { before: new Date(query.before) } : {}),
+      // The cursor: the `lastSeenAt` of the oldest row already shown, plus its
+      // id. Rows are ordered by that pair descending, so "older than this" is
+      // the next page. An offset would have skipped and duplicated rows as
+      // events were recorded underneath the reader; the id breaks ties, without
+      // which a group of rows sharing one timestamp is split across the
+      // boundary and its tail appears on no page at all.
+      //
+      // PARSED, not cast. `new Date('x')` is an Invalid Date that reaches the
+      // driver and answers 500 where the caller sent a bad query parameter and
+      // deserves a 400.
+      ...cursorFrom(query.before, query.beforeId),
       ...(query.open ? { open: query.open === 'true' } : {}),
     });
     return { events: events.map(toEventResponse) };
@@ -263,16 +271,15 @@ export class ControlController {
     @Body() body: unknown,
   ): Promise<SendTestNotificationResponse> {
     const { scope, actor } = await this.authenticate(request, { write: true });
-    const { intent, created, replayed } = await this.container.notifications.sendTest(
+    // The command returns its own attempts. Reading them through `get` here
+    // needed `opslog.view`, which this endpoint does not require — so an
+    // administrator holding only `settings.edit` had their test queued and was
+    // then answered 403 about it, every time they retried.
+    const { intent, attempts, created, replayed } = await this.container.notifications.sendTest(
       scope,
       actor,
       body,
     );
-    // The REAL attempts, re-read. A replay of a key whose message has already
-    // failed twice must not answer with an empty list: that reports a state the
-    // database does not hold, which is the whole failure this module exists to
-    // stop being normal.
-    const { attempts } = await this.container.notifications.get(scope, actor, intent.id);
     return {
       notification: toNotificationResponse(intent),
       attempts: attempts.map(toAttemptResponse),
@@ -304,6 +311,28 @@ export class ControlController {
       actor: adminActor(admin, correlationId, request, session.id),
     };
   }
+}
+
+/**
+ * The operational-log cursor, or a refusal.
+ *
+ * A query parameter is caller-controlled text; turning it into a Date without
+ * checking hands the driver an Invalid Date and turns a bad request into a 500.
+ */
+function cursorFrom(
+  before: string | undefined,
+  beforeId: string | undefined,
+): { before?: Date; beforeId?: string } {
+  if (before === undefined) return {};
+  const at = new Date(before);
+  if (Number.isNaN(at.getTime())) {
+    throw errors.validation(
+      CONTROL_ERROR_CODES.INVALID_VALUE,
+      'The `before` cursor is not a timestamp.',
+      { before },
+    );
+  }
+  return { before: at, ...(beforeId ? { beforeId } : {}) };
 }
 
 function toSettingResponse(setting: ResolvedSetting): ResolvedSettingResponse {

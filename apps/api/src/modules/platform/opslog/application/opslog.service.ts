@@ -12,7 +12,16 @@ export const OPSLOG_VIEW: PermissionKey = 'opslog.view';
 
 export const opsLogQuerySchema = z.object({
   limit: z.number().int().min(1).max(200).default(50),
+  /**
+   * The cursor: the `lastSeenAt` of the oldest row already shown, and its id.
+   *
+   * Both, because `last_seen_at` is not unique — a `Clock.now()` is captured
+   * once per transaction, so distinct conditions share one microsecond — and a
+   * strict comparison on it alone skips the rest of a group that straddles the
+   * page boundary.
+   */
   before: z.date().optional(),
+  beforeId: z.string().max(64).optional(),
   severities: z.array(z.enum(OPERATIONAL_SEVERITIES)).optional(),
   code: z.string().max(200).optional(),
   since: z.date().optional(),
