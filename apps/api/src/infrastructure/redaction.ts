@@ -253,6 +253,27 @@ const BARE_CREDENTIAL = new RegExp(
 );
 
 /**
+ * A credential-shaped token sitting immediately after a redaction marker.
+ *
+ * This is the general answer to "the value was `<scheme> <secret>` and the
+ * scheme is not one we name". Rather than trying to enumerate schemes — a set
+ * that is open, and that this module has now guessed wrong at three times — it
+ * observes that whatever was redacted swallowed only the first token, and asks
+ * whether the NEXT one looks like a credential: at least eight characters with
+ * something in it that is not a letter.
+ *
+ * `token: abc reported by alice` keeps its sentence, because `reported` is
+ * letters. `token=GoogleLogin sk-live-ZQ7hV2…` does not, because the thing
+ * after the scheme is plainly not a word.
+ */
+const TRAILING_CREDENTIAL = new RegExp(
+  `(${escapeForRegExp(REDACTED)})` +
+    String.raw`\s+` +
+    String.raw`(?=[A-Za-z0-9._~+/=-]*[0-9._~+/=-])[A-Za-z0-9._~+/=-]{8,}`,
+  'g',
+);
+
+/**
  * Whether a value BEGINS with an authorization scheme.
  *
  * `X-Auth-Token: Token abc123def456` is not one of the two credential header
@@ -322,6 +343,8 @@ export function redactSecretText(text: string): string {
         },
       )
       .replace(BARE_CREDENTIAL, (match) => `${/^\S+/.exec(match)?.[0] ?? ''} ${REDACTED}`)
+      // LAST, so it can see what every pass above left behind.
+      .replace(TRAILING_CREDENTIAL, '$1')
   );
 }
 
