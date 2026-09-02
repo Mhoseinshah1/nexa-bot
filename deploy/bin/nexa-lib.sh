@@ -26,7 +26,19 @@ NEXA_LIB_DIR="${NEXA_LIB_DIR:-${NEXA_ROOT}/opt/nexa/lib}"
 NEXA_CONFIG_DIR="${NEXA_CONFIG_DIR:-${NEXA_ROOT}/etc/nexa}"
 NEXA_STATE_DIR="${NEXA_STATE_DIR:-${NEXA_ROOT}/var/lib/nexa}"
 NEXA_BACKUP_DIR="${NEXA_BACKUP_DIR:-${NEXA_ROOT}/var/backups/nexa}"
-NEXA_LOCK_FILE="${NEXA_LOCK_FILE:-${NEXA_ROOT}/var/lock/nexa.lock}"
+# The lock lives in the state directory, NOT in /var/lock.
+#
+# On Ubuntu /var/lock is a symlink to /run/lock, which is mode 1777. Two things
+# follow. The installer would have to create a directory there, and `install -d`
+# on an existing one CHANGES ITS MODE — so installing Nexa would have dropped
+# the sticky bit off a host directory the rest of the system shares. And any
+# local user could create nexa.lock first and hold flock on it, so every future
+# `botctl update` would refuse with "another operation is already running" and
+# no operation would be running. Neither needs privilege to arrange.
+#
+# /var/lib/nexa is 0750 and root-owned. The lock has the same reachability as
+# the release state it protects, which is the correct answer to both.
+NEXA_LOCK_FILE="${NEXA_LOCK_FILE:-${NEXA_STATE_DIR}/nexa.lock}"
 
 NEXA_RELEASES_DIR="${NEXA_STATE_DIR}/releases"
 NEXA_CURRENT_FILE="${NEXA_STATE_DIR}/current"
@@ -322,7 +334,16 @@ for entry in entries:
 # shell. `-w` so a stuck operation reports rather than blocking for ever.
 nexa_acquire_lock() {
   local timeout="${1:-0}"
-  mkdir -p "$(dirname "$NEXA_LOCK_FILE")"
+  # Mode set explicitly rather than through `mkdir -m`, which applies only to
+  # the deepest component created (SC2174) — and only when the directory did
+  # not already exist, so a production install's 0750 state directory is not
+  # re-chmodded by a lock acquisition.
+  local lock_dir
+  lock_dir="$(dirname "$NEXA_LOCK_FILE")"
+  if [ ! -d "$lock_dir" ]; then
+    mkdir -p "$lock_dir" || nexa_die "cannot create ${lock_dir} for the update lock."
+    chmod 0750 "$lock_dir"
+  fi
   exec {NEXA_LOCK_FD}>>"$NEXA_LOCK_FILE" ||
     nexa_die "cannot open the lock file at ${NEXA_LOCK_FILE}."
   if ! flock -w "$timeout" -x "$NEXA_LOCK_FD"; then

@@ -115,7 +115,7 @@ setup_root() {
   export NEXA_CONFIG_DIR="${NEXA_ROOT}/etc/nexa"
   export NEXA_STATE_DIR="${NEXA_ROOT}/var/lib/nexa"
   export NEXA_BACKUP_DIR="${NEXA_ROOT}/var/backups/nexa"
-  export NEXA_LOCK_FILE="${NEXA_ROOT}/var/lock/nexa.lock"
+  export NEXA_LOCK_FILE="${NEXA_STATE_DIR}/nexa.lock"
   export NEXA_IMAGE_REPO="registry.test/nexa"
 
   mkdir -p "$NEXA_DEPLOY_DIR" "$NEXA_LIB_DIR" "$NEXA_STATE_DIR/releases" \

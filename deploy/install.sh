@@ -297,7 +297,10 @@ create_layout() {
   install -d -m 0755 "$NEXA_DEPLOY_DIR" "$NEXA_LIB_DIR"
   install -d -m 0750 "$NEXA_STATE_DIR" "$NEXA_RELEASES_DIR"
   install -d -m 0700 "$NEXA_BACKUP_DIR"
-  install -d -m 0755 "$(dirname "$NEXA_LOCK_FILE")"
+  # No directory is created for the lock: it lives in the state directory
+  # above. An earlier version created one under /var/lock, which on Ubuntu is
+  # /run/lock — chmodding a shared host directory to 0755 and dropping its
+  # sticky bit. See the note on NEXA_LOCK_FILE in nexa-lib.sh.
   nexa_ok "layout created"
 }
 
@@ -497,13 +500,22 @@ start_everything() {
 
 # ---------------------------------------------------------------------------
 main() {
+  # Preflight and the layout come FIRST, and only then the lock.
+  #
+  # The lock file lives in the state directory, so taking it earlier would
+  # create that directory from the umask rather than from `create_layout`'s
+  # explicit 0750. Nothing before this line changes what is running: preflight
+  # only reads, and creating directories is idempotent. The steps an install
+  # and an update must not interleave — migrating, switching the image, writing
+  # the release pointers — are all below it.
+  preflight
+  ensure_docker
+  create_layout
+
   # One writer at a time, exactly as botctl update and rollback take it: an
   # installer racing an update would interleave migrations.
   nexa_acquire_lock 0
 
-  preflight
-  ensure_docker
-  create_layout
   install_assets
   check_registry
 

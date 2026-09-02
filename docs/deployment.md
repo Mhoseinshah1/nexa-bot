@@ -60,9 +60,8 @@ Four locations, with four different lifetimes.
 | `/opt/nexa/deploy`      | 0755     | compose file, Caddy config, the env template          | replaced           |
 | `/opt/nexa/lib`         | 0755     | `nexa-lib.sh`, shared by botctl and the installer     | replaced           |
 | `/etc/nexa`             | **0700** | `nexa.env`, `postgres.env`, `redis.env`, `deploy.env` | **yes**            |
-| `/var/lib/nexa`         | 0750     | release manifests, `current`, `previous`              | **yes**            |
+| `/var/lib/nexa`         | 0750     | release manifests, `current`, `previous`, the lock    | **yes**            |
 | `/var/backups/nexa`     | **0700** | database dumps                                        | **yes**            |
-| `/var/lock/nexa.lock`   | —        | the update lock                                       | —                  |
 | `/usr/local/bin/botctl` | 0755     | the operator CLI                                      | replaced           |
 
 Every file under `/etc/nexa` is mode `0600` and owned by root. Docker reads

@@ -79,6 +79,22 @@ assert_fails 'accepted an unprefixed digest' nexa_valid_digest "$(printf 'a%.0s'
 assert_fails 'accepted uppercase hex' nexa_valid_digest "sha256:$(printf 'A%.0s' {1..64})"
 assert_ok 'rejected a well-formed digest' nexa_valid_digest "$DIGEST_A"
 
+test_case 'the update lock does not live in a world-writable directory'
+# Read out of the library with a CLEAN environment, so this asserts the
+# DEFAULT and not whatever the harness exported.
+default_lock="$(env -u NEXA_ROOT -u NEXA_STATE_DIR -u NEXA_LOCK_FILE \
+  bash -c '. "$1" >/dev/null 2>&1; printf "%s" "$NEXA_LOCK_FILE"' _ "$NEXA_LIB")"
+assert_equals 'the default lock moved out of the state directory' \
+  '/var/lib/nexa/nexa.lock' "$default_lock"
+# /var/lock is /run/lock on Ubuntu: mode 1777. A lock there is a local
+# denial of service — any user can create the file first and hold flock on
+# it, and every later `botctl update` refuses with nothing actually running.
+# And the installer would have had to `install -d` a shared host directory,
+# which changes its mode.
+assert_not_contains 'the lock is under a world-writable directory' "$default_lock" '/var/lock'
+assert_fails 'the installer creates a directory under /var/lock' \
+  grep -q 'install -d .*var/lock' "${REPO}/deploy/install.sh"
+
 test_case 'reads a config value without executing the file'
 # `source` would run this. A maintenance CLI that executes its own
 # configuration is one editing mistake away from being a shell injection.
