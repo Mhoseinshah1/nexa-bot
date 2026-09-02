@@ -1,4 +1,4 @@
-import { Module, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
+import { Inject, Module, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import { CONTAINER, type Container } from './container.js';
 import { HealthController } from './surfaces/web/health.controller.js';
@@ -19,11 +19,20 @@ import { DomainErrorFilter } from './surfaces/web/error.filter.js';
  */
 @Module({})
 export class AppModule implements NestModule {
-  private static isProduction = false;
+  /**
+   * The container this module graph was built for.
+   *
+   * Injected rather than stashed on a static. `isProduction` used to be a
+   * mutable class property assigned by `forContainer` and read back in
+   * `configure` — process-global state keyed to nothing, so two applications
+   * constructed in one process shared it. The second construction rewrote the
+   * first's value, and whichever `configure` ran later decided the security
+   * headers for BOTH. In a test run that silently swaps HSTS on or off; the
+   * shape is the problem regardless of whether production ever does it.
+   */
+  constructor(@Inject(CONTAINER) private readonly container: Container) {}
 
   static forContainer(container: Container) {
-    AppModule.isProduction = container.config.NODE_ENV === 'production';
-
     const controllers = [HealthController];
 
     // The authenticated admin surface. Registered whenever real authentication
@@ -58,6 +67,10 @@ export class AppModule implements NestModule {
 
   configure(consumer: MiddlewareConsumer): void {
     consumer.apply(CorrelationMiddleware).forRoutes('*path');
-    consumer.apply(securityHeaders(AppModule.isProduction)).forRoutes('*path');
+    // Read from THIS module's own container, so the answer belongs to this
+    // application rather than to whichever one was constructed most recently.
+    consumer
+      .apply(securityHeaders(this.container.config.NODE_ENV === 'production'))
+      .forRoutes('*path');
   }
 }

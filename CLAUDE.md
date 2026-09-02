@@ -66,5 +66,15 @@ pnpm test:integration          # needs the services above
 
 ## Git
 
-Work on the session's task branch. Never push to `main`, never merge to `main`,
-never force-push.
+Work on the session's task branch. **Never push implementation directly to
+`main`**, and never force-push anything.
+
+`main` moves only through a pull request that the owner has explicitly approved
+after review, with CI green on the exact reviewed head. Phase 1 was merged that
+way — reviewed to a clean round, then merged as a merge commit on the owner's
+instruction, so the reviewed history stays reachable.
+
+So: normal feature work happens on a branch and reaches `main` through a PR.
+Merging one is the owner's call, never a step you take because the work looks
+finished. Absent that explicit approval, leave the PR open and say it is
+ready.

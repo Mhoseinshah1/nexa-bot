@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 /**
  * Session tokens.
@@ -22,17 +22,4 @@ export function generateSessionToken(): string {
 
 export function hashSessionToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
-}
-
-/**
- * Compares two token hashes in constant time.
- *
- * The lookup itself is by unique index, so this exists for call sites that
- * already hold both values and would otherwise reach for `===`.
- */
-export function tokenHashesMatch(a: string, b: string): boolean {
-  const left = Buffer.from(a, 'utf8');
-  const right = Buffer.from(b, 'utf8');
-  if (left.length !== right.length) return false;
-  return timingSafeEqual(left, right);
 }

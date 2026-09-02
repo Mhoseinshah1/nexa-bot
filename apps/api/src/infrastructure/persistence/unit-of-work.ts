@@ -34,7 +34,22 @@ export class DrizzleUnitOfWork implements UnitOfWork<TransactionScope> {
     return this.db.transaction(async (tx) => fn({ tx, scope }));
   }
 
-  /** Convenience wrapper for the common tenant-scoped case. */
+  /**
+   * Convenience wrapper for the common tenant-scoped case.
+   *
+   * DELIBERATELY UNUSED, and not to be removed as dead code.
+   *
+   * This is the seam Postgres row-level security would attach to: a transaction
+   * with the tenant bound for its whole duration, so adopting RLS becomes one
+   * `SET LOCAL app.current_tenant_id` here rather than a sweep over every read
+   * in the codebase (ADR-0004). Callers use `run` with an explicit scope today
+   * because the repository layer enforces scoping; the value of this method is
+   * the shape it holds open, not the line it saves.
+   *
+   * A dead-code sweep will find it. It has been found and kept on purpose —
+   * twice now. If such a check is ever automated, exempt this method by name
+   * and cite ADR-0004 rather than deleting it and rediscovering why it existed.
+   */
   async withTenant<T>(tenant: TenantContext, fn: (tx: TransactionScope) => Promise<T>): Promise<T> {
     return this.run(tenant, fn);
   }

@@ -156,6 +156,75 @@ describe('HTTP surface', () => {
       expect(response.statusCode).toBe(401);
     });
 
+    it('refuses a malformed update before it reaches the write path', async () => {
+      // `@Body() update: Update` was a TypeScript type and nothing more, so at
+      // runtime this was whatever was posted. A body with no `update_id` was
+      // keyed as the literal string `unknown`, which makes every malformed
+      // update from one bot a replay of the first — silently swallowed, 200.
+      // JSON bodies that parse as JSON and then fail the schema. A non-JSON
+      // body is refused earlier still, by the transport, and is not what this
+      // is about.
+      const malformed: unknown[] = [
+        {},
+        { update_id: null },
+        { update_id: 'not-a-number' },
+        { update_id: 1.5 },
+        { update_id: { nested: 1 } },
+        { update_id: [] },
+        [],
+      ];
+
+      for (const payload of malformed) {
+        const response = await inject({
+          method: 'POST',
+          url: webhookUrl(BOT_A),
+          headers: {
+            [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET,
+            'content-type': 'application/json',
+          },
+          payload: JSON.stringify(payload),
+        });
+        expect(response.statusCode).toBe(400);
+      }
+
+      // Nothing was written: no idempotency row, and in particular no row keyed
+      // on the string `unknown`.
+      const keys = await api.container.database.db.execute(
+        `SELECT key FROM request_idempotency WHERE key LIKE 'telegram:%'` as never,
+      );
+      expect(JSON.stringify(keys)).not.toContain('unknown');
+    });
+
+    it('accepts an update whose unknown Telegram fields it does not model', async () => {
+      // The schema states what this installation depends on and lets the rest
+      // through. Telegram adds fields without asking; a strict object would
+      // reject valid traffic on their release schedule rather than ours.
+      const response = await inject({
+        method: 'POST',
+        url: webhookUrl(BOT_A),
+        headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET },
+        payload: {
+          update_id: 700,
+          some_future_telegram_field: { anything: [1, 2, 3] },
+          message: { message_id: 1, date: 0, chat: { id: 1, type: 'private' }, text: '/ping' },
+        },
+      });
+      expect(response.statusCode).toBe(201);
+    });
+
+    it('accepts update_id 0, which is falsy but valid', async () => {
+      // The old `update.update_id ?? 'unknown'` was nullish-coalescing, so 0
+      // survived it — but a truthiness test would not have, and the schema is
+      // where that is now settled rather than left to a reader's memory.
+      const response = await inject({
+        method: 'POST',
+        url: webhookUrl(BOT_A),
+        headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET },
+        payload: { update_id: 0 },
+      });
+      expect(response.statusCode).toBe(201);
+    });
+
     it('rejects an update for a bot instance that does not exist', async () => {
       // Checked AFTER the secret token, so the endpoint cannot be used to probe
       // which bot ids exist.

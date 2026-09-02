@@ -1,15 +1,12 @@
 import {
   errors,
   PLATFORM_ERROR_CODES,
-  resolveEffectivePermissions,
   SYSTEM_JOB_PERMISSIONS,
   type ActorContext,
   type AdminId,
-  type Clock,
   type OperationalEventInput,
   type OperationalEventRecorder,
   type PermissionKey,
-  type PermissionOverride,
   type ScopeContext,
 } from '@nexa/contracts';
 
@@ -166,16 +163,4 @@ export class PermissionGuard {
     }
     return this.resolver.resolve(scope, actor, tx);
   }
-}
-
-/**
- * The resolution rule Phase 1 will use, implemented and tested now because it is
- * pure and because getting DENY-wins wrong is expensive to discover later.
- */
-export function effectivePermissions(
-  rolePermissions: readonly PermissionKey[],
-  overrides: readonly PermissionOverride[],
-  clock: Clock,
-): ReadonlySet<PermissionKey> {
-  return resolveEffectivePermissions(rolePermissions, overrides, clock.now());
 }
