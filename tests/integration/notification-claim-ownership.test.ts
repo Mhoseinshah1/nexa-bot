@@ -245,6 +245,89 @@ describe('notification claim ownership', () => {
   }, 60_000);
 
   /**
+   * A REAL permanent refusal is not a sweep verdict, and blocks the restore.
+   *
+   * The restore predicate has two clauses: the sweep's own exhaustion row must
+   * exist, AND no other permanent failure may. Only the first was under test.
+   * The existing case for the second builds a real refusal with NO sweep row,
+   * which clause (a) already rejects — so clause (b) could be deleted whole and
+   * every case here stayed green.
+   *
+   * This is the ordering that needs it: a final claim parked in the transport,
+   * swept while it was outstanding, and THEN landing as the transport's own
+   * refusal. Both rows now sit on the intent, so the question is no longer "was
+   * there a sweep" but "is the sweep still the reason this intent is failed" —
+   * and it is not. A hand-back that never spoke to the transport may withdraw
+   * this module's guess about a missing outcome; it may not overturn an answer
+   * Telegram actually gave.
+   */
+  it('does not withdraw a sweep once the transport has refused for real', async () => {
+    const intent = await raise('real-refusal-vs-sweep');
+
+    // Attempt 1's worker dies with nothing recorded, so its number stays free
+    // for the hand-back at the end.
+    const [first] = await repo().claimDue(ctx.container.clock.now(), 10, 60_000);
+    expect(first!.attemptCount).toBe(1);
+    await sql(`UPDATE notifications SET next_attempt_at = now() - interval '1 hour'`);
+
+    // The FINAL claim's send parks inside the transport, holding a real
+    // permanent refusal to deliver when it is let go.
+    const held = transport.holdNextSend({
+      outcome: 'FAILED_PERMANENT',
+      errorCode: 'telegram.rejected.400',
+      errorMessage: 'chat not found',
+    });
+    const tick = ctx.container.notificationDispatcher.tick();
+    await held.entered;
+    expect((await rowOf(intent.id)).attemptCount, 'the final claim was not issued').toBe(2);
+
+    // Its lease expires, and a full extra lease of quiet passes. Another worker
+    // sweeps: at this instant the intent really does look exhausted.
+    await sql(`UPDATE notifications SET next_attempt_at = now() - interval '1 hour'`);
+    const swept = await repo().failExhausted(ctx.container.clock.now(), 10, {
+      leaseMs: 60_000,
+      transport: 'RECORDING',
+    });
+    expect(swept, 'the sweep did not run').toBe(1);
+    expect((await rowOf(intent.id)).status).toBe('FAILED');
+
+    // Only now does the parked send land, with the transport's own verdict.
+    held.release();
+    await tick;
+    const attempts = await ctx.container.notificationRepository.attempts(tenantA, intent.id);
+    expect(
+      attempts.map((attempt) => attempt.errorCode),
+      'the late refusal and the sweep verdict are not both on record',
+    ).toEqual(['telegram.rejected.400', 'notification.attempts_exhausted']);
+
+    // The straggler from attempt 1 finally hands its claim back. Its capacity
+    // returns — that number never reached the transport — but the intent stays
+    // failed, because the reason it is failed is no longer the sweep.
+    const handBack = await repo().releaseClaim({
+      tenantId: tenantA.tenantId,
+      notificationId: intent.id,
+      attemptNumber: 1,
+      now: ctx.container.clock.now(),
+      reason: 'tenant.not_active',
+    });
+    expect(handBack.released, 'the hand-back lost its capacity').toBe(true);
+    expect(
+      handBack.restored,
+      'a hand-back that never spoke to the transport reopened an intent the transport itself refused',
+    ).toBe(false);
+
+    const after = await rowOf(intent.id);
+    expect(after.status, 'a real permanent refusal was reopened by a hand-back').toBe('FAILED');
+    expect(after.completedAt, 'a failed intent lost its completion time').not.toBeNull();
+
+    // And the consequence a person would actually see: the message is not sent
+    // to a chat that does not exist, over and over.
+    const before = transport.calls;
+    await ctx.container.notificationDispatcher.tick();
+    expect(transport.calls, 'a permanently refused message was retried').toBe(before);
+  }, 60_000);
+
+  /**
    * A stale hand-back must not reschedule somebody else's live claim.
    *
    * The release ROW is keyed by attempt number so a straggler can still return
