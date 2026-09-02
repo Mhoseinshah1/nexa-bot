@@ -91,6 +91,17 @@ export const PERMISSIONS = [
   p('settings.edit', 'Change settings'),
   p('settings.destructive', 'Run destructive maintenance settings', 'CRITICAL'),
 
+  // Customer-facing text
+  //
+  // Separate from `settings.*` because the blast radii are not comparable: a
+  // setting changes how the installation behaves for its operators, while a
+  // template changes the words sent to every customer of the tenant. Separating
+  // them also lets a role edit copy while holding no configuration access at
+  // all. See docs/adr/0016-template-defaults-and-overrides.md, which also
+  // records how to reverse this if the split turns out not to earn its keep.
+  p('templates.view', 'View message templates and their overrides', 'LOW'),
+  p('templates.edit', 'Change or revert a message template', 'HIGH'),
+
   // Administration
   p('admins.view', 'View administrators', 'LOW'),
   p('admins.edit', 'Create, suspend or revoke administrators', 'CRITICAL'),
@@ -167,6 +178,8 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'catalog.view',
       'panels.view',
       'settings.view',
+      'templates.view',
+      'templates.edit',
       'reports.view',
       'opslog.view',
     ],
