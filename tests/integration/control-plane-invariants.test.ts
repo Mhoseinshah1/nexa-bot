@@ -221,6 +221,73 @@ describe('control-plane invariants', () => {
       }
       expect(missing, `named append-only but not enforced: ${missing.join('; ')}`).toEqual([]);
     });
+
+    /**
+     * An attempt number is EITHER spent or returned, never both.
+     *
+     * The whole ownership model is that sentence, and until now it rested on
+     * how the dispatcher happens to behave: one worker owns a claim and either
+     * sends on it or hands it back. `releaseClaim` guards its own insert
+     * against the attempts table; `recordAttempt` had no mirror guard, and
+     * nothing serialises the two. A number carrying both records subtracts to
+     * "returned" while its attempt row says it reached the transport — a
+     * message sent and its allowance handed back, which turns a bounded retry
+     * into an unbounded one.
+     */
+    const insertAttempt = (notification: string, attempt: number, outcome = 'SUCCEEDED') => `
+      INSERT INTO notification_delivery_attempts
+        (id, tenant_id, notification_id, attempt_number, transport, outcome, started_at, finished_at, error_code)
+      VALUES ('${ctx.container.ids.uuid()}', '${A}', '${notification}', ${attempt}, 'RECORDING', '${outcome}', now(), now(),
+              ${outcome === 'SUCCEEDED' ? 'NULL' : `'notification.attempts_exhausted'`})`;
+
+    it('refuses a released claim for an attempt that reached the transport', async () => {
+      const notification = ctx.container.ids.uuid();
+      await query(insert(A, notification, 'k7'));
+      await query(insertAttempt(notification, 1));
+      await expect(query(insertRelease(notification, 1))).rejects.toThrowError(
+        /reached the transport/i,
+      );
+    });
+
+    it('refuses an attempt on a number whose claim was returned', async () => {
+      const notification = ctx.container.ids.uuid();
+      await query(insert(A, notification, 'k8'));
+      await query(insertRelease(notification, 1));
+      await expect(query(insertAttempt(notification, 1))).rejects.toThrowError(/was released/i);
+    });
+
+    it('allows the sweep to withdraw its own verdict', async () => {
+      // The one permitted pair, and the reason the guard is not a plain
+      // "never both": `failExhausted` writes a synthetic FAILED_PERMANENT row
+      // to record the verdict it reached, and a later hand-back retires that
+      // number by recording it released, because nothing was ever sent on it.
+      const notification = ctx.container.ids.uuid();
+      await query(insert(A, notification, 'k9'));
+      await query(insertAttempt(notification, 1, 'FAILED_PERMANENT'));
+      await query(`
+        INSERT INTO notification_released_claims
+          (tenant_id, notification_id, attempt_number, released_at, reason)
+        VALUES ('${A}', '${notification}', 1, now(), 'sweep.withdrawn')`);
+      const rows = await query(
+        `SELECT reason FROM notification_released_claims WHERE notification_id = '${notification}'`,
+      );
+      expect(rows.rows[0]).toMatchObject({ reason: 'sweep.withdrawn' });
+    });
+
+    it('refuses to disguise an ordinary hand-back as a sweep withdrawal', async () => {
+      // The exception names BOTH halves. A release calling itself
+      // `sweep.withdrawn` over a real transport verdict is still a claim being
+      // returned for a message that was sent.
+      const notification = ctx.container.ids.uuid();
+      await query(insert(A, notification, 'k10'));
+      await query(insertAttempt(notification, 1));
+      await expect(
+        query(`
+          INSERT INTO notification_released_claims
+            (tenant_id, notification_id, attempt_number, released_at, reason)
+          VALUES ('${A}', '${notification}', 1, now(), 'sweep.withdrawn')`),
+      ).rejects.toThrowError(/reached the transport/i);
+    });
   });
 
   describe('operational event resolution', () => {
