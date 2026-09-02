@@ -236,9 +236,10 @@ export const configSchema = z
       });
     }
     if (config.NODE_ENV === 'production') {
-      // Parsed, not prefix-matched. `https://evil/?x=http://api.telegram.org`
-      // starts with the wrong thing and `HTTPS://…` with the right one, and a
-      // `startsWith` gets both backwards. The protocol is a field; read the
+      // Parsed, not string-matched. An `includes('https')` accepts
+      // `http://evil.example.com/?x=https://api.telegram.org`, and a
+      // `startsWith('https')` rejects `HTTPS://api.telegram.org`, which is the
+      // same scheme spelled differently. The protocol is a field; read the
       // field.
       //
       // Not silently rewritten to https either. A bot token travels in the URL

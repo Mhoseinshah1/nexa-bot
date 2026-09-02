@@ -5,7 +5,6 @@ import {
   type HealthInfoResponse,
   type HealthLiveResponse,
   type HealthReadyResponse,
-  type SystemReadinessResponse,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { requireSessionToken } from './authenticated-request.js';
@@ -24,8 +23,10 @@ import { ReadinessProbe } from './readiness.probe.js';
  * anonymous because the caller is an orchestrator with no credentials; `info`
  * is not, because nothing without a session needs the build's identity. And
  * readiness now answers with a word rather than a description of the
- * deployment — `SystemReadinessController` serves the reasons to an
- * administrator who has signed in.
+ * deployment. The reasons are served to a signed-in administrator by
+ * `ControlController.systemReadiness`, which shares this controller's
+ * `ReadinessProbe` so there is one readiness computation rather than two that
+ * can disagree.
  */
 @Controller()
 export class HealthController {
@@ -45,7 +46,9 @@ export class HealthController {
    * A live Web Admin session, or 401.
    *
    * The same token and the same authenticator every other administrative
-   * request uses. Nothing here resolves a permission: see `readiness`.
+   * request uses. Nothing here resolves a permission: build metadata is the
+   * shape of the deployment rather than a tenant's data, and a permission
+   * nobody can be denied is decoration.
    */
   private async requireSession(request: FastifyRequest): Promise<void> {
     const token = requireSessionToken(request, this.container.config.NODE_ENV === 'production');
@@ -65,31 +68,14 @@ export class HealthController {
    *
    * The probes still run — the answer has to be real — but their names,
    * latencies, migration counts, relay lag and failure classifications stay
-   * here. `readiness()` is the same computation, exposed to a session.
+   * here. `ControlController.systemReadiness` runs the same probe and reports
+   * them to a session.
    */
   @Get(HEALTH_ROUTES.ready)
   async ready(@Res({ passthrough: true }) reply: FastifyReply): Promise<HealthReadyResponse> {
     const { degraded } = await this.probe.run();
     reply.status(degraded ? 503 : 200);
     return { status: degraded ? 'degraded' : 'ok' };
-  }
-
-  /**
-   * The same readiness, with its reasons, for a signed-in administrator.
-   *
-   * Authentication is the whole gate and there is no permission: this is the
-   * shape of the deployment rather than a tenant's data, every administrator
-   * needs it when something is wrong, and a permission nobody can be denied is
-   * decoration.
-   *
-   * It reports 200 even when degraded. A 503 here would be a broken API call
-   * to the screen asking the question, and the screen's job is to display the
-   * bad news rather than to fail with it — the status is in the body.
-   */
-  async readiness(request: FastifyRequest): Promise<SystemReadinessResponse> {
-    await this.requireSession(request);
-    const { degraded, dependencies } = await this.probe.run();
-    return { status: degraded ? 'degraded' : 'ok', dependencies };
   }
 
   @Get(HEALTH_ROUTES.info)

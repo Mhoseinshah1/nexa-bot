@@ -32,7 +32,8 @@ resolves authority on every call rather than caching it into a session.
 Administrator management — create, disable, re-enable, change roles, rotate
 credentials — with the authoritative permission check inside the mutation
 transaction. `pnpm admin:bootstrap` creates an installation's first owner from
-the command line; there is no self-service registration.
+the command line, running compiled output (`admin:bootstrap:dev` runs the
+source); there is no self-service registration.
 
 **Phase 2 — the control plane.** Message templates stored **raw** and rendered
 nowhere near where they are edited, with an append-only revision history and a

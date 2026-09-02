@@ -2,9 +2,9 @@ name: Exhaustive notification orderings
 
 # The combinatorial search, off the pull-request path.
 #
-# 1 341 orderings, each with a full database reset, took a CI integration job
-# to roughly fourteen minutes — long enough that the cost of the search landed
-# on every unrelated change. Its value is finding a shape nobody has imagined
+# 1 341 orderings, each with a full database reset. The suite itself takes
+# about four minutes; carrying it took the whole CI integration job to roughly
+# fourteen, so the cost of the search landed on every unrelated change. Its value is finding a shape nobody has imagined
 # yet, which is worth a great deal once a night and very little on the ninth
 # push of an afternoon.
 #

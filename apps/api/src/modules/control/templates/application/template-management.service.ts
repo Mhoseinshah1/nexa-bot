@@ -24,6 +24,7 @@ import {
 } from '@nexa/contracts';
 
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
+import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
 import type { FeatureFlagResolver } from '../../features/application/feature-flags.service.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
@@ -171,6 +172,8 @@ export class TemplateManagementService {
      * back, so it must not travel through the projector's own transaction.
      */
     private readonly opsLog: OperationalEventRecorder,
+    /** For the mutation-time session-revocation check. */
+    private readonly sessions: SessionRepository,
   ) {}
 
   async list(
@@ -315,7 +318,14 @@ export class TemplateManagementService {
     }
 
     const result = await runAuthorizedMutation(
-      { uow: this.uow, guard: this.guard, audit: this.audit, opsLog: this.opsLog },
+      {
+        uow: this.uow,
+        guard: this.guard,
+        audit: this.audit,
+        opsLog: this.opsLog,
+        sessions: this.sessions,
+        clock: this.clock,
+      },
       scope,
       actor,
       TEMPLATES_EDIT,
@@ -487,7 +497,14 @@ export class TemplateManagementService {
     }
 
     const result = await runAuthorizedMutation(
-      { uow: this.uow, guard: this.guard, audit: this.audit, opsLog: this.opsLog },
+      {
+        uow: this.uow,
+        guard: this.guard,
+        audit: this.audit,
+        opsLog: this.opsLog,
+        sessions: this.sessions,
+        clock: this.clock,
+      },
       scope,
       actor,
       TEMPLATES_EDIT,

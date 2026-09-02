@@ -19,6 +19,7 @@ import {
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
+import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -146,6 +147,8 @@ export class SettingsService {
      * what opened the condition.
      */
     private readonly opsLog: OperationalEventRecorder,
+    /** For the mutation-time session-revocation check. */
+    private readonly sessions: SessionRepository,
   ) {}
 
   /**
@@ -212,7 +215,14 @@ export class SettingsService {
     }
 
     const result = await runAuthorizedMutation(
-      { uow: this.uow, guard: this.guard, audit: this.audit, opsLog: this.opsLog },
+      {
+        uow: this.uow,
+        guard: this.guard,
+        audit: this.audit,
+        opsLog: this.opsLog,
+        sessions: this.sessions,
+        clock: this.clock,
+      },
       scope,
       actor,
       SETTINGS_EDIT,

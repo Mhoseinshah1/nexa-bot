@@ -147,6 +147,25 @@ forever, so the alert never arrives at all).
 An ownership token — claim with a nonce, record only if the nonce still matches
 — would close it, and is the change to make if duplicates are ever observed.
 
+### The exhaustion sweep does not ask whether the tenant is active
+
+`claimDue` refuses an inactive tenant, and the dispatcher asks again on the
+line before each send. `failExhausted` deliberately does neither, and the
+asymmetry is the decision rather than an oversight.
+
+Those two govern SENDING, and a stopped installation must not send. This
+governs bookkeeping about sends that have already been attempted. An intent
+only reaches `attempt_count = max_attempts` by being claimed, which a stopped
+tenant cannot be, so its attempts were genuinely spent while it was active.
+Withholding that verdict until the tenant returns would leave the row PENDING
+for the length of the pause — the "reported as pending for ever" state this
+sweep exists to end.
+
+A pause is still not a verdict, and nothing here makes it one. A late
+SUCCEEDED can move a swept row from FAILED to SENT whenever it arrives, and a
+claim handed back by `releaseClaim` has its attempt returned, so a paused
+tenant's queued work never reaches this predicate at all.
+
 ### There is no retention or archive for notifications, and that is a decision
 
 Phase 2 never deletes, archives or summarises a notification intent or a

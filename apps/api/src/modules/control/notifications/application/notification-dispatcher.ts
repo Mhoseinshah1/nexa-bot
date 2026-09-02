@@ -205,7 +205,29 @@ export class NotificationDispatcher {
     await this.inFlight;
   }
 
+  /**
+   * One pass. Tracked, so `stop()` waits for it however it was started.
+   *
+   * The tracking used to live only in `start()`'s poll loop, which made
+   * `stop()` a no-op for any tick begun another way — and made the regression
+   * that guards it vacuous, because `await null` still costs a microtask and a
+   * test that only waited one microtask could not tell the difference. A
+   * running tick owns a claimed row whatever called it, and the outcome of its
+   * send has nowhere to go once the pool is closed.
+   */
   async tick(): Promise<DispatchTickResult> {
+    const running = this.runTick();
+    this.inFlight = running;
+    try {
+      return await running;
+    } finally {
+      // Only if it is still ours: the poll loop replaces this with its own
+      // wrapped promise, and clearing that one would undo the loop's tracking.
+      if (this.inFlight === running) this.inFlight = null;
+    }
+  }
+
+  private async runTick(): Promise<DispatchTickResult> {
     const now = this.clock.now();
 
     // Before anything else, and regardless of budget: an intent that has spent

@@ -12,6 +12,7 @@ import {
   type NotificationDestination,
   type NotificationKind,
   type PermissionKey,
+  type OperationalEventRecorder,
   type ScopeContext,
   type SettingKey,
   type TemplateKey,
@@ -19,6 +20,8 @@ import {
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
+import type { SessionRepository } from '../../../platform/identity/application/ports.js';
+import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
@@ -52,6 +55,15 @@ export class NotificationService {
     private readonly audit: AuditWriter,
     private readonly idempotency: IdempotencyStore,
     private readonly uow: UnitOfWork<TransactionScope>,
+    /**
+     * The RAW recorder, for denials only.
+     *
+     * A denial's operational event is written after its transaction has rolled
+     * back, so it must not travel through the projector's own transaction.
+     */
+    private readonly opsLog: OperationalEventRecorder,
+    /** For the mutation-time session-revocation check. */
+    private readonly sessions: SessionRepository,
   ) {}
 
   /**
@@ -174,7 +186,22 @@ export class NotificationService {
     readonly created: boolean;
     readonly replayed: boolean;
   }> {
-    await this.guard.check(scope, actor, 'settings.edit');
+    // The early rejection, audited. This is the check an ordinary
+    // unauthorized request actually hits; the decision that counts is re-run
+    // inside the transaction below.
+    try {
+      await this.guard.check(scope, actor, 'settings.edit');
+    } catch (denial) {
+      await this.audit.record(scope, actor, {
+        action: 'notifications.test',
+        entityType: 'Notification',
+        entityId: null,
+        before: null,
+        after: null,
+        result: 'DENIED',
+      });
+      throw denial;
+    }
     const command = sendTestNotificationRequestSchema.parse(input);
 
     // A state-changing command, so it takes an idempotency key like every
@@ -268,53 +295,67 @@ export class NotificationService {
     // An audit row outside the transaction of the write it describes can
     // survive a write that rolled back, and then it is a record of something
     // that did not happen.
-    return this.uow.run(scope, async (tx) => {
-      const result = await this.notifications.create(
-        scope,
-        {
-          id,
-          kind: 'OPERATIONS_TEST',
-          dedupeKey: `ops-test:${id}`,
-          destination,
-          // `label` is nullable on an actor; the template requires a name, so
-          // say what we actually know rather than rendering the word "null".
-          payload: serialiseValues({ requestedBy: actor.label ?? actor.type, at: now }),
-          templateKey: 'ops.notification.test',
-          maxAttempts,
-          correlationId: actor.correlationId,
-          now,
-        },
-        tx,
-      );
+    return runAuthorizedMutation(
+      {
+        uow: this.uow,
+        guard: this.guard,
+        audit: this.audit,
+        opsLog: this.opsLog,
+        sessions: this.sessions,
+        clock: this.clock,
+      },
+      scope,
+      actor,
+      'settings.edit',
+      { action: 'notifications.test', entityType: 'Notification', entityId: null },
+      async (tx) => {
+        const result = await this.notifications.create(
+          scope,
+          {
+            id,
+            kind: 'OPERATIONS_TEST',
+            dedupeKey: `ops-test:${id}`,
+            destination,
+            // `label` is nullable on an actor; the template requires a name, so
+            // say what we actually know rather than rendering the word "null".
+            payload: serialiseValues({ requestedBy: actor.label ?? actor.type, at: now }),
+            templateKey: 'ops.notification.test',
+            maxAttempts,
+            correlationId: actor.correlationId,
+            now,
+          },
+          tx,
+        );
 
-      await this.audit.record(
-        scope,
-        actor,
-        {
-          action: 'notifications.test',
-          entityType: 'Notification',
-          entityId: result.intent.id,
-          before: null,
-          after: { destination: describeDestination(destination) },
-          result: 'SUCCESS',
-        },
-        tx,
-      );
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'notifications.test',
+            entityType: 'Notification',
+            entityId: result.intent.id,
+            before: null,
+            after: { destination: describeDestination(destination) },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
 
-      await rememberOnce(
-        this.idempotency,
-        scope,
-        actor.surface,
-        command.idempotencyKey,
-        requestHash,
-        { notificationId: result.intent.id },
-        tx,
-      );
+        await rememberOnce(
+          this.idempotency,
+          scope,
+          actor.surface,
+          command.idempotencyKey,
+          requestHash,
+          { notificationId: result.intent.id },
+          tx,
+        );
 
-      // A brand-new intent has no attempts yet; saying so is a fact rather
-      // than the hard-coded empty list the controller used to invent.
-      return { ...result, attempts: [], replayed: false };
-    });
+        // A brand-new intent has no attempts yet; saying so is a fact rather
+        // than the hard-coded empty list the controller used to invent.
+        return { ...result, attempts: [], replayed: false };
+      },
+    );
   }
 
   /** The configured destination, or null when there is none. */

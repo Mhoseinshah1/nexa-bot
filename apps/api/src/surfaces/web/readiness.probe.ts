@@ -30,13 +30,33 @@ export class ReadinessProbe {
     return { degraded: dependencies.some((d) => d.status === 'down'), dependencies };
   }
 
+  /**
+   * How long any one dependency may take to answer before it counts as down.
+   *
+   * A readiness endpoint that can hang is not a readiness endpoint. The Redis
+   * client is configured with `maxRetriesPerRequest: null`, which means a
+   * command issued while the connection is down waits for ever rather than
+   * rejecting — correct for a queue, fatal for a probe. `/health/ready` is
+   * polled by a load balancer that has no timeout of its own, so the bound has
+   * to be here.
+   */
+  private static readonly PROBE_TIMEOUT_MS = 3_000;
+
   private async timed(
     name: string,
     probe: () => Promise<{ ok: boolean; detail?: string }>,
   ): Promise<DependencyStatus> {
     const started = Date.now();
     try {
-      const result = await probe();
+      const result = await Promise.race([
+        probe(),
+        new Promise<{ ok: boolean; detail?: string }>((resolve) =>
+          setTimeout(
+            () => resolve({ ok: false, detail: 'timeout' }),
+            ReadinessProbe.PROBE_TIMEOUT_MS,
+          ).unref?.(),
+        ),
+      ]);
       return {
         name,
         status: result.ok ? 'up' : 'down',

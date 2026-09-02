@@ -1,7 +1,11 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import type { ActorContext } from '@nexa/contracts';
-import { auditLogs, outboxMessages } from '../../apps/api/src/infrastructure/persistence/schema';
+import type { ActorContext, AdminSessionId } from '@nexa/contracts';
+import {
+  auditLogs,
+  notifications,
+  outboxMessages,
+} from '../../apps/api/src/infrastructure/persistence/schema';
 import {
   adminActorFor,
   createAdmin,
@@ -226,6 +230,110 @@ describe('fresh transactional authorization', () => {
       ).toBeGreaterThan(0);
     }, 30_000);
   }
+
+  /**
+   * Permissions and sessions are two different revocations.
+   *
+   * `authenticated-request.ts` states that `sessionId` is required *"so a
+   * mutation can confirm, under the lock it takes anyway, that this session
+   * has not been revoked since the request arrived"*. Phase 1's administrator
+   * mutations honour that; the control plane did not — so "changing an
+   * administrator's roles stops their in-flight write" was true while
+   * "revoking their sessions stops it" was false, and a signed-out or
+   * password-rotated administrator's write still committed. A comment
+   * promising a guarantee the code did not provide.
+   */
+  it('refuses a control-plane write whose session is revoked before the transaction', async () => {
+    const sessionId = ctx.container.ids.uuid() as AdminSessionId;
+    await ctx.container.sessions.create(tenantA, {
+      id: sessionId,
+      adminId: adminA.id,
+      tokenHash: 'a'.repeat(64),
+      issuedAt: ctx.container.clock.now(),
+      expiresAt: new Date(ctx.container.clock.now().getTime() + 3_600_000),
+      ip: '198.51.100.7',
+      userAgent: 'vitest',
+    });
+    const withSession: ActorContext = { ...actorA, sessionId };
+
+    const barrier = barrierOnNextTransaction();
+    const attempt = ctx.container.settingsService.set(tenantA, withSession, {
+      key: 'ops.notifications.max_attempts',
+      value: 4,
+      expectedVersion: null,
+      idempotencyKey: 'revoked-session',
+    });
+    const settled = attempt.then(
+      () => ({ ok: true }) as const,
+      (error: unknown) => ({ ok: false, error }) as const,
+    );
+    const arrived = await Promise.race([
+      barrier.reached.then(() => 'at the barrier' as const),
+      settled.then(() => 'finished early' as const),
+    ]);
+    expect(arrived, 'settings.set never reached its transaction').toBe('at the barrier');
+
+    // A sign-out, or a password rotation, lands while A is parked.
+    await ctx.container.sessions.revoke(sessionId, ctx.container.clock.now(), 'signed out');
+
+    barrier.release();
+    const outcome = await settled;
+    expect(outcome.ok, 'a revoked session committed a control-plane write').toBe(false);
+
+    const resolved = await ctx.container.settingsResolver.resolve(
+      tenantA,
+      'ops.notifications.max_attempts',
+    );
+    expect(resolved.source, 'the setting was written on a revoked session').toBe('DEFAULT');
+  }, 30_000);
+
+  it('refuses notifications.test when authority is revoked before the transaction', async () => {
+    // The fifth protected control-plane write, and the one a first pass
+    // missed: `sendTest` checks `settings.edit` on the pool and then parses,
+    // hashes, looks up an idempotency record, resolves a destination and reads
+    // a setting before its transaction opens. Same window, and this one ends
+    // with a Telegram message going out.
+    await ctx.container.settingsService.set(tenantA, ownerB, {
+      key: 'ops.notifications.telegram_chat_id',
+      value: '-100999',
+      expectedVersion: null,
+      idempotencyKey: 'revoked-test-setup',
+    });
+
+    const barrier = barrierOnNextTransaction();
+    const attempt = ctx.container.notifications.sendTest(tenantA, actorA, {
+      idempotencyKey: 'revoked-send-test',
+    });
+    const settled = attempt.then(
+      () => ({ ok: true }) as const,
+      (error: unknown) => ({ ok: false, error }) as const,
+    );
+    const arrived = await Promise.race([
+      barrier.reached.then(() => 'at the barrier' as const),
+      settled.then(() => 'finished early' as const),
+    ]);
+    expect(arrived, 'notifications.test never reached its transaction').toBe('at the barrier');
+
+    await revokeA();
+
+    barrier.release();
+    const outcome = await settled;
+    expect(outcome.ok, 'notifications.test committed on revoked authority').toBe(false);
+
+    // No intent was queued, so nothing can be sent for it.
+    const queued = await db().select().from(notifications);
+    expect(queued, 'a notification was queued by a revoked actor').toEqual([]);
+
+    const audits = await auditRows('notifications.test');
+    expect(
+      audits.filter((row) => row.result === 'SUCCESS'),
+      'a SUCCESS audit row was committed for a denied test send',
+    ).toEqual([]);
+    expect(
+      audits.filter((row) => row.result === 'DENIED').length,
+      'the denial left no audit evidence',
+    ).toBeGreaterThan(0);
+  }, 30_000);
 
   /**
    * `templates.revert` needs an override to remove, so its setup writes one

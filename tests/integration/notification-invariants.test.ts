@@ -228,6 +228,63 @@ describe('notification state machine invariants', () => {
     await slow;
 
     expect(await statusOf(intent), 'a delivered message stayed FAILED').toBe('SENT');
+    // A unique index on `(tenant_id, notification_id, attempt_number)` means no
+    // application change can PERSIST a duplicate, so this is a guard against
+    // that index being dropped rather than a live check. The collision itself
+    // is caught by the two assertions above: a synthetic sweep row written at
+    // `attempt_count` rather than `+1` makes the straggler's insert violate
+    // the index, which surfaces through `await slow` and through the intent
+    // staying FAILED.
+    const attempts = await ctx.container.notificationRepository.attempts(tenantA, intent.id);
+    const numbers = attempts.map((a) => a.attemptNumber);
+    expect(new Set(numbers).size, `duplicate attempt numbers: ${numbers.join(',')}`).toBe(
+      numbers.length,
+    );
+  }, 60_000);
+
+  /**
+   * The same ordering, but the outstanding send FAILS when it lands.
+   *
+   * The enumeration asserts `sweptThenFailingLanding > 0` for exactly this,
+   * and the split left it with no regression on the pull-request path — a
+   * shape covered only by the nightly suite, which is the one thing the split
+   * was not allowed to do.
+   *
+   * The invariant differs from the successful case: a failure arriving after
+   * the sweep must NOT resurrect the intent. `recordAttempt`'s predicate is
+   * widened only for SUCCEEDED; everything else requires ownership of the
+   * claim, and a straggler no longer has it.
+   */
+  it('leaves a swept intent failed when its in-flight send lands a failure', async () => {
+    const intent = await begin('inflight-late-failure');
+
+    await apply('FAIL_RETRYABLE');
+    await apply('EXPIRE_LEASE');
+
+    const hold = transport.holdNextSend({
+      outcome: 'FAILED_PERMANENT',
+      errorCode: 'telegram.rejected.400',
+      errorMessage: 'chat not found',
+    });
+    const slow = ctx.container.notificationDispatcher.tick();
+    const arrived = await Promise.race([
+      hold.entered.then(() => 'at the barrier' as const),
+      slow.then(() => 'finished early' as const),
+    ]);
+    expect(arrived, 'no send was left in flight').toBe('at the barrier');
+
+    await apply('EXPIRE_LEASE');
+    await ctx.container.notificationDispatcher.tick();
+    expect(await statusOf(intent), 'the sweep did not write the intent off').toBe('FAILED');
+
+    hold.release();
+    await slow;
+
+    expect(await statusOf(intent), 'a failed landing moved a terminal intent').toBe('FAILED');
+    expect(transport.messages, 'a failed send was recorded as delivered').toHaveLength(0);
+
+    // The attempt still happened, so it still has a row — and the numbers stay
+    // unique across the synthetic sweep row and the straggler's own.
     const attempts = await ctx.container.notificationRepository.attempts(tenantA, intent.id);
     const numbers = attempts.map((a) => a.attemptNumber);
     expect(new Set(numbers).size, `duplicate attempt numbers: ${numbers.join(',')}`).toBe(
@@ -279,11 +336,17 @@ describe('notification state machine invariants', () => {
     expect(arrived, 'no send was left in flight').toBe('at the barrier');
 
     // `stop()` is called while the send is parked. It must not resolve yet.
+    //
+    // Asserted across a REAL turn of the event loop, not one microtask. The
+    // first version of this waited a single `await Promise.resolve()`, which
+    // `await null` also outlasts — so it passed against a `stop()` that waited
+    // for nothing at all, which is exactly what `stop()` did for a tick the
+    // poll loop had not started.
     let stopped = false;
     const stopping = dispatcher.stop().then(() => {
       stopped = true;
     });
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(stopped, 'stop() returned while a send was still outstanding').toBe(false);
 
     hold.release();

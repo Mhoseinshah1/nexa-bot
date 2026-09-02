@@ -39,8 +39,8 @@ describe('configuration', () => {
     });
 
     it('is not fooled by a URL that merely contains https', () => {
-      // `startsWith` gets this backwards in both directions, which is why the
-      // check parses the URL and reads its protocol.
+      // An `includes('https')` accepts this. The check parses the URL and
+      // reads its protocol instead.
       expect(() =>
         loadConfig({
           ...production,
@@ -50,21 +50,25 @@ describe('configuration', () => {
     });
 
     it('accepts an uppercase scheme, which is the same scheme', () => {
-      expect(() =>
-        loadConfig({ ...production, TELEGRAM_API_BASE_URL: 'HTTPS://api.telegram.org' }),
-      ).not.toThrow();
+      // And stores it as given: a `startsWith('https')` would reject this, and
+      // a normaliser would quietly change what the operator configured.
+      const config = loadConfig({
+        ...production,
+        TELEGRAM_API_BASE_URL: 'HTTPS://api.telegram.org',
+      });
+      expect(config.TELEGRAM_API_BASE_URL).toBe('HTTPS://api.telegram.org');
     });
 
-    it('does not rewrite an insecure URL into a secure one', () => {
-      // Silently upgrading it would hide that somebody configured it, which is
-      // exactly the thing worth knowing about a deployment.
-      let caught: unknown;
-      try {
-        loadConfig({ ...production, TELEGRAM_API_BASE_URL: 'http://api.telegram.org' });
-      } catch (error) {
-        caught = error;
-      }
-      expect(caught).toBeDefined();
+    it('does not rewrite an accepted URL', () => {
+      // A rewrite can only be observed on a value that is ACCEPTED — the
+      // rejected case above proves refusal, not preservation. Silently
+      // upgrading an insecure URL would hide that somebody had configured one,
+      // which is exactly what is worth knowing about a deployment.
+      const config = loadConfig({
+        ...production,
+        TELEGRAM_API_BASE_URL: 'https://api.telegram.org/bot/',
+      });
+      expect(config.TELEGRAM_API_BASE_URL).toBe('https://api.telegram.org/bot/');
     });
 
     it('still allows a local http stub outside production', () => {

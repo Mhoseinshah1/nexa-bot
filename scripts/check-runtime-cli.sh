@@ -7,10 +7,12 @@
 # not run in the one place they matter most: a fresh install, before first
 # boot, and every upgrade after it.
 #
-# This checks three things, because the first two alone have both been true of
-# a broken build. The file existing does not mean it loads; loading it under a
-# node_modules tree that also contains devDependencies does not mean it would
-# load without them.
+# This checks four things. The first three are about that packaging claim, and
+# the first two alone have both been true of a broken build: the file existing
+# does not mean it loads, and loading it under a node_modules tree that also
+# contains devDependencies does not mean it would load without them. The fourth
+# is a different artifact concern that belongs with the other build assertions
+# — the Web Admin must not publish its own source maps.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -70,20 +72,36 @@ pass "they load and expose their entrypoints, with migrations reachable from dis
 # resolves here because the workspace has everything installed, and fails in an
 # image built with `--prod`.
 DEV_DEPS=$(node -e "
-  const pkg = require('./apps/api/package.json');
-  console.log(Object.keys(pkg.devDependencies ?? {}).join('\n'));
+  // Every devDependency that could reach dist, not just the api's own. A root
+  // devDependency — vitest, eslint, typescript — is just as absent from an
+  // image built with --prod, and the first version of this check scanned only
+  // apps/api/package.json.
+  const manifests = [
+    './package.json',
+    './apps/api/package.json',
+    './packages/contracts/package.json',
+    './packages/i18n/package.json',
+  ];
+  const names = new Set();
+  for (const m of manifests) {
+    let pkg;
+    try { pkg = require(m); } catch { continue; }
+    for (const name of Object.keys(pkg.devDependencies ?? {})) names.add(name);
+    // A devDependency of one workspace is a production dependency of another
+    // only if that workspace declares it, so subtract what api ships with.
+  }
+  const prod = new Set(Object.keys(require('./apps/api/package.json').dependencies ?? {}));
+  console.log([...names].filter((n) => !prod.has(n)).join('\n'));
 ")
 LEAKED=""
 for dep in $DEV_DEPS; do
-  # Bare specifiers only: 'dep' or 'dep/sub'. A path containing the name is not
-  # an import of it.
-  #
-  # All THREE forms. The first version of this check matched `from '...'` and
-  # `require(...)` only, so a side-effect import — `import 'tsx';`, the exact
-  # shape `reflect-metadata` is imported in — passed it. Found by injecting one
-  # and watching the check stay green, which is the only way that kind of hole
-  # is ever found.
-  if grep -rqE "from '${dep}(/[^']*)?'|require\('${dep}(/[^']*)?'\)|import '${dep}(/[^']*)?'" apps/api/dist 2>/dev/null; then
+  # ALL FOUR import forms. The first version matched `from '…'`, `require(…)`
+  # and `import '…'` but not `import('…')`, so any dynamic import of a
+  # devDependency was invisible — found by injecting one and watching the check
+  # stay green. Single quotes only is safe because `format:check` enforces
+  # Prettier's `singleQuote` on everything that compiles into dist.
+  if grep -rqE "from '${dep}(/[^']*)?'|require\('${dep}(/[^']*)?'\)|import '${dep}(/[^']*)?'|import\('${dep}(/[^']*)?'\)" \
+      apps/api/dist packages/contracts/dist packages/i18n/dist 2>/dev/null; then
     LEAKED="${LEAKED} ${dep}"
   fi
 done

@@ -5,19 +5,17 @@ import {
   API_PREFIX,
   AUTH_ROUTES,
   errorResponseSchema,
-  HEALTH_ROUTES,
   healthInfoResponseSchema,
-  healthReadyResponseSchema,
   loginResponseSchema,
   logoutResponseSchema,
   sessionResponseSchema,
   type AdminListResponse,
   type HealthInfoResponse,
-  type HealthReadyResponse,
   type LoginResponse,
   type LogoutResponse,
   type SessionResponse,
   CONTROL_ROUTES,
+  HEALTH_ROUTES,
   featureFlagListResponseSchema,
   featureFlagWriteResponseSchema,
   settingWriteResponseSchema,
@@ -54,38 +52,21 @@ import {
  * in the API at the same time — which is the whole reason the seam exists.
  */
 
-async function get<T>(path: string, schema: { parse: (v: unknown) => T }): Promise<T> {
-  const response = await fetch(path, { headers: { accept: 'application/json' } });
-  // A body that is not JSON — a proxy's HTML error page, an empty 502 — threw a
-  // SyntaxError from inside `json()` before the status was ever looked at, so
-  // the screen reported a parse failure for what was really a gateway being
-  // down. Reading it as null lets the status check below say what happened.
-  const body: unknown = await response.json().catch(() => null);
-  // A 503 from readiness is a valid, well-shaped answer, not a transport error.
-  if (!response.ok && response.status !== 503) {
-    throw new Error(`Request to ${path} failed with ${response.status}`);
-  }
-  return schema.parse(body);
-}
-
-/**
- * The anonymous probe. A status and nothing else, by design.
- *
- * Kept because the sign-in screen may need to know the API is reachable before
- * anybody has a session. The panel's readiness panel uses `fetchReadiness`
- * below, which is authenticated and carries the reasons.
- */
-export function fetchLiveness(): Promise<HealthReadyResponse> {
-  return get(HEALTH_ROUTES.ready, healthReadyResponseSchema);
-}
-
 /** Readiness with dependency detail. Requires a session. */
 export function fetchReadiness(): Promise<SystemReadinessResponse> {
   return authedGet(CONTROL_ROUTES.systemReadiness, systemReadinessResponseSchema);
 }
 
+/**
+ * Build metadata. Requires a session, so it goes through `authedGet`.
+ *
+ * It worked through the anonymous `get()` only because the Fetch spec defaults
+ * `credentials` to `same-origin` — the implicit behaviour this file elsewhere
+ * says it does not rely on. Relying on it here would have been the same bet,
+ * made silently.
+ */
 export function fetchInfo(): Promise<HealthInfoResponse> {
-  return get(HEALTH_ROUTES.info, healthInfoResponseSchema);
+  return authedGet(HEALTH_ROUTES.info, healthInfoResponseSchema, { absolute: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -196,8 +177,20 @@ export async function fetchAdmins(): Promise<AdminListResponse> {
 // ---------------------------------------------------------------------------
 
 /** An authenticated GET that parses with the frozen schema. */
-async function authedGet<T>(path: string, schema: { parse: (v: unknown) => T }): Promise<T> {
-  const response = await fetch(`${API_PREFIX}${path}`, {
+/**
+ * An authenticated GET.
+ *
+ * `absolute` is for the health routes, which live outside `API_PREFIX` but are
+ * no longer anonymous. `credentials: 'same-origin'` is explicit throughout: it
+ * is the spec's default, and a default nobody wrote down is a default nobody
+ * notices changing.
+ */
+async function authedGet<T>(
+  path: string,
+  schema: { parse: (v: unknown) => T },
+  options: { absolute?: boolean } = {},
+): Promise<T> {
+  const response = await fetch(options.absolute === true ? path : `${API_PREFIX}${path}`, {
     credentials: 'same-origin',
     headers: { accept: 'application/json' },
   });

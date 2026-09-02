@@ -56,6 +56,25 @@ replayed key returns the first result. Version conflict and idempotent replay
 are different answers to different questions: a replay is the same request
 arriving twice, a conflict is a different request built on stale state.
 
+### A concurrent loser rolls back rather than waiting for the winner
+
+Two simultaneous requests carrying one idempotency key both pass the `find`
+that precedes the work — neither can see the other's uncommitted row — so they
+meet at the insert. `rememberOnce` makes that meeting visible: the loser throws
+`platform.idempotency_in_flight` and its whole transaction rolls back.
+
+It does NOT wait for the winner and replay its result. Waiting means holding a
+transaction open on a row another transaction has not committed, for as long
+as that one takes, which is the thing "nothing expensive happens inside a
+transaction" above exists to prevent — and the winner may yet roll back, in
+which case the waiter has blocked on nothing.
+
+The cost is that a caller who genuinely raced themselves gets a conflict rather
+than an answer. That is acceptable because the winner's result is DURABLE: a
+retry with the same key replays it, so the answer is one request away rather
+than lost. `NotificationService.sendTest` is the write where this is most
+visible, since a double-clicked test button is exactly how the race is reached.
+
 ## Rejected
 
 **`SELECT … FOR UPDATE` on the row.** It works, and it costs a held lock for the

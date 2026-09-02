@@ -106,6 +106,12 @@ export class TelegramNotificationTransport implements NotificationTransport {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
         signal: controller.signal,
+        // Never follow a redirect. The bot token is in the request PATH, so a
+        // 30x from the configured base to an http:// or third-party location
+        // would hand the credential straight over — and the production https
+        // rule in the config schema binds only the FIRST hop. Telegram's API
+        // does not redirect; anything that does is not Telegram.
+        redirect: 'error',
       });
 
       // A body that will not parse is kept DISTINCT from a body that parsed

@@ -21,6 +21,7 @@ import {
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
+import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -167,6 +168,8 @@ export class FeatureFlagsService {
      * back, so it must not travel through the projector's own transaction.
      */
     private readonly opsLog: OperationalEventRecorder,
+    /** For the mutation-time session-revocation check. */
+    private readonly sessions: SessionRepository,
   ) {}
 
   async list(scope: ScopeContext, actor: ActorContext): Promise<ResolvedFeatureFlag[]> {
@@ -267,7 +270,14 @@ export class FeatureFlagsService {
     }
 
     const result = await runAuthorizedMutation(
-      { uow: this.uow, guard: this.guard, audit: this.audit, opsLog: this.opsLog },
+      {
+        uow: this.uow,
+        guard: this.guard,
+        audit: this.audit,
+        opsLog: this.opsLog,
+        sessions: this.sessions,
+        clock: this.clock,
+      },
       scope,
       actor,
       FEATURES_EDIT,

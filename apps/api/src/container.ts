@@ -322,6 +322,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // The RAW recorder: a repair closes the condition the resolver opened, and
     // the projecting decorator reads settings to decide whether to notify.
     opsLogWriter,
+    // For the mutation-time session-revocation check.
+    sessions,
   );
 
   const featureFlagRepository = new DrizzleFeatureFlagRepository(database.db);
@@ -341,6 +343,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // The RAW recorder. A denial's event is written after its transaction has
     // rolled back, so it must not travel through the projector's transaction.
     opsLogWriter,
+    // For the mutation-time session-revocation check.
+    sessions,
   );
 
   const templateRepository = new DrizzleTemplateRepository(database.db);
@@ -365,6 +369,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // The RAW recorder, for the same reason as above: a denial is recorded
     // after its transaction has already rolled back.
     opsLogWriter,
+    // For the mutation-time session-revocation check.
+    sessions,
   );
 
   const notificationRepository = new DrizzleNotificationRepository(database.db, ids);
@@ -388,6 +394,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     audit,
     idempotency,
     uow,
+    // The RAW recorder: a denial is recorded after its transaction has already
+    // rolled back.
+    opsLogWriter,
+    // For the mutation-time session-revocation check.
+    sessions,
   );
 
   // Recording and announcing become one call from here on. Everything that

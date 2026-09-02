@@ -22,10 +22,16 @@ export interface RedisHandle {
 
 export function createRedis(url: string): RedisHandle {
   const client = new Redis(url, {
-    // A command that cannot reach Redis fails instead of queueing forever
-    // behind an unbounded retry, so a stall surfaces as an error rather than
-    // as unexplained slowness. It is also what a queue library would require
-    // here, when one arrives.
+    // `null` means "retry for ever": a command issued while the connection is
+    // down waits until it comes back rather than rejecting with
+    // MaxRetriesPerRequestError. That is what a queue library wants — a job
+    // must not be lost to a reconnect — and it is what this will be for.
+    //
+    // Said plainly because the comment here previously claimed the OPPOSITE,
+    // that a command "fails instead of queueing forever". It does not, and a
+    // reader trusting that would conclude the readiness probe below is bounded
+    // when nothing about this option bounds it. The probe carries its own
+    // deadline for exactly that reason.
     maxRetriesPerRequest: null,
     lazyConnect: true,
   });

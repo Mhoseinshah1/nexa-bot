@@ -70,10 +70,10 @@ touch the database.
 ```bash
 bash scripts/dev-services.sh   # postgres + redis (docker, or native fallback)
 pnpm db:migrate:dev && pnpm db:seed:dev   # compiled: pnpm build && pnpm db:migrate
-pnpm admin:bootstrap           # create the installation's first owner (CLI only)
+pnpm admin:bootstrap           # first owner, from dist (dev: admin:bootstrap:dev)
 pnpm verify                    # typecheck, lint, boundaries, i18n, unit tests, build
 pnpm test:integration          # needs the services above
-pnpm test:exhaustive           # 1341 notification orderings; nightly in CI, ~4 min
+pnpm test:exhaustive           # 1341 notification orderings, ~4 min; nightly in CI
 pnpm check:runtime             # dist CLI runs without devDeps; web ships no source maps
 ```
 
