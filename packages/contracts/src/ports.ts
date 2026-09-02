@@ -61,6 +61,17 @@ export interface Logger {
  */
 export interface UnitOfWork<TTransaction = unknown> {
   run<T>(scope: ScopeContext, fn: (tx: TTransaction) => Promise<T>): Promise<T>;
+
+  /**
+   * A transaction whose statements all see ONE snapshot.
+   *
+   * `run` is READ COMMITTED: every statement takes its own snapshot, which is
+   * what an optimistic write predicate needs and what a multi-statement READ
+   * must not rely on. Two reads inside `run` can straddle another writer's
+   * commit and produce a reply describing a state that never existed. Use this
+   * where a reply is assembled from more than one read.
+   */
+  runSnapshot<T>(scope: ScopeContext, fn: (tx: TTransaction) => Promise<T>): Promise<T>;
   /**
    * A savepoint inside an existing transaction.
    *
