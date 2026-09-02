@@ -338,6 +338,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
     tenants,
+    // The RAW recorder. A denial's event is written after its transaction has
+    // rolled back, so it must not travel through the projector's transaction.
+    opsLogWriter,
   );
 
   const templateRepository = new DrizzleTemplateRepository(database.db);
@@ -359,6 +362,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
     tenants,
+    // The RAW recorder, for the same reason as above: a denial is recorded
+    // after its transaction has already rolled back.
+    opsLogWriter,
   );
 
   const notificationRepository = new DrizzleNotificationRepository(database.db, ids);

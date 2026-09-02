@@ -14,6 +14,7 @@ import {
   type Clock,
   type IdGenerator,
   type IdempotencyStore,
+  type OperationalEventRecorder,
   type PermissionKey,
   type PlaceholderDefinition,
   type ScopeContext,
@@ -23,6 +24,7 @@ import {
 } from '@nexa/contracts';
 
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
+import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
 import type { FeatureFlagResolver } from '../../features/application/feature-flags.service.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -162,6 +164,13 @@ export class TemplateManagementService {
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     private readonly scopeActivity: ScopeActivityReader,
+    /**
+     * The RAW recorder, for denials only.
+     *
+     * A denial's operational event is written after its transaction has rolled
+     * back, so it must not travel through the projector's own transaction.
+     */
+    private readonly opsLog: OperationalEventRecorder,
   ) {}
 
   async list(
@@ -305,129 +314,136 @@ export class TemplateManagementService {
       };
     }
 
-    const result = await this.uow.run(scope, async (tx) => {
-      await this.requireActiveScope(scope, tx);
+    const result = await runAuthorizedMutation(
+      { uow: this.uow, guard: this.guard, audit: this.audit, opsLog: this.opsLog },
+      scope,
+      actor,
+      TEMPLATES_EDIT,
+      { action: 'templates.set', entityType: 'Template', entityId: key },
+      async (tx) => {
+        await this.requireActiveScope(scope, tx);
 
-      const before = await this.templates.findOverride(scope, key, locale, tx);
+        const before = await this.templates.findOverride(scope, key, locale, tx);
 
-      // Saving the same body again is not a change, and must not become one.
-      //
-      // Without this, re-pressing save writes a revision identical to the last,
-      // bumps the version, and invalidates every other editor's expectation for
-      // no reason — turning the history into a record of how many times somebody
-      // pressed a button rather than of what the message said.
-      // Checked before the no-op shortcut, and for the reason given at length
-      // in `SettingsService.set`: the shortcut returns without executing the
-      // conditional update, so without this a request built on state that has
-      // moved is accepted as "no change" whenever its body coincides. The
-      // writing path still carries its own predicate.
-      if (
-        (before?.version ?? null) !== command.expectedVersion ||
-        (before?.revision ?? null) !== command.expectedRevision
-      ) {
-        throw errors.conflict(
-          CONTROL_ERROR_CODES.VERSION_CONFLICT,
-          `${key} changed while you were editing it. Reload and reapply your change.`,
-          { key, expectedVersion: command.expectedVersion },
+        // Saving the same body again is not a change, and must not become one.
+        //
+        // Without this, re-pressing save writes a revision identical to the last,
+        // bumps the version, and invalidates every other editor's expectation for
+        // no reason — turning the history into a record of how many times somebody
+        // pressed a button rather than of what the message said.
+        // Checked before the no-op shortcut, and for the reason given at length
+        // in `SettingsService.set`: the shortcut returns without executing the
+        // conditional update, so without this a request built on state that has
+        // moved is accepted as "no change" whenever its body coincides. The
+        // writing path still carries its own predicate.
+        if (
+          (before?.version ?? null) !== command.expectedVersion ||
+          (before?.revision ?? null) !== command.expectedRevision
+        ) {
+          throw errors.conflict(
+            CONTROL_ERROR_CODES.VERSION_CONFLICT,
+            `${key} changed while you were editing it. Reload and reapply your change.`,
+            { key, expectedVersion: command.expectedVersion },
+          );
+        }
+
+        if (before !== null && before.body === command.body) {
+          const template = this.toView(key, locale, before, await this.overridesApplied(scope, tx));
+          await rememberOnce(
+            this.idempotency,
+            scope,
+            actor.surface,
+            command.idempotencyKey,
+            requestHash,
+            this.toReplayRecord(template, before.revision, false),
+            tx,
+          );
+          return { template, revision: before.revision, changed: false };
+        }
+
+        const revision = (await this.templates.latestRevision(scope, key, locale, tx)) + 1;
+
+        // The override write goes FIRST, so a concurrent edit is refused by the
+        // version predicate before a revision number is claimed. The other order
+        // would surface a raw unique-index violation on the revision instead of a
+        // conflict that names what happened.
+        const written = await this.templates.upsertOverride(
+          scope,
+          {
+            id: this.ids.uuid(),
+            key,
+            locale,
+            body: command.body,
+            revision,
+            expectedVersion: command.expectedVersion,
+            expectedRevision: command.expectedRevision,
+            now: this.clock.now(),
+            adminId: actor.type === 'WEB_ADMIN' ? actor.id : null,
+          },
+          tx,
         );
-      }
+        if (written === null) {
+          throw errors.conflict(
+            CONTROL_ERROR_CODES.VERSION_CONFLICT,
+            `${key} changed while you were editing it. Reload and reapply your change.`,
+            { key, expectedVersion: command.expectedVersion },
+          );
+        }
 
-      if (before !== null && before.body === command.body) {
-        const template = this.toView(key, locale, before, await this.overridesApplied(scope, tx));
+        await this.templates.appendRevision(
+          scope,
+          {
+            id: this.ids.uuid(),
+            key,
+            locale,
+            revision,
+            action: 'SET',
+            body: command.body,
+            now: this.clock.now(),
+            adminId: actor.type === 'WEB_ADMIN' ? actor.id : null,
+          },
+          tx,
+        );
+
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'templates.set',
+            entityType: 'Template',
+            entityId: key,
+            before: before ? { body: before.body, revision: before.revision } : null,
+            after: { body: command.body, revision },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+
+        await this.outbox.write(tx, actor, {
+          eventType: 'TemplateOverrideChanged',
+          aggregateType: 'Template',
+          aggregateId: key,
+          payload: {
+            key,
+            locale,
+            revision,
+            previousRevision: before ? before.revision : null,
+          },
+        });
+
+        const template = this.toView(key, locale, written, await this.overridesApplied(scope, tx));
         await rememberOnce(
           this.idempotency,
           scope,
           actor.surface,
           command.idempotencyKey,
           requestHash,
-          this.toReplayRecord(template, before.revision, false),
+          this.toReplayRecord(template, revision, true),
           tx,
         );
-        return { template, revision: before.revision, changed: false };
-      }
-
-      const revision = (await this.templates.latestRevision(scope, key, locale, tx)) + 1;
-
-      // The override write goes FIRST, so a concurrent edit is refused by the
-      // version predicate before a revision number is claimed. The other order
-      // would surface a raw unique-index violation on the revision instead of a
-      // conflict that names what happened.
-      const written = await this.templates.upsertOverride(
-        scope,
-        {
-          id: this.ids.uuid(),
-          key,
-          locale,
-          body: command.body,
-          revision,
-          expectedVersion: command.expectedVersion,
-          expectedRevision: command.expectedRevision,
-          now: this.clock.now(),
-          adminId: actor.type === 'WEB_ADMIN' ? actor.id : null,
-        },
-        tx,
-      );
-      if (written === null) {
-        throw errors.conflict(
-          CONTROL_ERROR_CODES.VERSION_CONFLICT,
-          `${key} changed while you were editing it. Reload and reapply your change.`,
-          { key, expectedVersion: command.expectedVersion },
-        );
-      }
-
-      await this.templates.appendRevision(
-        scope,
-        {
-          id: this.ids.uuid(),
-          key,
-          locale,
-          revision,
-          action: 'SET',
-          body: command.body,
-          now: this.clock.now(),
-          adminId: actor.type === 'WEB_ADMIN' ? actor.id : null,
-        },
-        tx,
-      );
-
-      await this.audit.record(
-        scope,
-        actor,
-        {
-          action: 'templates.set',
-          entityType: 'Template',
-          entityId: key,
-          before: before ? { body: before.body, revision: before.revision } : null,
-          after: { body: command.body, revision },
-          result: 'SUCCESS',
-        },
-        tx,
-      );
-
-      await this.outbox.write(tx, actor, {
-        eventType: 'TemplateOverrideChanged',
-        aggregateType: 'Template',
-        aggregateId: key,
-        payload: {
-          key,
-          locale,
-          revision,
-          previousRevision: before ? before.revision : null,
-        },
-      });
-
-      const template = this.toView(key, locale, written, await this.overridesApplied(scope, tx));
-      await rememberOnce(
-        this.idempotency,
-        scope,
-        actor.surface,
-        command.idempotencyKey,
-        requestHash,
-        this.toReplayRecord(template, revision, true),
-        tx,
-      );
-      return { template, revision, changed: true };
-    });
+        return { template, revision, changed: true };
+      },
+    );
 
     return { ...result, replayed: false };
   }
@@ -470,88 +486,95 @@ export class TemplateManagementService {
       };
     }
 
-    const result = await this.uow.run(scope, async (tx) => {
-      await this.requireActiveScope(scope, tx);
+    const result = await runAuthorizedMutation(
+      { uow: this.uow, guard: this.guard, audit: this.audit, opsLog: this.opsLog },
+      scope,
+      actor,
+      TEMPLATES_EDIT,
+      { action: 'templates.revert', entityType: 'Template', entityId: key },
+      async (tx) => {
+        await this.requireActiveScope(scope, tx);
 
-      const removed = await this.templates.deleteOverride(
-        scope,
-        {
-          key,
-          locale,
-          expectedVersion: command.expectedVersion,
-          expectedRevision: command.expectedRevision,
-        },
-        tx,
-      );
-      if (removed === null) {
-        // Two different situations, and they deserve different answers: nothing
-        // to revert, or somebody edited it while this was being decided.
-        const current = await this.templates.findOverride(scope, key, locale, tx);
-        if (current === null) {
-          throw errors.notFound(
-            CONTROL_ERROR_CODES.TEMPLATE_NOT_OVERRIDDEN,
-            `${key} has no override to revert; it is already using the default.`,
-            { key },
+        const removed = await this.templates.deleteOverride(
+          scope,
+          {
+            key,
+            locale,
+            expectedVersion: command.expectedVersion,
+            expectedRevision: command.expectedRevision,
+          },
+          tx,
+        );
+        if (removed === null) {
+          // Two different situations, and they deserve different answers: nothing
+          // to revert, or somebody edited it while this was being decided.
+          const current = await this.templates.findOverride(scope, key, locale, tx);
+          if (current === null) {
+            throw errors.notFound(
+              CONTROL_ERROR_CODES.TEMPLATE_NOT_OVERRIDDEN,
+              `${key} has no override to revert; it is already using the default.`,
+              { key },
+            );
+          }
+          throw errors.conflict(
+            CONTROL_ERROR_CODES.VERSION_CONFLICT,
+            `${key} changed while you were reverting it. Reload and decide again.`,
+            { key, expectedVersion: command.expectedVersion },
           );
         }
-        throw errors.conflict(
-          CONTROL_ERROR_CODES.VERSION_CONFLICT,
-          `${key} changed while you were reverting it. Reload and decide again.`,
-          { key, expectedVersion: command.expectedVersion },
+
+        const revision = (await this.templates.latestRevision(scope, key, locale, tx)) + 1;
+        await this.templates.appendRevision(
+          scope,
+          {
+            id: this.ids.uuid(),
+            key,
+            locale,
+            revision,
+            action: 'REVERT',
+            // A REVERT stores no body. Reverting means going back to the default,
+            // not taking a copy of whatever the default happens to say today.
+            body: null,
+            now: this.clock.now(),
+            adminId: actor.type === 'WEB_ADMIN' ? actor.id : null,
+          },
+          tx,
         );
-      }
 
-      const revision = (await this.templates.latestRevision(scope, key, locale, tx)) + 1;
-      await this.templates.appendRevision(
-        scope,
-        {
-          id: this.ids.uuid(),
-          key,
-          locale,
-          revision,
-          action: 'REVERT',
-          // A REVERT stores no body. Reverting means going back to the default,
-          // not taking a copy of whatever the default happens to say today.
-          body: null,
-          now: this.clock.now(),
-          adminId: actor.type === 'WEB_ADMIN' ? actor.id : null,
-        },
-        tx,
-      );
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'templates.revert',
+            entityType: 'Template',
+            entityId: key,
+            before: { body: removed.body, revision: removed.revision },
+            after: null,
+            result: 'SUCCESS',
+          },
+          tx,
+        );
 
-      await this.audit.record(
-        scope,
-        actor,
-        {
-          action: 'templates.revert',
-          entityType: 'Template',
-          entityId: key,
-          before: { body: removed.body, revision: removed.revision },
-          after: null,
-          result: 'SUCCESS',
-        },
-        tx,
-      );
+        await this.outbox.write(tx, actor, {
+          eventType: 'TemplateOverrideReverted',
+          aggregateType: 'Template',
+          aggregateId: key,
+          payload: { key, locale, revision },
+        });
 
-      await this.outbox.write(tx, actor, {
-        eventType: 'TemplateOverrideReverted',
-        aggregateType: 'Template',
-        aggregateId: key,
-        payload: { key, locale, revision },
-      });
-
-      const template = this.toView(key, locale, null, await this.overridesApplied(scope, tx));
-      await rememberOnce(
-        this.idempotency,
-        scope,
-        actor.surface,
-        command.idempotencyKey,
-        requestHash,
-        this.toReplayRecord(template, revision, true),
-        tx,
-      );
-      return { template, revision, changed: true };
-    });
+        const template = this.toView(key, locale, null, await this.overridesApplied(scope, tx));
+        await rememberOnce(
+          this.idempotency,
+          scope,
+          actor.surface,
+          command.idempotencyKey,
+          requestHash,
+          this.toReplayRecord(template, revision, true),
+          tx,
+        );
+        return { template, revision, changed: true };
+      },
+    );
 
     return { ...result, replayed: false };
   }

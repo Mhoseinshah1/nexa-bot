@@ -19,6 +19,7 @@ import {
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
+import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
@@ -210,145 +211,152 @@ export class SettingsService {
       };
     }
 
-    const result = await this.uow.run(scope, async (tx) => {
-      if (!(await this.scopeActivity.scopeIsActive(scope, tx))) {
-        throw errors.notFound(
-          PLATFORM_ERROR_CODES.TENANT_NOT_FOUND,
-          'This scope is not accepting work.',
+    const result = await runAuthorizedMutation(
+      { uow: this.uow, guard: this.guard, audit: this.audit, opsLog: this.opsLog },
+      scope,
+      actor,
+      SETTINGS_EDIT,
+      { action: 'settings.set', entityType: 'Setting', entityId: key },
+      async (tx) => {
+        if (!(await this.scopeActivity.scopeIsActive(scope, tx))) {
+          throw errors.notFound(
+            PLATFORM_ERROR_CODES.TENANT_NOT_FOUND,
+            'This scope is not accepting work.',
+          );
+        }
+
+        const before = await this.resolver.resolve(scope, key, tx);
+
+        // The expectation is checked before the no-op shortcut below, and this
+        // is the one place in this module where a check precedes its statement.
+        //
+        // It has to. The shortcut RETURNS without executing the conditional
+        // update, so the predicate that normally decides the question never runs
+        // — and a request built on state that has since moved was accepted as "no
+        // change" whenever its value happened to coincide with what is there now.
+        // A caller who read the key as unset, or who read a version two writes
+        // ago, was told their expectation held. That is the same lie as accepting
+        // the write, minus the write.
+        //
+        // It is NOT the authority, and nothing here relies on it being one: the
+        // path that writes still carries the predicate in its own statement, so a
+        // change landing between this read and that statement is caught there.
+        // This only decides whether the shortcut is available.
+        if (before.version !== command.expectedVersion) {
+          throw errors.conflict(
+            CONTROL_ERROR_CODES.VERSION_CONFLICT,
+            `${key} changed while you were editing it. Reload and reapply your change.`,
+            { key, expectedVersion: command.expectedVersion },
+          );
+        }
+
+        // A write that changes nothing is reported as changing nothing. Three
+        // unrelated legacy subsystems answer "✅ updated" to a write that touched
+        // no row, and one of them did it three times in a row while a product
+        // stayed broken (SOURCE_BUG-002).
+        if (before.source === 'TENANT' && deepEqual(before.value, value)) {
+          // The key is still consumed. A no-op is a completed command, and a key
+          // that is never stored is a key whose reuse with DIFFERENT input cannot
+          // be detected — the payload-mismatch check has nothing to compare
+          // against until a record exists.
+          await rememberOnce(
+            this.idempotency,
+            scope,
+            actor.surface,
+            command.idempotencyKey,
+            requestHash,
+            toReplayRecord(before, false),
+            tx,
+          );
+          return { setting: before, changed: false };
+        }
+
+        const written = await this.settings.upsert(
+          scope,
+          {
+            id: this.ids.uuid(),
+            key,
+            value,
+            expectedVersion: command.expectedVersion,
+            now: this.clock.now(),
+            adminId: actor.type === 'WEB_ADMIN' ? actor.id : null,
+          },
+          tx,
         );
-      }
 
-      const before = await this.resolver.resolve(scope, key, tx);
+        if (written === null) {
+          // Zero rows matched the expectation. Somebody else wrote between the
+          // read and this statement — the check being IN the statement is what
+          // makes that detectable rather than silently lost.
+          throw errors.conflict(
+            CONTROL_ERROR_CODES.VERSION_CONFLICT,
+            `${key} changed while you were editing it. Reload and reapply your change.`,
+            { key, expectedVersion: command.expectedVersion },
+          );
+        }
 
-      // The expectation is checked before the no-op shortcut below, and this
-      // is the one place in this module where a check precedes its statement.
-      //
-      // It has to. The shortcut RETURNS without executing the conditional
-      // update, so the predicate that normally decides the question never runs
-      // — and a request built on state that has since moved was accepted as "no
-      // change" whenever its value happened to coincide with what is there now.
-      // A caller who read the key as unset, or who read a version two writes
-      // ago, was told their expectation held. That is the same lie as accepting
-      // the write, minus the write.
-      //
-      // It is NOT the authority, and nothing here relies on it being one: the
-      // path that writes still carries the predicate in its own statement, so a
-      // change landing between this read and that statement is caught there.
-      // This only decides whether the shortcut is available.
-      if (before.version !== command.expectedVersion) {
-        throw errors.conflict(
-          CONTROL_ERROR_CODES.VERSION_CONFLICT,
-          `${key} changed while you were editing it. Reload and reapply your change.`,
-          { key, expectedVersion: command.expectedVersion },
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'settings.set',
+            entityType: 'Setting',
+            entityId: key,
+            // Values, not references: the record still means something after the
+            // row changes again.
+            before: { value: before.value, source: before.source },
+            after: { value: written.value, source: 'TENANT' },
+            result: 'SUCCESS',
+          },
+          tx,
         );
-      }
 
-      // A write that changes nothing is reported as changing nothing. Three
-      // unrelated legacy subsystems answer "✅ updated" to a write that touched
-      // no row, and one of them did it three times in a row while a product
-      // stayed broken (SOURCE_BUG-002).
-      if (before.source === 'TENANT' && deepEqual(before.value, value)) {
-        // The key is still consumed. A no-op is a completed command, and a key
-        // that is never stored is a key whose reuse with DIFFERENT input cannot
-        // be detected — the payload-mismatch check has nothing to compare
-        // against until a record exists.
+        await this.outbox.write(tx, actor, {
+          eventType: 'SettingChanged',
+          aggregateType: 'Setting',
+          aggregateId: key,
+          payload: { key, from: before.value, to: written.value },
+        });
+
+        // A repaired key CLOSES the condition its own invalidity opened.
+        //
+        // `SettingsResolver` records `settings.stored_value_invalid` every time
+        // it meets a value that no longer parses, deduplicated onto one row. That
+        // row has no other way to be resolved — nothing else knows the value
+        // became valid again — so without this the warning stays open for ever
+        // and keeps appearing in the operations view's unresolved filter, which
+        // is the "a fixed problem still looks broken" failure the recovery
+        // mechanism exists for.
+        //
+        // In the repair's transaction, so the recovery cannot survive a rollback
+        // of the write that earned it.
+        if (before.storedValueInvalid) {
+          await this.opsLog.record(
+            scope,
+            {
+              code: 'settings.stored_value_valid',
+              severity: 'INFO',
+              message: `The stored value for ${key} parses again.`,
+              context: { key },
+              recoversCode: INVALID_STORED_SETTING_CODE,
+            },
+            tx,
+          );
+        }
+
+        const setting = await this.resolver.resolve(scope, key, tx);
         await rememberOnce(
           this.idempotency,
           scope,
           actor.surface,
           command.idempotencyKey,
           requestHash,
-          toReplayRecord(before, false),
+          toReplayRecord(setting, true),
           tx,
         );
-        return { setting: before, changed: false };
-      }
-
-      const written = await this.settings.upsert(
-        scope,
-        {
-          id: this.ids.uuid(),
-          key,
-          value,
-          expectedVersion: command.expectedVersion,
-          now: this.clock.now(),
-          adminId: actor.type === 'WEB_ADMIN' ? actor.id : null,
-        },
-        tx,
-      );
-
-      if (written === null) {
-        // Zero rows matched the expectation. Somebody else wrote between the
-        // read and this statement — the check being IN the statement is what
-        // makes that detectable rather than silently lost.
-        throw errors.conflict(
-          CONTROL_ERROR_CODES.VERSION_CONFLICT,
-          `${key} changed while you were editing it. Reload and reapply your change.`,
-          { key, expectedVersion: command.expectedVersion },
-        );
-      }
-
-      await this.audit.record(
-        scope,
-        actor,
-        {
-          action: 'settings.set',
-          entityType: 'Setting',
-          entityId: key,
-          // Values, not references: the record still means something after the
-          // row changes again.
-          before: { value: before.value, source: before.source },
-          after: { value: written.value, source: 'TENANT' },
-          result: 'SUCCESS',
-        },
-        tx,
-      );
-
-      await this.outbox.write(tx, actor, {
-        eventType: 'SettingChanged',
-        aggregateType: 'Setting',
-        aggregateId: key,
-        payload: { key, from: before.value, to: written.value },
-      });
-
-      // A repaired key CLOSES the condition its own invalidity opened.
-      //
-      // `SettingsResolver` records `settings.stored_value_invalid` every time
-      // it meets a value that no longer parses, deduplicated onto one row. That
-      // row has no other way to be resolved — nothing else knows the value
-      // became valid again — so without this the warning stays open for ever
-      // and keeps appearing in the operations view's unresolved filter, which
-      // is the "a fixed problem still looks broken" failure the recovery
-      // mechanism exists for.
-      //
-      // In the repair's transaction, so the recovery cannot survive a rollback
-      // of the write that earned it.
-      if (before.storedValueInvalid) {
-        await this.opsLog.record(
-          scope,
-          {
-            code: 'settings.stored_value_valid',
-            severity: 'INFO',
-            message: `The stored value for ${key} parses again.`,
-            context: { key },
-            recoversCode: INVALID_STORED_SETTING_CODE,
-          },
-          tx,
-        );
-      }
-
-      const setting = await this.resolver.resolve(scope, key, tx);
-      await rememberOnce(
-        this.idempotency,
-        scope,
-        actor.surface,
-        command.idempotencyKey,
-        requestHash,
-        toReplayRecord(setting, true),
-        tx,
-      );
-      return { setting, changed: true };
-    });
+        return { setting, changed: true };
+      },
+    );
 
     return { ...result, replayed: false };
   }

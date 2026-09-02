@@ -14,12 +14,14 @@ import {
   type FlagBlastRadius,
   type IdGenerator,
   type IdempotencyStore,
+  type OperationalEventRecorder,
   type PermissionKey,
   type ScopeContext,
   type SettingKey,
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
+import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
@@ -158,6 +160,13 @@ export class FeatureFlagsService {
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     private readonly scopeActivity: ScopeActivityReader,
+    /**
+     * The RAW recorder, for denials only.
+     *
+     * A denial's operational event is written after its transaction has rolled
+     * back, so it must not travel through the projector's own transaction.
+     */
+    private readonly opsLog: OperationalEventRecorder,
   ) {}
 
   async list(scope: ScopeContext, actor: ActorContext): Promise<ResolvedFeatureFlag[]> {
@@ -257,102 +266,109 @@ export class FeatureFlagsService {
       };
     }
 
-    const result = await this.uow.run(scope, async (tx) => {
-      if (!(await this.scopeActivity.scopeIsActive(scope, tx))) {
-        throw errors.notFound(
-          PLATFORM_ERROR_CODES.TENANT_NOT_FOUND,
-          'This scope is not accepting work.',
+    const result = await runAuthorizedMutation(
+      { uow: this.uow, guard: this.guard, audit: this.audit, opsLog: this.opsLog },
+      scope,
+      actor,
+      FEATURES_EDIT,
+      { action: 'features.set', entityType: 'FeatureFlag', entityId: key },
+      async (tx) => {
+        if (!(await this.scopeActivity.scopeIsActive(scope, tx))) {
+          throw errors.notFound(
+            PLATFORM_ERROR_CODES.TENANT_NOT_FOUND,
+            'This scope is not accepting work.',
+          );
+        }
+
+        const before = await this.resolver.resolve(scope, key, tx);
+        const settings = await this.settings.resolveAll(scope, tx);
+
+        // Checked before the no-op shortcut, and for the reason given at length
+        // in `SettingsService.set`: the shortcut returns without executing the
+        // conditional update, so without this a request built on state that has
+        // moved is accepted as "no change" whenever its value coincides. The
+        // writing path still carries its own predicate; this only decides whether
+        // the shortcut is available.
+        if (before.version !== command.expectedVersion) {
+          throw errors.conflict(
+            CONTROL_ERROR_CODES.VERSION_CONFLICT,
+            `${key} changed while you were editing it. Reload and reapply your change.`,
+            { key, expectedVersion: command.expectedVersion },
+          );
+        }
+
+        if (before.source === 'TENANT' && before.enabled === command.enabled) {
+          // The key is still consumed; see the same note in `SettingsService`.
+          const flag = this.withConfiguration(before, settings);
+          await rememberOnce(
+            this.idempotency,
+            scope,
+            actor.surface,
+            command.idempotencyKey,
+            requestHash,
+            toFlagReplayRecord(flag, false),
+            tx,
+          );
+          return { flag, changed: false };
+        }
+
+        const written = await this.flags.upsert(
+          scope,
+          {
+            id: this.ids.uuid(),
+            key,
+            enabled: command.enabled,
+            expectedVersion: command.expectedVersion,
+            reason: command.reason ?? null,
+            now: this.clock.now(),
+            adminId: actor.type === 'WEB_ADMIN' ? actor.id : null,
+          },
+          tx,
         );
-      }
 
-      const before = await this.resolver.resolve(scope, key, tx);
-      const settings = await this.settings.resolveAll(scope, tx);
+        if (written === null) {
+          throw errors.conflict(
+            CONTROL_ERROR_CODES.VERSION_CONFLICT,
+            `${key} changed while you were editing it. Reload and reapply your change.`,
+            { key, expectedVersion: command.expectedVersion },
+          );
+        }
 
-      // Checked before the no-op shortcut, and for the reason given at length
-      // in `SettingsService.set`: the shortcut returns without executing the
-      // conditional update, so without this a request built on state that has
-      // moved is accepted as "no change" whenever its value coincides. The
-      // writing path still carries its own predicate; this only decides whether
-      // the shortcut is available.
-      if (before.version !== command.expectedVersion) {
-        throw errors.conflict(
-          CONTROL_ERROR_CODES.VERSION_CONFLICT,
-          `${key} changed while you were editing it. Reload and reapply your change.`,
-          { key, expectedVersion: command.expectedVersion },
+        await this.audit.record(
+          scope,
+          actor,
+          {
+            action: 'features.set',
+            entityType: 'FeatureFlag',
+            entityId: key,
+            before: { enabled: before.enabled, source: before.source },
+            after: { enabled: written.enabled, source: 'TENANT' },
+            ...(command.reason ? { reason: command.reason } : {}),
+            result: 'SUCCESS',
+          },
+          tx,
         );
-      }
 
-      if (before.source === 'TENANT' && before.enabled === command.enabled) {
-        // The key is still consumed; see the same note in `SettingsService`.
-        const flag = this.withConfiguration(before, settings);
+        await this.outbox.write(tx, actor, {
+          eventType: 'FeatureFlagChanged',
+          aggregateType: 'FeatureFlag',
+          aggregateId: key,
+          payload: { key, from: before.enabled, to: written.enabled },
+        });
+
+        const flag = this.withConfiguration(await this.resolver.resolve(scope, key, tx), settings);
         await rememberOnce(
           this.idempotency,
           scope,
           actor.surface,
           command.idempotencyKey,
           requestHash,
-          toFlagReplayRecord(flag, false),
+          toFlagReplayRecord(flag, true),
           tx,
         );
-        return { flag, changed: false };
-      }
-
-      const written = await this.flags.upsert(
-        scope,
-        {
-          id: this.ids.uuid(),
-          key,
-          enabled: command.enabled,
-          expectedVersion: command.expectedVersion,
-          reason: command.reason ?? null,
-          now: this.clock.now(),
-          adminId: actor.type === 'WEB_ADMIN' ? actor.id : null,
-        },
-        tx,
-      );
-
-      if (written === null) {
-        throw errors.conflict(
-          CONTROL_ERROR_CODES.VERSION_CONFLICT,
-          `${key} changed while you were editing it. Reload and reapply your change.`,
-          { key, expectedVersion: command.expectedVersion },
-        );
-      }
-
-      await this.audit.record(
-        scope,
-        actor,
-        {
-          action: 'features.set',
-          entityType: 'FeatureFlag',
-          entityId: key,
-          before: { enabled: before.enabled, source: before.source },
-          after: { enabled: written.enabled, source: 'TENANT' },
-          ...(command.reason ? { reason: command.reason } : {}),
-          result: 'SUCCESS',
-        },
-        tx,
-      );
-
-      await this.outbox.write(tx, actor, {
-        eventType: 'FeatureFlagChanged',
-        aggregateType: 'FeatureFlag',
-        aggregateId: key,
-        payload: { key, from: before.enabled, to: written.enabled },
-      });
-
-      const flag = this.withConfiguration(await this.resolver.resolve(scope, key, tx), settings);
-      await rememberOnce(
-        this.idempotency,
-        scope,
-        actor.surface,
-        command.idempotencyKey,
-        requestHash,
-        toFlagReplayRecord(flag, true),
-        tx,
-      );
-      return { flag, changed: true };
-    });
+        return { flag, changed: true };
+      },
+    );
 
     return { ...result, replayed: false };
   }
