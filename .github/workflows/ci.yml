@@ -197,6 +197,47 @@ jobs:
       - name: Production runtime and artifact checks
         run: pnpm check:runtime
 
+  # The deployment, actually run. Everything above this proves the application;
+  # this proves it can be installed, updated and rolled back.
+  #
+  # It BUILDS and VERIFIES the release image and never publishes it: publishing
+  # from pull-request CI would mean a pull request can push code to every
+  # installation. `release.yml` publishes, and only from a tag.
+  deploy:
+    name: Deployment smoke
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to an immutable commit. A tag is a moving pointer that whoever
+      # controls the action's repository can repoint at any time, and CI runs
+      # with a token. The comment names the release so an update stays legible.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # Shell is the language the installer and updater are written in, and an
+      # unquoted expansion there is a vulnerability rather than a style
+      # problem. The runner has shellcheck preinstalled.
+      # Called directly rather than through pnpm: this job needs no Node
+      # toolchain, and installing one to run shellcheck would add a minute and
+      # a dependency to a job that is about Docker.
+      - name: Shell static analysis
+        run: bash scripts/check-shell.sh
+
+      # The update and rollback state machines, against a fake docker. These
+      # reach the failure branches — a failed backup, a failed migration, a
+      # release that never becomes ready, a second writer — which the live
+      # smoke below cannot all reach cheaply.
+      - name: botctl logic
+        run: bash tests/deploy/botctl.test.sh
+
+      # Build, start, migrate, serve, back up. Uses the production compose file
+      # with the CI overlay, which changes only what CI cannot have.
+      - name: Deployment smoke
+        run: bash scripts/deployment-smoke.sh
+
+      # A -> B, a release that never becomes ready, and B -> A, against a real
+      # local registry so digests are real.
+      - name: Update and rollback smoke
+        run: bash scripts/deployment-update-smoke.sh
+
   # Deliberately its own job. A dependency audit reads a remote advisory
   # database, so it can fail for reasons that have nothing to do with the diff;
   # keeping it out of `static` and `test` means a registry outage cannot make a

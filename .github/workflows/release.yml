@@ -1,0 +1,163 @@
+name: Release
+
+# Publishing happens ONLY from a tag, and never from ordinary pull-request CI.
+# A pull request that could publish is a pull request that can push code to
+# every installation; the deployment job in ci.yml builds and verifies the same
+# image without ever logging in to a registry.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and publish, e.g. v1.0.0'
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# The minimum that lets this publish. `contents: read` to check out,
+# `packages: write` to push to GHCR, and nothing else.
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  publish:
+    name: Build and publish the release image
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      version: ${{ steps.identity.outputs.version }}
+      commit: ${{ steps.identity.outputs.commit }}
+      image: ${{ steps.identity.outputs.image }}
+    steps:
+      # Every value that reaches a `run:` block below arrives through `env:`
+      # and is used as a quoted shell variable. Interpolating `${{ }}` directly
+      # into a script splices the value into the source before the shell sees
+      # it, so a tag containing shell syntax would execute in a job that holds
+      # a token able to publish to every installation.
+      - name: Validate the requested tag
+        id: request
+        env:
+          REQUESTED: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          # A release tag and nothing else. This is also what stops a `ref:`
+          # below from being anything but a tag name.
+          if ! printf '%s' "$REQUESTED" | grep -qE '^v[0-9A-Za-z][0-9A-Za-z._-]{0,62}$'; then
+            printf 'refusing to release from "%s": releases are tagged v<version>\n' "$REQUESTED" >&2
+            exit 1
+          fi
+          printf 'tag=%s\n' "$REQUESTED" >>"$GITHUB_OUTPUT"
+
+      # Pinned to an immutable commit, per this repository's CI policy. A tag
+      # is a moving pointer that whoever controls the action's repository can
+      # repoint at any time, and this job holds a token that can publish.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # Validated above against a strict pattern, so this cannot be a
+          # branch, a SHA belonging to a fork, or anything containing a slash.
+          ref: refs/tags/${{ steps.request.outputs.tag }}
+
+      - name: Establish the release identity
+        id: identity
+        env:
+          TAG: ${{ steps.request.outputs.tag }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          # GHCR rejects an uppercase repository path, and a GitHub owner may
+          # legitimately contain capitals.
+          owner="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          {
+            printf 'version=%s\n' "$TAG"
+            printf 'commit=%s\n' "$(git rev-parse HEAD)"
+            printf 'built=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            printf 'image=%s/%s/nexa-bot\n' "$REGISTRY" "$owner"
+          } >>"$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.identity.outputs.image }}:${{ steps.identity.outputs.version }}
+          # Facts about the build, not credentials. Build arguments land in
+          # image metadata, so nothing secret may ever appear here.
+          build-args: |
+            BUILD_VERSION=${{ steps.identity.outputs.version }}
+            BUILD_COMMIT=${{ steps.identity.outputs.commit }}
+            BUILD_TIME=${{ steps.identity.outputs.built }}
+          provenance: true
+          sbom: true
+
+      # The digest is the release's identity. Printed into the job summary so a
+      # human can compare what an installation reports against what was
+      # actually published, rather than trusting either in isolation.
+      - name: Record the release identity
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+          COMMIT: ${{ steps.identity.outputs.commit }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          BUILT: ${{ steps.identity.outputs.built }}
+        run: |
+          set -euo pipefail
+          {
+            printf '### Release %s\n\n' "$VERSION"
+            printf '| field | value |\n| --- | --- |\n'
+            printf '| version | `%s` |\n' "$VERSION"
+            printf '| commit | `%s` |\n' "$COMMIT"
+            printf '| digest | `%s` |\n' "$DIGEST"
+            printf '| built | `%s` |\n\n' "$BUILT"
+            printf 'Install with:\n\n```\nsudo ./install.sh --domain <domain> --acme-email <email> --version %s\n```\n' "$VERSION"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  verify:
+    name: Verify the published image
+    runs-on: ubuntu-latest
+    needs: publish
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: refs/tags/${{ needs.publish.outputs.version }}
+
+      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pulled BY DIGEST, so the verification runs against what was published.
+      # Pulling the tag again would verify whatever the tag points at now,
+      # which is precisely what digests exist to avoid.
+      - name: Verify the artefact that was published
+        env:
+          IMAGE: ${{ needs.publish.outputs.image }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          VERSION: ${{ needs.publish.outputs.version }}
+          COMMIT: ${{ needs.publish.outputs.commit }}
+        run: |
+          set -euo pipefail
+          reference="${IMAGE}@${DIGEST}"
+          docker pull --quiet "$reference"
+          # The image must agree with the release identity. A published image
+          # whose metadata names a different commit is a release nobody can
+          # trace back to source.
+          bash scripts/check-image.sh "$reference" "$VERSION" "$COMMIT"

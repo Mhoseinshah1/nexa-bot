@@ -204,7 +204,17 @@ nexa_resolve_digest() {
   if [ -z "$digest" ]; then
     # Older Docker without buildx. `docker manifest inspect -v` reports the
     # descriptor digest for the same reference.
-    digest="$(docker manifest inspect -v "$reference" 2>/dev/null |
+    #
+    # `--insecure` ONLY for a loopback registry, and never otherwise. A
+    # registry on 127.0.0.1 has no TLS to verify and no network segment to be
+    # intercepted on; the deployment smoke test runs one so that digests are
+    # real rather than simulated. Any other host keeps TLS verification, which
+    # is what makes a digest resolved over the network worth trusting.
+    local insecure=()
+    case "$NEXA_IMAGE_REPO" in
+      127.0.0.1:* | localhost:*) insecure=(--insecure) ;;
+    esac
+    digest="$(docker manifest inspect "${insecure[@]+"${insecure[@]}"}" -v "$reference" 2>/dev/null |
       python3 -c '
 import json, sys
 try:
