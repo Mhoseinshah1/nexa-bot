@@ -158,6 +158,29 @@ export class SettingsService {
 
       const before = await this.resolver.resolve(scope, key, tx);
 
+      // The expectation is checked before the no-op shortcut below, and this
+      // is the one place in this module where a check precedes its statement.
+      //
+      // It has to. The shortcut RETURNS without executing the conditional
+      // update, so the predicate that normally decides the question never runs
+      // — and a request built on state that has since moved was accepted as "no
+      // change" whenever its value happened to coincide with what is there now.
+      // A caller who read the key as unset, or who read a version two writes
+      // ago, was told their expectation held. That is the same lie as accepting
+      // the write, minus the write.
+      //
+      // It is NOT the authority, and nothing here relies on it being one: the
+      // path that writes still carries the predicate in its own statement, so a
+      // change landing between this read and that statement is caught there.
+      // This only decides whether the shortcut is available.
+      if (before.version !== command.expectedVersion) {
+        throw errors.conflict(
+          CONTROL_ERROR_CODES.VERSION_CONFLICT,
+          `${key} changed while you were editing it. Reload and reapply your change.`,
+          { key, expectedVersion: command.expectedVersion },
+        );
+      }
+
       // A write that changes nothing is reported as changing nothing. Three
       // unrelated legacy subsystems answer "✅ updated" to a write that touched
       // no row, and one of them did it three times in a row while a product

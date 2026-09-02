@@ -145,10 +145,17 @@ export class FeatureFlagsService {
       }
     }
 
+    // The reason is part of the request, so it is part of the hash.
+    //
+    // It is persisted and audited, and leaving it out made a retry that carried
+    // a DIFFERENT reason look like the same request: the store answered with the
+    // first one's result, so the API accepted a reason it never stored. For a
+    // TENANT_WIDE toggle the reason is the half a reviewer reads later.
     const requestHash = hashRequest({
       key,
       enabled: command.enabled,
       expectedVersion: command.expectedVersion,
+      reason: command.reason ?? null,
     });
     // Re-read on replay; see the same note in `SettingsService`. A stored
     // result carries a Date through `jsonb` and comes back a string.
@@ -178,6 +185,20 @@ export class FeatureFlagsService {
 
       const before = await this.resolver.resolve(scope, key, tx);
       const settings = await this.settings.resolveAll(scope, tx);
+
+      // Checked before the no-op shortcut, and for the reason given at length
+      // in `SettingsService.set`: the shortcut returns without executing the
+      // conditional update, so without this a request built on state that has
+      // moved is accepted as "no change" whenever its value coincides. The
+      // writing path still carries its own predicate; this only decides whether
+      // the shortcut is available.
+      if (before.version !== command.expectedVersion) {
+        throw errors.conflict(
+          CONTROL_ERROR_CODES.VERSION_CONFLICT,
+          `${key} changed while you were editing it. Reload and reapply your change.`,
+          { key, expectedVersion: command.expectedVersion },
+        );
+      }
 
       if (before.source === 'TENANT' && before.enabled === command.enabled) {
         // The key is still consumed; see the same note in `SettingsService`.

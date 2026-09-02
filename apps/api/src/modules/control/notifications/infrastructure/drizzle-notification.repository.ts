@@ -321,8 +321,8 @@ export class DrizzleNotificationRepository implements NotificationRepository {
     readonly retryAfterMs: number | null;
     readonly nextStatus: NotificationStatus;
     readonly nextAttemptAt: Date;
-  }): Promise<void> {
-    await this.db.transaction(async (tx) => {
+  }): Promise<{ readonly moved: boolean }> {
+    return this.db.transaction(async (tx) => {
       await tx.insert(notificationDeliveryAttempts).values({
         id: input.attemptId,
         tenantId: input.tenantId,
@@ -341,16 +341,34 @@ export class DrizzleNotificationRepository implements NotificationRepository {
         retryAfterMs: input.retryAfterMs,
       });
 
-      // Only a PENDING intent moves.
+      // Only a PENDING intent moves, and — except on success — only at the
+      // hands of the attempt that currently owns the claim.
       //
       // A dispatcher whose send outlives its lease is not impossible: the lease
-      // exists precisely so a stalled sender's work becomes available again. If
-      // it then returns and writes its outcome unconditionally, it can put an
-      // intent a second dispatcher has already marked SENT back into PENDING —
-      // and the queue would send the same message again, on a schedule.
+      // exists precisely so a stalled sender's work becomes available again.
+      // PENDING alone was not enough to make that safe. Attempt 1 could return
+      // RETRYABLE after attempt 2 had claimed the row, replace attempt 2's
+      // lease with a short back-off, and let attempt 3 start alongside it —
+      // after which attempt 3 could mark the intent FAILED while attempt 2's
+      // send was actually succeeding, and attempt 2's own update would then be
+      // the one rejected. A delivered message, recorded as permanently failed,
+      // by two writers each behaving correctly on its own.
       //
-      // The attempt row above is still written either way, because it happened.
-      await tx
+      // `attempt_count` is the claim's identity: it is incremented by the claim
+      // and names the attempt in flight. Matching it means a stale writer's
+      // status update is a no-op.
+      //
+      // SUCCESS is the exception, deliberately. Delivery is terminal truth
+      // whoever observed it, and letting a late success end the intent stops
+      // the NEXT attempt sending the same message again. It costs nothing: an
+      // intent that has been delivered has nothing left to do.
+      const ownership =
+        input.outcome === 'SUCCEEDED'
+          ? undefined
+          : eq(notifications.attemptCount, input.attemptNumber);
+
+      // The attempt row above is written either way, because it happened.
+      const moved = await tx
         .update(notifications)
         .set({
           status: input.nextStatus,
@@ -364,8 +382,12 @@ export class DrizzleNotificationRepository implements NotificationRepository {
             eq(notifications.tenantId, input.tenantId),
             eq(notifications.id, input.notificationId),
             eq(notifications.status, 'PENDING'),
+            ...(ownership ? [ownership] : []),
           ),
-        );
+        )
+        .returning({ id: notifications.id });
+
+      return { moved: moved.length > 0 };
     });
   }
 }

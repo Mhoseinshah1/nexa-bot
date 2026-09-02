@@ -553,3 +553,316 @@ describe('control plane, third review round', () => {
     });
   });
 });
+
+/**
+ * What the Codex review found that the three rounds before it did not.
+ *
+ * Kept in its own describe because the origin matters: each of these is a race
+ * or an expectation semantics question that reads correct line by line, which
+ * is exactly the class three human-shaped reviews had already walked past.
+ */
+describe('control plane, Codex round', () => {
+  let ctx: TestContext;
+  let owner: ActorContext;
+  let transport: RecordingTransport;
+
+  beforeEach(async () => {
+    ctx ??= await createTestContext({ NOTIFICATION_TRANSPORT: 'recording' });
+    await ctx.reset();
+    transport = ctx.container.notificationTransport as RecordingTransport;
+    transport.reset();
+    ctx.container.notificationDispatcher.setRateLimitScope(tenantA);
+    owner = adminActorFor(
+      await createAdmin(ctx.container, tenantA, { username: 'owner', roleKeys: ['owner'] }),
+    );
+  });
+
+  afterAll(async () => {
+    await ctx?.close();
+  });
+
+  describe('a write states the state it was built on, even when it changes nothing', () => {
+    /**
+     * The no-op shortcut RETURNS without executing the conditional update, so
+     * the predicate that normally decides the question never ran. A request
+     * built on state that had since moved was therefore accepted as "no change"
+     * whenever its value happened to coincide with what was there — telling a
+     * caller who believed the key was unset that their expectation held.
+     */
+    it('refuses a settings no-op whose expectation is stale', async () => {
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.max_attempts',
+        value: 3,
+        expectedVersion: null,
+        idempotencyKey: `first-${Math.random()}`,
+      });
+
+      // Same value, and an expectation that says "I read this as unset".
+      await expect(
+        ctx.container.settingsService.set(tenantA, owner, {
+          key: 'ops.notifications.max_attempts',
+          value: 3,
+          expectedVersion: null,
+          idempotencyKey: `stale-${Math.random()}`,
+        }),
+      ).rejects.toMatchObject({ code: 'control.version_conflict' });
+    });
+
+    it('still accepts a no-op whose expectation is current, and says it changed nothing', async () => {
+      const first = await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.max_attempts',
+        value: 3,
+        expectedVersion: null,
+        idempotencyKey: `first-${Math.random()}`,
+      });
+
+      const second = await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.max_attempts',
+        value: 3,
+        expectedVersion: first.setting.version,
+        idempotencyKey: `noop-${Math.random()}`,
+      });
+      expect(second.changed).toBe(false);
+      expect(second.setting.version).toBe(first.setting.version);
+    });
+
+    it('refuses a template no-op whose expectation is stale', async () => {
+      await ctx.container.templatesService.set(tenantA, owner, {
+        key: 'bot.ping.reply',
+        body: 'سلام {correlationId}',
+        expectedVersion: null,
+        idempotencyKey: `tpl-${Math.random()}`,
+      });
+
+      await expect(
+        ctx.container.templatesService.set(tenantA, owner, {
+          key: 'bot.ping.reply',
+          body: 'سلام {correlationId}',
+          expectedVersion: null,
+          idempotencyKey: `tpl-stale-${Math.random()}`,
+        }),
+      ).rejects.toMatchObject({ code: 'control.version_conflict' });
+    });
+  });
+
+  describe('a flag reason is part of the request', () => {
+    it('rejects a key reused with a different reason instead of replaying', async () => {
+      const key = `flag-${Math.random()}`;
+      const toggle = (reason: string) =>
+        ctx.container.featureFlags.set(tenantA, owner, {
+          key: 'ops_notifications',
+          enabled: true,
+          expectedVersion: null,
+          idempotencyKey: key,
+          confirmKey: 'ops_notifications',
+          reason,
+        });
+
+      await toggle('Turning it on for the pilot tenant.');
+
+      // The reason is persisted and audited. Omitting it from the hash made
+      // this look like the same request, so the API answered success for a
+      // reason it never stored.
+      await expect(toggle('Something else entirely.')).rejects.toMatchObject({
+        code: 'platform.idempotency_payload_mismatch',
+      });
+    });
+  });
+
+  describe('an attempt that outlived its lease', () => {
+    beforeEach(async () => {
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.telegram_chat_id',
+        value: '-100999',
+        expectedVersion: null,
+        idempotencyKey: `chat-${Math.random()}`,
+      });
+      await ctx.container.featureFlags.set(tenantA, owner, {
+        key: 'ops_notifications',
+        enabled: true,
+        expectedVersion: null,
+        idempotencyKey: `flag-${Math.random()}`,
+        confirmKey: 'ops_notifications',
+        reason: 'Test setup.',
+      });
+      await ctx.container.opsLog.record(tenantA, {
+        code: 'panel.unreachable',
+        severity: 'ERROR',
+        message: 'The panel did not answer.',
+        dedupeKey: 'panel:1',
+      });
+    });
+
+    /**
+     * PENDING alone was not enough. Attempt 1 could return RETRYABLE after
+     * attempt 2 had claimed the row, replace attempt 2's lease with a short
+     * back-off, and let attempt 3 start alongside it — after which attempt 3
+     * could mark the intent FAILED while attempt 2's send was succeeding.
+     *
+     * `attempt_count` is the claim's identity, so a stale writer's status
+     * update matches nothing.
+     */
+    it('cannot move an intent a later attempt has claimed', async () => {
+      const [intent] = await ctx.container.notifications.list(tenantA, owner);
+      const before = await ctx.container.notifications.get(tenantA, owner, intent!.id);
+
+      // The row as a later claim leaves it: attempt 2 in flight, its lease in
+      // the future.
+      await ctx.container.database.withClient((client) =>
+        client.query(
+          `UPDATE notifications
+              SET attempt_count = 2, next_attempt_at = now() + interval '5 minutes'
+            WHERE id = $1`,
+          [intent!.id],
+        ),
+      );
+
+      // Attempt 1, arriving late with a retryable failure.
+      const { moved } = await ctx.container.notificationRepository.recordAttempt({
+        attemptId: '01900000-0000-7000-8000-0000000fa001',
+        tenantId: SEED_IDS.tenantA,
+        notificationId: intent!.id,
+        attemptNumber: 1,
+        transport: 'RECORDING',
+        outcome: 'FAILED_RETRYABLE',
+        startedAt: new Date(),
+        finishedAt: new Date(),
+        errorCode: 'telegram.unreachable',
+        errorMessage: 'socket hang up',
+        retryAfterMs: 0,
+        nextStatus: 'PENDING',
+        nextAttemptAt: new Date(),
+      });
+
+      expect(moved).toBe(false);
+
+      // Attempt 2's lease is untouched, so attempt 3 cannot start beside it.
+      const after = await ctx.container.database.db
+        .select()
+        .from(notifications)
+        .where(eq(notifications.id, intent!.id));
+      expect(after[0]!.nextAttemptAt.getTime()).toBeGreaterThan(Date.now() + 60_000);
+
+      // The attempt row is written either way, because it happened.
+      const detail = await ctx.container.notifications.get(tenantA, owner, intent!.id);
+      expect(detail.attempts.length).toBe(before.attempts.length + 1);
+    });
+
+    it('lets a late SUCCESS end the intent, because delivery is terminal truth', async () => {
+      const [intent] = await ctx.container.notifications.list(tenantA, owner);
+      await ctx.container.database.withClient((client) =>
+        client.query(
+          `UPDATE notifications
+              SET attempt_count = 2, next_attempt_at = now() + interval '5 minutes'
+            WHERE id = $1`,
+          [intent!.id],
+        ),
+      );
+
+      // Attempt 1's send landed, late. Recording it as SENT stops attempt 3
+      // sending the same message again, and costs nothing: an intent that has
+      // been delivered has nothing left to do.
+      const { moved } = await ctx.container.notificationRepository.recordAttempt({
+        attemptId: '01900000-0000-7000-8000-0000000fa002',
+        tenantId: SEED_IDS.tenantA,
+        notificationId: intent!.id,
+        attemptNumber: 1,
+        transport: 'RECORDING',
+        outcome: 'SUCCEEDED',
+        startedAt: new Date(),
+        finishedAt: new Date(),
+        errorCode: null,
+        errorMessage: null,
+        retryAfterMs: null,
+        nextStatus: 'SENT',
+        nextAttemptAt: new Date(),
+      });
+
+      expect(moved).toBe(true);
+      expect(
+        (await ctx.container.notifications.get(tenantA, owner, intent!.id)).intent.status,
+      ).toBe('SENT');
+    });
+  });
+
+  describe('a message whose values do not satisfy its template', () => {
+    /**
+     * `catalogue.render` substitutes what it is given and stringifies the rest,
+     * so a missing required value leaves a literal `{token}` in the message. A
+     * stored payload is only cast on the way out of the database, so neither
+     * the type system nor the schema stops one written by hand — and without
+     * this the message was sent and recorded SENT.
+     */
+    it('fails the attempt rather than sending a body with an unresolved placeholder', async () => {
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.telegram_chat_id',
+        value: '-100999',
+        expectedVersion: null,
+        idempotencyKey: `chat-${Math.random()}`,
+      });
+      await ctx.container.featureFlags.set(tenantA, owner, {
+        key: 'ops_notifications',
+        enabled: true,
+        expectedVersion: null,
+        idempotencyKey: `flag-${Math.random()}`,
+        confirmKey: 'ops_notifications',
+        reason: 'Test setup.',
+      });
+      await ctx.container.opsLog.record(tenantA, {
+        code: 'panel.unreachable',
+        severity: 'ERROR',
+        message: 'The panel did not answer.',
+        dedupeKey: 'panel:1',
+      });
+
+      const [intent] = await ctx.container.notifications.list(tenantA, owner);
+      // A payload with a required value removed, as a hand-written row or an
+      // emitter's mistake would leave it.
+      await ctx.container.database.withClient((client) =>
+        client.query(`UPDATE notifications SET payload = payload - 'message' WHERE id = $1`, [
+          intent!.id,
+        ]),
+      );
+
+      const result = await ctx.container.notificationDispatcher.tick();
+      expect(result).toMatchObject({ sent: 0, abandoned: 1 });
+      expect(transport.messages).toHaveLength(0);
+
+      const detail = await ctx.container.notifications.get(tenantA, owner, intent!.id);
+      expect(detail.intent.status).toBe('FAILED');
+      expect(detail.attempts[0]?.errorCode).toBe('notification.render_failed');
+    });
+  });
+
+  describe('a test send that has already been accepted', () => {
+    it('replays after the destination is cleared, rather than refusing it', async () => {
+      const first = await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.telegram_chat_id',
+        value: '-100999',
+        expectedVersion: null,
+        idempotencyKey: `chat-${Math.random()}`,
+      });
+
+      const key = `test-${Math.random()}`;
+      const sent = await ctx.container.notifications.sendTest(tenantA, owner, {
+        idempotencyKey: key,
+      });
+
+      // The destination changes after the test was accepted. It is server
+      // state, not part of the caller's request, and hashing it made an
+      // identical retry look like a reused key with different input.
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.telegram_chat_id',
+        value: '',
+        expectedVersion: first.setting.version,
+        idempotencyKey: `clear-${Math.random()}`,
+      });
+
+      const replay = await ctx.container.notifications.sendTest(tenantA, owner, {
+        idempotencyKey: key,
+      });
+      expect(replay.replayed).toBe(true);
+      expect(replay.intent.id).toBe(sent.intent.id);
+    });
+  });
+});

@@ -162,20 +162,26 @@ export class NotificationService {
     await this.guard.check(scope, actor, 'settings.edit');
     const command = sendTestNotificationRequestSchema.parse(input);
 
-    const destination = await this.destination(scope);
-    if (destination === null) {
-      throw errors.validation(
-        CONTROL_ERROR_CODES.DESTINATION_NOT_CONFIGURED,
-        'No operations destination is configured, so there is nothing to test.',
-      );
-    }
-
     // A state-changing command, so it takes an idempotency key like every
     // other one. That is a different mechanism from the intent's dedupe key
     // below and answers a different question: the key stops a double-clicked
     // button producing two messages, while the dedupe key expresses that two
     // DELIBERATE tests are two separate questions.
-    const requestHash = hashRequest({ destination: describeDestination(destination) });
+    //
+    // The hash covers the REQUEST and nothing else. It used to include the
+    // resolved destination, which is server state rather than something the
+    // caller sent — so a retry of an accepted test, after somebody changed the
+    // chat id, hashed differently and was rejected as a payload mismatch: the
+    // caller was told their key had been reused with different input when they
+    // had sent the same input twice. The request carries only a key, so that is
+    // all there is to identify it by.
+    const requestHash = hashRequest({ command: 'notifications.test' });
+
+    // The replay lookup comes BEFORE the destination is resolved, for the same
+    // reason. An accepted test does not become un-accepted when the destination
+    // is later cleared; looking the other way round meant a replay of a
+    // committed request answered `destination_not_configured` about a message
+    // that had already been queued and possibly already sent.
     const existing = await this.idempotency.find<{ notificationId: string }>(
       scope,
       actor.surface,
@@ -199,6 +205,15 @@ export class NotificationService {
         );
       }
       return { intent, created: false, replayed: true };
+    }
+
+    // Only a NEW test needs a destination to send to.
+    const destination = await this.destination(scope);
+    if (destination === null) {
+      throw errors.validation(
+        CONTROL_ERROR_CODES.DESTINATION_NOT_CONFIGURED,
+        'No operations destination is configured, so there is nothing to test.',
+      );
     }
 
     const now = this.clock.now();

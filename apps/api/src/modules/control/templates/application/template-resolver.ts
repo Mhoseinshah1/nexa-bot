@@ -1,5 +1,8 @@
 import {
+  CONTROL_ERROR_CODES,
+  errors,
   templateDefinition,
+  validateTemplateValues,
   type ScopeContext,
   type TemplateKey,
   type TemplateValues,
@@ -93,7 +96,33 @@ export class TemplateResolver {
     locale: Locale = DEFAULT_TEMPLATE_LOCALE,
     tx?: unknown,
   ): Promise<string> {
+    const definition = templateDefinition(key);
+
+    // The values are checked HERE, on the way to a customer, and not only when
+    // an administrator previews.
+    //
+    // `catalogue.render` substitutes what it is given and stringifies the rest,
+    // so a missing required value leaves a literal `{token}` in the message and
+    // a wrong type renders as whatever `String()` makes of it. `TemplateValues`
+    // is not keyed to a template at compile time and a stored payload is only
+    // cast on the way out of the database, so neither the type system nor the
+    // schema stops an emitter's mistake or a payload written by hand. Without
+    // this, such a message is sent and recorded SENT — the system reporting
+    // success for something a customer received as `{first_name}`.
+    //
+    // A throw is right: the caller is the dispatcher, which turns it into a
+    // permanently failed attempt with the reason recorded, and a body that
+    // cannot render will not render on the next attempt either.
+    const problems = validateTemplateValues(definition, values);
+    if (problems.length > 0) {
+      throw errors.validation(
+        CONTROL_ERROR_CODES.INVALID_VALUE,
+        `The values supplied for ${key} do not satisfy its declaration.`,
+        { key, issues: problems },
+      );
+    }
+
     const resolved = await this.resolve(scope, key, locale, tx);
-    return this.catalogue.render(templateDefinition(key), resolved.body, values, locale);
+    return this.catalogue.render(definition, resolved.body, values, locale);
   }
 }

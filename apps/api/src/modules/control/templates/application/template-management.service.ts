@@ -289,6 +289,19 @@ export class TemplateManagementService {
       // bumps the version, and invalidates every other editor's expectation for
       // no reason — turning the history into a record of how many times somebody
       // pressed a button rather than of what the message said.
+      // Checked before the no-op shortcut, and for the reason given at length
+      // in `SettingsService.set`: the shortcut returns without executing the
+      // conditional update, so without this a request built on state that has
+      // moved is accepted as "no change" whenever its body coincides. The
+      // writing path still carries its own predicate.
+      if ((before?.version ?? null) !== command.expectedVersion) {
+        throw errors.conflict(
+          CONTROL_ERROR_CODES.VERSION_CONFLICT,
+          `${key} changed while you were editing it. Reload and reapply your change.`,
+          { key, expectedVersion: command.expectedVersion },
+        );
+      }
+
       if (before !== null && before.body === command.body) {
         const template = this.toView(key, locale, before, await this.overridesApplied(scope, tx));
         await rememberOnce(

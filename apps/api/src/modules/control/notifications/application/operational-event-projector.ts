@@ -97,14 +97,31 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
       // notification is a projection of it, so if the two cannot be committed
       // together the right thing to lose is the projection.
       //
-      // Nothing was committed — the transaction rolled back — so recording
-      // again here is not a duplicate.
+      // This retry can double-count, and saying otherwise was wrong. A rejected
+      // transaction does not prove that nothing committed: Postgres can commit
+      // and then lose the connection before the client hears about it, and
+      // `uow.run` rejects identically either way. So:
+      //
+      //   - An event WITH a dedupe key — which is nearly all of them, and every
+      //     one this projector notifies on — collapses onto the row the first
+      //     attempt wrote, so the cost is `occurrence_count` reading 2 for one
+      //     occurrence. `isNew` is then false, so no second message is sent.
+      //   - An event with no dedupe key inserts unconditionally, so the cost is
+      //     a second row for one occurrence.
+      //
+      // Both are bounded and visible. Losing the event is neither: the
+      // condition's next occurrence would be a repeat rather than a new one,
+      // so nothing would announce it until it resolved and came back. An
+      // over-counted condition is a worse number; an unrecorded one is a
+      // silence, and silence is the failure this whole subsystem exists to
+      // prevent. The trade is recorded in docs/open-questions.md.
       this.logger.error(
         {
           err: error instanceof Error ? error.message : String(error),
           code: event.code,
+          deduped: event.dedupeKey !== undefined,
         },
-        'Could not record an operational event and its notification together; recording the event alone',
+        'Could not record an operational event and its notification together; recording the event alone, which may double-count if the failed commit had in fact landed',
       );
       return this.inner.record(scope, event);
     }

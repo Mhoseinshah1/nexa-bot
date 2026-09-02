@@ -41,7 +41,7 @@ export interface DispatcherOptions {
  * courtesy to Telegram, and an intent that failed to render never touched it.
  */
 interface DeliveryOutcomeReport {
-  readonly result: 'SENT' | 'RETRY' | 'FAILED';
+  readonly result: 'SENT' | 'RETRY' | 'FAILED' | 'SUPERSEDED';
   readonly reachedTransport: boolean;
 }
 
@@ -54,6 +54,13 @@ export interface DispatchTickResult {
   readonly abandoned: number;
   /** Intents swept to FAILED because they had spent every attempt. */
   readonly exhausted: number;
+  /**
+   * Attempts whose outcome arrived after a later attempt had claimed the row.
+   *
+   * The attempt is recorded; the intent is left to whoever holds the claim
+   * now. Counting these as failures would report an outcome that was refused.
+   */
+  readonly superseded: number;
   /**
    * Claims whose outcome could NOT be written down.
    *
@@ -147,7 +154,15 @@ export class NotificationDispatcher {
 
     const budget = await this.remainingBudget(now);
     if (budget <= 0) {
-      return { claimed: 0, sent: 0, failed: 0, abandoned: 0, exhausted, unrecorded: 0 };
+      return {
+        claimed: 0,
+        sent: 0,
+        failed: 0,
+        abandoned: 0,
+        exhausted,
+        superseded: 0,
+        unrecorded: 0,
+      };
     }
 
     const claimed = await this.notifications.claimDue(
@@ -159,6 +174,7 @@ export class NotificationDispatcher {
     let sent = 0;
     let failed = 0;
     let abandoned = 0;
+    let superseded = 0;
     let unrecorded = 0;
 
     for (const intent of claimed) {
@@ -206,7 +222,13 @@ export class NotificationDispatcher {
 
       if (delivery.result === 'SENT') sent += 1;
       else if (delivery.result === 'FAILED') abandoned += 1;
-      else failed += 1;
+      else if (delivery.result === 'SUPERSEDED') {
+        superseded += 1;
+        this.logger.warn(
+          { notificationId: intent.id, attemptNumber: intent.attemptCount },
+          'A delivery outcome arrived after a later attempt had claimed the intent; the attempt is recorded and the intent was left alone',
+        );
+      } else failed += 1;
 
       // Only work that reached the transport counts against the ceiling. A
       // burst of unrenderable intents would otherwise spend the whole minute's
@@ -220,7 +242,7 @@ export class NotificationDispatcher {
       if (delivery.reachedTransport) this.sentInWindow += 1;
     }
 
-    return { claimed: claimed.length, sent, failed, abandoned, exhausted, unrecorded };
+    return { claimed: claimed.length, sent, failed, abandoned, exhausted, superseded, unrecorded };
   }
 
   /** One intent: render, send outside any transaction, record what happened. */
@@ -317,7 +339,7 @@ export class NotificationDispatcher {
           retryAfterMs?: number;
         },
     startedAt: Date,
-  ): Promise<'SENT' | 'RETRY' | 'FAILED'> {
+  ): Promise<DeliveryOutcomeReport['result']> {
     const finishedAt = this.clock.now();
 
     // `attemptCount` was already incremented by the claim, so it names THIS
@@ -342,7 +364,7 @@ export class NotificationDispatcher {
       nextAttemptAt = new Date(finishedAt.getTime() + this.backoffFor(attemptNumber, result));
     }
 
-    await this.notifications.recordAttempt({
+    const { moved } = await this.notifications.recordAttempt({
       attemptId: this.ids.uuid(),
       tenantId: intent.tenantId,
       notificationId: intent.id,
@@ -360,6 +382,11 @@ export class NotificationDispatcher {
       nextStatus,
       nextAttemptAt,
     });
+
+    // The row did not move, so this attempt's claim has been superseded by a
+    // later one. Saying 'FAILED' or 'RETRY' here would report a transition that
+    // the database refused.
+    if (!moved) return 'SUPERSEDED';
 
     if (nextStatus === 'SENT') return 'SENT';
     return nextStatus === 'FAILED' ? 'FAILED' : 'RETRY';

@@ -112,6 +112,13 @@ export interface NotificationRepository {
    * change means a retry loop that never terminates; a status change with no
    * attempt row means the thing this table exists for — what actually happened
    * on the wire — is missing for the attempt that mattered.
+   *
+   * Returns whether the INTENT moved. It does not when the caller's claim has
+   * been superseded: a send that outlived its lease comes back to find the row
+   * already claimed by a later attempt, and its outcome must not disturb that
+   * attempt's lease or terminalize the intent underneath it. The attempt row is
+   * written in that case too, because it happened; what is refused is the
+   * status change.
    */
   recordAttempt(input: {
     readonly attemptId: string;
@@ -127,7 +134,7 @@ export interface NotificationRepository {
     readonly retryAfterMs: number | null;
     readonly nextStatus: NotificationStatus;
     readonly nextAttemptAt: Date;
-  }): Promise<void>;
+  }): Promise<{ readonly moved: boolean }>;
 }
 
 /** A message, rendered and addressed, ready to leave the process. */
