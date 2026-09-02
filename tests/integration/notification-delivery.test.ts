@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ActorContext } from '@nexa/contracts';
+import { NotificationDispatcher } from '../../apps/api/src/modules/control/notifications/application/notification-dispatcher';
 import type { RecordingTransport } from '../../apps/api/src/modules/control/notifications/infrastructure/recording-transport';
 import {
   adminActorFor,
@@ -347,6 +348,66 @@ describe('notification delivery', () => {
 
       // And it is not claimed again.
       expect(await ctx.container.notificationDispatcher.tick()).toMatchObject({ claimed: 0 });
+    });
+
+    it('does not charge an unrenderable intent to the rate ceiling', async () => {
+      // The ceiling is a courtesy to Telegram. An intent that failed to render
+      // never touched the network, so spending the minute's budget on it would
+      // delay the messages that CAN be sent.
+      //
+      // The first version of this guard tested `intent.status === 'PENDING'`,
+      // which is the claim's own predicate and therefore always true: a guard
+      // that did nothing, under a comment saying it did.
+      //
+      // Its own dispatcher, because the window is a counter in the instance's
+      // memory and nothing resets it — the container's dispatcher has already
+      // spent budget in earlier tests in this file. That is a real property of
+      // the design (ADR-0018 says the window is per process), not a test
+      // artefact, so the test works with it rather than reaching for a
+      // production reset method that exists only for tests.
+      const dispatcher = new NotificationDispatcher(
+        ctx.container.notificationRepository,
+        transport,
+        ctx.container.templateResolver,
+        ctx.container.settingsResolver,
+        ctx.container.clock,
+        ctx.container.ids,
+        ctx.container.logger,
+        {
+          pollIntervalMs: 1000,
+          batchSize: 10,
+          leaseMs: 120_000,
+          baseBackoffMs: 5_000,
+          maxBackoffMs: 300_000,
+        },
+      );
+      dispatcher.setRateLimitScope(tenantA);
+
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.max_per_minute',
+        value: 2,
+        expectedVersion: null,
+        idempotencyKey: `rate-${Date.now()}`,
+      });
+
+      await raiseError('renders:1');
+      await ctx.container.database.db.execute(
+        `INSERT INTO notifications
+           (id, tenant_id, kind, dedupe_key, destination, payload, template_key, max_attempts, next_attempt_at)
+         VALUES ('${ctx.container.ids.uuid()}', '${tenantA.tenantId}', 'OPERATIONAL_EVENT', 'unrenderable',
+                 '{"transport":"RECORDING"}', '{}', 'bot.no_such_key', 5, now() - interval '1 second')` as never,
+      );
+
+      const first = await dispatcher.tick();
+      expect(first.claimed).toBe(2);
+      expect(first.sent).toBe(1);
+
+      // One of the two spent budget, so one remains this minute. Against the
+      // no-op guard both would have counted and this tick would claim nothing.
+      await raiseError('renders:2');
+      const second = await dispatcher.tick();
+      expect(second.claimed).toBe(1);
+      expect(second.sent).toBe(1);
     });
 
     it('stops claiming an intent that has spent its attempts', async () => {

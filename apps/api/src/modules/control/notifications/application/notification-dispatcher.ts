@@ -33,6 +33,17 @@ export interface DispatcherOptions {
   readonly maxBackoffMs: number;
 }
 
+/**
+ * What one intent's delivery did.
+ *
+ * `reachedTransport` is separate from the result because the rate ceiling is a
+ * courtesy to Telegram, and an intent that failed to render never touched it.
+ */
+interface DeliveryOutcomeReport {
+  readonly result: 'SENT' | 'RETRY' | 'FAILED';
+  readonly reachedTransport: boolean;
+}
+
 export interface DispatchTickResult {
   readonly claimed: number;
   readonly sent: number;
@@ -127,9 +138,9 @@ export class NotificationDispatcher {
     let abandoned = 0;
 
     for (const intent of claimed) {
-      let outcome: 'SENT' | 'RETRY' | 'FAILED';
+      let delivery: DeliveryOutcomeReport;
       try {
-        outcome = await this.deliver(intent);
+        delivery = await this.deliver(intent);
       } catch (error) {
         // One intent must not be able to stop the batch.
         //
@@ -148,19 +159,29 @@ export class NotificationDispatcher {
           'Notification delivery threw; abandoning this intent and continuing the batch',
         );
         abandoned += 1;
+        // Charged to the ceiling, unlike a render failure. This catch cannot
+        // tell whether the throw happened before or after the transport was
+        // called, and over-counting only slows us down while under-counting
+        // could exceed Telegram's limit.
         this.sentInWindow += 1;
         await this.abandon(intent, error);
         continue;
       }
 
-      if (outcome === 'SENT') sent += 1;
-      else if (outcome === 'FAILED') abandoned += 1;
+      if (delivery.result === 'SENT') sent += 1;
+      else if (delivery.result === 'FAILED') abandoned += 1;
       else failed += 1;
 
       // Only work that reached the transport counts against the ceiling. A
       // burst of unrenderable intents would otherwise spend the whole minute's
       // budget without a single byte leaving the process.
-      if (outcome !== 'FAILED' || intent.status === 'PENDING') this.sentInWindow += 1;
+      //
+      // `reachedTransport` is reported by `deliver` because nothing on the
+      // intent can say it. The first version of this line tested
+      // `intent.status === 'PENDING'`, which is the claim's own predicate and
+      // therefore always true — a guard that did nothing, under a comment
+      // claiming it did.
+      if (delivery.reachedTransport) this.sentInWindow += 1;
     }
 
     return { claimed: claimed.length, sent, failed, abandoned };
@@ -203,7 +224,7 @@ export class NotificationDispatcher {
   }
 
   /** One intent: render, send outside any transaction, record what happened. */
-  private async deliver(intent: NotificationIntent): Promise<'SENT' | 'RETRY' | 'FAILED'> {
+  private async deliver(intent: NotificationIntent): Promise<DeliveryOutcomeReport> {
     const scope: ScopeContext = {
       tenantId: asId<'TenantId'>(intent.tenantId) as TenantId,
       botInstanceId: null,
@@ -240,7 +261,8 @@ export class NotificationDispatcher {
         },
         startedAt,
       );
-      return 'FAILED';
+      // Nothing left the process, so nothing is charged to the rate ceiling.
+      return { result: 'FAILED', reachedTransport: false };
     }
 
     const result = await this.transport.send({
@@ -250,7 +272,7 @@ export class NotificationDispatcher {
       tenantId: intent.tenantId,
     });
 
-    return this.record(intent, result, startedAt);
+    return { result: await this.record(intent, result, startedAt), reachedTransport: true };
   }
 
   private async record(

@@ -273,9 +273,13 @@ function isUniqueViolation(error: unknown): boolean {
  * `DrizzleQueryError` and puts the original on `cause`. Reading only the outer
  * object would make this check quietly never match.
  */
-function findCode(error: object): string | undefined {
+function findCode(error: object, depth = 0): string | undefined {
+  // Bounded. An error whose `cause` chain loops back on itself would otherwise
+  // hang the request rather than report a conflict, and a driver is not
+  // obliged to keep that chain acyclic.
+  if (depth > 5) return undefined;
   const direct = (error as { code?: unknown }).code;
   if (typeof direct === 'string') return direct;
   const cause = (error as { cause?: unknown }).cause;
-  return typeof cause === 'object' && cause !== null ? findCode(cause) : undefined;
+  return typeof cause === 'object' && cause !== null ? findCode(cause, depth + 1) : undefined;
 }
