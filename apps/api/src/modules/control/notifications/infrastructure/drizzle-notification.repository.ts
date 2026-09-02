@@ -587,7 +587,13 @@ export class DrizzleNotificationRepository implements NotificationRepository {
       await tx
         .update(notifications)
         .set({
-          lastAttemptAt: sql`greatest(coalesce(${notifications.lastAttemptAt}, ${input.finishedAt}), ${input.finishedAt})`,
+          // PostgreSQL's `greatest` IGNORES nulls — unlike the SQL standard,
+          // where any null argument makes the whole expression null — so a row
+          // whose `last_attempt_at` is null yields `finishedAt`, and the
+          // `coalesce` this used to wrap it in was doing nothing for any
+          // possible value. `finishedAt` is a bound parameter and never null,
+          // so the all-null case cannot arise either.
+          lastAttemptAt: sql`greatest(${notifications.lastAttemptAt}, ${input.finishedAt})`,
         })
         .where(
           and(

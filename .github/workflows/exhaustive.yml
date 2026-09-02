@@ -1,0 +1,94 @@
+name: Exhaustive notification orderings
+
+# The combinatorial search, off the pull-request path.
+#
+# 1 341 orderings, each with a full database reset, took a CI integration job
+# to roughly fourteen minutes — long enough that the cost of the search landed
+# on every unrelated change. Its value is finding a shape nobody has imagined
+# yet, which is worth a great deal once a night and very little on the ninth
+# push of an afternoon.
+#
+# Nothing here is the only cover for a known bug. Every failure shape these
+# enumerations found has a named, deterministic regression in
+# `tests/integration/notification-invariants.test.ts`, which runs on every pull
+# request. Locally: `pnpm test:exhaustive`.
+on:
+  schedule:
+    # 03:00 UTC, daily.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22'
+  PNPM_VERSION: '10.33.0'
+
+jobs:
+  exhaustive:
+    name: Exhaustive orderings
+    runs-on: ubuntu-latest
+    # Generous, because the point of this job is to be thorough rather than
+    # quick — but bounded, so a hang is reported rather than billed.
+    timeout-minutes: 60
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nexa
+          POSTGRES_PASSWORD: nexa
+          POSTGRES_DB: nexa_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U nexa -d nexa_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://nexa:nexa@127.0.0.1:5432/nexa_test
+      TEST_DATABASE_URL: postgres://nexa:nexa@127.0.0.1:5432/nexa_test
+      REDIS_URL: redis://127.0.0.1:6379
+      # A throwaway key for the test database only.
+      SECRETS_KEK: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      SECRETS_KEK_ID: ci-1
+
+    steps:
+      # Pinned to an immutable commit. A tag is a moving pointer that whoever
+      # controls the action's repository can repoint at any time, and CI runs
+      # with a token. The comment names the release so an update stays legible.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+        env:
+          BUILD_VERSION: ${{ github.sha }}
+          BUILD_COMMIT: ${{ github.sha }}
+
+      - name: Apply migrations
+        run: pnpm db:migrate
+
+      - name: Exhaustive notification orderings
+        run: pnpm test:exhaustive

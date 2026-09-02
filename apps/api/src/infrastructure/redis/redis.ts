@@ -3,12 +3,16 @@ import { Redis } from 'ioredis';
 /**
  * Redis.
  *
- * Used for exactly five things, enumerated so a sixth is a deliberate decision:
- * conversation FSM state, BullMQ queues, an idempotency cache in front of the
- * durable Postgres table, distributed locks, and rate limits.
+ * Intended for exactly five things, enumerated so a sixth is a deliberate
+ * decision: conversation FSM state, job queues, an idempotency cache in front
+ * of the durable Postgres table, distributed locks, and rate limits.
+ *
+ * Through Phase 2 it does NONE of them. It is connected and health-checked and
+ * nothing else — no queue library is installed, and the notification
+ * dispatcher polls Postgres rather than consuming a queue (ADR-0018). Said
+ * plainly because the list above reads like a description of what this does.
  *
  * Redis is never the source of truth for anything financial or auditable.
- * Phase 0 uses it only for queue connectivity and health.
  */
 export interface RedisHandle {
   readonly client: Redis;
@@ -18,8 +22,10 @@ export interface RedisHandle {
 
 export function createRedis(url: string): RedisHandle {
   const client = new Redis(url, {
-    // BullMQ requires this, and it also stops a queue stall from being hidden
-    // behind an unbounded retry queue.
+    // A command that cannot reach Redis fails instead of queueing forever
+    // behind an unbounded retry, so a stall surfaces as an error rather than
+    // as unexplained slowness. It is also what a queue library would require
+    // here, when one arrives.
     maxRetriesPerRequest: null,
     lazyConnect: true,
   });

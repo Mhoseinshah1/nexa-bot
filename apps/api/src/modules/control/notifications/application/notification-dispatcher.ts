@@ -444,14 +444,6 @@ export class NotificationDispatcher {
       return { result: 'FAILED', reachedTransport: false };
     }
 
-    // A transport that THROWS is a transport failure, not an unknown one.
-    //
-    // Left to propagate, it reached the batch's catch, which could only guess
-    // at what had happened and guessed permanently-failed — ending an intent on
-    // one refused connection, `maxAttempts` notwithstanding. Handled here, it is
-    // an ordinary retryable outcome with a reason in its attempt row, and the
-    // attempt ceiling decides when to stop, exactly as it does for a transport
-    // that returns a failure instead of raising one.
     // The tenant's status, asked HERE — after rendering, on the line before the
     // send — and not before `deliver` was called.
     //
@@ -470,6 +462,14 @@ export class NotificationDispatcher {
       return { result: 'RELEASED', reachedTransport: false };
     }
 
+    // A transport that THROWS is a transport failure, not an unknown one.
+    //
+    // Left to propagate, it reached the batch's catch, which could only guess
+    // at what had happened and guessed permanently-failed — ending an intent on
+    // one refused connection, `maxAttempts` notwithstanding. Handled here, it is
+    // an ordinary retryable outcome with a reason in its attempt row, and the
+    // attempt ceiling decides when to stop, exactly as it does for a transport
+    // that returns a failure instead of raising one.
     let result: Awaited<ReturnType<NotificationTransport['send']>>;
     try {
       result = await this.transport.send({

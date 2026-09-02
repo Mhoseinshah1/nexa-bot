@@ -43,6 +43,23 @@ export default defineConfig({
         plugins: [tsExtensionResolver()],
         test: {
           ...shared,
+          // The combinatorial enumeration. Deliberately NOT in `integration`:
+          // 1 341 orderings, each with a full database reset, took a CI
+          // integration job to fourteen minutes, so the cost of the search
+          // landed on every unrelated change. Nightly and on demand instead —
+          // and nothing here is the only cover for a known bug.
+          name: 'exhaustive',
+          include: ['tests/exhaustive/**/*.test.ts'],
+          setupFiles: ['tests/integration/setup.ts'],
+          fileParallelism: false,
+          testTimeout: 1_800_000,
+          hookTimeout: 60_000,
+        },
+      },
+      {
+        plugins: [tsExtensionResolver()],
+        test: {
+          ...shared,
           name: 'integration',
           include: ['tests/integration/**/*.test.ts'],
           setupFiles: ['tests/integration/setup.ts'],

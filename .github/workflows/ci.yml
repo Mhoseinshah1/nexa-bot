@@ -24,13 +24,16 @@ jobs:
     name: Typecheck, lint and boundaries
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      # Pinned to an immutable commit. A tag is a moving pointer that whoever
+      # controls the action's repository can repoint at any time, and CI runs
+      # with a token. The comment names the release so an update stays legible.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: ${{ env.PNPM_VERSION }}
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -92,23 +95,29 @@ jobs:
       SECRETS_KEK_ID: ci-1
 
     steps:
-      - uses: actions/checkout@v5
+      # Pinned to an immutable commit. A tag is a moving pointer that whoever
+      # controls the action's repository can repoint at any time, and CI runs
+      # with a token. The comment names the release so an update stays legible.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: ${{ env.PNPM_VERSION }}
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
 
-      # Internal packages have a build step; the apps typecheck against their
-      # declaration output.
-      - name: Build internal packages
-        run: pnpm --filter @nexa/contracts --filter @nexa/i18n build
+      # `db:migrate` now runs COMPILED output — the production path, which is
+      # the point of exercising it here rather than the tsx one.
+      - name: Build
+        run: pnpm build
+        env:
+          BUILD_VERSION: ${{ github.sha }}
+          BUILD_COMMIT: ${{ github.sha }}
 
       - name: Unit tests
         run: pnpm test
@@ -133,13 +142,16 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      # Pinned to an immutable commit. A tag is a moving pointer that whoever
+      # controls the action's repository can repoint at any time, and CI runs
+      # with a token. The comment names the release so an update stays legible.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: ${{ env.PNPM_VERSION }}
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -178,3 +190,46 @@ jobs:
             }
             console.log('api and worker graphs resolve from the built output');
           "
+
+      # The maintenance commands must run from a production runtime, and the
+      # admin panel must not publish its own source. Both were true of this
+      # repository until Phase 2's stabilisation pass.
+      - name: Production runtime and artifact checks
+        run: pnpm check:runtime
+
+  # Deliberately its own job. A dependency audit reads a remote advisory
+  # database, so it can fail for reasons that have nothing to do with the diff;
+  # keeping it out of `static` and `test` means a registry outage cannot make a
+  # correct change look broken.
+  #
+  # It gates on HIGH and CRITICAL in the PRODUCTION dependency graph only. LOW
+  # and MODERATE findings in devDependencies do not ship, and a gate that fails
+  # every pull request for something nobody can act on today is a gate people
+  # learn to ignore.
+  #
+  # If this job is red and the others are green: read it, do not merge around
+  # it, and do not weaken the threshold to get past it.
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to an immutable commit. A tag is a moving pointer that whoever
+      # controls the action's repository can repoint at any time, and CI runs
+      # with a token. The comment names the release so an update stays legible.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      # The lockfile is the security surface: it names the exact versions that
+      # would be installed, which is what an advisory applies to.
+      - run: pnpm install --frozen-lockfile
+
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level high

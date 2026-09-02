@@ -246,7 +246,7 @@ export const configSchema = z
       // publishes the credential to the network — and quietly "fixing" the
       // value would hide that somebody had configured it, which is worth
       // knowing about a deployment.
-      let protocol: string | null = null;
+      let protocol: string | null;
       try {
         protocol = new URL(config.TELEGRAM_API_BASE_URL).protocol;
       } catch {
