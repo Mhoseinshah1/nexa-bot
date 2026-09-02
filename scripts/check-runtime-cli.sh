@@ -24,6 +24,7 @@ ENTRYPOINTS=(
   "apps/api/dist/infrastructure/persistence/migrate.js"
   "apps/api/dist/infrastructure/persistence/seed.js"
   "apps/api/dist/bootstrap-owner.cli.js"
+  "apps/api/dist/provision-installation.cli.js"
 )
 
 # 1. The compiled entrypoints exist.
@@ -42,11 +43,14 @@ node --input-type=module -e "
   const migrate = await import('./apps/api/dist/infrastructure/persistence/migrate.js');
   const seed = await import('./apps/api/dist/infrastructure/persistence/seed.js');
   await import('./apps/api/dist/bootstrap-owner.cli.js');
+  const provision = await import('./apps/api/dist/provision-installation.cli.js');
 
   const problems = [];
   if (typeof migrate.runMigrations !== 'function') problems.push('migrate.runMigrations');
   if (typeof migrate.migrationsFolder !== 'function') problems.push('migrate.migrationsFolder');
   if (typeof seed.seed !== 'function') problems.push('seed.seed');
+  if (typeof provision.provisionInstallation !== 'function')
+    problems.push('provision.provisionInstallation');
 
   // The migrations have to be reachable FROM DIST. The folder is resolved
   // relative to the module, so a compiled layout that nests one level deeper
