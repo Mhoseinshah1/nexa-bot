@@ -328,6 +328,69 @@ describe('notification claim ownership', () => {
   }, 60_000);
 
   /**
+   * A withdrawn sweep is READABLE.
+   *
+   * The sweep's FAILED_PERMANENT row stays in the attempt history after being
+   * retired — correctly; it is what `sweep.withdrawn` retires, and evidence is
+   * not deleted. But the operations view showed only attempts, so an operator
+   * read "permanently failed" on an intent that was somehow pending again,
+   * with nothing anywhere connecting the two.
+   */
+  it('shows a withdrawn sweep as withdrawn, not as a permanent failure', async () => {
+    const intent = await raise('withdrawn-sweep-is-readable');
+
+    // One real attempt spent, then the final claim taken while the tenant is
+    // active and handed back after a stop — the ordering that produces a
+    // withdrawal.
+    transport.failNextWith({
+      outcome: 'FAILED_RETRYABLE',
+      errorCode: 'telegram.unreachable',
+      errorMessage: 'socket hang up',
+      retryAfterMs: 0,
+    });
+    await ctx.container.notificationDispatcher.tick();
+    await sql(`UPDATE notifications SET next_attempt_at = now() - interval '1 hour'`);
+    await repo().claimDue(ctx.container.clock.now(), 10, 60_000);
+    await stopTenant();
+    await sql(`UPDATE notifications SET next_attempt_at = now() - interval '1 hour'`);
+    await repo().failExhausted(ctx.container.clock.now(), 10, {
+      leaseMs: 60_000,
+      transport: 'RECORDING',
+    });
+    const handBack = await repo().releaseClaim({
+      tenantId: tenantA.tenantId,
+      notificationId: intent.id,
+      attemptNumber: 2,
+      now: ctx.container.clock.now(),
+      reason: 'tenant.not_active',
+    });
+    expect(handBack.restored, 'the sweep verdict was not withdrawn').toBe(true);
+    await startTenant();
+
+    // What the operations view is handed.
+    const view = await ctx.container.notifications.get(tenantA, owner, intent.id);
+    expect(view.intent.status).toBe('PENDING');
+
+    // The sweep's verdict is still in the attempt history, where it belongs.
+    const exhausted = view.attempts.find(
+      (attempt) => attempt.errorCode === 'notification.attempts_exhausted',
+    );
+    expect(exhausted, 'the sweep verdict vanished from the history').toBeDefined();
+
+    // And beside it, the row that says the verdict was taken back — on the
+    // same attempt number, so the two are readable as one event.
+    expect(
+      view.releasedClaims.map((claim) => [claim.attemptNumber, claim.reason]),
+      'a permanent failure is shown under a pending intent with nothing withdrawing it',
+    ).toEqual(
+      expect.arrayContaining([
+        [2, 'tenant.not_active'],
+        [exhausted!.attemptNumber, 'sweep.withdrawn'],
+      ]),
+    );
+  }, 60_000);
+
+  /**
    * A stale hand-back must not reschedule somebody else's live claim.
    *
    * The release ROW is keyed by attempt number so a straggler can still return

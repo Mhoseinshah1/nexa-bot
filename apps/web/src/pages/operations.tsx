@@ -301,6 +301,46 @@ export function NotificationsPage({ mayTest }: { mayTest: boolean }) {
               </tbody>
             </table>
           )}
+
+          {/* The claims that were given back.
+              
+              Rendered alongside the attempts rather than merged into them,
+              because they are the opposite kind of fact: an attempt row says
+              what happened on the wire and one of these says that on this
+              number nothing did. Merged, the two would need a shared "outcome"
+              column and a released claim has no outcome to put in it.
+
+              Without this the swept-then-withdrawn history is unreadable. The
+              exhaustion sweep's own FAILED_PERMANENT row stays in the attempts
+              table — correctly, it is what `sweep.withdrawn` retires — so an
+              operator saw a permanent failure sitting under an intent that was
+              somehow pending again, with nothing anywhere connecting them. */}
+          {detail.data.releasedClaims.length > 0 && (
+            <>
+              <h3>{t('web.returned_claims')}</h3>
+              <p className="notice">{t('web.returned_claims_intro')}</p>
+              <table>
+                <thead>
+                  <tr>
+                    <th>{t('web.attempt')}</th>
+                    <th>{t('web.returned_reason')}</th>
+                    <th>{t('web.returned_at')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detail.data.releasedClaims.map((claim) => (
+                    <tr key={claim.attemptNumber}>
+                      <td>{claim.attemptNumber}</td>
+                      <td>
+                        <code>{claim.reason}</code>
+                      </td>
+                      <td>{formatTimestamp(claim.releasedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
         </div>
       )}
     </section>

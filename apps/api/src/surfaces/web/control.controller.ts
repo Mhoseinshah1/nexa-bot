@@ -33,6 +33,7 @@ import type { OperationalEventRow } from '../../modules/platform/opslog/applicat
 import type {
   DeliveryAttemptRecord,
   NotificationIntent,
+  ReleasedClaimRecord,
 } from '../../modules/control/notifications/application/ports.js';
 
 /**
@@ -284,10 +285,15 @@ export class ControlController {
     @Param('id') id: string,
   ): Promise<NotificationDetailResponse> {
     const { scope, actor } = await this.authenticate(request);
-    const { intent, attempts } = await this.container.notifications.get(scope, actor, id);
+    const { intent, attempts, releasedClaims } = await this.container.notifications.get(
+      scope,
+      actor,
+      id,
+    );
     return {
       notification: toNotificationResponse(intent),
       attempts: attempts.map(toAttemptResponse),
+      releasedClaims: releasedClaims.map(toReleasedClaimResponse),
     };
   }
 
@@ -309,14 +315,12 @@ export class ControlController {
     // needed `opslog.view`, which this endpoint does not require — so an
     // administrator holding only `settings.edit` had their test queued and was
     // then answered 403 about it, every time they retried.
-    const { intent, attempts, created, replayed } = await this.container.notifications.sendTest(
-      scope,
-      actor,
-      body,
-    );
+    const { intent, attempts, releasedClaims, created, replayed } =
+      await this.container.notifications.sendTest(scope, actor, body);
     return {
       notification: toNotificationResponse(intent),
       attempts: attempts.map(toAttemptResponse),
+      releasedClaims: releasedClaims.map(toReleasedClaimResponse),
       created,
       replayed,
     };
@@ -477,6 +481,16 @@ function toNotificationResponse(
     lastAttemptAt: intent.lastAttemptAt?.toISOString() ?? null,
     completedAt: intent.completedAt?.toISOString() ?? null,
     correlationId: intent.correlationId,
+  };
+}
+
+function toReleasedClaimResponse(
+  claim: ReleasedClaimRecord,
+): NotificationDetailResponse['releasedClaims'][number] {
+  return {
+    attemptNumber: claim.attemptNumber,
+    releasedAt: claim.releasedAt.toISOString(),
+    reason: claim.reason,
   };
 }
 

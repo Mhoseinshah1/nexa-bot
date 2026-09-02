@@ -5,6 +5,7 @@ import {
   CONTROL_ROUTES,
   featureFlagListResponseSchema,
   notificationDetailResponseSchema,
+  sendTestNotificationResponseSchema,
   operationalEventListResponseSchema,
   previewTemplateResponseSchema,
   SESSION_COOKIE_NAME,
@@ -467,16 +468,33 @@ describe('control plane HTTP surface', () => {
       });
       expect(response.statusCode).toBe(201);
 
-      const body = notificationDetailResponseSchema.parse(response.json());
+      // The schema of the endpoint that was actually called. Parsing the
+      // detail shape here passed only because zod strips what it does not
+      // declare, so `created` and `replayed` — the two fields this route exists
+      // to answer with — were never validated at all.
+      const body = sendTestNotificationResponseSchema.parse(response.json());
       expect(body.notification.kind).toBe('OPERATIONS_TEST');
       expect(body.notification.status).toBe('PENDING');
       // Nothing has been attempted yet: creating the intent and sending it are
-      // separate, and the second happens in the worker.
+      // separate, and the second happens in the worker. Both lists are empty
+      // for the same reason — the intent has never been claimed.
       expect(body.attempts).toEqual([]);
+      expect(body.releasedClaims).toEqual([]);
 
       // The response says where it is going only by not saying: the destination
       // identifies an internal operations channel and is not on this seam.
       expect(JSON.stringify(body)).not.toContain('-1001234567890');
+
+      // And the detail route answers with the same three parts. The returned
+      // claims are what make a withdrawn sweep readable — an exhaustion
+      // verdict stays in the attempts list after being retired, so without
+      // them the screen shows a permanent failure under a pending intent.
+      const detail = notificationDetailResponseSchema.parse(
+        (await get(CONTROL_ROUTES.notification(body.notification.id), ownerCookie)).json(),
+      );
+      expect(detail.notification.id).toBe(body.notification.id);
+      expect(detail.attempts).toEqual([]);
+      expect(detail.releasedClaims).toEqual([]);
     });
   });
 });

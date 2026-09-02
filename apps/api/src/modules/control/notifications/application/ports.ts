@@ -51,6 +51,20 @@ export interface DeliveryAttemptRecord {
   readonly retryAfterMs: number | null;
 }
 
+/**
+ * A claim that was issued and given back without reaching the transport.
+ *
+ * The counterpart to `DeliveryAttemptRecord`. Spend is `attemptCount` minus
+ * these, so together the two say where every claim went — which is the only
+ * way to read a history whose attempt list is shorter than its claim count.
+ */
+export interface ReleasedClaimRecord {
+  readonly attemptNumber: number;
+  readonly releasedAt: Date;
+  /** A machine code: `tenant.not_active`, `sweep.withdrawn`. Never a sentence. */
+  readonly reason: string;
+}
+
 export interface NotificationRepository {
   /**
    * Creates an intent, or returns the one that already exists.
@@ -92,6 +106,19 @@ export interface NotificationRepository {
     notificationId: string,
     tx?: unknown,
   ): Promise<DeliveryAttemptRecord[]>;
+
+  /**
+   * The claims this intent gave back, for the operations view.
+   *
+   * Tenant-scoped and read-only, unlike every other reader of this table —
+   * `claimDue` and `spentAttempts` count these rows to decide spend, and this
+   * one exists so a person can see the same rows the arithmetic is using.
+   */
+  releasedClaims(
+    scope: ScopeContext,
+    notificationId: string,
+    tx?: unknown,
+  ): Promise<ReleasedClaimRecord[]>;
 
   /**
    * Claims intents that are due, across tenants, for the dispatcher.

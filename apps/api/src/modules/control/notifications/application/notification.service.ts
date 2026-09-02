@@ -27,7 +27,12 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
 import type { FeatureFlagResolver } from '../../features/application/feature-flags.service.js';
 import type { SettingsResolver } from '../../settings/application/settings-resolver.js';
-import type { DeliveryAttemptRecord, NotificationIntent, NotificationRepository } from './ports.js';
+import type {
+  DeliveryAttemptRecord,
+  NotificationIntent,
+  NotificationRepository,
+  ReleasedClaimRecord,
+} from './ports.js';
 
 export const NOTIFICATIONS_VIEW: PermissionKey = 'opslog.view';
 
@@ -137,7 +142,11 @@ export class NotificationService {
     scope: ScopeContext,
     actor: ActorContext,
     id: string,
-  ): Promise<{ intent: NotificationIntent; attempts: DeliveryAttemptRecord[] }> {
+  ): Promise<{
+    intent: NotificationIntent;
+    attempts: DeliveryAttemptRecord[];
+    releasedClaims: ReleasedClaimRecord[];
+  }> {
     await this.guard.check(scope, actor, NOTIFICATIONS_VIEW);
     const intent = await this.notifications.findById(scope, id);
     if (intent === null) {
@@ -146,9 +155,16 @@ export class NotificationService {
         'No such notification in this tenant.',
       );
     }
-    // The intent says what we meant to say; the attempts say what happened.
-    // Returning them together is the whole point of keeping them apart.
-    return { intent, attempts: await this.notifications.attempts(scope, id) };
+    // The intent says what we meant to say; the attempts say what happened;
+    // the released claims say where the rest of the claims went. Returning the
+    // three together is the whole point of keeping them apart — and without
+    // the third, a withdrawn sweep reads as a permanent failure on an intent
+    // that is somehow pending again.
+    return {
+      intent,
+      attempts: await this.notifications.attempts(scope, id),
+      releasedClaims: await this.notifications.releasedClaims(scope, id),
+    };
   }
 
   /**
@@ -183,6 +199,14 @@ export class NotificationService {
      * than widening the first.
      */
     readonly attempts: readonly DeliveryAttemptRecord[];
+    /**
+     * The claims this intent gave back, read on the same argument.
+     *
+     * A replay whose claims were handed back has an `attemptCount` larger than
+     * its attempt list, and without these rows nothing on the reply explains
+     * the difference.
+     */
+    readonly releasedClaims: readonly ReleasedClaimRecord[];
     readonly created: boolean;
     readonly replayed: boolean;
   }> {
@@ -264,6 +288,7 @@ export class NotificationService {
         return {
           intent: current ?? intent,
           attempts: await this.notifications.attempts(scope, intent.id, tx),
+          releasedClaims: await this.notifications.releasedClaims(scope, intent.id, tx),
           created: false,
           replayed: true,
         };
@@ -351,9 +376,11 @@ export class NotificationService {
           tx,
         );
 
-        // A brand-new intent has no attempts yet; saying so is a fact rather
-        // than the hard-coded empty list the controller used to invent.
-        return { ...result, attempts: [], replayed: false };
+        // A brand-new intent has no attempts and no returned claims yet; saying
+        // so is a fact rather than the hard-coded empty list the controller
+        // used to invent. Both lists are empty for the same reason: the intent
+        // has never been claimed.
+        return { ...result, attempts: [], releasedClaims: [], replayed: false };
       },
     );
   }

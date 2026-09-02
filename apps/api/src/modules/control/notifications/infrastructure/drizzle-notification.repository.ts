@@ -25,6 +25,7 @@ import type {
   DeliveryAttemptRecord,
   NotificationIntent,
   NotificationRepository,
+  ReleasedClaimRecord,
 } from '../application/ports.js';
 
 /**
@@ -256,6 +257,37 @@ export class DrizzleNotificationRepository implements NotificationRepository {
       )
       .orderBy(asc(notificationDeliveryAttempts.attemptNumber));
     return rows.map(toAttempt);
+  }
+
+  /**
+   * The claims this intent gave back, tenant-scoped.
+   *
+   * The only tenant-scoped reader of this table. Everything else counts these
+   * rows inside `spentAttempts`, cross-tenant, for the dispatcher; this one is
+   * for a person, so it goes through `requireTenantId` like every other read a
+   * surface can reach.
+   */
+  async releasedClaims(
+    scope: ScopeContext,
+    notificationId: string,
+    tx?: unknown,
+  ): Promise<ReleasedClaimRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await executorOf(this.db, tx)
+      .select()
+      .from(notificationReleasedClaims)
+      .where(
+        and(
+          eq(notificationReleasedClaims.tenantId, tenantId),
+          eq(notificationReleasedClaims.notificationId, notificationId),
+        ),
+      )
+      .orderBy(asc(notificationReleasedClaims.attemptNumber));
+    return rows.map((row) => ({
+      attemptNumber: row.attemptNumber,
+      releasedAt: row.releasedAt,
+      reason: row.reason,
+    }));
   }
 
   /**
