@@ -106,9 +106,15 @@ Publish a second release (a trivial change is enough), then:
 sudo botctl update v1.0.1
 ```
 
-- [ ] A backup is taken before the migration.
+- [ ] A backup is taken before the migration, and its filename names **both**
+      releases — `nexa-v1.0.0-before-v1.0.1-<stamp>.sql.gz`. It sits between two
+      schemas, so a name claiming one of them would be a claim nobody can check.
 - [ ] The migration runs and reports success.
-- [ ] `botctl version` reports the new version, commit and digest.
+- [ ] `botctl version` reports the new version, commit and digest, and prints
+      no `unknown` and no `DIVERGENCE`.
+- [ ] `/var/lib/nexa/releases/v1.0.1.json` exists. Without it, `botctl version`
+      goes blank and the NEXT update leaves the installation unable to roll
+      back at all.
 - [ ] The panel still works and you are still logged in.
 - [ ] `/var/lib/nexa/previous` names `v1.0.0`.
 - [ ] The `v1.0.0` release manifest still exists.
@@ -161,6 +167,22 @@ Worth doing once, on staging, so the behaviour is known rather than assumed:
       names the problem, and leaves the installation running.
 - [ ] `sudo docker stop nexa-postgres-1` then `sudo botctl status` reports NOT
       READY rather than claiming health. Start it again and confirm recovery.
+- [ ] `sudo ./install.sh --domain … --acme-email … --version v1.0.1` on the
+      host now running v1.0.0 **refuses** and points at `botctl update`. The
+      installer takes no backup and records no rollback target, so accepting a
+      version change would silently destroy the ability to roll back.
+- [ ] Edit `NEXA_IMAGE` in `/etc/nexa/deploy.env` to any other digest, then run
+      `sudo botctl version`. It reports `DIVERGENCE`, names what would actually
+      start, and exits non-zero. This is the state an interrupted update leaves,
+      and it used to be undetectable. Put the value back afterwards.
+
+## 13. Delegation, if you delegate
+
+Only if `botctl` is reachable through `sudo` for a non-root operator:
+
+- [ ] `NEXA_LIB=/tmp/anything sudo botctl status` refuses and names the
+      variable. Honouring it would let whoever ran sudo choose the code this
+      host executes as root.
 
 ## Sign-off
 
@@ -178,5 +200,7 @@ Worth doing once, on staging, so the behaviour is known rather than assumed:
 | Rollback succeeded, data intact       |        |       |
 | Update after rollback succeeded       |        |       |
 | Reinstall preserved secrets and data  |        |       |
+| Installer refused a version change    |        |       |
+| A divergent deploy.env was reported   |        |       |
 
 Only when every row passes should this deployment model carry a customer.
