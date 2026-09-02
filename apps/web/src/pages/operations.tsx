@@ -169,12 +169,25 @@ export function NotificationsPage({ mayTest }: { mayTest: boolean }) {
   const notifications = useQuery({
     queryKey: ['notifications'],
     queryFn: fetchNotifications,
+    // Delivery is ASYNCHRONOUS: the worker claims and sends on its own poll,
+    // so the list a test send refreshes almost always still says PENDING.
+    // Without this the page never learned the outcome — no interval, no
+    // refetch on focus — and an operator testing a destination sat looking at
+    // "pending" until they reloaded, which is indistinguishable from a
+    // destination that does not work.
+    //
+    // Only while something IS pending, so a settled list costs nothing.
+    refetchInterval: (query) =>
+      query.state.data?.notifications.some((entry) => entry.status === 'PENDING') ? 3_000 : false,
   });
 
   const detail = useQuery({
     queryKey: ['notification', selected],
     queryFn: () => fetchNotification(selected as string),
     enabled: selected !== null,
+    // The open panel follows the same rule as the list above.
+    refetchInterval: (query) =>
+      query.state.data?.notification.status === 'PENDING' ? 3_000 : false,
   });
 
   const submission = useSubmissionKey();

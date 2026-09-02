@@ -118,18 +118,15 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
     // Held across a failure, so a person pressing the button again after a
     // dropped response is asking "did that work?" rather than issuing a second
     // command.
-    mutationFn: (idempotencyKey: string) =>
-      saveTemplate({
-        key: template.key,
-        body: draft,
-        // The version AND revision the DRAFT was read at, not whatever the
-        // list holds now. Both, because a revert deletes the override and the
-        // next save starts a new row at version 1 — so a stale version 1 would
-        // match a row it has never seen, and the server would accept it.
-        expectedVersion: basis.version,
-        expectedRevision: basis.revision,
-        idempotencyKey,
-      }),
+    // The WHOLE command travels as the variable; see the note in
+    // `settings.tsx`. Reading the draft out of the closure would let a retry
+    // carry the original key with a later body.
+    mutationFn: (command: {
+      idempotencyKey: string;
+      body: string;
+      expectedVersion: number | null;
+      expectedRevision: number | null;
+    }) => saveTemplate({ key: template.key, ...command }),
     onSuccess: async (result) => {
       saving.settle();
       adopt(result.template);
@@ -163,19 +160,18 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
       : null;
 
   const undo = useMutation({
-    mutationFn: (idempotencyKey: string) => {
+    mutationFn: (command: {
+      idempotencyKey: string;
+      expectedVersion: number;
+      expectedRevision: number;
+    }) => {
       if (revertable === null) {
         // Unreachable: the button is not rendered without it. Refusing here
         // rather than casting is what makes that a fact the type checker
         // holds, instead of an assertion a comment makes.
         throw new Error('There is no override to revert.');
       }
-      return revertTemplate({
-        key: template.key,
-        expectedVersion: revertable.version,
-        expectedRevision: revertable.revision,
-        idempotencyKey,
-      });
+      return revertTemplate({ key: template.key, ...command });
     },
     onSuccess: async (result) => {
       reverting.settle();
@@ -215,13 +211,13 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    save.mutate(
-      saving.current({
-        body: draft,
-        expectedVersion: basis.version,
-        expectedRevision: basis.revision,
-      }),
-    );
+    // Snapshotted at the click, so a retry cannot see a later edit.
+    const command = {
+      body: draft,
+      expectedVersion: basis.version,
+      expectedRevision: basis.revision,
+    };
+    save.mutate({ ...command, idempotencyKey: saving.current(command) });
   };
 
   return (
@@ -381,7 +377,14 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
           {template.version !== null && (
             <button
               type="button"
-              onClick={() => undo.mutate(reverting.current({ revert: revertable }))}
+              onClick={() => {
+                if (revertable === null) return;
+                const command = {
+                  expectedVersion: revertable.version,
+                  expectedRevision: revertable.revision,
+                };
+                undo.mutate({ ...command, idempotencyKey: reverting.current(command) });
+              }}
               disabled={undo.isPending}
             >
               {t('web.revert')}

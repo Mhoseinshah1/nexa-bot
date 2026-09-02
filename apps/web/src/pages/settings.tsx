@@ -78,18 +78,20 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
   const submission = useSubmissionKey();
 
   const save = useMutation({
-    // The key is a VARIABLE of the mutation, minted once per submission below.
-    // react-query hands the same variables back on every retry, so a retry
-    // after a dropped connection carries the key the first attempt used — which
-    // is the only way an idempotency key protects anything.
-    mutationFn: (idempotencyKey: string) =>
-      saveSetting({
-        key: setting.key,
-        value: fromEditable(draft, basis.value),
-        // The version the DRAFT was read at, not whatever the list holds now.
-        expectedVersion: basis.version,
-        idempotencyKey,
-      }),
+    // The WHOLE command is the mutation's variable, not just its key.
+    //
+    // react-query hands the variables back unchanged on a retry, which is the
+    // only way an idempotency key protects anything — but a `mutationFn` that
+    // reads `draft` and `basis` out of the closure defeats that half way: the
+    // retry carries the original key and the LATEST payload. Edit the field
+    // during the 500 ms retry delay and the same key arrives with different
+    // input, which is either a payload mismatch or an edit submitted without
+    // anybody clicking save.
+    mutationFn: (command: {
+      idempotencyKey: string;
+      value: unknown;
+      expectedVersion: number | null;
+    }) => saveSetting({ key: setting.key, ...command }),
     onSuccess: async (result) => {
       // Adopt our own write before the refetch lands, so the row does not
       // report itself as having changed elsewhere.
@@ -110,7 +112,12 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    save.mutate(submission.current({ value: draft, expectedVersion: basis.version }));
+    // Snapshotted HERE, at the click, so the retry cannot see a later edit.
+    const command = {
+      value: fromEditable(draft, basis.value),
+      expectedVersion: basis.version,
+    };
+    save.mutate({ ...command, idempotencyKey: submission.current(command) });
   };
 
   return (

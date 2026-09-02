@@ -53,14 +53,16 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
   const toggle = useMutation({
     // Minted once per submission and passed as a variable, so a retry carries
     // the key the first attempt used.
-    mutationFn: (idempotencyKey: string) =>
-      saveFeatureFlag({
-        key: flag.key,
-        enabled: !flag.enabled,
-        expectedVersion: flag.version,
-        idempotencyKey,
-        ...(wide ? { confirmKey, reason } : {}),
-      }),
+    // The WHOLE command travels as the variable; see the note in
+    // `settings.tsx`. Reading `confirmKey` and `reason` out of the closure
+    // would let a retry carry the original key with a later reason.
+    mutationFn: (
+      command: {
+        idempotencyKey: string;
+        enabled: boolean;
+        expectedVersion: number | null;
+      } & Partial<{ confirmKey: string; reason: string }>,
+    ) => saveFeatureFlag({ key: flag.key, ...command }),
     onSuccess: async () => {
       submission.settle();
       setConfirmKey('');
@@ -77,14 +79,13 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    toggle.mutate(
-      submission.current({
-        enabled: !flag.enabled,
-        expectedVersion: flag.version,
-        confirmKey,
-        reason,
-      }),
-    );
+    // Snapshotted at the click, so a retry cannot see a later edit.
+    const command = {
+      enabled: !flag.enabled,
+      expectedVersion: flag.version,
+      ...(wide ? { confirmKey, reason } : {}),
+    };
+    toggle.mutate({ ...command, idempotencyKey: submission.current(command) });
   };
 
   return (

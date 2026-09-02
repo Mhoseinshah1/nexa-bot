@@ -319,6 +319,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
     tenants,
+    // The RAW recorder: a repair closes the condition the resolver opened, and
+    // the projecting decorator reads settings to decide whether to notify.
+    opsLogWriter,
   );
 
   const featureFlagRepository = new DrizzleFeatureFlagRepository(database.db);

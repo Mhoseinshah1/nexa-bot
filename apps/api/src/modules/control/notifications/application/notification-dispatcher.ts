@@ -106,6 +106,8 @@ export interface DispatchTickResult {
 export class NotificationDispatcher {
   private running = false;
   private timer: NodeJS.Timeout | null = null;
+  /** The tick currently running, so `stop` can wait for it. */
+  private inFlight: Promise<unknown> | null = null;
   private windowStartedAt = 0;
   private sentInWindow = 0;
   /**
@@ -154,24 +156,46 @@ export class NotificationDispatcher {
     const loop = () => {
       if (!this.running) return;
       this.timer = setTimeout(() => {
-        void this.tick()
+        // Held so `stop` can wait for it. A tick that is mid-send owns a
+        // claimed row, and the outcome of that send has nowhere to go once the
+        // pool is closed.
+        const running = this.tick()
           .catch((error: unknown) => {
             this.logger.error(
               { err: error instanceof Error ? error.message : String(error) },
               'Notification dispatcher tick failed',
             );
           })
-          .finally(loop);
+          .finally(() => {
+            this.inFlight = null;
+            loop();
+          });
+        this.inFlight = running;
+        void running;
       }, this.options.pollIntervalMs);
       this.timer.unref?.();
     };
     loop();
   }
 
+  /**
+   * Stops the loop AND waits for the tick that is already running.
+   *
+   * Returning as soon as the next timer is cleared was not stopping, it was
+   * abandoning: `container.shutdown()` closes the pool immediately afterwards,
+   * so a send in flight during a SIGTERM completed with nowhere to record its
+   * attempt or move its intent. The row stayed claimed, its lease expired, and
+   * the next deployment sent the same operational alert again — one duplicate
+   * per deploy that happened to overlap a send.
+   *
+   * The wait is bounded by the transport's own timeout, so this cannot hang a
+   * shutdown indefinitely.
+   */
   async stop(): Promise<void> {
     this.running = false;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    await this.inFlight;
   }
 
   async tick(): Promise<DispatchTickResult> {

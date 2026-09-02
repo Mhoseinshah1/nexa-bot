@@ -13,6 +13,7 @@ import {
   type IdempotencyStore,
   type PermissionKey,
   type ScopeContext,
+  type OperationalEventRecorder,
   type SettingKey,
   type SettingSource,
   type UnitOfWork,
@@ -24,6 +25,7 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { SettingRepository } from './ports.js';
+import { INVALID_STORED_SETTING_CODE } from './settings-resolver.js';
 import type { ResolvedSetting, SettingsResolver } from './settings-resolver.js';
 
 export const SETTINGS_VIEW: PermissionKey = 'settings.view';
@@ -134,6 +136,15 @@ export class SettingsService {
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     private readonly scopeActivity: ScopeActivityReader,
+    /**
+     * The RAW recorder, not the projecting one.
+     *
+     * This writes a recovery for a condition the resolver opened, inside the
+     * repair's own transaction. It must not go through the projector: that
+     * reads settings to decide whether to notify, and reading this very key is
+     * what opened the condition.
+     */
+    private readonly opsLog: OperationalEventRecorder,
   ) {}
 
   /**
@@ -299,6 +310,32 @@ export class SettingsService {
         aggregateId: key,
         payload: { key, from: before.value, to: written.value },
       });
+
+      // A repaired key CLOSES the condition its own invalidity opened.
+      //
+      // `SettingsResolver` records `settings.stored_value_invalid` every time
+      // it meets a value that no longer parses, deduplicated onto one row. That
+      // row has no other way to be resolved — nothing else knows the value
+      // became valid again — so without this the warning stays open for ever
+      // and keeps appearing in the operations view's unresolved filter, which
+      // is the "a fixed problem still looks broken" failure the recovery
+      // mechanism exists for.
+      //
+      // In the repair's transaction, so the recovery cannot survive a rollback
+      // of the write that earned it.
+      if (before.storedValueInvalid) {
+        await this.opsLog.record(
+          scope,
+          {
+            code: 'settings.stored_value_valid',
+            severity: 'INFO',
+            message: `The stored value for ${key} parses again.`,
+            context: { key },
+            recoversCode: INVALID_STORED_SETTING_CODE,
+          },
+          tx,
+        );
+      }
 
       const setting = await this.resolver.resolve(scope, key, tx);
       await rememberOnce(

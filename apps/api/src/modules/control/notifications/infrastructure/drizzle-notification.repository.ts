@@ -13,6 +13,7 @@ import type { Database, Executor } from '../../../../infrastructure/persistence/
 import {
   notificationDeliveryAttempts,
   notifications,
+  tenants,
 } from '../../../../infrastructure/persistence/schema.js';
 import {
   requireTenantId,
@@ -240,6 +241,19 @@ export class DrizzleNotificationRepository implements NotificationRepository {
           and(
             eq(notifications.status, 'PENDING'),
             lte(notifications.nextAttemptAt, now),
+            // The tenant has to be open for business, the same rule the outbox
+            // relay applies to a domain event and for the same reason: a
+            // tenant's status is a system-wide kill switch, and a notification
+            // queued while it was ACTIVE would otherwise still leave the
+            // process after somebody stopped the installation.
+            //
+            // The row stays PENDING rather than being failed. A stop is not a
+            // verdict on the message; it is a pause, and the alert is still
+            // worth sending when the tenant comes back.
+            inArray(
+              notifications.tenantId,
+              tx.select({ id: tenants.id }).from(tenants).where(eq(tenants.status, 'ACTIVE')),
+            ),
             // The backstop. Abandonment normally happens in `recordAttempt`,
             // which is exactly the code that does not run when a dispatch
             // throws before it — so an intent that has already spent its

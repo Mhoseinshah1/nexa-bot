@@ -969,6 +969,107 @@ describe('control plane, Codex round', () => {
     });
   });
 
+  describe('a stopped tenant sends nothing', () => {
+    /**
+     * A tenant's status is a system-wide kill switch, and the outbox relay has
+     * always honoured it. The notification claim did not: an intent queued
+     * while the tenant was ACTIVE still left the process after somebody stopped
+     * the installation, because eligibility asked only about the notification's
+     * own state and the clock.
+     */
+    it('does not claim an intent whose tenant has been stopped', async () => {
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.telegram_chat_id',
+        value: '-100999',
+        expectedVersion: null,
+        idempotencyKey: `chat-${Math.random()}`,
+      });
+      await ctx.container.featureFlags.set(tenantA, owner, {
+        key: 'ops_notifications',
+        enabled: true,
+        expectedVersion: null,
+        idempotencyKey: `flag-${Math.random()}`,
+        confirmKey: 'ops_notifications',
+        reason: 'Test setup.',
+      });
+      await ctx.container.opsLog.record(tenantA, {
+        code: 'panel.unreachable',
+        severity: 'ERROR',
+        message: 'The panel did not answer.',
+        dedupeKey: 'panel:stopped',
+      });
+      const [intent] = await ctx.container.notifications.list(tenantA, owner);
+
+      await ctx.container.database.withClient((client) =>
+        client.query(`UPDATE tenants SET status = 'STOPPED' WHERE id = $1`, [SEED_IDS.tenantA]),
+      );
+
+      const result = await ctx.container.notificationDispatcher.tick();
+      expect(result.claimed).toBe(0);
+      expect(transport.messages).toHaveLength(0);
+
+      // QUEUED, not failed. A stop is a pause rather than a verdict on the
+      // message, and the alert is still worth sending when the tenant returns.
+      const [row] = await ctx.container.database.db
+        .select()
+        .from(notifications)
+        .where(eq(notifications.id, intent!.id));
+      expect(row!.status).toBe('PENDING');
+
+      await ctx.container.database.withClient((client) =>
+        client.query(`UPDATE tenants SET status = 'ACTIVE' WHERE id = $1`, [SEED_IDS.tenantA]),
+      );
+      expect((await ctx.container.notificationDispatcher.tick()).sent).toBe(1);
+    });
+  });
+
+  describe('a repaired setting closes the condition it opened', () => {
+    /**
+     * `SettingsResolver` records `settings.stored_value_invalid` whenever it
+     * meets a value that no longer parses. Nothing else knows when the value
+     * becomes valid again, so without a recovery the warning stays open for
+     * ever and keeps appearing in the unresolved filter — "a fixed problem
+     * still looks broken", which is what the recovery mechanism is for.
+     */
+    it('resolves settings.stored_value_invalid when a valid value is written', async () => {
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.max_attempts',
+        value: 3,
+        expectedVersion: null,
+        idempotencyKey: `first-${Math.random()}`,
+      });
+      await ctx.container.database.withClient((client) =>
+        client.query(
+          `UPDATE setting_values SET value = '999'::jsonb
+             WHERE tenant_id = $1 AND setting_key = 'ops.notifications.max_attempts'`,
+          [SEED_IDS.tenantA],
+        ),
+      );
+
+      const invalid = await ctx.container.settingsService.get(
+        tenantA,
+        owner,
+        'ops.notifications.max_attempts',
+      );
+      expect(invalid.storedValueInvalid).toBe(true);
+
+      const opened = await ctx.container.opsLogService.list(tenantA, owner, {});
+      const warning = opened.find((event) => event.code === 'settings.stored_value_invalid');
+      expect(warning?.resolvedAt).toBeNull();
+
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.max_attempts',
+        value: 4,
+        expectedVersion: invalid.version,
+        idempotencyKey: `repair-${Math.random()}`,
+      });
+
+      const after = await ctx.container.opsLogService.list(tenantA, owner, {});
+      const closed = after.find((event) => event.code === 'settings.stored_value_invalid');
+      expect(closed?.resolvedAt).not.toBeNull();
+    });
+  });
+
   describe('a flag reason is part of the request', () => {
     it('rejects a key reused with a different reason instead of replaying', async () => {
       const key = `flag-${Math.random()}`;

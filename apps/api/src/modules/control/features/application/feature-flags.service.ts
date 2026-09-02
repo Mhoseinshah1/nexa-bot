@@ -79,7 +79,15 @@ export const setFeatureFlagCommandSchema = z.object({
    * kill switch is rendered identically to the dice toggle and takes one press.
    */
   confirmKey: z.string().optional(),
-  reason: z.string().min(3).max(500).optional(),
+  // TRIMMED before it is measured. `min(3)` accepted three spaces, and the
+  // guard below only asks whether a reason is present — so a TENANT_WIDE
+  // toggle could commit with an audit row explaining nothing, which is the
+  // whole safeguard defeated by the cheapest possible input.
+  reason: z
+    .string()
+    .transform((value) => value.trim())
+    .pipe(z.string().min(3).max(500))
+    .optional(),
 });
 export type SetFeatureFlagCommand = z.infer<typeof setFeatureFlagCommandSchema>;
 
