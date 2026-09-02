@@ -517,7 +517,14 @@ nexa_check_divergence() {
   version="$(nexa_current_version || true)"
   [ -n "$version" ] || return 0
   recorded="$(nexa_manifest_field "$version" digest 2>/dev/null || true)"
-  [ -n "$recorded" ] || return 0
+  if [ -z "$recorded" ]; then
+    # No manifest for the release this installation says it runs. That is what
+    # the pre-manifest updater left behind, and those are precisely the
+    # installations most likely to be divergent — so staying silent here failed
+    # open on the population that needed the warning most.
+    nexa_warn "no release manifest for ${version}, so what this installation runs cannot be confirmed. 'botctl update ${version}' records one."
+    return 1
+  fi
   configured="$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE 2>/dev/null || true)"
   [ -n "$configured" ] || return 0
 
@@ -573,7 +580,9 @@ nexa_prune_releases() {
 
   local kept=0 name version
   # Newest first by modification time, so the oldest manifests are the ones
-  # that go.
+  # that go. Two written in the same second tie-break by whatever order `ls`
+  # produces — harmless, because the two that must survive are skipped
+  # explicitly below rather than by being recent.
   while IFS= read -r name; do
     version="$(basename "$name" .json)"
     if [ "$version" = "$current" ] || [ "$version" = "$previous" ]; then

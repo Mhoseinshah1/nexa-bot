@@ -138,6 +138,62 @@ assert_not_contains 'the lock is under a world-writable directory' "$default_loc
 assert_fails 'the installer creates a directory under /var/lock' \
   grep -q 'install -d .*var/lock' "${REPO}/deploy/install.sh"
 
+test_case 'an interrupted commit never reports a release it did not start'
+# The ordering rule, driven through every interruption point.
+#
+# A completed commit ends in the same state whichever order the three files are
+# written in, so only an interruption can distinguish them — and the earlier
+# test could not, which is why reverting to the old order left the suite green.
+#
+# No hook in the production code: `nexa_write_atomic` is overridden here to
+# fail on the Nth call, which is what a power cut looks like from inside
+# `nexa_commit_release`.
+nexa_write_atomic_source="$(declare -f nexa_write_atomic)"
+eval "nexa_write_atomic_real${nexa_write_atomic_source#nexa_write_atomic}"
+assert_ok 'the real writer was not captured' declare -F nexa_write_atomic_real
+
+# `exit`, not `return`: this file runs without `set -e`, so a stub that merely
+# returns non-zero lets `nexa_commit_release` carry on to the next write and
+# the commit completes anyway — which is why an earlier version of this test
+# passed under the OLD write order too. The call below is in a subshell, so
+# exiting there is precisely a process killed mid-commit.
+commit_writes=0
+# SC2317: this body is reached only through `nexa_commit_release`. The override
+# happens at runtime, so static analysis cannot see the call — and that
+# indirect call is the entire mechanism.
+# (A comment line may not BEGIN with the tool's name, or it is parsed as a
+# directive rather than as prose.)
+# shellcheck disable=SC2317
+nexa_write_atomic() {
+  commit_writes=$((commit_writes + 1))
+  [ "$commit_writes" -le "${COMMIT_ALLOW:-99}" ] || exit 9
+  nexa_write_atomic_real "$@"
+}
+
+seed_release 'v1.0.0' "$DIGEST_A"
+for allow in 0 1 2; do
+  printf 'v1.0.0\n' >"${NEXA_STATE_DIR}/current"
+  rm -f "${NEXA_STATE_DIR}/previous"
+  set_deploy_image "registry.test/nexa@${DIGEST_A}"
+  commit_writes=0
+  (COMMIT_ALLOW="$allow" nexa_commit_release v2.0.0 v1.0.0 "registry.test/nexa@${DIGEST_B}") \
+    >/dev/null 2>&1 || true
+
+  reported="$(cat "${NEXA_STATE_DIR}/current" 2>/dev/null || printf 'none')"
+  started="$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE)"
+  # The invariant. Reporting the OLD release while starting the new one is
+  # recoverable by re-running the update. Reporting the NEW release while
+  # starting the old one is the state nothing can detect from the inside and
+  # every command lies about — and it is exactly what writing `current` first
+  # produces.
+  if [ "$reported" = "v2.0.0" ]; then
+    assert_equals "interrupted after ${allow} writes: reports v2.0.0 but would start something else" \
+      "registry.test/nexa@${DIGEST_B}" "$started"
+  fi
+done
+unset -f nexa_write_atomic
+COMMIT_ALLOW=99
+
 test_case 'a deploy.env rewrite that goes wrong changes nothing'
 # `grep -v ... || true` swallowed grep's exit 2 as happily as its exit 1, and
 # exit 2 is a read error, an I/O error or ENOSPC. What landed was a deploy.env
@@ -150,10 +206,24 @@ mkdir -p "${NEXA_ROOT}/stub"
 printf '#!/bin/sh\nexit 2\n' >"${NEXA_ROOT}/stub/grep"
 chmod +x "${NEXA_ROOT}/stub/grep"
 (
+  # SC2030: modifying PATH only inside this subshell is deliberate — the stub
+  # grep must not survive into the rest of the suite.
+  # shellcheck disable=SC2030
   PATH="${NEXA_ROOT}/stub:${PATH}"
   nexa_set_deploy_image "registry.test/nexa@${DIGEST_B}"
 ) >/dev/null 2>&1 && fail_test 'a failed read reported success'
 assert_equals 'deploy.env was rewritten from a failed read' "$before" "$(cat "$env_file")"
+# The MESSAGE, not just the outcome. Downstream the NEXA_DOMAIN check catches
+# this too, so the file is safe either way — but an operator whose /var is full
+# is then told "the rewritten deploy.env lost NEXA_DOMAIN", which sends them
+# looking in entirely the wrong place.
+sudo_probe="$(
+  # shellcheck disable=SC2030,SC2031
+  PATH="${NEXA_ROOT}/stub:${PATH}"
+  (nexa_set_deploy_image "registry.test/nexa@${DIGEST_B}") 2>&1 || true
+)"
+assert_contains 'the read failure was not diagnosed' "$sudo_probe" 'grep exited 2'
+assert_contains 'the operator was not pointed at disk space' "$sudo_probe" 'free space' 
 assert_fails 'a temporary file was left behind' \
   test -n "$(find "$NEXA_CONFIG_DIR" -name 'deploy.env.*' -print -quit)"
 
@@ -538,6 +608,34 @@ assert_equals 'a target that would not start became current' 'v1.0.0' "$(cat "${
 assert_contains 'the back-out was not verified before being announced' \
   "$BOTCTL_OUTPUT" 'is ready'
 
+test_case 'a back-out that does NOT come back is reported as the emergency it is'
+# The case that distinguishes the two branches, and the reason the earlier
+# assertion could not fail: `is ready` is a substring of the reassuring
+# message, which is printed whenever `compose up` returns zero — with or
+# without the readiness check. Only a previous release that starts and is NOT
+# ready tells the two apart.
+fake_set "up_exit_${DIGEST_B}" 1
+fake_set api_health 'starting'
+NEXA_READY_TIMEOUT=6 run_botctl update v2.0.0
+fake_set "up_exit_${DIGEST_B}" 0
+fake_set api_health 'healthy'
+assert_fails 'a failed back-out exited zero' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'an unhealthy back-out was announced as recovered' \
+  "$BOTCTL_OUTPUT" 'did not come back cleanly'
+assert_not_contains 'an unhealthy back-out claimed readiness' "$BOTCTL_OUTPUT" 'is ready'
+
+test_case 'a readiness back-out that does not come back is reported too'
+# The step-6 counterpart: the target starts but never becomes ready, and
+# neither does the release it falls back to.
+fake_set api_health 'starting'
+fake_set "api_health_${DIGEST_B}" 'starting'
+NEXA_READY_TIMEOUT=6 run_botctl update v2.0.0
+fake_set api_health 'healthy'
+fake_set "api_health_${DIGEST_B}" 'healthy'
+assert_fails 'a failed readiness back-out exited zero' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'an unhealthy readiness back-out was announced as recovered' \
+  "$BOTCTL_OUTPUT" 'did not come back cleanly'
+
 test_case 'a target that dies is backed out without waiting out the timeout'
 # An api container that EXITED is not listed by `docker compose ps` without
 # --all, so the readiness parse yielded nothing, that read as "not ready yet",
@@ -565,6 +663,25 @@ teardown_root
 setup_root
 setup_fake_docker
 seed_release 'v1.0.0' "$DIGEST_A"
+
+test_case 'the commit writes what RUNS before what is REPORTED'
+# The ordering rule, asserted rather than described. deploy.env decides what a
+# restart or a reboot starts; `current` decides what every command says. If
+# `current` is written first, an interruption between them leaves the tool
+# reporting the new release while quietly starting the old one — and no test
+# could see that until the fake started resolving its image from deploy.env
+# the way the real client does.
+reset_docker_log
+fake_set resolve_digest "$DIGEST_B"
+run_botctl update v2.0.0
+assert_equals 'the update failed' 0 "$BOTCTL_STATUS"
+reset_docker_log
+run_botctl restart
+assert_equals 'restart failed' 0 "$BOTCTL_STATUS"
+assert_contains 'a restart did not start the release the update committed' \
+  "$(docker_log)" "$DIGEST_B"
+assert_not_contains 'a restart started the release the update replaced' \
+  "$(docker_log)" "$DIGEST_A"
 
 test_case 'a recorded release that disagrees with deploy.env is REPORTED'
 # The state a power cut in the middle of the commit block leaves. It used to be

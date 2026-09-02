@@ -180,8 +180,28 @@ setup_fake_docker() {
 #!/usr/bin/env bash
 # Fake docker. Records what it was asked and answers from FAKE_DIR.
 set -uo pipefail
+
+# The image compose would use: the environment override if botctl set one,
+# otherwise whatever deploy.env names — exactly as the real client resolves it.
+#
+# Reading the --env-file is not decoration. Without it no test can observe
+# which image a back-out or a `botctl restart` would ACTUALLY start, and the
+# whole point of the commit-ordering rule is that deploy.env decides that. With
+# the fake taking the image only from the environment, reverting the ordering
+# to the buggy one left the suite green.
 NEXA_IMAGE="${NEXA_IMAGE:-}"
-printf '%s\n' "$*" >>"$DOCKER_LOG"
+if [ -z "$NEXA_IMAGE" ]; then
+  _env_file=""
+  _prev=""
+  for _arg in "$@"; do
+    [ "$_prev" = "--env-file" ] && _env_file="$_arg"
+    _prev="$_arg"
+  done
+  if [ -n "$_env_file" ] && [ -r "$_env_file" ]; then
+    NEXA_IMAGE="$(sed -n 's/^NEXA_IMAGE=//p' -- "$_env_file" | sed -n '1p')"
+  fi
+fi
+printf '%s [image=%s]\n' "$*" "$NEXA_IMAGE" >>"$DOCKER_LOG"
 
 read_state() { cat "${FAKE_DIR}/$1" 2>/dev/null || printf '%s' "$2"; }
 

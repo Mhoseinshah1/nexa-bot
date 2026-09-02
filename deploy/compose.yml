@@ -137,6 +137,17 @@ services:
     # The literal `$$REDIS_PASSWORD` is unexpanded on purpose: compose writes a
     # single `$`, so the value comes from the container's environment and is
     # never written into the compose file or into `docker inspect`'s Cmd.
+    #
+    # The value is QUOTED in the config file. A command-line flag tolerated any
+    # byte; a config directive is tokenised, so an unquoted password containing
+    # a space would be "wrong number of arguments" and one starting with `#` a
+    # comment. Installer-generated passwords are alphanumeric, but an operator
+    # editing /etc/nexa/redis.env has no way to know that constraint exists.
+    #
+    # Worth being precise about what this buys: /proc/<pid>/environ still holds
+    # the password and is readable by the redis uid, which is the only uid in
+    # this container. What it removes is the host-side exposure — `docker top`
+    # and a `ps` on the host showed the full argv.
     user: redis
     command:
       - sh
@@ -144,7 +155,7 @@ services:
       - |
         set -e
         umask 077
-        printf 'requirepass %s\nsave ""\nappendonly no\n' "$$REDIS_PASSWORD" >/tmp/redis.conf
+        printf 'requirepass "%s"\nsave ""\nappendonly no\n' "$$REDIS_PASSWORD" >/tmp/redis.conf
         exec redis-server /tmp/redis.conf
     env_file:
       - ${NEXA_CONFIG_DIR:-/etc/nexa}/redis.env
