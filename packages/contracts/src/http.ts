@@ -217,3 +217,244 @@ export const ADMIN_ROUTES = {
   roles: (id: string) => `/admins/${id}/roles`,
   rolesCatalog: '/roles',
 } as const;
+
+// ---------------------------------------------------------------------------
+// The control plane
+// ---------------------------------------------------------------------------
+
+/**
+ * Timestamps cross this seam as ISO-8601 strings in UTC.
+ *
+ * JSON has no date type, so the alternative is a number whose unit nobody
+ * states. The legacy log group mixes Jalali and Gregorian in one stream, which
+ * is the same mistake one layer up: Jalali is a display concern and this is a
+ * wire format.
+ */
+const isoTimestamp = z.iso.datetime();
+const nullableIsoTimestamp = isoTimestamp.nullable();
+
+export const resolvedSettingSchema = z.object({
+  key: z.string(),
+  value: z.unknown(),
+  source: z.enum(['DEFAULT', 'TENANT']),
+  /** Null when the value is the default: no row, so no version to state. */
+  version: z.number().int().positive().nullable(),
+  updatedAt: nullableIsoTimestamp,
+  updatedByAdminId: z.string().nullable(),
+  description: z.string(),
+  /** What `0`, empty or absent means for THIS key. Returned with every read. */
+  zeroMeaning: z.enum(['DISABLES', 'UNLIMITED', 'LITERAL', 'NOT_APPLICABLE']),
+  mutability: z.enum(['RUNTIME', 'RESTART_REQUIRED']),
+  classification: z.enum(['PUBLIC', 'SENSITIVE']),
+  configures: z.string().nullable(),
+});
+export type ResolvedSettingResponse = z.infer<typeof resolvedSettingSchema>;
+
+export const settingListResponseSchema = z.object({ settings: z.array(resolvedSettingSchema) });
+export type SettingListResponse = z.infer<typeof settingListResponseSchema>;
+
+export const setSettingRequestSchema = z.object({
+  value: z.unknown(),
+  /**
+   * The version the caller read. Required, and null means "I read this as
+   * unset". An optional expectation becomes an omitted one, and an omitted one
+   * is last-writer-wins with extra steps.
+   */
+  expectedVersion: z.number().int().positive().nullable(),
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type SetSettingRequest = z.infer<typeof setSettingRequestSchema>;
+
+export const featureFlagSchema = z.object({
+  key: z.string(),
+  enabled: z.boolean(),
+  source: z.enum(['DEFAULT', 'TENANT']),
+  version: z.number().int().positive().nullable(),
+  updatedAt: nullableIsoTimestamp,
+  updatedByAdminId: z.string().nullable(),
+  reason: z.string().nullable(),
+  description: z.string(),
+  /** TENANT_WIDE toggles go through the confirmation protocol (ADR-0010). */
+  blastRadius: z.enum(['LOCAL', 'TENANT_WIDE']),
+  /**
+   * The settings this flag governs, each marked inert when the flag is off.
+   *
+   * Travelling together is the point: in the legacy system the flag and its
+   * threshold sit on different screens, and the flag being off silently makes
+   * the value do nothing (CBR-007, GSR-008).
+   */
+  configuration: z.array(resolvedSettingSchema.extend({ inert: z.boolean() })),
+});
+export type FeatureFlagResponse = z.infer<typeof featureFlagSchema>;
+
+export const featureFlagListResponseSchema = z.object({ flags: z.array(featureFlagSchema) });
+export type FeatureFlagListResponse = z.infer<typeof featureFlagListResponseSchema>;
+
+export const setFeatureFlagRequestSchema = z.object({
+  enabled: z.boolean(),
+  expectedVersion: z.number().int().positive().nullable(),
+  idempotencyKey: z.string().min(8).max(255),
+  /** Typed confirmation of the flag's own key. Required for TENANT_WIDE. */
+  confirmKey: z.string().optional(),
+  reason: z.string().min(3).max(500).optional(),
+});
+export type SetFeatureFlagRequest = z.infer<typeof setFeatureFlagRequestSchema>;
+
+export const placeholderSchema = z.object({
+  token: z.string(),
+  type: z.enum(['STRING', 'NUMBER', 'MONEY', 'DATETIME', 'DURATION_DAYS', 'BYTES']),
+  description: z.string(),
+  required: z.boolean(),
+  repeatable: z.boolean(),
+});
+
+export const templateViewSchema = z.object({
+  key: z.string(),
+  locale: z.string(),
+  description: z.string(),
+  format: z.enum(['PLAIN_TEXT', 'TELEGRAM_HTML']),
+  placeholders: z.array(placeholderSchema),
+  maxLength: z.number().int().positive(),
+  /** The body in force — what a customer would actually receive. */
+  body: z.string(),
+  /**
+   * The tenant's RAW override, if stored, whether or not it is applied.
+   * This is what the edit field is populated from. Never a rendered string.
+   */
+  overrideBody: z.string().nullable(),
+  defaultBody: z.string(),
+  source: z.enum(['DEFAULT', 'TENANT']),
+  overrideSuppressed: z.boolean(),
+  version: z.number().int().positive().nullable(),
+  revision: z.number().int().positive().nullable(),
+  updatedAt: nullableIsoTimestamp,
+  updatedByAdminId: z.string().nullable(),
+});
+export type TemplateViewResponse = z.infer<typeof templateViewSchema>;
+
+export const templateListResponseSchema = z.object({ templates: z.array(templateViewSchema) });
+export type TemplateListResponse = z.infer<typeof templateListResponseSchema>;
+
+export const setTemplateRequestSchema = z.object({
+  body: z.string().min(1),
+  expectedVersion: z.number().int().positive().nullable(),
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type SetTemplateRequest = z.infer<typeof setTemplateRequestSchema>;
+
+export const revertTemplateRequestSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type RevertTemplateRequest = z.infer<typeof revertTemplateRequestSchema>;
+
+export const previewTemplateRequestSchema = z.object({
+  /** The body on screen, so a preview shows what is being edited. */
+  body: z.string(),
+  /** Sample values supplied by the caller, never taken from their own account. */
+  values: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
+});
+export type PreviewTemplateRequest = z.infer<typeof previewTemplateRequestSchema>;
+
+export const previewTemplateResponseSchema = z.object({
+  rendered: z.string(),
+  unresolved: z.array(z.string()),
+});
+export type PreviewTemplateResponse = z.infer<typeof previewTemplateResponseSchema>;
+
+export const templateRevisionSchema = z.object({
+  revision: z.number().int().positive(),
+  action: z.enum(['SET', 'REVERT']),
+  /** The body a SET stored. Null for a REVERT, which stores none. */
+  body: z.string().nullable(),
+  createdAt: isoTimestamp,
+  createdByAdminId: z.string().nullable(),
+});
+export type TemplateRevisionResponse = z.infer<typeof templateRevisionSchema>;
+
+export const templateRevisionListResponseSchema = z.object({
+  revisions: z.array(templateRevisionSchema),
+});
+export type TemplateRevisionListResponse = z.infer<typeof templateRevisionListResponseSchema>;
+
+export const operationalEventSchema = z.object({
+  id: z.string(),
+  code: z.string(),
+  severity: z.enum(['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL']),
+  message: z.string(),
+  context: z.record(z.string(), z.unknown()).nullable(),
+  occurrenceCount: z.number().int().positive(),
+  firstSeenAt: isoTimestamp,
+  lastSeenAt: isoTimestamp,
+  correlationId: z.string().nullable(),
+  recoversCode: z.string().nullable(),
+  /** Set when the condition cleared. The row is never removed either way. */
+  resolvedAt: nullableIsoTimestamp,
+  resolvedByEventId: z.string().nullable(),
+});
+export type OperationalEventResponse = z.infer<typeof operationalEventSchema>;
+
+export const operationalEventListResponseSchema = z.object({
+  events: z.array(operationalEventSchema),
+});
+export type OperationalEventListResponse = z.infer<typeof operationalEventListResponseSchema>;
+
+export const notificationSchema = z.object({
+  id: z.string(),
+  kind: z.enum(['OPERATIONAL_EVENT', 'OPERATIONS_TEST']),
+  status: z.enum(['PENDING', 'SENT', 'FAILED']),
+  templateKey: z.string(),
+  attemptCount: z.number().int().nonnegative(),
+  maxAttempts: z.number().int().positive(),
+  createdAt: isoTimestamp,
+  lastAttemptAt: nullableIsoTimestamp,
+  completedAt: nullableIsoTimestamp,
+  correlationId: z.string().nullable(),
+});
+export type NotificationResponse = z.infer<typeof notificationSchema>;
+
+export const notificationListResponseSchema = z.object({
+  notifications: z.array(notificationSchema),
+});
+export type NotificationListResponse = z.infer<typeof notificationListResponseSchema>;
+
+export const deliveryAttemptSchema = z.object({
+  attemptNumber: z.number().int().positive(),
+  transport: z.enum(['TELEGRAM', 'RECORDING']),
+  outcome: z.enum(['SUCCEEDED', 'FAILED_RETRYABLE', 'FAILED_PERMANENT']),
+  startedAt: isoTimestamp,
+  finishedAt: isoTimestamp,
+  errorCode: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+  retryAfterMs: z.number().int().nonnegative().nullable(),
+});
+export type DeliveryAttemptResponse = z.infer<typeof deliveryAttemptSchema>;
+
+/**
+ * One intent and everything that happened to it.
+ *
+ * The two halves are returned together and stay distinguishable, which is the
+ * question the legacy system cannot answer about its own notification report
+ * (UNK-LGR-015).
+ */
+export const notificationDetailResponseSchema = z.object({
+  notification: notificationSchema,
+  attempts: z.array(deliveryAttemptSchema),
+});
+export type NotificationDetailResponse = z.infer<typeof notificationDetailResponseSchema>;
+
+export const CONTROL_ROUTES = {
+  settings: '/settings',
+  setting: (key: string) => `/settings/${encodeURIComponent(key)}`,
+  features: '/features',
+  feature: (key: string) => `/features/${encodeURIComponent(key)}`,
+  templates: '/templates',
+  template: (key: string) => `/templates/${encodeURIComponent(key)}`,
+  templateRevert: (key: string) => `/templates/${encodeURIComponent(key)}/revert`,
+  templatePreview: (key: string) => `/templates/${encodeURIComponent(key)}/preview`,
+  templateRevisions: (key: string) => `/templates/${encodeURIComponent(key)}/revisions`,
+  opsLog: '/ops-log',
+  notifications: '/notifications',
+  notification: (id: string) => `/notifications/${encodeURIComponent(id)}`,
+  notificationTest: '/notifications/test',
+} as const;
