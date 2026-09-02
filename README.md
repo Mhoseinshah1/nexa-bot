@@ -104,6 +104,8 @@ committed research.
 | `docs/conventions.md`     | Every convention, and the failure it prevents               |
 | `docs/domain-glossary.md` | The vocabulary, including the boundaries that must not blur |
 | `docs/open-questions.md`  | Unresolved product decisions, carried not guessed           |
+| `docs/deployment.md`      | Installing, operating, updating and rolling back            |
+| `docs/vps-acceptance.md`  | The checklist for the first real staging VPS                |
 | `docs/adr/`               | Decisions, with reasons and rejected alternatives           |
 | `docs/research/`          | Sanitized reverse-engineering evidence                      |
 

@@ -11,6 +11,22 @@ log. There are still no product features: no purchases, payments, wallet,
 providers, resellers or customer-facing Telegram operations. Do not add them
 without an explicit instruction.
 
+**The deployment checkpoint after Phase 2 is done too**: an immutable image,
+a production Compose topology behind Caddy, an Ubuntu installer, and `botctl`
+with update and rollback (ADR-0022, `docs/deployment.md`). It has never been
+run against a real server — `docs/vps-acceptance.md` is the checklist that
+decides that. `BLOCKER-SECRETS-V2` is still open and is the next prerequisite
+before Phase 3.
+
+Three deployment rules that are easy to break by accident:
+
+- The root `docker-compose.yml` is **development infrastructure**. Production
+  is `deploy/`. Never merge the two.
+- A release is a **digest**, never a tag. `botctl` resolves a version once and
+  addresses the image by digest everywhere afterwards.
+- `botctl rollback` never restores the database. The backup predates the
+  migration, so restoring it would discard every write made since.
+
 Authentication and authorization are real. Every new write path takes a
 `ScopeContext` and an `ActorContext` and checks a permission through the guard —
 never by inspecting an actor's type, and never by not drawing a button.
@@ -70,11 +86,22 @@ touch the database.
 ```bash
 bash scripts/dev-services.sh   # postgres + redis (docker, or native fallback)
 pnpm db:migrate:dev && pnpm db:seed:dev   # compiled: pnpm build && pnpm db:migrate
+pnpm provision                 # the primary tenant (dev: provision:dev)
 pnpm admin:bootstrap           # first owner, from dist (dev: admin:bootstrap:dev)
-pnpm verify                    # typecheck, lint, boundaries, i18n, unit tests, build
+pnpm verify                    # the gate: static, shell, unit, deploy logic, build
 pnpm test:integration          # needs the services above
 pnpm test:exhaustive           # 1341 notification orderings, ~4 min; nightly in CI
 pnpm check:runtime             # dist CLI runs without devDeps; web ships no source maps
+pnpm check:shell               # shellcheck; deploy/ at info, scripts/ at warning
+pnpm test:deploy               # botctl update/rollback logic against a fake docker
+```
+
+With a Docker daemon (the Ubuntu CI job; cloud sessions usually have no
+registry egress for base images):
+
+```bash
+bash scripts/deployment-smoke.sh          # build, up, migrate, serve, back up
+bash scripts/deployment-update-smoke.sh   # A -> B -> failed health -> rollback
 ```
 
 `pnpm verify` is the gate. If you changed the schema, also run `pnpm db:check`.

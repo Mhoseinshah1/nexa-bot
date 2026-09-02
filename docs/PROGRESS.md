@@ -339,16 +339,12 @@ referential integrity, storage bounds, and any change to the append-only rule).
 
 ### Not deployable, and two things block Phase 3
 
-There is no Dockerfile, no TLS or reverse-proxy topology, no release wiring, no
-`botctl` and no installer. Phase 2 makes the maintenance commands run from
-compiled output so a runtime image needs neither `tsx` nor devDependencies —
-that is groundwork for the Deployment MVP, not the MVP.
-
 The secret envelope is still v1: ciphertext is not bound to its context, and a
 single configured KEK means rotation cannot decrypt what the previous key
-wrote. Both are recorded as `BLOCKER-DEPLOY` and `BLOCKER-SECRETS-V2` in
-`docs/open-questions.md` and must land before Phase 3 introduces provider
-credentials.
+wrote. That is `BLOCKER-SECRETS-V2` in `docs/open-questions.md` and must land
+before Phase 3 introduces provider credentials.
+
+`BLOCKER-DEPLOY` is closed by the checkpoint below.
 
 ### Deferred
 
@@ -359,6 +355,52 @@ credentials.
   installation-wide and the setting is tenant-scoped. One install serves one
   customer (ADR-0001), so this is right today and explicitly wrong the day an
   installation serves several tenants at volume.
+
+## Deployment / Installer MVP — done, and never run for real
+
+The checkpoint between Phase 2 and Phase 3. It exists because nothing in this
+repository deployed: the legacy product is installed by pasting a shell
+one-liner that clones a repository and runs it in place, so the running version
+is whatever `git pull` last produced and an update cannot be undone.
+
+**What it delivers.** One immutable image with the base pinned by digest, four
+process roles selected by command, and a Web Admin bundle copied out to the
+edge. A production Compose topology in `deploy/` where Caddy is the only
+container publishing a host port and the database is on a network the edge is
+not attached to. An idempotent Ubuntu installer that preflights everything
+before it writes anything, installs Docker from a signed apt repository, and
+generates its secrets exactly once. `botctl` with status, version, backup,
+update and rollback.
+
+**Update** holds an exclusive lock, resolves a version to a digest once, pulls
+by that digest, backs up, migrates using the _target_ release's own compiled
+migrator, waits for a real readiness check, and only then writes the
+current-release pointer. Every failure before that leaves the previous release
+running. **Rollback** switches the application image back and does not restore
+the database — the backup predates the migration, so restoring it would turn an
+outage into data loss.
+
+`provision-installation` was added because a fresh production install could not
+create an owner at all: the only code that had ever created a tenant was the
+development seed, and `bootstrap-owner` refuses without one.
+
+**It has never been run against a real server.** CI builds the image, brings
+the stack up, migrates, serves the panel through the edge, backs up, and drives
+update → failed-health back-out → rollback against a local registry. It cannot
+issue a certificate, reboot a host, or prove DNS points anywhere.
+`docs/vps-acceptance.md` is the checklist that decides whether this model can
+carry a customer, and nothing here claims it has passed.
+
+### Deliberately not done
+
+- **No backup rotation.** Dumps accumulate; retention is an operator decision
+  and no duration is invented, exactly as for the notification tables.
+- **No secret rotation procedure.** Rotating the database password or the KEK
+  on a live installation is unsupported; the KEK half belongs to
+  `BLOCKER-SECRETS-V2`.
+- **No Redis persistence.** Redis stores nothing through Phase 2, so a volume
+  would persist an empty dataset and imply a guarantee nothing relies on. The
+  compose file says where that has to be revisited.
 
 ## Phases 3–8
 

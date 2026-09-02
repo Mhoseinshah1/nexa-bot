@@ -77,17 +77,32 @@ Phase 3 introduces provider and panel credentials or anything is deployed for
 real. Both are recorded here so that "Phase 2 is done" is never mistaken for
 "this can be run".
 
-### `BLOCKER-DEPLOY` — the Deployment MVP
+### `BLOCKER-DEPLOY` — the Deployment MVP — **CLOSED**
 
-Nothing in this repository deploys. There is no Dockerfile or immutable runtime
-image, no Caddyfile or TLS reverse-proxy topology, no production Compose or
-release wiring, no container health checks, and no `botctl` or installer.
-Update and rollback come after that.
+Closed by the deployment/installer checkpoint after Phase 2. What it asked for
+now exists: an immutable multi-stage image pinned by digest, a production
+Compose topology where only the edge publishes a port, a Caddy TLS layer, an
+idempotent Ubuntu installer, and `botctl` with status, version, backup, update
+and rollback — update holding an exclusive lock, migrating from the target
+release's own compiled migrator, and activating only after a real readiness
+check. See [ADR-0022](adr/0022-deployment-topology.md) and
+[docs/deployment.md](deployment.md).
 
-Phase 2 makes the maintenance commands (`db:migrate`, `db:seed`,
-`admin:bootstrap`) run from compiled output rather than TypeScript source, so a
-runtime image needs neither `tsx` nor devDependencies. That is groundwork for
-this checkpoint and **not** a claim that any part of it is done.
+**Closed as an engineering prerequisite, not as a production rollout.** No part
+of this has been run against a real server. `docs/vps-acceptance.md` is the
+checklist to run on a fresh staging VPS, and it is the thing that decides
+whether this model can carry a customer — CI cannot issue a certificate, reboot
+a host, or prove that DNS points anywhere.
+
+Two things this checkpoint deliberately did NOT do, recorded so they are not
+mistaken for oversights:
+
+- **No backup rotation.** Dumps accumulate in `/var/backups/nexa`. Retention is
+  an operator decision and no duration is invented here, exactly as for the
+  notification and operational-event tables.
+- **No secret rotation tooling.** Rotating the database password or the KEK on
+  a live installation has no supported procedure yet; the KEK half of that
+  belongs to `BLOCKER-SECRETS-V2` below.
 
 ### `BLOCKER-SECRETS-V2` — the secret envelope
 
