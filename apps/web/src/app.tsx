@@ -84,6 +84,12 @@ function SignIn() {
   const [password, setPassword] = useState('');
 
   const attempt = useMutation({
+    // NEVER retried, whatever the global default is. Sign-in carries no
+    // idempotency key and creates a session on every success, so an automatic
+    // second attempt spends two of the throttle's allowance for one rejected
+    // password, and a success whose response was lost leaves a live session
+    // whose token the browser never received.
+    retry: false,
     mutationFn: () => signIn(username, password),
     onSuccess: async () => {
       setPassword('');
@@ -201,6 +207,8 @@ function SignedIn({
   });
 
   const leave = useMutation({
+    // Same reasoning as sign-in: no idempotency key, and a session action.
+    retry: false,
     mutationFn: signOut,
     onSuccess: async () => {
       await client.invalidateQueries({ queryKey: ['session'] });

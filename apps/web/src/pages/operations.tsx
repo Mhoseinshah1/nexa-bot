@@ -208,7 +208,7 @@ export function NotificationsPage({ mayTest }: { mayTest: boolean }) {
         <div className="actions">
           <button
             type="button"
-            onClick={() => test.mutate(submission.current())}
+            onClick={() => test.mutate(submission.current({ command: 'notifications.test' }))}
             disabled={test.isPending}
           >
             {test.isPending ? t('web.saving') : t('web.send_test')}

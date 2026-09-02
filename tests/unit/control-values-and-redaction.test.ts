@@ -284,6 +284,32 @@ describe('redacting a transport error message', () => {
     expect(Date.now() - started).toBeLessThan(500);
   });
 
+  it('redacts a quoted value whose closing quote is beyond the bound', () => {
+    // The bounded quoted alternatives need their terminator inside 4 096 and
+    // the unquoted one refuses to begin at a quote, so a long
+    // `privateKey="…"` matched NOTHING and was returned untouched — then
+    // stored, truncated. A bound that makes a matcher give up must make it give
+    // up by redacting more, never by redacting nothing.
+    const long = `privateKey="${'A'.repeat(5_000)}"`;
+    expect(redactSecretText(long)).not.toContain('AAAAAAAAAAAAAAAAAAAA');
+  });
+
+  it('still stops at the closing quote when there is one', () => {
+    // The fail-closed alternative must not become the ordinary path: JSON with
+    // a normal short value keeps everything after it.
+    expect(redactSecretText('{"token":"abc","chat_id":-100}')).toBe(
+      `{"token":"${REDACTED}","chat_id":-100}`,
+    );
+  });
+
+  it('redacts a parameterised Digest credential in full', () => {
+    // `Digest username="…", realm="…", response="…"` is one header value split
+    // by commas and quotes — the characters a token-shaped matcher stops at.
+    const digest =
+      'Authorization: Digest username="Mufasa", realm="example", nonce="abc", response="deadbeef"';
+    expect(redactSecretText(digest)).toBe(`Authorization: ${REDACTED}`);
+  });
+
   it('drops the tail it did not scan rather than returning it unredacted', () => {
     // A fixed-offset slice can cut a credential below the pattern's length
     // threshold, and returning what follows would store the unscanned half —

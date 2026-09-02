@@ -209,8 +209,17 @@ const LABELLED_SECRET = new RegExp(
   String.raw`(["']?)([A-Za-z0-9_.-]{0,64}(?:` +
     TEXT_SENSITIVE_FRAGMENTS.map(escapeForRegExp).join('|') +
     String.raw`)[A-Za-z0-9_.-]{0,64})(["']?)(\s*[=:]\s*)` +
-    // A quoted value in full, spaces included; or a known scheme plus the
-    // credential after it; or one whitespace-delimited token.
+    // A quoted value in full, spaces included; or a quoted run whose closing
+    // quote is NOT within the bound; or a known scheme plus the credential
+    // after it; or one whitespace-delimited token.
+    //
+    // That third alternative is the fail-closed one. Without it a
+    // `privateKey="<5000 characters>"` matched nothing at all — the bounded
+    // quoted alternatives need their terminator inside 4 096, and the unquoted
+    // alternative refuses to begin at a quote — so the value was returned
+    // untouched and `redactErrorMessage` then stored its first 2 000
+    // characters. A bound that makes a matcher give up has to make it give up
+    // by redacting more, never by redacting nothing.
     //
     // NOT "everything to the end of the line". That was tried, and it made this
     // rule match once per LINE rather than once per secret: the first match
@@ -218,7 +227,7 @@ const LABELLED_SECRET = new RegExp(
     // and kept the password. The end-of-line case belongs to
     // `CREDENTIAL_HEADER_LINE`, which is the only place the whole remainder is
     // known to be one value.
-    String.raw`("[^"]{0,4096}"|'[^']{0,4096}'|(?:${ANY_SCHEME}\s+)?[^\s"',&}]{1,4096})`,
+    String.raw`("[^"]{0,4096}"|'[^']{0,4096}'|["'][^\r\n]{0,8192}|(?:${ANY_SCHEME}\s+)?[^\s"',&}]{1,4096})`,
   'gi',
 );
 

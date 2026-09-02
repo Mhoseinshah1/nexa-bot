@@ -72,7 +72,7 @@ export type SetSettingCommand = z.infer<typeof setSettingCommandSchema>;
  * So the snapshot carries everything the response is built from, and the
  * registry supplies the rest, which cannot have changed without a release.
  */
-interface ReplayRecord {
+export interface SettingReplayRecord {
   readonly changed: boolean;
   readonly value: unknown;
   readonly source: SettingSource;
@@ -83,7 +83,7 @@ interface ReplayRecord {
   readonly storedValueInvalid: boolean;
 }
 
-function toReplayRecord(setting: ResolvedSetting, changed: boolean): ReplayRecord {
+export function toReplayRecord(setting: ResolvedSetting, changed: boolean): SettingReplayRecord {
   return {
     changed,
     value: setting.value,
@@ -95,7 +95,7 @@ function toReplayRecord(setting: ResolvedSetting, changed: boolean): ReplayRecor
   };
 }
 
-function fromReplayRecord(key: SettingKey, record: ReplayRecord): ResolvedSetting {
+export function fromReplayRecord(key: SettingKey, record: SettingReplayRecord): ResolvedSetting {
   const definition = settingDefinition(key);
   return {
     key,
@@ -184,8 +184,8 @@ export class SettingsService {
 
     const requestHash = hashRequest({ key, value, expectedVersion: command.expectedVersion });
     // A replay returns the FIRST result, rebuilt from the snapshot. See
-    // `ReplayRecord` for the two wrong answers this is between.
-    const existing = await this.idempotency.find<ReplayRecord>(
+    // `SettingReplayRecord` for the two wrong answers this is between.
+    const existing = await this.idempotency.find<SettingReplayRecord>(
       scope,
       actor.surface,
       command.idempotencyKey,

@@ -16,6 +16,7 @@ import {
   type IdempotencyStore,
   type PermissionKey,
   type ScopeContext,
+  type SettingKey,
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
@@ -28,6 +29,11 @@ import type {
   ResolvedSetting,
   SettingsResolver,
 } from '../../settings/application/settings-resolver.js';
+import {
+  fromReplayRecord,
+  toReplayRecord,
+  type SettingReplayRecord,
+} from '../../settings/application/settings.service.js';
 import type { FeatureFlagRepository } from './ports.js';
 
 export const FEATURES_VIEW: PermissionKey = 'settings.view';
@@ -85,10 +91,13 @@ export type SetFeatureFlagCommand = z.infer<typeof setFeatureFlagCommandSchema>;
  * string, and re-reading live state on replay reports whatever somebody else
  * did since.
  *
- * `configuration` is deliberately NOT snapshotted. It is a view of the settings
- * this flag governs — a different set of keys, written by a different command —
- * so it is read live and is current at the moment of the reply. What the replay
- * reproduces exactly is the half this command actually wrote.
+ * `configuration` is snapshotted TOO, and the argument for leaving it live did
+ * not survive contact with the rule. It is a view of settings this command did
+ * not write, so reading it fresh felt defensible — but it is part of THIS
+ * response, and `docs/conventions.md` says a replay returns the first result
+ * without qualifying which half. A reply that mixes the flag as it was with
+ * settings as they are now describes a state that never existed, which is the
+ * same failure the flag half was snapshotted to avoid.
  */
 interface FlagReplayRecord {
   readonly changed: boolean;
@@ -99,6 +108,10 @@ interface FlagReplayRecord {
   readonly updatedAt: string | null;
   readonly updatedByAdminId: string | null;
   readonly reason: string | null;
+  readonly configuration: readonly (SettingReplayRecord & {
+    readonly key: string;
+    readonly inert: boolean;
+  })[];
 }
 
 function toFlagReplayRecord(flag: ResolvedFeatureFlag, changed: boolean): FlagReplayRecord {
@@ -110,6 +123,11 @@ function toFlagReplayRecord(flag: ResolvedFeatureFlag, changed: boolean): FlagRe
     updatedAt: flag.updatedAt?.toISOString() ?? null,
     updatedByAdminId: flag.updatedByAdminId,
     reason: flag.reason,
+    configuration: flag.configuration.map((setting) => ({
+      ...toReplayRecord(setting, changed),
+      key: setting.key,
+      inert: setting.inert,
+    })),
   };
 }
 
@@ -215,8 +233,17 @@ export class FeatureFlagsService {
         updatedByAdminId: record.updatedByAdminId,
         reason: record.reason,
       };
+      const definition = featureFlagDefinition(key);
       return {
-        flag: this.withConfiguration(state, await this.settings.resolveAll(scope)),
+        flag: {
+          ...state,
+          description: definition.description,
+          blastRadius: definition.blastRadius,
+          configuration: record.configuration.map((setting) => ({
+            ...fromReplayRecord(setting.key as SettingKey, setting),
+            inert: setting.inert,
+          })),
+        },
         changed: record.changed,
         replayed: true,
       };

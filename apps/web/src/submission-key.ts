@@ -24,8 +24,20 @@ import { ApiError, newIdempotencyKey } from './api/client';
  * the person pressing the button, which is the case that reaches a queue.
  */
 export function useSubmissionKey(): {
-  /** The key for the submission now beginning, minting one if none is held. */
-  current: () => string;
+  /**
+   * The key for the submission now beginning.
+   *
+   * `payload` is a fingerprint of what is about to be sent. A held key is
+   * reused only while the payload is the SAME question — change it and a new
+   * key is minted, because it is a new command.
+   *
+   * Without that, an ambiguous failure whose request had in fact committed
+   * left the key held; the operator then edited the value and submitted, the
+   * same key arrived with a different request hash, and the server refused it
+   * as `platform.idempotency_payload_mismatch` — correctly, since reusing a
+   * key for different input is a caller bug. The caller was this hook.
+   */
+  current: (payload: unknown) => string;
   /**
    * Called once a definitive response has been seen — success OR a rejection
    * the server actually sent. Only a transport failure, where nothing came
@@ -35,12 +47,18 @@ export function useSubmissionKey(): {
   /** Retires the key when the error carries a server status, keeps it otherwise. */
   settleOn: (error: unknown) => void;
 } {
-  const held = useRef<string | null>(null);
+  const held = useRef<{ key: string; payload: string } | null>(null);
   const settle = () => {
     held.current = null;
   };
   return {
-    current: () => (held.current ??= newIdempotencyKey()),
+    current: (payload: unknown) => {
+      const fingerprint = JSON.stringify(payload ?? null);
+      if (held.current?.payload !== fingerprint) {
+        held.current = { key: newIdempotencyKey(), payload: fingerprint };
+      }
+      return held.current.key;
+    },
     settle,
     settleOn: (error: unknown) => {
       // An `ApiError` means an HTTP status came back, so the command's outcome

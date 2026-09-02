@@ -77,7 +77,14 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    toggle.mutate(submission.current());
+    toggle.mutate(
+      submission.current({
+        enabled: !flag.enabled,
+        expectedVersion: flag.version,
+        confirmKey,
+        reason,
+      }),
+    );
   };
 
   return (

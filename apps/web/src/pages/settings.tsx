@@ -110,7 +110,7 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    save.mutate(submission.current());
+    save.mutate(submission.current({ value: draft, expectedVersion: basis.version }));
   };
 
   return (

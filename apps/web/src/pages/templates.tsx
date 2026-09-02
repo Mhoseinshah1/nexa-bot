@@ -215,7 +215,13 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    save.mutate(saving.current());
+    save.mutate(
+      saving.current({
+        body: draft,
+        expectedVersion: basis.version,
+        expectedRevision: basis.revision,
+      }),
+    );
   };
 
   return (
@@ -375,7 +381,7 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
           {template.version !== null && (
             <button
               type="button"
-              onClick={() => undo.mutate(reverting.current())}
+              onClick={() => undo.mutate(reverting.current({ revert: revertable }))}
               disabled={undo.isPending}
             >
               {t('web.revert')}
