@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ResolvedSettingResponse } from '@nexa/contracts';
 import { ApiError, fetchSettings, newIdempotencyKey, saveSetting } from '../api/client';
+import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 
 /**
@@ -42,19 +43,49 @@ const ZERO_MEANING_KEYS: Record<ResolvedSettingResponse['zeroMeaning'], WebKey> 
 
 function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; mayEdit: boolean }) {
   const client = useQueryClient();
+
+  /**
+   * The row the draft is based on, held separately from the row the query
+   * currently has.
+   *
+   * These two drift apart the moment somebody else saves this key: the query
+   * refetches and `setting` becomes their row, while the field still holds what
+   * THIS administrator typed. Submitting that text against the refetched
+   * version would have overwritten their change without either person seeing
+   * anything — precisely the failure the version check exists to prevent,
+   * reintroduced one layer above it.
+   *
+   * So the write states the version the draft was actually based on. A
+   * concurrent change therefore comes back as a conflict, which is already
+   * shown, and the typing survives to be reapplied.
+   */
+  const [basis, setBasis] = useState<ResolvedSettingResponse>(setting);
   const [draft, setDraft] = useState(() => toEditable(setting.value));
 
+  const changedElsewhere = basis.version !== setting.version;
+
+  const adopt = (fresh: ResolvedSettingResponse) => {
+    setBasis(fresh);
+    setDraft(toEditable(fresh.value));
+  };
+
   const save = useMutation({
-    mutationFn: () =>
+    // The key is a VARIABLE of the mutation, minted once per submission below.
+    // react-query hands the same variables back on every retry, so a retry
+    // after a dropped connection carries the key the first attempt used — which
+    // is the only way an idempotency key protects anything.
+    mutationFn: (idempotencyKey: string) =>
       saveSetting({
         key: setting.key,
-        value: fromEditable(draft, setting.value),
-        // The version this row was READ at. Required, and null means "I read
-        // this as unset" — an expectation like any other.
-        expectedVersion: setting.version,
-        idempotencyKey: newIdempotencyKey(),
+        value: fromEditable(draft, basis.value),
+        // The version the DRAFT was read at, not whatever the list holds now.
+        expectedVersion: basis.version,
+        idempotencyKey,
       }),
-    onSuccess: async () => {
+    onSuccess: async (result) => {
+      // Adopt our own write before the refetch lands, so the row does not
+      // report itself as having changed elsewhere.
+      adopt(result.setting);
       await client.invalidateQueries({ queryKey: ['settings'] });
       await client.invalidateQueries({ queryKey: ['features'] });
     },
@@ -62,7 +93,7 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    save.mutate();
+    save.mutate(newIdempotencyKey());
   };
 
   return (
@@ -78,6 +109,11 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
       </h3>
       <p>{setting.description}</p>
 
+      {/* A stored value the registry no longer accepts. The default is in
+          force, and saying so is the difference between this and the legacy
+          screens that show a value nothing is using. */}
+      {setting.storedValueInvalid && <p className="error">{t('web.stored_value_invalid')}</p>}
+
       <label htmlFor={`value-${setting.key}`}>{t('web.value')}</label>
       <input
         id={`value-${setting.key}`}
@@ -85,6 +121,15 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
         onChange={(event) => setDraft(event.target.value)}
         disabled={!mayEdit}
       />
+
+      {changedElsewhere && (
+        <p className="notice">
+          {t('web.changed_elsewhere')}{' '}
+          <button type="button" className="link" onClick={() => adopt(setting)}>
+            {t('web.reload_value')}
+          </button>
+        </p>
+      )}
 
       <dl className="meta">
         <dt>{t('web.source')}</dt>
@@ -94,7 +139,7 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
         {setting.updatedAt && (
           <>
             <dt>{t('web.updated_at')}</dt>
-            <dd>{setting.updatedAt}</dd>
+            <dd>{formatTimestamp(setting.updatedAt)}</dd>
           </>
         )}
       </dl>
@@ -104,22 +149,38 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
           {save.isPending ? t('web.saving') : t('web.save')}
         </button>
       )}
-      {save.isError && (
-        <>
-          <p className="error">{messageFor(save.error)}</p>
-          <ul className="error">
-            {issuesFrom(save.error).map((issue) => (
-              <li key={issue}>{issue}</li>
-            ))}
-          </ul>
-        </>
-      )}
+      {save.isError && <ErrorReport error={save.error} />}
       {/* A no-op says so. The legacy screens answer "✅ updated" either way,
           and one of them said it three times while nothing changed. */}
       {save.isSuccess && (
         <p className="notice">{save.data.changed ? t('web.saved') : t('web.unchanged')}</p>
       )}
     </form>
+  );
+}
+
+/**
+ * A rejection, with its structured issues when it has any.
+ *
+ * The list is rendered only when it is non-empty. An always-present `<ul>` with
+ * nothing in it still draws its error styling, which reads as "and something
+ * else went wrong too" for every ordinary failure.
+ */
+export function ErrorReport({ error }: { error: unknown }) {
+  const issues = issuesFrom(error);
+  return (
+    <>
+      <p className="error">{messageFor(error)}</p>
+      {issues.length > 0 && (
+        <ul className="error">
+          {issues.map((issue, index) => (
+            // The index is part of the key: two schema issues can carry the
+            // same sentence, and React would then drop one of them.
+            <li key={`${index}:${issue}`}>{issue}</li>
+          ))}
+        </ul>
+      )}
+    </>
   );
 }
 

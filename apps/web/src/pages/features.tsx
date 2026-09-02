@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { FeatureFlagResponse } from '@nexa/contracts';
 import { fetchFeatureFlags, newIdempotencyKey, saveFeatureFlag } from '../api/client';
 import { t } from '../i18n/web.fa';
-import { issuesFrom, messageFor } from './settings';
+import { ErrorReport, messageFor } from './settings';
 
 /**
  * The feature-flag screen.
@@ -43,12 +43,14 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
   const [reason, setReason] = useState('');
 
   const toggle = useMutation({
-    mutationFn: () =>
+    // Minted once per submission and passed as a variable, so a retry carries
+    // the key the first attempt used.
+    mutationFn: (idempotencyKey: string) =>
       saveFeatureFlag({
         key: flag.key,
         enabled: !flag.enabled,
         expectedVersion: flag.version,
-        idempotencyKey: newIdempotencyKey(),
+        idempotencyKey,
         ...(wide ? { confirmKey, reason } : {}),
       }),
     onSuccess: async () => {
@@ -61,7 +63,7 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    toggle.mutate();
+    toggle.mutate(newIdempotencyKey());
   };
 
   return (
@@ -96,8 +98,11 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
                 <td>
                   <code>{setting.key}</code>
                   {setting.inert && <p className="notice">{t('web.inert')}</p>}
+                  {setting.storedValueInvalid && (
+                    <p className="error">{t('web.stored_value_invalid')}</p>
+                  )}
                 </td>
-                <td>{setting.value === '' ? '—' : String(setting.value)}</td>
+                <td>{displayValue(setting.value)}</td>
                 <td>
                   {setting.source === 'TENANT' ? t('web.source_tenant') : t('web.source_default')}
                 </td>
@@ -131,16 +136,20 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
           {toggle.isPending ? t('web.saving') : flag.enabled ? t('web.disable') : t('web.enable')}
         </button>
       )}
-      {toggle.isError && (
-        <>
-          <p className="error">{messageFor(toggle.error)}</p>
-          <ul className="error">
-            {issuesFrom(toggle.error).map((issue) => (
-              <li key={issue}>{issue}</li>
-            ))}
-          </ul>
-        </>
-      )}
+      {toggle.isError && <ErrorReport error={toggle.error} />}
     </form>
   );
+}
+
+/**
+ * A setting value as a table cell.
+ *
+ * `String(null)` is the four characters "null", which reads as a stored value
+ * rather than as an absent one — the same class of confusion as a screen that
+ * shows a default as though somebody had chosen it. An em dash says "nothing
+ * here" and cannot be mistaken for content.
+ */
+function displayValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—';
+  return typeof value === 'string' ? value : JSON.stringify(value);
 }

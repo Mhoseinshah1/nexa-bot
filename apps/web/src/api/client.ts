@@ -22,6 +22,7 @@ import {
   featureFlagWriteResponseSchema,
   settingWriteResponseSchema,
   notificationDetailResponseSchema,
+  sendTestNotificationResponseSchema,
   notificationListResponseSchema,
   operationalEventListResponseSchema,
   previewTemplateResponseSchema,
@@ -31,6 +32,7 @@ import {
   templateWriteResponseSchema,
   type FeatureFlagListResponse,
   type NotificationDetailResponse,
+  type SendTestNotificationResponse,
   type NotificationListResponse,
   type OperationalEventListResponse,
   type PreviewTemplateResponse,
@@ -52,7 +54,11 @@ import {
 
 async function get<T>(path: string, schema: { parse: (v: unknown) => T }): Promise<T> {
   const response = await fetch(path, { headers: { accept: 'application/json' } });
-  const body: unknown = await response.json();
+  // A body that is not JSON — a proxy's HTML error page, an empty 502 — threw a
+  // SyntaxError from inside `json()` before the status was ever looked at, so
+  // the screen reported a parse failure for what was really a gateway being
+  // down. Reading it as null lets the status check below say what happened.
+  const body: unknown = await response.json().catch(() => null);
   // A 503 from readiness is a valid, well-shaped answer, not a transport error.
   if (!response.ok && response.status !== 503) {
     throw new Error(`Request to ${path} failed with ${response.status}`);
@@ -187,11 +193,17 @@ async function authedGet<T>(path: string, schema: { parse: (v: unknown) => T }):
 }
 
 /**
- * A key for a write, minted per submission.
+ * A key for one SUBMISSION, minted when the submission begins.
  *
- * Every state-changing command takes one, so a double-submitted form or a retry
- * after a dropped connection produces one change rather than two. `randomUUID`
- * is available in every browser this admin supports and in the test environment.
+ * Every state-changing command takes one, so a retry after a dropped connection
+ * produces one change rather than two. That only holds if the key survives the
+ * retry: minting it inside the call meant every attempt carried a NEW key, and
+ * an idempotency key that changes per attempt protects nothing at all. So the
+ * callers mint it once and pass it as the mutation's variable, which react-query
+ * hands back unchanged on each retry.
+ *
+ * `randomUUID` is available in every browser this admin supports and in the test
+ * environment.
  */
 export function newIdempotencyKey(): string {
   return crypto.randomUUID();
@@ -273,10 +285,13 @@ export function previewTemplate(
 export function fetchOpsLog(query: {
   severity?: string;
   open?: boolean;
+  /** The `lastSeenAt` of the oldest row already shown; returns older ones. */
+  before?: string;
 }): Promise<OperationalEventListResponse> {
   const params = new URLSearchParams();
   if (query.severity) params.set('severity', query.severity);
   if (query.open !== undefined) params.set('open', String(query.open));
+  if (query.before) params.set('before', query.before);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${CONTROL_ROUTES.opsLog}?${suffix}` : CONTROL_ROUTES.opsLog,
@@ -292,10 +307,12 @@ export function fetchNotification(id: string): Promise<NotificationDetailRespons
   return authedGet(CONTROL_ROUTES.notification(id), notificationDetailResponseSchema);
 }
 
-export function sendTestNotification(idempotencyKey: string): Promise<NotificationDetailResponse> {
+export function sendTestNotification(
+  idempotencyKey: string,
+): Promise<SendTestNotificationResponse> {
   return post(
     CONTROL_ROUTES.notificationTest,
     { idempotencyKey },
-    notificationDetailResponseSchema,
+    sendTestNotificationResponseSchema,
   );
 }

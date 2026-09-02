@@ -9,8 +9,26 @@ import {
   revertTemplate,
   saveTemplate,
 } from '../api/client';
-import { t } from '../i18n/web.fa';
-import { issuesFrom, messageFor } from './settings';
+import { formatTimestamp } from '../format';
+import { t, type WebKey } from '../i18n/web.fa';
+import { ErrorReport, messageFor } from './settings';
+
+/**
+ * What a sample value has to look like in a text field, per declared type.
+ *
+ * The server coerces text into the declared type (`coerceTemplateValues`), so
+ * the form has to say what it expects. Before that coercion existed, a NUMBER
+ * placeholder was rejected on every attempt and a DATETIME or MONEY one could
+ * not be supplied at all — the field could only send a string.
+ */
+const SAMPLE_HINTS: Partial<Record<TemplateViewResponse['placeholders'][number]['type'], WebKey>> =
+  {
+    NUMBER: 'web.sample_number',
+    DURATION_DAYS: 'web.sample_number',
+    BYTES: 'web.sample_number',
+    DATETIME: 'web.sample_datetime',
+    MONEY: 'web.sample_money',
+  };
 
 /**
  * The template screen.
@@ -45,11 +63,40 @@ export function TemplatesPage({ mayEdit }: { mayEdit: boolean }) {
 
 function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; mayEdit: boolean }) {
   const client = useQueryClient();
+
+  /**
+   * The template the draft is based on, held apart from the one the query has.
+   *
+   * The same rule as the settings screen, for the same reason: once somebody
+   * else saves this key the query refetches, and submitting the text on screen
+   * against THEIR version would discard their change with nothing to notice it
+   * by. The write states the version the draft was actually based on, so a
+   * concurrent change comes back as a conflict and the typing survives.
+   */
+  const [basis, setBasis] = useState<TemplateViewResponse>(template);
   // The RAW body. The override when there is one, otherwise the default — never
   // anything that has been through the renderer.
   const [draft, setDraft] = useState(template.overrideBody ?? template.defaultBody);
   const [sample, setSample] = useState<Record<string, string>>({});
   const [showHistory, setShowHistory] = useState(false);
+  /**
+   * The body the last preview was rendered from.
+   *
+   * Without it the rendered output stays on screen while the body it came from
+   * is edited away underneath, which is a small version of exactly the legacy
+   * confusion this screen exists to end: a preview that is not of the thing you
+   * are looking at.
+   */
+  const [previewedBody, setPreviewedBody] = useState<string | null>(null);
+
+  const storedBody = template.overrideBody ?? template.defaultBody;
+  const changedElsewhere = basis.version !== template.version;
+  const unsaved = draft !== (basis.overrideBody ?? basis.defaultBody);
+
+  const adopt = (fresh: TemplateViewResponse) => {
+    setBasis(fresh);
+    setDraft(fresh.overrideBody ?? fresh.defaultBody);
+  };
 
   const invalidate = async () => {
     await client.invalidateQueries({ queryKey: ['templates'] });
@@ -57,34 +104,43 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
   };
 
   const save = useMutation({
-    mutationFn: () =>
+    // Minted once per submission and passed as a variable, so a retry carries
+    // the key the first attempt used.
+    mutationFn: (idempotencyKey: string) =>
       saveTemplate({
         key: template.key,
         body: draft,
-        expectedVersion: template.version,
-        idempotencyKey: newIdempotencyKey(),
+        // The version the DRAFT was read at, not whatever the list holds now.
+        expectedVersion: basis.version,
+        idempotencyKey,
       }),
-    onSuccess: invalidate,
+    onSuccess: async (result) => {
+      adopt(result.template);
+      await invalidate();
+    },
   });
 
   const undo = useMutation({
-    mutationFn: () =>
+    mutationFn: (idempotencyKey: string) =>
       revertTemplate({
         key: template.key,
         // Only reachable when a version exists, which is exactly when there is
         // an override to remove.
-        expectedVersion: template.version ?? 0,
-        idempotencyKey: newIdempotencyKey(),
+        expectedVersion: basis.version ?? 0,
+        idempotencyKey,
       }),
-    onSuccess: async () => {
-      setDraft(template.defaultBody);
+    onSuccess: async (result) => {
+      adopt(result.template);
       await invalidate();
     },
   });
 
   const preview = useMutation({
     mutationFn: () => previewTemplate(template.key, draft, sample),
+    onSuccess: () => setPreviewedBody(draft),
   });
+
+  const previewStale = preview.isSuccess && previewedBody !== draft;
 
   const revisions = useQuery({
     queryKey: ['revisions', template.key],
@@ -94,7 +150,7 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    save.mutate();
+    save.mutate(newIdempotencyKey());
   };
 
   return (
@@ -120,6 +176,23 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
         disabled={!mayEdit}
         dir="auto"
       />
+
+      {changedElsewhere && (
+        <p className="notice">
+          {t('web.changed_elsewhere')}{' '}
+          <button type="button" className="link" onClick={() => adopt(template)}>
+            {t('web.reload_value')}
+          </button>
+        </p>
+      )}
+      {!changedElsewhere && unsaved && (
+        <p className="notice">
+          {t('web.unsaved_changes')}{' '}
+          <button type="button" className="link" onClick={() => setDraft(storedBody)}>
+            {t('web.discard')}
+          </button>
+        </p>
+      )}
 
       {template.source === 'TENANT' && (
         <details>
@@ -166,6 +239,7 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
             <input
               id={`sample-${template.key}-${placeholder.token}`}
               value={sample[placeholder.token] ?? ''}
+              placeholder={hintFor(placeholder.type)}
               onChange={(event) =>
                 setSample((current) => ({ ...current, [placeholder.token]: event.target.value }))
               }
@@ -175,18 +249,13 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
         <button type="button" onClick={() => preview.mutate()} disabled={preview.isPending}>
           {t('web.preview')}
         </button>
-        {preview.isError && (
-          <>
-            <p className="error">{messageFor(preview.error)}</p>
-            <ul className="error">
-              {issuesFrom(preview.error).map((issue) => (
-                <li key={issue}>{issue}</li>
-              ))}
-            </ul>
-          </>
-        )}
+        {preview.isError && <ErrorReport error={preview.error} />}
         {preview.data && (
           <>
+            {/* The rendered output is of the body it was rendered from, and
+                that body may have been edited since. Saying so is cheaper than
+                a preview that quietly describes something else. */}
+            {previewStale && <p className="notice">{t('web.preview_stale')}</p>}
             <pre dir="auto">{preview.data.rendered}</pre>
             {preview.data.unresolved.length > 0 && (
               <p className="notice">
@@ -221,7 +290,7 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
                   {/* A REVERT stores no body: reverting goes back to the
                       default rather than copying it. */}
                   <td dir="auto">{revision.body ?? '—'}</td>
-                  <td>{revision.createdAt}</td>
+                  <td>{formatTimestamp(revision.createdAt)}</td>
                 </tr>
               ))}
             </tbody>
@@ -235,7 +304,7 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
             {save.isPending ? t('web.saving') : t('web.save')}
           </button>
           {template.version !== null && (
-            <button type="button" onClick={() => undo.mutate()} disabled={undo.isPending}>
+            <button type="button" onClick={() => undo.mutate(newIdempotencyKey())} disabled={undo.isPending}>
               {t('web.revert')}
             </button>
           )}
@@ -243,18 +312,9 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
       )}
       {mayEdit && template.version !== null && <p className="notice">{t('web.revert_note')}</p>}
 
-      {save.isError && (
-        <>
-          <p className="error">{messageFor(save.error)}</p>
-          {/* Which placeholder was wrong, not just that something was. */}
-          <ul className="error">
-            {issuesFrom(save.error).map((issue) => (
-              <li key={issue}>{issue}</li>
-            ))}
-          </ul>
-        </>
-      )}
-      {undo.isError && <p className="error">{messageFor(undo.error)}</p>}
+      {/* Which placeholder was wrong, not just that something was. */}
+      {save.isError && <ErrorReport error={save.error} />}
+      {undo.isError && <ErrorReport error={undo.error} />}
       {/* A no-op says so, exactly as a setting write does. Answering "saved"
           for a save that stored nothing is the legacy pattern verbatim. */}
       {save.isSuccess && (
@@ -262,4 +322,10 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
       )}
     </form>
   );
+}
+
+/** The text form a sample value has to take, or nothing for a plain string. */
+function hintFor(type: TemplateViewResponse['placeholders'][number]['type']): string | undefined {
+  const key = SAMPLE_HINTS[type];
+  return key ? t(key) : undefined;
 }

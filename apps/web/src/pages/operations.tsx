@@ -8,6 +8,7 @@ import {
   newIdempotencyKey,
   sendTestNotification,
 } from '../api/client';
+import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
 
@@ -24,15 +25,34 @@ const SEVERITIES: readonly OperationalSeverity[] = ['DEBUG', 'INFO', 'WARN', 'ER
 export function OperationsPage() {
   const [severity, setSeverity] = useState<string>('');
   const [openOnly, setOpenOnly] = useState(false);
+  /**
+   * The cursor: `lastSeenAt` of the oldest row shown, or null for the newest
+   * page. A CURSOR rather than an offset, because rows are ordered by that
+   * column and new events arrive at the top — an offset would skip and repeat
+   * rows while somebody paged through.
+   */
+  const [before, setBefore] = useState<string | null>(null);
 
   const events = useQuery({
-    queryKey: ['ops-log', severity, openOnly],
+    queryKey: ['ops-log', severity, openOnly, before],
     queryFn: () =>
       fetchOpsLog({
         ...(severity ? { severity } : {}),
         ...(openOnly ? { open: true } : {}),
+        ...(before ? { before } : {}),
       }),
   });
+
+  // A filter change starts again from the newest page: keeping the old cursor
+  // would show the second page of a list the reader has never seen the first
+  // page of.
+  const filter = (change: () => void) => {
+    setBefore(null);
+    change();
+  };
+
+  const rows = events.data?.events ?? [];
+  const oldest = rows.length > 0 ? rows[rows.length - 1] : undefined;
 
   return (
     <section>
@@ -44,7 +64,7 @@ export function OperationsPage() {
         <select
           id="severity"
           value={severity}
-          onChange={(event) => setSeverity(event.target.value)}
+          onChange={(event) => filter(() => setSeverity(event.target.value))}
         >
           <option value="">{t('web.all')}</option>
           {SEVERITIES.map((value) => (
@@ -59,7 +79,7 @@ export function OperationsPage() {
           id="open-only"
           type="checkbox"
           checked={openOnly}
-          onChange={(event) => setOpenOnly(event.target.checked)}
+          onChange={(event) => filter(() => setOpenOnly(event.target.checked))}
         />
 
         <button type="button" onClick={() => void events.refetch()}>
@@ -99,8 +119,8 @@ export function OperationsPage() {
                 {/* First and last seen are both shown: a condition that has
                     been failing since Tuesday reads differently from one that
                     started ten minutes ago, and a single timestamp hides it. */}
-                <td>{event.firstSeenAt}</td>
-                <td>{event.lastSeenAt}</td>
+                <td>{formatTimestamp(event.firstSeenAt)}</td>
+                <td>{formatTimestamp(event.lastSeenAt)}</td>
                 <td className={event.resolvedAt ? 'up' : 'down'}>
                   {event.resolvedAt ? t('web.resolved') : t('web.unresolved')}
                 </td>
@@ -109,6 +129,21 @@ export function OperationsPage() {
           </tbody>
         </table>
       )}
+
+      {/* A page is a page, not the whole log. The legacy `/admin/logs` renders
+          1,700 rows with no paging and no filter of any kind. */}
+      <div className="actions">
+        {before !== null && (
+          <button type="button" onClick={() => setBefore(null)}>
+            {t('web.newest')}
+          </button>
+        )}
+        {oldest && (
+          <button type="button" onClick={() => setBefore(oldest.lastSeenAt)}>
+            {t('web.older')}
+          </button>
+        )}
+      </div>
     </section>
   );
 }
@@ -143,9 +178,16 @@ export function NotificationsPage({ mayTest }: { mayTest: boolean }) {
   });
 
   const test = useMutation({
-    mutationFn: () => sendTestNotification(newIdempotencyKey()),
+    // Minted once per press. A retry of THAT press reuses it and reads back the
+    // one message it queued; a second deliberate press is a second question and
+    // gets its own key.
+    mutationFn: (idempotencyKey: string) => sendTestNotification(idempotencyKey),
     onSuccess: async () => {
       await client.invalidateQueries({ queryKey: ['notifications'] });
+      // The open detail panel too: a test send against an intent already on
+      // screen adds an attempt, and a panel that does not refresh reports the
+      // attempt list as it was before the button was pressed.
+      await client.invalidateQueries({ queryKey: ['notification'] });
     },
   });
 
@@ -156,10 +198,16 @@ export function NotificationsPage({ mayTest }: { mayTest: boolean }) {
 
       {mayTest && (
         <div className="actions">
-          <button type="button" onClick={() => test.mutate()} disabled={test.isPending}>
+          <button type="button" onClick={() => test.mutate(newIdempotencyKey())} disabled={test.isPending}>
             {test.isPending ? t('web.saving') : t('web.send_test')}
           </button>
-          {test.isSuccess && <p className="notice">{t('web.test_sent')}</p>}
+          {/* A replay says it replayed. Answering "queued" for a call that
+              queued nothing is the legacy pattern this screen exists to end. */}
+          {test.isSuccess && (
+            <p className="notice">
+              {test.data.created ? t('web.test_sent') : t('web.test_replayed')}
+            </p>
+          )}
           {test.isError && <p className="error">{messageFor(test.error)}</p>}
         </div>
       )}
@@ -190,13 +238,14 @@ export function NotificationsPage({ mayTest }: { mayTest: boolean }) {
                 <td>
                   {notification.attemptCount} / {notification.maxAttempts}
                 </td>
-                <td>{notification.lastAttemptAt ?? notification.createdAt}</td>
+                <td>{formatTimestamp(notification.lastAttemptAt ?? notification.createdAt)}</td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
 
+      {detail.isError && <p className="error">{messageFor(detail.error)}</p>}
       {detail.data && (
         <div className="card">
           <h3>{t('web.attempts')}</h3>
@@ -221,7 +270,7 @@ export function NotificationsPage({ mayTest }: { mayTest: boolean }) {
                     </td>
                     <td>{attempt.errorCode ?? '—'}</td>
                     <td dir="auto">{attempt.errorMessage ?? '—'}</td>
-                    <td>{attempt.finishedAt}</td>
+                    <td>{formatTimestamp(attempt.finishedAt)}</td>
                   </tr>
                 ))}
               </tbody>

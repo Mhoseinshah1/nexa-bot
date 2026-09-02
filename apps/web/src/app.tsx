@@ -226,6 +226,9 @@ function SignedIn({
             key={entry.id}
             type="button"
             className={entry.id === section ? 'active' : undefined}
+            // Which tab is current, for a screen reader. The `active` class
+            // says it visually and says nothing at all to anybody using one.
+            aria-current={entry.id === section ? 'page' : undefined}
             onClick={() => setSection(entry.id)}
           >
             {t(entry.label)}

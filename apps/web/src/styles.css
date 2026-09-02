@@ -97,14 +97,6 @@ th {
   font-weight: 600;
 }
 
-td.up {
-  color: var(--up);
-}
-
-td.down {
-  color: var(--down);
-}
-
 .error {
   color: var(--down);
 }
@@ -239,4 +231,33 @@ details {
 summary {
   cursor: pointer;
   font-weight: 600;
+}
+
+/*
+ * A button that reads as a link. Used where an action belongs inside a
+ * sentence — "this changed elsewhere; get the fresh value" — and a boxed
+ * button would break the line it is part of. Still a <button>, because it
+ * performs an action rather than navigating.
+ */
+button.link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+
+/*
+ * The status column, wherever it appears. These were styled as `td.up` and
+ * `td.down` only, so the same words rendered in a <span> or a <dd> — the
+ * notification and template screens both do — lost their colour silently.
+ */
+.up {
+  color: var(--up);
+}
+
+.down {
+  color: var(--down);
 }

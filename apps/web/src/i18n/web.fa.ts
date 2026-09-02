@@ -141,6 +141,22 @@ export const WEB_FA = {
   'web.send_test': 'ارسال پیام آزمایشی',
   'web.test_sent': 'پیام آزمایشی در صف قرار گرفت.',
   'web.destination_missing': 'مقصد اعلان‌ها هنوز تنظیم نشده است.',
+
+  // Concurrency and repair
+  'web.changed_elsewhere':
+    'این مقدار پس از آغاز ویرایش شما جای دیگری تغییر کرده است. ذخیره‌کردن با خطای تداخل روبه‌رو می‌شود.',
+  'web.reload_value': 'گرفتن مقدار تازه',
+  'web.stored_value_invalid':
+    'مقدار ذخیره‌شده با تعریف این کلید نمی‌خواند، پس پیش‌فرض اعمال می‌شود. ذخیره‌کردن یک مقدار معتبر آن را اصلاح می‌کند.',
+  'web.unsaved_changes': 'تغییرات ذخیره‌نشده دارید.',
+  'web.preview_stale': 'متن پس از این پیش‌نمایش تغییر کرده است. دوباره پیش‌نمایش بگیرید.',
+  'web.discard': 'دورانداختن تغییرات',
+  'web.sample_number': 'یک عدد درست، مثلاً ۳۰',
+  'web.sample_datetime': 'یک تاریخ، مثلاً 2026-09-02T08:00:00Z',
+  'web.sample_money': 'مبلغ به کوچک‌ترین واحد و سپس ارز، مثلاً 1250000 IRR',
+  'web.older': 'قدیمی‌تر',
+  'web.newest': 'تازه‌ترین',
+  'web.test_replayed': 'همین درخواست پیش‌تر ثبت شده بود؛ پیام تازه‌ای در صف قرار نگرفت.',
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;
