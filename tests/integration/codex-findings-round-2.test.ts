@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import {
   API_PREFIX,
+  IDENTITY_ERROR_CODES,
   AUTH_ROUTES,
   OWNER_ROLE_KEY,
   SESSION_COOKIE_NAME,
@@ -2779,5 +2780,140 @@ describe('review round 16', () => {
           definition.includes('expires_at') && definition.includes('revoked_at IS NULL'),
       ),
     ).toBe(true);
+  }, 30_000);
+});
+
+describe('review round 17', () => {
+  it('rate-limits guesses at the current password', async () => {
+    // This endpoint verifies a password and was not throttled at all, so an
+    // attacker holding a stolen session could guess without limit — each guess
+    // spending a production-cost KDF, and success converting a session that
+    // expires into a credential that does not.
+    const limit = ctx.container.config.LOGIN_MAX_ATTEMPTS_PER_USERNAME;
+    const actor = adminActorFor(owner);
+
+    for (let attempt = 0; attempt < limit; attempt += 1) {
+      await expect(
+        ctx.container.adminManagement.changeOwnPassword(tenantA, actor, {
+          currentPassword: `wrong-${attempt}`,
+          newPassword: 'a-brand-new-password',
+        }),
+      ).rejects.toMatchObject({ code: IDENTITY_ERROR_CODES.AUTH_INVALID_CREDENTIALS });
+    }
+
+    // Past the limit the guess is refused before the KDF runs at all.
+    await expect(
+      ctx.container.adminManagement.changeOwnPassword(tenantA, actor, {
+        currentPassword: 'wrong-again',
+        newPassword: 'a-brand-new-password',
+      }),
+    ).rejects.toMatchObject({ code: IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED });
+  }, 60_000);
+
+  it('shares one counter with login, so neither door is a way around the other', async () => {
+    // Separate counters would let an attacker locked out of login carry on
+    // guessing the same credential on the rotation endpoint.
+    const limit = ctx.container.config.LOGIN_MAX_ATTEMPTS_PER_USERNAME;
+    const actor = adminActorFor(owner);
+
+    for (let attempt = 0; attempt < limit; attempt += 1) {
+      await expect(
+        ctx.container.adminManagement.changeOwnPassword(tenantA, actor, {
+          currentPassword: `wrong-${attempt}`,
+          newPassword: 'a-brand-new-password',
+        }),
+      ).rejects.toThrow();
+    }
+
+    await expect(
+      ctx.container.auth.login(
+        tenantA,
+        anonymous,
+        { username: owner.username, password: owner.password },
+        { ip: null, userAgent: 'vitest' },
+      ),
+    ).rejects.toMatchObject({ code: IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED });
+  }, 60_000);
+
+  it('does not count a rotation whose password was correct', async () => {
+    const actor = adminActorFor(owner);
+    await ctx.container.adminManagement.changeOwnPassword(tenantA, actor, {
+      currentPassword: owner.password,
+      newPassword: 'a-completely-different-password',
+    });
+
+    const [row] = await ctx.container.database.db
+      .select()
+      .from(adminLoginThrottle)
+      .where(eq(adminLoginThrottle.subject, owner.username));
+    // The reservation went back: rotating a password must not rate-limit the
+    // person doing it.
+    expect(row?.failedCount ?? 0).toBe(0);
+  }, 60_000);
+
+  it('gives the reservation back when login fails before any verdict', async () => {
+    // A transient failure between reserving and judging — a lookup that times
+    // out, say, which the new statement timeout makes MORE likely — was counted
+    // as a failed attempt by somebody who never submitted one.
+    const admins = ctx.container.admins as unknown as Record<string, unknown>;
+    const real = ctx.container.admins.findCredentialsByUsername.bind(ctx.container.admins);
+    admins['findCredentialsByUsername'] = async () => {
+      throw new Error('database is unavailable');
+    };
+
+    try {
+      await expect(
+        ctx.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: owner.username, password: owner.password },
+          { ip: '203.0.113.7', userAgent: 'vitest' },
+        ),
+      ).rejects.toThrow('database is unavailable');
+    } finally {
+      admins['findCredentialsByUsername'] = real;
+    }
+
+    const rows = await ctx.container.database.db
+      .select()
+      .from(adminLoginThrottle)
+      .where(eq(adminLoginThrottle.subject, owner.username));
+    expect(rows[0]?.failedCount ?? 0).toBe(0);
+
+    // And the correct password still works immediately afterwards.
+    await expect(
+      ctx.container.auth.login(
+        tenantA,
+        anonymous,
+        { username: owner.username, password: owner.password },
+        { ip: '203.0.113.7', userAgent: 'vitest' },
+      ),
+    ).resolves.toBeDefined();
+  }, 60_000);
+
+  it('can find dispatchable work without walking a paused tenant backlog', async () => {
+    // The eligibility filter was a correlated EXISTS, so proving a stopped
+    // tenant's backlog held nothing dispatchable meant inspecting every paused
+    // row — on every relay poll and every readiness check. Under the statement
+    // timeout, a deliberately paused installation would start reporting errors
+    // instead of sitting healthily idle.
+    const rows = (await ctx.container.database.db.execute(
+      `SELECT indexdef FROM pg_indexes WHERE tablename = 'outbox_messages'` as never,
+    )) as unknown as { rows: { indexdef: string }[] };
+    const definitions = (rows.rows ?? (rows as unknown as { indexdef: string }[])).map(
+      (row) => row.indexdef,
+    );
+    expect(
+      definitions.some(
+        (definition) =>
+          definition.includes('tenant_id') &&
+          definition.includes('occurred_at') &&
+          definition.includes('published_at IS NULL'),
+      ),
+    ).toBe(true);
+
+    // And the behaviour the filter exists for is unchanged: a stopped tenant's
+    // messages are still left unclaimed rather than dispatched or dropped.
+    expect(await ctx.container.relay.lagMs()).toBe(0);
   }, 30_000);
 });

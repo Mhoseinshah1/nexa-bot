@@ -24,9 +24,19 @@ export interface SecretInput extends AsyncIterable<string | Uint8Array> {
   readonly isTTY?: boolean | undefined;
   setRawMode?(mode: boolean): unknown;
   on(event: 'data', listener: (chunk: Buffer | string) => void): unknown;
+  on(event: 'end' | 'close' | 'error', listener: () => void): unknown;
   off(event: 'data', listener: (chunk: Buffer | string) => void): unknown;
+  off(event: 'end' | 'close' | 'error', listener: () => void): unknown;
   resume?(): unknown;
   pause?(): unknown;
+}
+
+/** Input ran out where an answer was required. */
+export class TerminalInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TerminalInputError';
+  }
 }
 
 export interface SecretOutput {
@@ -90,6 +100,9 @@ export class TerminalReader {
   close(): void {
     if (!this.attached) return;
     this.input.off('data', this.onData);
+    this.input.off('end', this.onEnd);
+    this.input.off('close', this.onEnd);
+    this.input.off('error', this.onEnd);
     this.input.setRawMode?.(false);
     this.attached = false;
   }
@@ -99,8 +112,24 @@ export class TerminalReader {
     this.input.setRawMode?.(true);
     this.input.resume?.();
     this.input.on('data', this.onData);
+    // A terminal can END as well as deliver bytes: an SSH connection drops, or
+    // an installer's pseudo-terminal closes. Watching only `data` left the
+    // pending promise unsettled forever — the CLI hung with its database and
+    // Redis handles open and the terminal never restored, while the PIPED path
+    // raised on exactly the same condition. The two agree now.
+    this.input.on('end', this.onEnd);
+    this.input.on('close', this.onEnd);
+    this.input.on('error', this.onEnd);
     this.attached = true;
   }
+
+  private readonly onEnd = (): void => {
+    const read = this.pending;
+    if (read === null) return;
+    this.pending = null;
+    this.close();
+    read.reject(new TerminalInputError('Input ended before the answer was complete.'));
+  };
 
   private readonly onData = (chunk: Buffer | string): void => {
     const bytes = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
@@ -148,6 +177,11 @@ export class TerminalReader {
       }
 
       if (byte === 0x0a || byte === 0x0d) {
+        // CRLF is ONE line ending. A terminal or PTY that sends both would
+        // otherwise leave the LF in `surplus`, and the next question would
+        // consume it immediately and resolve empty — shifting every later
+        // answer by one and making a correct password confirmation fail.
+        if (byte === 0x0d && this.surplus[0] === 0x0a) this.surplus.shift();
         const answer = Buffer.from(read.bytes).toString('utf8');
         this.finish(read, () => {
           read.resolve(answer);

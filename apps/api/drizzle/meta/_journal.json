@@ -64,6 +64,13 @@
       "when": 1788306410256,
       "tag": "0008_retention_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788308116517,
+      "tag": "0009_outbox_tenant_index",
+      "breakpoints": true
     }
   ]
 }

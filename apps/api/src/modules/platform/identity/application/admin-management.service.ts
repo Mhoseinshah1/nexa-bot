@@ -5,7 +5,10 @@ import {
   changePasswordRequestSchema,
   errors,
   IDENTITY_ERROR_CODES,
+  PLATFORM_ERROR_CODES,
   isNexaError,
+  isSystemContext,
+  type TenantContext,
   OWNER_ROLE_KEY,
   setAdminRolesRequestSchema,
   setAdminStatusRequestSchema,
@@ -32,6 +35,7 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { DrizzleRoleRepository } from '../infrastructure/drizzle-role.repository.js';
 import type { AdminRepository, SessionRepository } from './ports.js';
 import { assertNotSelf, assertOwnerSurvives, diffRoles } from '../domain/admin-protection.js';
+import type { CredentialThrottle, Reservation } from './credential-throttle.js';
 
 /**
  * Administrator management.
@@ -84,6 +88,7 @@ export class AdminManagementService {
     private readonly outbox: OutboxWriter,
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
+    private readonly throttle: CredentialThrottle,
   ) {}
 
   async list(
@@ -522,6 +527,36 @@ export class AdminManagementService {
   }
 
   /**
+   * Reserves a password attempt, recording the refusal as THIS action.
+   *
+   * The counter is shared with login; the audit row is not. Recording a refused
+   * rotation as a refused login would make the trail lie about what happened.
+   */
+  private async reservePasswordAttempt(
+    scope: TenantContext,
+    actor: ActorContext,
+    username: string,
+    ip: string | null,
+    adminId: AdminId,
+  ): Promise<Reservation> {
+    try {
+      return await this.throttle.reserve(scope, actor, username, ip);
+    } catch (error) {
+      if (isNexaError(error) && error.code === IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED) {
+        await this.audit.record(scope, actor, {
+          action: 'admin.password_change',
+          entityType: 'Admin',
+          entityId: adminId,
+          before: null,
+          after: { reason: 'THROTTLED' },
+          result: 'DENIED',
+        });
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Changing one's OWN password.
    *
    * Not covered by `assertNotSelf`: it requires the current password, grants
@@ -542,11 +577,51 @@ export class AdminManagementService {
       throw errors.notFound(IDENTITY_ERROR_CODES.ADMIN_NOT_FOUND, 'No such administrator.');
     }
 
-    const currentMatches = await this.hasher.verify(
-      command.currentPassword,
-      credentials.passwordHash,
+    // Counted before it is checked, exactly as login is.
+    //
+    // This endpoint verifies a password and was not throttled at all, so an
+    // attacker holding a stolen session could guess the current password
+    // without limit — each guess spending a production-cost scrypt derivation,
+    // which is a CPU and memory exhaustion path as well as a brute force. And
+    // the prize is worse than it looks: finding the password turns a session
+    // that expires into a credential that does not.
+    //
+    // The SAME counter login uses, keyed by the same username. Two counters
+    // would let an attacker locked out of login carry on guessing here, which
+    // is the same credential by another door.
+    // The throttle counts per tenant subject, so this needs a tenant scope. An
+    // administrator rotating their own password always has one; asserting it
+    // here rather than casting means a system-scoped caller fails loudly
+    // instead of counting against a subject that does not exist.
+    if (isSystemContext(scope)) {
+      throw errors.validation(
+        PLATFORM_ERROR_CODES.TENANT_CONTEXT_MISSING,
+        'A password change needs a tenant scope.',
+      );
+    }
+    const tenantScope: TenantContext = scope;
+
+    const ip = typeof actor.ip === 'string' ? actor.ip : null;
+    const reserved = await this.reservePasswordAttempt(
+      tenantScope,
+      actor,
+      admin.username,
+      ip,
+      adminId,
     );
+
+    let currentMatches: boolean;
+    try {
+      currentMatches = await this.hasher.verify(command.currentPassword, credentials.passwordHash);
+    } catch (error) {
+      // Never judged, so it must not be counted — the same rule login follows.
+      await this.throttle.release(tenantScope, admin.username, ip, reserved);
+      throw error;
+    }
+
     if (!currentMatches) {
+      // A verified failure keeps its reservation. That is the guess being
+      // counted, and it is the whole point of the counter.
       await this.audit.record(scope, actor, {
         action: 'admin.password_change',
         entityType: 'Admin',
@@ -560,6 +635,10 @@ export class AdminManagementService {
         'The current password is incorrect.',
       );
     }
+
+    // Correct: give it back, so rotating a password cannot rate-limit the
+    // person doing it.
+    await this.throttle.release(tenantScope, admin.username, ip, reserved);
 
     // Re-using the password one already has is not a password change. Verified
     // against the stored hash rather than by comparing plaintexts, so nothing

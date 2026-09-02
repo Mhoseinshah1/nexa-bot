@@ -168,6 +168,16 @@ export const outboxMessages = pgTable(
     index('outbox_messages_unpublished_idx')
       .on(table.occurredAt)
       .where(sql`published_at IS NULL`),
+    // The same partial set, led by tenant.
+    //
+    // The index above orders ALL unpublished rows by time, which is right when
+    // everything is dispatchable and wrong when it is not: a stopped tenant's
+    // backlog had to be walked in full to prove it held nothing for an active
+    // one. Leading with `tenant_id` lets the relay go straight to the rows it
+    // may actually act on, and skip a paused tenant's entirely.
+    index('outbox_messages_tenant_unpublished_idx')
+      .on(table.tenantId, table.occurredAt)
+      .where(sql`published_at IS NULL`),
     check('outbox_messages_sequence_check', sql`sequence >= 1`),
     check('outbox_messages_attempts_check', sql`attempts >= 0`),
   ],

@@ -86,6 +86,18 @@ async function main(): Promise<void> {
         }
       }
 
+      // Restored BEFORE the owner is written, not just afterwards.
+      //
+      // While stdin is in raw mode the tty driver does not turn Ctrl+C into
+      // SIGINT — it arrives as a byte — and with no question pending the reader
+      // has nothing to deliver it to. An installer who submitted the
+      // confirmation and then tried to abort during the hash and the insert
+      // would have had that cancellation silently ignored, and the owner
+      // created anyway. Nothing more is read after this point, so there is no
+      // reason to still hold the terminal; the `finally` stays as a fallback
+      // for the paths that throw before reaching here.
+      prompt.close();
+
       const scope: TenantContext = { tenantId: tenant.id, botInstanceId: null };
       result = await container.bootstrapOwner.execute(scope, {
         username,

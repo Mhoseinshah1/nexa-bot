@@ -1,6 +1,9 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it } from 'vitest';
-import { TerminalReader } from '../../apps/api/src/infrastructure/tty/read-secret';
+import {
+  TerminalReader,
+  TerminalInputError,
+} from '../../apps/api/src/infrastructure/tty/read-secret';
 
 /**
  * The bootstrap CLI reads the first owner's password. `readline.question()`
@@ -167,6 +170,35 @@ describe('TerminalReader', () => {
     tty.press(ENTER);
     expect(await answer).toBe('ض');
     expect(output.out.join('')).toBe('d: ض\n');
+  });
+
+  it('treats CRLF as one line ending', async () => {
+    // A terminal or PTY that sends CRLF would otherwise leave the LF behind,
+    // and the next question would consume it immediately and resolve EMPTY —
+    // shifting every later answer by one, which makes a correct password
+    // confirmation compare the wrong two values and fail.
+    const tty = new FakeTty();
+    const reader = new TerminalReader(tty as never, capture());
+
+    const first = reader.read('u: ', visible);
+    tty.type('alice\r\nAlice Smith\r\nhunter2\r\n');
+    expect(await first).toBe('alice');
+    expect(await reader.read('d: ', visible)).toBe('Alice Smith');
+    expect(await reader.read('p: ', secret)).toBe('hunter2');
+  });
+
+  it('rejects a pending read when the terminal ends', async () => {
+    // An SSH connection drops, or an installer's pseudo-terminal closes. The
+    // reader watched only `data`, so the promise never settled and the CLI hung
+    // with its database and Redis handles open and the terminal unrestored —
+    // while the piped path raised on exactly the same condition.
+    const tty = new FakeTty();
+    const reader = new TerminalReader(tty as never, capture());
+    const answer = reader.read('p: ', secret);
+    tty.type('partial');
+    tty.emit('end');
+    await expect(answer).rejects.toBeInstanceOf(TerminalInputError);
+    expect(tty.raw).toBe(false);
   });
 
   it('keeps bytes that arrive past the end of an answer', async () => {

@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import {
   type Clock,
   type DomainEvent,
@@ -108,7 +108,7 @@ export class OutboxRelay {
       // of that: the messages are still there, in order, when the tenant is
       // started again. A message with no tenant is platform work and always
       // eligible.
-      const eligible = eligibleForDispatch();
+      const eligible = eligibleForDispatch(await this.activeTenantIds(tx));
 
       const claimed = await tx
         .select()
@@ -216,11 +216,28 @@ export class OutboxRelay {
     const [row] = await this.db
       .select({ occurredAt: outboxMessages.occurredAt })
       .from(outboxMessages)
-      .where(and(isNull(outboxMessages.publishedAt), eligibleForDispatch()))
+      .where(
+        and(isNull(outboxMessages.publishedAt), eligibleForDispatch(await this.activeTenantIds())),
+      )
       .orderBy(asc(outboxMessages.occurredAt))
       .limit(1);
     if (!row) return 0;
     return this.clock.now().getTime() - row.occurredAt.getTime();
+  }
+
+  /**
+   * The tenants currently open for business.
+   *
+   * One installation serves one customer (ADR-0001), so this is a handful of
+   * rows at most — cheap enough to read per batch, and far cheaper than making
+   * the planner ask the same question once per unpublished message.
+   */
+  private async activeTenantIds(tx?: Executor): Promise<string[]> {
+    const rows = await (tx ?? this.db)
+      .select({ id: tenants.id })
+      .from(tenants)
+      .where(eq(tenants.status, 'ACTIVE'));
+    return rows.map((row) => row.id);
   }
 
   async isHealthy(): Promise<boolean> {
@@ -238,15 +255,23 @@ export class OutboxRelay {
  * outside world still talking. Skipped, never dropped — the rows stay
  * unpublished, in order, for when the tenant comes back.
  */
-function eligibleForDispatch() {
-  return or(
-    isNull(outboxMessages.tenantId),
-    sql`EXISTS (
-      SELECT 1 FROM ${tenants}
-      WHERE ${tenants.id} = ${outboxMessages.tenantId}
-        AND ${tenants.status} = 'ACTIVE'
-    )`,
-  );
+function eligibleForDispatch(activeTenantIds: readonly string[]) {
+  // An ID LIST, not a correlated EXISTS.
+  //
+  // As a subquery this had to be evaluated per row, and the only index over
+  // unpublished messages orders them by occurrence time — so proving that a
+  // stopped tenant's large backlog contains nothing dispatchable meant
+  // inspecting every paused row, on every relay poll AND every readiness check.
+  // Harmless until connections carried a statement timeout; after it, an
+  // installation deliberately paused would start reporting errors instead of
+  // sitting healthily idle, which is the opposite of what pausing is for.
+  //
+  // The list is a snapshot, and that is safe because it is not the authority:
+  // every row is re-checked against its tenant under `FOR SHARE` at dispatch,
+  // which is what actually stops delivery. This filter only decides what is
+  // worth looking at.
+  if (activeTenantIds.length === 0) return isNull(outboxMessages.tenantId);
+  return or(isNull(outboxMessages.tenantId), inArray(outboxMessages.tenantId, activeTenantIds));
 }
 
 function toDomainEvent(row: typeof outboxMessages.$inferSelect): DomainEvent {

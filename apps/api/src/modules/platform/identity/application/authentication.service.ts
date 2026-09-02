@@ -2,6 +2,7 @@ import {
   adminUsernameSchema,
   errors,
   IDENTITY_ERROR_CODES,
+  isNexaError,
   NexaError,
   loginRequestSchema,
   type ActorContext,
@@ -27,10 +28,11 @@ import type {
   LoginThrottleRepository,
   RoleRepository,
   SessionRepository,
-  ThrottleState,
 } from './ports.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { generateSessionToken, hashSessionToken } from './session-token.js';
+import type { CredentialThrottle, Reservation } from './credential-throttle.js';
+export type { ThrottlePolicy } from './credential-throttle.js';
 
 /**
  * Web Admin authentication: username and password.
@@ -71,13 +73,6 @@ export interface LoginResult extends AuthenticatedAdmin {
   readonly token: string;
 }
 
-export interface ThrottlePolicy {
-  readonly windowSeconds: number;
-  readonly maxAttemptsPerUsername: number;
-  readonly maxAttemptsPerIp: number;
-  readonly lockoutSeconds: number;
-}
-
 /**
  * The slice of the tenant repository authentication needs.
  *
@@ -87,18 +82,6 @@ export interface ThrottlePolicy {
  */
 export interface TenantStatusReader {
   findById(id: TenantId): Promise<{ status: TenantStatus } | null>;
-}
-
-/**
- * The two throttle reservations one login attempt makes.
- *
- * Both are carried, not just the username's, so a release can name the counting
- * period its reservation belongs to rather than decrementing whatever the row
- * happens to hold when it gets there.
- */
-interface Reservation {
-  readonly username: ThrottleState;
-  readonly ip: ThrottleState | null;
 }
 
 /**
@@ -126,7 +109,7 @@ export class AuthenticationService {
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     private readonly sessionTtlSeconds: number,
-    private readonly policy: ThrottlePolicy,
+    private readonly credentialThrottle: CredentialThrottle,
     private readonly tenants: TenantStatusReader,
     private readonly permissions: EffectivePermissionReader,
   ) {}
@@ -196,10 +179,55 @@ export class AuthenticationService {
     // A username that could never exist is rejected before touching the
     // database, but only AFTER the throttle check — otherwise the cheap
     // rejection is itself a signal about which strings are worth trying.
+    // Everything from here to a credential VERDICT is wrapped: if it fails for
+    // any other reason — the lookup times out, the KDF throws — the attempt was
+    // never judged, so counting it is wrong. A transient database error would
+    // otherwise be recorded as a failed login by somebody who never submitted
+    // one, and at `LOGIN_MAX_ATTEMPTS_PER_USERNAME=1` would rate-limit the
+    // correct user the moment the database recovered. The statement timeout
+    // added for the tenant lock makes exactly this failure more likely, not
+    // less.
+    //
+    // A verdict that IS reached keeps its reservation, including "no such
+    // username": that is the failure the counter exists to count.
+    let verdictReached = false;
+    try {
+      return await this.completeLogin(
+        scope,
+        actor,
+        command,
+        context,
+        username,
+        reserved,
+        now,
+        () => {
+          verdictReached = true;
+        },
+      );
+    } catch (error) {
+      if (!verdictReached) {
+        await this.releaseReservations(scope, username, context.ip, reserved);
+      }
+      throw error;
+    }
+  }
+
+  /** The part of `login` that runs once an attempt has been reserved. */
+  private async completeLogin(
+    scope: TenantContext,
+    actor: ActorContext,
+    command: { username: string; password: string },
+    context: LoginContext,
+    username: string,
+    reserved: Reservation,
+    now: Date,
+    verdict: () => void,
+  ): Promise<LoginResult> {
     const shaped = adminUsernameSchema.safeParse(username);
     if (!shaped.success) {
       await this.hasher.spendDummyWork();
-      return this.failLogin(scope, actor, username, reserved, 'NO_SUCH_ADMIN');
+      verdict();
+      return await this.failLogin(scope, actor, username, reserved, 'NO_SUCH_ADMIN');
     }
 
     const credentials = await this.admins.findCredentialsByUsername(scope, username);
@@ -210,7 +238,8 @@ export class AuthenticationService {
       // password" takes a full hash, and the difference is a username oracle
       // that identical error text does nothing to hide.
       await this.hasher.spendDummyWork();
-      return this.failLogin(scope, actor, username, reserved, 'NO_SUCH_ADMIN');
+      verdict();
+      return await this.failLogin(scope, actor, username, reserved, 'NO_SUCH_ADMIN');
     }
 
     // A stored hash below current cost verifies FASTER than the dummy work an
@@ -229,8 +258,12 @@ export class AuthenticationService {
       belowCurrentCost ? this.hasher.spendDummyWork() : Promise.resolve(),
     ]);
 
+    // From here the credential has been judged: every outcome below is a real
+    // verdict, and keeps or returns its reservation on its own terms.
+    verdict();
+
     if (!passwordMatches) {
-      return this.failLogin(scope, actor, username, reserved, 'BAD_PASSWORD');
+      return await this.failLogin(scope, actor, username, reserved, 'BAD_PASSWORD');
     }
 
     // Checked AFTER the password, so a disabled account cannot be distinguished
@@ -348,7 +381,7 @@ export class AuthenticationService {
           scope,
           'IP',
           context.ip,
-          this.policy.maxAttemptsPerIp,
+          this.credentialThrottle.maxAttemptsPerIp,
           (reserved.ip ?? reserved.username).windowStartedAt,
           tx,
         );
@@ -569,83 +602,17 @@ export class AuthenticationService {
     username: string,
     ip: string | null,
   ): Promise<Reservation> {
-    const now = this.clock.now();
-
-    const usernameState = await this.throttle.reserveAttempt(scope, 'USERNAME', username, now, {
-      windowSeconds: this.policy.windowSeconds,
-      maxAttempts: this.policy.maxAttemptsPerUsername,
-      lockoutSeconds: this.policy.lockoutSeconds,
-    });
-    const ipState =
-      ip === null
-        ? null
-        : await this.throttle.reserveAttempt(scope, 'IP', ip, now, {
-            windowSeconds: this.policy.windowSeconds,
-            maxAttempts: this.policy.maxAttemptsPerIp,
-            lockoutSeconds: this.policy.lockoutSeconds,
-          });
-
-    const subjects = [
-      ['USERNAME', usernameState, this.policy.maxAttemptsPerUsername, username],
-      ['IP', ipState, this.policy.maxAttemptsPerIp, ip ?? ''],
-    ] as const;
-
-    // The attempt that REACHES the limit establishes the lockout. It is still
-    // verified — see below — but the lockout is worth alerting on from the
-    // moment it exists, and this is the only place that observes it: the
-    // failure path is not reached for a refused attempt, and the refusal path
-    // is not reached by the attempt that merely reaches the limit.
-    for (const [kind, state, limit, subject] of subjects) {
-      if (state !== null && state.failedCount >= limit) {
-        await this.opsLog.record(scope, {
-          code: 'auth.login_locked_out',
-          severity: 'WARN',
-          message: `Login attempts were locked out for a ${kind.toLowerCase()} subject.`,
-          context: { username, subjectKind: kind, failedCount: state.failedCount },
-          dedupeKey: `auth.login_locked_out:${kind}:${subject}`,
-          correlationId: actor.correlationId,
-        });
-      }
-    }
-
-    // Refused only once the attempt is PAST the configured number, not on the
-    // one that reaches it. `maxAttempts` is how many attempts are allowed, so
-    // rejecting the Nth would give N-1 credential checks — and with a limit of
-    // 1 the very first login, correct password and all, would be refused and
-    // the installation would have no way in.
-    //
-    // The reservation still does its job: in a burst, everything beyond the
-    // limit is refused here, before the KDF runs.
-    for (const [, state, limit] of subjects) {
-      if (state !== null && state.failedCount > limit) {
-        // Give BOTH reservations back before refusing. This request never
-        // reaches the KDF and never checks a credential, so counting it
-        // overstates what actually happened — and the overstatement sticks: an
-        // allowed request that reserved the limiting count and then succeeded
-        // returns only its own, so the leaked one holds the subject at the
-        // limit and keeps the lock alive. With `LOGIN_MAX_ATTEMPTS_PER_IP=1`,
-        // two simultaneous correct logins would refuse one, admit the other,
-        // and still lock the address they share.
-        await this.releaseReservations(scope, username, ip, {
-          username: usernameState,
-          ip: ipState,
-        });
+    try {
+      return await this.credentialThrottle.reserve(scope, actor, username, ip);
+    } catch (error) {
+      // The refusal itself is shared; the AUDIT row is not. A refused login and
+      // a refused password rotation are different actions and recording them as
+      // the same one would make the trail lie about what was attempted.
+      if (isNexaError(error) && error.code === IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED) {
         await this.recordThrottleDenial(scope, actor, username);
-        throw new NexaError({
-          kind: 'RATE_LIMITED',
-          code: IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED,
-          message: 'Too many attempts. Try again later.',
-          details: {
-            retryAfterSeconds: Math.max(
-              1,
-              Math.ceil(((state.lockedUntil?.getTime() ?? now.getTime()) - now.getTime()) / 1000),
-            ),
-          },
-        });
       }
+      throw error;
     }
-
-    return { username: usernameState, ip: ipState };
   }
 
   /**
@@ -660,22 +627,7 @@ export class AuthenticationService {
     ip: string | null,
     reserved: Reservation,
   ): Promise<void> {
-    await this.throttle.releaseAttempt(
-      scope,
-      'USERNAME',
-      username,
-      this.policy.maxAttemptsPerUsername,
-      reserved.username.windowStartedAt,
-    );
-    if (ip !== null && reserved.ip !== null) {
-      await this.throttle.releaseAttempt(
-        scope,
-        'IP',
-        ip,
-        this.policy.maxAttemptsPerIp,
-        reserved.ip.windowStartedAt,
-      );
-    }
+    await this.credentialThrottle.release(scope, username, ip, reserved);
   }
 
   private async recordThrottleDenial(

@@ -38,6 +38,7 @@ import { DrizzleRoleRepository } from './modules/platform/identity/infrastructur
 import { DrizzleSessionRepository } from './modules/platform/identity/infrastructure/drizzle-session.repository.js';
 import { DrizzleLoginThrottleRepository } from './modules/platform/identity/infrastructure/drizzle-login-throttle.repository.js';
 import { AuthenticationService } from './modules/platform/identity/application/authentication.service.js';
+import { CredentialThrottle } from './modules/platform/identity/application/credential-throttle.js';
 import { AdminManagementService } from './modules/platform/identity/application/admin-management.service.js';
 import { BootstrapOwnerService } from './modules/platform/identity/application/bootstrap-owner.service.js';
 import { RetentionSweeper } from './modules/platform/identity/application/retention-sweeper.js';
@@ -131,6 +132,16 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   // contract set: nothing here reintroduces an actor-type bypass.
   const guard = new PermissionGuard(new AdminPermissionResolver(admins, roles, clock), opsLog);
 
+  // One counter per subject for every path that checks a password: login and
+  // `changeOwnPassword` both go through this, so an attacker locked out of one
+  // cannot keep guessing the same credential on the other.
+  const credentialThrottle = new CredentialThrottle(loginThrottle, opsLog, clock, {
+    windowSeconds: config.LOGIN_THROTTLE_WINDOW_SECONDS,
+    maxAttemptsPerUsername: config.LOGIN_MAX_ATTEMPTS_PER_USERNAME,
+    maxAttemptsPerIp: config.LOGIN_MAX_ATTEMPTS_PER_IP,
+    lockoutSeconds: config.LOGIN_LOCKOUT_SECONDS,
+  });
+
   const auth = new AuthenticationService(
     admins,
     roles,
@@ -143,12 +154,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
     config.SESSION_TTL_SECONDS,
-    {
-      windowSeconds: config.LOGIN_THROTTLE_WINDOW_SECONDS,
-      maxAttemptsPerUsername: config.LOGIN_MAX_ATTEMPTS_PER_USERNAME,
-      maxAttemptsPerIp: config.LOGIN_MAX_ATTEMPTS_PER_IP,
-      lockoutSeconds: config.LOGIN_LOCKOUT_SECONDS,
-    },
+    credentialThrottle,
     tenants,
     guard,
   );
@@ -165,6 +171,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     outbox,
     clock,
     ids,
+    credentialThrottle,
   );
 
   const bootstrapOwner = new BootstrapOwnerService(
