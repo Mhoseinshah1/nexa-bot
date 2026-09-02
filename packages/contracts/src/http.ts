@@ -42,13 +42,50 @@ export const healthLiveResponseSchema = z.object({
 });
 export type HealthLiveResponse = z.infer<typeof healthLiveResponseSchema>;
 
-/** Readiness: can this process serve traffic. Names the failing dependency. */
+/**
+ * Readiness: can this process serve traffic. 200 or 503, and nothing else.
+ *
+ * Deliberately minimal, and it used to carry the dependency list. This endpoint
+ * is anonymous — it has to be, because the thing asking is a load balancer or a
+ * container orchestrator with no credentials — and what it answered told that
+ * anonymous caller which dependencies the deployment has, what each one is
+ * called, how long each took to answer, how many migrations are applied, how far
+ * behind the outbox relay is, and a classification of the current failure. That
+ * is a description of the system's internals, served fastest at exactly the
+ * moment it is broken.
+ *
+ * A load balancer needs the status code. It has never needed the reasons.
+ *
+ * The detail did not disappear: `systemReadinessResponseSchema` carries it to
+ * an authenticated Web Admin session.
+ */
 export const healthReadyResponseSchema = z.object({
   status: z.enum(['ok', 'degraded']),
-  dependencies: z.array(dependencyStatusSchema),
 });
 export type HealthReadyResponse = z.infer<typeof healthReadyResponseSchema>;
 
+/**
+ * Readiness with its reasons, for an operator who has signed in.
+ *
+ * Authentication is the whole gate, and no new permission guards it. What this
+ * exposes is the shape of the deployment rather than any tenant's data, every
+ * administrator needs it when something is wrong, and a permission nobody can
+ * be denied is a permission that exists to be looked at rather than enforced.
+ */
+export const systemReadinessResponseSchema = z.object({
+  status: z.enum(['ok', 'degraded']),
+  dependencies: z.array(dependencyStatusSchema),
+});
+export type SystemReadinessResponse = z.infer<typeof systemReadinessResponseSchema>;
+
+/**
+ * Build metadata. Requires an authenticated session.
+ *
+ * Version, commit, build time, Node version and environment are not secrets and
+ * they are not for strangers either: together they name the exact revision an
+ * attacker would go and read, and the Node build whose advisories they would
+ * check first. An administrator sees it; an anonymous caller does not.
+ */
 export const healthInfoResponseSchema = z.object({
   name: z.string(),
   version: z.string(),
@@ -592,4 +629,6 @@ export const CONTROL_ROUTES = {
   notifications: '/notifications',
   notification: (id: string) => `/notifications/${encodeURIComponent(id)}`,
   notificationTest: '/notifications/test',
+  /** Readiness with dependency detail. Authenticated; see the schema. */
+  systemReadiness: '/system/readiness',
 } as const;
