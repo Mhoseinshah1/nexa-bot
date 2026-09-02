@@ -327,6 +327,29 @@ operation, so ADR-0010's dry-run and counted-preview steps have nothing to apply
 to yet. No second locale, though overrides are keyed by one from the first
 migration.
 
+**No retention or archive for notifications either**, and it is worth saying
+separately because the tables are the ones that grow fastest. A notification
+intent is never deleted and a delivery attempt is append-only evidence — the
+question a stuck notification provokes is "what did the third attempt fail
+with", and a row removed on a schedule cannot answer it. So both tables grow
+without bound on a long-lived installation. That is an accepted Phase 2
+tradeoff, not an oversight: no duration is invented here, and ADR-0018 lists
+what a future policy must decide (archival, duration, evidence and history,
+referential integrity, storage bounds, and any change to the append-only rule).
+
+### Not deployable, and two things block Phase 3
+
+There is no Dockerfile, no TLS or reverse-proxy topology, no release wiring, no
+`botctl` and no installer. Phase 2 makes the maintenance commands run from
+compiled output so a runtime image needs neither `tsx` nor devDependencies —
+that is groundwork for the Deployment MVP, not the MVP.
+
+The secret envelope is still v1: ciphertext is not bound to its context, and a
+single configured KEK means rotation cannot decrypt what the previous key
+wrote. Both are recorded as `BLOCKER-DEPLOY` and `BLOCKER-SECRETS-V2` in
+`docs/open-questions.md` and must land before Phase 3 introduces provider
+credentials.
+
 ### Deferred
 
 - **Keyset pagination on the operational log and the notification list.** Both

@@ -147,6 +147,43 @@ forever, so the alert never arrives at all).
 An ownership token — claim with a nonce, record only if the nonce still matches
 — would close it, and is the change to make if duplicates are ever observed.
 
+### There is no retention or archive for notifications, and that is a decision
+
+Phase 2 never deletes, archives or summarises a notification intent or a
+delivery attempt. Both tables grow monotonically, and on a sufficiently
+long-lived installation they grow without bound. That is an acknowledged
+tradeoff, recorded here rather than discovered later.
+
+The reasoning is the same one that leaves the operational log unswept. Delivery
+attempts are **append-only evidence**: the question a stuck notification
+provokes is "what did the third attempt fail with", and a row deleted on a
+schedule is a row that cannot answer it. Intents are what attempts hang off, so
+deleting an intent while keeping its attempts either orphans the evidence or
+takes it along.
+
+No retention duration is invented here. A number chosen without an operator's
+requirement is not a policy, it is a default that quietly becomes one — and the
+legacy system's answer to log volume was "no retention at all, no dedup, no
+severity" (LGR-BR-080/081), which is the failure this ADR already exists to fix
+at the other end.
+
+Whoever adds retention must decide, explicitly and in an ADR, all of:
+
+- **Archival, not just deletion** — where the rows go, or an argument for why
+  losing them is acceptable.
+- **Duration**, from a stated operational requirement rather than a round number.
+- **Evidence and history** — whether attempts may be removed at all, given they
+  are the delivery record.
+- **Referential integrity** — what happens to attempts whose intent is gone, and
+  to the `(tenant_id, notification_id, attempt_number)` unique index.
+- **Storage bounds** — what the policy actually guarantees, so the claim can be
+  checked.
+- **Any change to the append-only policy**, which is a contract change and
+  belongs in its own commit.
+
+Until then, an operator who needs the space reclaims it deliberately, knowing
+what they are discarding.
+
 ## Rejected
 
 **One table with a `status` column and an attempt counter.** It cannot answer

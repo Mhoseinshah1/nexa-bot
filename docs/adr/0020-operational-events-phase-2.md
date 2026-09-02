@@ -20,8 +20,13 @@ feed, not an audit trail" (WEB-BR-024), 1,700 rows and no filter or export.
 ### Extend the existing model. Do not build a second log.
 
 There is no new events table, no new severity vocabulary and no parallel
-recorder. Phase 2 adds a read model, a resolution link, a retention sweep and a
-severity-driven notification projection to the table that already exists.
+recorder. Phase 2 adds a read model, a resolution link and a severity-driven
+notification projection to the table that already exists.
+
+It does NOT add a retention sweep. This summary said it did, which contradicted
+the decision recorded further down under "There is no retention sweep, and that
+is a decision" — a summary that promised the opposite of the section it was
+summarising. The decision below is the one that holds.
 
 The three-way separation of ADR-0007 is unchanged and is worth restating,
 because Phase 2 is the first phase in which all three are populated by the same

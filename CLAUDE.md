@@ -67,7 +67,7 @@ touch the database.
 
 ```bash
 bash scripts/dev-services.sh   # postgres + redis (docker, or native fallback)
-pnpm db:migrate && pnpm db:seed
+pnpm db:migrate:dev && pnpm db:seed:dev   # compiled: pnpm build && pnpm db:migrate
 pnpm admin:bootstrap           # create the installation's first owner (CLI only)
 pnpm verify                    # typecheck, lint, boundaries, i18n, unit tests, build
 pnpm test:integration          # needs the services above

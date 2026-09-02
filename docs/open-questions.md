@@ -70,6 +70,50 @@ or is the more conservative reading.
 | —                           | **DECISION** | Whether an operational event can be recorded twice when a commit's outcome is unknown. `NotifyingOperationalEventRecorder` records the event alone if the event and its notification cannot commit together — but a rejected transaction does not prove nothing landed: Postgres can commit and then lose the connection before the client hears about it. A dedupe-keyed event then reads `occurrence_count = 2` for one occurrence; an event with no dedupe key gets a second row. | Phase 2 accepts the over-count. Both costs are bounded and visible in the log; losing the event is neither, because the condition's next occurrence would be a repeat rather than a new one and nothing would announce it until it resolved and came back. Closing the window needs an identity the retry can look itself up by — a caller-supplied event id on the port, or a transaction-outcome probe. Neither is invented here. |
 | —                           | **DECISION** | What happens to operational events after some number of years. The table is append-only by a database trigger and nothing removes a row, so it grows without bound. Dedupe collapses a repeating condition onto one row with a counter, which removes the growth mode that hurt the legacy log group, but not the long tail.                                                                                                                                                         | Phase 2 deliberately ships no retention rather than weakening the append-only guard to give a drafted setting something to configure (ADR-0020). The honest options are archival to cold storage, or an argued decision to permit aged deletion. Neither is invented here.                                                                                                                                                          |
 
+## Blocks Phase 3 — engineering prerequisites
+
+Not product questions. Two pieces of work must land, each in its own PR, before
+Phase 3 introduces provider and panel credentials or anything is deployed for
+real. Both are recorded here so that "Phase 2 is done" is never mistaken for
+"this can be run".
+
+### `BLOCKER-DEPLOY` — the Deployment MVP
+
+Nothing in this repository deploys. There is no Dockerfile or immutable runtime
+image, no Caddyfile or TLS reverse-proxy topology, no production Compose or
+release wiring, no container health checks, and no `botctl` or installer.
+Update and rollback come after that.
+
+Phase 2 makes the maintenance commands (`db:migrate`, `db:seed`,
+`admin:bootstrap`) run from compiled output rather than TypeScript source, so a
+runtime image needs neither `tsx` nor devDependencies. That is groundwork for
+this checkpoint and **not** a claim that any part of it is done.
+
+### `BLOCKER-SECRETS-V2` — the secret envelope
+
+The v1 cipher encrypts a secret as an opaque value. Two consequences, neither
+acceptable once panel and gateway credentials exist:
+
+- **Ciphertext is not bound to its context.** There is no associated data, so a
+  value encrypted for one purpose, tenant or row decrypts perfectly well in
+  another. Anyone who can write a ciphertext column can transplant a credential
+  between rows.
+- **Rotation does not actually work.** Rows carry a `key_id`, but exactly one
+  KEK is configured, so after rotating it the old rows cannot be read at all.
+  The column records which key was used and nothing can use it.
+
+A separate hardening PR must deliver: a canonical secret context (purpose,
+tenant, owning row) bound as AEAD associated data; a versioned v2 envelope; a
+configured keyring of decryption KEKs with one explicit active encryption KEK;
+v1 decryption kept working; new writes as v2; bounded, idempotent re-encryption
+to the active key; and a safe retirement procedure for a retired KEK. With
+tests proving a ciphertext cannot be transplanted across purpose, tenant or
+row, and that a rotation decrypts with the old key while encrypting with the
+new one.
+
+Not attempted inside the Phase 2 PR: silently changing the stored secret format
+in an already-large change is how a format migration becomes an outage.
+
 ## Blocks Phase 3 — providers
 
 | Id            | Type    | Question                                                                                                          | Fallback                                                  |
@@ -140,6 +184,18 @@ or is the more conservative reading.
 | `C-MODULE-TREE`    | The review's §3 module tree (`src/commerce/ordering`) and its agent-ownership section (`modules/ordering`) disagree on nesting.                                                                                                                                                                                                                                                                                                                       | Reconciled as `src/modules/<context>/<submodule>`; recorded in `docs/adr/0002-module-boundaries.md`.                                                                                                                                                                                                     |
 
 ---
+
+## Accepted Phase 2 tradeoffs
+
+Decided deliberately, with the consequence stated. Not questions, and not
+oversights.
+
+| Id                        | Decision                                                                                                                                                                                                                                                                                                                                                                                                           | Where                                              |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- |
+| `TRADEOFF-NOTIF-RETAIN`   | **No automatic retention or archive for notification intents in Phase 2.** Delivery attempts remain append-only evidence. Both tables therefore grow without bound on a sufficiently long-lived installation. No retention duration is invented; whoever adds one must decide archival, duration, evidence and history, referential integrity, storage bounds and any change to the append-only policy, in an ADR. | [ADR-0018](adr/0018-notifications.md)              |
+| `TRADEOFF-OPSLOG-RETAIN`  | **No retention sweep for operational events.** Deleting them would require an actor allowed to delete evidence, which no role holds.                                                                                                                                                                                                                                                                               | [ADR-0020](adr/0020-operational-events-phase-2.md) |
+| `TRADEOFF-SWEEP-TENANT`   | **`failExhausted` is deliberately independent of the tenant's current ACTIVE status.** It records terminal bookkeeping for attempts genuinely spent while the tenant was active. Tenant status governs whether we SEND, not whether completed attempt history may be terminalized.                                                                                                                                 | [ADR-0018](adr/0018-notifications.md)              |
+| `TRADEOFF-SENDTEST-LOSER` | **A concurrent `sendTest` idempotency loser rolls back with a conflict** rather than waiting to replay the winner immediately. The winning result is durable, so a later retry replays it.                                                                                                                                                                                                                         | [ADR-0021](adr/0021-control-plane-concurrency.md)  |
 
 ## Resolved
 
