@@ -29,7 +29,12 @@ cleanup() {
   find drizzle -name '*drift-check*' -delete
   # Any snapshot that did not exist before this run is ours to remove.
   for snapshot in $(find drizzle/meta -name '*_snapshot.json' | sort); do
-    echo "$SNAPSHOTS_BEFORE" | grep -qxF "$snapshot" || rm -f "$snapshot"
+    # `grep -c`, which reads its whole input, not `grep -qxF`, which exits on
+    # the first match and can leave `echo` dying of SIGPIPE — returning 141
+    # under `pipefail` exactly when the snapshot IS known. This branch DELETES,
+    # so the wrong answer here removes a checked-in snapshot.
+    known="$(echo "$SNAPSHOTS_BEFORE" | grep -cxF "$snapshot" || true)"
+    [ "${known:-0}" -gt 0 ] || rm -f "$snapshot"
   done
   mv -f "$JOURNAL.drift-backup" "$JOURNAL"
 }

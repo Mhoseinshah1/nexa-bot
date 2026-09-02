@@ -200,13 +200,19 @@ step "update v1.0.0 -> v2.0.0"
 [ "$(cat "${NEXA_STATE_DIR}/previous")" = "v1.0.0" ] || fail "v1.0.0 is not the rollback target"
 [ -f "${NEXA_STATE_DIR}/releases/v1.0.0.json" ] ||
   fail "the update deleted the release it replaced"
-find "$NEXA_BACKUP_DIR" -name '*.sql.gz' | grep -q . ||
-  fail "the update did not take a backup"
+# Counted, not `| grep -q`: a `grep -q` that matches exits at once and `find`
+# dies of SIGPIPE, so under `pipefail` the check fails exactly when it passes.
+backups="$(find "$NEXA_BACKUP_DIR" -name '*.sql.gz' | wc -l)"
+[ "${backups:-0}" -gt 0 ] || fail "the update did not take a backup"
 
 DIGEST_B="$(docker buildx imagetools inspect "${IMAGE_REPO}:v2.0.0" --format '{{.Manifest.Digest}}')"
 grep -qF "NEXA_IMAGE=${IMAGE_REPO}@${DIGEST_B}" "${NEXA_CONFIG_DIR}/deploy.env" ||
   fail "deploy.env does not name v2.0.0's digest; the release would not survive a reboot"
-"$BOTCTL" version | grep -qF "$DIGEST_B" || fail "botctl version does not report the new digest"
+version_output="$("$BOTCTL" version)"
+case "$version_output" in
+  *"$DIGEST_B"*) : ;;
+  *) fail "botctl version does not report the new digest" ;;
+esac
 pass "v2.0.0 is current, by digest, with v1.0.0 preserved as the rollback target"
 
 # ---------------------------------------------------------------------------

@@ -186,13 +186,21 @@ preflight() {
   # --- Ports ---
   #
   # Checked, never opened. A blocked port is reported with what to do about it.
-  local port
+  #
+  # Both checks read their command's output into a variable rather than piping
+  # into `grep -q`. Under `pipefail` a `grep -q` that MATCHES exits at once,
+  # the writer ahead of it can die of SIGPIPE, and the pipeline returns 141 —
+  # so the test reports "nothing listening" precisely when something is. On a
+  # port preflight that is the wrong answer in the dangerous direction.
+  local port listeners names
   for port in 80 443; do
-    if ss -Hltn "sport = :${port}" 2>/dev/null | grep -q .; then
+    listeners="$(ss -Hltn "sport = :${port}" 2>/dev/null || true)"
+    if [ -n "$listeners" ]; then
       # Our own Caddy holding the port on a rerun is expected, not a conflict.
-      if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^nexa-caddy'; then
-        continue
-      fi
+      # `grep -c` reads to the end of its input, so nothing upstream is ever
+      # killed mid-write; `grep -q` would not.
+      names="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c '^nexa-caddy' || true)"
+      [ "${names:-0}" -eq 0 ] || continue
       nexa_die "something is already listening on port ${port}. Nexa's edge needs 80 (ACME and the redirect) and 443. Stop the other service, or install Nexa on a host that is not already serving HTTP."
     fi
   done

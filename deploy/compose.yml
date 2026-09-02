@@ -119,7 +119,10 @@ services:
     healthcheck:
       # `redis-cli` reads REDISCLI_AUTH from the environment, so the password
       # does not appear in the health check's process line either.
-      test: ['CMD-SHELL', 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      # Compared as a string rather than piped into `grep -q`: the pipeline
+      # form is only safe here because `sh -c` has no `pipefail`, and a health
+      # check that is correct by omission is one a later edit breaks silently.
+      test: ['CMD-SHELL', '[ "$$(REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping)" = PONG ]']
       interval: 5s
       timeout: 5s
       retries: 20

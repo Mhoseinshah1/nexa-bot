@@ -57,3 +57,27 @@ mapfile -t HELPERS < <(find scripts -type f -name '*.sh' 2>/dev/null | sort)
 shellcheck -x -s bash --severity=warning --exclude=SC1091,SC2016 "${HELPERS[@]}" ||
   fail "a helper script has findings at WARNING or above."
 printf '\033[32mok\033[0m    %d helper scripts clean at shellcheck warning\n' "${#HELPERS[@]}"
+
+# --- Tier 3: one pattern shellcheck does not catch ---------------------------
+#
+# `producer | grep -q PATTERN` under `set -o pipefail`.
+#
+# When grep FINDS its match it exits immediately. The producer ahead of it then
+# dies of SIGPIPE writing the rest, and `pipefail` makes the whole pipeline
+# return 141 — so the test fails exactly when it should pass, and reports the
+# opposite of the truth.
+#
+# This is not theoretical. It cost two CI runs here: a backup assertion that
+# announced "the backup contains no schema" about a perfectly good dump, and a
+# version assertion that announced a missing digest that was present. Both were
+# invisible locally and both looked like real product failures.
+#
+# The fixes are all cheap: `case`/`[[ ]]` for strings already in memory,
+# `grep -c` or `wc -l` when a stream must be read.
+OFFENDERS="$(grep -rnE '\| *grep [^|]*-[a-zA-Z]*q' deploy scripts tests/deploy 2>/dev/null |
+  grep -v 'check-shell.sh' | grep -vE '^[^:]*:[0-9]+: *#' || true)"
+if [ -n "$OFFENDERS" ]; then
+  printf '%s\n' "$OFFENDERS" >&2
+  fail "a pipeline ends in 'grep -q'. Under pipefail that FAILS when the pattern is found, because the writer dies of SIGPIPE. Use a case match, grep -c or wc -l."
+fi
+printf '\033[32mok\033[0m    no pipeline ends in a quiet grep\n'

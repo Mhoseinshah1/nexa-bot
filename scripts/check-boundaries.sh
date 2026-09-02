@@ -379,9 +379,12 @@ while read -r code; do
   # split into two non-existent paths by xargs, and a grep that finds nothing
   # because it looked in the wrong place reports the same thing as a code with
   # no producer.
-  if ! find apps/api/src -name '*.ts' -exec grep -h "$code" {} + 2>/dev/null \
-    | grep -vE '^\s*(//|\*|/\*)' \
-    | grep -q .; then
+  # `grep -c`, not `grep -q`: a quiet grep exits on its first match, the
+  # `find` ahead of it dies of SIGPIPE, and under `pipefail` the pipeline
+  # returns 141 — so a code WITH a producer would be reported as having none.
+  producers="$(find apps/api/src -name '*.ts' -exec grep -h "$code" {} + 2>/dev/null \
+    | grep -cvE '^\s*(//|\*|/\*)' || true)"
+  if [ "${producers:-0}" -eq 0 ]; then
     UNPRODUCED="$UNPRODUCED $code"
   fi
 done <<EOF

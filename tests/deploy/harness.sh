@@ -219,11 +219,18 @@ case "${1:-}" in
     done
     case "${1:-}" in
       ps)
-        if printf '%s' "$*" | grep -q -- '--format json'; then
-          printf '{"Service":"api","State":"running","Health":"%s"}\n' "$(read_state api_health healthy)"
-        else
-          printf 'api running healthy\npostgres running healthy\nredis running healthy\n'
-        fi
+        # A `case` rather than `printf | grep -q`: the pipeline form takes the
+        # WRONG BRANCH if printf is killed by SIGPIPE when grep matches early,
+        # which would make the fake answer with the table format where JSON was
+        # asked for — and readiness would silently never be detected.
+        case "$*" in
+          *'--format json'*)
+            printf '{"Service":"api","State":"running","Health":"%s"}\n' "$(read_state api_health healthy)"
+            ;;
+          *)
+            printf 'api running healthy\npostgres running healthy\nredis running healthy\n'
+            ;;
+        esac
         exit 0
         ;;
       up) exit "$(read_state up_exit 0)" ;;
