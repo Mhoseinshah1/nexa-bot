@@ -319,6 +319,8 @@ export class ControlController {
  * A query parameter is caller-controlled text; turning it into a Date without
  * checking hands the driver an Invalid Date and turns a bad request into a 500.
  */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function cursorFrom(
   before: string | undefined,
   beforeId: string | undefined,
@@ -330,6 +332,16 @@ function cursorFrom(
       CONTROL_ERROR_CODES.INVALID_VALUE,
       'The `before` cursor is not a timestamp.',
       { before },
+    );
+  }
+  // The id too. `operational_events.id` is a Postgres `uuid`, so `beforeId=oops`
+  // is a driver error and a 500 — in the function whose sibling line exists
+  // precisely to stop a bad query parameter becoming one.
+  if (beforeId !== undefined && !UUID.test(beforeId)) {
+    throw errors.validation(
+      CONTROL_ERROR_CODES.INVALID_VALUE,
+      'The `beforeId` cursor is not an identifier.',
+      { beforeId },
     );
   }
   return { before: at, ...(beforeId ? { beforeId } : {}) };

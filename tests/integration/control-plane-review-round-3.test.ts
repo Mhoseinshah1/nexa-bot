@@ -580,13 +580,22 @@ describe('control plane, third review round', () => {
           [intent!.id],
         ),
       );
+      const [row] = await ctx.container.database.db
+        .select()
+        .from(notifications)
+        .where(eq(notifications.id, intent!.id));
       expect((await ctx.container.notificationDispatcher.tick()).exhausted).toBe(1);
 
       const { moved } = await ctx.container.notificationRepository.recordAttempt({
         attemptId: '01900000-0000-7000-8000-0000000fb001',
         tenantId: SEED_IDS.tenantA,
         notificationId: intent!.id,
-        attemptNumber: 1,
+        // The number the DISPATCHER would use — `intent.attemptCount`, the one
+        // the claim left. Passing 1 here was the only reason this test was
+        // green: it is a number no claim in this scenario can produce, so it
+        // never met the sweep's own row on the unique index, and the collision
+        // that made the correction impossible went unseen.
+        attemptNumber: row!.attemptCount,
         transport: 'RECORDING',
         outcome: 'SUCCEEDED',
         startedAt: new Date(),
@@ -599,9 +608,15 @@ describe('control plane, third review round', () => {
       });
 
       expect(moved).toBe(true);
-      expect(
-        (await ctx.container.notifications.get(tenantA, owner, intent!.id)).intent.status,
-      ).toBe('SENT');
+
+      // Both records survive, at two different attempt numbers: the sweep's
+      // conclusion, and what actually happened afterwards.
+      const detail = await ctx.container.notifications.get(tenantA, owner, intent!.id);
+      expect(detail.intent.status).toBe('SENT');
+      expect(detail.attempts.map((attempt) => attempt.errorCode)).toContain(
+        'notification.attempts_exhausted',
+      );
+      expect(detail.attempts.some((attempt) => attempt.outcome === 'SUCCEEDED')).toBe(true);
     });
 
     /**

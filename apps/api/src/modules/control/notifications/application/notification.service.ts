@@ -222,11 +222,17 @@ export class NotificationService {
           { notificationId: existing.result.notificationId },
         );
       }
-      // Both reads in ONE transaction. Separately, the dispatcher could
-      // process the intent between them, and the reply would pair an older
-      // status with newer attempts — reporting PENDING beside a successful
-      // send, which is a state the database never held.
-      return this.uow.run(scope, async (tx) => {
+      // Both reads in one REPEATABLE READ transaction, which is the part that
+      // matters and which a bare transaction does not give.
+      //
+      // The connection's default is READ COMMITTED, where every statement takes
+      // its own snapshot — so wrapping two reads in `db.transaction` bought a
+      // round trip and nothing else, while the comment here claimed it stopped
+      // the dispatcher pairing an older status with newer attempts. Under
+      // REPEATABLE READ both statements see one snapshot, so the reply cannot
+      // report PENDING beside a successful send: a state the database never
+      // held.
+      return this.uow.runSnapshot(scope, async (tx) => {
         const current = await this.notifications.findById(scope, intent.id, tx);
         return {
           intent: current ?? intent,

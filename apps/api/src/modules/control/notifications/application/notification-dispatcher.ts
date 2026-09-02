@@ -44,6 +44,8 @@ export interface DispatcherOptions {
 interface DeliveryOutcomeReport {
   readonly result: 'SENT' | 'RETRY' | 'FAILED' | 'SUPERSEDED';
   readonly reachedTransport: boolean;
+  /** SUPERSEDED because the intent already said what this attempt reported. */
+  readonly alreadyTrue?: boolean;
 }
 
 export interface DispatchTickResult {
@@ -241,8 +243,19 @@ export class NotificationDispatcher {
       else if (delivery.result === 'SUPERSEDED') {
         superseded += 1;
         this.logger.warn(
-          { notificationId: intent.id, attemptNumber: intent.attemptCount },
-          'A delivery outcome arrived after a later attempt had claimed the intent; the attempt is recorded and the intent was left alone',
+          {
+            notificationId: intent.id,
+            attemptNumber: intent.attemptCount,
+            // A SUCCEEDED outcome that did not move the row found it already
+            // SENT, which is the same thing this attempt was reporting. That is
+            // not the same event as a stale failure arriving after a later
+            // claim, and logging both under one sentence described something
+            // that had not happened.
+            reason: delivery.alreadyTrue
+              ? 'the intent was already in that state'
+              : 'a later attempt holds the claim',
+          },
+          'A delivery outcome did not move the intent',
         );
       } else failed += 1;
 
@@ -349,7 +362,12 @@ export class NotificationDispatcher {
       };
     }
 
-    return { result: await this.record(intent, result, startedAt), reachedTransport: true };
+    const recorded = await this.record(intent, result, startedAt);
+    return {
+      result: recorded,
+      reachedTransport: true,
+      alreadyTrue: recorded === 'SUPERSEDED' && result.outcome === 'SUCCEEDED',
+    };
   }
 
   private async record(

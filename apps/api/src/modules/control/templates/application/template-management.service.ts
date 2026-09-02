@@ -119,10 +119,10 @@ interface TemplateReplayRecord {
    * whatever somebody else did to the key since — telling an administrator
    * their save succeeded with a body they never submitted.
    *
-   * `applied` is snapshotted too. Whether an override is in force is a property
-   * of the `template_overrides` feature flag, and a reply that mixed this
-   * command's body with the flag's current state would describe a template that
-   * never existed.
+   * `sourceWasTenant` is snapshotted too — it is `source === 'TENANT'`, which
+   * is "an override existed AND the flag was on", not the flag's state alone.
+   * The distinction matters because a reply mixing this command's body with the
+   * flag's CURRENT state would describe a template that never existed.
    */
   readonly override: {
     readonly body: string;
@@ -132,7 +132,7 @@ interface TemplateReplayRecord {
     readonly updatedAt: string;
     readonly updatedByAdminId: string | null;
   } | null;
-  readonly applied: boolean;
+  readonly sourceWasTenant: boolean;
 }
 
 export interface SetTemplateResult {
@@ -644,20 +644,26 @@ export class TemplateManagementService {
     changed: boolean,
   ): TemplateReplayRecord {
     const stored =
-      template.overrideBody === null || template.version === null || template.revision === null
+      template.overrideBody === null ||
+      template.version === null ||
+      template.revision === null ||
+      template.updatedAt === null
         ? null
         : {
             body: template.overrideBody,
             version: template.version,
             revision: template.revision,
-            updatedAt: (template.updatedAt ?? new Date(0)).toISOString(),
+            // No `?? new Date(0)`: an override always carries an `updatedAt`,
+            // and a fallback that fabricates 1970 is a silent lie rather than
+            // a safety net. The guard above is what makes this total.
+            updatedAt: template.updatedAt.toISOString(),
             updatedByAdminId: template.updatedByAdminId,
           };
     return {
       revision,
       changed,
       override: stored,
-      applied: template.source === 'TENANT',
+      sourceWasTenant: template.source === 'TENANT',
     };
   }
 
@@ -672,7 +678,7 @@ export class TemplateManagementService {
       record.override === null
         ? null
         : { ...record.override, updatedAt: new Date(record.override.updatedAt) },
-      record.applied,
+      record.sourceWasTenant,
     );
   }
 

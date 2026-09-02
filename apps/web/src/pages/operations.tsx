@@ -193,6 +193,10 @@ export function NotificationsPage({ mayTest }: { mayTest: boolean }) {
       // attempt list as it was before the button was pressed.
       await client.invalidateQueries({ queryKey: ['notification'] });
     },
+    // A rejection the server SENT retires the key: the outcome is known and the
+    // next press is a new question. A transport failure keeps it, because
+    // nothing came back and the next press is the same question asked again.
+    onError: (error: unknown) => submission.settleOn(error),
   });
 
   return (

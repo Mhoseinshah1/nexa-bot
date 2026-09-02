@@ -35,6 +35,26 @@ export class DrizzleUnitOfWork implements UnitOfWork<TransactionScope> {
   }
 
   /**
+   * A transaction whose statements all see ONE snapshot.
+   *
+   * `run` is READ COMMITTED, which is the connection default and the right
+   * choice for a write: each statement sees the newest committed state, which
+   * is what an optimistic predicate needs. It is the wrong choice for a
+   * multi-statement READ that has to be internally consistent — two reads in a
+   * `run` can straddle somebody else's commit and produce a reply describing a
+   * state that never existed.
+   *
+   * That distinction is why this is a separate method rather than an option:
+   * the previous code wrapped two reads in `run` under a comment saying they
+   * were therefore atomic, and they were not.
+   */
+  async runSnapshot<T>(scope: ScopeContext, fn: (tx: TransactionScope) => Promise<T>): Promise<T> {
+    return this.db.transaction(async (tx) => fn({ tx, scope }), {
+      isolationLevel: 'repeatable read',
+    });
+  }
+
+  /**
    * A savepoint inside the caller's transaction.
    *
    * Drizzle turns a nested `transaction()` into `SAVEPOINT` / `ROLLBACK TO`,

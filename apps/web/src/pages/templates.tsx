@@ -140,29 +140,52 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
     // offered, and every resubmission repeated the same conflict until an
     // unrelated refetch happened. The draft survives; what is refreshed is the
     // row it will be compared against.
-    onError: invalidate,
+    onError: (error: unknown) => {
+      saving.settleOn(error);
+      void invalidate();
+    },
   });
 
+  /**
+   * The row a revert would remove, or null when the draft is based on none.
+   *
+   * The button's guard and its payload have to name the SAME row. They did not:
+   * the guard tested the freshly-fetched `template` while the request carried
+   * `basis`, so opening the card with no override and letting somebody else
+   * create one drew a button that submitted a null version — refused as a 400
+   * validation error rather than the conflict the operator should see. Two
+   * `as number` casts were what hid it from the type checker, under a comment
+   * claiming the guard had already been fixed.
+   */
+  const revertable =
+    basis.version !== null && basis.revision !== null
+      ? { version: basis.version, revision: basis.revision }
+      : null;
+
   const undo = useMutation({
-    // Only rendered when the DRAFT's row exists, so both expectations are
-    // present. The previous version guarded on the freshly-fetched row while
-    // submitting the draft's, and fell back to `expectedVersion: 0` — a version
-    // that can never exist — under a comment saying the fallback was
-    // unreachable. It was reachable: open the card with no override, let
-    // somebody else create one, and the refetch drew the button.
-    mutationFn: (idempotencyKey: string) =>
-      revertTemplate({
+    mutationFn: (idempotencyKey: string) => {
+      if (revertable === null) {
+        // Unreachable: the button is not rendered without it. Refusing here
+        // rather than casting is what makes that a fact the type checker
+        // holds, instead of an assertion a comment makes.
+        throw new Error('There is no override to revert.');
+      }
+      return revertTemplate({
         key: template.key,
-        expectedVersion: basis.version as number,
-        expectedRevision: basis.revision as number,
+        expectedVersion: revertable.version,
+        expectedRevision: revertable.revision,
         idempotencyKey,
-      }),
+      });
+    },
     onSuccess: async (result) => {
       reverting.settle();
       adopt(result.template);
       await invalidate();
     },
-    onError: invalidate,
+    onError: (error: unknown) => {
+      reverting.settleOn(error);
+      void invalidate();
+    },
   });
 
   // The whole input, in a stable order, so a re-render cannot make it look
@@ -170,8 +193,16 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
   const previewInput = JSON.stringify([draft, Object.entries(sample).sort()]);
 
   const preview = useMutation({
-    mutationFn: () => previewTemplate(template.key, draft, sample),
-    onSuccess: () => setPreviewedInput(previewInput),
+    // The input travels as the mutation's VARIABLE, so the marker is set from
+    // what the request actually used. Reading `previewInput` in `onSuccess`
+    // closed over the latest render instead: editing the body while a preview
+    // was in flight recorded the NEW input, and the stale preview then reported
+    // itself as current — the failure this whole mechanism exists to prevent,
+    // in its last remaining form.
+    mutationFn: (input: { body: string; values: Record<string, string> }) =>
+      previewTemplate(template.key, input.body, input.values),
+    onSuccess: (_result, variables) =>
+      setPreviewedInput(JSON.stringify([variables.body, Object.entries(variables.values).sort()])),
   });
 
   const previewStale = preview.isSuccess && previewedInput !== previewInput;
@@ -280,7 +311,11 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
             />
           </div>
         ))}
-        <button type="button" onClick={() => preview.mutate()} disabled={preview.isPending}>
+        <button
+          type="button"
+          onClick={() => preview.mutate({ body: draft, values: sample })}
+          disabled={preview.isPending}
+        >
           {t('web.preview')}
         </button>
         {preview.isError && <ErrorReport error={preview.error} />}
@@ -348,7 +383,7 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
           )}
         </div>
       )}
-      {mayEdit && template.version !== null && <p className="notice">{t('web.revert_note')}</p>}
+      {mayEdit && revertable !== null && <p className="notice">{t('web.revert_note')}</p>}
 
       {/* Which placeholder was wrong, not just that something was. */}
       {save.isError && <ErrorReport error={save.error} />}

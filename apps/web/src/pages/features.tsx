@@ -69,7 +69,10 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
     },
     // A conflict means the cached row is stale; refreshing is what makes a
     // second attempt able to succeed.
-    onError: refresh,
+    onError: (error: unknown) => {
+      submission.settleOn(error);
+      void refresh();
+    },
   });
 
   const onSubmit = (event: FormEvent) => {

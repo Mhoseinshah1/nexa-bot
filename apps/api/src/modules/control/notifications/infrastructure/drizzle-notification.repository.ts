@@ -349,15 +349,12 @@ export class DrizzleNotificationRepository implements NotificationRepository {
       // `onConflictDoNothing`, because the alternative failure is catastrophic
       // and the insurance is one clause.
       //
-      // `(tenant_id, notification_id, attempt_number)` is unique. I could not
-      // construct a state where a row already exists at the swept intent's
-      // current attempt number — every path that writes one also moves the
-      // intent out of PENDING, which is what this sweep selects on. But if one
-      // ever did, the violation would abort this transaction, `tick()` would
-      // throw before claiming anything, and the installation would stop
-      // delivering notifications entirely, for every tenant, on every tick,
-      // until somebody deleted a row by hand. A sweep whose job is to stop
-      // silence must not be able to cause it.
+      // A violation here would abort this transaction, `tick()` would throw
+      // before claiming anything, and the installation would stop delivering
+      // notifications entirely, for every tenant, on every tick, until somebody
+      // deleted a row by hand. A sweep whose job is to stop silence must not be
+      // able to cause it — and the first version of this insert really could,
+      // by taking the number the still-running attempt would use.
       await tx
         .insert(notificationDeliveryAttempts)
         .values(
@@ -365,10 +362,24 @@ export class DrizzleNotificationRepository implements NotificationRepository {
             id: this.ids.uuid(),
             tenantId: row.tenantId,
             notificationId: row.id,
-            // The attempt this row accounts for is the one whose outcome was
-            // never written down: the claim incremented the counter and nothing
-            // recorded what happened next.
-            attemptNumber: row.attemptCount,
+            // ONE PAST the claim's number, and this is load-bearing.
+            //
+            // The claim's own number belongs to the attempt whose outcome was
+            // never written down — and that attempt may still be running, and
+            // may still succeed. `(tenant_id, notification_id, attempt_number)`
+            // is unique, so taking its number meant the late success's own
+            // `recordAttempt` insert threw, its transaction aborted, and the
+            // status update never ran. The correction that makes this sweep's
+            // safety margin an acceptable guess rather than a verdict was
+            // impossible for precisely the rows the sweep had touched: a
+            // delivered message filed as permanently failed, by the change
+            // written to stop exactly that.
+            //
+            // `max_attempts + 1` is a number no claim can produce — `claimDue`
+            // only increments rows still below `max_attempts` — so the two
+            // records coexist: the sweep's conclusion, and then, if it lands,
+            // what actually happened.
+            attemptNumber: row.attemptCount + 1,
             transport: options.transport,
             outcome: 'FAILED_PERMANENT' as const,
             startedAt: now,

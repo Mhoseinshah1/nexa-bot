@@ -156,14 +156,48 @@ describe('redacting a transport error message', () => {
     expect(redacted).not.toContain('hunter2');
     expect(redacted).toContain('api_key');
     expect(redacted).toContain('password');
+    // The sentence around it survives: an ordinary labelled value loses its
+    // first token, not the rest of the line.
+    expect(redacted).toContain('and');
   });
 
-  it('removes a labelled bearer credential, scheme and all', () => {
-    // The whole value goes, `Bearer` included. Keeping the scheme and removing
-    // only what follows was the first attempt and produced two redaction
-    // markers in a row, which says less than one.
-    const redacted = redactSecretText('Authorization: Bearer abc.def.ghi refused');
-    expect(redacted).toBe(`Authorization: ${REDACTED} refused`);
+  it('removes an authorization header value entirely, whatever scheme it uses', () => {
+    // A credential header's value is the whole rest of the line, because the
+    // set of schemes is OPEN. Two attempts got this wrong the same way: one
+    // named `Bearer`, the next named seven — and both left the credential
+    // behind for the eighth.
+    expect(redactSecretText('Authorization: Bearer abc.def.ghi refused')).toBe(
+      `Authorization: ${REDACTED}`,
+    );
+    expect(redactSecretText('Authorization: SSWS 00QCjAl4MlV-WPXM')).toBe(
+      `Authorization: ${REDACTED}`,
+    );
+    expect(redactSecretText('Proxy-Authorization: NTLM TlRMTVNTUAAB')).toBe(
+      `Proxy-Authorization: ${REDACTED}`,
+    );
+    expect(redactSecretText('Authorization: GoogleLogin auth=xyzsecret')).toBe(
+      `Authorization: ${REDACTED}`,
+    );
+  });
+
+  it('removes a credential whose value opens with a scheme under any header name', () => {
+    // `X-Auth-Token` is not one of the two credential header names, so without
+    // this the scheme word was taken and the credential after it survived.
+    expect(redactSecretText('X-Auth-Token: Token abc123def456')).toBe(`X-Auth-Token: ${REDACTED}`);
+  });
+
+  it('leaves an ordinary sentence that begins with a scheme word', () => {
+    // `Bearer`, `Basic`, `Digest` and `Negotiate` are also English. Requiring
+    // the credential to LOOK like one — eight characters with something that
+    // is not a letter — is what keeps these readable.
+    for (const line of [
+      'Basic auth failed for user alice',
+      'Digest mismatch: recomputed 9f8e',
+      'Negotiate handshake failed, falling back',
+      'Token expired at 2026-09-02',
+    ]) {
+      expect(redactSecretText(line)).toBe(line);
+    }
   });
 
   it('removes a credential under any authorization scheme, not just Bearer', () => {
@@ -180,12 +214,15 @@ describe('redacting a transport error message', () => {
     expect(redactSecretText('X-Auth-Token: Token abc123def456')).toBe(`X-Auth-Token: ${REDACTED}`);
   });
 
-  it('removes a quoted value containing spaces', () => {
+  it('removes a quoted value containing spaces, and leaves it quoted', () => {
+    // Quoted in, quoted out: `{"token":[redacted]}` does not parse, and the
+    // point of keeping the name's quotes was to leave something a person still
+    // recognises as JSON.
     expect(redactSecretText('password="correct horse battery staple"')).toBe(
-      `password=${REDACTED}`,
+      `password="${REDACTED}"`,
     );
     expect(redactSecretText("password='correct horse battery staple'")).toBe(
-      `password=${REDACTED}`,
+      `password="${REDACTED}"`,
     );
   });
 
@@ -210,16 +247,20 @@ describe('redacting a transport error message', () => {
     // through untouched. A transport that surfaces a response BODY rather than
     // a parsed field hands exactly this to the append-only attempt column.
     expect(redactSecretText('rejected: {"token":"123abcSECRETVALUE","chat_id":-100}')).toBe(
-      `rejected: {"token":${REDACTED},"chat_id":-100}`,
+      `rejected: {"token":"${REDACTED}","chat_id":-100}`,
     );
     expect(redactSecretText('login failed: {"username":"admin","password":"hunter2"}')).toBe(
-      `login failed: {"username":"admin","password":${REDACTED}}`,
+      `login failed: {"username":"admin","password":"${REDACTED}"}`,
     );
+    // And it still parses, which is what the quotes are for.
+    expect(() =>
+      JSON.parse(redactSecretText('{"token":"123abcSECRETVALUE","chat_id":-100}')),
+    ).not.toThrow();
   });
 
   it('removes a single-quoted secret', () => {
     expect(redactSecretText("panel error: password='hunter2' rejected")).toBe(
-      `panel error: password=${REDACTED} rejected`,
+      `panel error: password="${REDACTED}" rejected`,
     );
   });
 
@@ -230,14 +271,28 @@ describe('redacting a transport error message', () => {
     expect(redactSecretText('author: alice reported it')).toBe('author: alice reported it');
   });
 
-  it('does not stall on a long adversarial input', () => {
-    // The first version's unbounded character classes backtracked
-    // quadratically: 64 KB of `a.a.a.…token` took five seconds on the event
-    // loop, and the function is exported with no internal bound.
-    const hostile = 'a.'.repeat(40_000) + 'token';
+  it('does not stall on an adversarial input that is WITHIN the length bound', () => {
+    // Deliberately under `MAX_REDACTABLE_LENGTH`, so the length bound cannot
+    // carry this test. The previous version fed 80 KB, which was sliced to
+    // 8 000 before matching — so it pinned the bound and nothing else, and the
+    // unbounded character classes it was written for could have been reverted
+    // with the suite green.
+    const hostile = 'a.'.repeat(3_900) + 'token';
+    expect(hostile.length).toBeLessThan(8_000);
     const started = Date.now();
     redactSecretText(hostile);
     expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it('drops the tail it did not scan rather than returning it unredacted', () => {
+    // A fixed-offset slice can cut a credential below the pattern's length
+    // threshold, and returning what follows would store the unscanned half —
+    // the same defect `redactErrorMessage` was corrected for, one layer down.
+    const token = '123456789:AAH4kK9vQwErTyUiOpAsDfGhJkLzXcVbNmQ';
+    const long = 'x'.repeat(7_990) + token;
+    const redacted = redactSecretText(long);
+    expect(redacted).not.toContain('AAH4kK9vQwErTyUiOpAsDfGhJkLzXcVbNmQ');
+    expect(redacted).toContain('not scanned and dropped');
   });
 
   it('keeps every fragment a plain literal, so interpolating them cannot change the pattern', () => {

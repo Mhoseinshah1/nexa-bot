@@ -161,14 +161,42 @@ const TEXT_SENSITIVE_FRAGMENTS = [
 const TELEGRAM_BOT_TOKEN = /\d{5,}:[A-Za-z0-9_-]{20,}/g;
 
 /**
- * Authorization schemes, so a credential is redacted WITH the word in front of
- * it rather than left behind by it.
+ * Names whose value is an authorization credential, whatever scheme it uses.
  *
- * A list rather than "any word followed by a token", which would have eaten an
- * extra word out of every ordinary `token: abc reported by alice`.
+ * For these, the redaction takes the REST OF THE LINE rather than one
+ * whitespace-delimited token. Two attempts at this were wrong in the same way:
+ * the first named `Bearer`, the second named seven schemes, and both left the
+ * credential behind for the eighth. `Authorization: SSWS 00QCjAl4MlV-WPXM`
+ * (Okta), `NTLM`, `DPoP`, `SCRAM-SHA-256`, `GoogleLogin` — each redacted the
+ * scheme word and stored the secret after it. A list of schemes cannot be
+ * right, because the set is open; what is closed is the set of HEADER NAMES
+ * whose entire value is a credential.
  */
-const AUTH_SCHEMES = ['Bearer', 'Basic', 'Digest', 'Token', 'ApiKey', 'Negotiate', 'Mutual'];
-const SCHEME = `(?:${AUTH_SCHEMES.join('|')})`;
+const CREDENTIAL_HEADER_LINE = /((?:proxy-)?authorization)(\s*[=:]\s*)[^\r\n]+/gi;
+
+/**
+ * Schemes for the UNLABELLED rule, where a list IS the right conservatism:
+ * there is no name to tell us the line is a credential, so the scheme word is
+ * the only evidence.
+ *
+ * Case-SENSITIVE, and deliberately short. `Token`, `Mutual` and `ApiKey` are
+ * ordinary English words, and with the `i` flag they turned
+ * `token expired for tenant 019abc` into `token [redacted] for tenant 019abc`
+ * — eating the operator's sentence, which is the harm the list was introduced
+ * to avoid. All three are already covered by the labelled rule via `token` and
+ * `apikey`, so dropping them here costs nothing.
+ */
+const BARE_SCHEMES = ['Bearer', 'Basic', 'Digest', 'Negotiate'];
+
+/**
+ * Schemes recognised as the START OF A VALUE, under any header name.
+ *
+ * `X-Auth-Token: Token abc123def456` names no credential header, so the
+ * labelled rule would otherwise take only `Token` and leave the credential.
+ * Wider than `BARE_SCHEMES` because here there IS a sensitive name in front of
+ * it — the evidence is stronger, so the list can be.
+ */
+const ANY_SCHEME = `(?:${[...BARE_SCHEMES, 'Token', 'ApiKey', 'Mutual', 'SSWS', 'NTLM', 'DPoP'].join('|')})`;
 
 // The name's quotes are captured so they can be put back: redacting inside a
 // JSON fragment should leave something a person still recognises as JSON.
@@ -181,14 +209,48 @@ const LABELLED_SECRET = new RegExp(
   String.raw`(["']?)([A-Za-z0-9_.-]{0,64}(?:` +
     TEXT_SENSITIVE_FRAGMENTS.map(escapeForRegExp).join('|') +
     String.raw`)[A-Za-z0-9_.-]{0,64})(["']?)(\s*[=:]\s*)` +
-    // A quoted value in full, spaces included, or an optional scheme word plus
-    // the credential after it.
-    String.raw`("[^"]{0,4096}"|'[^']{0,4096}'|(?:${SCHEME}\s+)?[^\s"',&}]{1,4096})`,
+    // A quoted value in full, spaces included; or a known scheme plus the
+    // credential after it; or one whitespace-delimited token.
+    //
+    // NOT "everything to the end of the line". That was tried, and it made this
+    // rule match once per LINE rather than once per secret: the first match
+    // swallowed the rest, so `api_key=… and password: hunter2` lost the api key
+    // and kept the password. The end-of-line case belongs to
+    // `CREDENTIAL_HEADER_LINE`, which is the only place the whole remainder is
+    // known to be one value.
+    String.raw`("[^"]{0,4096}"|'[^']{0,4096}'|(?:${ANY_SCHEME}\s+)?[^\s"',&}]{1,4096})`,
   'gi',
 );
 
-/** An unlabelled credential, for text that does not name the header. */
-const BEARER = new RegExp(String.raw`\b${SCHEME}\s+[A-Za-z0-9._~+/-]{4,}=*`, 'gi');
+/**
+ * An unlabelled credential, for text that does not name the header.
+ *
+ * The credential has to LOOK like one: at least eight characters, and at least
+ * one that is not a letter. Four was too loose in both directions —
+ * `Basic auth failed for user alice` lost `auth`, `Digest mismatch: …` lost
+ * `mismatch`, and `Negotiate handshake failed` lost `handshake`, because those
+ * are ordinary words after ordinary words.
+ *
+ * The known miss is an unlabelled scheme followed by base64 that happens to be
+ * all letters (`Basic dXNlcjpwYXNz`). Realistic base64 carries digits or
+ * `+/=`, and the labelled form — which is how a header appears when a client
+ * quotes one — is covered by the credential-header rule above. Stated because
+ * a gap named is worth more than a gap implied.
+ */
+const BARE_CREDENTIAL = new RegExp(
+  String.raw`\b(?:${BARE_SCHEMES.join('|')})\s+` +
+    String.raw`(?=[A-Za-z0-9._~+/-]*[0-9._~+/-])[A-Za-z0-9._~+/-]{8,}=*`,
+  'g',
+);
+
+/**
+ * Whether a value BEGINS with an authorization scheme.
+ *
+ * `X-Auth-Token: Token abc123def456` is not one of the two credential header
+ * names, so only its first whitespace-delimited token would be taken — which
+ * is the scheme, leaving the credential. When the value opens with a scheme,
+ * the whole value is the credential whatever the header is called.
+ */
 
 /**
  * A fragment as a literal, not as a pattern.
@@ -211,16 +273,47 @@ export function redactSecretText(text: string): string {
   // Bounded HERE rather than at the call site. The one caller today slices to
   // 2 000 characters, but this is exported and the cost of a long input is
   // paid on the event loop.
-  const bounded = text.length > MAX_REDACTABLE_LENGTH ? text.slice(0, MAX_REDACTABLE_LENGTH) : text;
+  //
+  // The tail is DROPPED rather than passed through, and that is the whole
+  // point. `redactErrorMessage` was corrected to redact before truncating,
+  // because slicing at a fixed offset can cut a bot token below the pattern's
+  // length threshold and store the surviving half — and this bound would have
+  // reintroduced exactly that at 8 000 for the next caller. Unscanned text is
+  // not text this function may return.
+  if (text.length > MAX_REDACTABLE_LENGTH) {
+    return `${redactSecretText(text.slice(0, MAX_REDACTABLE_LENGTH))}… [${text.length - MAX_REDACTABLE_LENGTH} characters not scanned and dropped]`;
+  }
+  const bounded = text;
 
-  return bounded
-    .replace(TELEGRAM_BOT_TOKEN, REDACTED)
-    .replace(
-      LABELLED_SECRET,
-      (_match, openQuote: string, name: string, closeQuote: string, separator: string) =>
-        `${openQuote}${name}${closeQuote}${separator}${REDACTED}`,
-    )
-    .replace(BEARER, (match) => `${match.split(/\s+/)[0] ?? ''} ${REDACTED}`);
+  return (
+    bounded
+      .replace(TELEGRAM_BOT_TOKEN, REDACTED)
+      // FIRST, because a credential header's whole value is the credential
+      // whatever scheme it names, and the labelled rule below would otherwise
+      // take only its first token.
+      .replace(
+        CREDENTIAL_HEADER_LINE,
+        (_match, name: string, separator: string) => `${name}${separator}${REDACTED}`,
+      )
+      .replace(
+        LABELLED_SECRET,
+        (
+          _match,
+          openQuote: string,
+          name: string,
+          closeQuote: string,
+          separator: string,
+          value: string,
+        ) => {
+          // The value's quotes come back as quotes. `{"token":[redacted]}` does
+          // not parse, and the comment above promises something a person still
+          // recognises as JSON.
+          const replacement = /^["']/.test(value) ? `"${REDACTED}"` : REDACTED;
+          return `${openQuote}${name}${closeQuote}${separator}${replacement}`;
+        },
+      )
+      .replace(BARE_CREDENTIAL, (match) => `${/^\S+/.exec(match)?.[0] ?? ''} ${REDACTED}`)
+  );
 }
 
 /** Every fragment the text rule interpolates, for the test that keeps it simple. */

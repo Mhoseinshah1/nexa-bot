@@ -102,7 +102,10 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
     // offered, and every resubmission repeated the same conflict until an
     // unrelated refetch happened. The draft survives; what is refreshed is the
     // row it will be compared against.
-    onError: refresh,
+    onError: (error: unknown) => {
+      submission.settleOn(error);
+      void refresh();
+    },
   });
 
   const onSubmit = (event: FormEvent) => {
