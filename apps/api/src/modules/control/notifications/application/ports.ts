@@ -18,7 +18,18 @@ export interface NotificationIntent {
   readonly payload: Record<string, unknown>;
   readonly templateKey: TemplateKey;
   readonly status: NotificationStatus;
+  /**
+   * Claims ISSUED for this intent. Monotonic: it is never decremented, because
+   * a claim whose process died with the socket open still has to count.
+   */
   readonly attemptCount: number;
+  /**
+   * Claims handed back without ever reaching the transport.
+   *
+   * Zero unless the reader counted them; only the dispatch path does. Spend —
+   * what actually counts against `maxAttempts` — is `attemptCount` minus this.
+   */
+  readonly releasedCount: number;
   readonly maxAttempts: number;
   readonly correlationId: string | null;
   readonly createdAt: Date;

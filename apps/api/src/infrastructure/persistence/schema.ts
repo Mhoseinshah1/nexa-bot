@@ -908,17 +908,6 @@ export const notifications = pgTable(
 );
 
 /**
- * One attempt to deliver one notification. Append-only.
- *
- * The record of what actually happened on the wire, which the legacy system does
- * not keep at all — it has no delivery-status field anywhere, which is why
- * whether its notification report means "sent" or "matched" is UNKNOWN
- * (UNK-LGR-015).
- *
- * `retry_after_ms` holds what the transport ASKED FOR, when it said anything. A
- * 429 that names a wait is honoured rather than second-guessed.
- */
-/**
  * Claims handed back without ever reaching the transport.
  *
  * `attempt_count` on the intent counts claims ISSUED, and it is deliberately
@@ -965,6 +954,17 @@ export const notificationReleasedClaims = pgTable(
   ],
 );
 
+/**
+ * One attempt to deliver one notification. Append-only.
+ *
+ * The record of what actually happened on the wire, which the legacy system does
+ * not keep at all — it has no delivery-status field anywhere, which is why
+ * whether its notification report means "sent" or "matched" is UNKNOWN
+ * (UNK-LGR-015).
+ *
+ * `retry_after_ms` holds what the transport ASKED FOR, when it said anything. A
+ * 429 that names a wait is honoured rather than second-guessed.
+ */
 export const notificationDeliveryAttempts = pgTable(
   'notification_delivery_attempts',
   {

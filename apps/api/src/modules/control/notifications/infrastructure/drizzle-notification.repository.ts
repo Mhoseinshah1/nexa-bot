@@ -62,7 +62,13 @@ const ATTEMPTS_EXHAUSTED_CODE = 'notification.attempts_exhausted';
 type Row = typeof notifications.$inferSelect;
 type AttemptRow = typeof notificationDeliveryAttempts.$inferSelect;
 
-function toIntent(row: Row): NotificationIntent {
+/**
+ * `releasedCount` is how many of this intent's claims were handed back without
+ * reaching the transport. Zero unless a caller has counted them: only the
+ * dispatch path needs it, and a read that has not counted must not pretend it
+ * has — the field says what was measured, not what was assumed.
+ */
+function toIntent(row: Row, releasedCount = 0): NotificationIntent {
   return {
     id: row.id,
     tenantId: row.tenantId,
@@ -88,6 +94,7 @@ function toIntent(row: Row): NotificationIntent {
     templateKey: row.templateKey as TemplateKey,
     status: row.status as NotificationStatus,
     attemptCount: row.attemptCount,
+    releasedCount,
     maxAttempts: row.maxAttempts,
     correlationId: row.correlationId,
     createdAt: row.createdAt,
@@ -319,7 +326,25 @@ export class DrizzleNotificationRepository implements NotificationRepository {
           ),
         )
         .returning();
-      return claimed.map(toIntent);
+      // Each claimed intent carries its own release count, so the dispatcher
+      // can decide abandonment on SPEND rather than on the claim number. The
+      // counter is monotonic now, so `attempt_count` alone says how many times
+      // the row has been picked up — not how many attempts it has used.
+      const releases = await tx
+        .select({
+          notificationId: notificationReleasedClaims.notificationId,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(notificationReleasedClaims)
+        .where(
+          inArray(
+            notificationReleasedClaims.notificationId,
+            claimed.map((row) => row.id),
+          ),
+        )
+        .groupBy(notificationReleasedClaims.notificationId);
+      const byId = new Map(releases.map((r) => [String(r.notificationId), r.count]));
+      return claimed.map((row) => toIntent(row, byId.get(String(row.id)) ?? 0));
     });
   }
 
@@ -392,6 +417,13 @@ export class DrizzleNotificationRepository implements NotificationRepository {
                      AND ${notificationDeliveryAttempts.notificationId} = ${input.notificationId}
                      AND ${notificationDeliveryAttempts.attemptNumber} = ${input.attemptNumber}
                 )`,
+                // Only a claim that was actually ISSUED can be handed back.
+                // Spend is `attempt_count` minus these rows, so a release for
+                // a number above the counter would make it negative — an
+                // intent permanently claimable and never sweepable. Nothing in
+                // the dispatcher can reach that today; nothing in the table
+                // stopped it either.
+                sql`${input.attemptNumber} <= ${notifications.attemptCount}`,
               ),
             ),
         )
@@ -416,7 +448,30 @@ export class DrizzleNotificationRepository implements NotificationRepository {
       const restoredRows = await tx
         .update(notifications)
         .set({
-          nextAttemptAt: input.now,
+          // Rescheduling is the OWNER's business, and only the owner's.
+          //
+          // The release ROW is keyed by attempt number precisely so a stale
+          // hand-back can still return its capacity — that is the whole point.
+          // But the previous version dropped the ownership guard from this
+          // UPDATE as well, and the two halves are not the same question. A
+          // straggler releasing attempt 1 while attempt 2 holds a live lease
+          // was moving `next_attempt_at` back to now, so a third worker
+          // claimed and SENT the message while attempt 2's send was still in
+          // flight. The lease is this module's only concurrency control, and a
+          // stale releaser was cancelling it. It also wiped the back-off a
+          // live attempt had just computed, turning a rate-limit wait into an
+          // immediate re-send.
+          //
+          // So: reschedule only when this release owns the current claim, or
+          // when the intent is FAILED and is being taken back out of a sweep's
+          // verdict — where there is no live claim to disturb and the row must
+          // become due again for anything to happen at all.
+          nextAttemptAt: sql`CASE
+            WHEN ${notifications.attemptCount} = ${input.attemptNumber}
+              OR ${notifications.status} = 'FAILED'
+            THEN ${input.now}
+            ELSE ${notifications.nextAttemptAt}
+          END`,
           lastAttemptAt: sql`(
             SELECT max(${notificationDeliveryAttempts.finishedAt})
               FROM ${notificationDeliveryAttempts}
@@ -437,17 +492,32 @@ export class DrizzleNotificationRepository implements NotificationRepository {
             // SENT intent is left entirely alone — delivery is terminal truth.
             inArray(notifications.status, ['PENDING', 'FAILED']),
             sql`${spentAttempts} < ${notifications.maxAttempts}`,
-            // A REAL permanent refusal is never overturned. The sweep's own
-            // synthetic row is also FAILED_PERMANENT, and excluding it by code
-            // is what separates "the transport said no" from "we gave up
-            // waiting for an outcome" — only the second is a judgement a
-            // hand-back can correct.
-            sql`NOT EXISTS (
-              SELECT 1 FROM ${notificationDeliveryAttempts}
-               WHERE ${notificationDeliveryAttempts.tenantId} = ${notifications.tenantId}
-                 AND ${notificationDeliveryAttempts.notificationId} = ${notifications.id}
-                 AND ${notificationDeliveryAttempts.outcome} = 'FAILED_PERMANENT'
-                 AND ${notificationDeliveryAttempts.errorCode} IS DISTINCT FROM ${ATTEMPTS_EXHAUSTED_CODE}
+            // Only a SWEEP verdict is reversible, and it is stated positively
+            // rather than as the absence of a real refusal. Asking only "is
+            // there no real FAILED_PERMANENT" would also reopen an intent that
+            // reached FAILED some other way — a retryable failure on its last
+            // attempt, say — which is a verdict nothing here is entitled to
+            // overturn. What a hand-back can correct is exactly one thing: the
+            // sweep gave up waiting for an outcome that was never coming,
+            // because the claim was never sent.
+            sql`(
+              ${notifications.status} = 'PENDING'
+              OR (
+                EXISTS (
+                  SELECT 1 FROM ${notificationDeliveryAttempts}
+                   WHERE ${notificationDeliveryAttempts.tenantId} = ${notifications.tenantId}
+                     AND ${notificationDeliveryAttempts.notificationId} = ${notifications.id}
+                     AND ${notificationDeliveryAttempts.outcome} = 'FAILED_PERMANENT'
+                     AND ${notificationDeliveryAttempts.errorCode} = ${ATTEMPTS_EXHAUSTED_CODE}
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM ${notificationDeliveryAttempts}
+                   WHERE ${notificationDeliveryAttempts.tenantId} = ${notifications.tenantId}
+                     AND ${notificationDeliveryAttempts.notificationId} = ${notifications.id}
+                     AND ${notificationDeliveryAttempts.outcome} = 'FAILED_PERMANENT'
+                     AND ${notificationDeliveryAttempts.errorCode} IS DISTINCT FROM ${ATTEMPTS_EXHAUSTED_CODE}
+                )
+              )
             )`,
           ),
         )

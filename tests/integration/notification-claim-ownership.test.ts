@@ -245,6 +245,187 @@ describe('notification claim ownership', () => {
   }, 60_000);
 
   /**
+   * A stale hand-back must not reschedule somebody else's live claim.
+   *
+   * The release ROW is keyed by attempt number so a straggler can still return
+   * its capacity — that is the point. The intent's SCHEDULE is a different
+   * question, and dropping the ownership guard from it meant a straggler
+   * releasing attempt 1 moved `next_attempt_at` back to now while attempt 2
+   * held a live lease. A third worker then claimed and sent the same message
+   * while attempt 2's send was still in flight: the lease is this module's
+   * only concurrency control, and the stale releaser was cancelling it.
+   */
+  it('does not reschedule a live claim when a stale hand-back arrives', async () => {
+    const intent = await raise('stale-release-lease');
+
+    // Attempt 1 is claimed and stalls past its lease.
+    await repo().claimDue(ctx.container.clock.now(), 10, 60_000);
+    await sql(`UPDATE notifications SET next_attempt_at = now() - interval '1 hour'`);
+
+    // Attempt 2 is claimed by another worker and holds a fresh lease.
+    await repo().claimDue(ctx.container.clock.now(), 10, 60_000);
+    const leased = (await rowOf(intent.id)).nextAttemptAt;
+    expect(leased.getTime(), 'attempt 2 did not take a lease').toBeGreaterThan(Date.now());
+
+    // The STALE claim hands back. Its capacity must return; the live lease
+    // must not move.
+    const stale = await repo().releaseClaim({
+      tenantId: tenantA.tenantId,
+      notificationId: intent.id,
+      attemptNumber: 1,
+      now: ctx.container.clock.now(),
+      reason: 'tenant.not_active',
+    });
+    expect(stale.released, 'the stale hand-back lost its capacity').toBe(true);
+
+    const after = await rowOf(intent.id);
+    expect(after.nextAttemptAt.getTime(), "a stale hand-back cancelled a live claim's lease").toBe(
+      leased.getTime(),
+    );
+
+    // And the practical consequence: no second worker can claim it, so the
+    // message is not sent twice while attempt 2 is still outstanding.
+    const stolen = await repo().claimDue(ctx.container.clock.now(), 10, 60_000);
+    expect(stolen, 'a third worker claimed an intent that was already in flight').toEqual([]);
+  }, 60_000);
+
+  /**
+   * Capacity that was handed back must be usable for REAL sends.
+   *
+   * `claimDue`, `failExhausted` and `releaseClaim` all moved to derived spend;
+   * the dispatcher's abandonment test did not, and it read the monotonic claim
+   * counter. So an intent handed back through a few stop/start cycles was
+   * written off on its FIRST real send — the counter had passed `max_attempts`
+   * while nothing had been spent. The defect this pass exists to fix, moved
+   * from the repository into the dispatcher.
+   */
+  it('gives a message its full allowance after repeated stop and start cycles', async () => {
+    const intent = await raise('allowance-across-cycles');
+
+    // Six cycles: claimed while active, handed back when the tenant stops.
+    for (let cycle = 0; cycle < 6; cycle += 1) {
+      await startTenant();
+      const [claimed] = await repo().claimDue(ctx.container.clock.now(), 10, 60_000);
+      expect(claimed, `cycle ${cycle} could not claim`).toBeDefined();
+      await stopTenant();
+      await repo().releaseClaim({
+        tenantId: tenantA.tenantId,
+        notificationId: intent.id,
+        attemptNumber: claimed!.attemptCount,
+        now: ctx.container.clock.now(),
+        reason: 'tenant.not_active',
+      });
+    }
+    expect(transport.calls, 'a stopped tenant was sent to').toBe(0);
+
+    const cycled = await rowOf(intent.id);
+    expect(cycled.attemptCount, 'the claim counter is meant to be monotonic').toBe(6);
+    expect(cycled.attemptCount - (await releasesFor(intent.id)).length).toBe(0);
+
+    // Now the installation is back. `max_attempts` is 2, so the message gets
+    // TWO real sends — not one, and not none.
+    await startTenant();
+    transport.failNextWith({
+      outcome: 'FAILED_RETRYABLE',
+      errorCode: 'telegram.unreachable',
+      errorMessage: 'socket hang up',
+      retryAfterMs: 0,
+    });
+    await ctx.container.notificationDispatcher.tick();
+    expect(transport.calls).toBe(1);
+    expect(
+      (await rowOf(intent.id)).status,
+      'the first real send was written off as exhausted',
+    ).toBe('PENDING');
+
+    await sql(`UPDATE notifications SET next_attempt_at = now() - interval '1 hour'`);
+    await ctx.container.notificationDispatcher.tick();
+    expect(transport.calls, 'the second real attempt never happened').toBe(2);
+    expect((await rowOf(intent.id)).status).toBe('SENT');
+  }, 60_000);
+
+  /**
+   * A FAILED reached any way OTHER than the sweep is a verdict a hand-back may
+   * not overturn.
+   */
+  it('does not reopen an intent that failed for a reason other than the sweep', async () => {
+    const intent = await raise('permanent-refusal');
+
+    transport.failNextWith({
+      outcome: 'FAILED_PERMANENT',
+      errorCode: 'telegram.rejected.400',
+      errorMessage: 'chat not found',
+    });
+    await ctx.container.notificationDispatcher.tick();
+    expect((await rowOf(intent.id)).status).toBe('FAILED');
+
+    // A hand-back for a claim that never recorded anything — attempt 2, which
+    // has no attempt row — must not resurrect a transport refusal.
+    await sql(`UPDATE notifications SET attempt_count = 2`);
+    const outcome = await repo().releaseClaim({
+      tenantId: tenantA.tenantId,
+      notificationId: intent.id,
+      attemptNumber: 2,
+      now: ctx.container.clock.now(),
+      reason: 'tenant.not_active',
+    });
+    expect(outcome.restored, 'a transport refusal was overturned').toBe(false);
+    expect((await rowOf(intent.id)).status, 'a refused message was reopened').toBe('FAILED');
+  }, 60_000);
+
+  /** A release for a claim that was never issued cannot invent capacity. */
+  it('refuses to release an attempt that was never claimed', async () => {
+    const intent = await raise('never-claimed');
+
+    const outcome = await repo().releaseClaim({
+      tenantId: tenantA.tenantId,
+      notificationId: intent.id,
+      attemptNumber: 9,
+      now: ctx.container.clock.now(),
+      reason: 'tenant.not_active',
+    });
+    expect(outcome.released, 'capacity was invented for a claim never issued').toBe(false);
+    expect(await releasesFor(intent.id)).toEqual([]);
+
+    const row = await rowOf(intent.id);
+    expect(
+      row.attemptCount - (await releasesFor(intent.id)).length,
+      'spend went negative',
+    ).toBeGreaterThanOrEqual(0);
+  }, 60_000);
+
+  /**
+   * A hand-back whose first write fails is retried once, and the retry is safe
+   * because the release is keyed by attempt number.
+   */
+  it('retries a failed hand-back once and recovers the attempt', async () => {
+    const intent = await raise('retry-handback');
+
+    const activeTenants = repo().activeTenants.bind(repo());
+    (repo() as { activeTenants: typeof activeTenants }).activeTenants = async () => new Set();
+    const real = repo().releaseClaim.bind(repo());
+    let calls = 0;
+    (repo() as { releaseClaim: typeof real }).releaseClaim = async (input) => {
+      calls += 1;
+      if (calls === 1) throw new Error('the hand-back could not be stored');
+      return real(input);
+    };
+
+    try {
+      const result = await ctx.container.notificationDispatcher.tick();
+      expect(calls, 'the hand-back was not retried').toBe(2);
+      expect(result.released, 'the retry did not record the hand-back').toBe(1);
+      expect(result.unreleased, 'a recovered hand-back was reported as lost').toBe(0);
+      expect(transport.calls).toBe(0);
+      expect(await releasesFor(intent.id)).toHaveLength(1);
+      expect((await rowOf(intent.id)).attemptCount - 1, 'the attempt was spent').toBe(0);
+    } finally {
+      (repo() as { releaseClaim: typeof real }).releaseClaim = real;
+      (repo() as { activeTenants: typeof activeTenants }).activeTenants = activeTenants;
+    }
+  }, 60_000);
+
+  /**
    * A release must never hand back capacity for a message that WAS sent.
    *
    * The guard is the attempt row: it is the proof a transport call happened.
@@ -320,10 +501,13 @@ describe('notification claim ownership', () => {
     const activeTenants = repo().activeTenants.bind(repo());
     (repo() as { activeTenants: typeof activeTenants }).activeTenants = async () => new Set();
 
+    // BOTH attempts for the first intent fail — the call and its retry — so
+    // the intent genuinely loses its hand-back. That is the case that used to
+    // throw out of the loop and strand everything claimed behind it.
     const real = repo().releaseClaim.bind(repo());
     let failures = 0;
     (repo() as { releaseClaim: typeof real }).releaseClaim = async (input) => {
-      if (failures === 0) {
+      if (failures < 2) {
         failures += 1;
         throw new Error('the hand-back could not be stored');
       }
@@ -350,6 +534,8 @@ describe('notification claim ownership', () => {
       expect(rows.every((r) => r.status === 'PENDING')).toBe(true);
       const allReleases = await db().select().from(notificationReleasedClaims);
       expect(allReleases, 'the failed hand-back was recorded anyway').toHaveLength(1);
+      // No double decrement: the counter is monotonic, so one claim each, and
+      // exactly one of the two has its capacity back.
       expect(rows.every((r) => r.attemptCount === 1)).toBe(true);
     } finally {
       (repo() as { releaseClaim: typeof real }).releaseClaim = real;

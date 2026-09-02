@@ -92,12 +92,14 @@ export interface DispatchTickResult {
    */
   readonly released: number;
   /**
-   * Hand-backs whose recording FAILED.
+   * Hand-backs that could not be recorded, twice.
    *
-   * Distinct from `released`, and not a delivery outcome: no transport call
-   * happened, so there is nothing to file as sent or failed. The intent keeps
-   * its lease and is met again; because a release is idempotent, repeating it
-   * then is safe where retrying it inside the failure would have been a guess.
+   * Not a delivery outcome: no transport call happened, so there is nothing to
+   * file as sent or failed. The intent keeps its lease and is met again — but
+   * one attempt of its allowance is genuinely SPENT, because a claim with
+   * neither an attempt row nor a release is indistinguishable from one whose
+   * sender died after a successful send, and at-least-once requires that to
+   * count. A non-zero value here is a durable loss of capacity, not a delay.
    */
   readonly unreleased: number;
 }
@@ -350,25 +352,48 @@ export class NotificationDispatcher {
           });
           if (didRelease) released += 1;
         } catch (error) {
-          // Nothing is retried here and nothing is invented. The release may
-          // or may not have committed, and a second attempt at it from this
-          // catch would be a guess — the operation is idempotent, so the safe
-          // place to repeat it is the next claim of this intent, after its
-          // lease expires, not inside the failure.
+          // ONE retry, and it is safe for a reason rather than by hope.
           //
-          // No transport call happened, so no delivery outcome is fabricated
-          // either. The intent keeps its lease and comes back; the only cost
-          // of the unrecorded hand-back is one attempt of its allowance, and
-          // that is recoverable rather than lost.
-          this.logger.error(
-            {
-              err: error instanceof Error ? error.message : String(error),
+          // A release is keyed by the attempt number it releases, so repeating
+          // it is a no-op against the primary key whether or not the first
+          // call committed. That is what makes retrying correct here when
+          // retrying a decrement would have been a guess.
+          //
+          // Retried HERE because nothing else can. A claim that recorded
+          // neither an attempt row nor a release is indistinguishable, in the
+          // database, from one whose sender died after a successful send — and
+          // at-least-once says that one must count as spent. So a later pass
+          // cannot safely repair this; the only moment we know no transport
+          // call happened is now.
+          try {
+            const { released: didRelease } = await this.notifications.releaseClaim({
+              tenantId: intent.tenantId,
               notificationId: intent.id,
               attemptNumber: intent.attemptCount,
-            },
-            'Could not record a notification hand-back; leaving it to its lease',
-          );
-          unreleased += 1;
+              now: this.clock.now(),
+              reason: 'tenant.not_active',
+            });
+            if (didRelease) released += 1;
+            continue;
+          } catch {
+            // Both attempts failed. Said plainly: this attempt of the
+            // allowance is now SPENT, not deferred — an earlier version of
+            // this comment claimed the cost was recoverable on the next claim,
+            // and no code path recovered it.
+            //
+            // No delivery outcome is invented either. No transport call
+            // happened, so there is nothing to file as sent or failed; the
+            // intent keeps its lease and is met again with one fewer attempt.
+            this.logger.error(
+              {
+                err: error instanceof Error ? error.message : String(error),
+                notificationId: intent.id,
+                attemptNumber: intent.attemptCount,
+              },
+              'Could not record a notification hand-back; the attempt is spent',
+            );
+            unreleased += 1;
+          }
         }
         continue;
       }
@@ -577,13 +602,25 @@ export class NotificationDispatcher {
     // sender died before recording anything.
     const attemptNumber = intent.attemptCount;
 
+    // The NUMBER identifies the attempt; SPEND decides whether any are left.
+    //
+    // They were the same figure while the counter could be decremented, and are
+    // not now that it is monotonic. Reading the number here meant an intent
+    // whose claims had been handed back unsent — six stop/start cycles, say —
+    // was written off on its FIRST real send, because the claim number had
+    // passed `max_attempts` while nothing had been spent. `claimDue`,
+    // `failExhausted` and `releaseClaim` were all moved to spend; this was the
+    // one place left reading the raw counter, and it is the place that decides
+    // whether a message ever gets its allowance.
+    const spent = intent.attemptCount - intent.releasedCount;
+
     let nextStatus: NotificationStatus;
     let nextAttemptAt: Date;
 
     if (result.outcome === 'SUCCEEDED') {
       nextStatus = 'SENT';
       nextAttemptAt = finishedAt;
-    } else if (result.outcome === 'FAILED_PERMANENT' || attemptNumber >= intent.maxAttempts) {
+    } else if (result.outcome === 'FAILED_PERMANENT' || spent >= intent.maxAttempts) {
       // Bounded on purpose. A permanently wrong destination retried forever is
       // the legacy log group's sixty-identical-errors failure with a scheduler
       // in front of it.
@@ -591,7 +628,10 @@ export class NotificationDispatcher {
       nextAttemptAt = finishedAt;
     } else {
       nextStatus = 'PENDING';
-      nextAttemptAt = new Date(finishedAt.getTime() + this.backoffFor(attemptNumber, result));
+      // Spend again, not the claim number: backing off `2^(claims - 1)` made
+      // the first real retry of an intent that had been handed back six times
+      // wait sixty-four times as long as its first failure warranted.
+      nextAttemptAt = new Date(finishedAt.getTime() + this.backoffFor(spent, result));
     }
 
     const { moved } = await this.notifications.recordAttempt({
