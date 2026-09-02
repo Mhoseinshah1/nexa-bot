@@ -162,7 +162,9 @@ sudo botctl update v1.1.0
 ```
 
 The algorithm, in order. An exclusive `flock` is held for the whole run, so a
-second update, an install or a rollback waits rather than interleaving.
+second update, an install or a rollback is **refused** — it does not queue. A
+command that silently waits out a long migration tells the operator nothing;
+"another install, update or rollback is already running" tells them everything.
 
 1. **Resolve** the version to an image digest. The tag is read exactly once.
 2. **Pull** by that digest. A tag repointed a second later cannot change what
@@ -172,10 +174,19 @@ second update, an install or a rollback waits rather than interleaving.
    schema change is the one the incoming code expects, by construction.
 5. **Start** the target release.
 6. **Wait** for the API's readiness probe.
-7. **Commit**: write `current`, `previous` and the image pointer.
+7. **Commit**: write the release manifest, then the image pointer, then
+   `previous`, then `current`.
 
 Step 7 is the only durable moment. Everything before it leaves the previous
 release current and running.
+
+The order inside step 7 is deliberate. The image pointer — what a restart or a
+reboot would actually start — is written before `current`, which is what every
+command reports. So an interruption partway through leaves an installation that
+still reports the previous release and is fixed by re-running the update, rather
+than one that reports the new release while quietly starting the old one.
+`botctl version` and `botctl status` compare the two and report a divergence
+loudly if they ever disagree.
 
 ### What happens when it fails
 
@@ -190,8 +201,9 @@ release current and running.
 | The rollback is not healthy    | Reported loudly. **Neither release is deleted.**                                    |
 
 The previous release is never deleted by the update that replaced it. Manifests
-are pruned to the five most recent, and the current release and the rollback
-target are never pruned.
+are pruned to the five most recent by an update — a rollback prunes nothing —
+and the current release and the rollback target are never pruned, so an
+installation keeps at most seven.
 
 ## Rolling back
 
@@ -283,14 +295,45 @@ Checked by tests, not just intended:
 - The installer never opens a firewall port.
 - The updater never runs `git`.
 
-### What `docker inspect` can still see
+### What is still visible, and to whom
+
+Two things, both written down rather than left to be discovered. Both are
+bounded by the same fact: everything that can see them is already root on this
+host.
 
 `env_file` values appear in a container's inspected environment, so anything
-that can talk to the Docker socket can read `DATABASE_URL`. That is not a
-mitigable gap: access to the Docker socket is already root-equivalent on the
-host. It is written down here rather than left to be discovered.
+that can talk to the Docker socket can read `DATABASE_URL`. Socket access is
+root-equivalent, so this is not a mitigable gap.
+
+`docker compose config` prints the contents of every `env_file` — the compose
+CLIENT reads them, not the daemon. So that command's output is not safe to paste
+into a ticket, and `botctl status` exists partly so there is an output that is.
 
 ## Still outstanding
+
+**Release provenance is trust-on-first-use.** A release is pinned by digest, so
+the tag cannot be repointed under an installation and `botctl` addresses the
+image by digest everywhere after resolving it once. But nothing verifies who
+BUILT that digest. `nexa_resolve_digest` trusts whatever the registry answers
+with the first time a version is named, and an attacker who can publish to the
+package — a leaked `packages: write` token, a compromised Actions runner — can
+publish a digest that every installation will then faithfully pin.
+
+Closing it means signing releases at publish time and verifying the signature
+before `botctl update` pulls: cosign with GitHub's OIDC identity, checked
+against the repository and workflow that is allowed to produce releases. That is
+a key-management decision of its own and it is not in this checkpoint. What is
+here — one resolution, a digest everywhere after it, and `botctl version`
+reporting the digest so it can be compared against the release job's summary —
+is what makes the verification step addable later without changing the model.
+
+**Migration compatibility is policy with no mechanism.** The expand → deploy →
+contract rule below is what makes application rollback sound, and nothing in
+this repository checks that a migration obeys it. A single same-release
+`DROP COLUMN` or `SET NOT NULL` silently invalidates every rollback afterwards,
+and it surfaces only as the previous release crash-looping AFTER `botctl
+rollback` has already stopped the working one. A migration-review gate belongs
+beside `check-migration-drift.sh`.
 
 **`BLOCKER-SECRETS-V2`.** The v1 secret envelope binds no context to its
 ciphertext, and a single configured KEK means rotation cannot read what the

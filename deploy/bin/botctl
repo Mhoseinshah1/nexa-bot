@@ -152,14 +152,21 @@ cmd_status() {
 # A real dump through pg_dump, never a copy of the data directory: copying
 # PostgreSQL's files while it is running produces something that looks like a
 # backup and is not one.
+# The label is an argument so an update can say what the dump actually is.
+# `botctl backup` deliberately takes NO lock: a backup during a long update is
+# a reasonable thing to want, and blocking it would be worse than allowing it —
+# pg_dump's snapshot is internally consistent either way. But it means the dump
+# an update takes sits between two schemas, and labelling it with the outgoing
+# version alone was a claim it could not support.
 cmd_backup() {
   require_installed
+  local label="${1:-}"
   local pg_user pg_db version stamp target
   pg_user="$(nexa_env_value "${NEXA_CONFIG_DIR}/postgres.env" POSTGRES_USER)" ||
     nexa_die "cannot read the database user from ${NEXA_CONFIG_DIR}/postgres.env."
   pg_db="$(nexa_env_value "${NEXA_CONFIG_DIR}/postgres.env" POSTGRES_DB)" ||
     nexa_die "cannot read the database name from ${NEXA_CONFIG_DIR}/postgres.env."
-  version="$(nexa_current_version || printf 'unknown')"
+  version="${label:-$(nexa_current_version || printf 'unknown')}"
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   target="${NEXA_BACKUP_DIR}/nexa-${version}-${stamp}.sql.gz"
 
@@ -291,7 +298,10 @@ cmd_update() {
   # read "the backup FAILED" with nothing telling them the update had been
   # abandoned or which release is still running. Confirmed by deleting this
   # guard and watching the suite stay green: it was unreachable.
-  if ! (cmd_backup) >/dev/null; then
+  # Labelled with BOTH releases. The dump is taken after ${current}'s schema
+  # and before ${target}'s, and a file named for one of them alone is a claim
+  # about which schema it holds that nobody can check later.
+  if ! (cmd_backup "${current}-before-${target}") >/dev/null; then
     nexa_die "the backup failed, so the update did NOT proceed. ${current} is still running and is still the current release."
   fi
   nexa_ok "backup complete"
@@ -312,9 +322,13 @@ cmd_update() {
   nexa_step "starting ${target}"
   if ! NEXA_IMAGE="$target_image" nexa_compose up -d --remove-orphans; then
     nexa_warn "the target release did not start; returning to ${current}."
-    nexa_compose up -d --remove-orphans ||
-      nexa_die "${target} failed to start AND ${current} could not be restarted. The installation is down; run 'botctl logs' and 'botctl rollback'."
-    nexa_die "${target} failed to start. ${current} is running again and is still the current release."
+    # `up -d` returning zero says the containers were created, not that the
+    # application works. Saying "is running again" without checking is how an
+    # operator reads a reassuring message about an installation that is down.
+    if nexa_compose up -d --remove-orphans && nexa_wait_ready; then
+      nexa_die "${target} failed to start. ${current} is running again, is ready, and is still the current release."
+    fi
+    nexa_die "${target} failed to start AND ${current} did not come back cleanly. The installation may be down; run 'botctl logs' and 'botctl rollback'."
   fi
 
   # 6. VERIFY. A container that started is not an application that works.
@@ -425,7 +439,7 @@ main() {
   case "$command" in
     version) cmd_version "$@" ;;
     status) cmd_status "$@" ;;
-    backup) cmd_backup "$@" ;;
+    backup) cmd_backup ;;
     update) cmd_update "$@" ;;
     rollback) cmd_rollback "$@" ;;
     logs) cmd_logs "$@" ;;

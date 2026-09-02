@@ -29,8 +29,13 @@ x-app-common: &app-common
   # arrives.
   init: true
   env_file:
-    # Read by the Docker DAEMON as root, which is why this file is 0600
-    # root-owned and no container needs permission to read it.
+    # 0600 and root-owned, so no unprivileged process on the host can read it.
+    #
+    # It is read by the compose CLIENT, not by the daemon — which means
+    # `docker compose config` PRINTS every value in it. Anyone who can run
+    # compose against this installation is already root, so this is not a new
+    # exposure; it is a reason not to paste `docker compose config` output into
+    # a ticket. `botctl status` exists partly so there is an output that can be.
     - ${NEXA_CONFIG_DIR:-/etc/nexa}/nexa.env
   security_opt:
     - no-new-privileges:true

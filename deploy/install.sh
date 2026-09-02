@@ -459,9 +459,11 @@ write_deploy_env() {
   local file="${NEXA_CONFIG_DIR}/deploy.env"
   nexa_step "recording the deployment settings"
   umask 077
-  # No secrets here: this is what compose interpolates, and `docker compose
-  # config` prints it. The credentials live in the three env_file entries the
-  # daemon reads instead.
+  # No secrets here. That is not because `docker compose config` would hide
+  # them — it reads every env_file itself and prints their contents too — but
+  # because this file is interpolated into the compose file, and a value that
+  # ends up in `docker inspect`'s Cmd or in a container's labels is exposed
+  # more widely than one that only reaches its environment.
   {
     printf '# Written by the Nexa installer. No secrets belong in this file.\n'
     printf 'NEXA_IMAGE=%s\n' "$image"

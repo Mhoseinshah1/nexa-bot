@@ -371,9 +371,13 @@ nexa_acquire_lock() {
 
 # --- The current-image pointer -----------------------------------------------
 #
-# `deploy.env` names the image compose runs when nobody overrides it, so this
-# is what makes a release survive a reboot: Docker restarts the containers, and
-# any later `docker compose up` without an override starts the same digest.
+# `deploy.env` names the image compose runs when nobody overrides it. It is NOT
+# what carries a release across a reboot — Docker restarts the containers that
+# already exist, and those carry the image they were created with. What this
+# governs is the next `docker compose up`: a restart, another update's back-out
+# path, or an operator's own command. Which is exactly why it disagreeing with
+# the recorded release is worth detecting: the disagreement is invisible until
+# somebody runs one of those.
 #
 # Written atomically, and — the part that was missing — VERIFIED before the
 # rename. A partially-rewritten deploy.env is an installation that cannot start
@@ -519,8 +523,11 @@ nexa_prune_releases() {
     if [ "$version" = "$current" ] || [ "$version" = "$previous" ]; then
       continue
     fi
+    # `>`, not `>=`. With `>=` the KEEPth manifest was deleted along with
+    # everything older, so a retention of five kept four unpinned manifests and
+    # the documentation said five.
     kept=$((kept + 1))
-    if [ "$kept" -ge "$keep" ]; then
+    if [ "$kept" -gt "$keep" ]; then
       rm -f -- "$name"
     fi
   done < <(ls -1t -- "$NEXA_RELEASES_DIR"/*.json 2>/dev/null || true)

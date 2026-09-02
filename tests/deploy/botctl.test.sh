@@ -373,6 +373,15 @@ assert_contains 'version does not report the commit' "$BOTCTL_OUTPUT" 'cafebabe'
 assert_contains 'version does not report the digest' "$BOTCTL_OUTPUT" "$DIGEST_B"
 assert_not_contains 'version reports an unknown fact after an update' "$BOTCTL_OUTPUT" 'unknown'
 
+test_case "the update's backup names both releases"
+# It is taken after v1.0.0's schema and before v2.0.0's. A file named for
+# either one alone is a claim about which schema it holds that nobody can
+# check later — and `botctl backup` takes no lock, so this dump really can be
+# the one an operator reaches for.
+dump="$(find "$NEXA_BACKUP_DIR" -name '*.sql.gz' -print -quit)"
+assert_contains 'the backup does not name the outgoing release' "$dump" 'v1.0.0'
+assert_contains 'the backup does not name the incoming release' "$dump" 'v2.0.0'
+
 test_case 'a backup was taken before the migration'
 # Order matters: the backup must precede the migration, because the migration
 # is the step that switching an image back cannot undo.
@@ -474,6 +483,18 @@ assert_contains 'the operator was not told the previous release came back' \
   "$BOTCTL_OUTPUT" 'is running again and is still the current release'
 assert_not_contains 'the back-out landed on the panic branch' \
   "$BOTCTL_OUTPUT" 'did not come back cleanly'
+
+test_case 'a target that will not start is backed out, and the back-out is verified'
+fake_set "up_exit_${DIGEST_B}" 1
+NEXA_READY_TIMEOUT=6 run_botctl update v2.0.0
+fake_set "up_exit_${DIGEST_B}" 0
+assert_fails 'a target that would not start exited zero' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'a target that would not start became current' 'v1.0.0' "$(cat "${NEXA_STATE_DIR}/current")"
+# `up -d` returning zero says containers were created, not that the application
+# works. The message used to say "is running again" on that basis alone, which
+# is a reassuring thing to read about an installation that is down.
+assert_contains 'the back-out was not verified before being announced' \
+  "$BOTCTL_OUTPUT" 'is ready'
 
 test_case 'a target that dies is backed out without waiting out the timeout'
 # An api container that EXITED is not listed by `docker compose ps` without
@@ -678,6 +699,10 @@ assert_ok 'the current release manifest was pruned' test -f "${NEXA_STATE_DIR}/r
 assert_ok 'the ROLLBACK TARGET manifest was pruned' test -f "${NEXA_STATE_DIR}/releases/v0.0.1.json"
 remaining="$(find "${NEXA_STATE_DIR}/releases" -name '*.json' | wc -l)"
 assert_ok 'retention is unbounded' test "$remaining" -lt 8
+# Exactly what it says: KEEP unpinned manifests, plus current and previous.
+# `kept >= keep` deleted the KEEPth too, so a retention of five kept four and
+# the documentation said five.
+assert_equals 'retention does not keep the number it says' 5 "$remaining"
 teardown_root
 
 report

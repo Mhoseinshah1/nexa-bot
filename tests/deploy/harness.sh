@@ -255,7 +255,10 @@ case "${1:-}" in
         esac
         exit 0
         ;;
-      up) exit "$(read_state up_exit 0)" ;;
+      # Per-image, like health, so "the target will not start but the previous
+      # release does" is expressible. With one global value the back-out could
+      # never succeed, and the branch that reports it had no coverage.
+      up) exit "$(read_state "up_exit_${NEXA_IMAGE##*@}" "$(read_state up_exit 0)")" ;;
       run) exit "$(read_state run_exit 0)" ;;
       exec)
         # Stand in for pg_dump: emit something that looks like a real dump so

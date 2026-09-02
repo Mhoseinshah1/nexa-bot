@@ -127,11 +127,18 @@ precisely because argv is world-readable in `ps`.
 ### Update is a state machine with one durable commit point
 
 `botctl update` holds an exclusive `flock` for its whole run, so a second
-`botctl update`, `install` or `rollback` waits rather than interleaving. The
-order is: resolve to a digest, pull, preflight, back up, migrate with the target
-image, start the target, wait for readiness, and only then write the new
-`current` release pointer. Every failure before that write leaves the previous
-release current and running.
+`botctl update`, `install` or `rollback` is REFUSED rather than interleaving —
+`flock -w 0`, deliberately: an operator who runs a command and watches it queue
+silently behind a twenty-minute migration learns nothing, and an operator told
+"another update is already running" knows exactly what to do.
+
+The order is: resolve to a digest, pull, back up, migrate with the target image,
+start the target, wait for readiness, and only then commit. Every failure before
+the commit leaves the previous release current and running. The commit itself
+writes three files, and the order within it matters as much as the order above:
+the image pointer first, the reported release last, so an interrupted commit
+fails toward "not recorded yet" rather than toward reporting something untrue.
+`botctl version` and `botctl status` compare the two and report a disagreement.
 
 The previous release is never deleted by the update that replaced it. That is
 what makes rollback a switch rather than a download.
