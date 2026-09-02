@@ -169,7 +169,17 @@ export class FeatureFlagsService {
       const settings = await this.settings.resolveAll(scope, tx);
 
       if (before.source === 'TENANT' && before.enabled === command.enabled) {
-        return { flag: this.withConfiguration(before, settings), changed: false };
+        // The key is still consumed; see the same note in `SettingsService`.
+        const flag = this.withConfiguration(before, settings);
+        await this.idempotency.remember(
+          scope,
+          actor.surface,
+          command.idempotencyKey,
+          requestHash,
+          { flag, changed: false },
+          tx,
+        );
+        return { flag, changed: false };
       }
 
       const written = await this.flags.upsert(

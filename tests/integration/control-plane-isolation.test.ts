@@ -156,6 +156,35 @@ describe('control-plane isolation and concurrency', () => {
       ).rejects.toMatchObject({ code: 'control.version_conflict' });
     });
 
+    it('consumes the idempotency key even when nothing changed', async () => {
+      // A no-op is a completed command. A key that is never stored is a key
+      // whose reuse with DIFFERENT input cannot be detected, because the
+      // payload-mismatch check has nothing to compare against.
+      const idempotencyKey = key();
+      await ctx.container.settingsService.set(tenantA, ownerA, {
+        key: 'ops.notifications.max_attempts',
+        value: 3,
+        expectedVersion: null,
+        idempotencyKey: key(),
+      });
+      const noop = await ctx.container.settingsService.set(tenantA, ownerA, {
+        key: 'ops.notifications.max_attempts',
+        value: 3,
+        expectedVersion: 1,
+        idempotencyKey,
+      });
+      expect(noop.changed).toBe(false);
+
+      await expect(
+        ctx.container.settingsService.set(tenantA, ownerA, {
+          key: 'ops.notifications.max_attempts',
+          value: 9,
+          expectedVersion: 1,
+          idempotencyKey,
+        }),
+      ).rejects.toMatchObject({ code: 'platform.idempotency_payload_mismatch' });
+    });
+
     it('replays an idempotency key instead of writing twice', async () => {
       const idempotencyKey = key();
       const first = await ctx.container.settingsService.set(tenantA, ownerA, {
@@ -266,6 +295,34 @@ describe('control-plane isolation and concurrency', () => {
       expect(
         await ctx.container.templatesService.revisions(tenantA, ownerA, templateKey),
       ).toHaveLength(1);
+    });
+
+    it('treats re-saving the same body as no change', async () => {
+      // Otherwise the history records how many times somebody pressed save
+      // rather than what the message said, and every press invalidates other
+      // editors' expectations for nothing.
+      const first = await ctx.container.templatesService.set(tenantA, ownerA, {
+        key: templateKey,
+        body: 'same {correlationId}',
+        expectedVersion: null,
+        idempotencyKey: key(),
+      });
+      const again = await ctx.container.templatesService.set(tenantA, ownerA, {
+        key: templateKey,
+        body: 'same {correlationId}',
+        expectedVersion: 1,
+        idempotencyKey: key(),
+      });
+
+      expect(first.changed).toBe(true);
+      expect(again.changed).toBe(false);
+      expect(again.revision).toBe(first.revision);
+      expect(
+        await ctx.container.templatesService.revisions(tenantA, ownerA, templateKey),
+      ).toHaveLength(1);
+      expect((await ctx.container.templatesService.get(tenantA, ownerA, templateKey)).version).toBe(
+        1,
+      );
     });
 
     it('refuses a revert built on a stale version', async () => {

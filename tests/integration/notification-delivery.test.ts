@@ -272,6 +272,42 @@ describe('notification delivery', () => {
       expect(await ctx.container.notificationDispatcher.tick()).toMatchObject({ claimed: 0 });
     });
 
+    it('cannot be revived by an attempt that outlived its lease', async () => {
+      // The lease exists so a stalled sender's work becomes available again. A
+      // dispatcher that then returns and writes its outcome unconditionally
+      // would put an intent a second dispatcher has already marked SENT back
+      // into PENDING — and the same message would go out again, on a schedule.
+      await raiseError();
+      await ctx.container.notificationDispatcher.tick();
+
+      const [intent] = await ctx.container.notifications.list(tenantA, owner);
+      const before = await ctx.container.notifications.get(tenantA, owner, intent!.id);
+      expect(before.intent.status).toBe('SENT');
+
+      // The straggler, writing a retryable outcome long after the fact.
+      await ctx.container.notificationRepository.recordAttempt({
+        attemptId: ctx.container.ids.uuid(),
+        tenantId: tenantA.tenantId,
+        notificationId: intent!.id,
+        attemptNumber: 99,
+        transport: 'RECORDING',
+        outcome: 'FAILED_RETRYABLE',
+        startedAt: new Date(),
+        finishedAt: new Date(),
+        errorCode: 'telegram.unreachable',
+        errorMessage: 'late',
+        retryAfterMs: null,
+        nextStatus: 'PENDING',
+        nextAttemptAt: new Date(0),
+      });
+
+      const after = await ctx.container.notifications.get(tenantA, owner, intent!.id);
+      // The attempt is recorded, because it happened. The intent does not move.
+      expect(after.attempts).toHaveLength(2);
+      expect(after.intent.status).toBe('SENT');
+      expect(await ctx.container.notificationDispatcher.tick()).toMatchObject({ claimed: 0 });
+    });
+
     it('never sends one tenant’s notification to another', async () => {
       const ownerB = adminActorFor(
         await createAdmin(ctx.container, tenantB, { username: 'owner-b', roleKeys: ['owner'] }),

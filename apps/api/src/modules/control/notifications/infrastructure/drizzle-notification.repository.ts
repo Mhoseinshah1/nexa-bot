@@ -249,6 +249,15 @@ export class DrizzleNotificationRepository implements NotificationRepository {
         retryAfterMs: input.retryAfterMs,
       });
 
+      // Only a PENDING intent moves.
+      //
+      // A dispatcher whose send outlives its lease is not impossible: the lease
+      // exists precisely so a stalled sender's work becomes available again. If
+      // it then returns and writes its outcome unconditionally, it can put an
+      // intent a second dispatcher has already marked SENT back into PENDING —
+      // and the queue would send the same message again, on a schedule.
+      //
+      // The attempt row above is still written either way, because it happened.
       await tx
         .update(notifications)
         .set({
@@ -262,6 +271,7 @@ export class DrizzleNotificationRepository implements NotificationRepository {
           and(
             eq(notifications.tenantId, input.tenantId),
             eq(notifications.id, input.notificationId),
+            eq(notifications.status, 'PENDING'),
           ),
         );
     });

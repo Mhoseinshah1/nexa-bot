@@ -176,7 +176,11 @@ export class ControlController {
     @Param('key') key: string,
     @Body() body: unknown,
   ): Promise<PreviewTemplateResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    // The Origin check applies even though this changes nothing. It is a POST
+    // carrying a session cookie, and the cost of exempting it is a route that
+    // has to be re-reasoned about every time somebody asks whether the CSRF
+    // rule is "writes only" or "POSTs".
+    const { scope, actor } = await this.authenticate(request, { write: true });
     const result = await this.container.templatesService.preview(scope, actor, {
       ...(body as Record<string, unknown>),
       key,

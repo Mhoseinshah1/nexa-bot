@@ -162,13 +162,19 @@ export class NotificationService {
       'ops.notifications.max_attempts' as SettingKey,
     );
 
+    // The intent's own id is its dedupe key.
+    //
+    // Each test is its own question: two tests half an hour apart are two
+    // questions, and collapsing them would make the second silently answer with
+    // the first one's result. A timestamp was the obvious key and is wrong at
+    // the edge — two clicks inside one millisecond would collide, and the
+    // second would report success while pointing at the first test's outcome.
+    const id = this.ids.uuid();
+
     const result = await this.notifications.create(scope, {
-      id: this.ids.uuid(),
+      id,
       kind: 'OPERATIONS_TEST',
-      // Each test is its own intent: two tests half an hour apart are two
-      // questions, and collapsing them would make the second one silently
-      // answer with the first one's result.
-      dedupeKey: `ops-test:${now.toISOString()}`,
+      dedupeKey: `ops-test:${id}`,
       destination,
       // `label` is nullable on an actor; the template requires a name, so say
       // what we actually know rather than rendering the word "null".

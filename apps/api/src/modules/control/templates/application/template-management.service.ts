@@ -97,6 +97,8 @@ export const previewTemplateCommandSchema = z.object({
 export interface SetTemplateResult {
   readonly template: TemplateView;
   readonly revision: number;
+  /** False when the submitted body was already the stored one. */
+  readonly changed: boolean;
   readonly replayed: boolean;
 }
 
@@ -247,6 +249,27 @@ export class TemplateManagementService {
       await this.requireActiveScope(scope, tx);
 
       const before = await this.templates.findOverride(scope, key, locale, tx);
+
+      // Saving the same body again is not a change, and must not become one.
+      //
+      // Without this, re-pressing save writes a revision identical to the last,
+      // bumps the version, and invalidates every other editor's expectation for
+      // no reason — turning the history into a record of how many times somebody
+      // pressed a button rather than of what the message said.
+      if (before !== null && before.body === command.body) {
+        const template = this.toView(key, locale, before, await this.overridesApplied(scope, tx));
+        const unchanged = { template, revision: before.revision, changed: false };
+        await this.idempotency.remember(
+          scope,
+          actor.surface,
+          command.idempotencyKey,
+          requestHash,
+          unchanged,
+          tx,
+        );
+        return unchanged;
+      }
+
       const revision = (await this.templates.latestRevision(scope, key, locale, tx)) + 1;
 
       // The override write goes FIRST, so a concurrent edit is refused by the
@@ -325,7 +348,7 @@ export class TemplateManagementService {
         { template, revision },
         tx,
       );
-      return { template, revision };
+      return { template, revision, changed: true };
     });
 
     return { ...result, replayed: false };
@@ -429,10 +452,10 @@ export class TemplateManagementService {
         actor.surface,
         command.idempotencyKey,
         requestHash,
-        { template, revision },
+        { template, revision, changed: true },
         tx,
       );
-      return { template, revision };
+      return { template, revision, changed: true };
     });
 
     return { ...result, replayed: false };

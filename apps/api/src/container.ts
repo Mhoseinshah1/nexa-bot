@@ -125,6 +125,14 @@ export interface Container {
   readonly templatesService: TemplateManagementService;
   readonly templateResolver: TemplateResolver;
   readonly notifications: NotificationService;
+  /**
+   * The repository behind it.
+   *
+   * Exposed so a test can drive the write path directly — the case that matters
+   * is a delivery attempt arriving after its lease expired, which no sequence of
+   * service calls can produce on purpose.
+   */
+  readonly notificationRepository: DrizzleNotificationRepository;
   readonly notificationDispatcher: NotificationDispatcher;
   readonly notificationTransport: NotificationTransport;
   readonly opsLogService: OpsLogService;
@@ -444,6 +452,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     templatesService,
     templateResolver,
     notifications,
+    notificationRepository,
     notificationDispatcher,
     notificationTransport,
     opsLogService,

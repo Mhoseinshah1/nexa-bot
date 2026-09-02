@@ -137,6 +137,18 @@ export class SettingsService {
       // no row, and one of them did it three times in a row while a product
       // stayed broken (SOURCE_BUG-002).
       if (before.source === 'TENANT' && deepEqual(before.value, value)) {
+        // The key is still consumed. A no-op is a completed command, and a key
+        // that is never stored is a key whose reuse with DIFFERENT input cannot
+        // be detected — the payload-mismatch check has nothing to compare
+        // against until a record exists.
+        await this.idempotency.remember(
+          scope,
+          actor.surface,
+          command.idempotencyKey,
+          requestHash,
+          { setting: before, changed: false },
+          tx,
+        );
         return { setting: before, changed: false };
       }
 
