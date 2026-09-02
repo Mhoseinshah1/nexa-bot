@@ -303,7 +303,7 @@ export function NotificationsPage({ mayTest }: { mayTest: boolean }) {
           )}
 
           {/* The claims that were given back.
-              
+
               Rendered alongside the attempts rather than merged into them,
               because they are the opposite kind of fact: an attempt row says
               what happened on the wire and one of these says that on this
