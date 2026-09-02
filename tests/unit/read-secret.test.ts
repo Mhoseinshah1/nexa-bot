@@ -187,6 +187,27 @@ describe('TerminalReader', () => {
     expect(await reader.read('p: ', secret)).toBe('hunter2');
   });
 
+  it('treats CRLF as one line ending across a chunk boundary', async () => {
+    // Chunk boundaries are arbitrary. The first CRLF fix only looked for the LF
+    // among bytes ALREADY buffered, so a chunk ending in CR left the LF to
+    // arrive later and resolve the next question as empty — the same defect it
+    // was written to close, moved one chunk along.
+    const tty = new FakeTty();
+    const reader = new TerminalReader(tty as never, capture());
+
+    const first = reader.read('u: ', visible);
+    tty.type('alice\r');
+    expect(await first).toBe('alice');
+
+    const second = reader.read('d: ', visible);
+    tty.type('\nAlice Smith\r');
+    expect(await second).toBe('Alice Smith');
+
+    const third = reader.read('p: ', secret);
+    tty.type('\nhunter2\r\n');
+    expect(await third).toBe('hunter2');
+  });
+
   it('rejects a pending read when the terminal ends', async () => {
     // An SSH connection drops, or an installer's pseudo-terminal closes. The
     // reader watched only `data`, so the promise never settled and the CLI hung

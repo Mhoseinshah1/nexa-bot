@@ -1,4 +1,10 @@
-import { NexaError, IDENTITY_ERROR_CODES, type ActorContext, type Clock } from '@nexa/contracts';
+import {
+  NexaError,
+  isNexaError,
+  IDENTITY_ERROR_CODES,
+  type ActorContext,
+  type Clock,
+} from '@nexa/contracts';
 import type { OperationalEventRecorder, TenantContext } from '@nexa/contracts';
 import type { LoginThrottleRepository, ThrottleState } from './ports.js';
 
@@ -60,6 +66,17 @@ export class CredentialThrottle {
   ): Promise<Reservation> {
     const now = this.clock.now();
 
+    // An ACTIVE lock is refused before anything is written.
+    //
+    // Reserving over an existing lock re-runs the over-limit branch, which sets
+    // `locked_until = now + lockoutSeconds` — so every further attempt extends
+    // the deadline instead of serving it. Login happened to avoid this by
+    // checking first; the rotation path did not, and an attacker holding a
+    // stolen session could send cheap, already-refused requests indefinitely to
+    // keep the real administrator locked out for good. The check belongs here,
+    // where every caller gets it, rather than in one of them.
+    await this.assertNotLocked(scope, username, ip, now);
+
     const usernameState = await this.throttle.reserveAttempt(scope, 'USERNAME', username, now, {
       windowSeconds: this.policy.windowSeconds,
       maxAttempts: this.policy.maxAttemptsPerUsername,
@@ -95,52 +112,95 @@ export class CredentialThrottle {
       ['USERNAME', usernameState, this.policy.maxAttemptsPerUsername, username],
       ['IP', ipState, this.policy.maxAttemptsPerIp, ip ?? ''],
     ] as const;
+    const reserved: Reservation = { username: usernameState, ip: ipState };
 
-    // The attempt that REACHES the limit establishes the lockout. It is still
-    // verified — see below — but the lockout is worth alerting on from the
-    // moment it exists, and this is the only place that observes it: the
-    // failure path is not reached for a refused attempt, and the refusal path
-    // is not reached by the attempt that merely reaches the limit.
-    for (const [kind, state, limit, subject] of subjects) {
-      if (state !== null && state.failedCount >= limit) {
-        await this.opsLog.record(scope, {
-          code: 'auth.login_locked_out',
-          severity: 'WARN',
-          message: `Password attempts were locked out for a ${kind.toLowerCase()} subject.`,
-          context: { username, subjectKind: kind, failedCount: state.failedCount },
-          dedupeKey: `auth.login_locked_out:${kind}:${subject}`,
-          correlationId: actor.correlationId,
-        });
+    // Everything from here runs with BOTH reservations already committed, and
+    // the caller's own cleanup does not begin until this method returns. So a
+    // failure in here — writing the lockout event, say — would stand the counts
+    // up permanently without any credential ever being judged.
+    try {
+      // The attempt that REACHES the limit establishes the lockout. It is still
+      // verified — see below — but the lockout is worth alerting on from the
+      // moment it exists, and this is the only place that observes it: the
+      // failure path is not reached for a refused attempt, and the refusal path
+      // is not reached by the attempt that merely reaches the limit.
+      for (const [kind, state, limit, subject] of subjects) {
+        if (state !== null && state.failedCount >= limit) {
+          await this.opsLog.record(scope, {
+            code: 'auth.login_locked_out',
+            severity: 'WARN',
+            message: `Password attempts were locked out for a ${kind.toLowerCase()} subject.`,
+            context: { username, subjectKind: kind, failedCount: state.failedCount },
+            dedupeKey: `auth.login_locked_out:${kind}:${subject}`,
+            correlationId: actor.correlationId,
+          });
+        }
       }
-    }
 
-    // Refused only once the attempt is PAST the configured number, not on the
-    // one that reaches it. `maxAttempts` is how many attempts are allowed, so
-    // rejecting the Nth would give N-1 credential checks — and with a limit of
-    // 1 the very first login, correct password and all, would be refused and
-    // the installation would have no way in.
-    for (const [, state, limit] of subjects) {
-      if (state !== null && state.failedCount > limit) {
-        // Give BOTH reservations back before refusing. This request never
-        // reaches the KDF and never checks a credential, so counting it
-        // overstates what happened — and the overstatement sticks, holding the
-        // subject at the limit and keeping the lock alive.
-        await this.release(scope, username, ip, { username: usernameState, ip: ipState });
+      // Refused only once the attempt is PAST the configured number, not on the
+      // one that reaches it. `maxAttempts` is how many attempts are allowed, so
+      // rejecting the Nth would give N-1 credential checks — and with a limit of
+      // 1 the very first login, correct password and all, would be refused and
+      // the installation would have no way in.
+      for (const [, state, limit] of subjects) {
+        if (state !== null && state.failedCount > limit) {
+          // Give BOTH reservations back before refusing. This request never
+          // reaches the KDF and never checks a credential, so counting it
+          // overstates what happened — and the overstatement sticks, holding the
+          // subject at the limit and keeping the lock alive.
+          await this.release(scope, username, ip, reserved);
+          throw new NexaError({
+            kind: 'RATE_LIMITED',
+            code: IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED,
+            message: 'Too many attempts. Try again later.',
+            details: {
+              retryAfterSeconds: Math.max(
+                1,
+                Math.ceil(((state.lockedUntil?.getTime() ?? now.getTime()) - now.getTime()) / 1000),
+              ),
+            },
+          });
+        }
+      }
+
+      return reserved;
+    } catch (error) {
+      // A refusal releases on its own terms below and rethrows; anything else
+      // is a failure that judged nothing, so both subjects go back.
+      if (isNexaError(error) && error.code === IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED) throw error;
+      await this.release(scope, username, ip, reserved);
+      throw error;
+    }
+  }
+
+  /**
+   * Refuses while a lock is being served, without touching the row.
+   *
+   * Reads only. Writing here is what would renew the deadline it is checking.
+   */
+  private async assertNotLocked(
+    scope: TenantContext,
+    username: string,
+    ip: string | null,
+    now: Date,
+  ): Promise<void> {
+    const subjects: ['USERNAME' | 'IP', string][] = [['USERNAME', username]];
+    if (ip !== null) subjects.push(['IP', ip]);
+
+    for (const [kind, subject] of subjects) {
+      const state = await this.throttle.find(scope, kind, subject);
+      if (state?.lockedUntil && state.lockedUntil.getTime() > now.getTime()) {
         throw new NexaError({
           kind: 'RATE_LIMITED',
           code: IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED,
           message: 'Too many attempts. Try again later.',
           details: {
-            retryAfterSeconds: Math.max(
-              1,
-              Math.ceil(((state.lockedUntil?.getTime() ?? now.getTime()) - now.getTime()) / 1000),
-            ),
+            subjectKind: kind,
+            retryAfterSeconds: Math.ceil((state.lockedUntil.getTime() - now.getTime()) / 1000),
           },
         });
       }
     }
-
-    return { username: usernameState, ip: ipState };
   }
 
   /**

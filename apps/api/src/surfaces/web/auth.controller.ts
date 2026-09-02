@@ -133,6 +133,12 @@ export class AuthController {
       scope,
       adminActor(admin, correlationId, request, session.id),
       body,
+      {
+        // The same subject login throttles by, resolved the same way: null when
+        // the address cannot be believed as a client's. The actor keeps the raw
+        // address for the audit row; the counter must not.
+        ip: ipThrottleSubject(request.ip, this.container.config.TRUSTED_PROXY_IPS),
+      },
     );
 
     // A successful rotation revokes every session for this administrator,

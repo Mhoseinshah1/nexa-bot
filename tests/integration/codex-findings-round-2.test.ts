@@ -241,10 +241,15 @@ describe('a rotation may not commit after the account is disabled', () => {
     });
 
     const rotation = ctx.container.adminManagement
-      .changeOwnPassword(tenantA, adminActorFor(subject), {
-        currentPassword: 'the-original-password',
-        newPassword: 'a-password-the-attacker-picked',
-      })
+      .changeOwnPassword(
+        tenantA,
+        adminActorFor(subject),
+        {
+          currentPassword: 'the-original-password',
+          newPassword: 'a-password-the-attacker-picked',
+        },
+        { ip: null },
+      )
       .catch((error: unknown) => error);
 
     await rotationIsHashing;
@@ -2794,19 +2799,29 @@ describe('review round 17', () => {
 
     for (let attempt = 0; attempt < limit; attempt += 1) {
       await expect(
-        ctx.container.adminManagement.changeOwnPassword(tenantA, actor, {
-          currentPassword: `wrong-${attempt}`,
-          newPassword: 'a-brand-new-password',
-        }),
+        ctx.container.adminManagement.changeOwnPassword(
+          tenantA,
+          actor,
+          {
+            currentPassword: `wrong-${attempt}`,
+            newPassword: 'a-brand-new-password',
+          },
+          { ip: null },
+        ),
       ).rejects.toMatchObject({ code: IDENTITY_ERROR_CODES.AUTH_INVALID_CREDENTIALS });
     }
 
     // Past the limit the guess is refused before the KDF runs at all.
     await expect(
-      ctx.container.adminManagement.changeOwnPassword(tenantA, actor, {
-        currentPassword: 'wrong-again',
-        newPassword: 'a-brand-new-password',
-      }),
+      ctx.container.adminManagement.changeOwnPassword(
+        tenantA,
+        actor,
+        {
+          currentPassword: 'wrong-again',
+          newPassword: 'a-brand-new-password',
+        },
+        { ip: null },
+      ),
     ).rejects.toMatchObject({ code: IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED });
   }, 60_000);
 
@@ -2818,10 +2833,15 @@ describe('review round 17', () => {
 
     for (let attempt = 0; attempt < limit; attempt += 1) {
       await expect(
-        ctx.container.adminManagement.changeOwnPassword(tenantA, actor, {
-          currentPassword: `wrong-${attempt}`,
-          newPassword: 'a-brand-new-password',
-        }),
+        ctx.container.adminManagement.changeOwnPassword(
+          tenantA,
+          actor,
+          {
+            currentPassword: `wrong-${attempt}`,
+            newPassword: 'a-brand-new-password',
+          },
+          { ip: null },
+        ),
       ).rejects.toThrow();
     }
 
@@ -2837,10 +2857,15 @@ describe('review round 17', () => {
 
   it('does not count a rotation whose password was correct', async () => {
     const actor = adminActorFor(owner);
-    await ctx.container.adminManagement.changeOwnPassword(tenantA, actor, {
-      currentPassword: owner.password,
-      newPassword: 'a-completely-different-password',
-    });
+    await ctx.container.adminManagement.changeOwnPassword(
+      tenantA,
+      actor,
+      {
+        currentPassword: owner.password,
+        newPassword: 'a-completely-different-password',
+      },
+      { ip: null },
+    );
 
     const [row] = await ctx.container.database.db
       .select()
@@ -2916,4 +2941,141 @@ describe('review round 17', () => {
     // messages are still left unclaimed rather than dispatched or dropped.
     expect(await ctx.container.relay.lagMs()).toBe(0);
   }, 30_000);
+});
+
+describe('review round 18', () => {
+  it('does not lock the account when a CORRECT login aborts after verification', async () => {
+    // Marking the attempt judged as soon as the password matched let anything
+    // after it — the tenant read, the rehash, opening the transaction — keep the
+    // reservation. At a limit of 1 a correct password plus one transient error
+    // established a lock and rate-limited the retry once it cleared.
+    const admins = ctx.container.admins as unknown as Record<string, unknown>;
+    const real = ctx.container.admins.lockTenantForRead.bind(ctx.container.admins);
+    admins['lockTenantForRead'] = async () => {
+      throw new Error('database is unavailable');
+    };
+
+    try {
+      await expect(
+        ctx.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: owner.username, password: owner.password },
+          { ip: '203.0.113.44', userAgent: 'vitest' },
+        ),
+      ).rejects.toThrow('database is unavailable');
+    } finally {
+      admins['lockTenantForRead'] = real;
+    }
+
+    const rows = await ctx.container.database.db
+      .select()
+      .from(adminLoginThrottle)
+      .where(eq(adminLoginThrottle.subject, owner.username));
+    expect(rows[0]?.failedCount ?? 0).toBe(0);
+    expect(rows[0]?.lockedUntil ?? null).toBeNull();
+
+    // And the correct password still works the moment the fault clears.
+    await expect(
+      ctx.container.auth.login(
+        tenantA,
+        anonymous,
+        { username: owner.username, password: owner.password },
+        { ip: '203.0.113.44', userAgent: 'vitest' },
+      ),
+    ).resolves.toBeDefined();
+  }, 60_000);
+
+  it('refuses an active lock without extending it', async () => {
+    // Reserving over an existing lock re-runs the over-limit branch, which sets
+    // `locked_until = now + lockoutSeconds`. An attacker holding a stolen
+    // session could send cheap, already-refused rotations indefinitely and keep
+    // the real administrator locked out for good.
+    const limit = ctx.container.config.LOGIN_MAX_ATTEMPTS_PER_USERNAME;
+    const actor = adminActorFor(owner);
+    const change = (currentPassword: string) =>
+      ctx.container.adminManagement.changeOwnPassword(
+        tenantA,
+        actor,
+        { currentPassword, newPassword: 'a-brand-new-password' },
+        { ip: null },
+      );
+
+    for (let attempt = 0; attempt < limit; attempt += 1) {
+      await expect(change(`wrong-${attempt}`)).rejects.toThrow();
+    }
+
+    const [locked] = await ctx.container.database.db
+      .select()
+      .from(adminLoginThrottle)
+      .where(eq(adminLoginThrottle.subject, owner.username));
+    const deadline = locked?.lockedUntil?.getTime() ?? 0;
+    expect(deadline).toBeGreaterThan(0);
+
+    // Hammer it while the lock is being served.
+    const clock = ctx.container.clock as unknown as Record<string, unknown>;
+    const realNow = ctx.container.clock.now.bind(ctx.container.clock);
+    clock['now'] = () => new Date(realNow().getTime() + 60_000);
+    try {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await expect(change('still-wrong')).rejects.toMatchObject({
+          code: IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED,
+        });
+      }
+    } finally {
+      clock['now'] = realNow;
+    }
+
+    const [after] = await ctx.container.database.db
+      .select()
+      .from(adminLoginThrottle)
+      .where(eq(adminLoginThrottle.subject, owner.username));
+    // The deadline must be the one the lockout established, not a fresh one.
+    expect(after?.lockedUntil?.getTime() ?? 0).toBe(deadline);
+  }, 60_000);
+
+  it('gives both reservations back when the lockout event cannot be written', async () => {
+    // Both reservations commit before the operational-log write, and the
+    // caller's cleanup does not begin until `reserve()` returns — so a failure
+    // here stood the counts up with no credential judged at all.
+    const opsLog = ctx.container.opsLog as unknown as Record<string, unknown>;
+    const real = ctx.container.opsLog.record.bind(ctx.container.opsLog);
+    opsLog['record'] = async (scope: unknown, event: { code: string }) => {
+      if (event.code === 'auth.login_locked_out') throw new Error('ops log is unavailable');
+      return real(scope as never, event as never);
+    };
+
+    const limit = ctx.container.config.LOGIN_MAX_ATTEMPTS_PER_USERNAME;
+    try {
+      // Reach the limit, which is the attempt that writes the lockout event.
+      for (let attempt = 0; attempt < limit - 1; attempt += 1) {
+        await expect(
+          ctx.container.auth.login(
+            tenantA,
+            anonymous,
+            { username: owner.username, password: 'wrong' },
+            { ip: null, userAgent: 'vitest' },
+          ),
+        ).rejects.toThrow();
+      }
+      await expect(
+        ctx.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: owner.username, password: 'wrong' },
+          { ip: null, userAgent: 'vitest' },
+        ),
+      ).rejects.toThrow('ops log is unavailable');
+    } finally {
+      opsLog['record'] = real;
+    }
+
+    const [row] = await ctx.container.database.db
+      .select()
+      .from(adminLoginThrottle)
+      .where(eq(adminLoginThrottle.subject, owner.username));
+    // The failed attempt that could not be logged gave its count back rather
+    // than standing it up permanently.
+    expect(row?.failedCount ?? 0).toBe(limit - 1);
+  }, 60_000);
 });

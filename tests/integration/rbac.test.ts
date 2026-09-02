@@ -607,10 +607,15 @@ describe('password change', () => {
       from,
     );
 
-    await ctx.container.adminManagement.changeOwnPassword(tenantA, adminActorFor(support), {
-      currentPassword: 'a-perfectly-fine-password',
-      newPassword: 'an-entirely-different-password',
-    });
+    await ctx.container.adminManagement.changeOwnPassword(
+      tenantA,
+      adminActorFor(support),
+      {
+        currentPassword: 'a-perfectly-fine-password',
+        newPassword: 'an-entirely-different-password',
+      },
+      { ip: null },
+    );
 
     // A password change is what an administrator does when they think a
     // credential is exposed. They cannot know which live session is the
@@ -629,19 +634,29 @@ describe('password change', () => {
 
   it('refuses without the current password', async () => {
     await expect(
-      ctx.container.adminManagement.changeOwnPassword(tenantA, adminActorFor(support), {
-        currentPassword: 'not-the-current-one',
-        newPassword: 'an-entirely-different-password',
-      }),
+      ctx.container.adminManagement.changeOwnPassword(
+        tenantA,
+        adminActorFor(support),
+        {
+          currentPassword: 'not-the-current-one',
+          newPassword: 'an-entirely-different-password',
+        },
+        { ip: null },
+      ),
     ).rejects.toThrow();
   });
 
   it('refuses re-using the same password', async () => {
     await expect(
-      ctx.container.adminManagement.changeOwnPassword(tenantA, adminActorFor(support), {
-        currentPassword: 'a-perfectly-fine-password',
-        newPassword: 'a-perfectly-fine-password',
-      }),
+      ctx.container.adminManagement.changeOwnPassword(
+        tenantA,
+        adminActorFor(support),
+        {
+          currentPassword: 'a-perfectly-fine-password',
+          newPassword: 'a-perfectly-fine-password',
+        },
+        { ip: null },
+      ),
     ).rejects.toThrow(/differ/i);
   });
 
@@ -674,10 +689,15 @@ describe('password change', () => {
 
     try {
       await expect(
-        ctx.container.adminManagement.changeOwnPassword(tenantA, adminActorFor(support), {
-          currentPassword: 'a-perfectly-fine-password',
-          newPassword: 'an-entirely-different-password',
-        }),
+        ctx.container.adminManagement.changeOwnPassword(
+          tenantA,
+          adminActorFor(support),
+          {
+            currentPassword: 'a-perfectly-fine-password',
+            newPassword: 'an-entirely-different-password',
+          },
+          { ip: null },
+        ),
       ).rejects.toThrow(/injected failure/);
     } finally {
       outbox.write = realWrite;
@@ -711,10 +731,15 @@ describe('password change', () => {
   });
 
   it('audits the change without recording either password', async () => {
-    await ctx.container.adminManagement.changeOwnPassword(tenantA, adminActorFor(support), {
-      currentPassword: 'a-perfectly-fine-password',
-      newPassword: 'an-entirely-different-password',
-    });
+    await ctx.container.adminManagement.changeOwnPassword(
+      tenantA,
+      adminActorFor(support),
+      {
+        currentPassword: 'a-perfectly-fine-password',
+        newPassword: 'an-entirely-different-password',
+      },
+      { ip: null },
+    );
 
     const audits = await ctx.container.database.db
       .select()

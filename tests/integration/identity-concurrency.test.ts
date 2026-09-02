@@ -104,20 +104,30 @@ describe('password rotation is compare-and-set', () => {
       };
     });
 
-    const b = ctx.container.adminManagement.changeOwnPassword(tenantA, actor, {
-      currentPassword: 'the-original-password',
-      newPassword: 'the-password-b-wants',
-    });
+    const b = ctx.container.adminManagement.changeOwnPassword(
+      tenantA,
+      actor,
+      {
+        currentPassword: 'the-original-password',
+        newPassword: 'the-password-b-wants',
+      },
+      { ip: null },
+    );
     const bSettled = b.catch((error: unknown) => error);
 
     await bHasVerified;
     hasher.verify = realVerify;
 
     // A rotates while B is held.
-    await ctx.container.adminManagement.changeOwnPassword(tenantA, actor, {
-      currentPassword: 'the-original-password',
-      newPassword: 'the-password-a-wants',
-    });
+    await ctx.container.adminManagement.changeOwnPassword(
+      tenantA,
+      actor,
+      {
+        currentPassword: 'the-original-password',
+        newPassword: 'the-password-a-wants',
+      },
+      { ip: null },
+    );
 
     releaseB();
     const caught = await bSettled;
@@ -157,10 +167,15 @@ describe('password rotation is compare-and-set', () => {
 
     // Simulate the same collision without the stall: rotate once, then replay a
     // request built against the now-superseded hash.
-    await ctx.container.adminManagement.changeOwnPassword(tenantA, actor, {
-      currentPassword: 'the-original-password',
-      newPassword: 'the-password-a-wants',
-    });
+    await ctx.container.adminManagement.changeOwnPassword(
+      tenantA,
+      actor,
+      {
+        currentPassword: 'the-original-password',
+        newPassword: 'the-password-a-wants',
+      },
+      { ip: null },
+    );
 
     const stale = await ctx.container.admins.compareAndSetPasswordHash(
       tenantA,
@@ -266,10 +281,15 @@ describe('rehash on login cannot revert a rotation', () => {
     await loginIsHashing;
 
     // The rotation commits while the login is held mid-rehash.
-    await ctx.container.adminManagement.changeOwnPassword(tenantA, adminActorFor(subject), {
-      currentPassword: 'the-original-password',
-      newPassword: 'the-rotated-password',
-    });
+    await ctx.container.adminManagement.changeOwnPassword(
+      tenantA,
+      adminActorFor(subject),
+      {
+        currentPassword: 'the-original-password',
+        newPassword: 'the-rotated-password',
+      },
+      { ip: null },
+    );
 
     releaseLogin();
     await loginSettled;

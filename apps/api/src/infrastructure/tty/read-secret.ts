@@ -71,6 +71,15 @@ interface PendingRead {
 export class TerminalReader {
   /** Received but not yet consumed. Survives between questions, deliberately. */
   private surplus: number[] = [];
+  /**
+   * A CR ended the last answer, so an LF arriving next is its other half.
+   *
+   * Chunk boundaries are arbitrary. The first version of the CRLF fix only
+   * looked for the LF among bytes ALREADY buffered, so a chunk ending in CR
+   * left the LF to arrive later and resolve the next question as empty — the
+   * very defect it was written to close, moved one chunk along.
+   */
+  private pendingCr = false;
   private pending: PendingRead | null = null;
   private attached = false;
 
@@ -146,6 +155,13 @@ export class TerminalReader {
       const read = this.pending;
       const byte = this.surplus.shift() as number;
 
+      // The other half of a CRLF whose CR ended the previous answer, whether it
+      // came in the same chunk or a later one.
+      if (this.pendingCr) {
+        this.pendingCr = false;
+        if (byte === 0x0a) continue;
+      }
+
       // Raw mode delivers escape sequences verbatim: an arrow key sends
       // ESC [ D, Home sends ESC [ H. Left alone those bytes land IN the answer
       // — silently, for a password — and the operator ends up with a credential
@@ -178,10 +194,13 @@ export class TerminalReader {
 
       if (byte === 0x0a || byte === 0x0d) {
         // CRLF is ONE line ending. A terminal or PTY that sends both would
-        // otherwise leave the LF in `surplus`, and the next question would
-        // consume it immediately and resolve empty — shifting every later
-        // answer by one and making a correct password confirmation fail.
-        if (byte === 0x0d && this.surplus[0] === 0x0a) this.surplus.shift();
+        // otherwise leave the LF behind, and the next question would consume it
+        // immediately and resolve empty — shifting every later answer by one
+        // and making a correct password confirmation compare the wrong values.
+        //
+        // Recorded as state rather than consumed here, because the LF may not
+        // have arrived yet.
+        this.pendingCr = byte === 0x0d;
         const answer = Buffer.from(read.bytes).toString('utf8');
         this.finish(read, () => {
           read.resolve(answer);

@@ -3,7 +3,6 @@ import {
   errors,
   IDENTITY_ERROR_CODES,
   isNexaError,
-  NexaError,
   loginRequestSchema,
   type ActorContext,
   type Admin,
@@ -162,8 +161,6 @@ export class AuthenticationService {
     const username = command.username.trim().toLowerCase();
     const now = this.clock.now();
 
-    await this.assertNotThrottled(scope, actor, username, context.ip);
-
     // The attempt is counted NOW, before the verification, not after it fails.
     //
     // The check above only reads. A concurrent burst therefore all passed it
@@ -258,18 +255,29 @@ export class AuthenticationService {
       belowCurrentCost ? this.hasher.spendDummyWork() : Promise.resolve(),
     ]);
 
-    // From here the credential has been judged: every outcome below is a real
-    // verdict, and keeps or returns its reservation on its own terms.
-    verdict();
-
+    // `verdict()` is NOT called here.
+    //
+    // It used to be, on the reasoning that the credential had been judged — but
+    // a judged credential is not a disposed reservation. Everything below can
+    // still throw for reasons that have nothing to do with the password: the
+    // tenant read, the rehash, opening the transaction. Marking the attempt
+    // judged here left those failures holding the count, so at a limit of 1 a
+    // CORRECT password plus one transient error established a lock and rate
+    // limited the administrator's retry once it cleared.
+    //
+    // Each outcome below therefore marks itself judged at the point it disposes
+    // of its own reservation — keeping it, returning it, or clearing it with
+    // the session — and anything unexpected in between still releases.
     if (!passwordMatches) {
+      verdict();
       return await this.failLogin(scope, actor, username, reserved, 'BAD_PASSWORD');
     }
 
     // Checked AFTER the password, so a disabled account cannot be distinguished
     // from an active one without already knowing the password.
     if (credentials.admin.status !== 'ACTIVE') {
-      return this.failLogin(scope, actor, username, reserved, 'ADMIN_DISABLED');
+      verdict();
+      return await this.failLogin(scope, actor, username, reserved, 'ADMIN_DISABLED');
     }
 
     // Same placement, same reason: an installation that has been stopped must
@@ -287,7 +295,8 @@ export class AuthenticationService {
       // those are failures against a real credential and are what the counter
       // exists to count.
       await this.releaseReservations(scope, username, context.ip, reserved);
-      return this.failLogin(scope, actor, username, reserved, 'TENANT_INACTIVE');
+      verdict();
+      return await this.failLogin(scope, actor, username, reserved, 'TENANT_INACTIVE');
     }
 
     // The password was correct and the cost profile has since been raised, so
@@ -438,10 +447,17 @@ export class AuthenticationService {
       // was added to stop.
       if (issued === 'TENANT_STOPPED') {
         await this.releaseReservations(scope, username, context.ip, reserved);
-        return this.failLogin(scope, actor, username, reserved, 'TENANT_INACTIVE');
+        verdict();
+        return await this.failLogin(scope, actor, username, reserved, 'TENANT_INACTIVE');
       }
-      return this.failLogin(scope, actor, username, reserved, 'BAD_PASSWORD');
+      verdict();
+      return await this.failLogin(scope, actor, username, reserved, 'BAD_PASSWORD');
     }
+
+    // Issued: the transaction cleared the username counter and returned the IP
+    // reservation as part of the same commit, so there is nothing left to
+    // release and nothing after this point can fail.
+    verdict();
 
     const { permissions, roleKeys } = issued;
 
@@ -551,45 +567,6 @@ export class AuthenticationService {
     });
   }
 
-  private async assertNotThrottled(
-    scope: TenantContext,
-    actor: ActorContext,
-    username: string,
-    ip: string | null,
-  ): Promise<void> {
-    const now = this.clock.now();
-    const subjects: ['USERNAME' | 'IP', string][] = [['USERNAME', username]];
-    if (ip !== null) subjects.push(['IP', ip]);
-
-    for (const [kind, subject] of subjects) {
-      const state = await this.throttle.find(scope, kind, subject);
-      if (state?.lockedUntil && state.lockedUntil.getTime() > now.getTime()) {
-        const retryAfterSeconds = Math.ceil((state.lockedUntil.getTime() - now.getTime()) / 1000);
-        await this.audit.record(scope, actor, {
-          action: 'auth.login',
-          entityType: 'Admin',
-          entityId: null,
-          before: null,
-          after: { username, reason: 'THROTTLED' satisfies LoginFailureReason, subjectKind: kind },
-          result: 'DENIED',
-        });
-        throw new NexaError({
-          kind: 'RATE_LIMITED',
-          code: IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED,
-          message: 'Too many attempts. Try again later.',
-          details: { retryAfterSeconds },
-        });
-      }
-    }
-  }
-
-  /**
-   * Records the failure and throws the single generic error.
-   *
-   * `reason` reaches the audit log and the operational log. It never reaches
-   * the caller: the returned type is `never` precisely so no call site can
-   * accidentally branch on which kind of failure it was.
-   */
   /**
    * Counts this attempt against both subjects and refuses if it crosses a limit.
    *
@@ -609,7 +586,13 @@ export class AuthenticationService {
       // a refused password rotation are different actions and recording them as
       // the same one would make the trail lie about what was attempted.
       if (isNexaError(error) && error.code === IDENTITY_ERROR_CODES.AUTH_RATE_LIMITED) {
-        await this.recordThrottleDenial(scope, actor, username);
+        const subjectKind = error.details['subjectKind'];
+        await this.recordThrottleDenial(
+          scope,
+          actor,
+          username,
+          typeof subjectKind === 'string' ? subjectKind : null,
+        );
       }
       throw error;
     }
@@ -634,13 +617,18 @@ export class AuthenticationService {
     scope: TenantContext,
     actor: ActorContext,
     username: string,
+    subjectKind: string | null,
   ): Promise<void> {
     await this.audit.record(scope, actor, {
       action: 'auth.login',
       entityType: 'Admin',
       entityId: null,
       before: null,
-      after: { username, reason: 'THROTTLED' satisfies LoginFailureReason },
+      after: {
+        username,
+        reason: 'THROTTLED' satisfies LoginFailureReason,
+        ...(subjectKind === null ? {} : { subjectKind }),
+      },
       result: 'DENIED',
     });
   }

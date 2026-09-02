@@ -103,10 +103,15 @@ describe('a login cannot outlive the credential that authorised it', () => {
 
     await loginHasVerified;
 
-    await ctx.container.adminManagement.changeOwnPassword(tenantA, adminActorFor(subject), {
-      currentPassword: 'the-original-password',
-      newPassword: 'the-rotated-password',
-    });
+    await ctx.container.adminManagement.changeOwnPassword(
+      tenantA,
+      adminActorFor(subject),
+      {
+        currentPassword: 'the-original-password',
+        newPassword: 'the-rotated-password',
+      },
+      { ip: null },
+    );
 
     releaseLogin();
     const caught = await settled;

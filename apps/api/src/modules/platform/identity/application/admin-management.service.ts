@@ -75,6 +75,17 @@ function assertTenantActive(status: TenantStatus): void {
   }
 }
 
+/**
+ * What the surface must resolve for a password rotation.
+ *
+ * Mirrors `LoginContext`: deciding whether a client address can be believed is
+ * a transport question, and the application layer must not guess at it.
+ */
+export interface PasswordChangeContext {
+  /** The throttle subject, already checked against the trusted-proxy config. */
+  readonly ip: string | null;
+}
+
 export class AdminManagementService {
   constructor(
     private readonly guard: PermissionGuard,
@@ -564,7 +575,12 @@ export class AdminManagementService {
    * credential they believe is exposed. It needs no catalog permission for the
    * same reason — the current password IS the authorization.
    */
-  async changeOwnPassword(scope: ScopeContext, actor: ActorContext, input: unknown): Promise<void> {
+  async changeOwnPassword(
+    scope: ScopeContext,
+    actor: ActorContext,
+    input: unknown,
+    context: PasswordChangeContext,
+  ): Promise<void> {
     const command = changePasswordRequestSchema.parse(input);
     const adminId = adminIdOf(actor);
     if (adminId === null) {
@@ -601,7 +617,18 @@ export class AdminManagementService {
     }
     const tenantScope: TenantContext = scope;
 
-    const ip = typeof actor.ip === 'string' ? actor.ip : null;
+    // The throttle subject, resolved by the SURFACE — not `actor.ip`.
+    //
+    // `actor.ip` is the audit's view: whatever address the request arrived
+    // from, kept verbatim so the trail is honest. The throttle needs a
+    // different thing, which login already computes: an address that can be
+    // BELIEVED as a client's, null when it cannot. Behind a reverse proxy with
+    // no usable forwarded address that is the proxy's own IP, and counting
+    // against it would let one account's failed rotations lock the address
+    // every administrator shares — the installation-wide lockout the login path
+    // exists to avoid, reintroduced through the other door. IPv4-mapped forms
+    // are normalised there too, and were not here.
+    const ip = context.ip;
     const reserved = await this.reservePasswordAttempt(
       tenantScope,
       actor,
