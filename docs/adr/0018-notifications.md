@@ -50,14 +50,33 @@ both are enforced by unique constraints rather than by the queue behaving well.
 
 ### No network call inside a transaction
 
-The transaction writes the intent. The outbox row relays it. A worker consumer
-picks the job up, loads the intent, calls the transport **outside any
-transaction**, and records the attempt in a short transaction of its own.
+The business transaction writes the intent and commits. A dispatcher in the
+worker process then claims due intents with `FOR UPDATE SKIP LOCKED`, commits
+the claim, calls the transport **outside any transaction**, and records the
+attempt and the outcome in a second short transaction.
 
 This is not a style preference. A send holds a socket open for as long as
 Telegram feels like taking, and a transaction that waits on it holds its locks
 for the same duration — which is how a slow third party becomes a database
 incident.
+
+**The dispatcher is a poller and not an outbox consumer, and that was a
+correction.** The first version of this ADR routed notifications through a
+`NotificationQueued` domain event, on the reasoning that the outbox is already
+the durable hand-off. Reading `OutboxRelay` showed why that does not work:
+consumers run INSIDE the relay's claim transaction, by design — that transaction
+is what makes `processed_messages` an effectively-once claim. A consumer that
+sent would therefore hold a database transaction open across a Telegram call,
+which is the exact thing this section forbids.
+
+The event was removed rather than the rule bent. It would in any case have been
+a second durable copy of a fact the intent row already records, with no consumer
+other than "wake the sender up".
+
+The dispatcher's claim moves `next_attempt_at` forward by a lease before the
+send, so an intent whose sender dies mid-flight becomes eligible again rather
+than staying claimed forever, and the row's attempt history says how many times
+that happened.
 
 ### Transports are a port, and the real one is real
 

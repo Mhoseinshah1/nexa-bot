@@ -1,0 +1,249 @@
+import {
+  CONTROL_ERROR_CODES,
+  errors,
+  isMoneyValue,
+  templateDefinition,
+  type ActorContext,
+  type AuditWriter,
+  type Clock,
+  type IdGenerator,
+  type NotificationDestination,
+  type NotificationKind,
+  type PermissionKey,
+  type ScopeContext,
+  type SettingKey,
+  type TemplateKey,
+  type TemplateValues,
+} from '@nexa/contracts';
+import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
+import type { FeatureFlagResolver } from '../../features/application/feature-flags.service.js';
+import type { SettingsResolver } from '../../settings/application/settings-resolver.js';
+import type { DeliveryAttemptRecord, NotificationIntent, NotificationRepository } from './ports.js';
+
+export const NOTIFICATIONS_VIEW: PermissionKey = 'opslog.view';
+
+/**
+ * Creating and reading notification intents.
+ *
+ * Reading is guarded by `opslog.view`: a notification is operational record, the
+ * same family as an operational event, and it does not need a permission of its
+ * own to make a screen convenient.
+ *
+ * Creating is NOT guarded, and that is the distinction that matters. Nobody
+ * asks for an operational notification — a condition occurs and somebody should
+ * be told. There is no actor to authorize. What creating does require is a
+ * caller that has already decided, which is why `queue` takes a transaction: the
+ * intent commits with the thing that caused it or not at all.
+ */
+export class NotificationService {
+  constructor(
+    private readonly guard: PermissionGuard,
+    private readonly notifications: NotificationRepository,
+    private readonly settings: SettingsResolver,
+    private readonly features: FeatureFlagResolver,
+    private readonly clock: Clock,
+    private readonly ids: IdGenerator,
+    private readonly audit: AuditWriter,
+  ) {}
+
+  /**
+   * Records that something should be communicated.
+   *
+   * Returns `created: false` when an intent with this dedupe key already exists.
+   * That is the normal case for a repeating condition, and it is the mechanism
+   * by which sixty occurrences of one problem produce one message.
+   */
+  async queue(
+    scope: ScopeContext,
+    input: {
+      readonly kind: NotificationKind;
+      readonly dedupeKey: string;
+      readonly templateKey: TemplateKey;
+      readonly values: TemplateValues;
+      readonly correlationId?: string;
+    },
+    tx?: unknown,
+  ): Promise<{ readonly intent: NotificationIntent | null; readonly created: boolean }> {
+    if (!(await this.features.isEnabled(scope, 'ops_notifications', tx))) {
+      return { intent: null, created: false };
+    }
+
+    const destination = await this.destination(scope, tx);
+    if (destination === null) return { intent: null, created: false };
+
+    const maxAttempts = await this.settings.valueOf<number>(
+      scope,
+      'ops.notifications.max_attempts' as SettingKey,
+      tx,
+    );
+
+    // The template key is checked here rather than at send time, so a typo is a
+    // failure at the point that can still be fixed by a person, not a message
+    // that fails silently at three in the morning.
+    templateDefinition(input.templateKey);
+
+    return this.notifications.create(
+      scope,
+      {
+        id: this.ids.uuid(),
+        kind: input.kind,
+        dedupeKey: input.dedupeKey,
+        // A snapshot. An attempt from March must still say which chat it was
+        // addressed to after somebody repoints the destination in April.
+        destination,
+        payload: serialiseValues(input.values),
+        templateKey: input.templateKey,
+        maxAttempts,
+        correlationId: input.correlationId ?? null,
+        now: this.clock.now(),
+      },
+      tx,
+    );
+  }
+
+  async list(
+    scope: ScopeContext,
+    actor: ActorContext,
+    options: { limit?: number; before?: Date } = {},
+  ): Promise<NotificationIntent[]> {
+    await this.guard.check(scope, actor, NOTIFICATIONS_VIEW);
+    return this.notifications.list(scope, {
+      limit: Math.min(Math.max(options.limit ?? 50, 1), 200),
+      ...(options.before ? { before: options.before } : {}),
+    });
+  }
+
+  async get(
+    scope: ScopeContext,
+    actor: ActorContext,
+    id: string,
+  ): Promise<{ intent: NotificationIntent; attempts: DeliveryAttemptRecord[] }> {
+    await this.guard.check(scope, actor, NOTIFICATIONS_VIEW);
+    const intent = await this.notifications.findById(scope, id);
+    if (intent === null) {
+      throw errors.notFound(
+        CONTROL_ERROR_CODES.NOTIFICATION_NOT_FOUND,
+        'No such notification in this tenant.',
+      );
+    }
+    // The intent says what we meant to say; the attempts say what happened.
+    // Returning them together is the whole point of keeping them apart.
+    return { intent, attempts: await this.notifications.attempts(scope, id) };
+  }
+
+  /**
+   * Sends a test message to the configured destination.
+   *
+   * Exists because the legacy log group could not be tested at all: its forum
+   * topic id was never captured anywhere (UNK-GS-002), and a destination that
+   * cannot be tested is a destination discovered to be wrong during an incident.
+   *
+   * Requires `settings.edit`, not a permission of its own — it is part of
+   * configuring the destination, and it sends one message to an operations
+   * channel, not to a customer.
+   */
+  async sendTest(
+    scope: ScopeContext,
+    actor: ActorContext,
+  ): Promise<{ readonly intent: NotificationIntent; readonly created: boolean }> {
+    await this.guard.check(scope, actor, 'settings.edit');
+
+    const destination = await this.destination(scope);
+    if (destination === null) {
+      throw errors.validation(
+        CONTROL_ERROR_CODES.DESTINATION_NOT_CONFIGURED,
+        'No operations destination is configured, so there is nothing to test.',
+      );
+    }
+
+    const now = this.clock.now();
+    const maxAttempts = await this.settings.valueOf<number>(
+      scope,
+      'ops.notifications.max_attempts' as SettingKey,
+    );
+
+    const result = await this.notifications.create(scope, {
+      id: this.ids.uuid(),
+      kind: 'OPERATIONS_TEST',
+      // Each test is its own intent: two tests half an hour apart are two
+      // questions, and collapsing them would make the second one silently
+      // answer with the first one's result.
+      dedupeKey: `ops-test:${now.toISOString()}`,
+      destination,
+      // `label` is nullable on an actor; the template requires a name, so say
+      // what we actually know rather than rendering the word "null".
+      payload: serialiseValues({ requestedBy: actor.label ?? actor.type, at: now }),
+      templateKey: 'ops.notification.test',
+      maxAttempts,
+      correlationId: actor.correlationId,
+      now,
+    });
+
+    await this.audit.record(scope, actor, {
+      action: 'notifications.test',
+      entityType: 'Notification',
+      entityId: result.intent.id,
+      before: null,
+      after: { destination: describeDestination(destination) },
+      result: 'SUCCESS',
+    });
+
+    return result;
+  }
+
+  /** The configured destination, or null when there is none. */
+  private async destination(
+    scope: ScopeContext,
+    tx?: unknown,
+  ): Promise<NotificationDestination | null> {
+    const chatId = await this.settings.valueOf<string>(
+      scope,
+      'ops.notifications.telegram_chat_id' as SettingKey,
+      tx,
+    );
+    // Empty means "not configured", which the registry states as this key's
+    // declared zero meaning rather than leaving a reader to guess.
+    if (chatId.trim() === '') return null;
+
+    const topicId = await this.settings.valueOf<number | null>(
+      scope,
+      'ops.notifications.telegram_topic_id' as SettingKey,
+      tx,
+    );
+    return { transport: 'TELEGRAM', chatId, topicId };
+  }
+}
+
+/** A destination as it may appear in an audit row. Carries no credential. */
+function describeDestination(destination: NotificationDestination): Record<string, unknown> {
+  return destination.transport === 'TELEGRAM'
+    ? { transport: 'TELEGRAM', chatId: destination.chatId, topicId: destination.topicId }
+    : { transport: destination.transport };
+}
+
+/**
+ * Turns template values into something a `jsonb` column can hold.
+ *
+ * Dates become ISO strings and bigints become decimal strings, because JSON has
+ * neither. `Money` survives as its two fields, so the amount is still minor
+ * units plus a currency when it comes back out and is still rendered by the one
+ * formatter.
+ */
+export function serialiseValues(values: TemplateValues): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [token, value] of Object.entries(values)) {
+    if (value instanceof Date) {
+      out[token] = value.toISOString();
+    } else if (typeof value === 'bigint') {
+      out[token] = value.toString();
+    } else if (isMoneyValue(value)) {
+      // Minor units as a string, currency alongside. JSON has no bigint, and a
+      // number would silently lose precision above 2^53 — which is well inside
+      // the range of an amount denominated in Rial.
+      out[token] = { amountMinor: value.amountMinor.toString(), currency: value.currency };
+    } else {
+      out[token] = value;
+    }
+  }
+  return out;
+}

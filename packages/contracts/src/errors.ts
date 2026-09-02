@@ -163,3 +163,29 @@ export const IDENTITY_ERROR_CODES = {
   ROLE_NOT_FOUND: 'role.not_found',
   BOOTSTRAP_ALREADY_DONE: 'bootstrap.already_completed',
 } as const;
+
+/**
+ * Codes emitted by the control plane — templates, settings, feature flags,
+ * notifications and the operational-event surface.
+ *
+ * `VERSION_CONFLICT` is the one worth reading twice. It is returned when a write
+ * carried an expectation about the row it was replacing and the row had already
+ * moved. It is NOT an error the client should retry blindly: the change was
+ * built on state that is now stale, so the correct response is to re-read and
+ * decide again. The legacy alternative is that the second save silently
+ * discards the first, with nothing anywhere to notice it by.
+ */
+export const CONTROL_ERROR_CODES = {
+  UNKNOWN_KEY: 'control.unknown_key',
+  INVALID_VALUE: 'control.invalid_value',
+  VERSION_CONFLICT: 'control.version_conflict',
+  /** A template body that would ship a broken message to customers. */
+  TEMPLATE_INVALID: 'control.template_invalid',
+  /** A revert with nothing to revert: this tenant has no override of the key. */
+  TEMPLATE_NOT_OVERRIDDEN: 'control.template_not_overridden',
+  /** A TENANT_WIDE flag toggled without the confirmation the protocol requires. */
+  CONFIRMATION_REQUIRED: 'control.confirmation_required',
+  /** A notification asked for with no destination configured. */
+  DESTINATION_NOT_CONFIGURED: 'control.destination_not_configured',
+  NOTIFICATION_NOT_FOUND: 'control.notification_not_found',
+} as const;

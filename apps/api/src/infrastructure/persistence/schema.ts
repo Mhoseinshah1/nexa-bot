@@ -315,22 +315,10 @@ export const operationalEvents = pgTable(
     index('operational_events_tenant_seen_idx').on(table.tenantId, table.lastSeenAt),
     index('operational_events_code_idx').on(table.code),
     uniqueIndex('operational_events_dedupe_key').on(table.dedupeScope, table.dedupeKey),
-    /**
-     * The retention sweep's index.
-     *
-     * The sweep removes resolved events older than the window, across tenants,
-     * so it cannot use `operational_events_tenant_seen_idx` — that index leads
-     * with `tenant_id` and the sweep has no tenant to fix.
-     *
-     * Partial, and that is what makes it cheap rather than another unmeasured
-     * write cost on a hot table: an insert writes an UNRESOLVED row and does not
-     * touch this index at all. An entry appears only when a condition is marked
-     * resolved, which happens once per condition rather than once per
-     * occurrence.
-     */
-    index('operational_events_resolved_idx')
-      .on(table.resolvedAt)
-      .where(sql`resolved_at IS NOT NULL`),
+    // There is deliberately no index on `resolved_at`. One was drafted for a
+    // retention sweep, and the sweep turned out not to be able to exist (the
+    // table refuses DELETE — ADR-0020). An index whose only query was removed is
+    // a write cost with nothing on the other side of it, so it went too.
     check('operational_events_severity_check', enumCheck('severity', OPERATIONAL_SEVERITIES)),
     check('operational_events_occurrence_check', sql`occurrence_count >= 1`),
     // A resolver without a resolution time is nonsense in either direction. The
@@ -867,6 +855,16 @@ export const notifications = pgTable(
     correlationId: text('correlation_id'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     lastAttemptAt: timestamptz('last_attempt_at'),
+    /**
+     * The earliest moment the next attempt may run.
+     *
+     * Three jobs in one column: the initial "send now", the back-off after a
+     * retryable failure, and the LEASE the dispatcher takes when it claims a
+     * row. Pushing it forward before the send means an intent whose sender dies
+     * mid-flight becomes eligible again on its own, instead of staying claimed
+     * by a process that no longer exists.
+     */
+    nextAttemptAt: timestamptz('next_attempt_at').notNull().defaultNow(),
     /** When it reached SENT or FAILED. NULL while PENDING. */
     completedAt: timestamptz('completed_at'),
   },
@@ -879,6 +877,22 @@ export const notifications = pgTable(
     uniqueIndex('notifications_dedupe_key').on(table.tenantId, table.dedupeKey),
     // The administrator-facing list: this tenant's notifications, newest first.
     index('notifications_tenant_created_idx').on(table.tenantId, table.createdAt),
+    /**
+     * The dispatcher's claim.
+     *
+     * `SELECT ... WHERE status = 'PENDING' AND next_attempt_at <= now ORDER BY
+     * next_attempt_at FOR UPDATE SKIP LOCKED` — one query, run on a tick, and
+     * the only reason this index exists.
+     *
+     * Partial, and it stays small: a row leaves the index the moment it reaches
+     * SENT or FAILED, so it holds work in flight rather than all history.
+     * Deliberately not led by `tenant_id` — the dispatcher runs for the
+     * installation and has no tenant to fix, so a tenant-leading index would be
+     * a scan.
+     */
+    index('notifications_pending_idx')
+      .on(table.nextAttemptAt)
+      .where(sql`status = 'PENDING'`),
     check('notifications_kind_check', enumCheck('kind', NOTIFICATION_KINDS)),
     check('notifications_status_check', enumCheck('status', NOTIFICATION_STATUSES)),
     check('notifications_attempts_check', sql`attempt_count >= 0 AND max_attempts >= 1`),

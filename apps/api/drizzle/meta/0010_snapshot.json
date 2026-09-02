@@ -1,5 +1,5 @@
 {
-  "id": "d61a99fe-f14d-4a33-89ba-1bfbec87e52d",
+  "id": "2d167bdb-b35f-40c2-963a-30150b96b41a",
   "prevId": "7f0a0e55-0985-4876-a578-3cc7a39458d1",
   "version": "7",
   "dialect": "postgresql",
@@ -1543,6 +1543,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
         "completed_at": {
           "name": "completed_at",
           "type": "timestamp with time zone",
@@ -1589,6 +1596,22 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "notifications_pending_idx": {
+          "name": "notifications_pending_idx",
+          "columns": [
+            {
+              "expression": "next_attempt_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "status = 'PENDING'",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -1792,22 +1815,6 @@
             }
           ],
           "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "operational_events_resolved_idx": {
-          "name": "operational_events_resolved_idx",
-          "columns": [
-            {
-              "expression": "resolved_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "resolved_at IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}

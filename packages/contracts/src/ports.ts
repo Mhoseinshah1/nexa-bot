@@ -153,8 +153,32 @@ export interface OperationalEventInput {
   readonly recoversCode?: string;
 }
 
+/**
+ * What was actually recorded.
+ *
+ * `isNew` is the field that matters. A deduplicated condition collapses onto one
+ * row and increments a counter, so a projection driven by these — an alert, a
+ * notification — fires once per CONDITION rather than once per occurrence. The
+ * legacy log group posted the same expired-TLS error 36 + 15 + 8 + 1 times in a
+ * single day because nothing anywhere could tell those apart (BUG-LGR-028).
+ *
+ * `reopened` says the row had been marked resolved and this occurrence opened it
+ * again, which is worth telling somebody about even though the row is not new.
+ */
+export interface RecordedOperationalEvent {
+  readonly id: string;
+  readonly code: string;
+  readonly severity: OperationalSeverity;
+  readonly message: string;
+  readonly occurrenceCount: number;
+  readonly firstSeenAt: Date;
+  readonly lastSeenAt: Date;
+  readonly isNew: boolean;
+  readonly reopened: boolean;
+}
+
 export interface OperationalEventRecorder {
-  record(scope: ScopeContext, event: OperationalEventInput): Promise<void>;
+  record(scope: ScopeContext, event: OperationalEventInput): Promise<RecordedOperationalEvent>;
 }
 
 /**

@@ -24,6 +24,12 @@
 -- Composite foreign keys throughout, following migration 0007: a child row names
 -- "this id, IN THIS TENANT", so a mis-tenanted row is rejected by the database
 -- rather than becoming invisible to the tenant that owns the id.
+--
+-- One partial index is added, `notifications_pending_idx`, and it serves exactly
+-- one query: the dispatcher's claim. It stays small because a row leaves it the
+-- moment the notification reaches SENT or FAILED, and it deliberately does not
+-- lead with `tenant_id` — the dispatcher runs for the installation and has no
+-- tenant to fix.
 
 CREATE TABLE "feature_flag_states" (
 	"id" uuid PRIMARY KEY NOT NULL,
@@ -69,6 +75,7 @@ CREATE TABLE "notifications" (
 	"correlation_id" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"last_attempt_at" timestamp with time zone,
+	"next_attempt_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"completed_at" timestamp with time zone,
 	CONSTRAINT "notifications_tenant_id_key" UNIQUE("tenant_id","id"),
 	CONSTRAINT "notifications_kind_check" CHECK (kind IN ('OPERATIONAL_EVENT', 'OPERATIONS_TEST')),
@@ -134,8 +141,8 @@ CREATE UNIQUE INDEX "feature_flag_states_key" ON "feature_flag_states" USING btr
 CREATE UNIQUE INDEX "notification_delivery_attempts_key" ON "notification_delivery_attempts" USING btree ("tenant_id","notification_id","attempt_number");--> statement-breakpoint
 CREATE UNIQUE INDEX "notifications_dedupe_key" ON "notifications" USING btree ("tenant_id","dedupe_key");--> statement-breakpoint
 CREATE INDEX "notifications_tenant_created_idx" ON "notifications" USING btree ("tenant_id","created_at");--> statement-breakpoint
+CREATE INDEX "notifications_pending_idx" ON "notifications" USING btree ("next_attempt_at") WHERE status = 'PENDING';--> statement-breakpoint
 CREATE UNIQUE INDEX "setting_values_key" ON "setting_values" USING btree ("tenant_id","setting_key");--> statement-breakpoint
 CREATE UNIQUE INDEX "template_overrides_key" ON "template_overrides" USING btree ("tenant_id","template_key","locale");--> statement-breakpoint
 CREATE UNIQUE INDEX "template_revisions_key" ON "template_revisions" USING btree ("tenant_id","template_key","locale","revision");--> statement-breakpoint
-CREATE INDEX "operational_events_resolved_idx" ON "operational_events" USING btree ("resolved_at") WHERE resolved_at IS NOT NULL;--> statement-breakpoint
 ALTER TABLE "operational_events" ADD CONSTRAINT "operational_events_resolution_check" CHECK (resolved_by_event_id IS NULL OR resolved_at IS NOT NULL);

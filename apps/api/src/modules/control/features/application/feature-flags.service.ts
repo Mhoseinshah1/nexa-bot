@@ -1,0 +1,329 @@
+import { z } from 'zod';
+import {
+  CONTROL_ERROR_CODES,
+  errors,
+  FEATURE_FLAGS,
+  featureFlagDefinition,
+  isFeatureFlagKey,
+  PLATFORM_ERROR_CODES,
+  type ActorContext,
+  type AuditWriter,
+  type Clock,
+  type FeatureFlagKey,
+  type FeatureFlagSource,
+  type FlagBlastRadius,
+  type IdGenerator,
+  type IdempotencyStore,
+  type PermissionKey,
+  type ScopeContext,
+  type UnitOfWork,
+} from '@nexa/contracts';
+import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
+import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
+import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
+import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
+import type {
+  ResolvedSetting,
+  SettingsResolver,
+} from '../../settings/application/settings-resolver.js';
+import type { FeatureFlagRepository } from './ports.js';
+
+export const FEATURES_VIEW: PermissionKey = 'settings.view';
+export const FEATURES_EDIT: PermissionKey = 'settings.edit';
+
+/**
+ * A flag, its state, and the settings that parameterise it.
+ *
+ * The configuration travels WITH the flag rather than living two screens away.
+ * The legacy pair — `⚠️ اعلان کاهش موجودی` in one menu and `⚠️ مبلغ هشدار موجودی`
+ * in another — produced the recorded outcome that the flag is off, so the value
+ * is inert, and nothing on either screen says so (CBR-007, GSR-008).
+ */
+export interface ResolvedFeatureFlag {
+  readonly key: FeatureFlagKey;
+  readonly enabled: boolean;
+  readonly source: FeatureFlagSource;
+  readonly version: number | null;
+  readonly updatedAt: Date | null;
+  readonly updatedByAdminId: string | null;
+  readonly reason: string | null;
+  readonly description: string;
+  readonly blastRadius: FlagBlastRadius;
+  /**
+   * The settings this flag governs, each marked with whether it currently does
+   * anything. `inert` is the honest half of GSR-008's recommendation: a value
+   * that cannot take effect says so instead of looking configured.
+   */
+  readonly configuration: readonly (ResolvedSetting & { readonly inert: boolean })[];
+}
+
+export const setFeatureFlagCommandSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  key: z.string().min(1),
+  enabled: z.boolean(),
+  expectedVersion: z.number().int().positive().nullable(),
+  /**
+   * Typed confirmation of the target's identity, for a TENANT_WIDE flag.
+   *
+   * ADR-0010 asks for confirmation proportional to blast radius, and this is
+   * the shape it prescribes for a change that is not merely cosmetic: the
+   * operator names what they are changing. In the legacy system the whole-bot
+   * kill switch is rendered identically to the dice toggle and takes one press.
+   */
+  confirmKey: z.string().optional(),
+  reason: z.string().min(3).max(500).optional(),
+});
+export type SetFeatureFlagCommand = z.infer<typeof setFeatureFlagCommandSchema>;
+
+export interface SetFeatureFlagResult {
+  readonly flag: ResolvedFeatureFlag;
+  readonly changed: boolean;
+  readonly replayed: boolean;
+}
+
+export class FeatureFlagsService {
+  constructor(
+    private readonly guard: PermissionGuard,
+    private readonly uow: UnitOfWork<TransactionScope>,
+    private readonly flags: FeatureFlagRepository,
+    private readonly resolver: FeatureFlagResolver,
+    private readonly settings: SettingsResolver,
+    private readonly audit: AuditWriter,
+    private readonly outbox: OutboxWriter,
+    private readonly idempotency: IdempotencyStore,
+    private readonly clock: Clock,
+    private readonly ids: IdGenerator,
+    private readonly scopeActivity: ScopeActivityReader,
+  ) {}
+
+  async list(scope: ScopeContext, actor: ActorContext): Promise<ResolvedFeatureFlag[]> {
+    await this.guard.check(scope, actor, FEATURES_VIEW);
+    const states = await this.resolver.resolveAll(scope);
+    const settings = await this.settings.resolveAll(scope);
+    return states.map((state) => this.withConfiguration(state, settings));
+  }
+
+  async set(
+    scope: ScopeContext,
+    actor: ActorContext,
+    input: unknown,
+  ): Promise<SetFeatureFlagResult> {
+    try {
+      await this.guard.check(scope, actor, FEATURES_EDIT);
+    } catch (denial) {
+      await this.audit.record(scope, actor, {
+        action: 'features.set',
+        entityType: 'FeatureFlag',
+        entityId: null,
+        before: null,
+        after: null,
+        result: 'DENIED',
+      });
+      throw denial;
+    }
+
+    const command = setFeatureFlagCommandSchema.parse(input);
+    const key = this.requireKey(command.key);
+    const definition = featureFlagDefinition(key);
+
+    if (definition.blastRadius === 'TENANT_WIDE') {
+      if (command.confirmKey !== key) {
+        throw errors.validation(
+          CONTROL_ERROR_CODES.CONFIRMATION_REQUIRED,
+          `${key} affects every customer of this tenant. Confirm by naming the flag.`,
+          { key, blastRadius: definition.blastRadius },
+        );
+      }
+      if (!command.reason) {
+        throw errors.validation(
+          CONTROL_ERROR_CODES.CONFIRMATION_REQUIRED,
+          `${key} affects every customer of this tenant. A reason is required.`,
+          { key },
+        );
+      }
+    }
+
+    const requestHash = hashRequest({
+      key,
+      enabled: command.enabled,
+      expectedVersion: command.expectedVersion,
+    });
+    const existing = await this.idempotency.find<Omit<SetFeatureFlagResult, 'replayed'>>(
+      scope,
+      actor.surface,
+      command.idempotencyKey,
+      requestHash,
+    );
+    if (existing) return { ...existing.result, replayed: true };
+
+    const result = await this.uow.run(scope, async (tx) => {
+      if (!(await this.scopeActivity.scopeIsActive(scope, tx))) {
+        throw errors.notFound(
+          PLATFORM_ERROR_CODES.TENANT_NOT_FOUND,
+          'This scope is not accepting work.',
+        );
+      }
+
+      const before = await this.resolver.resolve(scope, key, tx);
+      const settings = await this.settings.resolveAll(scope, tx);
+
+      if (before.source === 'TENANT' && before.enabled === command.enabled) {
+        return { flag: this.withConfiguration(before, settings), changed: false };
+      }
+
+      const written = await this.flags.upsert(
+        scope,
+        {
+          id: this.ids.uuid(),
+          key,
+          enabled: command.enabled,
+          expectedVersion: command.expectedVersion,
+          reason: command.reason ?? null,
+          now: this.clock.now(),
+          adminId: actor.type === 'WEB_ADMIN' ? actor.id : null,
+        },
+        tx,
+      );
+
+      if (written === null) {
+        throw errors.conflict(
+          CONTROL_ERROR_CODES.VERSION_CONFLICT,
+          `${key} changed while you were editing it. Reload and reapply your change.`,
+          { key, expectedVersion: command.expectedVersion },
+        );
+      }
+
+      await this.audit.record(
+        scope,
+        actor,
+        {
+          action: 'features.set',
+          entityType: 'FeatureFlag',
+          entityId: key,
+          before: { enabled: before.enabled, source: before.source },
+          after: { enabled: written.enabled, source: 'TENANT' },
+          ...(command.reason ? { reason: command.reason } : {}),
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+
+      await this.outbox.write(tx, actor, {
+        eventType: 'FeatureFlagChanged',
+        aggregateType: 'FeatureFlag',
+        aggregateId: key,
+        payload: { key, from: before.enabled, to: written.enabled },
+      });
+
+      const flag = this.withConfiguration(await this.resolver.resolve(scope, key, tx), settings);
+      await this.idempotency.remember(
+        scope,
+        actor.surface,
+        command.idempotencyKey,
+        requestHash,
+        { flag, changed: true },
+        tx,
+      );
+      return { flag, changed: true };
+    });
+
+    return { ...result, replayed: false };
+  }
+
+  private withConfiguration(
+    state: ResolvedFlagState,
+    settings: readonly ResolvedSetting[],
+  ): ResolvedFeatureFlag {
+    const definition = featureFlagDefinition(state.key);
+    const governed = new Set<string>(definition.configuredBy);
+    return {
+      ...state,
+      description: definition.description,
+      blastRadius: definition.blastRadius,
+      configuration: settings
+        .filter((setting) => governed.has(setting.key))
+        .map((setting) => ({ ...setting, inert: !state.enabled })),
+    };
+  }
+
+  private requireKey(key: string): FeatureFlagKey {
+    if (!isFeatureFlagKey(key)) {
+      throw errors.notFound(CONTROL_ERROR_CODES.UNKNOWN_KEY, `No such feature flag: ${key}.`);
+    }
+    return key;
+  }
+}
+
+/**
+ * The unguarded half, for code deciding how to behave.
+ *
+ * Same reasoning as `SettingsResolver`: a worker asking whether a feature is on
+ * has no actor to authorize. Tenant scoping still applies on every read.
+ */
+export interface ResolvedFlagState {
+  readonly key: FeatureFlagKey;
+  readonly enabled: boolean;
+  readonly source: FeatureFlagSource;
+  readonly version: number | null;
+  readonly updatedAt: Date | null;
+  readonly updatedByAdminId: string | null;
+  readonly reason: string | null;
+}
+
+export class FeatureFlagResolver {
+  constructor(private readonly flags: FeatureFlagRepository) {}
+
+  async resolveAll(scope: ScopeContext, tx?: unknown): Promise<ResolvedFlagState[]> {
+    const stored = new Map((await this.flags.findAll(scope, tx)).map((row) => [row.key, row]));
+    return FEATURE_FLAGS.map((definition) => {
+      const key = definition.key as FeatureFlagKey;
+      return toState(key, stored.get(key) ?? null);
+    });
+  }
+
+  async resolve(
+    scope: ScopeContext,
+    key: FeatureFlagKey,
+    tx?: unknown,
+  ): Promise<ResolvedFlagState> {
+    return toState(key, await this.flags.find(scope, key, tx));
+  }
+
+  /** Whether a feature is on. The question most callers actually have. */
+  async isEnabled(scope: ScopeContext, key: FeatureFlagKey, tx?: unknown): Promise<boolean> {
+    return (await this.resolve(scope, key, tx)).enabled;
+  }
+}
+
+function toState(
+  key: FeatureFlagKey,
+  row: {
+    enabled: boolean;
+    version: number;
+    updatedAt: Date;
+    updatedByAdminId: string | null;
+    reason: string | null;
+  } | null,
+): ResolvedFlagState {
+  if (row === null) {
+    return {
+      key,
+      enabled: featureFlagDefinition(key).defaultEnabled,
+      source: 'DEFAULT',
+      version: null,
+      updatedAt: null,
+      updatedByAdminId: null,
+      reason: null,
+    };
+  }
+  return {
+    key,
+    enabled: row.enabled,
+    source: 'TENANT',
+    version: row.version,
+    updatedAt: row.updatedAt,
+    updatedByAdminId: row.updatedByAdminId,
+    reason: row.reason,
+  };
+}

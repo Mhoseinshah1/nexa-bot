@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { actorRefSchema, type ActorRef } from './actor.js';
-import { NOTIFICATION_KINDS } from './notifications.js';
 
 /**
  * Domain events.
@@ -85,10 +84,6 @@ export const EVENT_TYPES = [
   'TemplateOverrideChanged',
   'TemplateOverrideReverted',
   'FeatureFlagChanged',
-  // The only event in this set with a consumer today: the relay turns it into a
-  // send job, which is how the network call gets outside the transaction that
-  // created the intent.
-  'NotificationQueued',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -107,7 +102,6 @@ export const AGGREGATE_TYPES = [
   'Admin',
   'Template',
   'FeatureFlag',
-  'Notification',
 ] as const;
 export type AggregateType = (typeof AGGREGATE_TYPES)[number];
 
@@ -155,11 +149,6 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     revision: z.number().int().positive(),
   }),
   FeatureFlagChanged: z.object({ key: z.string(), from: z.boolean(), to: z.boolean() }),
-  NotificationQueued: z.object({
-    kind: z.enum(NOTIFICATION_KINDS),
-    /** The intent's identity. A retry reuses it and never mints a second one. */
-    dedupeKey: z.string(),
-  }),
 } as const satisfies Record<EventType, z.ZodType>;
 
 export type EventPayload<T extends EventType> = z.infer<(typeof EVENT_PAYLOAD_SCHEMAS)[T]>;

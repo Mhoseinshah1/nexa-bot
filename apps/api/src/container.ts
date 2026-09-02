@@ -44,6 +44,26 @@ import { BootstrapOwnerService } from './modules/platform/identity/application/b
 import { RetentionSweeper } from './modules/platform/identity/application/retention-sweeper.js';
 import { RecordPingService } from './modules/platform/system/application/record-ping.service.js';
 import { PingLogConsumer } from './modules/platform/opslog/application/ping-log.consumer.js';
+import { DrizzleOperationalEventReader } from './modules/platform/opslog/infrastructure/drizzle-operational-event.reader.js';
+import { OpsLogService } from './modules/platform/opslog/application/opslog.service.js';
+import { DrizzleSettingRepository } from './modules/control/settings/infrastructure/drizzle-settings.repository.js';
+import { SettingsResolver } from './modules/control/settings/application/settings-resolver.js';
+import { SettingsService } from './modules/control/settings/application/settings.service.js';
+import { DrizzleFeatureFlagRepository } from './modules/control/features/infrastructure/drizzle-feature-flags.repository.js';
+import {
+  FeatureFlagResolver,
+  FeatureFlagsService,
+} from './modules/control/features/application/feature-flags.service.js';
+import { DrizzleTemplateRepository } from './modules/control/templates/infrastructure/drizzle-template.repository.js';
+import { TemplateResolver } from './modules/control/templates/application/template-resolver.js';
+import { TemplateManagementService } from './modules/control/templates/application/template-management.service.js';
+import { DrizzleNotificationRepository } from './modules/control/notifications/infrastructure/drizzle-notification.repository.js';
+import { NotificationService } from './modules/control/notifications/application/notification.service.js';
+import { NotificationDispatcher } from './modules/control/notifications/application/notification-dispatcher.js';
+import { NotifyingOperationalEventRecorder } from './modules/control/notifications/application/operational-event-projector.js';
+import { TelegramNotificationTransport } from './modules/control/notifications/infrastructure/telegram-transport.js';
+import { RecordingTransport } from './modules/control/notifications/infrastructure/recording-transport.js';
+import type { NotificationTransport } from './modules/control/notifications/application/ports.js';
 
 /**
  * The composition root.
@@ -96,6 +116,19 @@ export interface Container {
   readonly installationTenantId: TenantId | null;
   setInstallationTenant(tenantId: TenantId | null): void;
   readonly recordPing: RecordPingService;
+
+  // Control plane — Phase 2
+  readonly settingsService: SettingsService;
+  readonly settingsResolver: SettingsResolver;
+  readonly featureFlags: FeatureFlagsService;
+  readonly featureFlagResolver: FeatureFlagResolver;
+  readonly templatesService: TemplateManagementService;
+  readonly templateResolver: TemplateResolver;
+  readonly notifications: NotificationService;
+  readonly notificationDispatcher: NotificationDispatcher;
+  readonly notificationTransport: NotificationTransport;
+  readonly opsLogService: OpsLogService;
+
   shutdown(): Promise<void>;
 }
 
@@ -119,8 +152,20 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const outbox = new OutboxWriter(ids, clock);
   const audit = new DrizzleAuditWriter(database.db, ids, clock);
-  const opsLog = new DrizzleOperationalEventRecorder(database.db, ids, clock);
   const idempotency = new DrizzleIdempotencyStore(database.db, ids);
+
+  // The recorder everything writes through. It is wrapped further down, once
+  // the notification service exists, so that recording an operational event and
+  // announcing it are one call rather than two things a call site must remember
+  // to do in the right order.
+  const opsLogWriter = new DrizzleOperationalEventRecorder(database.db, ids, clock);
+  const opsLogRef: { current: OperationalEventRecorder } = { current: opsLogWriter };
+  // A stable façade, so everything constructed before the projector still ends
+  // up going through it. Without this the guard, the throttle and the resolver
+  // would each hold the bare writer and their events would never be announced.
+  const opsLog: OperationalEventRecorder = {
+    record: (scope, event) => opsLogRef.current.record(scope, event),
+  };
 
   const hasher = new ScryptPasswordHasher(scryptParamsFor(config.PASSWORD_HASH_PROFILE));
   const admins = new DrizzleAdminRepository(database.db);
@@ -242,6 +287,114 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const recordPing = new RecordPingService(guard, uow, outbox, audit, idempotency, clock, tenants);
 
+  // ---------------------------------------------------------------------------
+  // Control plane
+  // ---------------------------------------------------------------------------
+
+  const settingRepository = new DrizzleSettingRepository(database.db);
+  const settingsResolver = new SettingsResolver(settingRepository, opsLog);
+  const settingsService = new SettingsService(
+    guard,
+    uow,
+    settingRepository,
+    settingsResolver,
+    audit,
+    outbox,
+    idempotency,
+    clock,
+    ids,
+    tenants,
+  );
+
+  const featureFlagRepository = new DrizzleFeatureFlagRepository(database.db);
+  const featureFlagResolver = new FeatureFlagResolver(featureFlagRepository);
+  const featureFlags = new FeatureFlagsService(
+    guard,
+    uow,
+    featureFlagRepository,
+    featureFlagResolver,
+    settingsResolver,
+    audit,
+    outbox,
+    idempotency,
+    clock,
+    ids,
+    tenants,
+  );
+
+  const templateRepository = new DrizzleTemplateRepository(database.db);
+  const templateResolver = new TemplateResolver(templateRepository, featureFlagResolver);
+  const templatesService = new TemplateManagementService(
+    guard,
+    uow,
+    templateRepository,
+    featureFlagResolver,
+    audit,
+    outbox,
+    idempotency,
+    clock,
+    ids,
+    tenants,
+  );
+
+  const notificationRepository = new DrizzleNotificationRepository(database.db);
+
+  // A second resolver, wired to the RAW recorder rather than to the façade.
+  //
+  // `SettingsResolver` records an operational event when a stored value no
+  // longer parses, and the projection below reads settings. Wiring the
+  // projection path through the façade would therefore make one bad stored value
+  // record an event, which projects, which reads settings, which records an
+  // event. This removes the cycle instead of detecting it at runtime.
+  const projectionSettings = new SettingsResolver(settingRepository, opsLogWriter);
+
+  const notifications = new NotificationService(
+    guard,
+    notificationRepository,
+    projectionSettings,
+    featureFlagResolver,
+    clock,
+    ids,
+    audit,
+  );
+
+  // Recording and announcing become one call from here on. Everything that
+  // already holds `opsLog` holds the façade, so this reaches them too.
+  opsLogRef.current = new NotifyingOperationalEventRecorder(
+    opsLogWriter,
+    notifications,
+    projectionSettings,
+    logger,
+  );
+
+  const notificationTransport: NotificationTransport =
+    config.NOTIFICATION_TRANSPORT === 'recording'
+      ? new RecordingTransport()
+      : new TelegramNotificationTransport(
+          botInstances,
+          config.TELEGRAM_API_BASE_URL,
+          config.NOTIFICATION_SEND_TIMEOUT_MS,
+        );
+
+  const notificationDispatcher = new NotificationDispatcher(
+    notificationRepository,
+    notificationTransport,
+    templateResolver,
+    settingsResolver,
+    clock,
+    ids,
+    logger,
+    {
+      pollIntervalMs: config.NOTIFICATION_DISPATCH_INTERVAL_MS,
+      batchSize: config.NOTIFICATION_DISPATCH_BATCH_SIZE,
+      leaseMs: config.NOTIFICATION_CLAIM_LEASE_MS,
+      baseBackoffMs: config.NOTIFICATION_BACKOFF_BASE_MS,
+      maxBackoffMs: config.NOTIFICATION_BACKOFF_MAX_MS,
+    },
+  );
+
+  const opsLogService = new OpsLogService(guard, new DrizzleOperationalEventReader(database.db));
+
   return {
     config,
     logger,
@@ -275,10 +428,28 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
     setInstallationTenant(tenantId: TenantId | null) {
       installationTenantId = tenantId;
+      // The dispatcher runs for the installation but the rate ceiling is a
+      // tenant setting. One install serves one customer (ADR-0001), so the
+      // primary tenant's ceiling is the installation's — stated here rather
+      // than assumed somewhere further down.
+      notificationDispatcher.setRateLimitScope(
+        tenantId === null ? null : { tenantId, botInstanceId: null },
+      );
     },
     recordPing,
+    settingsService,
+    settingsResolver,
+    featureFlags,
+    featureFlagResolver,
+    templatesService,
+    templateResolver,
+    notifications,
+    notificationDispatcher,
+    notificationTransport,
+    opsLogService,
     async shutdown() {
       await relay.stop();
+      await notificationDispatcher.stop();
       await throttleSweeper.stop();
       await sessionSweeper.stop();
       await redis.close();
