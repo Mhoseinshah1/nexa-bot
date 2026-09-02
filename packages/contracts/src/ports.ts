@@ -61,6 +61,23 @@ export interface Logger {
  */
 export interface UnitOfWork<TTransaction = unknown> {
   run<T>(scope: ScopeContext, fn: (tx: TTransaction) => Promise<T>): Promise<T>;
+  /**
+   * A savepoint inside an existing transaction.
+   *
+   * For work that may fail WITHOUT taking the caller's transaction with it.
+   * That is not something a `try`/`catch` can provide: in Postgres a failed
+   * statement aborts the whole transaction, so catching the error leaves every
+   * later statement failing with `current transaction is aborted` and loses the
+   * caller's own write — while the catch block reports that it kept it.
+   *
+   * Used by the operational-event projector, whose contract is that the event
+   * survives a projection that could not be built.
+   */
+  runNested<T>(
+    scope: ScopeContext,
+    tx: TTransaction,
+    fn: (tx: TTransaction) => Promise<T>,
+  ): Promise<T>;
 }
 
 /**
@@ -96,6 +113,21 @@ export interface IdempotencyStore {
     key: string,
     requestHash: string,
   ): Promise<IdempotencyRecord<TResult> | null>;
+  /**
+   * Stores the result of a completed command against its key.
+   *
+   * Returns FALSE when a record for this key already existed, which is the
+   * signal that a concurrent request with the same key won the race. It is not
+   * decoration: `find` runs before the work and cannot see a request that has
+   * not committed yet, so two simultaneous submissions of one key both find
+   * nothing and both do the work. The insert is where they meet, and a caller
+   * that ignores the answer has an idempotency key that stops a SEQUENTIAL
+   * replay and nothing else — precisely the case a double-clicked button
+   * produces.
+   *
+   * The loser should abandon its transaction, so its half of the duplicate work
+   * is rolled back rather than committed beside the winner's.
+   */
   remember<TResult>(
     scope: ScopeContext,
     namespace: IdempotencyNamespace,
@@ -103,7 +135,7 @@ export interface IdempotencyStore {
     requestHash: string,
     result: TResult,
     tx?: unknown,
-  ): Promise<void>;
+  ): Promise<boolean>;
 }
 
 export const AUDIT_RESULTS = ['SUCCESS', 'DENIED', 'FAILED'] as const;

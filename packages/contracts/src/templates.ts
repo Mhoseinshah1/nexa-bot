@@ -1,4 +1,4 @@
-import type { Money } from './money.js';
+import { CURRENCY_CODES, currencyCodeSchema, money, type Money } from './money.js';
 
 /**
  * Customer-facing text.
@@ -293,6 +293,116 @@ export function isMoneyValue(value: TemplateValue): value is Money {
     'amountMinor' in value &&
     'currency' in value
   );
+}
+
+/**
+ * One sample value, as a text field can hold it, turned into the type its
+ * placeholder declares.
+ *
+ * A preview form is text inputs, and a `DATETIME` placeholder needs a `Date`
+ * while a `MONEY` one needs an amount AND a currency. Without a coercion at the
+ * seam, those two placeholder types were unreachable from the admin screen and
+ * a `NUMBER` one was rejected on every attempt — the field could only ever send
+ * a string, and the validator only ever accepted a number.
+ *
+ * The text forms are stated once, here, rather than in each surface:
+ *
+ *   - `NUMBER`, `DURATION_DAYS`, `BYTES` — a whole number, e.g. `30`.
+ *   - `DATETIME` — anything `Date` parses, in practice ISO-8601, e.g.
+ *     `2026-09-02T08:00:00Z`.
+ *   - `MONEY` — minor units and a currency, e.g. `1250000 IRR`. Two parts on
+ *     purpose: the legacy `{price}` is a bare number whose unit lives in the
+ *     surrounding copy, which is how one card-to-card template came to say
+ *     تومان where its twin says ریال for the same token.
+ *   - `STRING` — itself.
+ *
+ * A refusal names the token and the form expected, because the person typing is
+ * the person who has to fix it.
+ */
+export type CoercedTemplateValue =
+  | { readonly ok: true; readonly value: TemplateValue }
+  | { readonly ok: false; readonly problem: string };
+
+export function coerceTemplateValue(
+  placeholder: PlaceholderDefinition,
+  raw: string,
+): CoercedTemplateValue {
+  const bad = (expected: string): CoercedTemplateValue => ({
+    ok: false,
+    problem: `{${placeholder.token}} is declared ${placeholder.type} and needs ${expected}; received ${JSON.stringify(raw)}.`,
+  });
+
+  switch (placeholder.type) {
+    case 'STRING':
+      return { ok: true, value: raw };
+
+    case 'NUMBER':
+    case 'DURATION_DAYS':
+    case 'BYTES': {
+      const trimmed = raw.trim();
+      // A whole number, and `Number('')` is 0 — which would silently turn an
+      // empty field into a supplied zero, and zero means something specific
+      // enough in this system to have its own registry field.
+      if (!/^-?\d+$/.test(trimmed)) return bad('a whole number such as 30');
+      return { ok: true, value: Number(trimmed) };
+    }
+
+    case 'DATETIME': {
+      const at = new Date(raw.trim());
+      if (Number.isNaN(at.getTime())) {
+        return bad('a date such as 2026-09-02T08:00:00Z');
+      }
+      return { ok: true, value: at };
+    }
+
+    case 'MONEY': {
+      const match = /^(-?\d+)\s+([A-Za-z]{3,4})$/.exec(raw.trim());
+      if (!match?.[1] || !match[2]) {
+        return bad('minor units and a currency, such as 1250000 IRR');
+      }
+      const currency = currencyCodeSchema.safeParse(match[2].toUpperCase());
+      if (!currency.success) {
+        return bad(`a known currency, one of ${CURRENCY_CODES.join(', ')}`);
+      }
+      return { ok: true, value: money(BigInt(match[1]), currency.data) };
+    }
+  }
+}
+
+/**
+ * A whole form of sample values, coerced together.
+ *
+ * Every field is attempted even after one fails, so a form with three wrong
+ * fields reports three problems rather than the first one three times.
+ */
+export function coerceTemplateValues(
+  definition: TemplateDefinition,
+  raw: Readonly<Record<string, string>>,
+): { readonly values: TemplateValues; readonly problems: readonly string[] } {
+  const values: Record<string, TemplateValue> = {};
+  const problems: string[] = [];
+
+  for (const placeholder of definition.placeholders) {
+    const supplied = raw[placeholder.token];
+    // An absent field and an empty one both mean "no sample for this token".
+    // The preview reports it as unresolved and leaves the token in place.
+    if (supplied === undefined || supplied.trim() === '') continue;
+
+    const coerced = coerceTemplateValue(placeholder, supplied);
+    if (coerced.ok) values[placeholder.token] = coerced.value;
+    else problems.push(coerced.problem);
+  }
+
+  // A token the catalogue does not declare cannot be rendered and is not
+  // silently dropped: an administrator who typed one is told, rather than
+  // shown a preview that ignored their input.
+  for (const token of Object.keys(raw)) {
+    if (!definition.placeholders.some((placeholder) => placeholder.token === token)) {
+      problems.push(`{${token}} is not declared for this template.`);
+    }
+  }
+
+  return { values, problems };
 }
 
 // ---------------------------------------------------------------------------

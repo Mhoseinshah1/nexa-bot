@@ -113,6 +113,8 @@ export const PLATFORM_ERROR_CODES = {
   TENANT_NOT_FOUND: 'platform.tenant_not_found',
   PERMISSION_DENIED: 'platform.permission_denied',
   IDEMPOTENCY_PAYLOAD_MISMATCH: 'platform.idempotency_payload_mismatch',
+  /** Another request holding the same idempotency key committed first. */
+  IDEMPOTENCY_IN_FLIGHT: 'platform.idempotency_in_flight',
   UNKNOWN_EVENT_TYPE: 'platform.unknown_event_type',
   CONFIG_INVALID: 'platform.config_invalid',
   SECRET_DECRYPT_FAILED: 'platform.secret_decrypt_failed',

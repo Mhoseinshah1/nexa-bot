@@ -252,7 +252,16 @@ export const resolvedSettingSchema = z.object({
   key: z.string(),
   value: z.unknown(),
   source: z.enum(SETTING_SOURCES),
-  /** Null when the value is the default: no row, so no version to state. */
+  /**
+   * The stored row's version, or null when there is genuinely no row.
+   *
+   * A row whose value no longer parses reports `source: 'DEFAULT'` — the
+   * default is what is in force — but still reports ITS OWN version, because
+   * that is what a caller must state to overwrite it. Reporting null there made
+   * the key permanently unwritable: the write took its first-write branch, the
+   * insert conflicted with the row that was there all along, and every reload
+   * returned null again.
+   */
   version: z.number().int().positive().nullable(),
   updatedAt: nullableIsoTimestamp,
   updatedByAdminId: z.string().nullable(),
@@ -262,6 +271,12 @@ export const resolvedSettingSchema = z.object({
   mutability: z.enum(SETTING_MUTABILITIES),
   classification: z.enum(SETTING_CLASSIFICATIONS),
   configures: z.string().nullable(),
+  /**
+   * A row exists whose value no longer parses against its declaration, so the
+   * default is in force. A surface should say so rather than present the
+   * default as a deliberate choice, and submitting a valid value repairs it.
+   */
+  storedValueInvalid: z.boolean(),
 });
 export type ResolvedSettingResponse = z.infer<typeof resolvedSettingSchema>;
 
@@ -403,8 +418,17 @@ export type RevertTemplateRequest = z.infer<typeof revertTemplateRequestSchema>;
 export const previewTemplateRequestSchema = z.object({
   /** The body on screen, so a preview shows what is being edited. */
   body: z.string(),
-  /** Sample values supplied by the caller, never taken from their own account. */
-  values: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
+  /**
+   * Sample values supplied by the caller, never taken from their own account.
+   *
+   * TEXT, because a preview form is text fields, and coerced server-side to
+   * each placeholder's declared type by `coerceTemplateValues`. Accepting
+   * `string | number` here instead made a `NUMBER` placeholder rejected on
+   * every attempt from the admin screen and made `DATETIME` and `MONEY` ones
+   * impossible to supply at all: the field could only send a string, and the
+   * validator only accepted a `Date` or a `Money`.
+   */
+  values: z.record(z.string(), z.string()).optional(),
 });
 export type PreviewTemplateRequest = z.infer<typeof previewTemplateRequestSchema>;
 
@@ -509,6 +533,24 @@ export const sendTestNotificationRequestSchema = z.object({
   idempotencyKey: z.string().min(8).max(255),
 });
 export type SendTestNotificationRequest = z.infer<typeof sendTestNotificationRequestSchema>;
+
+/**
+ * What a test send answers with.
+ *
+ * The intent, its REAL attempts, and whether this call created anything.
+ * Answering with the detail shape and a hard-coded empty attempt list said
+ * "nothing has been tried yet" for a replay of a key whose message had already
+ * failed twice — a screen reporting a state the database does not hold, which
+ * is the legacy pattern this module exists to end.
+ */
+export const sendTestNotificationResponseSchema = z.object({
+  notification: notificationSchema,
+  attempts: z.array(deliveryAttemptSchema),
+  /** False when this call replayed an earlier one rather than queueing anything. */
+  created: z.boolean(),
+  replayed: z.boolean(),
+});
+export type SendTestNotificationResponse = z.infer<typeof sendTestNotificationResponseSchema>;
 
 export const CONTROL_ROUTES = {
   settings: '/settings',
