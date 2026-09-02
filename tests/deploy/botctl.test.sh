@@ -177,11 +177,14 @@ test_case 'the installer refuses to be used as an updater'
 # deploy.env named the new one, and the next reboot started an un-migrated
 # image. It also destroyed the rollback relationship silently.
 printf 'v1.0.0\n' >"${NEXA_STATE_DIR}/current"
-# SOURCED and driven through `preflight` alone, never executed: an installer
-# run for real on a build machine would install Docker on it.
+# SOURCED and driven through the one guard, never executed: an installer run
+# for real on a build machine would install Docker on it. And the guard is
+# called directly rather than through `preflight`, whose FIRST check is that
+# the caller is root — CI's runner is not, so going through preflight tested
+# the root check and reported this one green.
 installer_output="$(bash -c '
   . "$1" --domain admin.example.test --acme-email ops@example.test --version "$2" >/dev/null 2>&1
-  preflight 2>&1' _ "${REPO}/deploy/install.sh" v2.0.0 || true)"
+  refuse_version_change 2>&1' _ "${REPO}/deploy/install.sh" v2.0.0 || true)"
 assert_contains 'the installer did not refuse a version change' \
   "$installer_output" 'the installer is not an updater'
 assert_contains 'the refusal did not point at botctl update' \
@@ -192,7 +195,7 @@ test_case 'the installer accepts a rerun of the version it already installed'
 # It gets past the version check and fails later, on something else.
 installer_output="$(bash -c '
   . "$1" --domain admin.example.test --acme-email ops@example.test --version "$2" >/dev/null 2>&1
-  preflight 2>&1' _ "${REPO}/deploy/install.sh" v1.0.0 || true)"
+  refuse_version_change 2>&1' _ "${REPO}/deploy/install.sh" v1.0.0 || true)"
 assert_not_contains 'a rerun of the same version was refused' \
   "$installer_output" 'the installer is not an updater'
 rm -f "${NEXA_STATE_DIR}/current"

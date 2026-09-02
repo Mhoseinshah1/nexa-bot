@@ -135,6 +135,26 @@ done
 # Everything that can be known before anything is changed is checked before
 # anything is changed. An installer that fails on step nine having already
 # written six files is an installer people are afraid to run.
+# A rerun of the installer is supported and documented; a rerun with a DIFFERENT
+# --version is not, and it used to be accepted. The installer takes no backup,
+# never writes `previous`, and repoints deploy.env at the new image BEFORE
+# anything is pulled, migrated or started. So a failed migration left the
+# installation still running and still reporting the old release, with
+# deploy.env naming the new one — and the next restart or reboot started an
+# un-migrated image. It also silently destroyed the rollback relationship
+# `botctl rollback` depends on.
+#
+# Its own function, and not because preflight is long: this is the one refusal
+# the suite must be able to drive without being root, and preflight's first
+# check is that the caller IS root.
+refuse_version_change() {
+  local installed
+  installed="$(nexa_current_version || true)"
+  [ -n "$installed" ] || return 0
+  [ "$installed" != "$VERSION" ] || return 0
+  nexa_die "this host already runs ${installed}, and the installer is not an updater: it takes no backup, records no rollback target, and would repoint the deployment at ${VERSION} before anything had been migrated or started. Run instead: botctl update ${VERSION}"
+}
+
 preflight() {
   nexa_step "preflight"
 
@@ -150,24 +170,7 @@ preflight() {
   [ -n "$VERSION" ] || nexa_die "--version is required. A deployment without a version is a deployment nobody can support."
   nexa_require_version "$VERSION"
 
-  # --- Not an updater ---
-  #
-  # Before anything else that touches the host, because this is the one refusal
-  # the operator must get instead of a half-changed installation.
-  #
-  # A rerun of the installer is supported and documented; a rerun with a
-  # DIFFERENT --version is not, and it used to be accepted. It takes no backup,
-  # never writes `previous`, and repoints deploy.env at the new image BEFORE
-  # anything is pulled, migrated or started. So a failed migration left the
-  # installation still running and still reporting the old release, with
-  # deploy.env naming the new one — and the next restart or reboot started an
-  # un-migrated image. It also silently destroyed the rollback relationship
-  # `botctl rollback` depends on.
-  local installed
-  installed="$(nexa_current_version || true)"
-  if [ -n "$installed" ] && [ "$installed" != "$VERSION" ]; then
-    nexa_die "this host already runs ${installed}, and the installer is not an updater: it takes no backup, records no rollback target, and would repoint the deployment at ${VERSION} before anything had been migrated or started. Run instead: botctl update ${VERSION}"
-  fi
+  refuse_version_change
 
   # --- The platform ---
   local id="" release="" arch
