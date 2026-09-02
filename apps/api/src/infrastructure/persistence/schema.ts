@@ -1044,6 +1044,7 @@ export const schema = {
   featureFlagStates,
   notifications,
   notificationDeliveryAttempts,
+  notificationReleasedClaims,
 };
 
 /** Tables the database itself refuses to UPDATE or DELETE. */
@@ -1052,4 +1053,8 @@ export const APPEND_ONLY_TABLES = [
   'processed_messages',
   'template_revisions',
   'notification_delivery_attempts',
+  // Load-bearing accounting, not just evidence: spend is `attempt_count` minus
+  // these rows, so deleting one silently spends an attempt that was handed
+  // back and adding one silently returns an attempt that was not.
+  'notification_released_claims',
 ] as const;

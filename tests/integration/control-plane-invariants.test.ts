@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { APPEND_ONLY_TABLES } from '../../apps/api/src/infrastructure/persistence/schema';
 import { createTestContext, SEED_IDS, tenantA, type TestContext } from './harness';
 
 /**
@@ -162,6 +163,63 @@ describe('control-plane invariants', () => {
       await expect(
         query(`UPDATE notification_delivery_attempts SET outcome = 'FAILED_PERMANENT'`),
       ).rejects.toThrowError(/append-only/i);
+    });
+
+    /**
+     * A released claim is accounting, not just history.
+     *
+     * Spend is `attempt_count` minus these rows, and `claimDue`,
+     * `failExhausted` and the dispatcher's abandonment test all read that
+     * figure. So a row DELETED here silently spends an attempt that was handed
+     * back — enough of them and a message is written off having never been
+     * sent — and a row EDITED here reassigns a hand-back to a different
+     * attempt number, which is the identity the whole ownership model rests
+     * on. The application only ever inserts, with `ON CONFLICT DO NOTHING`;
+     * the database now refuses everything else.
+     */
+    const insertRelease = (notification: string, attempt: number) => `
+      INSERT INTO notification_released_claims
+        (tenant_id, notification_id, attempt_number, released_at, reason)
+      VALUES ('${A}', '${notification}', ${attempt}, now(), 'tenant.not_active')`;
+
+    it('refuses to edit a released claim', async () => {
+      const notification = ctx.container.ids.uuid();
+      await query(insert(A, notification, 'k5'));
+      await query(insertRelease(notification, 1));
+      await expect(
+        query(`UPDATE notification_released_claims SET attempt_number = 2`),
+      ).rejects.toThrowError(/append-only/i);
+    });
+
+    it('refuses to delete a released claim', async () => {
+      const notification = ctx.container.ids.uuid();
+      await query(insert(A, notification, 'k6'));
+      await query(insertRelease(notification, 1));
+      await expect(query(`DELETE FROM notification_released_claims`)).rejects.toThrowError(
+        /append-only/i,
+      );
+    });
+
+    /**
+     * Every table the code CLAIMS is append-only actually is.
+     *
+     * `APPEND_ONLY_TABLES` is read by the boundary checks and by anything
+     * reasoning about evidence. A name on that list with no trigger behind it
+     * is a guarantee asserted in TypeScript and not enforced anywhere — so the
+     * list is checked against the database rather than trusted.
+     */
+    it('enforces every table named in APPEND_ONLY_TABLES', async () => {
+      const missing: string[] = [];
+      for (const table of APPEND_ONLY_TABLES) {
+        const result = await query(`
+          SELECT tgname FROM pg_trigger
+           WHERE tgrelid = '${table}'::regclass
+             AND NOT tgisinternal
+             AND tgname IN ('${table}_no_update', '${table}_no_delete')`);
+        const found = result.rows.map((row) => String(row.tgname)).sort();
+        if (found.length !== 2) missing.push(`${table} (${found.join(', ') || 'no guards'})`);
+      }
+      expect(missing, `named append-only but not enforced: ${missing.join('; ')}`).toEqual([]);
     });
   });
 

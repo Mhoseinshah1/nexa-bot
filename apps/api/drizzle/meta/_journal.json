@@ -92,6 +92,13 @@
       "when": 1788372544738,
       "tag": "0012_notification_released_claims",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1788372545738,
+      "tag": "0013_released_claims_guards",
+      "breakpoints": true
     }
   ]
 }
