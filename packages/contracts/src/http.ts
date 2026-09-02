@@ -570,15 +570,41 @@ export const deliveryAttemptSchema = z.object({
 export type DeliveryAttemptResponse = z.infer<typeof deliveryAttemptSchema>;
 
 /**
+ * A claim that was handed back without ever reaching the transport.
+ *
+ * The counterpart to a delivery attempt: an attempt row says what happened on
+ * the wire, and one of these says that on this number nothing did. Together
+ * they are what the intent's `attemptCount` is made of, so an operator reading
+ * a history where the two disagree in number can see why.
+ *
+ * `reason` is a machine code, never a sentence — `tenant.not_active` for a
+ * claim returned because the installation was stopped mid-batch, and
+ * `sweep.withdrawn` for the one case that reads strangely without it: the
+ * exhaustion sweep's own FAILED_PERMANENT row, retired when a hand-back showed
+ * the intent had never actually spent its attempts. Without this array that row
+ * is an ordinary permanent failure sitting in the history of an intent that is
+ * somehow PENDING again.
+ */
+export const releasedClaimSchema = z.object({
+  attemptNumber: z.number().int().positive(),
+  releasedAt: isoTimestamp,
+  reason: z.string(),
+});
+export type ReleasedClaimResponse = z.infer<typeof releasedClaimSchema>;
+
+/**
  * One intent and everything that happened to it.
  *
  * The two halves are returned together and stay distinguishable, which is the
  * question the legacy system cannot answer about its own notification report
- * (UNK-LGR-015).
+ * (UNK-LGR-015). `releasedClaims` is the third: the claims that were issued and
+ * given back, which is the only thing that explains an `attemptCount` larger
+ * than the attempt list under it.
  */
 export const notificationDetailResponseSchema = z.object({
   notification: notificationSchema,
   attempts: z.array(deliveryAttemptSchema),
+  releasedClaims: z.array(releasedClaimSchema),
 });
 export type NotificationDetailResponse = z.infer<typeof notificationDetailResponseSchema>;
 
@@ -600,15 +626,18 @@ export type SendTestNotificationRequest = z.infer<typeof sendTestNotificationReq
 /**
  * What a test send answers with.
  *
- * The intent, its REAL attempts, and whether this call created anything.
- * Answering with the detail shape and a hard-coded empty attempt list said
- * "nothing has been tried yet" for a replay of a key whose message had already
- * failed twice — a screen reporting a state the database does not hold, which
- * is the legacy pattern this module exists to end.
+ * The intent, its REAL attempts, its returned claims, and whether this call
+ * created anything. Answering with the detail shape and a hard-coded empty
+ * attempt list said "nothing has been tried yet" for a replay of a key whose
+ * message had already failed twice — a screen reporting a state the database
+ * does not hold, which is the legacy pattern this module exists to end. A
+ * replay whose claims were handed back has the same gap, so the same three
+ * fields answer here as on the detail route.
  */
 export const sendTestNotificationResponseSchema = z.object({
   notification: notificationSchema,
   attempts: z.array(deliveryAttemptSchema),
+  releasedClaims: z.array(releasedClaimSchema),
   /** False when this call replayed an earlier one rather than queueing anything. */
   created: z.boolean(),
   replayed: z.boolean(),
