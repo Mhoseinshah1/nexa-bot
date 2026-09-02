@@ -126,6 +126,15 @@ chmod 0600 "$env_file"
 printf '%s\n' "$before" >"$env_file"
 chmod 0600 "$env_file"
 
+test_case 'readiness ignores a leftover one-off container'
+# `docker compose run` containers carry Service == "api". A migration container
+# left behind by a killed update, or by a --rm that did not fire, would be
+# picked by a first-match parser — and readiness would report on an exited
+# container while the real api was healthy, backing out a good release.
+fake_set stale_run 1
+assert_ok 'a leftover run container was mistaken for the api' nexa_wait_ready 5
+fake_set stale_run 0
+
 test_case 'the installer refuses to be used as an updater'
 # It takes no backup, never writes `previous`, and repoints deploy.env at the
 # new image before anything is pulled, migrated or started — so a failed
@@ -411,7 +420,13 @@ setup_fake_docker
 seed_release 'v1.0.0' "$DIGEST_A"
 test_case 'a target that never becomes ready does not become current'
 fake_set resolve_digest "$DIGEST_B"
-fake_set api_health 'starting'
+# ONLY the target is unhealthy. That distinction is the whole test: with one
+# global health value the previous release could not come back either, so this
+# landed on the panic branch ("NEITHER came back cleanly") and silently proved
+# something else. The branch below is the one docs/deployment.md promises —
+# "The previous release is restarted; it remains current" — and it had no
+# coverage at all.
+fake_set "api_health_${DIGEST_B}" 'starting'
 # The readiness wait is bounded; shorten it so the test is not.
 NEXA_READY_TIMEOUT=6 run_botctl update v2.0.0
 assert_fails 'an unready target exited zero' test "$BOTCTL_STATUS" -eq 0
@@ -419,6 +434,27 @@ assert_equals 'an unready target became current' 'v1.0.0' "$(cat "${NEXA_STATE_D
 assert_equals 'deploy.env was repointed at an unready release' \
   "registry.test/nexa@${DIGEST_A}" \
   "$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE)"
+# The documented outcome, in the operator's words, not the panic one.
+assert_contains 'the operator was not told the previous release came back' \
+  "$BOTCTL_OUTPUT" 'is running again and is still the current release'
+assert_not_contains 'the back-out landed on the panic branch' \
+  "$BOTCTL_OUTPUT" 'did not come back cleanly'
+
+test_case 'a target that dies is backed out without waiting out the timeout'
+# An api container that EXITED is not listed by `docker compose ps` without
+# --all, so the readiness parse yielded nothing, that read as "not ready yet",
+# and the update waited out the whole timeout — twice, counting the back-out's
+# own wait — for a container that was already gone.
+fake_set "api_health_${DIGEST_B}" ''
+fake_set stale_run 1
+started="$(date +%s)"
+NEXA_READY_TIMEOUT=60 run_botctl update v2.0.0
+elapsed=$(( $(date +%s) - started ))
+fake_set stale_run 0
+assert_fails 'a dead target exited zero' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'a dead target became current' 'v1.0.0' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_ok 'the update waited out the readiness timeout for a dead container' \
+  test "$elapsed" -lt 30
 teardown_root
 
 # =============================================================================
@@ -563,8 +599,21 @@ flock -x 9
 run_botctl update v2.0.0
 assert_fails 'a second update ran while the lock was held' test "$BOTCTL_STATUS" -eq 0
 assert_contains 'the lock refusal was not explained' "$BOTCTL_OUTPUT" 'already running'
+# A rollback TARGET, without which this proves nothing: an unseeded fixture
+# makes rollback fail with "nothing to roll back to" whether the lock is held
+# or not, and deleting `nexa_acquire_lock` from cmd_rollback left the whole
+# suite green.
+seed_release 'v0.9.0' "$DIGEST_C"
+printf 'v0.9.0\n' >"${NEXA_STATE_DIR}/previous"
+printf 'v1.0.0\n' >"${NEXA_STATE_DIR}/current"
+set_deploy_image "registry.test/nexa@${DIGEST_A}"
 run_botctl rollback
 assert_fails 'a rollback ran while the lock was held' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the rollback refusal was not about the lock' \
+  "$BOTCTL_OUTPUT" 'already running'
+assert_equals 'a locked-out rollback still moved current' 'v1.0.0' \
+  "$(cat "${NEXA_STATE_DIR}/current")"
+rm -f "${NEXA_STATE_DIR}/previous"
 flock -u 9
 exec 9>&-
 

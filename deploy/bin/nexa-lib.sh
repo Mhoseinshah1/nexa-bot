@@ -287,7 +287,13 @@ nexa_wait_ready() {
     # shell must not expand anything inside it — an interpolated value here
     # would be code, not data.
     # shellcheck disable=SC2016
-    state="$(nexa_compose ps --format json api 2>/dev/null |
+    # `--all`, because without it an api container that EXITED is simply not
+    # listed: the parse yields nothing, that reads as "not ready yet", and the
+    # loop waits out the entire timeout for a container that is gone. With it
+    # the `exited | dead` fast-fail below is reachable, which is the difference
+    # between a failed release being backed out in seconds and in six minutes
+    # (this wait, then the back-out's own).
+    state="$(nexa_compose ps --all --format json api 2>/dev/null |
       python3 -c '
 import json, sys
 raw = sys.stdin.read().strip()
@@ -307,10 +313,22 @@ except json.JSONDecodeError:
                 entries.append(json.loads(line))
             except json.JSONDecodeError:
                 pass
+# `docker compose run` containers carry Service == "api" too. A migration
+# container left behind by a killed update would be picked first on a plain
+# "first match wins", and readiness would report on THAT — backing out a
+# release that was actually healthy. Prefer an entry that reports a Health at
+# all, and fall back to the first api entry only when none does.
+chosen = None
 for entry in entries:
-    if entry.get("Service") == "api":
-        print(entry.get("Health") or entry.get("State") or "")
+    if entry.get("Service") != "api":
+        continue
+    if entry.get("Health"):
+        chosen = entry
         break
+    if chosen is None:
+        chosen = entry
+if chosen is not None:
+    print(chosen.get("Health") or chosen.get("State") or "")
 ' 2>/dev/null || true)"
 
     case "$state" in

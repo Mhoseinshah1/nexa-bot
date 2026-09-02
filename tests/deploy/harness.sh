@@ -171,6 +171,7 @@ setup_fake_docker() {
   printf '0' >"${FAKE_DIR}/exec_exit"
   printf '0' >"${FAKE_DIR}/empty_dump"
   printf 'healthy' >"${FAKE_DIR}/api_health"
+  printf '0' >"${FAKE_DIR}/stale_run"
   printf 'sha256:%s' "$(printf 'a%.0s' {1..64})" >"${FAKE_DIR}/resolve_digest"
   printf '0' >"${FAKE_DIR}/resolve_exit"
 
@@ -178,6 +179,7 @@ setup_fake_docker() {
 #!/usr/bin/env bash
 # Fake docker. Records what it was asked and answers from FAKE_DIR.
 set -uo pipefail
+NEXA_IMAGE="${NEXA_IMAGE:-}"
 printf '%s\n' "$*" >>"$DOCKER_LOG"
 
 read_state() { cat "${FAKE_DIR}/$1" 2>/dev/null || printf '%s' "$2"; }
@@ -225,7 +227,27 @@ case "${1:-}" in
         # asked for — and readiness would silently never be detected.
         case "$*" in
           *'--format json'*)
-            printf '{"Service":"api","State":"running","Health":"%s"}\n' "$(read_state api_health healthy)"
+            # A leftover `compose run` container, if a test asked for one. It
+            # carries Service == "api" and reports NO Health, exactly as a
+            # migration container left behind by a killed update does, and it
+            # is emitted FIRST so a naive first-match parser picks it.
+            #
+            # And, like real compose, an EXITED container is listed only with
+            # `--all`. Without modelling that, the caller's `--all` is
+            # decorative and the fast-fail it makes reachable is untestable.
+            if [ "$(read_state stale_run 0)" != "0" ]; then
+              case "$*" in
+                *--all*) printf '{"Service":"api","State":"exited"}\n' ;;
+              esac
+            fi
+            # Health is per-IMAGE when a test asks for it. Without that, the
+            # fake has one global health and "the target is unhealthy but the
+            # previous release is healthy" cannot be expressed — so the test
+            # named for the back-out branch actually landed on the panic
+            # branch, and the branch the documentation promises had no
+            # coverage at all.
+            printf '{"Service":"api","State":"running","Health":"%s"}\n' \
+              "$(read_state "api_health_${NEXA_IMAGE##*@}" "$(read_state api_health healthy)")"
             ;;
           *)
             printf 'api running healthy\npostgres running healthy\nredis running healthy\n'
