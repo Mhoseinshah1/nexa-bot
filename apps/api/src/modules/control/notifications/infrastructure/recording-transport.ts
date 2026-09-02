@@ -23,6 +23,23 @@ export class RecordingTransport implements NotificationTransport {
 
   private invocations = 0;
 
+  /**
+   * A send that has begun and is waiting to be allowed to finish.
+   *
+   * Every test that drives this transport otherwise completes a whole
+   * `tick()` — claim, send, record — before anything else can run, so the one
+   * ordering the dispatcher's lease margin actually exists for is unreachable:
+   * a send still in flight while its lease expires and the sweep runs, with
+   * the outcome arriving afterwards. A held send is how that ordering is
+   * reached, rather than approximated by driving the repository directly.
+   */
+  private held: {
+    readonly entered: Promise<void>;
+    readonly markEntered: () => void;
+    readonly released: Promise<void>;
+    readonly release: () => void;
+  } | null = null;
+
   get messages(): readonly OutboundMessage[] {
     return this.sent;
   }
@@ -54,7 +71,35 @@ export class RecordingTransport implements NotificationTransport {
     this.nextThrow = error;
   }
 
+  /**
+   * Makes the next send PARK inside the transport until it is released.
+   *
+   * `entered` resolves once a send has actually begun — the intent is claimed,
+   * its attempt counter is already incremented and its lease is held — so a
+   * caller can expire that lease, run a sweep, or start a second dispatcher
+   * while the first send is genuinely outstanding. The outcome is fixed when
+   * the send enters, so a failure armed while it is parked belongs to the NEXT
+   * call rather than silently rewriting this one's result.
+   */
+  holdNextSend(): { readonly entered: Promise<void>; readonly release: () => void } {
+    let markEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.held = { entered, markEntered, released, release };
+    return { entered, release };
+  }
+
   reset(): void {
+    // A hold that is still parked would deadlock whatever runs next, and a
+    // test that forgot to release one should fail on its assertions rather
+    // than by hanging the suite.
+    this.held?.release();
+    this.held = null;
     this.sent.length = 0;
     this.invocations = 0;
     this.nextResult = { outcome: 'SUCCEEDED' };
@@ -69,6 +114,14 @@ export class RecordingTransport implements NotificationTransport {
 
     const result = this.nextResult;
     this.nextResult = { outcome: 'SUCCEEDED' };
+
+    const held = this.held;
+    if (held) {
+      this.held = null;
+      held.markEntered();
+      await held.released;
+    }
+
     if (result.outcome === 'SUCCEEDED') this.sent.push(message);
     return result;
   }
