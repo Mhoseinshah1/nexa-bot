@@ -18,9 +18,6 @@
 
 set -euo pipefail
 
-# The library is installed beside this script's deployment, not beside the
-# script itself: /usr/local/bin holds one file, and everything else lives under
-# /opt/nexa. A missing library is a broken installation, not a fallback case.
 # --- Delegated invocations get no environment ---------------------------------
 #
 # Every path this script uses is overridable from the environment, which is what
@@ -37,22 +34,41 @@ set -euo pipefail
 # claiming. SUDO_USER is present exactly in the delegated case and absent when
 # the suite runs, so the refusal is precise.
 if [ -n "${SUDO_USER:-}" ]; then
-  for _nexa_var in NEXA_LIB NEXA_ROOT NEXA_DEPLOY_DIR NEXA_LIB_DIR NEXA_CONFIG_DIR \
-    NEXA_STATE_DIR NEXA_BACKUP_DIR NEXA_LOCK_FILE NEXA_IMAGE_REPO NEXA_IMAGE; do
+  # PATH too, and in this branch only. botctl resolves `docker`, `flock`,
+  # `python3`, `grep`, `mktemp`, `mv`, `gzip` and `awk` by bare name, so a
+  # caller-supplied PATH is the same escalation as a caller-supplied library —
+  # and PATH is one of the few variables a sudoers file is routinely configured
+  # to pass. Scoped rather than unconditional because a root operator with an
+  # unusual PATH is already root, and because the test suite puts a fake
+  # `docker` on PATH deliberately.
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  export PATH
+
+  # Every NEXA_* variable, discovered rather than listed. An enumerated denylist
+  # exempts by omission: `NEXA_KEEP_RELEASES` and `NEXA_READY_TIMEOUT` are read
+  # by the library and were not on it, and the next variable added would not be
+  # either.
+  for _nexa_var in $(compgen -v NEXA_ 2>/dev/null || true); do
     if [ -n "${!_nexa_var:-}" ]; then
-      printf 'error %s is set in the environment of a sudo invocation.\n' "$_nexa_var" >&2
-      printf '      botctl reads its paths and its registry from the installation, not from
-' >&2
-      printf '      the caller: honouring this would let whoever ran sudo choose the code and
-' >&2
-      printf '      the image this host executes as root. Run it without that variable.
-' >&2
+      cat >&2 <<REFUSAL
+error ${_nexa_var} is set in the environment of a sudo invocation.
+      botctl reads its paths and its registry from the installation, not from
+      the caller: honouring this would let whoever ran sudo choose the code and
+      the image this host executes as root. Run it without that variable.
+
+      This is a backstop, not the defence. A sudoers rule for botctl MUST keep
+      env_reset: BASH_ENV and its like are read by bash BEFORE this script runs,
+      so no check inside it can be reached in time.
+REFUSAL
       exit 1
     fi
   done
   unset _nexa_var
 fi
 
+# The library is installed beside this script's deployment, not beside the
+# script itself: /usr/local/bin holds one file, and everything else lives under
+# /opt/nexa. A missing library is a broken installation, not a fallback case.
 NEXA_LIB="${NEXA_LIB:-/opt/nexa/lib/nexa-lib.sh}"
 if [ ! -r "$NEXA_LIB" ]; then
   printf 'error botctl cannot find its library at %s. Is Nexa installed?\n' "$NEXA_LIB" >&2

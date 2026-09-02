@@ -174,8 +174,12 @@ nexa_write_manifest() {
   nexa_valid_digest "$digest" || nexa_die "refusing to record a release with a malformed digest."
   path="$(nexa_manifest_path "$version")"
   mkdir -p "$NEXA_RELEASES_DIR"
+  # Into place, not in place. This is the one file `botctl rollback` cannot
+  # proceed without, and `open(path, "w")` truncates before it writes — so an
+  # interruption here leaves an empty manifest where a missing one would have
+  # been honestly refused.
   python3 -c '
-import json, sys
+import json, os, sys
 manifest = {
     "version": sys.argv[2],
     "commit": sys.argv[3],
@@ -183,9 +187,13 @@ manifest = {
     "image": sys.argv[5] + "@" + sys.argv[4],
     "recordedAt": sys.argv[6],
 }
-with open(sys.argv[1], "w", encoding="utf-8") as handle:
+temporary = sys.argv[1] + ".partial"
+with open(temporary, "w", encoding="utf-8") as handle:
     json.dump(manifest, handle, indent=2, sort_keys=True)
     handle.write("\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+os.replace(temporary, sys.argv[1])
 ' "$path" "$version" "$commit" "$digest" "$NEXA_IMAGE_REPO" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   chmod 0644 "$path"
 }

@@ -180,9 +180,18 @@ Worth doing once, on staging, so the behaviour is known rather than assumed:
 
 Only if `botctl` is reachable through `sudo` for a non-root operator:
 
-- [ ] `NEXA_LIB=/tmp/anything sudo botctl status` refuses and names the
+- [ ] `sudo env NEXA_LIB=/tmp/anything botctl status` refuses and names the
       variable. Honouring it would let whoever ran sudo choose the code this
       host executes as root.
+
+      Note the `env`: written as `NEXA_LIB=… sudo botctl status`, the variable
+      is set in **sudo's** environment and `env_reset` strips it before botctl
+      ever sees it, so that spelling proves nothing either way.
+
+- [ ] The sudoers rule keeps `env_reset` (it is the default; check for an
+      `env_keep` or `SETENV` that turns it off). botctl's own refusal is a
+      backstop: `BASH_ENV` is read by bash **before** the script runs, so no
+      check inside it can be reached in time.
 
 ## Sign-off
 

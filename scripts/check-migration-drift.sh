@@ -33,7 +33,13 @@ cleanup() {
     # the first match and can leave `echo` dying of SIGPIPE — returning 141
     # under `pipefail` exactly when the snapshot IS known. This branch DELETES,
     # so the wrong answer here removes a checked-in snapshot.
-    known="$(echo "$SNAPSHOTS_BEFORE" | grep -cxF "$snapshot" || true)"
+    known=0
+    status=0
+    known="$(echo "$SNAPSHOTS_BEFORE" | grep -cxF "$snapshot")" || status=$?
+    # Exit 1 means "not found", which is the delete case. Anything above that
+    # is an error, and this branch DELETES — so a read failure must not read as
+    # "unknown, remove it".
+    [ "$status" -le 1 ] || { echo "cannot read the snapshot list (grep exited $status)" >&2; exit 1; }
     [ "${known:-0}" -gt 0 ] || rm -f "$snapshot"
   done
   mv -f "$JOURNAL.drift-backup" "$JOURNAL"

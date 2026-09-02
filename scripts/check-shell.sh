@@ -85,8 +85,34 @@ printf '\033[32mok\033[0m    %d helper scripts clean at shellcheck warning\n' "$
 #
 # A line ending in `|| true` is exempt: it has already decided the exit status
 # does not matter, which is the correct answer for a diagnostic dump.
-OFFENDERS="$(grep -rnE '\| *(grep [^|]*-[a-zA-Z]*q|head( |$))' deploy scripts tests/deploy 2>/dev/null |
-  grep -v 'check-shell.sh' | grep -vE '^[^:]*:[0-9]+: *#' | grep -vE '\|\| *true *$' || true)"
+#
+# Multi-line pipelines count. A pipeline may be broken after its `|`, and the
+# original offender in check-boundaries.sh was written exactly that way — so a
+# one-line regex reported the tree clean while the spelling most likely to recur
+# sat in it. The awk below joins any line whose last character is `|` or `\` to
+# the next before matching, and reports the line the pipeline STARTED on.
+#
+# `.github` is in the scan set because the release workflow is shell too, and it
+# is the one that holds a token able to publish.
+OFFENDERS="$(find deploy scripts tests/deploy .github -type f \
+  \( -name '*.sh' -o -name 'botctl' -o -name '*.yml' \) 2>/dev/null |
+  grep -v 'check-shell.sh' |
+  while IFS= read -r file; do
+    awk -v f="$file" '
+      { line = $0 }
+      joined != "" { line = joined " " $0; joined = "" }
+      /[|\\]$/ { joined = line; if (start == 0) start = NR; next }
+      {
+        n = (start ? start : NR)
+        start = 0
+        if (line ~ /^[[:space:]]*#/) next
+        if (line ~ /\|\|[[:space:]]*true[[:space:]]*$/) next
+        if (line ~ /\|[[:space:]]*(grep[^|]*-[a-zA-Z]*q|head([[:space:]]|$))/) {
+          printf "%s:%d: %s\n", f, n, line
+        }
+      }
+    ' "$file"
+  done || true)"
 if [ -n "$OFFENDERS" ]; then
   printf '%s\n' "$OFFENDERS" >&2
   fail "a pipeline ends in a consumer that exits early ('grep -q' or 'head'). Under pipefail that returns 141 when it SUCCEEDS, because the writer dies of SIGPIPE — and under 'set -e' that aborts the script. Use a case match, grep -c, wc -l, find -print -quit, or sed -n '1,Np'."

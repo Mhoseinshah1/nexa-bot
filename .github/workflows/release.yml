@@ -49,7 +49,15 @@ jobs:
           set -euo pipefail
           # A release tag and nothing else. This is also what stops a `ref:`
           # below from being anything but a tag name.
-          if ! printf '%s' "$REQUESTED" | grep -qE '^v[0-9A-Za-z][0-9A-Za-z._-]{0,62}$'; then
+          #
+          # Bash's own `=~`, not `printf | grep -E`. grep matches PER LINE, so a
+          # multi-line value passes as soon as any one of its lines matches —
+          # and the accepted value is then written to $GITHUB_OUTPUT, where a
+          # second line is a second step output. `=~` anchors to the whole
+          # string. (Reaching this needs repository write access via
+          # workflow_dispatch, since a git tag cannot contain a newline; it is
+          # still the wrong check in the job that publishes releases.)
+          if [[ ! $REQUESTED =~ ^v[0-9A-Za-z][0-9A-Za-z._-]{0,62}$ ]]; then
             printf 'refusing to release from "%s": releases are tagged v<version>\n' "$REQUESTED" >&2
             exit 1
           fi

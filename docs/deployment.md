@@ -294,6 +294,23 @@ Checked by tests, not just intended:
   the smoke test greps normal `botctl` output for each generated value.
 - The installer never opens a firewall port.
 - The updater never runs `git`.
+- `botctl` refuses every `NEXA_*` variable from the caller's environment when
+  it is invoked through `sudo`, and resets `PATH` — otherwise a delegated
+  invocation could choose the library it loads, the registry it pulls from, and
+  the `docker` binary it runs.
+
+### Delegating botctl
+
+A sudoers rule for `botctl` **must keep `env_reset`**, which is the default:
+
+```
+%ops ALL=(root) NOPASSWD: /usr/local/bin/botctl
+```
+
+The refusal described above is a backstop, not the defence. `BASH_ENV` and
+similar are read by bash *before* the script's first line runs, so an
+`env_keep` that passes them through cannot be defended against from inside the
+script they hijack.
 
 ### What is still visible, and to whom
 

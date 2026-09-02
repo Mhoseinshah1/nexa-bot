@@ -103,6 +103,14 @@ assert_contains 'the refusal did not name NEXA_LIB' "$sudo_output" 'NEXA_LIB is 
 sudo_output="$(sudo_botctl NEXA_IMAGE_REPO evil.example/nexa)"
 assert_contains 'a sudo invocation chose the registry' \
   "$sudo_output" 'NEXA_IMAGE_REPO is set in the environment'
+# Every NEXA_* variable, not an enumerated list. The list exempted by omission:
+# NEXA_KEEP_RELEASES and NEXA_READY_TIMEOUT are read by the library and were
+# not on it, and the next variable added would not have been either.
+sudo_output="$(sudo_botctl NEXA_KEEP_RELEASES 0)"
+assert_contains 'a variable outside the old list was allowed through' \
+  "$sudo_output" 'NEXA_KEEP_RELEASES is set in the environment'
+assert_contains 'the operator was not told env_reset is the real defence' \
+  "$sudo_output" 'env_reset'
 
 test_case 'a direct root invocation is unaffected'
 # The refusal is keyed on SUDO_USER, which is present exactly in the delegated
@@ -216,12 +224,41 @@ secrets_probe() {
 }
 printf 'POSTGRES_USER=nexa\nPOSTGRES_DB=nexa\n' >"${NEXA_CONFIG_DIR}/postgres.env"
 printf 'REDIS_PASSWORD=x\n' >"${NEXA_CONFIG_DIR}/redis.env"
-printf 'SECRETS_KEK=k\nSECRETS_KEK_ID=i\nDATABASE_URL=d\nREDIS_URL=r\n' >"${NEXA_CONFIG_DIR}/nexa.env"
+write_full_app_env() {
+  cat >"${NEXA_CONFIG_DIR}/nexa.env" <<'ENV'
+SECRETS_KEK=k
+SECRETS_KEK_ID=i
+DATABASE_URL=d
+REDIS_URL=r
+WEB_ADMIN_ORIGINS=https://admin.example.test
+DEPLOYMENT_TOPOLOGY=single-host
+BUILD_TIME=2026-01-01T00:00:00Z
+ENV
+}
+write_full_app_env
 probe="$(secrets_probe || true)"
 assert_not_contains 'a postgres.env with no password was accepted as complete' \
   "$probe" 'secrets already exist'
 assert_contains 'the operator was not told the configuration is incomplete' \
   "$probe" 'incomplete'
+
+test_case 'a nexa.env truncated two thirds of the way through is not complete'
+# The keys the check used to look for all sit in the FIRST HALF of a 76-line
+# template, so a write that died late satisfied every one of them. Losing
+# DEPLOYMENT_TOPOLOGY is the dangerous one: it has a schema default, so its
+# absence silently stops TRUSTED_PROXY_IPS being required and the API boots
+# ignoring X-Forwarded-For.
+printf 'POSTGRES_USER=nexa\nPOSTGRES_DB=nexa\nPOSTGRES_PASSWORD=p\n' >"${NEXA_CONFIG_DIR}/postgres.env"
+printf 'SECRETS_KEK=k\nSECRETS_KEK_ID=i\nDATABASE_URL=d\nREDIS_URL=r\n' >"${NEXA_CONFIG_DIR}/nexa.env"
+probe="$(secrets_probe || true)"
+assert_not_contains 'a truncated nexa.env was accepted as complete' \
+  "$probe" 'secrets already exist'
+
+test_case 'a value that is only whitespace is not a value'
+write_full_app_env
+printf 'POSTGRES_USER=nexa\nPOSTGRES_DB=nexa\nPOSTGRES_PASSWORD=   \n' >"${NEXA_CONFIG_DIR}/postgres.env"
+probe="$(secrets_probe || true)"
+assert_not_contains 'a whitespace-only password was accepted' "$probe" 'secrets already exist'
 
 test_case 'a complete set of secrets is left alone'
 printf 'POSTGRES_USER=nexa\nPOSTGRES_DB=nexa\nPOSTGRES_PASSWORD=p\n' >"${NEXA_CONFIG_DIR}/postgres.env"

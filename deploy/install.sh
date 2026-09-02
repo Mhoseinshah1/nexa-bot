@@ -337,8 +337,12 @@ secrets_complete() {
   local file="$1" key
   shift
   [ -s "$file" ] || return 1
+  local value
   for key in "$@"; do
-    [ -n "$(nexa_env_value "$file" "$key" 2>/dev/null || true)" ] || return 1
+    value="$(nexa_env_value "$file" "$key" 2>/dev/null || true)"
+    # Trimmed: a key whose value is spaces is not a key with a value, and
+    # `POSTGRES_PASSWORD="  "` is a thing a partial write can leave.
+    [ -n "${value//[[:space:]]/}" ] || return 1
   done
   return 0
 }
@@ -353,7 +357,10 @@ write_secret_file() {
   chmod 0600 "$tmp"
   cat >"$tmp" || { rm -f "$tmp"; nexa_die "cannot write ${target} (is /var full?)."; }
   sync "$tmp" 2>/dev/null || true
-  mv -f "$tmp" "$target"
+  mv -f "$tmp" "$target" || {
+    rm -f "$tmp"
+    nexa_die "cannot install ${target}."
+  }
 }
 
 generate_secrets() {
@@ -380,7 +387,15 @@ generate_secrets() {
   local have=0 missing=0
   if secrets_complete "$pg_env" POSTGRES_USER POSTGRES_DB POSTGRES_PASSWORD; then have=$((have + 1)); else missing=$((missing + 1)); fi
   if secrets_complete "$redis_env" REDIS_PASSWORD; then have=$((have + 1)); else missing=$((missing + 1)); fi
-  if secrets_complete "$app_env" SECRETS_KEK SECRETS_KEK_ID DATABASE_URL REDIS_URL; then have=$((have + 1)); else missing=$((missing + 1)); fi
+  # BUILD_TIME is last in the template, and that is why it is in this list.
+  # The keys before it sit in the first half of a 76-line file, so a write that
+  # died two thirds of the way through satisfied all of them — and a nexa.env
+  # missing DEPLOYMENT_TOPOLOGY is worse than one missing SECRETS_KEK, because
+  # that key HAS a schema default: losing it silently stops TRUSTED_PROXY_IPS
+  # being required, and the API boots ignoring X-Forwarded-For. A key from the
+  # end is the cheapest true test that the write reached it.
+  if secrets_complete "$app_env" SECRETS_KEK SECRETS_KEK_ID DATABASE_URL REDIS_URL \
+    WEB_ADMIN_ORIGINS DEPLOYMENT_TOPOLOGY BUILD_TIME; then have=$((have + 1)); else missing=$((missing + 1)); fi
 
   if [ "$missing" -eq 0 ]; then
     nexa_ok "secrets already exist; leaving them alone"
@@ -487,8 +502,13 @@ write_deploy_env() {
 start_data_services() {
   nexa_step "starting PostgreSQL and Redis"
   nexa_compose up -d postgres redis
+  # `awk '$2 == "healthy"'`, not `grep -c 'healthy'`. "healthy" is a SUBSTRING
+  # of "unhealthy", so the old count reached two the moment BOTH services were
+  # reporting unhealthy — and the installer announced them healthy and went on
+  # to migrate against a database that was telling it not to.
   local waited=0
-  until [ "$(nexa_compose ps --format '{{.Service}} {{.Health}}' 2>/dev/null | grep -c 'healthy')" -ge 2 ]; do
+  until [ "$(nexa_compose ps --format '{{.Service}} {{.Health}}' 2>/dev/null |
+    awk '$2 == "healthy" { n += 1 } END { print n + 0 }')" -ge 2 ]; do
     [ "$waited" -lt 180 ] || nexa_die "PostgreSQL and Redis did not become healthy within 180s. Run 'botctl logs postgres'."
     sleep 3
     waited=$((waited + 3))
@@ -618,8 +638,11 @@ main() {
   bootstrap_owner
 
   nexa_write_manifest "$VERSION" "$commit" "$digest"
-  printf '%s\n' "$VERSION" >"$NEXA_CURRENT_FILE"
-  chmod 0644 "$NEXA_CURRENT_FILE"
+  # Through the same atomic write botctl uses. `printf > file` truncates first,
+  # so an interruption here left an EMPTY current — an installation reporting
+  # no release at all, which is the one state neither update nor rollback can
+  # recover from.
+  nexa_write_atomic "$NEXA_CURRENT_FILE" "$VERSION"
 
   cat <<SUMMARY
 
