@@ -343,20 +343,52 @@ export function coerceTemplateValue(
       // A whole number, and `Number('')` is 0 — which would silently turn an
       // empty field into a supplied zero, and zero means something specific
       // enough in this system to have its own registry field.
-      if (!/^-?\d+$/.test(trimmed)) return bad('a whole number such as 30');
-      return { ok: true, value: Number(trimmed) };
+      if (!/^-?\d{1,20}$/.test(trimmed)) return bad('a whole number such as 30');
+
+      // And a number JavaScript can actually hold. `Number('9'.repeat(400))` is
+      // `Infinity` and `Number('9007199254740993')` is a DIFFERENT integer —
+      // both of which would have been rendered into a preview whose whole
+      // purpose is showing the administrator what they will really get.
+      // `money()` refuses an unsafe integer for the same reason; this branch
+      // was the one that did not.
+      const value = Number(trimmed);
+      if (!Number.isSafeInteger(value)) {
+        return bad('a whole number JavaScript can represent exactly');
+      }
+      return { ok: true, value };
     }
 
     case 'DATETIME': {
-      const at = new Date(raw.trim());
+      const trimmed = raw.trim();
+      // ISO-8601 or nothing. `new Date` alone accepts JavaScript's legacy
+      // parsing, under which `'0'` is the year 2000 and `'2026-02-30'` is the
+      // 2nd of March — a typo silently becoming a plausible date, in a
+      // preview that exists to show what will really be sent.
+      if (
+        !/^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})?)?$/.test(
+          trimmed,
+        )
+      ) {
+        return bad('an ISO-8601 date such as 2026-09-02T08:00:00Z');
+      }
+      const at = new Date(trimmed);
       if (Number.isNaN(at.getTime())) {
-        return bad('a date such as 2026-09-02T08:00:00Z');
+        return bad('an ISO-8601 date such as 2026-09-02T08:00:00Z');
+      }
+      // A date that does not round-trip is one Date silently rolled over:
+      // `2026-02-30` parses and comes back as March.
+      if (!at.toISOString().startsWith(trimmed.slice(0, 10))) {
+        return bad('a real calendar date');
       }
       return { ok: true, value: at };
     }
 
     case 'MONEY': {
-      const match = /^(-?\d+)\s+([A-Za-z]{3,4})$/.exec(raw.trim());
+      // The amount is BOUNDED. `BigInt` accepts a million digits and the money
+      // formatter's thousands-separator regex is quadratic in the digit count,
+      // so an unbounded amount from a `templates.view` holder was a one-request
+      // way to stall the event loop.
+      const match = /^(-?\d{1,30})\s+([A-Za-z]{3,4})$/.exec(raw.trim());
       if (!match?.[1] || !match[2]) {
         return bad('minor units and a currency, such as 1250000 IRR');
       }
@@ -383,10 +415,18 @@ export function coerceTemplateValues(
   const problems: string[] = [];
 
   for (const placeholder of definition.placeholders) {
-    const supplied = raw[placeholder.token];
+    // `hasOwnProperty`, not a bare index. A token is an ASCII identifier, and
+    // `toString` and `constructor` are ASCII identifiers: reading one straight
+    // off the object returns a function from `Object.prototype`, and the
+    // `.trim()` below then throws a TypeError out of a preview. No template
+    // declares such a token today, which is precisely why it would have been
+    // found by whoever added the first one.
+    const supplied = Object.prototype.hasOwnProperty.call(raw, placeholder.token)
+      ? raw[placeholder.token]
+      : undefined;
     // An absent field and an empty one both mean "no sample for this token".
     // The preview reports it as unresolved and leaves the token in place.
-    if (supplied === undefined || supplied.trim() === '') continue;
+    if (typeof supplied !== 'string' || supplied.trim() === '') continue;
 
     const coerced = coerceTemplateValue(placeholder, supplied);
     if (coerced.ok) values[placeholder.token] = coerced.value;

@@ -190,4 +190,14 @@ export const CONTROL_ERROR_CODES = {
   /** A notification asked for with no destination configured. */
   DESTINATION_NOT_CONFIGURED: 'control.destination_not_configured',
   NOTIFICATION_NOT_FOUND: 'control.notification_not_found',
+  /**
+   * An idempotency record names a notification that no longer exists.
+   *
+   * Distinct from NOT_FOUND on purpose. That one answers "no such notification
+   * in this tenant" to somebody who asked for one; this one says a COMPLETED
+   * command's record points at nothing, which is a corrupt store rather than a
+   * bad request, and a client that could not tell them apart would retry the
+   * one that cannot succeed.
+   */
+  NOTIFICATION_RECORD_ORPHANED: 'control.notification_record_orphaned',
 } as const;

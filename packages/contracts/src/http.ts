@@ -405,12 +405,30 @@ export type TemplateWriteResponse = z.infer<typeof templateWriteResponseSchema>;
 export const setTemplateRequestSchema = z.object({
   body: z.string().min(1),
   expectedVersion: z.number().int().positive().nullable(),
+  /**
+   * The revision the caller read, alongside the version.
+   *
+   * BOTH, because a version alone does not identify a row here. A revert
+   * DELETES the override, and the next save inserts a fresh row at version 1 —
+   * so an administrator holding a stale version 1 could state it, match the new
+   * row's version 1, and silently overwrite work done after the revert. The
+   * version check was doing exactly what it was written to do and could not
+   * see the difference.
+   *
+   * `revision` cannot restart: it is `max(template_revisions.revision) + 1`
+   * over an append-only table that the revert does not touch, and the revert is
+   * itself a revision. Carrying it makes the expectation name a point in the
+   * key's history rather than a position in one row's lifetime.
+   */
+  expectedRevision: z.number().int().positive().nullable(),
   idempotencyKey: z.string().min(8).max(255),
 });
 export type SetTemplateRequest = z.infer<typeof setTemplateRequestSchema>;
 
 export const revertTemplateRequestSchema = z.object({
   expectedVersion: z.number().int().positive(),
+  /** See `setTemplateRequestSchema.expectedRevision`. */
+  expectedRevision: z.number().int().positive(),
   idempotencyKey: z.string().min(8).max(255),
 });
 export type RevertTemplateRequest = z.infer<typeof revertTemplateRequestSchema>;
@@ -428,7 +446,15 @@ export const previewTemplateRequestSchema = z.object({
    * impossible to supply at all: the field could only send a string, and the
    * validator only accepted a `Date` or a `Money`.
    */
-  values: z.record(z.string(), z.string()).optional(),
+  values: z
+    .record(
+      z.string().max(200),
+      // BOUNDED. The values reach `coerceTemplateValues`, and an unbounded one
+      // was a way for any `templates.view` holder to hand the server a
+      // megabyte to parse as a number.
+      z.string().max(1_000),
+    )
+    .optional(),
 });
 export type PreviewTemplateRequest = z.infer<typeof previewTemplateRequestSchema>;
 
