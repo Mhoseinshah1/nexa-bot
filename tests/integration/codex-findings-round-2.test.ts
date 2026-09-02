@@ -3238,3 +3238,63 @@ describe('review round 19', () => {
     expect(row?.revokedAt ?? null).toBeNull();
   }, 60_000);
 });
+
+describe('review round 20', () => {
+  it('keeps a locked subject refusable when the window is shorter than the lockout', async () => {
+    // The window and the lockout are configured independently. With a window
+    // shorter than a lockout, the counting period "ended" while the deadline
+    // was still being served, so `failed_count` reset to 1 — a row that is
+    // locked and yet counts as a first attempt. The refusal downstream reads
+    // that count, so a caller racing the lock-setting write passed it and went
+    // on to verify a password mid-lockout.
+    const policy = { windowSeconds: 60, maxAttempts: 1, lockoutSeconds: 3_600 };
+    const now = ctx.container.clock.now();
+
+    const first = await ctx.container.loginThrottle.reserveAttempt(
+      tenantA,
+      'USERNAME',
+      'short-window',
+      now,
+      policy,
+    );
+    expect(first.lockedUntil).not.toBeNull();
+
+    // Past the WINDOW, but well inside the lockout.
+    const later = await ctx.container.loginThrottle.reserveAttempt(
+      tenantA,
+      'USERNAME',
+      'short-window',
+      new Date(now.getTime() + 120_000),
+      policy,
+    );
+
+    // The lock still stands, and the count still forces a refusal rather than
+    // reading as a fresh first attempt.
+    expect(later.lockedUntil?.getTime()).toBe(first.lockedUntil?.getTime());
+    expect(later.failedCount).toBeGreaterThan(policy.maxAttempts);
+  }, 30_000);
+
+  it('still restarts the period once the lockout has actually been served', async () => {
+    // The other half of the same rule: serving the penalty must clear the
+    // record that imposed it, or a lockout becomes permanent.
+    const policy = { windowSeconds: 60, maxAttempts: 1, lockoutSeconds: 300 };
+    const now = ctx.container.clock.now();
+
+    await ctx.container.loginThrottle.reserveAttempt(
+      tenantA,
+      'USERNAME',
+      'served-lockout',
+      now,
+      policy,
+    );
+
+    const after = await ctx.container.loginThrottle.reserveAttempt(
+      tenantA,
+      'USERNAME',
+      'served-lockout',
+      new Date(now.getTime() + 400_000),
+      policy,
+    );
+    expect(after.failedCount).toBe(1);
+  }, 30_000);
+});

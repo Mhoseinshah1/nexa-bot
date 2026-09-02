@@ -241,6 +241,26 @@ describe('TerminalReader', () => {
     await expect(reader.read('p: ', secret)).rejects.toBeInstanceOf(TerminalInputError);
   });
 
+  it('answers from the buffer even when the stream has already ended', async () => {
+    // A PTY can deliver every answer in one chunk and close immediately.
+    // Refusing up-front because EOF had arrived failed a bootstrap that had in
+    // fact been given everything it asked for — the previous fix for the hang,
+    // over-corrected.
+    const tty = new FakeTty();
+    const reader = new TerminalReader(tty as never, capture());
+
+    const first = reader.read('u: ', visible);
+    tty.type('alice\nAlice Smith\nhunter2\n');
+    tty.emit('end');
+    expect(await first).toBe('alice');
+
+    expect(await reader.read('d: ', visible)).toBe('Alice Smith');
+    expect(await reader.read('p: ', secret)).toBe('hunter2');
+
+    // Only the question the buffer cannot answer fails.
+    await expect(reader.read('x: ', visible)).rejects.toBeInstanceOf(TerminalInputError);
+  });
+
   it('keeps bytes that arrive past the end of an answer', async () => {
     // A paste delivers several answers in ONE chunk. Dropping the surplus made
     // the next question hang waiting for input that had already arrived, or

@@ -508,7 +508,15 @@ describe('login throttling counts every concurrent failure', () => {
       afterWindow,
       shortWindow,
     );
-    expect(state.failedCount).toBe(1);
+    // The count does NOT reset while the lockout is live.
+    //
+    // This assertion used to read `toBe(1)`, which encoded the defect rather
+    // than the rule: a row that is locked and yet counts as a first attempt
+    // passes the refusal downstream, which reads the count — so a caller racing
+    // the lock-setting write went on to verify a password mid-lockout. Serving
+    // a penalty is not the same as having served it, so the period is over only
+    // once the lockout is.
+    expect(state.failedCount).toBeGreaterThan(shortWindow.maxAttempts);
     // Still locked: the lockout has an hour to run.
     expect(state.lockedUntil).not.toBeNull();
     expect(state.lockedUntil?.getTime()).toBeGreaterThan(afterWindow.getTime());

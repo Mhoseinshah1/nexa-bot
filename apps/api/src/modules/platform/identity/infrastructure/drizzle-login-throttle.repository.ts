@@ -99,10 +99,21 @@ export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
     // The counting period restarts when the window has elapsed, and equally
     // when a lockout has run out: the lockout is the penalty, and serving it
     // must clear the record that imposed it.
+    //
+    // A LIVE lockout means the period has not ended, whatever the window says.
+    // The window and the lockout are configured independently, so a window
+    // shorter than a lockout used to reset `failed_count` to 1 while the
+    // deadline was still being served — leaving a row that is locked and yet
+    // counts as a first attempt. The refusal downstream reads the count, so a
+    // caller racing the lock-setting write passed it and went on to verify a
+    // password mid-lockout. Serving the penalty is not the same as having
+    // served it.
     const periodEnded = sql`(
-        ${adminLoginThrottle.windowStartedAt} <= ${windowCutoff}
-        OR (${adminLoginThrottle.lockedUntil} IS NOT NULL
-            AND ${adminLoginThrottle.lockedUntil} <= ${now})
+        CASE
+          WHEN ${adminLoginThrottle.lockedUntil} IS NOT NULL
+            THEN ${adminLoginThrottle.lockedUntil} <= ${now}
+          ELSE ${adminLoginThrottle.windowStartedAt} <= ${windowCutoff}
+        END
       )`;
 
     const nextCount = sql`CASE WHEN ${periodEnded} THEN 1

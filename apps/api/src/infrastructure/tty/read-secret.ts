@@ -98,7 +98,6 @@ export class TerminalReader {
   ) {}
 
   read(prompt: string, options: { echo: boolean }): Promise<string> {
-    if (this.ended !== null) return Promise.reject(this.ended);
     this.output.write(prompt);
     return new Promise<string>((resolve, reject) => {
       this.pending = {
@@ -109,9 +108,22 @@ export class TerminalReader {
         partialCharacter: [],
         escape: 'none',
       };
-      this.attach();
-      // Anything a previous question left behind belongs to this one.
+      // Never re-attach to a stream that has already ended.
+      if (this.ended === null) this.attach();
+
+      // Anything a previous question left behind belongs to this one — and it
+      // is answered even if the stream has since ended. A PTY can deliver every
+      // answer in one chunk and close immediately; refusing up-front because
+      // EOF had arrived failed a bootstrap that had, in fact, been given
+      // everything it asked for. The end of the stream is only fatal to a
+      // question the buffer cannot answer.
       this.consume();
+
+      if (this.pending !== null && this.ended !== null) {
+        const unanswerable = this.pending;
+        this.pending = null;
+        unanswerable.reject(this.ended);
+      }
     });
   }
 
