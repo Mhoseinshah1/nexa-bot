@@ -1,0 +1,26 @@
+# Production edge configuration.
+#
+# The routing lives in routes.caddy and is shared verbatim with the CI
+# topology, so a smoke test exercises the rules that actually ship. Only the
+# site address and TLS are decided here, because those are the two things CI
+# cannot have: a public name and a publicly-issued certificate.
+
+{
+	email {$NEXA_ACME_EMAIL}
+	# Everything else is Caddy's default and that is deliberate: automatic
+	# HTTPS from Let's Encrypt, HTTP/2 and HTTP/3, OCSP stapling, and an
+	# implicit :80 redirect to HTTPS for the site address below. Restating any
+	# of it here would be a second place for it to be wrong.
+}
+
+import routes.caddy
+
+{$NEXA_DOMAIN} {
+	# HSTS is set HERE rather than in the shared snippet, because it is the one
+	# header that must not be sent by the CI topology: an HSTS response from a
+	# plain-HTTP test origin would pin `localhost` to HTTPS in the runner's
+	# client for a year. It applies to every response from this site.
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+	import nexa_routes
+}

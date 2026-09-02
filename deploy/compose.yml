@@ -1,0 +1,265 @@
+# The PRODUCTION deployment. Not the root docker-compose.yml, which is
+# development infrastructure (two services, development credentials, ports
+# published to loopback) and stays exactly as it is.
+#
+# Read with ADR-0022. The invariants this file exists to hold:
+#
+#   - Caddy is the ONLY thing that publishes a host port.
+#   - PostgreSQL and Redis publish nothing and are not on Caddy's network.
+#   - No container mounts the Docker socket, runs privileged, uses host
+#     networking, or bind-mounts source.
+#   - The application containers run as a non-root user.
+#   - Everything restarts after a host reboot without an operator.
+#
+# `botctl` always invokes this as:
+#   docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml ...
+# so ${NEXA_IMAGE} below is an immutable digest reference, never a tag.
+
+name: nexa
+
+x-app-common: &app-common
+  # A DIGEST, written by the installer or by `botctl update` once it has
+  # resolved the target version. Never `latest`: a tag is a pointer somebody
+  # else can move, and an installation whose identity can change underneath it
+  # is an installation nobody can support.
+  image: ${NEXA_IMAGE:?NEXA_IMAGE must be an image digest reference}
+  restart: unless-stopped
+  # tini as PID 1: reaps and forwards signals. The API and worker both install
+  # SIGTERM handlers and drain in-flight work, which only helps if the signal
+  # arrives.
+  init: true
+  env_file:
+    # Read by the Docker DAEMON as root, which is why this file is 0600
+    # root-owned and no container needs permission to read it.
+    - ${NEXA_CONFIG_DIR:-/etc/nexa}/nexa.env
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  networks:
+    # BOTH, for api and worker alike. `data` is internal and carries PostgreSQL
+    # and Redis; `edge` is an ordinary bridge and is the only way out.
+    #
+    # The worker needs that egress as much as the API does, and more obviously:
+    # the notification dispatcher runs in the worker and calls the Telegram API
+    # over HTTPS. On `data` alone it would start, pass its health checks, claim
+    # intents and fail every send with a DNS error — an installation that looks
+    # healthy while every operational alert goes nowhere, which is the exact
+    # failure the recording-transport guard in the config schema exists to
+    # prevent by a different route.
+    - data
+    - edge
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  logging:
+    driver: json-file
+    options:
+      max-size: '10m'
+      max-file: '5'
+
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    restart: unless-stopped
+    init: true
+    # NO `ports`. Not "bound to loopback", not "firewalled" — absent. The
+    # database is reachable from the `data` network and from nothing else, and
+    # Caddy is not on that network.
+    env_file:
+      - ${NEXA_CONFIG_DIR:-/etc/nexa}/postgres.env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - data
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # The credentials come from the environment inside the container, so
+      # nothing here lands in the command line.
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+  redis:
+    image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+    restart: unless-stopped
+    init: true
+    # Redis stores NOTHING through Phase 2 — see ADR-0022. It is connected and
+    # health-checked; the login throttle is Postgres-backed and no queue library
+    # is installed. `--save ""` and `--appendonly no` say that deliberately
+    # rather than leaving a persistence volume that implies a durability
+    # guarantee nothing relies on. When Redis acquires queues or locks, this
+    # decision has to be revisited, and this comment is where to start.
+    #
+    # `sh -c` with an unexpanded `$$REDIS_PASSWORD`: the literal stays in the
+    # image's command line and the value comes from the environment, so the
+    # password is not written into the compose file or into `docker inspect`'s
+    # Cmd. It is still visible to anything that can already exec into this
+    # container, which by then already has Redis.
+    command:
+      ['sh', '-c', 'exec redis-server --requirepass "$$REDIS_PASSWORD" --save "" --appendonly no']
+    env_file:
+      - ${NEXA_CONFIG_DIR:-/etc/nexa}/redis.env
+    networks:
+      - data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      # `redis-cli` reads REDISCLI_AUTH from the environment, so the password
+      # does not appear in the health check's process line either.
+      test: ['CMD-SHELL', 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+  # The Web Admin bundle, published from the application image into the volume
+  # Caddy serves. It runs once per `up` and exits.
+  #
+  # Root, and ONLY this one. A named volume is created root-owned, and this job
+  # writes into it; the application containers below are non-root and this is a
+  # file copy rather than the application. It has no network, no capabilities
+  # and no configuration — it copies a directory and stops.
+  #
+  # The copy has to be explicit rather than relying on Docker's populate-on-
+  # first-mount: that only happens when the volume is EMPTY, so after an update
+  # the volume would keep serving the previous release's assets while the API
+  # served the new one.
+  web-assets:
+    image: ${NEXA_IMAGE:?NEXA_IMAGE must be an image digest reference}
+    user: '0:0'
+    init: true
+    restart: 'no'
+    network_mode: none
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    command:
+      ['sh', '-c', 'rm -rf /srv/web/* /srv/web/.[!.]* 2>/dev/null; cp -a /app/web/. /srv/web/']
+    volumes:
+      - webassets:/srv/web
+
+  api:
+    <<: *app-common
+    command: ['node', 'dist/main.js']
+    healthcheck:
+      # Node's global fetch — the runtime image carries no curl and does not
+      # need one. A 200 from the anonymous readiness route is the same signal a
+      # load balancer would use.
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  worker:
+    <<: *app-common
+    command: ['node', 'dist/main.worker.js']
+    # DELIBERATELY no healthcheck. The worker serves no HTTP and exposes no
+    # port, so any check here would amount to "is the process running", which
+    # is what `restart: unless-stopped` already acts on and what
+    # `botctl status` already reports. A check that restates the container
+    # state would look like a liveness guarantee it is not.
+
+  caddy:
+    image: caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    restart: unless-stopped
+    init: true
+    # The only published ports in the deployment. 80 is needed for the ACME
+    # HTTP-01 challenge and for the redirect to HTTPS.
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    environment:
+      # Interpolated from deploy.env, which holds no secrets. Caddy reads them
+      # in the Caddyfile.
+      NEXA_DOMAIN: ${NEXA_DOMAIN:?NEXA_DOMAIN must be set}
+      NEXA_ACME_EMAIL: ${NEXA_ACME_EMAIL:?NEXA_ACME_EMAIL must be set}
+    volumes:
+      # The whole directory, read-only: the Caddyfile imports routes.caddy
+      # beside it, and a single-file mount would leave that import dangling.
+      - ${NEXA_DEPLOY_DIR:-/opt/nexa/deploy}/caddy:/etc/caddy:ro
+      - webassets:/srv/web:ro
+      # Certificates and ACME account state. Losing this volume means
+      # re-issuing every certificate, which rate limits punish.
+      - caddydata:/data
+      - caddyconfig:/config
+    networks:
+      - edge
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      # Binding 80/443 as a non-root user. Nothing else.
+      - NET_BIND_SERVICE
+    depends_on:
+      web-assets:
+        condition: service_completed_successfully
+      api:
+        # Real readiness, not a sleep. Caddy starting before the API is up
+        # would serve 502s to the first requests after every deployment.
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:80/health/live']
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+
+networks:
+  # Pinned subnets, because TRUSTED_PROXY_IPS has to name the addresses Caddy
+  # connects from and the application refuses an empty trusted set in
+  # reverse-proxy topology. Letting Docker allocate would mean the trusted set
+  # is right until the day a network is recreated in a different order.
+  # Caddy reaches the API here, and the API and worker reach the internet here.
+  # Caddy is NOT on `data`, so the edge has no route to the database at all.
+  edge:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${NEXA_EDGE_SUBNET:-172.29.0.0/24}
+  data:
+    driver: bridge
+    # No route out. The database and Redis have no reason to reach the
+    # internet, and an internal network means a compromised dependency cannot
+    # call home from here.
+    internal: true
+    ipam:
+      config:
+        - subnet: ${NEXA_DATA_SUBNET:-172.29.1.0/24}
+
+volumes:
+  pgdata:
+  webassets:
+  caddydata:
+  caddyconfig:

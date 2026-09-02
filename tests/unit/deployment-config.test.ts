@@ -1,0 +1,138 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { configSchema } from '../../apps/api/src/infrastructure/config/config.schema';
+
+/**
+ * The deployment's configuration, checked against the application's own schema.
+ *
+ * This is the anti-drift mechanism, and it is the reason `deploy/` carries no
+ * hand-written list of environment variables. The template is filled with the
+ * values the installer would generate and parsed through the REAL
+ * `configSchema` — so a variable the application starts requiring fails here,
+ * at build time, rather than on an operator's first production boot.
+ *
+ * It also runs the schema's production refusals against the deployment for
+ * real: `AUTH_MODE=none`, a recording transport, a `direct` topology, an empty
+ * trusted-proxy set and a non-canonical admin origin are each rejected by the
+ * application, and each is a mistake this template could plausibly make.
+ */
+describe('the production environment template', () => {
+  const templatePath = join(__dirname, '../../deploy/nexa.env.template');
+  const template = readFileSync(templatePath, 'utf8');
+
+  /** Values of the shape the installer generates. Nothing here is a real key. */
+  const SUBSTITUTIONS: Record<string, string> = {
+    __POSTGRES_PASSWORD__: 'r4nd0m-postgres-password',
+    __REDIS_PASSWORD__: 'r4nd0m-redis-password',
+    // 32 bytes, base64, and deliberately not all zero: the schema refuses an
+    // all-zero key, which is the shape a "just fill it in later" placeholder
+    // takes. Nothing here is a real key.
+    __SECRETS_KEK__: Buffer.from('nexa-deployment-template-test-key'.slice(0, 32)).toString(
+      'base64',
+    ),
+    __SECRETS_KEK_ID__: 'install-1',
+    __DOMAIN__: 'admin.example.com',
+    __EDGE_SUBNET__: '172.29.0.0/24',
+    __BUILD_VERSION__: '1.2.3',
+    __BUILD_COMMIT__: 'a'.repeat(40),
+    __BUILD_TIME__: '2026-01-01T00:00:00Z',
+  };
+
+  function render(overrides: Record<string, string> = {}): Record<string, string> {
+    let filled = template;
+    for (const [token, value] of Object.entries(SUBSTITUTIONS)) {
+      filled = filled.split(token).join(value);
+    }
+    const env: Record<string, string> = {};
+    for (const line of filled.split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed === '' || trimmed.startsWith('#')) continue;
+      const eq = trimmed.indexOf('=');
+      // A template line that is neither a comment nor an assignment is a typo
+      // that would silently vanish into the environment file.
+      expect(eq, `not a KEY=VALUE line: ${trimmed}`).toBeGreaterThan(0);
+      env[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
+    }
+    return { ...env, ...overrides };
+  }
+
+  it('leaves no unsubstituted placeholder', () => {
+    // A token the installer forgets to replace reaches production as the
+    // literal string `__SECRETS_KEK__`, which the schema would reject — but
+    // only for the values it validates. Catching it here covers all of them.
+    const rendered = Object.values(render()).join('\n');
+    expect(rendered).not.toMatch(/__[A-Z_]+__/);
+  });
+
+  it('parses cleanly through the application configuration schema', () => {
+    const result = configSchema.safeParse(render());
+    const problems = result.success
+      ? []
+      : result.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`);
+    expect(problems, "the deployment template does not satisfy the app's own schema").toEqual([]);
+  });
+
+  it('produces a production configuration, not a development one', () => {
+    const config = configSchema.parse(render());
+    expect(config.NODE_ENV).toBe('production');
+    // Authentication is real from Phase 1 onward. The schema permits `none`
+    // only in development; this asserts the deployment never asks for it.
+    expect(config.AUTH_MODE).toBe('password');
+    // `recording` keeps messages in memory. An installation running it looks
+    // healthy while every operational alert goes nowhere.
+    expect(config.NOTIFICATION_TRANSPORT).toBe('telegram');
+    // The scrypt work factor. `fast` is a test affordance, two orders of
+    // magnitude weaker.
+    expect(config.PASSWORD_HASH_PROFILE).toBe('production');
+    expect(config.DEPLOYMENT_TOPOLOGY).toBe('reverse-proxy');
+  });
+
+  it('trusts the edge network and nothing wider', () => {
+    const config = configSchema.parse(render());
+    expect(config.TRUSTED_PROXY_IPS.length).toBeGreaterThan(0);
+    // A /0 is `trustProxy: true` spelled differently: every request would
+    // appear to come from the proxy, so one failed-login burst would lock out
+    // every administrator at once.
+    for (const entry of config.TRUSTED_PROXY_IPS) {
+      expect(entry, 'the deployment trusts every address').not.toMatch(/\/0$/);
+    }
+  });
+
+  it('names the admin origin as a canonical https origin', () => {
+    const config = configSchema.parse(render());
+    expect(config.WEB_ADMIN_ORIGINS).toEqual(['https://admin.example.com']);
+  });
+
+  it('carries the build identity the release manifest will report', () => {
+    const config = configSchema.parse(render());
+    expect(config.BUILD_VERSION).toBe('1.2.3');
+    expect(config.BUILD_COMMIT).toBe('a'.repeat(40));
+    expect(config.BUILD_TIME).not.toBe('unknown');
+  });
+
+  /**
+   * The template is only worth testing if the test can fail.
+   *
+   * Each case below is a plausible edit to the template — a domain pasted with
+   * its scheme wrong, a trusted set emptied "because Docker assigns it
+   * anyway", a transport switched while debugging — and each must be refused
+   * by the application's schema rather than by a rule restated here.
+   */
+  it.each([
+    ['an http admin origin', { WEB_ADMIN_ORIGINS: 'http://admin.example.com' }],
+    ['an admin origin with a trailing slash', { WEB_ADMIN_ORIGINS: 'https://admin.example.com/' }],
+    ['an empty trusted proxy set', { TRUSTED_PROXY_IPS: '' }],
+    ['a trusted proxy set of everything', { TRUSTED_PROXY_IPS: '0.0.0.0/0' }],
+    ['the recording transport', { NOTIFICATION_TRANSPORT: 'recording' }],
+    ['authentication turned off', { AUTH_MODE: 'none' }],
+    ['a direct topology', { DEPLOYMENT_TOPOLOGY: 'direct', TRUSTED_PROXY_IPS: '' }],
+    ['the fast password profile', { PASSWORD_HASH_PROFILE: 'fast' }],
+    ['a plaintext Telegram base URL', { TELEGRAM_API_BASE_URL: 'http://api.telegram.org' }],
+    ['a short KEK', { SECRETS_KEK: Buffer.alloc(16).toString('base64') }],
+    // The placeholder shape a hurried installer leaves behind.
+    ['an all-zero KEK', { SECRETS_KEK: Buffer.alloc(32).toString('base64') }],
+  ])('is refused with %s', (_name, overrides) => {
+    expect(configSchema.safeParse(render(overrides)).success).toBe(false);
+  });
+});
