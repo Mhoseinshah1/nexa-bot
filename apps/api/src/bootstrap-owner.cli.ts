@@ -27,7 +27,17 @@ function parseArgs(argv: readonly string[]): Args {
   const get = (flag: string): string | null => {
     const index = argv.indexOf(flag);
     if (index === -1) return null;
-    return argv[index + 1] ?? null;
+    const value = argv[index + 1];
+    // A flag with no value is not the same as no flag.
+    //
+    // Returning null for both meant `--tenant` with nothing after it fell
+    // through to `findPrimary()`, so an operator who explicitly aimed at one
+    // tenant could create the installation's owner in a different one — and be
+    // told it had worked. Refused instead.
+    if (value === undefined || value.startsWith('--')) {
+      throw new PromptInputError(`${flag} needs a value.`);
+    }
+    return value;
   };
   return {
     username: get('--username'),

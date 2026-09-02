@@ -199,7 +199,7 @@ export interface SessionRepository {
    */
   isLive(scope: ScopeContext, id: AdminSessionId, now: Date, tx?: unknown): Promise<boolean>;
   touch(id: AdminSessionId, now: Date): Promise<void>;
-  revoke(id: AdminSessionId, now: Date, reason: string): Promise<void>;
+  revoke(id: AdminSessionId, now: Date, reason: string, tx?: unknown): Promise<void>;
   revokeAllForAdmin(
     scope: ScopeContext,
     adminId: AdminId,

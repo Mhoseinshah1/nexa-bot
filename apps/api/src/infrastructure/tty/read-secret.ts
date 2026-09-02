@@ -80,6 +80,15 @@ export class TerminalReader {
    * very defect it was written to close, moved one chunk along.
    */
   private pendingCr = false;
+  /**
+   * The stream has ended; no further answer can ever arrive.
+   *
+   * Remembered, because `end` can land between one answer resolving and the
+   * next `read()` being called. Handling it only for a read already in flight
+   * left the NEXT question attaching to a dead stream and waiting forever —
+   * the same hang the EOF handler was added to prevent, one question along.
+   */
+  private ended: Error | null = null;
   private pending: PendingRead | null = null;
   private attached = false;
 
@@ -89,6 +98,7 @@ export class TerminalReader {
   ) {}
 
   read(prompt: string, options: { echo: boolean }): Promise<string> {
+    if (this.ended !== null) return Promise.reject(this.ended);
     this.output.write(prompt);
     return new Promise<string>((resolve, reject) => {
       this.pending = {
@@ -133,11 +143,15 @@ export class TerminalReader {
   }
 
   private readonly onEnd = (): void => {
+    if (this.ended === null) {
+      this.ended = new TerminalInputError('Input ended before the answer was complete.');
+    }
     const read = this.pending;
-    if (read === null) return;
     this.pending = null;
     this.close();
-    read.reject(new TerminalInputError('Input ended before the answer was complete.'));
+    // Recorded even with nothing in flight, so the next question fails at once
+    // rather than waiting on a stream that will never speak again.
+    if (read !== null) read.reject(this.ended);
   };
 
   private readonly onData = (chunk: Buffer | string): void => {

@@ -116,10 +116,10 @@ export class DrizzleSessionRepository implements SessionRepository {
       .where(eq(adminSessions.id, id));
   }
 
-  async revoke(id: AdminSessionId, now: Date, reason: string): Promise<void> {
+  async revoke(id: AdminSessionId, now: Date, reason: string, tx?: unknown): Promise<void> {
     // Only an unrevoked session is revoked, so the original revocation time and
     // reason survive a second logout rather than being overwritten.
-    await this.db
+    await executorOf(this.db, tx)
       .update(adminSessions)
       .set({ revokedAt: now, revokedReason: reason })
       .where(and(eq(adminSessions.id, id), isNull(adminSessions.revokedAt)));

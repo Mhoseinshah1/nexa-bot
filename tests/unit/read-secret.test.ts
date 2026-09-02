@@ -222,6 +222,25 @@ describe('TerminalReader', () => {
     expect(tty.raw).toBe(false);
   });
 
+  it('remembers that the terminal ended, and fails the NEXT question too', async () => {
+    // `end` can land between one answer resolving and the next `read()`.
+    // Handling it only for a read already in flight left the next question
+    // attaching to a dead stream and waiting forever — the same hang the EOF
+    // handler was added to prevent, one question along.
+    const tty = new FakeTty();
+    const reader = new TerminalReader(tty as never, capture());
+
+    const first = reader.read('u: ', visible);
+    tty.type('alice');
+    tty.press(ENTER);
+    expect(await first).toBe('alice');
+
+    // Nothing is pending when the stream dies.
+    tty.emit('end');
+
+    await expect(reader.read('p: ', secret)).rejects.toBeInstanceOf(TerminalInputError);
+  });
+
   it('keeps bytes that arrive past the end of an answer', async () => {
     // A paste delivers several answers in ONE chunk. Dropping the surplus made
     // the next question hang waiting for input that had already arrived, or

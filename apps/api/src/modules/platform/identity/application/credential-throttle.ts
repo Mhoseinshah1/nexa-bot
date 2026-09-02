@@ -5,7 +5,7 @@ import {
   type ActorContext,
   type Clock,
 } from '@nexa/contracts';
-import type { OperationalEventRecorder, TenantContext } from '@nexa/contracts';
+import type { OperationalEventRecorder, TenantContext, UnitOfWork } from '@nexa/contracts';
 import type { LoginThrottleRepository, ThrottleState } from './ports.js';
 
 /**
@@ -45,6 +45,7 @@ export class CredentialThrottle {
     private readonly opsLog: OperationalEventRecorder,
     private readonly clock: Clock,
     private readonly policy: ThrottlePolicy,
+    private readonly uow: UnitOfWork<unknown>,
   ) {}
 
   /** The IP limit, for the one release that happens inside a transaction. */
@@ -66,15 +67,15 @@ export class CredentialThrottle {
   ): Promise<Reservation> {
     const now = this.clock.now();
 
-    // An ACTIVE lock is refused before anything is written.
+    // A cheap early refusal while a lock is being served.
     //
-    // Reserving over an existing lock re-runs the over-limit branch, which sets
-    // `locked_until = now + lockoutSeconds` — so every further attempt extends
-    // the deadline instead of serving it. Login happened to avoid this by
-    // checking first; the rotation path did not, and an attacker holding a
-    // stolen session could send cheap, already-refused requests indefinitely to
-    // keep the real administrator locked out for good. The check belongs here,
-    // where every caller gets it, rather than in one of them.
+    // NOT the guarantee. This is a read before a write, so a concurrent burst
+    // can all pass it before the first reservation lands — which is the same
+    // check-then-write shape this branch has been correcting all along, and I
+    // reintroduced it here as the fix for the very defect it describes. The
+    // real protection is in `reserveAttempt`'s statement, which will not
+    // rewrite a live deadline no matter how many callers reach it at once.
+    // This read only saves the work when it happens to be observed in time.
     await this.assertNotLocked(scope, username, ip, now);
 
     const usernameState = await this.throttle.reserveAttempt(scope, 'USERNAME', username, now, {
@@ -215,21 +216,32 @@ export class CredentialThrottle {
     ip: string | null,
     reserved: Reservation,
   ): Promise<void> {
-    await this.throttle.releaseAttempt(
-      scope,
-      'USERNAME',
-      username,
-      this.policy.maxAttemptsPerUsername,
-      reserved.username.windowStartedAt,
-    );
-    if (ip !== null && reserved.ip !== null) {
+    // BOTH decrements, or neither.
+    //
+    // In sequence, a transient failure on the second left the first applied and
+    // the release half done — and a caller that then retried the whole release
+    // decremented the username twice. That second decrement is not harmless
+    // bookkeeping: with concurrent attempts it erases somebody else's real
+    // failure, and can clear the lock that failure established.
+    await this.uow.run(scope, async (tx) => {
       await this.throttle.releaseAttempt(
         scope,
-        'IP',
-        ip,
-        this.policy.maxAttemptsPerIp,
-        reserved.ip.windowStartedAt,
+        'USERNAME',
+        username,
+        this.policy.maxAttemptsPerUsername,
+        reserved.username.windowStartedAt,
+        tx,
       );
-    }
+      if (ip !== null && reserved.ip !== null) {
+        await this.throttle.releaseAttempt(
+          scope,
+          'IP',
+          ip,
+          this.policy.maxAttemptsPerIp,
+          reserved.ip.windowStartedAt,
+          tx,
+        );
+      }
+    });
   }
 }

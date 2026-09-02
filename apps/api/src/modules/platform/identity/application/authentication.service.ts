@@ -556,14 +556,28 @@ export class AuthenticationService {
 
   async logout(scope: ScopeContext, actor: ActorContext, sessionId: AdminSessionId): Promise<void> {
     const now = this.clock.now();
-    await this.sessions.revoke(sessionId, now, 'logout');
-    await this.audit.record(scope, actor, {
-      action: 'auth.logout',
-      entityType: 'Admin',
-      entityId: actor.id,
-      before: null,
-      after: { sessionId },
-      result: 'SUCCESS',
+    // The revocation and its audit row commit together.
+    //
+    // Done in sequence, a failing audit insert returned an error to a caller
+    // whose session was ALREADY revoked — so the surface never cleared the
+    // cookie, the operator saw a failure, and the one record of a state change
+    // that did happen was missing. Same shape as the login audit, in the method
+    // beside it, which I fixed and did not look across at.
+    await this.uow.run(scope, async (tx) => {
+      await this.sessions.revoke(sessionId, now, 'logout', tx);
+      await this.audit.record(
+        scope,
+        actor,
+        {
+          action: 'auth.logout',
+          entityType: 'Admin',
+          entityId: actor.id,
+          before: null,
+          after: { sessionId },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
     });
   }
 

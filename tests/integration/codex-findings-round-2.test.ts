@@ -3079,3 +3079,162 @@ describe('review round 18', () => {
     expect(row?.failedCount ?? 0).toBe(limit - 1);
   }, 60_000);
 });
+
+describe('review round 19', () => {
+  it('never extends a live lock, in the statement that reserves', async () => {
+    // My previous fix for this was a read-before-write, which a concurrent
+    // burst walks straight through: every caller passes the check before the
+    // first reservation lands, and each then rewrites `locked_until`. So the
+    // guarantee has to be in the reserving STATEMENT, and that is what this
+    // exercises — the repository directly, below the early refusal, which is
+    // exactly the path a racing caller takes.
+    const policy = {
+      windowSeconds: ctx.container.config.LOGIN_THROTTLE_WINDOW_SECONDS,
+      maxAttempts: 1,
+      lockoutSeconds: ctx.container.config.LOGIN_LOCKOUT_SECONDS,
+    };
+
+    // One attempt reaches the limit and establishes the lock.
+    const first = await ctx.container.loginThrottle.reserveAttempt(
+      tenantA,
+      'USERNAME',
+      'race-subject',
+      ctx.container.clock.now(),
+      policy,
+    );
+    const deadline = first.lockedUntil?.getTime() ?? 0;
+    expect(deadline).toBeGreaterThan(0);
+
+    // Eight more arrive while it is being served, all reserving at once.
+    const later = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        ctx.container.loginThrottle.reserveAttempt(
+          tenantA,
+          'USERNAME',
+          'race-subject',
+          new Date(ctx.container.clock.now().getTime() + 1_000),
+          policy,
+        ),
+      ),
+    );
+
+    // Not one of them moved the deadline.
+    for (const state of later) {
+      expect(state.lockedUntil?.getTime() ?? 0).toBe(deadline);
+    }
+    const [row] = await ctx.container.database.db
+      .select()
+      .from(adminLoginThrottle)
+      .where(eq(adminLoginThrottle.subject, 'race-subject'));
+    expect(row?.lockedUntil?.getTime() ?? 0).toBe(deadline);
+  }, 60_000);
+
+  it('does not half-release when the second subject fails', async () => {
+    // Released in sequence, a failure on the IP decrement left the username
+    // decrement applied. A caller retrying the whole release then decremented
+    // the username twice — and that second decrement is not harmless
+    // bookkeeping: with concurrent attempts it erases somebody else's real
+    // failure, and can clear the lock that failure established.
+    const db = ctx.container.database.db;
+
+    // One real failure, counted.
+    await ctx.container.auth
+      .login(
+        tenantA,
+        anonymous,
+        { username: owner.username, password: 'wrong' },
+        { ip: '203.0.113.9', userAgent: 'vitest' },
+      )
+      .catch(() => undefined);
+
+    const [before] = await db
+      .select()
+      .from(adminLoginThrottle)
+      .where(eq(adminLoginThrottle.subject, owner.username));
+    expect(before?.failedCount).toBe(1);
+
+    // Abort a login before any verdict, with the IP half of the release made
+    // to fail. The username half must roll back with it.
+    const throttleRepo = ctx.container.loginThrottle as unknown as Record<string, unknown>;
+    const realRelease = ctx.container.loginThrottle.releaseAttempt.bind(
+      ctx.container.loginThrottle,
+    );
+    throttleRepo['releaseAttempt'] = async (...args: unknown[]) => {
+      if (args[1] === 'IP') throw new Error('release failed');
+      return realRelease(...(args as Parameters<typeof realRelease>));
+    };
+
+    const admins = ctx.container.admins as unknown as Record<string, unknown>;
+    const realLookup = ctx.container.admins.findCredentialsByUsername.bind(ctx.container.admins);
+    admins['findCredentialsByUsername'] = async () => {
+      throw new Error('database is unavailable');
+    };
+
+    try {
+      await expect(
+        ctx.container.auth.login(
+          tenantA,
+          anonymous,
+          { username: owner.username, password: owner.password },
+          { ip: '203.0.113.9', userAgent: 'vitest' },
+        ),
+      ).rejects.toThrow();
+    } finally {
+      admins['findCredentialsByUsername'] = realLookup;
+      throttleRepo['releaseAttempt'] = realRelease;
+    }
+
+    // The aborted attempt reserved one and released neither, so the count is
+    // its own reservation on top of the earlier real failure — NOT the earlier
+    // failure silently decremented away by a half-applied release.
+    const [after] = await db
+      .select()
+      .from(adminLoginThrottle)
+      .where(eq(adminLoginThrottle.subject, owner.username));
+    expect(after?.failedCount).toBe(2);
+  }, 60_000);
+
+  it('does not revoke a session whose logout audit fails', async () => {
+    // Sequentially, a failing audit insert returned an error to a caller whose
+    // session was already revoked — so the surface never cleared the cookie,
+    // the operator saw a failure, and the state change that DID happen had no
+    // record. Same shape as the login audit, in the method beside it.
+    const issued = await ctx.container.auth.login(
+      tenantA,
+      anonymous,
+      { username: owner.username, password: owner.password },
+      from,
+    );
+
+    const audit = ctx.container.audit as unknown as Record<string, unknown>;
+    const realRecord = ctx.container.audit.record.bind(ctx.container.audit);
+    audit['record'] = async (
+      scope: unknown,
+      actor: unknown,
+      entry: { action: string },
+      tx?: unknown,
+    ) => {
+      if (entry.action === 'auth.logout') throw new Error('audit is unavailable');
+      return realRecord(scope as never, actor as never, entry as never, tx as never);
+    };
+
+    try {
+      await expect(
+        ctx.container.auth.logout(
+          tenantA,
+          adminActorFor(owner),
+          issued.session.id as AdminSessionId,
+        ),
+      ).rejects.toThrow('audit is unavailable');
+    } finally {
+      audit['record'] = realRecord;
+    }
+
+    // The session is still live: the revocation rolled back with its record.
+    const [row] = await ctx.container.database.db
+      .select()
+      .from(adminSessions)
+      .where(eq(adminSessions.id, issued.session.id));
+    expect(row?.revokedAt ?? null).toBeNull();
+  }, 60_000);
+});

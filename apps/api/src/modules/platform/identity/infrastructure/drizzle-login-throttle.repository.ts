@@ -131,10 +131,26 @@ export class DrizzleLoginThrottleRepository implements LoginThrottleRepository {
           windowStartedAt: sql`CASE WHEN ${periodEnded} THEN ${now}
             ELSE ${adminLoginThrottle.windowStartedAt}
           END`,
-          // Ordered deliberately: a fresh period that immediately re-reaches
-          // the limit (`maxAttempts = 1`) locks again rather than being
-          // cleared, and an unexpired lock is carried forward untouched.
+          // An UNEXPIRED lock is carried forward first, and never rewritten.
+          //
+          // This branch used to sit last, so an attempt that arrived while a
+          // lockout was being served re-reached the limit and replaced the
+          // deadline with `now + lockoutSeconds`. Every further attempt pushed
+          // it out again, which turns a penalty into a permanent lockout that
+          // an attacker can hold open with cheap, already-refused requests.
+          //
+          // A read-before-write check cannot close that: concurrent callers all
+          // pass the read before the first one writes. The guarantee has to be
+          // in this statement, where the row is locked, and it is: while a lock
+          // is live its deadline is the one thing this CASE will not touch.
+          //
+          // Order still matters for the other two. A fresh period that
+          // immediately re-reaches the limit (`maxAttempts = 1`) locks again
+          // rather than being cleared.
           lockedUntil: sql`CASE
+            WHEN ${adminLoginThrottle.lockedUntil} IS NOT NULL
+                 AND ${adminLoginThrottle.lockedUntil} > ${now}
+              THEN ${adminLoginThrottle.lockedUntil}
             WHEN (${nextCount}) >= ${policy.maxAttempts} THEN ${lockedUntil}
             WHEN ${adminLoginThrottle.lockedUntil} IS NOT NULL
                  AND ${adminLoginThrottle.lockedUntil} <= ${now} THEN NULL

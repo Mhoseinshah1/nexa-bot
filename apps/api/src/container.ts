@@ -80,6 +80,7 @@ export interface Container {
   readonly admins: DrizzleAdminRepository;
   readonly roles: DrizzleRoleRepository;
   readonly sessions: DrizzleSessionRepository;
+  readonly loginThrottle: DrizzleLoginThrottleRepository;
   readonly auth: AuthenticationService;
   readonly adminManagement: AdminManagementService;
   readonly bootstrapOwner: BootstrapOwnerService;
@@ -135,12 +136,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   // One counter per subject for every path that checks a password: login and
   // `changeOwnPassword` both go through this, so an attacker locked out of one
   // cannot keep guessing the same credential on the other.
-  const credentialThrottle = new CredentialThrottle(loginThrottle, opsLog, clock, {
-    windowSeconds: config.LOGIN_THROTTLE_WINDOW_SECONDS,
-    maxAttemptsPerUsername: config.LOGIN_MAX_ATTEMPTS_PER_USERNAME,
-    maxAttemptsPerIp: config.LOGIN_MAX_ATTEMPTS_PER_IP,
-    lockoutSeconds: config.LOGIN_LOCKOUT_SECONDS,
-  });
+  const credentialThrottle = new CredentialThrottle(
+    loginThrottle,
+    opsLog,
+    clock,
+    {
+      windowSeconds: config.LOGIN_THROTTLE_WINDOW_SECONDS,
+      maxAttemptsPerUsername: config.LOGIN_MAX_ATTEMPTS_PER_USERNAME,
+      maxAttemptsPerIp: config.LOGIN_MAX_ATTEMPTS_PER_IP,
+      lockoutSeconds: config.LOGIN_LOCKOUT_SECONDS,
+    },
+    uow,
+  );
 
   const auth = new AuthenticationService(
     admins,
@@ -259,6 +266,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     admins,
     roles,
     sessions,
+    loginThrottle,
     auth,
     adminManagement,
     bootstrapOwner,
