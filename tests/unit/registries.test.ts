@@ -45,6 +45,26 @@ describe('the settings registry', () => {
     }
   });
 
+  it('accepts a zero state wherever the declaration says one is possible', () => {
+    // The other half of the rule above, and the half that was missing. The
+    // NOT_APPLICABLE test proves a key that CLAIMS zero cannot occur really
+    // forbids it; without this, a key claiming DISABLES, UNLIMITED or LITERAL
+    // could declare a meaning for a state its own schema rejects — a registry
+    // describing behaviour that no value can ever produce, which is exactly
+    // what a settings screen is for reading.
+    for (const setting of SETTINGS) {
+      if (setting.zeroMeaning === 'NOT_APPLICABLE') continue;
+      const accepted =
+        setting.schema.safeParse(0).success ||
+        setting.schema.safeParse('').success ||
+        setting.schema.safeParse(null).success;
+      expect(
+        accepted,
+        `${setting.key} declares ${setting.zeroMeaning} for a zero state its schema rejects`,
+      ).toBe(true);
+    }
+  });
+
   it('accepts empty where the declaration says empty means something', () => {
     // The destination is the one key here whose zero case carries a meaning:
     // empty is "not configured", and nothing is sent.

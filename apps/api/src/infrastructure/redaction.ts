@@ -116,21 +116,33 @@ export function redactSecrets<T>(value: T): T {
  * solvable by matching, and claiming otherwise would be the kind of comment
  * this codebase has already had to correct once.
  */
-const TELEGRAM_BOT_TOKEN = /\b\d{5,}:[A-Za-z0-9_-]{20,}\b/g;
+// NO leading word boundary. Telegram's own URL is `/bot<token>`, so the digits
+// are preceded by a letter and `\b` did not match there — which is the one
+// place this pattern exists to cover.
+const TELEGRAM_BOT_TOKEN = /\d{5,}:[A-Za-z0-9_-]{20,}/g;
+
+// The value may itself be a `Bearer …` credential, and that alternative is
+// inside this pattern rather than left to the one below. Applied separately,
+// the bearer rule replaced the credential and this rule then matched
+// `Authorization: Bearer` and replaced the WORD Bearer as though it were the
+// secret, leaving two redaction markers and no indication of what was removed.
 const LABELLED_SECRET = new RegExp(
   String.raw`\b([A-Za-z0-9_.-]*(?:${SENSITIVE_FRAGMENTS.join('|')}|api[_-]?key)[A-Za-z0-9_.-]*)` +
-    String.raw`(\s*[=:]\s*)("?)([^\s"'&]+)\3`,
+    String.raw`(\s*[=:]\s*)("?)((?:Bearer\s+)?[^\s"'&]+)\3`,
   'gi',
 );
-const BEARER = /\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi;
+
+/** An unlabelled bearer credential, for text that does not name the header. */
+const BEARER = /\bBearer\s+[A-Za-z0-9._~+/-]{4,}=*/g;
 
 export function redactSecretText(text: string): string {
   return text
     .replace(TELEGRAM_BOT_TOKEN, REDACTED)
-    .replace(BEARER, `Bearer ${REDACTED}`)
-    .replace(LABELLED_SECRET, (_match, name: string, separator: string) =>
-      `${name}${separator}${REDACTED}`,
-    );
+    .replace(
+      LABELLED_SECRET,
+      (_match, name: string, separator: string) => `${name}${separator}${REDACTED}`,
+    )
+    .replace(BEARER, `Bearer ${REDACTED}`);
 }
 
 /** Convenience for the nullable `before`/`after` audit columns. */

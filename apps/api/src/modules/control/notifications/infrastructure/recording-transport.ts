@@ -19,6 +19,7 @@ export class RecordingTransport implements NotificationTransport {
 
   private readonly sent: OutboundMessage[] = [];
   private nextResult: TransportResult = { outcome: 'SUCCEEDED' };
+  private nextThrow: Error | null = null;
 
   get messages(): readonly OutboundMessage[] {
     return this.sent;
@@ -29,12 +30,28 @@ export class RecordingTransport implements NotificationTransport {
     this.nextResult = result;
   }
 
+  /**
+   * Makes the next send THROW, which is a different case from returning a
+   * failure and was handled differently — wrongly — until a test could
+   * express it. A real transport raises when a socket dies, and the dispatcher
+   * has to treat that as a retryable attempt rather than as an outcome it must
+   * guess at.
+   */
+  throwNextWith(error: Error): void {
+    this.nextThrow = error;
+  }
+
   reset(): void {
     this.sent.length = 0;
     this.nextResult = { outcome: 'SUCCEEDED' };
+    this.nextThrow = null;
   }
 
   async send(message: OutboundMessage): Promise<TransportResult> {
+    const thrown = this.nextThrow;
+    this.nextThrow = null;
+    if (thrown) throw thrown;
+
     const result = this.nextResult;
     this.nextResult = { outcome: 'SUCCEEDED' };
     if (result.outcome === 'SUCCEEDED') this.sent.push(message);
