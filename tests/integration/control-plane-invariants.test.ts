@@ -1,5 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { createTestContext, SEED_IDS, type TestContext } from './harness';
+import { createTestContext, SEED_IDS, tenantA, type TestContext } from './harness';
 
 /**
  * What the Phase 2 tables refuse, enforced by the database rather than by a
@@ -231,6 +232,85 @@ describe('control-plane invariants', () => {
       await expect(query(`DELETE FROM operational_events WHERE id = '${id}'`)).rejects.toThrowError(
         /append-only/i,
       );
+    });
+  });
+
+  describe('the role backfill in migration 0011', () => {
+    /**
+     * The statement, read from the migration rather than retyped.
+     *
+     * A copy would drift from the file it is meant to prove, and a test that
+     * asserts a copy of the SQL is a test of the copy.
+     */
+    const backfill = () => {
+      const sql = readFileSync('apps/api/drizzle/0011_control_plane_guards.sql', 'utf8');
+      const start = sql.indexOf('INSERT INTO "role_permissions"');
+      expect(start).toBeGreaterThan(-1);
+      return sql.slice(start);
+    };
+
+    it('gives the three widened seeds their template permissions and nothing else', async () => {
+      // Seeded roles are written at creation and never reasserted, so a
+      // permission newly added to a seed reaches an existing installation only
+      // through a migration. Without this one, `operator` means one thing on an
+      // installation created last month and another on one created next month.
+      await ctx.container.roles.ensureSystemRoles(tenantA);
+
+      // Put the tenant back into the state a pre-Phase-2 installation is in.
+      await query(`DELETE FROM role_permissions WHERE permission_key LIKE 'templates.%'`);
+      const before = await query(
+        `SELECT count(*)::int AS n FROM role_permissions WHERE permission_key LIKE 'templates.%'`,
+      );
+      expect(before.rows[0].n).toBe(0);
+
+      await query(backfill());
+
+      const granted = await query(`
+        SELECT r.key AS role_key, rp.permission_key
+        FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
+        WHERE rp.permission_key LIKE 'templates.%'
+        ORDER BY r.key, rp.permission_key`);
+
+      expect(
+        granted.rows.map((row: Record<string, string>) => `${row.role_key}:${row.permission_key}`),
+      ).toEqual([
+        'observer:templates.view',
+        'operator:templates.edit',
+        'operator:templates.view',
+        'owner:templates.edit',
+        'owner:templates.view',
+      ]);
+    });
+
+    it('is idempotent, so a re-run is not an error', async () => {
+      await ctx.container.roles.ensureSystemRoles(tenantA);
+      await query(backfill());
+      await query(backfill());
+
+      const rows = await query(
+        `SELECT count(*)::int AS n FROM role_permissions WHERE permission_key LIKE 'templates.%'`,
+      );
+      // Five grants, not ten. `ON CONFLICT DO NOTHING` is doing the work.
+      expect(rows.rows[0].n).toBe(5);
+    });
+
+    it('leaves a role an operator created alone', async () => {
+      // The create-only rule protects a permission somebody withdrew. A role
+      // that was never seeded from the catalogue is not this migration's to
+      // widen at all.
+      await ctx.container.roles.ensureSystemRoles(tenantA);
+      const roleId = ctx.container.ids.uuid();
+      await query(`
+        INSERT INTO roles (id, tenant_id, key, name, is_system)
+        VALUES ('${roleId}', '${A}', 'operator', 'A custom role that shares a key', false)
+        ON CONFLICT DO NOTHING`);
+
+      await query(backfill());
+
+      const custom = await query(
+        `SELECT count(*)::int AS n FROM role_permissions WHERE role_id = '${roleId}'`,
+      );
+      expect(custom.rows[0].n).toBe(0);
     });
   });
 

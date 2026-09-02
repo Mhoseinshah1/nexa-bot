@@ -24,16 +24,21 @@ export async function resolveInstallationTenant(container: Container): Promise<v
 
   if (primary === null) return;
 
-  // Bring the system roles up to date with this build's catalogue.
+  // Create any system role this installation does not have yet.
   //
-  // `ensureSystemRoles` was written to be idempotent so that an upgrade picks
-  // up a permission newly added to a seeded role — and then had exactly one
-  // production caller, inside the first-owner bootstrap, which returns early
-  // the moment any administrator exists. The upgrade path it promised was
-  // therefore unreachable for every installation that had one. Left that way, a
-  // release adding a permission to the `owner` seed would leave existing owners
-  // without it, and the amplification rule would then stop ANYONE granting it,
-  // because nobody holds it.
+  // NOT an upgrade path, and the comment here used to say it was. Phase 2 is
+  // the first release to add a permission to a seeded role, which is what made
+  // the discrepancy matter: `ensureSystemRoles` leaves an EXISTING role alone
+  // and says why — reasserting a seed on every boot would silently restore a
+  // permission an operator had deliberately withdrawn, with no audit row and
+  // nothing to notice it.
+  //
+  // So a permission newly added to a seed reaches existing installations
+  // through a MIGRATION that says what it is doing, and Phase 2 carries one
+  // (`0011_control_plane_guards.sql`). This call covers the other half: an
+  // installation that has never had, say, the `observer` role gets it, and a
+  // provisioning run that created a tenant before a later release added a seed
+  // is not left short of it.
   //
   // Roles an operator created are never touched, and the writes are conflict-
   // ignoring inserts, so a boot that changes nothing costs a few statements.
