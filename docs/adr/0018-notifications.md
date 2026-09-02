@@ -27,8 +27,8 @@ group id — and no delivery model at all behind it.
 
 ### A notification is an intent. A delivery attempt is a fact.
 
-Two tables, and the distinction is the point of the design rather than a detail
-of it.
+Three tables, and the distinctions between them are the point of the design
+rather than a detail of it.
 
 **`notifications`** — one row per thing that should be communicated. It carries
 the tenant, the kind, the destination reference, a typed payload, a status, and
@@ -38,6 +38,15 @@ transaction** that produced it, alongside the audit row and the outbox row.
 **`notification_delivery_attempts`** — append-only, one row per attempt. Attempt
 number, transport, start and finish, outcome, and — when the transport says so —
 the error and the `retry_after` it asked for.
+
+**`notification_released_claims`** — append-only, one row per claim that was
+issued and given back without ever reaching the transport. Added after the
+first two, when spend stopped being a counter that could be decremented:
+`attempt_count` counts claims ISSUED and never goes down, so what an intent has
+actually spent is that number minus these rows. It is therefore accounting as
+well as evidence, and a database trigger refuses a row on any attempt number
+that has an attempt row — the two ledgers are exclusive, with one deliberate
+exception for the exhaustion sweep retiring its own verdict.
 
 A notification that failed four times has one row in the first table and four in
 the second. Reading the first tells you what the system meant to say; reading
