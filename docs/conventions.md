@@ -182,7 +182,11 @@ Placeholders are unvalidated and overloaded: `{time}` means both "now" and
 "service duration".
 
 **Enforced by.** `check-i18n-keys.mjs` fails on a missing key, an undeclared
-token, or a hard-coded Persian string in a surface.
+token, a hard-coded Persian string in **either** surface, or a `web.*` key
+nothing renders any more. `validateTemplateBody` in `@nexa/contracts` refuses a
+body that uses an undeclared token, drops a required one, or repeats a
+single-use one; the web editor, the service and the tests all call that one
+function, so they cannot disagree about what is valid.
 
 ---
 
@@ -196,8 +200,11 @@ resolved source, and what `0` or empty means. No write-only setters.
 captures the next message whatever it is, this is exactly how a production
 gateway setting was overwritten by an ordinary chat message.
 
-**Enforced by.** Nothing yet; no settings surface exists. The rule is recorded
-so the first one is built correctly.
+**Enforced by.** The settings registry (`@nexa/contracts`), where declaring what
+`0` or empty means is a required field rather than a comment, and
+`SettingsService`, whose every read returns the value, its resolved source and
+that declaration. Asserted over HTTP in `tests/integration/control-plane-http`.
+There is no write-to-read path anywhere in the module.
 
 ---
 
@@ -213,8 +220,15 @@ the money. A single "optimisation" button deletes six order classes with no
 count, no dry run, no undo and no record of prior runs. The whole-bot kill
 switch is rendered identically to the dice toggle.
 
-**Enforced by.** Nothing yet; no bulk operation exists. See
-`docs/adr/0010-destructive-operations.md`.
+**Enforced by.** Partially, and only where something destructive exists yet. A
+feature flag declares its blast radius, and a `TENANT_WIDE` one is refused
+unless the caller types the flag's own key and gives a reason — which the audit
+row then carries. The web admin draws such a flag differently from a local one,
+because the legacy capability screen renders the whole-bot kill switch
+identically to the dice toggle.
+
+No bulk operation exists yet, so the dry-run and counted-preview steps have
+nothing to apply to. See `docs/adr/0010-destructive-operations.md`.
 
 ---
 
@@ -228,7 +242,11 @@ changed nothing — re-adding an existing admin, a settings write, a panel
 creation against an unreachable host. It is a cultural pattern there, which
 makes it a review responsibility here.
 
-**Enforced by.** `check-boundaries.sh` and the ESLint `no-empty` rule.
+**Enforced by.** `check-boundaries.sh` and the ESLint `no-empty` rule. From
+Phase 2 the control-plane write responses also carry `changed`, so a save that
+landed on the value already stored says so instead of answering "saved" — a
+response that cannot express "nothing changed" cannot comply with this rule
+however carefully the service works it out.
 
 ---
 

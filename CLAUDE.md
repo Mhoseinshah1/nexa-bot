@@ -3,13 +3,24 @@
 Tenant-aware Telegram service-sales platform. TypeScript, NestJS, PostgreSQL 16,
 Redis, BullMQ, grammY, React. One codebase, several process roles.
 
-**Phases 0 and 1 are done: foundation, then identity and RBAC.** There are still
-no product features: no purchases, payments, wallet, providers, resellers or
-production Telegram operations. Do not add them without an explicit instruction.
+**Phases 0, 1 and 2 are done: foundation, identity and RBAC, then the control
+plane** — templates, settings, feature flags, notifications and the operational
+log. There are still no product features: no purchases, payments, wallet,
+providers, resellers or customer-facing Telegram operations. Do not add them
+without an explicit instruction.
 
-Authentication and authorization are real now. Every new write path takes a
+Authentication and authorization are real. Every new write path takes a
 `ScopeContext` and an `ActorContext` and checks a permission through the guard —
 never by inspecting an actor's type, and never by not drawing a button.
+
+Three Phase 2 rules that are easy to break by accident:
+
+- A template body is stored **raw** and rendered nowhere near where it is
+  edited. Nothing in this codebase may persist a rendered string.
+- A setting is declared in the registry or it does not exist. Unknown keys fail
+  closed at the schema, the service and the surface.
+- A feature flag is a boolean; its parameters are settings. Neither registry
+  grows a field that belongs to the other.
 
 ## Before you change anything
 
