@@ -33,7 +33,18 @@ export interface ResolvedSetting {
   readonly key: SettingKey;
   readonly value: unknown;
   readonly source: SettingSource;
-  /** Null when the value is the default: there is no row, so there is no version. */
+  /**
+   * The stored row's version, or null when there is genuinely no row.
+   *
+   * NOT null merely because the DEFAULT is in force. A row whose value no longer
+   * parses still exists and still has a version, and that version is what a
+   * caller must state to overwrite it. Returning null for it made the key
+   * permanently unwritable through any surface: the caller submitted
+   * `expectedVersion: null`, the repository took its first-write branch, the
+   * insert conflicted with the row that was there all along, and the answer was
+   * `control.version_conflict` — forever, with no reload that could help,
+   * because reloading returned null again.
+   */
   readonly version: number | null;
   readonly updatedAt: Date | null;
   readonly updatedByAdminId: string | null;
@@ -43,6 +54,12 @@ export interface ResolvedSetting {
   readonly mutability: SettingMutability;
   readonly classification: SettingClassification;
   readonly configures: string | null;
+  /**
+   * True when a row exists whose value no longer parses against its
+   * declaration. The default is in force, `version` is the row's, and
+   * resubmitting a valid value repairs it.
+   */
+  readonly storedValueInvalid: boolean;
 }
 
 /** A stored value that no longer parses against its declaration. */
@@ -96,16 +113,17 @@ export class SettingsResolver {
       configures: definition.configures,
     } as const;
 
-    const asDefault = (): ResolvedSetting => ({
+    const unset = (): ResolvedSetting => ({
       ...base,
       value: definition.defaultValue,
       source: 'DEFAULT',
       version: null,
       updatedAt: null,
       updatedByAdminId: null,
+      storedValueInvalid: false,
     });
 
-    if (row === null) return asDefault();
+    if (row === null) return unset();
 
     const parsed = definition.schema.safeParse(row.value);
     if (!parsed.success) {
@@ -132,7 +150,17 @@ export class SettingsResolver {
         },
         tx,
       );
-      return asDefault();
+      // The DEFAULT is in force, so that is the source — but the ROW's identity
+      // is reported, because the row is what a repair has to overwrite.
+      return {
+        ...base,
+        value: definition.defaultValue,
+        source: 'DEFAULT',
+        version: row.version,
+        updatedAt: row.updatedAt,
+        updatedByAdminId: row.updatedByAdminId,
+        storedValueInvalid: true,
+      };
     }
 
     return {
@@ -142,6 +170,7 @@ export class SettingsResolver {
       version: row.version,
       updatedAt: row.updatedAt,
       updatedByAdminId: row.updatedByAdminId,
+      storedValueInvalid: false,
     };
   }
 }

@@ -22,6 +22,7 @@ import type { PermissionGuard } from '../../../platform/access/application/permi
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
+import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type {
   ResolvedSetting,
@@ -149,13 +150,23 @@ export class FeatureFlagsService {
       enabled: command.enabled,
       expectedVersion: command.expectedVersion,
     });
-    const existing = await this.idempotency.find<Omit<SetFeatureFlagResult, 'replayed'>>(
+    // Re-read on replay; see the same note in `SettingsService`. A stored
+    // result carries a Date through `jsonb` and comes back a string.
+    const existing = await this.idempotency.find<{ changed: boolean }>(
       scope,
       actor.surface,
       command.idempotencyKey,
       requestHash,
     );
-    if (existing) return { ...existing.result, replayed: true };
+    if (existing) {
+      const state = await this.resolver.resolve(scope, key);
+      const settings = await this.settings.resolveAll(scope);
+      return {
+        flag: this.withConfiguration(state, settings),
+        changed: existing.result.changed,
+        replayed: true,
+      };
+    }
 
     const result = await this.uow.run(scope, async (tx) => {
       if (!(await this.scopeActivity.scopeIsActive(scope, tx))) {
@@ -171,12 +182,13 @@ export class FeatureFlagsService {
       if (before.source === 'TENANT' && before.enabled === command.enabled) {
         // The key is still consumed; see the same note in `SettingsService`.
         const flag = this.withConfiguration(before, settings);
-        await this.idempotency.remember(
+        await rememberOnce(
+          this.idempotency,
           scope,
           actor.surface,
           command.idempotencyKey,
           requestHash,
-          { flag, changed: false },
+          { changed: false },
           tx,
         );
         return { flag, changed: false };
@@ -227,12 +239,13 @@ export class FeatureFlagsService {
       });
 
       const flag = this.withConfiguration(await this.resolver.resolve(scope, key, tx), settings);
-      await this.idempotency.remember(
+      await rememberOnce(
+        this.idempotency,
         scope,
         actor.surface,
         command.idempotencyKey,
         requestHash,
-        { flag, changed: true },
+        { changed: true },
         tx,
       );
       return { flag, changed: true };

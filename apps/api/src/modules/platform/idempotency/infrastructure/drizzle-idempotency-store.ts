@@ -89,10 +89,15 @@ export class DrizzleIdempotencyStore implements IdempotencyStore {
     requestHash: string,
     result: TResult,
     tx?: unknown,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const executor = (tx as TransactionScope | undefined)?.tx ?? this.db;
 
-    await executor
+    // `RETURNING` is what makes the conflict observable. `onConflictDoNothing`
+    // alone reports the same silence for "stored" and "somebody else already
+    // had this key", and the second is a concurrent duplicate the caller has to
+    // abandon — its `find` ran before the other request committed, so it saw
+    // nothing and did the work too.
+    const stored = await executor
       .insert(requestIdempotency)
       .values({
         id: this.ids.uuid(),
@@ -102,6 +107,9 @@ export class DrizzleIdempotencyStore implements IdempotencyStore {
         requestHash,
         result: result as Record<string, unknown>,
       })
-      .onConflictDoNothing();
+      .onConflictDoNothing()
+      .returning({ id: requestIdempotency.id });
+
+    return stored.length > 0;
   }
 }

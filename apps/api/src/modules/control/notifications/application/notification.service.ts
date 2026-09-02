@@ -21,6 +21,7 @@ import {
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
+import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
 import type { FeatureFlagResolver } from '../../features/application/feature-flags.service.js';
 import type { SettingsResolver } from '../../settings/application/settings-resolver.js';
 import type { DeliveryAttemptRecord, NotificationIntent, NotificationRepository } from './ports.js';
@@ -183,7 +184,21 @@ export class NotificationService {
     );
     if (existing) {
       const intent = await this.notifications.findById(scope, existing.result.notificationId);
-      if (intent !== null) return { intent, created: false, replayed: true };
+      if (intent === null) {
+        // The key says a test was created and the intent it names is gone.
+        // Nothing in this system deletes a notification, so this is a
+        // corruption rather than an ordinary miss — and FALLING THROUGH to
+        // create a new one would invert the whole mechanism: every replay of
+        // that key would mint another message, so N retries of one request
+        // would send N of them. Refusing says what is wrong.
+        throw errors.conflict(
+          CONTROL_ERROR_CODES.NOTIFICATION_NOT_FOUND,
+          `Idempotency key "${command.idempotencyKey}" names notification ` +
+            `${existing.result.notificationId}, which no longer exists.`,
+          { notificationId: existing.result.notificationId },
+        );
+      }
+      return { intent, created: false, replayed: true };
     }
 
     const now = this.clock.now();
@@ -235,7 +250,8 @@ export class NotificationService {
         tx,
       );
 
-      await this.idempotency.remember(
+      await rememberOnce(
+        this.idempotency,
         scope,
         actor.surface,
         command.idempotencyKey,

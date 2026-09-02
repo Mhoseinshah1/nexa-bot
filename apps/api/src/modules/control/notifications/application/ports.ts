@@ -94,6 +94,18 @@ export interface NotificationRepository {
   claimDue(now: Date, limit: number, leaseMs: number): Promise<NotificationIntent[]>;
 
   /**
+   * Moves intents that have spent every attempt, and are still PENDING, to
+   * FAILED. Returns how many moved.
+   *
+   * The gap between `claimDue`, which refuses such a row, and `recordAttempt`,
+   * which is the code that normally fails it and is exactly the code that does
+   * not run when a dispatch throws before it. Without this a row sits PENDING
+   * for ever: never claimed, never failed, never listed anywhere as a thing that
+   * went wrong.
+   */
+  failExhausted(now: Date, limit: number): Promise<number>;
+
+  /**
    * Records one attempt and moves the intent, in one transaction.
    *
    * The two halves have to commit together. An attempt row with no status

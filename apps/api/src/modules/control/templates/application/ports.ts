@@ -5,6 +5,7 @@ import type {
   TemplateRevisionAction,
   TemplateValues,
 } from '@nexa/contracts';
+import type { Locale } from './template-resolver.js';
 
 /**
  * The built-in default bodies, and the renderer.
@@ -21,20 +22,20 @@ import type {
  */
 export interface TemplateCatalogue {
   /** The built-in body for a key. Raw, with placeholders intact. */
-  defaultBody(key: TemplateKey, locale: string): string;
+  defaultBody(key: TemplateKey, locale: Locale): string;
   /** Substitutes declared tokens. Escapes values for an HTML-format key. */
   render(
     definition: TemplateDefinition,
     body: string,
     values: TemplateValues,
-    locale: string,
+    locale: Locale,
   ): string;
 }
 
 /** A tenant's current override of one key. Absent means "uses the default". */
 export interface StoredTemplateOverride {
   readonly key: TemplateKey;
-  readonly locale: string;
+  readonly locale: Locale;
   /** RAW source. Never a rendered message. */
   readonly body: string;
   readonly version: number;
@@ -45,7 +46,7 @@ export interface StoredTemplateOverride {
 
 export interface TemplateRevision {
   readonly key: TemplateKey;
-  readonly locale: string;
+  readonly locale: Locale;
   readonly revision: number;
   readonly action: TemplateRevisionAction;
   /** The raw body a SET stored. Null for a REVERT, which stores no body. */
@@ -57,13 +58,13 @@ export interface TemplateRevision {
 export interface TemplateRepository {
   findOverrides(
     scope: ScopeContext,
-    locale: string,
+    locale: Locale,
     tx?: unknown,
   ): Promise<StoredTemplateOverride[]>;
   findOverride(
     scope: ScopeContext,
     key: TemplateKey,
-    locale: string,
+    locale: Locale,
     tx?: unknown,
   ): Promise<StoredTemplateOverride | null>;
 
@@ -71,14 +72,14 @@ export interface TemplateRepository {
   latestRevision(
     scope: ScopeContext,
     key: TemplateKey,
-    locale: string,
+    locale: Locale,
     tx?: unknown,
   ): Promise<number>;
 
   listRevisions(
     scope: ScopeContext,
     key: TemplateKey,
-    locale: string,
+    locale: Locale,
     limit: number,
     tx?: unknown,
   ): Promise<TemplateRevision[]>;
@@ -89,7 +90,7 @@ export interface TemplateRepository {
     input: {
       readonly id: string;
       readonly key: TemplateKey;
-      readonly locale: string;
+      readonly locale: Locale;
       readonly body: string;
       readonly revision: number;
       readonly expectedVersion: number | null;
@@ -110,7 +111,7 @@ export interface TemplateRepository {
     scope: ScopeContext,
     input: {
       readonly key: TemplateKey;
-      readonly locale: string;
+      readonly locale: Locale;
       readonly expectedVersion: number;
     },
     tx?: unknown,
@@ -121,7 +122,7 @@ export interface TemplateRepository {
     input: {
       readonly id: string;
       readonly key: TemplateKey;
-      readonly locale: string;
+      readonly locale: Locale;
       readonly revision: number;
       readonly action: TemplateRevisionAction;
       readonly body: string | null;

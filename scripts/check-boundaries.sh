@@ -25,6 +25,37 @@ pass() {
   echo "ok    $1"
 }
 
+# A directory every check below assumes exists.
+#
+# Without this a rename makes `grep -r` on a missing path return nothing, which
+# reads as "no violations" and passes. A check that cannot fail is worse than no
+# check, because it is on the CI report saying the rule holds.
+require_dir() {
+  if [ ! -d "$1" ]; then
+    fail "Expected directory $1 does not exist" \
+         "Every check over it would pass vacuously. Update this script for the new layout."
+    return 1
+  fi
+  return 0
+}
+
+# Source lines with comment lines removed.
+#
+# `grep -r` matches a rule's own documentation: the money check fired on a
+# comment reading `amount: number` that was EXPLAINING why that is banned, and
+# the only way past it was to reword the comment. Prose about a rule is not a
+# violation of it.
+scan_source() {
+  local pattern="$1"
+  shift
+  grep -rnE "$pattern" "$@" --include=*.ts 2>/dev/null \
+    | grep -vE ':[0-9]+:[[:space:]]*(//|\*|/\*)' || true
+}
+
+for dir in packages/contracts/src apps/api/src apps/api/src/surfaces apps/api/src/modules apps/web/src; do
+  require_dir "$dir" || true
+done
+
 # --- @nexa/contracts is the root of the dependency graph --------------------
 # It holds declarations only. A framework import here means an implementation
 # has leaked into the specification.
@@ -104,12 +135,27 @@ fi
 # that threw for every locale but `fa`, so the second-locale path ADR-0016
 # describes could not be exercised by a test.
 if [ -n "$INNER_DIRS" ]; then
-  I18N_LEAK=$(grep -rn "from '@nexa/i18n'" $INNER_DIRS 2>/dev/null || true)
+  # Both quote styles and any subpath. The first version matched the exact
+  # string `from '@nexa/i18n'`, so `from "@nexa/i18n"` and
+  # `from '@nexa/i18n/catalogue.js'` — the two forms a leak is most likely to
+  # take once someone is reaching past a rule — went straight through it.
+  I18N_LEAK=$(scan_source "from ['\"]@nexa/i18n(/[^'\"]*)?['\"]" $INNER_DIRS)
   if [ -n "$I18N_LEAK" ]; then
     fail "A domain or application file imports @nexa/i18n directly" "$I18N_LEAK" \
          "Declare a port and bind the catalogue in container.ts."
   else
     pass "domain and application layers reach the catalogue through a port"
+  fi
+
+  # And the surfaces. A controller that renders from the catalogue itself is a
+  # second renderer beside `TemplateResolver`, which is how the legacy system
+  # came to hold 36 editable texts in one surface and 608 in the other.
+  SURFACE_I18N=$(scan_source "from ['\"]@nexa/i18n(/[^'\"]*)?['\"]" apps/api/src/surfaces)
+  if [ -n "$SURFACE_I18N" ]; then
+    fail "A surface imports @nexa/i18n directly" "$SURFACE_I18N" \
+         "Surfaces send a template KEY. The catalogue is resolved behind the application layer."
+  else
+    pass "surfaces do not render from the catalogue themselves"
   fi
 fi
 
@@ -152,8 +198,8 @@ fi
 # --- No password or session material is logged or persisted raw -------------
 # A password reaching a log or an audit column is unrecoverable: it is in the
 # backups before anyone notices.
-SECRET_LEAK=$(grep -rnE "(after|before|context):\s*\{[^}]*\b(password|passwordHash|token)\b" \
-  apps/api/src --include=*.ts 2>/dev/null | grep -v "tokenSecretRef" || true)
+SECRET_LEAK=$(scan_source "(after|before|context):\s*\{[^}]*\b(password|passwordHash|token)\b" apps/api/src \
+  | grep -v "tokenSecretRef" || true)
 if [ -n "$SECRET_LEAK" ]; then
   fail "A credential is written into an audit or log payload" "$SECRET_LEAK" \
        "Audit the fact of the change, never the material."
@@ -163,10 +209,9 @@ fi
 
 # --- Money is never a float or a bare number -------------------------------
 # A float that reaches production is very expensive to find.
-if grep -rnE "(amount|price|balance|total)\s*:\s*number" \
-     packages/contracts/src apps/api/src 2>/dev/null >/dev/null; then
-  fail "A monetary field is typed as number" \
-       "$(grep -rnE "(amount|price|balance|total)\s*:\s*number" packages/contracts/src apps/api/src 2>/dev/null)" \
+MONEY_AS_NUMBER=$(scan_source "(amount|price|balance|total)\s*:\s*number" packages/contracts/src apps/api/src)
+if [ -n "$MONEY_AS_NUMBER" ]; then
+  fail "A monetary field is typed as number" "$MONEY_AS_NUMBER" \
        "Use the branded Money type: bigint minor units plus an explicit currency."
 else
   pass "no monetary field is typed as number"

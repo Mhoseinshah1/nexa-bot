@@ -15,6 +15,19 @@ import type {
   TemplateRepository,
   TemplateRevision,
 } from '../application/ports.js';
+import { DEFAULT_TEMPLATE_LOCALE, isLocale, type Locale } from '../application/template-resolver.js';
+
+/**
+ * A stored locale narrowed back to one this build supports.
+ *
+ * The column is text, so it can hold a locale a later release removed or a
+ * migration wrote by hand. Falling back to the default keeps a row readable
+ * rather than throwing on the way out of the mapper — which, in `findOverrides`,
+ * would take the whole template list with it.
+ */
+function toLocale(stored: string): Locale {
+  return isLocale(stored) ? stored : DEFAULT_TEMPLATE_LOCALE;
+}
 
 type OverrideRow = typeof templateOverrides.$inferSelect;
 type RevisionRow = typeof templateRevisions.$inferSelect;
@@ -22,7 +35,7 @@ type RevisionRow = typeof templateRevisions.$inferSelect;
 function toOverride(row: OverrideRow): StoredTemplateOverride {
   return {
     key: row.templateKey as TemplateKey,
-    locale: row.locale,
+    locale: toLocale(row.locale),
     body: row.body,
     version: row.version,
     revision: row.revision,
@@ -34,7 +47,7 @@ function toOverride(row: OverrideRow): StoredTemplateOverride {
 function toRevision(row: RevisionRow): TemplateRevision {
   return {
     key: row.templateKey as TemplateKey,
-    locale: row.locale,
+    locale: toLocale(row.locale),
     revision: row.revision,
     action: row.action as TemplateRevisionAction,
     body: row.body,

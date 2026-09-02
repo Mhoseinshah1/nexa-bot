@@ -1,5 +1,6 @@
 import {
   money,
+  notificationDestinationSchema,
   templateDefinition,
   type Clock,
   type CurrencyCode,
@@ -47,8 +48,22 @@ interface DeliveryOutcomeReport {
 export interface DispatchTickResult {
   readonly claimed: number;
   readonly sent: number;
+  /** Attempts that will be retried. */
   readonly failed: number;
+  /** Intents that reached a terminal FAILED, this tick. */
   readonly abandoned: number;
+  /** Intents swept to FAILED because they had spent every attempt. */
+  readonly exhausted: number;
+  /**
+   * Claims whose outcome could NOT be written down.
+   *
+   * Distinct from `abandoned`, which is a recorded terminal failure. These are
+   * intents whose status is unknown to the database: they keep their lease and
+   * are met again when it expires, or are swept by `failExhausted` once their
+   * attempts are spent. Counting them as failures would report a state nothing
+   * has stored.
+   */
+  readonly unrecorded: number;
 }
 
 /**
@@ -124,8 +139,16 @@ export class NotificationDispatcher {
 
   async tick(): Promise<DispatchTickResult> {
     const now = this.clock.now();
+
+    // Before anything else, and regardless of budget: an intent that has spent
+    // its attempts is never claimed again, so if nothing sweeps it, it stays
+    // PENDING for ever and no screen ever reports it as failed.
+    const exhausted = await this.notifications.failExhausted(now, this.options.batchSize);
+
     const budget = await this.remainingBudget(now);
-    if (budget <= 0) return { claimed: 0, sent: 0, failed: 0, abandoned: 0 };
+    if (budget <= 0) {
+      return { claimed: 0, sent: 0, failed: 0, abandoned: 0, exhausted, unrecorded: 0 };
+    }
 
     const claimed = await this.notifications.claimDue(
       now,
@@ -136,6 +159,7 @@ export class NotificationDispatcher {
     let sent = 0;
     let failed = 0;
     let abandoned = 0;
+    let unrecorded = 0;
 
     for (const intent of claimed) {
       let delivery: DeliveryOutcomeReport;
@@ -146,25 +170,37 @@ export class NotificationDispatcher {
         //
         // Without this, a single throw aborts the loop and leaves every intent
         // claimed after it leased, with its attempt counter already incremented
-        // and no attempt row written — and since abandonment happens in
-        // `record`, which is the code that did not run, the counter climbs
-        // forever and nothing behind it is ever delivered. That is ADR-0018's
-        // own "sixty identical errors with a scheduler in front of it",
-        // reproduced by the thing built to prevent it.
+        // and no attempt row written. That is ADR-0018's own "sixty identical
+        // errors with a scheduler in front of it", reproduced by the thing
+        // built to prevent it.
+        //
+        // Reaching HERE now means one specific thing: `deliver` handles a
+        // transport throw itself, so the only way out of it is the RECORDER
+        // failing. Nothing about this intent can therefore be written down —
+        // including, notably, a status. The first version wrote FAILED anyway,
+        // which was wrong twice over: it ignored `maxAttempts`, ending an
+        // intent on its first hiccup where the ordinary path would have
+        // retried; and the throw can happen AFTER a successful send, so it
+        // could file a delivered message as permanently failed.
+        //
+        // Leaving the row alone is the honest answer. Its lease expires, the
+        // loop meets it again, and if it has spent its attempts by then
+        // `failExhausted` ends it — with an attempt history that says what
+        // actually happened rather than a verdict invented here.
         this.logger.error(
           {
             err: error instanceof Error ? error.message : String(error),
             notificationId: intent.id,
+            attemptCount: intent.attemptCount,
+            maxAttempts: intent.maxAttempts,
           },
-          'Notification delivery threw; abandoning this intent and continuing the batch',
+          'Could not record the outcome of a notification; leaving it to its lease',
         );
-        abandoned += 1;
-        // Charged to the ceiling, unlike a render failure. This catch cannot
-        // tell whether the throw happened before or after the transport was
-        // called, and over-counting only slows us down while under-counting
-        // could exceed Telegram's limit.
+        unrecorded += 1;
+        // Charged to the ceiling. This catch cannot tell whether the send
+        // happened before the recorder failed, and over-counting only slows us
+        // down while under-counting could exceed Telegram's limit.
         this.sentInWindow += 1;
-        await this.abandon(intent, error);
         continue;
       }
 
@@ -184,43 +220,7 @@ export class NotificationDispatcher {
       if (delivery.reachedTransport) this.sentInWindow += 1;
     }
 
-    return { claimed: claimed.length, sent, failed, abandoned };
-  }
-
-  /**
-   * Records an intent as permanently failed after an unexpected throw.
-   *
-   * Best effort by necessity: if this fails too, the intent stays claimed until
-   * its lease expires and the loop meets it again — bounded by the claim
-   * predicate, which refuses an intent that has already used its attempts.
-   */
-  private async abandon(intent: NotificationIntent, cause: unknown): Promise<void> {
-    const now = this.clock.now();
-    try {
-      await this.notifications.recordAttempt({
-        attemptId: this.ids.uuid(),
-        tenantId: intent.tenantId,
-        notificationId: intent.id,
-        attemptNumber: intent.attemptCount,
-        transport: this.transport.kind,
-        outcome: 'FAILED_PERMANENT',
-        startedAt: now,
-        finishedAt: now,
-        errorCode: 'notification.dispatch_failed',
-        errorMessage: cause instanceof Error ? cause.message : String(cause),
-        retryAfterMs: null,
-        nextStatus: 'FAILED',
-        nextAttemptAt: now,
-      });
-    } catch (error) {
-      this.logger.error(
-        {
-          err: error instanceof Error ? error.message : String(error),
-          notificationId: intent.id,
-        },
-        'Could not record the failure of a notification that could not be dispatched',
-      );
-    }
+    return { claimed: claimed.length, sent, failed, abandoned, exhausted, unrecorded };
   }
 
   /** One intent: render, send outside any transaction, record what happened. */
@@ -234,6 +234,20 @@ export class NotificationDispatcher {
     let text: string;
     let definition;
     try {
+      // The destination, checked here rather than when the row was read.
+      //
+      // A jsonb column is only ever as good as the last thing that wrote it,
+      // and this is the one place a bad one can be handled without taking
+      // anything else down: it fails this intent and the batch continues.
+      const destination = notificationDestinationSchema.safeParse(intent.destination);
+      if (!destination.success) {
+        throw new Error(
+          `The stored destination is not valid: ${destination.error.issues
+            .map((issue) => issue.message)
+            .join('; ')}`,
+        );
+      }
+
       // Inside the try. `templateDefinition` throws for a key the frozen
       // catalogue no longer declares, which a PENDING row can outlive across a
       // release, and a throw out here would take the whole batch with it.
@@ -265,12 +279,29 @@ export class NotificationDispatcher {
       return { result: 'FAILED', reachedTransport: false };
     }
 
-    const result = await this.transport.send({
-      destination: intent.destination,
-      text,
-      html: definition.format === 'TELEGRAM_HTML',
-      tenantId: intent.tenantId,
-    });
+    // A transport that THROWS is a transport failure, not an unknown one.
+    //
+    // Left to propagate, it reached the batch's catch, which could only guess
+    // at what had happened and guessed permanently-failed — ending an intent on
+    // one refused connection, `maxAttempts` notwithstanding. Handled here, it is
+    // an ordinary retryable outcome with a reason in its attempt row, and the
+    // attempt ceiling decides when to stop, exactly as it does for a transport
+    // that returns a failure instead of raising one.
+    let result: Awaited<ReturnType<NotificationTransport['send']>>;
+    try {
+      result = await this.transport.send({
+        destination: intent.destination,
+        text,
+        html: definition.format === 'TELEGRAM_HTML',
+        tenantId: intent.tenantId,
+      });
+    } catch (error) {
+      result = {
+        outcome: 'FAILED_RETRYABLE',
+        errorCode: 'notification.transport_threw',
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
+    }
 
     return { result: await this.record(intent, result, startedAt), reachedTransport: true };
   }

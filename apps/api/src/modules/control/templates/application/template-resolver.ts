@@ -7,8 +7,22 @@ import {
 import type { FeatureFlagResolver } from '../../features/application/feature-flags.service.js';
 import type { TemplateCatalogue, TemplateRepository } from './ports.js';
 
-/** The one locale this product ships. A second is a catalogue, not a refactor. */
-export type Locale = string;
+/**
+ * The locales this product ships.
+ *
+ * A UNION, not `string`. It was widened to `string` to make a call site
+ * compile, and that turned a compile error into a runtime one: an unsupported
+ * locale then flowed all the way to `templateDefinition`, which throws, and a
+ * request answered 500 where the type system had been about to say no for free.
+ * A second locale is a catalogue file plus one entry here.
+ */
+export const SUPPORTED_LOCALES = ['fa'] as const;
+export type Locale = (typeof SUPPORTED_LOCALES)[number];
+
+/** Narrows a string from outside — a query parameter, a stored row. */
+export function isLocale(value: string): value is Locale {
+  return (SUPPORTED_LOCALES as readonly string[]).includes(value);
+}
 
 /**
  * Resolves the body a message will actually be sent with.
@@ -26,7 +40,7 @@ export type Locale = string;
  */
 export interface ResolvedTemplate {
   readonly key: TemplateKey;
-  readonly locale: string;
+  readonly locale: Locale;
   /** RAW source. This is what an edit field is populated from. */
   readonly body: string;
   readonly source: 'DEFAULT' | 'TENANT';

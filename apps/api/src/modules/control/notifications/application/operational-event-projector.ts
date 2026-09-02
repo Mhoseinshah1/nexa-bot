@@ -88,7 +88,7 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
 
     // Already inside somebody's transaction: join it rather than opening a
     // second one, and let their commit carry both.
-    if (tx !== undefined) return this.recordAndProject(scope, event, tx);
+    if (tx !== undefined) return this.recordAndProject(scope, event, tx as TransactionScope);
 
     try {
       return await this.uow.run(scope, (opened) => this.recordAndProject(scope, event, opened));
@@ -113,39 +113,50 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
   private async recordAndProject(
     scope: ScopeContext,
     event: OperationalEventInput,
-    tx: unknown,
+    tx: TransactionScope,
   ): Promise<RecordedOperationalEvent> {
     const recorded = await this.inner.record(scope, event, tx);
     if (!recorded.isNew && !recorded.reopened) return recorded;
 
     try {
-      const threshold = await this.settings.valueOf<OperationalSeverity>(
-        scope,
-        'ops.notifications.min_severity' as SettingKey,
-        tx,
-      );
-      if (rank(recorded.severity) < rank(threshold)) return recorded;
+      // Inside a SAVEPOINT, so a failure here rolls back the projection and
+      // nothing else.
+      //
+      // The first version simply caught the error, which keeps nothing: in
+      // Postgres the failed statement has already aborted the transaction, so
+      // every later statement fails with `current transaction is aborted` and
+      // the caller's own write is lost — while this catch block reports that it
+      // kept it. That is the failure mode this whole subsystem exists to make
+      // hard, written into its own error handling.
+      await this.uow.runNested(scope, tx, async (nested) => {
+        const threshold = await this.settings.valueOf<OperationalSeverity>(
+          scope,
+          'ops.notifications.min_severity' as SettingKey,
+          nested,
+        );
+        if (rank(recorded.severity) < rank(threshold)) return;
 
-      await this.notifications.queue(
-        scope,
-        {
-          kind: 'OPERATIONAL_EVENT',
-          // The occurrence count is part of the identity so that a condition which
-          // resolves and recurs is announced again, while the same open condition
-          // firing repeatedly is not.
-          dedupeKey: `opslog:${recorded.id}:${recorded.occurrenceCount}`,
-          templateKey: 'ops.notification.operational_event',
-          values: {
-            severity: recorded.severity,
-            code: recorded.code,
-            message: recorded.message,
-            occurrences: recorded.occurrenceCount,
-            firstSeenAt: recorded.firstSeenAt,
+        await this.notifications.queue(
+          scope,
+          {
+            kind: 'OPERATIONAL_EVENT',
+            // The occurrence count is part of the identity so that a condition
+            // which resolves and recurs is announced again, while the same open
+            // condition firing repeatedly is not.
+            dedupeKey: `opslog:${recorded.id}:${recorded.occurrenceCount}`,
+            templateKey: 'ops.notification.operational_event',
+            values: {
+              severity: recorded.severity,
+              code: recorded.code,
+              message: recorded.message,
+              occurrences: recorded.occurrenceCount,
+              firstSeenAt: recorded.firstSeenAt,
+            },
+            ...(event.correlationId ? { correlationId: event.correlationId } : {}),
           },
-          ...(event.correlationId ? { correlationId: event.correlationId } : {}),
-        },
-        tx,
-      );
+          nested,
+        );
+      });
     } catch (error) {
       // Not rethrown, and not silent.
       //

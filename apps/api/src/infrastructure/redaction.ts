@@ -94,6 +94,45 @@ export function redactSecrets<T>(value: T): T {
   return redactValue(value, 0, new WeakSet()) as T;
 }
 
+/**
+ * Secrets inside FREE TEXT, as opposed to inside a key.
+ *
+ * `redactSecrets` matches on keys, which is the right rule for a structured
+ * record and no rule at all for a sentence. A transport's error text is a
+ * sentence, and Telegram's happens to be the one place a bot token can appear
+ * in one: its API errors quote the request URL, and the token is a path segment
+ * of that URL. The attempt table is append-only and is returned over HTTP, so a
+ * token that lands there cannot be taken back out.
+ *
+ * Three patterns, and no pretence of more:
+ *
+ *   - a Telegram bot token, `<digits>:<35 or so opaque characters>`;
+ *   - a `name=value` or `name: value` pair whose NAME is sensitive by the same
+ *     fragment list the key rule uses;
+ *   - an `Authorization: Bearer …` credential.
+ *
+ * What this does NOT do is find an unlabelled secret in prose — a bare
+ * high-entropy string with nothing around it to identify it. That is not
+ * solvable by matching, and claiming otherwise would be the kind of comment
+ * this codebase has already had to correct once.
+ */
+const TELEGRAM_BOT_TOKEN = /\b\d{5,}:[A-Za-z0-9_-]{20,}\b/g;
+const LABELLED_SECRET = new RegExp(
+  String.raw`\b([A-Za-z0-9_.-]*(?:${SENSITIVE_FRAGMENTS.join('|')}|api[_-]?key)[A-Za-z0-9_.-]*)` +
+    String.raw`(\s*[=:]\s*)("?)([^\s"'&]+)\3`,
+  'gi',
+);
+const BEARER = /\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi;
+
+export function redactSecretText(text: string): string {
+  return text
+    .replace(TELEGRAM_BOT_TOKEN, REDACTED)
+    .replace(BEARER, `Bearer ${REDACTED}`)
+    .replace(LABELLED_SECRET, (_match, name: string, separator: string) =>
+      `${name}${separator}${REDACTED}`,
+    );
+}
+
 /** Convenience for the nullable `before`/`after` audit columns. */
 export function redactRecord(
   value: Record<string, unknown> | null,

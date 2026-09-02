@@ -7,8 +7,8 @@ import {
   TEMPLATES,
   TEMPLATE_BODY_MAX_LENGTH,
   templateDefinition,
+  coerceTemplateValues,
   validateTemplateBody,
-  validateTemplateValues,
   type ActorContext,
   type AuditWriter,
   type Clock,
@@ -19,7 +19,6 @@ import {
   type ScopeContext,
   type TemplateFormat,
   type TemplateKey,
-  type TemplateValues,
   type UnitOfWork,
 } from '@nexa/contracts';
 
@@ -28,6 +27,7 @@ import type { FeatureFlagResolver } from '../../features/application/feature-fla
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
+import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TemplateCatalogue, TemplateRepository, TemplateRevision } from './ports.js';
 import { DEFAULT_TEMPLATE_LOCALE, type Locale } from './template-resolver.js';
@@ -45,7 +45,7 @@ export const TEMPLATES_EDIT: PermissionKey = 'templates.edit';
  */
 export interface TemplateView {
   readonly key: TemplateKey;
-  readonly locale: string;
+  readonly locale: Locale;
   readonly description: string;
   readonly format: TemplateFormat;
   readonly placeholders: readonly PlaceholderDefinition[];
@@ -90,9 +90,23 @@ export const previewTemplateCommandSchema = z.object({
   key: z.string().min(1),
   /** The body being edited, so a preview shows what is on screen, not what is stored. */
   body: z.string().max(TEMPLATE_BODY_MAX_LENGTH),
-  /** Caller-supplied sample values. Never taken from the acting administrator. */
-  values: z.record(z.string(), z.union([z.string(), z.number()])).default({}),
+  /**
+   * Caller-supplied sample values, as text. Never taken from the acting
+   * administrator, and coerced to each placeholder's declared type below.
+   */
+  values: z.record(z.string(), z.string()).default({}),
 });
+
+/**
+ * What a completed write stores for its idempotency key.
+ *
+ * JSON-native only. A stored `TemplateView` would carry `updatedAt` as a Date
+ * and come back a string; the view is re-read on replay instead.
+ */
+interface TemplateReplayRecord {
+  readonly revision: number;
+  readonly changed: boolean;
+}
 
 export interface SetTemplateResult {
   readonly template: TemplateView;
@@ -192,16 +206,19 @@ export class TemplateManagementService {
       );
     }
 
-    const values = command.values as TemplateValues;
-    // Types are checked for the values that WERE supplied; absent ones are
-    // reported as unresolved below rather than refused. A preview with no sample
-    // values is the normal first thing an administrator does.
-    const typeProblems = validateTemplateValues(definition, values, { requireAll: false });
-    if (typeProblems.length > 0) {
+    // Text into declared types. A field left empty is not a supplied value: it
+    // is reported as unresolved below and its token stays in the output, which
+    // is what an administrator previewing a half-filled form expects to see.
+    //
+    // Absent values are not refused — a preview with no samples at all is the
+    // normal first thing anybody does — but a value that WAS typed and does not
+    // fit its declaration is, and the message names the token and the form.
+    const { values, problems } = coerceTemplateValues(definition, command.values);
+    if (problems.length > 0) {
       throw errors.validation(
         CONTROL_ERROR_CODES.INVALID_VALUE,
         'The sample values do not match the declared placeholder types.',
-        { key, issues: typeProblems },
+        { key, issues: problems },
       );
     }
 
@@ -243,13 +260,23 @@ export class TemplateManagementService {
       body: command.body,
       expectedVersion: command.expectedVersion,
     });
-    const existing = await this.idempotency.find<Omit<SetTemplateResult, 'replayed'>>(
+    // Re-read on replay; see the same note in `SettingsService`. A stored
+    // `TemplateView` carries `updatedAt` as a Date, which comes back from
+    // `jsonb` as a string and made the controller answer 500 to a retry.
+    const existing = await this.idempotency.find<TemplateReplayRecord>(
       scope,
       actor.surface,
       command.idempotencyKey,
       requestHash,
     );
-    if (existing) return { ...existing.result, replayed: true };
+    if (existing) {
+      return {
+        template: await this.get(scope, actor, key),
+        revision: existing.result.revision,
+        changed: existing.result.changed,
+        replayed: true,
+      };
+    }
 
     const result = await this.uow.run(scope, async (tx) => {
       await this.requireActiveScope(scope, tx);
@@ -264,16 +291,16 @@ export class TemplateManagementService {
       // pressed a button rather than of what the message said.
       if (before !== null && before.body === command.body) {
         const template = this.toView(key, locale, before, await this.overridesApplied(scope, tx));
-        const unchanged = { template, revision: before.revision, changed: false };
-        await this.idempotency.remember(
+        await rememberOnce(
+          this.idempotency,
           scope,
           actor.surface,
           command.idempotencyKey,
           requestHash,
-          unchanged,
+          { revision: before.revision, changed: false } satisfies TemplateReplayRecord,
           tx,
         );
-        return unchanged;
+        return { template, revision: before.revision, changed: false };
       }
 
       const revision = (await this.templates.latestRevision(scope, key, locale, tx)) + 1;
@@ -346,12 +373,13 @@ export class TemplateManagementService {
       });
 
       const template = this.toView(key, locale, written, await this.overridesApplied(scope, tx));
-      await this.idempotency.remember(
+      await rememberOnce(
+        this.idempotency,
         scope,
         actor.surface,
         command.idempotencyKey,
         requestHash,
-        { template, revision, changed: true },
+        { revision, changed: true } satisfies TemplateReplayRecord,
         tx,
       );
       return { template, revision, changed: true };
@@ -379,13 +407,20 @@ export class TemplateManagementService {
     const locale = DEFAULT_TEMPLATE_LOCALE;
 
     const requestHash = hashRequest({ key, expectedVersion: command.expectedVersion });
-    const existing = await this.idempotency.find<Omit<SetTemplateResult, 'replayed'>>(
+    const existing = await this.idempotency.find<TemplateReplayRecord>(
       scope,
       actor.surface,
       command.idempotencyKey,
       requestHash,
     );
-    if (existing) return { ...existing.result, replayed: true };
+    if (existing) {
+      return {
+        template: await this.get(scope, actor, key),
+        revision: existing.result.revision,
+        changed: existing.result.changed,
+        replayed: true,
+      };
+    }
 
     const result = await this.uow.run(scope, async (tx) => {
       await this.requireActiveScope(scope, tx);
@@ -453,12 +488,13 @@ export class TemplateManagementService {
       });
 
       const template = this.toView(key, locale, null, await this.overridesApplied(scope, tx));
-      await this.idempotency.remember(
+      await rememberOnce(
+        this.idempotency,
         scope,
         actor.surface,
         command.idempotencyKey,
         requestHash,
-        { template, revision, changed: true },
+        { revision, changed: true } satisfies TemplateReplayRecord,
         tx,
       );
       return { template, revision, changed: true };

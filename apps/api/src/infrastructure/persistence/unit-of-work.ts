@@ -35,6 +35,24 @@ export class DrizzleUnitOfWork implements UnitOfWork<TransactionScope> {
   }
 
   /**
+   * A savepoint inside the caller's transaction.
+   *
+   * Drizzle turns a nested `transaction()` into `SAVEPOINT` / `ROLLBACK TO`,
+   * which is the only thing that makes "this part may fail and the rest
+   * stands" true in Postgres. A plain try/catch does not: the failed statement
+   * has already aborted the transaction, so the catch keeps nothing and the
+   * caller's write dies with `current transaction is aborted` instead of with
+   * the error that actually happened.
+   */
+  async runNested<T>(
+    scope: ScopeContext,
+    tx: TransactionScope,
+    fn: (tx: TransactionScope) => Promise<T>,
+  ): Promise<T> {
+    return tx.tx.transaction(async (nested) => fn({ tx: nested, scope }));
+  }
+
+  /**
    * Convenience wrapper for the common tenant-scoped case.
    *
    * DELIBERATELY UNUSED, and not to be removed as dead code.

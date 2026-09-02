@@ -14,6 +14,7 @@ import type { PermissionGuard } from '../../access/application/permission-guard.
 import type { OutboxWriter } from '../../eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { hashRequest } from '../../idempotency/infrastructure/drizzle-idempotency-store.js';
+import { rememberOnce } from '../../idempotency/application/remember-once.js';
 
 /**
  * The canonical write path, with nothing else in it.
@@ -148,7 +149,8 @@ export class RecordPingService {
         tx,
       );
 
-      await this.idempotency.remember(
+      await rememberOnce(
+        this.idempotency,
         scope,
         actor.surface,
         command.idempotencyKey,

@@ -20,6 +20,7 @@ import type { PermissionGuard } from '../../../platform/access/application/permi
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
+import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { SettingRepository } from './ports.js';
 import type { ResolvedSetting, SettingsResolver } from './settings-resolver.js';
@@ -45,6 +46,17 @@ export const setSettingCommandSchema = z.object({
   expectedVersion: z.number().int().positive().nullable(),
 });
 export type SetSettingCommand = z.infer<typeof setSettingCommandSchema>;
+
+/**
+ * What a completed write stores for its idempotency key.
+ *
+ * Deliberately tiny and JSON-native: no Date, no nested object, nothing whose
+ * type changes on the way through `jsonb`. Everything else a replay needs is
+ * re-read from the row.
+ */
+interface ReplayRecord {
+  readonly changed: boolean;
+}
 
 export interface SetSettingResult {
   readonly setting: ResolvedSetting;
@@ -114,13 +126,27 @@ export class SettingsService {
     const value = parsed.value;
 
     const requestHash = hashRequest({ key, value, expectedVersion: command.expectedVersion });
-    const existing = await this.idempotency.find<Omit<SetSettingResult, 'replayed'>>(
+    // A replay RE-READS rather than returning a stored copy of the result.
+    //
+    // The idempotency record is a `jsonb` column, so a `Date` in a stored
+    // result comes back as an ISO string. Returning that object handed the
+    // controller a string where it expected a Date and answered 500 to the
+    // cheapest possible success — the same "a jsonb round-trip believed rather
+    // than checked" failure that already cost this branch a setting write.
+    // Storing only what identifies the work makes the shape unable to drift.
+    const existing = await this.idempotency.find<ReplayRecord>(
       scope,
       actor.surface,
       command.idempotencyKey,
       requestHash,
     );
-    if (existing) return { ...existing.result, replayed: true };
+    if (existing) {
+      return {
+        setting: await this.resolver.resolve(scope, key),
+        changed: existing.result.changed,
+        replayed: true,
+      };
+    }
 
     const result = await this.uow.run(scope, async (tx) => {
       if (!(await this.scopeActivity.scopeIsActive(scope, tx))) {
@@ -141,12 +167,13 @@ export class SettingsService {
         // that is never stored is a key whose reuse with DIFFERENT input cannot
         // be detected — the payload-mismatch check has nothing to compare
         // against until a record exists.
-        await this.idempotency.remember(
+        await rememberOnce(
+          this.idempotency,
           scope,
           actor.surface,
           command.idempotencyKey,
           requestHash,
-          { setting: before, changed: false },
+          { changed: false } satisfies ReplayRecord,
           tx,
         );
         return { setting: before, changed: false };
@@ -200,12 +227,13 @@ export class SettingsService {
       });
 
       const setting = await this.resolver.resolve(scope, key, tx);
-      await this.idempotency.remember(
+      await rememberOnce(
+        this.idempotency,
         scope,
         actor.surface,
         command.idempotencyKey,
         requestHash,
-        { setting, changed: true },
+        { changed: true } satisfies ReplayRecord,
         tx,
       );
       return { setting, changed: true };

@@ -1,5 +1,4 @@
-import { and, asc, desc, eq, lt, lte, inArray, sql } from 'drizzle-orm';
-import { notificationDestinationSchema } from '@nexa/contracts';
+import { and, asc, desc, eq, gte, lt, lte, inArray, sql } from 'drizzle-orm';
 import type {
   DeliveryOutcome,
   NotificationDestination,
@@ -18,7 +17,7 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { redactRecord } from '../../../../infrastructure/redaction.js';
+import { redactSecretText } from '../../../../infrastructure/redaction.js';
 import type {
   DeliveryAttemptRecord,
   NotificationIntent,
@@ -34,11 +33,22 @@ function toIntent(row: Row): NotificationIntent {
     tenantId: row.tenantId,
     kind: row.kind as NotificationKind,
     dedupeKey: row.dedupeKey,
-    // PARSED, not cast. A jsonb round-trip believed rather than checked is
-    // exactly what put a chat id back as a number and had the API answer 201
-    // for a setting that was not set. A destination that decoded wrong would
-    // otherwise reach the transport and be posted to whatever `chatId` became.
-    destination: notificationDestinationSchema.parse(row.destination),
+    // Cast here, VALIDATED at the point of use.
+    //
+    // Parsing in this mapper was the obvious move and was worse than the cast
+    // it replaced. `claimDue` maps inside its own transaction, so one row whose
+    // destination did not parse threw out of the transaction, rolled the claim
+    // back, and left that row first in the queue — every subsequent tick
+    // selected it, threw, and rolled back. The whole installation's dispatcher
+    // would have stopped delivering, for every tenant, permanently, with no
+    // attempt row and nothing visible in the admin UI. It also made one bad row
+    // able to 500 `list()` for the tenant, so an operator could not even see
+    // the queue that had stopped.
+    //
+    // The dispatcher validates a destination per intent, inside the per-intent
+    // error handling that already exists, so a bad one fails that notification
+    // and nothing else.
+    destination: row.destination as NotificationDestination,
     payload: row.payload as Record<string, unknown>,
     templateKey: row.templateKey as TemplateKey,
     status: row.status as NotificationStatus,
@@ -70,14 +80,19 @@ function toAttempt(row: AttemptRow): DeliveryAttemptRecord {
 /**
  * A transport's error text, redacted and bounded.
  *
- * `redactRecord` works on objects, so the message is wrapped, redacted and
- * unwrapped rather than given its own second implementation of the rules.
+ * The first version wrapped the message in `{ message }` and passed it to
+ * `redactRecord`, under a comment saying it therefore shared the one
+ * implementation of the rules. It did not: `redactRecord` decides by KEY, the
+ * key was `message`, `message` matches no sensitive fragment, and the value was
+ * returned exactly as it arrived. The function truncated and nothing else,
+ * while its own comment said it redacted.
+ *
+ * A sentence needs a rule about its CONTENT, which `redactSecretText` is — and
+ * this is the one sink where that matters, because Telegram's API errors quote
+ * the request URL and the bot token is a segment of it.
  */
 function redactErrorMessage(message: string | null): string | null {
-  if (message === null) return null;
-  const redacted = redactRecord({ message: message.slice(0, 2000) });
-  const value = redacted?.message;
-  return typeof value === 'string' ? value : null;
+  return message === null ? null : redactSecretText(message.slice(0, 2000));
 }
 
 function executorOf(db: Database, tx?: unknown): Executor {
@@ -246,6 +261,50 @@ export class DrizzleNotificationRepository implements NotificationRepository {
         .returning();
       return claimed.map(toIntent);
     });
+  }
+
+  /**
+   * Fails intents that have spent every attempt and are still PENDING.
+   *
+   * `claimDue` refuses such a row — it would otherwise be claimed forever — and
+   * `recordAttempt` is the code that normally moves it to FAILED, which is
+   * exactly the code that did not run when a dispatch threw before it. Between
+   * the two, a row could sit PENDING with `attempt_count = max_attempts` and
+   * never be claimed, never be failed, and never appear in any list of things
+   * that went wrong. Silence is the one outcome this subsystem may not produce.
+   *
+   * `next_attempt_at <= now` is the lease check. A row a dispatcher is holding
+   * right now has its lease in the future, so this cannot steal a send that is
+   * still in flight and report it as failed.
+   */
+  async failExhausted(now: Date, limit: number): Promise<number> {
+    const exhausted = await this.db
+      .select({ id: notifications.id })
+      .from(notifications)
+      .where(
+        and(
+          eq(notifications.status, 'PENDING'),
+          lte(notifications.nextAttemptAt, now),
+          gte(notifications.attemptCount, notifications.maxAttempts),
+        ),
+      )
+      .limit(limit);
+    if (exhausted.length === 0) return 0;
+
+    const failed = await this.db
+      .update(notifications)
+      .set({ status: 'FAILED', completedAt: now, nextAttemptAt: now })
+      .where(
+        and(
+          eq(notifications.status, 'PENDING'),
+          inArray(
+            notifications.id,
+            exhausted.map((row) => row.id),
+          ),
+        ),
+      )
+      .returning({ id: notifications.id });
+    return failed.length;
   }
 
   async recordAttempt(input: {

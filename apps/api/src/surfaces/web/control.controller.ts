@@ -5,6 +5,7 @@ import {
   type FeatureFlagListResponse,
   type FeatureFlagResponse,
   type NotificationDetailResponse,
+  type SendTestNotificationResponse,
   type NotificationListResponse,
   type OperationalEventListResponse,
   type PreviewTemplateResponse,
@@ -211,6 +212,11 @@ export class ControlController {
       ...(query.severity ? { severities: query.severity.split(',') } : {}),
       ...(query.since ? { since: new Date(query.since) } : {}),
       ...(query.until ? { until: new Date(query.until) } : {}),
+      // The cursor: the `lastSeenAt` of the oldest row already shown. Rows are
+      // ordered by that column descending, so "older than this" is the next
+      // page. An offset would have skipped and duplicated rows as events were
+      // recorded underneath the reader.
+      ...(query.before ? { before: new Date(query.before) } : {}),
       ...(query.open ? { open: query.open === 'true' } : {}),
     });
     return { events: events.map(toEventResponse) };
@@ -255,10 +261,24 @@ export class ControlController {
   async testNotification(
     @Req() request: FastifyRequest,
     @Body() body: unknown,
-  ): Promise<NotificationDetailResponse> {
+  ): Promise<SendTestNotificationResponse> {
     const { scope, actor } = await this.authenticate(request, { write: true });
-    const { intent } = await this.container.notifications.sendTest(scope, actor, body);
-    return { notification: toNotificationResponse(intent), attempts: [] };
+    const { intent, created, replayed } = await this.container.notifications.sendTest(
+      scope,
+      actor,
+      body,
+    );
+    // The REAL attempts, re-read. A replay of a key whose message has already
+    // failed twice must not answer with an empty list: that reports a state the
+    // database does not hold, which is the whole failure this module exists to
+    // stop being normal.
+    const { attempts } = await this.container.notifications.get(scope, actor, intent.id);
+    return {
+      notification: toNotificationResponse(intent),
+      attempts: attempts.map(toAttemptResponse),
+      created,
+      replayed,
+    };
   }
 
   /**
@@ -299,6 +319,7 @@ function toSettingResponse(setting: ResolvedSetting): ResolvedSettingResponse {
     mutability: setting.mutability,
     classification: setting.classification,
     configures: setting.configures,
+    storedValueInvalid: setting.storedValueInvalid,
   };
 }
 
