@@ -95,6 +95,15 @@ export interface Container {
   readonly sessionSweeper: RetentionSweeper;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
+  /**
+   * The recorder WITHOUT the notification projection.
+   *
+   * Exposed because two collaborators must not go through the façade: the
+   * settings resolver the projection itself reads, and the dispatcher that
+   * drains the queue the projection writes into. Both would otherwise be
+   * producers of the work they consume.
+   */
+  readonly opsLogWriter: OperationalEventRecorder;
   readonly idempotency: IdempotencyStore;
   readonly guard: PermissionGuard;
   readonly hasher: PasswordHasher;
@@ -428,6 +437,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
     logger,
+    // The RAW recorder, on the same argument as `projectionSettings` above: the
+    // façade projects an event into a notification intent, and this is the
+    // object that drains that queue. A withdrawn sweep would queue a message
+    // for the dispatcher that withdrew it.
+    opsLogWriter,
     {
       pollIntervalMs: config.NOTIFICATION_DISPATCH_INTERVAL_MS,
       batchSize: config.NOTIFICATION_DISPATCH_BATCH_SIZE,
@@ -457,6 +471,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     sessionSweeper,
     audit,
     opsLog,
+    opsLogWriter,
     idempotency,
     guard,
     hasher,

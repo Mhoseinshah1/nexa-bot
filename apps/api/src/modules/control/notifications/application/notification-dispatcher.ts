@@ -3,9 +3,11 @@ import {
   notificationDestinationSchema,
   templateDefinition,
   type Clock,
+  type CorrelationId,
   type CurrencyCode,
   type IdGenerator,
   type Logger,
+  type OperationalEventRecorder,
   type NotificationDestination,
   type NotificationStatus,
   type ScopeContext,
@@ -92,6 +94,18 @@ export interface DispatchTickResult {
    */
   readonly released: number;
   /**
+   * Sweep verdicts a hand-back took back, this tick.
+   *
+   * A terminal state, corrected. `failExhausted` had written the intent off as
+   * permanently failed and this says the verdict was wrong: the claims it
+   * counted as spent had never reached the transport. That is the intended
+   * repair and it is not routine — a non-zero value here means the sweep's
+   * safety margin fired on a claim that was still coming back, and how often
+   * that happens is a thing an operator should be able to read rather than
+   * infer from a row that quietly changed status.
+   */
+  readonly restored: number;
+  /**
    * Hand-backs that could not be recorded, twice.
    *
    * Not a delivery outcome: no transport call happened, so there is nothing to
@@ -165,8 +179,74 @@ export class NotificationDispatcher {
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     private readonly logger: Logger,
+    /**
+     * The RAW operational-event recorder, never the notifying façade.
+     *
+     * The façade projects an event at or above the configured severity into a
+     * notification intent — and this class is what drains that queue, so wiring
+     * it here would make every withdrawn sweep queue a message that this
+     * dispatcher then sends and can itself have withdrawn. The amplification
+     * would be worst exactly when it hurts: a stopped installation hands back
+     * every queued claim at once.
+     *
+     * The same reason the composition root gives `projectionSettings` its own
+     * raw recorder, and the same shape of fix — remove the cycle rather than
+     * detect it at runtime.
+     */
+    private readonly opsLog: OperationalEventRecorder,
     private readonly options: DispatcherOptions,
   ) {}
+
+  /**
+   * Says that a sweep's verdict was taken back.
+   *
+   * A WARN rather than an INFO because the sweep was WRONG: it decided an
+   * intent had spent every attempt, and the hand-back proves those claims never
+   * reached the transport. The repair is intended and the alternative is worse
+   * — a message written off having never been sent — but the safety margin
+   * firing on a claim that was still coming back is a tuning signal, and how
+   * often it happens should be readable rather than inferred from a row that
+   * quietly changed status.
+   *
+   * Never throws. The release has already committed and the batch behind it
+   * must not be stranded by a failure to describe what happened; and at the
+   * second call site this runs inside the hand-back's own catch, where a throw
+   * would be counted as a hand-back that never happened.
+   */
+  private async announceRestore(intent: NotificationIntent): Promise<void> {
+    try {
+      await this.opsLog.record(
+        {
+          tenantId: asId<'TenantId'>(intent.tenantId) as TenantId,
+          botInstanceId: null,
+        },
+        {
+          code: 'notification.sweep_withdrawn',
+          severity: 'WARN',
+          message:
+            'An exhaustion verdict was withdrawn: the claims it counted as spent never reached the transport.',
+          context: {
+            notificationId: intent.id,
+            attemptNumber: intent.attemptCount,
+            reason: 'tenant.not_active',
+          },
+          // One row per WITHDRAWAL, not per intent: the same intent can be
+          // swept and withdrawn again later, and collapsing those would hide
+          // the second one behind an occurrence counter on a resolved row.
+          dedupeKey: `notification:${intent.id}:sweep_withdrawn:${intent.attemptCount}`,
+          ...(intent.correlationId ? { correlationId: intent.correlationId as CorrelationId } : {}),
+        },
+      );
+    } catch (error) {
+      this.logger.error(
+        {
+          err: error instanceof Error ? error.message : String(error),
+          notificationId: intent.id,
+        },
+        'Withdrew a sweep verdict but could not record the operational event',
+      );
+    }
+  }
 
   start(): void {
     if (this.running) return;
@@ -260,6 +340,7 @@ export class NotificationDispatcher {
         superseded: 0,
         unrecorded: 0,
         released: 0,
+        restored: 0,
         unreleased: 0,
       };
     }
@@ -276,6 +357,7 @@ export class NotificationDispatcher {
     let superseded = 0;
     let unrecorded = 0;
     let released = 0;
+    let restored = 0;
     let unreleased = 0;
 
     for (const intent of claimed) {
@@ -343,14 +425,18 @@ export class NotificationDispatcher {
         // point of that guard is that one intent cannot stop the batch, and
         // the hand-back was the one step still able to.
         try {
-          const { released: didRelease } = await this.notifications.releaseClaim({
+          const handBack = await this.notifications.releaseClaim({
             tenantId: intent.tenantId,
             notificationId: intent.id,
             attemptNumber: intent.attemptCount,
             now: this.clock.now(),
             reason: 'tenant.not_active',
           });
-          if (didRelease) released += 1;
+          if (handBack.released) released += 1;
+          if (handBack.restored) {
+            restored += 1;
+            await this.announceRestore(intent);
+          }
         } catch (error) {
           // ONE retry, and it is safe for a reason rather than by hope.
           //
@@ -366,14 +452,18 @@ export class NotificationDispatcher {
           // cannot safely repair this; the only moment we know no transport
           // call happened is now.
           try {
-            const { released: didRelease } = await this.notifications.releaseClaim({
+            const handBack = await this.notifications.releaseClaim({
               tenantId: intent.tenantId,
               notificationId: intent.id,
               attemptNumber: intent.attemptCount,
               now: this.clock.now(),
               reason: 'tenant.not_active',
             });
-            if (didRelease) released += 1;
+            if (handBack.released) released += 1;
+            if (handBack.restored) {
+              restored += 1;
+              await this.announceRestore(intent);
+            }
             continue;
           } catch {
             // Both attempts failed. Said plainly: this attempt of the
@@ -444,6 +534,19 @@ export class NotificationDispatcher {
       );
     }
 
+    // A terminal state was corrected, which is the intended repair and still
+    // not routine: `failExhausted` had written these intents off as permanently
+    // failed on the evidence of a claim that turned out never to have reached
+    // the transport. A warning, because the number is a tuning signal for the
+    // sweep's safety margin — and because a repair nobody can see is
+    // indistinguishable from a row changing status for no reason.
+    if (restored > 0) {
+      this.logger.warn(
+        { restored, claimed: claimed.length },
+        'Withdrew exhaustion verdicts: the claims they counted as spent were never sent',
+      );
+    }
+
     return {
       claimed: claimed.length,
       sent,
@@ -453,6 +556,7 @@ export class NotificationDispatcher {
       superseded,
       unrecorded,
       released,
+      restored,
       unreleased,
     };
   }

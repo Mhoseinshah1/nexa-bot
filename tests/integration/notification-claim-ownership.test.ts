@@ -6,6 +6,8 @@ import {
   notifications,
   tenants,
 } from '../../apps/api/src/infrastructure/persistence/schema';
+import { NotificationDispatcher } from '../../apps/api/src/modules/control/notifications/application/notification-dispatcher';
+import type { TemplateResolver } from '../../apps/api/src/modules/control/templates/application/template-resolver';
 import type { RecordingTransport } from '../../apps/api/src/modules/control/notifications/infrastructure/recording-transport';
 import {
   adminActorFor,
@@ -325,6 +327,174 @@ describe('notification claim ownership', () => {
     const before = transport.calls;
     await ctx.container.notificationDispatcher.tick();
     expect(transport.calls, 'a permanently refused message was retried').toBe(before);
+  }, 60_000);
+
+  /**
+   * A withdrawn verdict is REPORTED, not merely applied.
+   *
+   * `restored` came back from the repository and both dispatcher call sites
+   * threw it away. A FAILED intent silently becoming PENDING again is the
+   * correction working — and it is also indistinguishable, from outside, from a
+   * row changing status for no reason. The sweep's safety margin firing on a
+   * claim that was still coming back is a tuning signal, so it is counted,
+   * warned about, and written to the operational log the operations view reads.
+   *
+   * Driven through the DISPATCHER rather than the repository, because the
+   * counter and the event are the dispatcher's, and because the ordering that
+   * produces one is the dispatcher's own: a stop that lands while an intent is
+   * being rendered, which is the window `deliver` re-checks the tenant in.
+   */
+  it('counts and records a withdrawn sweep verdict', async () => {
+    const intent = await raise('restore-is-reported');
+
+    // Attempt 1 spends itself for real, so the next claim is the final one.
+    transport.failNextWith({
+      outcome: 'FAILED_RETRYABLE',
+      errorCode: 'telegram.unreachable',
+      errorMessage: 'socket hang up',
+      retryAfterMs: 0,
+    });
+    await ctx.container.notificationDispatcher.tick();
+    await sql(`UPDATE notifications SET next_attempt_at = now() - interval '1 hour'`);
+
+    // A dispatcher that can be stopped mid-render, which is the only window in
+    // which a claim is held and no transport call has happened yet.
+    let markRendering!: () => void;
+    const rendering = new Promise<void>((resolve) => {
+      markRendering = resolve;
+    });
+    let releaseRender!: () => void;
+    const renderReleased = new Promise<void>((resolve) => {
+      releaseRender = resolve;
+    });
+    const real = ctx.container.templateResolver;
+    const pausing = {
+      render: async (...args: Parameters<TemplateResolver['render']>) => {
+        markRendering();
+        await renderReleased;
+        return real.render(...args);
+      },
+    } as unknown as TemplateResolver;
+
+    const dispatcher = new NotificationDispatcher(
+      ctx.container.notificationRepository,
+      transport,
+      pausing,
+      ctx.container.settingsResolver,
+      ctx.container.clock,
+      ctx.container.ids,
+      ctx.container.logger,
+      ctx.container.opsLogWriter,
+      {
+        pollIntervalMs: 1_000,
+        batchSize: 10,
+        leaseMs: 60_000,
+        baseBackoffMs: 1_000,
+        maxBackoffMs: 60_000,
+      },
+    );
+
+    const tick = dispatcher.tick();
+    await rendering;
+    expect((await rowOf(intent.id)).attemptCount, 'the final claim was not issued').toBe(2);
+
+    // The installation is stopped while that render is parked, its lease
+    // expires, and another worker sweeps: at this instant the intent really
+    // does look exhausted.
+    await stopTenant();
+    await sql(`UPDATE notifications SET next_attempt_at = now() - interval '1 hour'`);
+    await repo().failExhausted(ctx.container.clock.now(), 10, {
+      leaseMs: 60_000,
+      transport: 'RECORDING',
+    });
+    expect((await rowOf(intent.id)).status, 'the sweep did not reach a verdict').toBe('FAILED');
+
+    // The render finishes, the tenant re-check fails, and the hand-back
+    // withdraws the verdict.
+    releaseRender();
+    const result = await tick;
+
+    expect(transport.calls, 'a stopped tenant was sent to').toBe(1);
+    expect(result.released, 'the claim was not handed back').toBe(1);
+    expect(result.restored, 'a withdrawn exhaustion verdict was not counted').toBe(1);
+    expect((await rowOf(intent.id)).status).toBe('PENDING');
+
+    // And it is on the record, once, where an operator can see how often the
+    // sweep's margin fires on a claim that was still coming back.
+    const events = await sql(
+      `SELECT code, severity, occurrence_count FROM operational_events
+        WHERE code = 'notification.sweep_withdrawn'`,
+    );
+    expect(events.rows, 'the withdrawal was not recorded anywhere').toHaveLength(1);
+    expect(events.rows[0]).toMatchObject({ severity: 'WARN', occurrence_count: 1 });
+  }, 60_000);
+
+  /**
+   * An ORDINARY hand-back is not a withdrawal, and must not be reported as one.
+   *
+   * The release brought the intent's derived state up to date in one statement
+   * covering both PENDING and FAILED, so its `RETURNING` matched for every
+   * successful hand-back — and `restored`, documented as "the release took the
+   * intent back out of a sweep's verdict", was true for all of them. Nothing
+   * read the flag, so nothing noticed. Counting it, as the tick result now
+   * does, would have logged one "a sweep verdict was wrong" warning and
+   * recorded one operational event per queued message every time an operator
+   * stopped the installation — noise generated by the correction mechanism, on
+   * exactly the occasion an operator is reading the log.
+   */
+  it('does not report an ordinary hand-back as a withdrawn verdict', async () => {
+    const intent = await raise('ordinary-handback-is-not-a-withdrawal');
+
+    // No attempts spent, no sweep: this intent is simply put back.
+    let markRendering!: () => void;
+    const rendering = new Promise<void>((resolve) => {
+      markRendering = resolve;
+    });
+    let releaseRender!: () => void;
+    const renderReleased = new Promise<void>((resolve) => {
+      releaseRender = resolve;
+    });
+    const real = ctx.container.templateResolver;
+    const pausing = {
+      render: async (...args: Parameters<TemplateResolver['render']>) => {
+        markRendering();
+        await renderReleased;
+        return real.render(...args);
+      },
+    } as unknown as TemplateResolver;
+
+    const dispatcher = new NotificationDispatcher(
+      ctx.container.notificationRepository,
+      transport,
+      pausing,
+      ctx.container.settingsResolver,
+      ctx.container.clock,
+      ctx.container.ids,
+      ctx.container.logger,
+      ctx.container.opsLogWriter,
+      {
+        pollIntervalMs: 1_000,
+        batchSize: 10,
+        leaseMs: 60_000,
+        baseBackoffMs: 1_000,
+        maxBackoffMs: 60_000,
+      },
+    );
+
+    const tick = dispatcher.tick();
+    await rendering;
+    await stopTenant();
+    releaseRender();
+    const result = await tick;
+
+    expect(result.released, 'the claim was not handed back').toBe(1);
+    expect(result.restored, 'an ordinary hand-back was reported as a withdrawn verdict').toBe(0);
+    expect((await rowOf(intent.id)).status).toBe('PENDING');
+
+    const events = await sql(
+      `SELECT code FROM operational_events WHERE code = 'notification.sweep_withdrawn'`,
+    );
+    expect(events.rows, 'an ordinary hand-back recorded a withdrawal').toHaveLength(0);
   }, 60_000);
 
   /**

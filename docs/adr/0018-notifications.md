@@ -168,10 +168,16 @@ tenant's queued work never reaches this predicate at all.
 
 ### There is no retention or archive for notifications, and that is a decision
 
-Phase 2 never deletes, archives or summarises a notification intent or a
-delivery attempt. Both tables grow monotonically, and on a sufficiently
-long-lived installation they grow without bound. That is an acknowledged
-tradeoff, recorded here rather than discovered later.
+Phase 2 never deletes, archives or summarises a notification intent, a delivery
+attempt or a **released claim**. All three tables grow monotonically, and on a
+sufficiently long-lived installation they grow without bound. That is an
+acknowledged tradeoff, recorded here rather than discovered later.
+
+`notification_released_claims` is the newest of the three and the one most
+easily missed. It carries a foreign key to `notifications` and no-update /
+no-delete triggers of its own, so a notification row can no longer be deleted
+at all while a claim of its has been returned — the retention decision does not
+merely include this table, it is constrained by it.
 
 The reasoning is the same one that leaves the operational log unswept. Delivery
 attempts are **append-only evidence**: the question a stuck notification
@@ -195,6 +201,12 @@ Whoever adds retention must decide, explicitly and in an ADR, all of:
   are the delivery record.
 - **Referential integrity** — what happens to attempts whose intent is gone, and
   to the `(tenant_id, notification_id, attempt_number)` unique index.
+- **Released claims**, which are accounting as well as history: spend is
+  `attempt_count` minus these rows, so removing one silently spends an attempt
+  that was handed back. Any policy has to say whether they go with their intent,
+  and how the arithmetic stays correct for whatever survives — which also means
+  deciding what happens to the `nexa_reject_mutation` and exclusivity triggers
+  that currently refuse every delete on both this table and the attempts.
 - **Storage bounds** — what the policy actually guarantees, so the claim can be
   checked.
 - **Any change to the append-only policy**, which is a contract change and

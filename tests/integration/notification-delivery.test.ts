@@ -374,6 +374,7 @@ describe('notification delivery', () => {
         ctx.container.clock,
         ctx.container.ids,
         ctx.container.logger,
+        ctx.container.opsLogWriter,
         {
           pollIntervalMs: 1000,
           batchSize: 10,

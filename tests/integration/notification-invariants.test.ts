@@ -406,6 +406,7 @@ describe('notification state machine invariants', () => {
       ctx.container.clock,
       ctx.container.ids,
       ctx.container.logger,
+      ctx.container.opsLogWriter,
       {
         pollIntervalMs: 1_000,
         batchSize: 10,

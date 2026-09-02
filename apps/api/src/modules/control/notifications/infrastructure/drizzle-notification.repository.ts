@@ -465,91 +465,109 @@ export class DrizzleNotificationRepository implements NotificationRepository {
       const released = inserted.length > 0;
 
       // Whether or not this call was the one that recorded it, the intent's
-      // derived state is brought up to date: due again now, `last_attempt_at`
-      // back to the last attempt that actually happened, and — if a sweep had
-      // already written the intent off while this claim was outstanding — out
-      // of that verdict again.
+      // derived state is brought up to date: due again now, and
+      // `last_attempt_at` back to the last attempt that actually happened.
       //
-      // FAILED back to PENDING is the same class of correction as the accepted
-      // rule that a late SUCCEEDED moves FAILED to SENT: newer, better
-      // evidence about an attempt overrides a judgement made without it. It is
-      // deliberately narrow. Only an EXHAUSTION verdict is reversible, and
-      // only while the intent is no longer exhausted; a `FAILED_PERMANENT`
-      // attempt row is the transport's own refusal and is never overridden by
-      // a claim that never spoke to it.
-      const restoredRows = await tx
+      // TWO statements, by the status they apply to, because they answer two
+      // different questions and one of them has to be reportable. The combined
+      // version returned a row for the ordinary PENDING hand-back as well, so
+      // `restored` — documented as "the release took the intent back out of a
+      // sweep's verdict" — was true for EVERY successful hand-back. Nothing
+      // read it, so nothing noticed; the moment the dispatcher counted it, a
+      // stopped installation would have logged one "a sweep verdict was wrong"
+      // warning per queued message.
+      //
+      // Rescheduling is the OWNER's business, and only the owner's.
+      //
+      // The release ROW is keyed by attempt number precisely so a stale
+      // hand-back can still return its capacity — that is the whole point. But
+      // an earlier version dropped the ownership guard from this UPDATE as
+      // well, and the two halves are not the same question. A straggler
+      // releasing attempt 1 while attempt 2 holds a live lease was moving
+      // `next_attempt_at` back to now, so a third worker claimed and SENT the
+      // message while attempt 2's send was still in flight. The lease is this
+      // module's only concurrency control, and a stale releaser was cancelling
+      // it. It also wiped the back-off a live attempt had just computed,
+      // turning a rate-limit wait into an immediate re-send.
+      const lastRealAttempt = sql`(
+        SELECT max(${notificationDeliveryAttempts.finishedAt})
+          FROM ${notificationDeliveryAttempts}
+         WHERE ${notificationDeliveryAttempts.tenantId} = ${notifications.tenantId}
+           AND ${notificationDeliveryAttempts.notificationId} = ${notifications.id}
+      )`;
+
+      await tx
         .update(notifications)
         .set({
-          // Rescheduling is the OWNER's business, and only the owner's.
-          //
-          // The release ROW is keyed by attempt number precisely so a stale
-          // hand-back can still return its capacity — that is the whole point.
-          // But the previous version dropped the ownership guard from this
-          // UPDATE as well, and the two halves are not the same question. A
-          // straggler releasing attempt 1 while attempt 2 holds a live lease
-          // was moving `next_attempt_at` back to now, so a third worker
-          // claimed and SENT the message while attempt 2's send was still in
-          // flight. The lease is this module's only concurrency control, and a
-          // stale releaser was cancelling it. It also wiped the back-off a
-          // live attempt had just computed, turning a rate-limit wait into an
-          // immediate re-send.
-          //
-          // So: reschedule only when this release owns the current claim, or
-          // when the intent is FAILED and is being taken back out of a sweep's
-          // verdict — where there is no live claim to disturb and the row must
-          // become due again for anything to happen at all.
+          // Only when this release owns the current claim. A straggler returns
+          // its capacity without touching a live attempt's schedule.
           nextAttemptAt: sql`CASE
             WHEN ${notifications.attemptCount} = ${input.attemptNumber}
-              OR ${notifications.status} = 'FAILED'
             THEN ${input.now}
             ELSE ${notifications.nextAttemptAt}
           END`,
-          lastAttemptAt: sql`(
-            SELECT max(${notificationDeliveryAttempts.finishedAt})
-              FROM ${notificationDeliveryAttempts}
-             WHERE ${notificationDeliveryAttempts.tenantId} = ${notifications.tenantId}
-               AND ${notificationDeliveryAttempts.notificationId} = ${notifications.id}
-          )`,
-          status: sql`CASE WHEN ${notifications.status} = 'FAILED' THEN 'PENDING' ELSE ${notifications.status} END`,
-          // The CHECK constraint insists a terminal status carries a
-          // completion time and a pending one does not, so the two move
-          // together or the write is refused.
-          completedAt: sql`CASE WHEN ${notifications.status} = 'FAILED' THEN NULL ELSE ${notifications.completedAt} END`,
+          lastAttemptAt: lastRealAttempt,
         })
         .where(
           and(
             eq(notifications.tenantId, input.tenantId),
             eq(notifications.id, input.notificationId),
-            // PENDING is the ordinary case; FAILED is the sweep-raced one. A
-            // SENT intent is left entirely alone — delivery is terminal truth.
-            inArray(notifications.status, ['PENDING', 'FAILED']),
+            eq(notifications.status, 'PENDING'),
             sql`${spentAttempts} < ${notifications.maxAttempts}`,
-            // Only a SWEEP verdict is reversible, and it is stated positively
-            // rather than as the absence of a real refusal. Asking only "is
-            // there no real FAILED_PERMANENT" would also reopen an intent that
-            // reached FAILED some other way — a retryable failure on its last
-            // attempt, say — which is a verdict nothing here is entitled to
-            // overturn. What a hand-back can correct is exactly one thing: the
-            // sweep gave up waiting for an outcome that was never coming,
-            // because the claim was never sent.
-            sql`(
-              ${notifications.status} = 'PENDING'
-              OR (
-                EXISTS (
-                  SELECT 1 FROM ${notificationDeliveryAttempts}
-                   WHERE ${notificationDeliveryAttempts.tenantId} = ${notifications.tenantId}
-                     AND ${notificationDeliveryAttempts.notificationId} = ${notifications.id}
-                     AND ${notificationDeliveryAttempts.outcome} = 'FAILED_PERMANENT'
-                     AND ${notificationDeliveryAttempts.errorCode} = ${ATTEMPTS_EXHAUSTED_CODE}
-                )
-                AND NOT EXISTS (
-                  SELECT 1 FROM ${notificationDeliveryAttempts}
-                   WHERE ${notificationDeliveryAttempts.tenantId} = ${notifications.tenantId}
-                     AND ${notificationDeliveryAttempts.notificationId} = ${notifications.id}
-                     AND ${notificationDeliveryAttempts.outcome} = 'FAILED_PERMANENT'
-                     AND ${notificationDeliveryAttempts.errorCode} IS DISTINCT FROM ${ATTEMPTS_EXHAUSTED_CODE}
-                )
-              )
+          ),
+        );
+
+      // The sweep-raced case, and the only one that is a CORRECTION.
+      //
+      // FAILED back to PENDING is the same class of repair as the accepted rule
+      // that a late SUCCEEDED moves FAILED to SENT: newer, better evidence
+      // about an attempt overrides a judgement made without it. It is
+      // deliberately narrow. Only an EXHAUSTION verdict is reversible, and only
+      // while the intent is no longer exhausted; a `FAILED_PERMANENT` attempt
+      // row is the transport's own refusal and is never overridden by a claim
+      // that never spoke to it.
+      //
+      // There is no live claim to disturb here, so `next_attempt_at` moves to
+      // now unconditionally: the row must become due again for anything to
+      // happen at all.
+      const restoredRows = await tx
+        .update(notifications)
+        .set({
+          nextAttemptAt: input.now,
+          lastAttemptAt: lastRealAttempt,
+          status: 'PENDING',
+          // The CHECK constraint insists a terminal status carries a completion
+          // time and a pending one does not, so the two move together or the
+          // write is refused.
+          completedAt: null,
+        })
+        .where(
+          and(
+            eq(notifications.tenantId, input.tenantId),
+            eq(notifications.id, input.notificationId),
+            // A SENT intent is left entirely alone — delivery is terminal truth.
+            eq(notifications.status, 'FAILED'),
+            sql`${spentAttempts} < ${notifications.maxAttempts}`,
+            // Stated POSITIVELY rather than as the absence of a real refusal.
+            // Asking only "is there no real FAILED_PERMANENT" would also reopen
+            // an intent that reached FAILED some other way — a retryable
+            // failure on its last attempt, say — which is a verdict nothing
+            // here is entitled to overturn. What a hand-back can correct is
+            // exactly one thing: the sweep gave up waiting for an outcome that
+            // was never coming, because the claim was never sent.
+            sql`EXISTS (
+              SELECT 1 FROM ${notificationDeliveryAttempts}
+               WHERE ${notificationDeliveryAttempts.tenantId} = ${notifications.tenantId}
+                 AND ${notificationDeliveryAttempts.notificationId} = ${notifications.id}
+                 AND ${notificationDeliveryAttempts.outcome} = 'FAILED_PERMANENT'
+                 AND ${notificationDeliveryAttempts.errorCode} = ${ATTEMPTS_EXHAUSTED_CODE}
+            )`,
+            sql`NOT EXISTS (
+              SELECT 1 FROM ${notificationDeliveryAttempts}
+               WHERE ${notificationDeliveryAttempts.tenantId} = ${notifications.tenantId}
+                 AND ${notificationDeliveryAttempts.notificationId} = ${notifications.id}
+                 AND ${notificationDeliveryAttempts.outcome} = 'FAILED_PERMANENT'
+                 AND ${notificationDeliveryAttempts.errorCode} IS DISTINCT FROM ${ATTEMPTS_EXHAUSTED_CODE}
             )`,
           ),
         )
