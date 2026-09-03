@@ -228,6 +228,9 @@ jobs:
       - name: botctl logic
         run: bash tests/deploy/botctl.test.sh
 
+      - name: The shell check's own check
+        run: bash tests/deploy/check-shell.test.sh
+
       # Build, start, migrate, serve, back up. Uses the production compose file
       # with the CI overlay, which changes only what CI cannot have.
       - name: Deployment smoke

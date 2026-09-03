@@ -546,6 +546,19 @@ nexa_check_divergence() {
     # "disagree" when they may agree perfectly, and offered a repair that then
     # died for want of the same manifest. Unknown is a warning; disagreement is
     # a refusal.
+    # Before settling for "unconfirmable", take the evidence that IS available.
+    # deploy.env may name a different release whose manifest resolves perfectly
+    # — that is row 2 of the ordering table above, an update interrupted between
+    # the image pointer and the `current` write, on exactly the pre-manifest
+    # population this branch exists for. Reporting that as merely unknown let
+    # `botctl restart` go ahead and start the other release.
+    configured="$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE 2>/dev/null || true)"
+    running="$(nexa_version_for_image "$configured" 2>/dev/null || true)"
+    if [ -n "$running" ] && [ "$running" != "$version" ]; then
+      nexa_warn "DIVERGENCE: this installation records ${version}, which has no manifest, but deploy.env would start ${running}."
+      nexa_warn "A restart or a reboot would start ${running}. 'botctl update ${running}' settles it."
+      return 1
+    fi
     nexa_warn "no release manifest for ${version}, so what this installation runs cannot be confirmed against source."
     nexa_warn "'botctl update ${version}' records one. Until then 'botctl version' cannot report a commit or a digest."
     return 2

@@ -174,6 +174,16 @@ parser_case 'a dead api is not waited out' dead '{"Service":"api","State":"dead"
 parser_case 'a restarting api is still coming up' restarting '{"Service":"api","State":"restarting"}\n'
 parser_case 'a running api with no health yet is not healthy' running '{"Service":"api","State":"running"}\n'
 parser_case 'another service is not the api' '' '{"Service":"worker","State":"running","Health":"healthy"}\n'
+# The rule the previous commit changed, and the one row the table did not have
+# — so that commit could not tell its own change from its predecessor. An entry
+# with no State at all is not evidence of life; treating "" as alive let one
+# malformed entry beside a dead api suppress the fast-fail and burn two full
+# readiness timeouts.
+NO_STATE='{"Service":"api","Health":"starting"}'
+parser_case 'an entry with no State does not suppress the fast-fail' \
+  exited "${NO_STATE}\n${DEAD_STARTING}"
+parser_case 'a State-less entry after a corpse is not read as life' \
+  exited "${DEAD_STARTING}\n${NO_STATE}"
 
 test_case 'the update lock does not live in a world-writable directory'
 # Read out of the library with a CLEAN environment, so this asserts the
@@ -774,6 +784,11 @@ assert_contains 'the operator was not told what would actually start' \
 # no-op: `botctl update <current>` short-circuits with "already running".
 assert_contains 'the advice does not name the release that would start' \
   "$BOTCTL_OUTPUT" 'botctl update v2.0.0'
+# `status` is the one the smoke scripts gate on, and it was the one caller
+# whose failure on a REAL disagreement nothing asserted.
+run_botctl status
+assert_fails 'status reported success on a divergent installation' \
+  test "$BOTCTL_STATUS" -eq 0
 
 test_case 'a divergence is only detected against the WHOLE image reference'
 # `*"@${digest}"` also matched a different repository carrying the same digest
@@ -845,6 +860,25 @@ assert_not_contains 'an absent manifest was reported as a disagreement' \
   "$BOTCTL_OUTPUT" 'DIVERGENCE'
 run_botctl status
 assert_equals 'status failed on a healthy installation with no manifest' 0 "$BOTCTL_STATUS"
+
+test_case 'a missing manifest does not hide a divergence that IS provable'
+# The other half. deploy.env may name a DIFFERENT release whose manifest
+# resolves perfectly — an update interrupted between the image pointer and the
+# `current` write, on exactly this pre-manifest population. Reporting that as
+# merely "unconfirmable" let `botctl restart` go ahead and start the other one.
+seed_release 'v2.0.0' "$DIGEST_B"
+printf 'v1.0.0\n' >"${NEXA_STATE_DIR}/current"
+set_deploy_image "registry.test/nexa@${DIGEST_B}"
+run_botctl version
+assert_fails 'a provable divergence was reported as merely unknown' \
+  test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the divergence was not named' "$BOTCTL_OUTPUT" 'DIVERGENCE'
+assert_contains 'the release that would start was not named' "$BOTCTL_OUTPUT" 'v2.0.0'
+run_botctl restart
+assert_fails 'restart started the other release' test "$BOTCTL_STATUS" -eq 0
+# Back to the plain no-manifest fixture for the tests below.
+rm -f "${NEXA_STATE_DIR}/releases/v2.0.0.json"
+set_deploy_image "registry.test/nexa@${DIGEST_A}"
 
 test_case 'restart is not refused for want of a manifest'
 # `botctl restart` is refused only for a real disagreement, where a restart is

@@ -96,7 +96,9 @@ printf '\033[32mok\033[0m    %d helper scripts clean at shellcheck warning\n' "$
 # is the one that holds a token able to publish.
 OFFENDERS="$(find deploy scripts tests/deploy .github -type f \
   \( -name '*.sh' -o -name 'botctl' -o -name '*.yml' -o -name '*.yaml' \) 2>/dev/null |
-  grep -v 'check-shell.sh' |
+  # The check and its test both contain the pattern as DATA — one in its
+  # explanation, one in its probes. Neither is a pipeline anything executes.
+  grep -vE 'check-shell\.(sh|test\.sh)' |
   while IFS= read -r file; do
     awk -v f="$file" '
       # Heredoc bodies are prose or data, not code this check has any business
@@ -115,7 +117,10 @@ OFFENDERS="$(find deploy scripts tests/deploy .github -type f \
       # quote and any further redirections. Prose does not: `echo "documented
       # as <<MARKER in the manual"` has words after the tag, and treating that
       # as an opener swallowed every following line in the file.
-      match($0, /(^|[[:space:]]|>|\))<<-?[[:space:]]*['"'"'"]?[A-Za-z_][A-Za-z0-9_]*['"'"'"]?[[:space:]]*([0-9]*[<>][^[:space:]]+[[:space:]]*)*$/) {
+      # `cat <<EOF | tee x` is a real opener: the pipe applies to the command,
+      # not to the tag. Requiring end-of-line outright meant the heredoc never
+      # opened and its BODY was scanned as code.
+      match($0, /(^|[[:space:]]|>|\))<<-?[[:space:]]*['"'"'"]?[A-Za-z_][A-Za-z0-9_]*['"'"'"]?[[:space:]]*([0-9]*[<>][^[:space:]]+[[:space:]]*)*([|;&].*)?$/) {
         tag = substr($0, RSTART, RLENGTH)
         gsub(/^.*<<-?[[:space:]]*['"'"'"]?/, "", tag)
         gsub(/['"'"'"].*$/, "", tag)
@@ -133,7 +138,9 @@ OFFENDERS="$(find deploy scripts tests/deploy .github -type f \
       # and were skipped, so the join never happened and the consumer alone on
       # the next line had no pipe left to match. That silently un-did the
       # multi-line detection this check was widened for.
-      /^[[:space:]]*(-[[:space:]]+)?([A-Za-z_.-]+|"[^"]*"|'"'"'[^'"'"']*'"'"')[[:space:]]*:[[:space:]]*\|[+-]?[[:space:]]*$/ { next }
+      # Digits belong in keys: `run2:`, `python3:`, `step2:`. Without them the
+      # indicator was joined onto the first body line and that line reported.
+      /^[[:space:]]*(-[[:space:]]+)?([A-Za-z0-9_.-]+|"[^"]*"|'"'"'[^'"'"']*'"'"')[[:space:]]*:[[:space:]]*\|[+-]?[[:space:]]*$/ { next }
       /^[[:space:]]*-[[:space:]]*\|[+-]?[[:space:]]*$/ { next }
 
       { line = $0 }
@@ -147,6 +154,19 @@ OFFENDERS="$(find deploy scripts tests/deploy .github -type f \
         # A pipe is required. `grep -q file` with no pipeline is not this bug.
         if (line ~ /\|[[:space:]]*(LC_ALL=[^[:space:]]+[[:space:]]+|command[[:space:]]+)?(grep[^|]*(-[a-zA-Z]*q|-m[[:space:]]*[0-9])|head([[:space:]]|$))/) {
           printf "%s:%d: %s\n", f, n, line
+        }
+      }
+      # The backstop that makes every future spelling of this bug loud.
+      #
+      # Whatever heuristic decides what opens a heredoc will eventually be
+      # fooled — twice already, by a comment and then by a string ending at a
+      # tag — and the failure is SILENT: every following line is skipped and
+      # the check reports the file clean. Refusing to reach the end of a file
+      # while still inside one converts that whole class into a failure with a
+      # file and a tag on it.
+      END {
+        if (heredoc != "") {
+          printf "%s:EOF: still inside heredoc <<%s; the rest of this file was NOT checked\n", f, heredoc
         }
       }
     ' "$file"

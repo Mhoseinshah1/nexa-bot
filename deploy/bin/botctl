@@ -418,6 +418,12 @@ cmd_update() {
     # pointer; nothing else about this installation changed.
     nexa_set_deploy_image "$target_image"
     nexa_ok "re-recorded ${target} (${digest})"
+    # An interrupted rollback can leave `previous` equal to `current`. This
+    # repair deliberately does not touch `previous`, so that state survives it
+    # — and the next `botctl rollback` refuses. Better said here than
+    # discovered then.
+    [ "$(nexa_previous_version || true)" != "$target" ] ||
+      nexa_warn "the rollback target is also ${target}, so 'botctl rollback' will refuse until that is settled." 
   else
     nexa_commit_release "$target" "$current" "$target_image"
     nexa_ok "updated to ${target} (${digest})"
