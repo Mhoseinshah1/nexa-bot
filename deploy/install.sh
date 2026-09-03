@@ -51,6 +51,8 @@ TENANT_CURRENCY="IRT"
 OWNER_USERNAME=""
 OWNER_DISPLAY_NAME=""
 OWNER_PASSWORD_FILE=""
+# Set by `require_owner_state`: "none" or "bootstrapped". Anything else dies.
+OWNER_STATE=""
 SKIP_OWNER="no"
 
 usage() {
@@ -608,16 +610,33 @@ owner_state() {
     tr -d '\r' | sed -n '1p'
 }
 
+# Which of the three states this database is in, with the two that are not an
+# answer turned into a refusal.
+#
+# Shared by both paths through `bootstrap_owner`, so a foreign or unreadable
+# answer is refused identically whether or not --skip-owner was passed. Written
+# as one function for exactly that reason: the same decision made in two places
+# is the same decision until somebody edits one of them.
+#
+# Sets a global rather than printing its answer, because `nexa_die` calls `exit`
+# and an `exit` inside `$( )` ends the substitution and not the installer. That
+# would leave a refusal that prints in red and then carries on.
+require_owner_state() {
+  local state
+  state="$(owner_state)" || state=""
+  case "$state" in
+    bootstrapped | none) OWNER_STATE="$state" ;;
+    foreign)
+      nexa_die "this database already has administrators that this installer did not create. Refusing to adopt an installation that was provisioned elsewhere: recording a release for it would attach this host's release identity to somebody else's data. Point NEXA_CONFIG_DIR at the right installation, or start from an empty database."
+      ;;
+    *)
+      nexa_die "could not determine whether this installation already has an owner (the bootstrap CLI answered \"${state}\"). Refusing to guess: creating an owner here would be a second owner if one already exists, and skipping would leave an installation nobody can log in to."
+      ;;
+  esac
+}
+
 bootstrap_owner() {
-  if [ "$SKIP_OWNER" = "yes" ]; then
-    nexa_warn "skipping the first owner. Nobody can log in until you run:"
-    nexa_warn "  docker compose --env-file ${NEXA_CONFIG_DIR}/deploy.env -f ${NEXA_DEPLOY_DIR}/compose.yml run --rm --no-deps --entrypoint node api dist/bootstrap-owner.cli.js"
-    return 0
-  fi
-
-  nexa_step "creating the first owner"
-
-  # Ask before asking the operator.
+  # Ask before saying anything, on BOTH paths.
   #
   # The owner is committed here, and the release manifest and `current` pointer
   # are written several steps later. An install interrupted in that gap leaves a
@@ -631,23 +650,33 @@ bootstrap_owner() {
   # whether THIS installation's bootstrap created them, which the application
   # answers from the audit record written in the owner's own transaction — so
   # there is no window where the owner exists and the answer is no.
-  local state
-  state="$(owner_state)" || state=""
-  case "$state" in
-    bootstrapped)
-      # Already done, by this installation. Nothing to create, nothing to ask,
-      # and the release state below still needs writing.
-      nexa_ok "the first owner already exists from an earlier run of this installer"
+  require_owner_state
+  local state="$OWNER_STATE"
+
+  if [ "$SKIP_OWNER" = "yes" ]; then
+    # --skip-owner says "do not create one", not "there is not one".
+    #
+    # It used to print "Nobody can log in until you run ..." unconditionally,
+    # which on a rerun of an already-bootstrapped installation was simply false
+    # — and false in the direction that sends an operator to run a bootstrap
+    # that would refuse them. Real-VPS acceptance found it.
+    if [ "$state" = "bootstrapped" ]; then
+      nexa_ok "skipping owner bootstrap; an existing owner is already present"
       return 0
-      ;;
-    foreign)
-      nexa_die "this database already has administrators that this installer did not create. Refusing to adopt an installation that was provisioned elsewhere: recording a release for it would attach this host's release identity to somebody else's data. Point NEXA_CONFIG_DIR at the right installation, or start from an empty database."
-      ;;
-    none) ;;
-    *)
-      nexa_die "could not determine whether this installation already has an owner (the bootstrap CLI answered \"${state}\"). Refusing to guess: creating an owner here would be a second owner if one already exists, and skipping would leave an installation nobody can log in to."
-      ;;
-  esac
+    fi
+    nexa_warn "skipping the first owner. Nobody can log in until you run:"
+    nexa_warn "  docker compose --env-file ${NEXA_CONFIG_DIR}/deploy.env -f ${NEXA_DEPLOY_DIR}/compose.yml run --rm --no-deps --entrypoint node api dist/bootstrap-owner.cli.js"
+    return 0
+  fi
+
+  nexa_step "creating the first owner"
+
+  if [ "$state" = "bootstrapped" ]; then
+    # Already done, by this installation. Nothing to create, nothing to ask,
+    # and the release state below still needs writing.
+    nexa_ok "the first owner already exists from an earlier run of this installer"
+    return 0
+  fi
 
   # The username and display name may be arguments — they are not secret. The
   # PASSWORD may not: argv is readable by every user on the machine via `ps`,

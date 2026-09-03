@@ -415,6 +415,66 @@ bootstrap_probe() {
     printf "EXIT=%s\n" "$?"' _ "${REPO}/deploy/install.sh"
 }
 
+# The same, with --skip-owner. A separate driver rather than a flag, because the
+# installer reads SKIP_OWNER while being SOURCED and the two invocations differ
+# only in that argument.
+skip_owner_probe() {
+  bash -c '
+    . "$1" --domain admin.example.test --acme-email ops@example.test --version v1.0.0 --skip-owner >/dev/null 2>&1
+    bootstrap_owner 2>&1
+    printf "EXIT=%s\n" "$?"' _ "${REPO}/deploy/install.sh"
+}
+
+# ---------------------------------------------------------------------------
+# --skip-owner says "do not create one", not "there is not one".
+#
+# Real-VPS acceptance found the installer telling an operator that nobody could
+# log in, on an installation that had a working owner — and pointing them at a
+# bootstrap command that would have refused them. The warning is true on a fresh
+# host and false on a rerun, so it is now conditional on the same owner state
+# every other decision here uses.
+# ---------------------------------------------------------------------------
+test_case 'skip-owner on a fresh installation still warns that nobody can log in'
+fake_set owner_state none
+probe="$(skip_owner_probe)"
+assert_contains 'the fresh-host warning was lost' "$probe" 'Nobody can log in'
+assert_contains 'the operator was not told how to bootstrap' "$probe" 'bootstrap-owner.cli.js'
+assert_contains 'skip-owner did not succeed on a fresh host' "$probe" 'EXIT=0'
+
+test_case 'skip-owner on a bootstrapped installation says so, and does not lie'
+fake_set owner_state bootstrapped
+reset_docker_log
+probe="$(skip_owner_probe)"
+assert_contains 'the truthful message is missing' \
+  "$probe" 'an existing owner is already present'
+assert_not_contains 'the installer claimed nobody could log in when an owner exists' \
+  "$probe" 'Nobody can log in'
+assert_contains 'skip-owner did not succeed on a bootstrapped host' "$probe" 'EXIT=0'
+# And it still created nothing: the only bootstrap-owner invocation is the read.
+assert_not_contains 'skip-owner ran the bootstrap CLI' \
+  "$(docker_log | grep -F 'bootstrap-owner.cli.js' | grep -vF -- '--status' || true)" \
+  'bootstrap-owner.cli.js'
+
+test_case 'skip-owner fails closed on a foreign database, exactly as bootstrap does'
+# The refusal must not be softer just because --skip-owner was passed, and it
+# must terminate the installer rather than print in red and carry on: `nexa_die`
+# calls `exit`, and an `exit` inside `$( )` would end only the substitution.
+fake_set owner_state foreign
+probe="$(skip_owner_probe)"
+assert_contains 'a foreign database was skipped past instead of refused' \
+  "$probe" 'did not create'
+assert_fails 'the installer continued past a foreign database under --skip-owner' \
+  test "${probe#*EXIT=}" -eq 0
+
+test_case 'skip-owner fails closed on an unreadable owner state'
+fake_set owner_state_exit 1
+probe="$(skip_owner_probe)"
+assert_contains 'an unreadable owner state was guessed at under --skip-owner' \
+  "$probe" 'could not determine whether'
+assert_fails 'the installer continued past an unreadable state under --skip-owner' \
+  test "${probe#*EXIT=}" -eq 0
+fake_set owner_state_exit 0
+
 test_case 'a rerun after a successful bootstrap continues instead of dying'
 fake_set owner_state bootstrapped
 reset_docker_log
