@@ -101,6 +101,15 @@ export const errors = {
     new NexaError({ kind: 'PERMISSION_DENIED', code, message, ...(details ? { details } : {}) }),
   unauthenticated: (code: string, message: string) =>
     new NexaError({ kind: 'UNAUTHENTICATED', code, message }),
+  /**
+   * The request is well-formed and the thing it asks for is not currently
+   * possible — an archived panel being edited, say. Distinct from CONFLICT,
+   * which means somebody else changed the state underneath you: retrying a
+   * conflict after re-reading can succeed, while retrying this cannot until
+   * the precondition itself is changed.
+   */
+  preconditionFailed: (code: string, message: string, details?: Record<string, unknown>) =>
+    new NexaError({ kind: 'PRECONDITION_FAILED', code, message, ...(details ? { details } : {}) }),
   configuration: (code: string, message: string, details?: Record<string, unknown>) =>
     new NexaError({ kind: 'CONFIGURATION', code, message, ...(details ? { details } : {}) }),
   internal: (code: string, message: string, cause?: unknown) =>
