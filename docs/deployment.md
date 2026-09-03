@@ -277,6 +277,13 @@ than a documented rule and less than a mechanical guarantee.
 There is no automated destructive schema rollback and there will not be one: a
 down-migration that drops a column is a data-loss button beside a panic button.
 
+One migration in this release can fail on an existing database rather than on
+its own code. `0015_single_primary_tenant` adds a unique index that permits one
+`PRIMARY` tenant, and it will not build on a database that already holds two —
+a state provisioning cannot produce, but a hand-written `INSERT` can. It fails
+loudly at migrate time with the index name, which is the correct outcome: the
+operator decides which tenant is primary, not the migration.
+
 ## Reboots
 
 Every long-running service has `restart: unless-stopped`, so Docker brings the
@@ -311,9 +318,20 @@ Publication is gated. `release.yml` will not build until:
   there is no force-republish switch; the way to publish different bytes is a
   new version.
 
+What the gate does **not** check is which ref that CI run belonged to. A commit
+reachable from a pull-request branch and from the tag has one set of runs, and a
+successful run recorded against the branch satisfies the gate. That is the
+intent — the same bytes were tested — but it means the guarantee is "this SHA
+passed CI", not "this SHA passed CI as a tag".
+
 The image is built for `linux/amd64` and `linux/arm64` — every architecture the
 installer accepts — and the published manifest is read back by digest and
 checked for both before the release is considered done.
+
+**A failed verification burns the version.** That read-back runs after the tag
+is public, so a release that fails it is already installable, and the
+immutability rule then makes that version unpublishable for ever. The recovery
+is a version bump.
 
 The digest is the identity. `latest` is never the installed identity, and
 `botctl version` reports all three so an installation can be tied back to

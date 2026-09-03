@@ -735,6 +735,29 @@ assert_contains 'the operator was not told the database is not reverted' \
   "$BOTCTL_OUTPUT" 'DATABASE IS NOT REVERTED'
 assert_contains 'the operator was not warned about restoring the backup' \
   "$BOTCTL_OUTPUT" 'discard every write made since'
+# It came back, so saying so is correct HERE.
+assert_contains 'the successful back-out did not say the application was reverted' \
+  "$BOTCTL_OUTPUT" 'APPLICATION has been reverted'
+
+test_case 'a post-migration back-out that FAILS does not claim a revert'
+# The panic branch, and the one place wording matters most: the migration has
+# run, the target will not start, AND the previous release did not come back.
+# Telling an operator "Nexa has reverted the application" here — while the next
+# line says it did not come back cleanly — is a contradiction at the exact
+# moment they are deciding whether to restore a backup that would discard every
+# write since the update.
+fake_set api_health 'starting'
+fake_set "api_health_${DIGEST_B}" 'starting'
+NEXA_READY_TIMEOUT=6 run_botctl update v2.0.0
+fake_set api_health 'healthy'
+fake_set "api_health_${DIGEST_B}" 'healthy'
+assert_fails 'a stranded update exited zero' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the stranded operator was not told the database is untouched' \
+  "$BOTCTL_OUTPUT" 'DATABASE IS NOT REVERTED'
+assert_contains 'the stranded operator was not told nothing was reverted' \
+  "$BOTCTL_OUTPUT" 'NOTHING has been reverted'
+assert_not_contains 'a failed back-out claimed the application was reverted' \
+  "$BOTCTL_OUTPUT" 'APPLICATION has been reverted'
 
 test_case 'a target that dies is backed out without waiting out the timeout'
 # An api container that EXITED is not listed by `docker compose ps` without

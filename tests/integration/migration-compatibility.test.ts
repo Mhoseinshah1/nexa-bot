@@ -29,12 +29,21 @@ describe('migration compatibility across the rollback window', () => {
     readFileSync(join(__dirname, '../../apps/api/drizzle/meta/_journal.json'), 'utf8'),
   ) as { entries: { idx: number; tag: string }[] };
 
-  // The migrations this release adds, and everything before them. Derived from
-  // the journal rather than hard-coded, so a new migration joins the release
-  // side automatically and this test keeps meaning what it says.
-  const RELEASE_UNDER_TEST = ['0015_single_primary_tenant', '0016_claim_exclusivity_serialisation'];
-  const previous = journal.entries.filter((e) => !RELEASE_UNDER_TEST.includes(e.tag));
-  const incoming = journal.entries.filter((e) => RELEASE_UNDER_TEST.includes(e.tag));
+  // The last migration of the PREVIOUS release. Everything up to and including
+  // it is what an installation being updated already has; everything AFTER it
+  // is what this release will apply underneath the previous release's code.
+  //
+  // Split by journal ORDER, not by membership of a list. An earlier version
+  // named the incoming migrations explicitly, which meant a NEW migration fell
+  // into `previous` — it was applied in beforeAll, before the previous
+  // release's operations ever ran, so the gate did not apply to the one
+  // migration it most needed to. A `DROP COLUMN` in a hypothetical 0017 passed
+  // all three tests. This is the ordering the update actually performs.
+  const PREVIOUS_RELEASE_LAST = '0014_claim_exclusivity';
+  const boundary = journal.entries.findIndex((e) => e.tag === PREVIOUS_RELEASE_LAST);
+  if (boundary < 0) throw new Error(`${PREVIOUS_RELEASE_LAST} is not in the journal`);
+  const previous = journal.entries.slice(0, boundary + 1);
+  const incoming = journal.entries.slice(boundary + 1);
 
   const scratch = `nexa_rollback_${Date.now()}`;
   const adminUrl = () => testConfig().DATABASE_URL;
@@ -175,6 +184,12 @@ describe('migration compatibility across the rollback window', () => {
         // Comments explain the rule and would otherwise trip it.
         .replace(/^\s*--.*$/gm, '')
         .toUpperCase();
+      // A unique index and a CHECK are additions that NARROW: rows the
+      // previous release could write may stop being writable. They are allowed
+      // — 0015 adds one — but only because the behavioural replay above proves
+      // the previous release still works. Listing them here would forbid the
+      // release this file ships with, so the rule is: the shapes below are
+      // never acceptable, and a narrowing addition has to survive the replay.
       for (const forbidden of [
         'DROP COLUMN',
         'DROP TABLE',
@@ -183,6 +198,7 @@ describe('migration compatibility across the rollback window', () => {
         'DROP DEFAULT',
         'RENAME COLUMN',
         'RENAME TO',
+        'TRUNCATE',
       ]) {
         expect(
           sql,

@@ -131,10 +131,7 @@ open(target, "w", encoding="utf-8").write(text)
   "__SECRETS_KEK__=${KEK}" \
   "__SECRETS_KEK_ID__=smoke-1" \
   "__DOMAIN__=localhost" \
-  "__EDGE_SUBNET__=172.29.0.0/24" \
-  "__BUILD_VERSION__=${VERSION_A}" \
-  "__BUILD_COMMIT__=${COMMIT_A}" \
-  "__BUILD_TIME__=${BUILT_AT}"
+  "__EDGE_SUBNET__=172.29.0.0/24"
 
 # The one production value CI must override: the schema requires a canonical
 # https admin origin, and CI has no certificate. Changed HERE, in the smoke

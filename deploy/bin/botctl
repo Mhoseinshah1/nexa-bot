@@ -367,14 +367,35 @@ cmd_update() {
   # What an operator has to know once the migration has run and the target
   # then failed. Printed by BOTH post-migration failure paths, from one place,
   # because two copies of a warning this important will eventually disagree.
-  post_migration_warning() {
+  # Shared by both post-migration failure paths. What differs between them is
+  # whether the previous release CAME BACK, and that difference has to survive
+  # into the wording: telling an operator "Nexa has reverted the application"
+  # while the next line says it did not come back cleanly is the worst possible
+  # moment to be imprecise, because it is the moment they decide whether to
+  # reach for the backup.
+  post_migration_database_note() {
     nexa_warn "The migration to ${target} ALREADY RAN, so the database may have changed."
-    nexa_warn "Nexa has reverted the APPLICATION to ${current}. The DATABASE IS NOT REVERTED and"
-    nexa_warn "restoring it is NOT automatic: the pre-update backup in ${NEXA_BACKUP_DIR} predates"
-    nexa_warn "the migration, so restoring it would discard every write made since. That is a"
-    nexa_warn "separate, deliberately destructive disaster-recovery step — see docs/deployment.md."
-    nexa_warn "${current} is expected to keep working against ${target}'s schema: migrations in a"
-    nexa_warn "release only add, which is what makes this rollback safe. Read 'botctl logs api'."
+    nexa_warn "The DATABASE IS NOT REVERTED, and restoring it is NOT automatic."
+    nexa_warn "The pre-update backup in ${NEXA_BACKUP_DIR} predates the migration."
+    nexa_warn "Restoring it would discard every write made since — a separate, deliberately"
+    nexa_warn "destructive disaster-recovery step. See docs/deployment.md."
+  }
+
+  # The previous release is running again.
+  post_migration_reverted() {
+    post_migration_database_note
+    nexa_warn "The APPLICATION has been reverted to ${current}, which is expected to keep working"
+    nexa_warn "against ${target}'s schema: migrations in a release only add, which is what makes"
+    nexa_warn "this rollback safe. Read 'botctl logs api'."
+  }
+
+  # It is not.
+  post_migration_stranded() {
+    post_migration_database_note
+    nexa_warn "${current} did NOT come back cleanly, so NOTHING has been reverted — not the"
+    nexa_warn "application and not the database. Neither release has been deleted. Read"
+    nexa_warn "'botctl logs api' before doing anything else, and do not restore the backup to"
+    nexa_warn "try to fix a container that will not start."
   }
 
   # 4. MIGRATE, using the TARGET release's own compiled migrator.
@@ -397,10 +418,10 @@ cmd_update() {
     # application works. Saying "is running again" without checking is how an
     # operator reads a reassuring message about an installation that is down.
     if nexa_compose up -d --remove-orphans && nexa_wait_ready; then
-      post_migration_warning
+      post_migration_reverted
       nexa_die "${target} failed to start. ${current} is running again, is ready, and is still the current release."
     fi
-    post_migration_warning
+    post_migration_stranded
     nexa_die "${target} failed to start AND ${current} did not come back cleanly. The installation may be down; run 'botctl logs' and 'botctl rollback'."
   fi
 
@@ -409,10 +430,10 @@ cmd_update() {
   if ! NEXA_IMAGE="$target_image" nexa_wait_ready; then
     nexa_warn "${target} started but never became ready; returning to ${current}."
     if nexa_compose up -d --remove-orphans && nexa_wait_ready; then
-      post_migration_warning
+      post_migration_reverted
       nexa_die "${target} failed its readiness check. ${current} is running again and is still the current release."
     fi
-    post_migration_warning
+    post_migration_stranded
     nexa_die "${target} failed its readiness check AND ${current} did not come back cleanly. Both releases are intact; run 'botctl logs api'."
   fi
 

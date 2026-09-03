@@ -13,8 +13,16 @@ on:
         description: 'Existing tag to build and publish, e.g. v1.0.0'
         required: true
 
+# Keyed on the VERSION, not on the ref.
+#
+# `github.ref` is `refs/tags/v1.0.0` for a tag push and `refs/heads/main` for a
+# workflow_dispatch launched from main, so the two paths landed in DIFFERENT
+# groups and could run at once. Both gates would then check "has this version
+# been published?" before either publish job pushed, both would see no, and one
+# version would end up with two digests — exactly what the immutability check
+# exists to prevent.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 # Declared empty at the top so no job inherits anything by accident; each job
@@ -259,6 +267,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # NOTE: this runs AFTER the tag is public. A failure here — a missing
+      # architecture, metadata that disagrees with the release — does not
+      # withdraw the tag, and the gate's immutability check then makes that
+      # version unpublishable for ever. The recovery is a version bump. That is
+      # a deliberate trade: verifying before the tag exists would mean pushing
+      # by digest and tagging afterwards, which makes the digest-to-tag step
+      # the thing nothing verifies. Recorded in docs/deployment.md.
+      #
       # Pulled BY DIGEST, so the verification runs against what was published.
       # Pulling the tag again would verify whatever the tag points at now,
       # which is precisely what digests exist to avoid.

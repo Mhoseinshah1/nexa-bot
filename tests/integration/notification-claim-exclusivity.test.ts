@@ -146,6 +146,16 @@ describe('notification claim exclusivity (0014, serialised by 0016)', () => {
     await a.connect();
     await b.connect();
     try {
+      // The barrier below asks about THIS connection, not the cluster. An
+      // unfiltered `pg_locks` count would also be satisfied by an ungranted
+      // advisory lock held by any other session in any other database on the
+      // same server — a suite running beside this one would let the race
+      // proceed without the second writer ever having blocked.
+      const { rows: pidRows } = await b.query<{ pid: number }>(
+        'SELECT pg_backend_pid()::int AS pid',
+      );
+      const secondPid = pidRows[0].pid;
+
       await a.query('BEGIN');
       await b.query('BEGIN');
       await first(a);
@@ -161,7 +171,8 @@ describe('notification claim exclusivity (0014, serialised by 0016)', () => {
       const waiting = async () => {
         const { rows } = await a.query(
           `SELECT count(*)::int AS n FROM pg_locks
-            WHERE locktype = 'advisory' AND NOT granted`,
+            WHERE locktype = 'advisory' AND NOT granted AND pid = $1`,
+          [secondPid],
         );
         return rows[0].n > 0;
       };

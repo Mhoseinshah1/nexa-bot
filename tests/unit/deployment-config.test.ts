@@ -125,6 +125,25 @@ describe('the production environment template', () => {
     expect(installer, 'the installer still writes a pending placeholder').not.toMatch(/=pending/);
   });
 
+  it('the installer checks the LAST key in the template for a torn write', () => {
+    // `secrets_complete` names one key from the end of the template as its
+    // proof that a write reached the end. That rule already rotted once — it
+    // named BUILD_TIME, which left the file — and the consequence is quiet: a
+    // torn write losing DEPLOYMENT_TOPOLOGY means TRUSTED_PROXY_IPS stops
+    // being required, and the API boots ignoring X-Forwarded-For.
+    const raw = readFileSync(templatePath, 'utf8');
+    const assignments = [...raw.matchAll(/^([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1]);
+    const last = assignments.at(-1);
+    expect(last, 'the template has no assignments').toBeTruthy();
+
+    const installer = readFileSync(join(__dirname, '../../deploy/install.sh'), 'utf8');
+    const checked = /secrets_complete "\$app_env"([^;]*?); then/s.exec(installer)?.[1] ?? '';
+    expect(
+      checked.split(/\s+/).filter(Boolean),
+      `install.sh does not check ${last}, the last key in the template`,
+    ).toContain(last);
+  });
+
   it('still boots without a build identity, reporting the schema defaults', () => {
     // The image supplies these in production. A container run outside the
     // release flow must still start and still say something true about

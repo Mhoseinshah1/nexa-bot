@@ -65,7 +65,13 @@ describe('the release workflow', () => {
     expect(gate, 'the gate does not compare the run path').toMatch(/\[ "\$path" = "\$WORKFLOW" \]/);
     // Anything other than `success` — cancelled, skipped, stale, neutral,
     // timed_out — is not a pass, and a gate that accepts one is decoration.
-    expect(gate).toMatch(/conclusion.*=.*"success"/);
+    //
+    // Matched exactly. `/conclusion.*=.*"success"/` also matches `!=`, which
+    // is the mutation that makes the gate accept a FAILED run and reject the
+    // passing one — the single worst edit possible to this file, and it left
+    // the suite green.
+    expect(gate).toContain('[ "$conclusion" = "success" ]');
+    expect(gate, 'the conclusion test was inverted').not.toContain('"$conclusion" !=');
     // Fails closed when nothing was found at all.
     expect(gate).toContain('no completed workflow run exists');
     // The returned run's own head_sha is compared, not just the query filter.
@@ -100,6 +106,20 @@ describe('the release workflow', () => {
     expect(Object.keys(inputs ?? {})).toEqual(['tag']);
   });
 
+  it('serialises on the VERSION, so two trigger paths cannot publish it at once', () => {
+    // `github.ref` is refs/tags/v1.0.0 for a tag push and refs/heads/main for a
+    // workflow_dispatch launched from main, so keying on it put the two paths
+    // in different groups. Both gates would then ask "has this version been
+    // published?" before either publish job pushed, both would see no, and one
+    // version would end up with two digests.
+    const concurrency = (parse(raw) as { concurrency: { group: string } }).concurrency;
+    expect(concurrency.group).toContain('github.event.inputs.tag');
+    expect(concurrency.group).toContain('github.ref_name');
+    expect(concurrency.group, 'keyed on the full ref, which differs per trigger').not.toMatch(
+      /github\.ref\s*}}/,
+    );
+  });
+
   it('builds every architecture the installer accepts', () => {
     const build = workflow.jobs.publish?.steps.find((s) => s.name === 'Build and push');
     expect(build?.with?.platforms).toBe('linux/amd64,linux/arm64');
@@ -129,10 +149,21 @@ describe('the release workflow', () => {
       );
     }
 
-    // And the published manifest is checked at release time, not assumed.
+    // And the published manifest is CHECKED at release time, not merely
+    // printed. Asserting on the architecture names alone was satisfied by the
+    // prose comment in the same run block, so deleting the entire enforcement
+    // loop left this green.
     const verify = workflow.jobs.verify?.steps.map((s) => s.run ?? '').join('\n') ?? '';
     expect(verify).toContain('published architectures');
-    for (const arch of accepted) expect(verify).toContain(dockerNames[arch]);
+    expect(verify, 'the manifest is read but nothing is enforced').toMatch(
+      /for required in [^\n]*amd64[^\n]*arm64/,
+    );
+    expect(verify, 'a missing architecture does not fail the release').toMatch(
+      /the published manifest has no %s image/,
+    );
+    // The loop must be able to fail.
+    const loop = verify.slice(verify.indexOf('for required in'));
+    expect(loop).toContain('exit 1');
   });
 
   it('pins every third-party action to an immutable commit', () => {

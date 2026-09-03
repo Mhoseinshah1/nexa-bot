@@ -141,10 +141,7 @@ open(sys.argv[2], "w", encoding="utf-8").write(text)
   "__SECRETS_KEK__=$(head -c 32 /dev/urandom | base64 -w0)" \
   "__SECRETS_KEK_ID__=smoke-1" \
   "__DOMAIN__=localhost" \
-  "__EDGE_SUBNET__=172.29.0.0/24" \
-  "__BUILD_VERSION__=v1.0.0" \
-  "__BUILD_COMMIT__=${COMMIT}" \
-  "__BUILD_TIME__=smoke"
+  "__EDGE_SUBNET__=172.29.0.0/24"
 sed -i 's|^WEB_ADMIN_ORIGINS=.*|WEB_ADMIN_ORIGINS=https://localhost|' "${NEXA_CONFIG_DIR}/nexa.env"
 
 DIGEST_A="$(docker buildx imagetools inspect "${IMAGE_REPO}:v1.0.0" --format '{{.Manifest.Digest}}')"

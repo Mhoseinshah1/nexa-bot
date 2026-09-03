@@ -249,6 +249,34 @@ describe('the CI compose overlay', () => {
   });
 });
 
+describe('the CI overlay leaves the edge health checks alone', () => {
+  const ci = readFileSync(join(__dirname, '../../deploy/compose.ci.yml'), 'utf8');
+  const ciCaddyfile = readFileSync(join(__dirname, '../../deploy/caddy/Caddyfile.ci'), 'utf8');
+
+  it('does not replace the healthcheck command', () => {
+    // It did, and Caddyfile.ci also had no internal health site — so the
+    // production healthcheck was executed by NOTHING: not by the smoke tests,
+    // not by the unit tests. The regression it exists for (the Web Admin
+    // one-shot exiting while the API stays healthy, leaving the edge with
+    // nothing to serve) was caught by CI the first time and would not have
+    // been caught again.
+    const caddyBlock = ci.slice(ci.indexOf('  caddy:'));
+    const healthcheck = caddyBlock.slice(caddyBlock.indexOf('healthcheck:'));
+    expect(healthcheck, 'the CI overlay overrides the healthcheck command').not.toMatch(
+      /^\s+test:/m,
+    );
+  });
+
+  it('serves the internal health site the production check probes', () => {
+    // Plain HTTP on the container's own loopback: something CI genuinely can
+    // have, unlike DNS and a certificate. That is why the command above is not
+    // overridden.
+    expect(ciCaddyfile).toMatch(/http:\/\/127\.0\.0\.1:8080 \{/);
+    const site = ciCaddyfile.slice(ciCaddyfile.indexOf('http://127.0.0.1:8080 {'));
+    expect(site).toMatch(/import nexa_routes/);
+  });
+});
+
 describe('the production Caddy routing', () => {
   const routes = readFileSync(join(__dirname, '../../deploy/caddy/routes.caddy'), 'utf8');
 

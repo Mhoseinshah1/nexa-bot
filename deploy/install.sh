@@ -450,8 +450,7 @@ with open(target, "w", encoding="utf-8") as handle:
     "__SECRETS_KEK__=${kek}" \
     "__SECRETS_KEK_ID__=${kek_id}" \
     "__DOMAIN__=${DOMAIN}" \
-    "__EDGE_SUBNET__=${NEXA_EDGE_SUBNET:-172.29.0.0/24}" \
-    "__NOTHING__=unused"
+    "__EDGE_SUBNET__=${NEXA_EDGE_SUBNET:-172.29.0.0/24}"
 
   # Same rule for the substituted template: it is complete before it is named.
   chmod 0600 "${app_env}.partial"
