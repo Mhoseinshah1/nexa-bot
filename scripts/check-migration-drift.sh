@@ -29,10 +29,39 @@ cleanup() {
   find drizzle -name '*drift-check*' -delete
   # Any snapshot that did not exist before this run is ours to remove.
   for snapshot in $(find drizzle/meta -name '*_snapshot.json' | sort); do
-    echo "$SNAPSHOTS_BEFORE" | grep -qxF "$snapshot" || rm -f "$snapshot"
+    # `grep -c`, which reads its whole input, not `grep -qxF`, which exits on
+    # the first match and can leave `echo` dying of SIGPIPE — returning 141
+    # under `pipefail` exactly when the snapshot IS known. This branch DELETES,
+    # so the wrong answer here removes a checked-in snapshot.
+    known=0
+    status=0
+    known="$(echo "$SNAPSHOTS_BEFORE" | grep -cxF "$snapshot")" || status=$?
+    # Exit 1 means "not found", which is the delete case. Anything above that
+    # is an error, and this branch DELETES — so a read failure must not read as
+    # "unknown, remove it".
+    #
+    # `break`, not `exit`: this runs inside the EXIT trap, and exiting from here
+    # skips the journal restore below — leaving the repository with a
+    # drizzle-modified _journal.json and an orphan backup, which is the exact
+    # state this function exists to prevent. Stop deleting, finish cleaning up,
+    # and report at the end.
+    if [ "$status" -gt 1 ]; then
+      echo "cannot read the snapshot list (grep exited $status); stopped removing snapshots" >&2
+      CLEANUP_FAILED=1
+      break
+    fi
+    [ "${known:-0}" -gt 0 ] || rm -f "$snapshot"
   done
+  # The journal is restored unconditionally, even after the failure above.
+  # This check must not be able to leave the repository altered.
   mv -f "$JOURNAL.drift-backup" "$JOURNAL"
+  [ "${CLEANUP_FAILED:-0}" -eq 0 ] || {
+    echo "the drift check could not clean up fully; inspect drizzle/meta before committing" >&2
+    return 1
+  }
+  return 0
 }
+CLEANUP_FAILED=0
 trap cleanup EXIT
 
 DATABASE_URL="${DATABASE_URL:-postgres://nexa:nexa@127.0.0.1:5432/nexa_dev}" \

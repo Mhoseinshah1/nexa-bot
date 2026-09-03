@@ -9,6 +9,7 @@ import type {
   Role,
   RoleId,
   ScopeContext,
+  TenantContext,
   TenantStatus,
 } from '@nexa/contracts';
 
@@ -301,4 +302,28 @@ export interface LoginThrottleRepository {
     subject: string,
     tx?: unknown,
   ): Promise<void>;
+}
+
+/**
+ * Was this installation's first owner created by the installer's bootstrap?
+ *
+ * Reads the one row `BootstrapOwnerService` writes inside the same transaction
+ * as the owner. It exists because "there is an administrator" and "this
+ * installation bootstrapped itself" are different facts, and only the second
+ * one makes it safe for the installer to carry on past a step it has already
+ * completed.
+ *
+ * A module-local port rather than a read on `AuditWriter`: the contract's audit
+ * port is write-only on purpose, and widening a frozen interface to answer one
+ * installer question is the wrong trade.
+ */
+export interface BootstrapRecordReader {
+  /**
+   * True when an `admin.bootstrap` audit record exists for this tenant.
+   *
+   * `TenantContext`, not `ScopeContext`: a system-scoped read would compare the
+   * tenant column against NULL and match nothing, silently answering "no
+   * bootstrap" for every installation. The type refuses the call instead.
+   */
+  wasBootstrapped(scope: TenantContext): Promise<boolean>;
 }

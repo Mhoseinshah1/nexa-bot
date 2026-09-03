@@ -1,0 +1,109 @@
+# The routing, as a snippet, so production and CI import THE SAME rules.
+#
+# That sharing is the point. A CI edge that reimplements the routes tests a
+# second Caddyfile nobody deploys: the smoke test passes, and the production
+# file is free to be wrong about the one thing the test was meant to prove.
+# Only the site address and TLS differ between the two, because a public
+# certificate cannot be issued in CI — everything below is identical.
+#
+# Routing is DERIVED, not guessed. `apps/web/vite.config.ts` proxies exactly
+# two prefixes to the API in development — `/api` and `/health` — and the web
+# client builds every request as `${API_PREFIX}${path}` with API_PREFIX =
+# `/api/admin/v1`, relative to its own origin. So the SPA and the API share one
+# origin, which is also what the `__Host-` session cookie requires: that cookie
+# has no Domain attribute and is sent only to the exact host that set it.
+#
+# Caddy adds NO authentication. The API authenticates every administrative
+# route itself and answers `/health/info` with 401 without a session; a second
+# auth layer here would be a second place for that decision to be made
+# differently, and the two would drift.
+
+(nexa_routes) {
+	encode zstd gzip
+
+	# --- The API and the health routes ---------------------------------------
+	#
+	# These come FIRST. `handle` blocks are evaluated in order and only the
+	# first match runs, so putting the SPA fallback first would swallow every
+	# API request into index.html and the admin panel would receive HTML where
+	# it expected JSON — with a 200, which is the worst way for it to fail.
+	#
+	# No `header` directive in these blocks, deliberately. The API sets its own
+	# security headers (`security-headers.middleware.ts`): a `default-src 'none'`
+	# CSP that is correct for JSON and wrong for a document, HSTS, nosniff,
+	# `Cache-Control: no-store` on authenticated responses. Adding headers here
+	# would either duplicate them or quietly override the stricter ones.
+	@api path /api/*
+	handle @api {
+		reverse_proxy api:3000
+	}
+
+	# /health/live and /health/ready are anonymous by design and answer with a
+	# word and a status code. /health/info requires a session and returns 401
+	# without one, so proxying all three is the existing contract rather than a
+	# widening of it.
+	@health path /health/*
+	handle @health {
+		reverse_proxy api:3000
+	}
+
+	# --- The Telegram webhook ------------------------------------------------
+	#
+	# `/telegram/webhook/:botInstanceId`, and it is NOT under /api. Without this
+	# block the path falls to the SPA handler below, which answers index.html
+	# with 200 — and a 200 is exactly how Telegram is told an update was
+	# accepted. Every update would be acknowledged and thrown away, with
+	# nothing in any log, for as long as the feature stayed on.
+	#
+	# The default of TELEGRAM_WEBHOOK_ENABLED=false does not make that safe: it
+	# means the failure waits until the day somebody turns the feature on, and
+	# then presents as "Telegram is not delivering updates" rather than as a
+	# routing bug.
+	#
+	# No authentication here, and none by omission either: the controller
+	# verifies Telegram's secret-token header before it even parses the bot id,
+	# so an unknown or malformed id gets the API's own answer rather than a
+	# page. Caddy's job is to deliver the request to the thing that decides.
+	@telegram path /telegram/webhook/*
+	handle @telegram {
+		reverse_proxy api:3000
+	}
+
+	# --- The Web Admin -------------------------------------------------------
+
+	# Hashed filenames, so a year is safe and a new release busts the cache by
+	# changing the name. `immutable` stops a browser revalidating at all.
+	@assets path /assets/*
+	handle @assets {
+		header Cache-Control "public, max-age=31536000, immutable"
+		header X-Content-Type-Options "nosniff"
+		root * /srv/web
+		file_server
+	}
+
+	# Everything else is the SPA. `try_files` falls back to index.html so a
+	# deep link the client routes on is served the application rather than a
+	# 404 from the file server.
+	handle {
+		header {
+			# The document's CSP, which is a different question from the API's.
+			# The bundle loads one module script and one stylesheet from its own
+			# origin and talks to its own origin; nothing is inline, nothing is
+			# third-party, so this is as tight as the application actually needs.
+			Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+			X-Content-Type-Options "nosniff"
+			Referrer-Policy "no-referrer"
+			Permissions-Policy "geolocation=(), camera=(), microphone=()"
+			Cross-Origin-Opener-Policy "same-origin"
+			# index.html names the hashed assets, so it must never be cached:
+			# a stale copy points at files the new release no longer has.
+			Cache-Control "no-store"
+			# Caddy announces itself by default. It says nothing useful to an
+			# operator and something mildly useful to everyone else.
+			-Server
+		}
+		root * /srv/web
+		try_files {path} /index.html
+		file_server
+	}
+}

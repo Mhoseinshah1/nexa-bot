@@ -63,12 +63,30 @@ export class Prompter {
   }
 
   /**
-   * Restores the terminal. A process that exits while stdin is still in raw
-   * mode leaves the operator's shell without echo or line editing.
+   * Restores the terminal and lets go of stdin. A process that exits while
+   * stdin is still in raw mode leaves the operator's shell without echo and
+   * line editing — and one that never lets go of stdin never exits at all.
+   *
+   * Both paths hold the stream, so both are released here. The terminal path
+   * resumed it (see `TerminalReader.close`). The PIPED path has an async
+   * iterator open over it, which keeps reading and keeps the handle referenced
+   * for as long as the writer holds its end open; returning the iterator ends
+   * that. Driving the compiled prompter down a pipe that stays open reproduces
+   * the same never-exits behaviour the terminal path showed on the staging
+   * host, and this is what stops it.
+   *
+   * Idempotent, because the CLI closes once when it has finished asking and
+   * again in a `finally`.
    */
   close(): void {
     this.terminal?.close();
     this.terminal = null;
+
+    const iterator = this.iterator;
+    this.iterator = null;
+    // Nothing reads after close, so a rejection here has no one to inform and
+    // must not become an unhandled rejection in a CLI that is on its way out.
+    void Promise.resolve(iterator?.return?.()).catch(() => undefined);
   }
 
   /**

@@ -20,7 +20,7 @@ import {
 import type { OutboxWriter } from '../../eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { DrizzleRoleRepository } from '../infrastructure/drizzle-role.repository.js';
-import type { AdminRepository } from './ports.js';
+import type { AdminRepository, BootstrapRecordReader } from './ports.js';
 
 /**
  * Installation bootstrap: creating the first owner.
@@ -56,6 +56,24 @@ export interface BootstrapOwnerResult {
   readonly username: string;
 }
 
+/**
+ * What the installer needs to know before it decides whether to bootstrap.
+ *
+ *   - `none`         — no administrator exists. Bootstrap normally.
+ *   - `bootstrapped` — administrators exist AND this installation's own
+ *                      bootstrap created them. A rerun may carry on past this
+ *                      step; there is nothing left to do and nothing to ask.
+ *   - `foreign`      — administrators exist with no record of this bootstrap.
+ *                      The installer must stop: it is looking at a database it
+ *                      did not provision, and continuing would attach a fresh
+ *                      release identity to somebody else's installation.
+ *
+ * The distinction is the whole point. "There is an administrator, therefore the
+ * bootstrap must have succeeded" is the reasoning that turns a safety fence
+ * into a shrug.
+ */
+export type BootstrapStatus = 'none' | 'bootstrapped' | 'foreign';
+
 export class BootstrapOwnerService {
   constructor(
     private readonly uow: UnitOfWork<TransactionScope>,
@@ -66,7 +84,29 @@ export class BootstrapOwnerService {
     private readonly outbox: OutboxWriter,
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
+    private readonly bootstrapRecord: BootstrapRecordReader,
   ) {}
+
+  /**
+   * Read-only. Creates nothing, and is NOT a way in.
+   *
+   * It exists because an interrupted install had no safe way to resume. The
+   * owner is committed several steps before the release manifest and `current`
+   * pointer are written, and on a real staging host the install stopped in
+   * exactly that gap. A rerun then hit `execute` again, was refused with
+   * BOOTSTRAP_ALREADY_DONE — correctly — and the installation was left running,
+   * healthy, and permanently unable to record which release it was running.
+   *
+   * The fence in `execute` is untouched. This does not relax it, and it is not
+   * consulted by it: `execute` still refuses whenever any administrator exists,
+   * whoever created them. This only lets the INSTALLER tell apart the state it
+   * produced from a state it must not touch.
+   */
+  async status(scope: TenantContext): Promise<BootstrapStatus> {
+    const admins = await this.admins.list(scope);
+    if (admins.length === 0) return 'none';
+    return (await this.bootstrapRecord.wasBootstrapped(scope)) ? 'bootstrapped' : 'foreign';
+  }
 
   async execute(scope: TenantContext, input: BootstrapOwnerInput): Promise<BootstrapOwnerResult> {
     const username = adminUsernameSchema.parse(input.username.trim().toLowerCase());

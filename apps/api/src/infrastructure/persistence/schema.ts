@@ -100,6 +100,22 @@ export const tenants = pgTable(
   },
   (table) => [
     uniqueIndex('tenants_slug_key').on(table.slug),
+    // Exactly ONE primary tenant per database, enforced here rather than by
+    // the code that inserts it.
+    //
+    // The primary tenant IS the installation: it is the only kind with no
+    // parent, and every reseller bot hangs off it. Two of them is not a
+    // degraded installation, it is two installations sharing a database.
+    //
+    // The provisioning CLI used to guard this with `SELECT ... FOR UPDATE`
+    // inside a transaction, which locks nothing when it matches no rows — so
+    // two first-run installers both saw an empty table and both inserted. With
+    // the same slug one happened to die on `tenants_slug_key`, which is a
+    // different invariant catching this one by accident; with different slugs
+    // both committed.
+    uniqueIndex('tenants_single_primary_key')
+      .on(table.kind)
+      .where(sql`kind = 'PRIMARY'`),
     check('tenants_kind_check', enumCheck('kind', TENANT_KINDS)),
     check('tenants_status_check', enumCheck('status', TENANT_STATUSES)),
     check('tenants_calendar_check', enumCheck('calendar', CALENDARS)),

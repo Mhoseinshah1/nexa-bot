@@ -11,6 +11,22 @@ log. There are still no product features: no purchases, payments, wallet,
 providers, resellers or customer-facing Telegram operations. Do not add them
 without an explicit instruction.
 
+**The deployment checkpoint after Phase 2 is done too**: an immutable image,
+a production Compose topology behind Caddy, an Ubuntu installer, and `botctl`
+with update and rollback (ADR-0022, `docs/deployment.md`). It has never been
+run against a real server — `docs/vps-acceptance.md` is the checklist that
+decides that. `BLOCKER-SECRETS-V2` is still open and is the next prerequisite
+before Phase 3.
+
+Three deployment rules that are easy to break by accident:
+
+- The root `docker-compose.yml` is **development infrastructure**. Production
+  is `deploy/`. Never merge the two.
+- A release is a **digest**, never a tag. `botctl` resolves a version once and
+  addresses the image by digest everywhere afterwards.
+- `botctl rollback` never restores the database. The backup predates the
+  migration, so restoring it would discard every write made since.
+
 Authentication and authorization are real. Every new write path takes a
 `ScopeContext` and an `ActorContext` and checks a permission through the guard —
 never by inspecting an actor's type, and never by not drawing a button.
@@ -70,11 +86,22 @@ touch the database.
 ```bash
 bash scripts/dev-services.sh   # postgres + redis (docker, or native fallback)
 pnpm db:migrate:dev && pnpm db:seed:dev   # compiled: pnpm build && pnpm db:migrate
+pnpm provision                 # the primary tenant (dev: provision:dev)
 pnpm admin:bootstrap           # first owner, from dist (dev: admin:bootstrap:dev)
-pnpm verify                    # typecheck, lint, boundaries, i18n, unit tests, build
+pnpm verify                    # the gate: static, shell, unit, deploy logic, build
 pnpm test:integration          # needs the services above
 pnpm test:exhaustive           # 1341 notification orderings, ~4 min; nightly in CI
 pnpm check:runtime             # dist CLI runs without devDeps; web ships no source maps
+pnpm check:shell               # shellcheck; deploy/ at info, scripts/ at warning
+pnpm test:deploy               # botctl update/rollback logic against a fake docker
+```
+
+With a Docker daemon (the Ubuntu CI job; cloud sessions usually have no
+registry egress for base images):
+
+```bash
+bash scripts/deployment-smoke.sh          # build, up, migrate, serve, back up
+bash scripts/deployment-update-smoke.sh   # A -> B -> failed health -> rollback
 ```
 
 `pnpm verify` is the gate. If you changed the schema, also run `pnpm db:check`.
@@ -84,7 +111,9 @@ in `tests/integration/notification-invariants.test.ts`.
 
 ## Reviewing with agents
 
-Two rules, both learned the expensive way on the Phase 2 branch.
+Five rules. The first two were learned the expensive way on the Phase 2 branch;
+the last three on the deployment branch, where four review rounds each found
+their defect inside the fix written for the round before.
 
 **A reviewer that mutates code works in its own worktree.** Falsifiability
 review — reverting a production rule to watch a test fail — is the standard
@@ -98,6 +127,28 @@ somebody else to run.
 **Agents that share PostgreSQL are serialised or given separate databases.**
 The integration suite truncates tables between tests. Two suites against one
 database produced 122 false failures that looked exactly like real ones.
+
+**A fix is reviewed as hard as the bug.** On the deployment branch the
+readiness parser was rewritten three times, and the first two rewrites each
+INVERTED the behaviour they were written to protect — the second preferred a
+dead container over a healthy one, the third preferred a running one-off
+reporting `starting` over the healthy container beside it. Three separate fixes
+told the operator to run a command that could not work, each introduced by the
+commit that removed the previous one. Reviewing a diff for "does it fix the
+bug" catches none of this. Ask instead: what does this fix now do that it did
+not do before, and in which state is that wrong?
+
+**A rule with no test is a rule that will be silently reverted.** Five
+production rules changed in one commit there had no test at all, so the suite
+could not distinguish three successive versions of the same function — every
+inversion above passed a green suite. Mutation is the only check that finds
+this: revert the single rule a test names and watch that test fail. A test that
+stays green under mutation is not a test.
+
+**A claim about testing that leaves no test behind is worse than no claim.** A
+commit message on that branch cited eleven parser shapes and twelve guard
+probes. Both sets had been run and thrown away, so the next reader believed a
+coverage that did not exist. Commit the probe or do not cite it.
 
 **Before any commit that follows agent work**, run `git status`, read every
 line of `git diff`, and confirm no reviewer mutation is still in the tree —

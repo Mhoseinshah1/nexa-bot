@@ -28,6 +28,7 @@ import {
 import { OutboxWriter } from './modules/platform/eventing/infrastructure/outbox-writer.js';
 import { OutboxRelay } from './modules/platform/eventing/infrastructure/outbox-relay.js';
 import { DrizzleAuditWriter } from './modules/platform/audit/infrastructure/drizzle-audit-writer.js';
+import { DrizzleBootstrapRecordReader } from './modules/platform/identity/infrastructure/drizzle-bootstrap-record.reader.js';
 import { DrizzleOperationalEventRecorder } from './modules/platform/opslog/infrastructure/drizzle-operational-events.js';
 import { DrizzleIdempotencyStore } from './modules/platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import { PermissionGuard } from './modules/platform/access/application/permission-guard.js';
@@ -259,6 +260,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     outbox,
     clock,
     ids,
+    new DrizzleBootstrapRecordReader(database.db),
   );
 
   let installationTenantId: TenantId | null = null;

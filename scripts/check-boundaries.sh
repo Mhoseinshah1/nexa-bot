@@ -7,7 +7,7 @@
 # each check names it.
 
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 FAILED=0
 
@@ -321,7 +321,7 @@ if [ -d docs/research ]; then
       hits=$(grep -rnE "$pattern" docs/research 2>/dev/null || true)
     fi
     if [ -n "$hits" ]; then
-      fail "$description appears in docs/research" "$(echo "$hits" | head -5)"
+      fail "$description appears in docs/research" "$(printf '%s\n' "$hits" | sed -n '1,5p')"
       RESEARCH_CLEAN=0
     fi
   }
@@ -375,10 +375,16 @@ while read -r code; do
   # error mapping or a translation would have passed. Only the API can emit one.
   # Comment lines are stripped for the same reason — a code named in prose is
   # not a code anything can throw.
-  if ! find apps/api/src -name '*.ts' 2>/dev/null \
-    | xargs grep -h "$code" 2>/dev/null \
-    | grep -vE '^\s*(//|\*|/\*)' \
-    | grep -q .; then
+  # `-exec +` rather than `| xargs`: a path containing whitespace would be
+  # split into two non-existent paths by xargs, and a grep that finds nothing
+  # because it looked in the wrong place reports the same thing as a code with
+  # no producer.
+  # `grep -c`, not `grep -q`: a quiet grep exits on its first match, the
+  # `find` ahead of it dies of SIGPIPE, and under `pipefail` the pipeline
+  # returns 141 — so a code WITH a producer would be reported as having none.
+  producers="$(find apps/api/src -name '*.ts' -exec grep -h "$code" {} + 2>/dev/null \
+    | grep -cvE '^\s*(//|\*|/\*)' || true)"
+  if [ "${producers:-0}" -eq 0 ]; then
     UNPRODUCED="$UNPRODUCED $code"
   fi
 done <<EOF

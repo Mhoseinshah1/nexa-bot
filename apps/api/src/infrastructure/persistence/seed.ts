@@ -48,8 +48,16 @@ export async function seed(db: Database, kekBase64: string, kekId: string): Prom
       },
       {
         id: SEED_IDS.tenantB,
-        kind: 'PRIMARY',
-        parentTenantId: null,
+        // A RESELLER_BOT, not a second PRIMARY.
+        //
+        // An installation has exactly one primary tenant — it IS the
+        // installation — and `tenants_single_primary_key` now enforces that.
+        // Seeding two modelled a shape production cannot have, and the
+        // isolation tests below are stronger for using the shape it does: a
+        // reseller must not see the primary's rows, which is the boundary that
+        // actually ships.
+        kind: 'RESELLER_BOT',
+        parentTenantId: SEED_IDS.tenantA,
         slug: 'globex',
         displayName: 'Globex Store',
         status: 'ACTIVE',

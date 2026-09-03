@@ -1,0 +1,35 @@
+# The build context is what the daemon receives before a single instruction
+# runs. Keeping it small is a speed matter; keeping it CORRECT is a
+# reproducibility matter — a host's node_modules or dist copied into the
+# builder would silently take precedence over what the lockfile resolves, so
+# the image would depend on the machine that built it.
+node_modules
+**/node_modules
+dist
+**/dist
+.git
+.github
+.claude
+coverage
+*.log
+
+# Never in a build context, under any circumstance.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Nothing below is used at runtime.
+docs
+tests
+deploy
+scripts/claude-session-start.sh
+docker-compose.yml
+.editorconfig
+.prettierrc
+eslint.config.mjs
+vitest.config.mts
+CLAUDE.md
+README.md
+PROGRESS.md

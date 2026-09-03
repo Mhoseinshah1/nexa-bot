@@ -1,0 +1,48 @@
+# CI-only overrides for the production compose file.
+#
+# Applied as a second `-f`, so everything not restated below is the production
+# definition — the networks, the absent database ports, the non-root users, the
+# dropped capabilities, the restart policies. That is the point: a smoke test
+# against a separate topology proves things about the separate topology.
+#
+# Exactly three things change, and each is something CI cannot have. The
+# healthcheck COMMAND is deliberately not among them — see the note on it
+# below:
+#
+#   1. No public DNS name and no ACME, so Caddy runs the CI config over plain
+#      HTTP. The ROUTES are imported from the same routes.caddy the production
+#      edge uses.
+#   2. 80 and 443 are published on loopback under a high port, because a GitHub
+#      runner should not be listening on the world's port 80 and because a
+#      previous job's leftovers must not collide.
+#   3. The ACME e-mail is irrelevant with automatic HTTPS off, so it is not
+#      required.
+#
+# Nothing here relaxes a security property. If a check passes only with this
+# file applied, it is not testing the deployment.
+
+services:
+  caddy:
+    command: ['caddy', 'run', '--config', '/etc/caddy/Caddyfile.ci', '--adapter', 'caddyfile']
+    ports: !override
+      - '127.0.0.1:${NEXA_CI_HTTP_PORT:-18080}:80'
+    environment:
+      NEXA_DOMAIN: localhost
+      NEXA_ACME_EMAIL: ci@localhost
+    healthcheck:
+      # `test:` is NOT restated. The production command probes the internal
+      # health site, which is plain HTTP on the container's own loopback and
+      # therefore something CI can have — unlike DNS and a certificate. An
+      # earlier version overrode it here, and since Caddyfile.ci also had no
+      # such site, the production healthcheck was executed by nothing at all:
+      # not by the smokes, not by the unit tests. The regression it exists for
+      # — the Web Admin one-shot exiting while the API stays healthy, so the
+      # edge serves nothing — was caught by CI the first time and would not
+      # have been caught again.
+      #
+      # Only the timings change, because CI should not wait production's
+      # intervals to find out a container is broken.
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s

@@ -1,0 +1,35 @@
+# The CI edge. Used ONLY by deploy/compose.ci.yml.
+#
+# CI has no public DNS name and cannot complete an ACME challenge, so the one
+# thing this cannot exercise is certificate issuance. Everything else — the
+# order of the handle blocks, the API and health prefixes, the SPA fallback,
+# the asset caching, the security headers — is imported from routes.caddy and
+# is therefore the same configuration the production edge runs.
+#
+# This file exists so that CI never becomes a reason to weaken the production
+# Caddyfile. The temptation it removes is real: the cheapest way to make a
+# smoke test pass is to turn off automatic HTTPS in the file that ships.
+
+{
+	# No ACME, no certificate, no HTTPS redirect. `http://` on the site address
+	# below would be enough on its own; this makes the intent unmissable.
+	auto_https off
+	admin off
+}
+
+import routes.caddy
+
+# The same internal health site the production Caddyfile defines, for the same
+# healthcheck. Plain HTTP on the container's own loopback, so CI genuinely can
+# have it — which is the whole reason the healthcheck command is not overridden
+# in compose.ci.yml. Without this the production check would probe a site the
+# CI edge does not serve, and CI would prove nothing about it.
+http://127.0.0.1:8080 {
+	import nexa_routes
+}
+
+# Plain HTTP on :80 inside the compose network. The smoke test publishes this
+# to a loopback port on the runner.
+http://localhost:80, http://127.0.0.1:80 {
+	import nexa_routes
+}

@@ -1,6 +1,11 @@
 import { stdin, stdout } from 'node:process';
 import { isNexaError, type TenantContext } from '@nexa/contracts';
 import { Prompter, PromptInputError } from './infrastructure/tty/prompt.js';
+import {
+  checkOwnerDisplayName,
+  checkOwnerPassword,
+  checkOwnerUsername,
+} from './infrastructure/tty/owner-input.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 
@@ -21,6 +26,23 @@ interface Args {
   readonly username: string | null;
   readonly displayName: string | null;
   readonly tenantSlug: string | null;
+  /**
+   * Report whether this installation still needs a first owner, and create
+   * nothing.
+   *
+   * The installer needs this because the owner is committed several steps
+   * before the release manifest and `current` pointer are written. On a real
+   * Ubuntu 24.04 staging host the install stopped in exactly that gap: the
+   * owner existed, the stack was healthy, and `botctl version` reported "no
+   * current release is recorded" for good, because a rerun reached this CLI
+   * again and was refused — correctly — with BOOTSTRAP_ALREADY_DONE.
+   *
+   * Read-only, and it does NOT relax the fence in `BootstrapOwnerService`. It
+   * answers a different question: not "is there an administrator" but "did this
+   * installation's own bootstrap create them", which is the only version of the
+   * question an installer may act on.
+   */
+  readonly status: boolean;
 }
 
 function parseArgs(argv: readonly string[]): Args {
@@ -43,6 +65,7 @@ function parseArgs(argv: readonly string[]): Args {
     username: get('--username'),
     displayName: get('--display-name'),
     tenantSlug: get('--tenant'),
+    status: argv.includes('--status'),
   };
 }
 
@@ -65,21 +88,34 @@ async function main(): Promise<void> {
       );
     }
 
+    if (args.status) {
+      // The ONLY thing on stdout, so a shell can read it without parsing prose.
+      // Every other line this CLI writes goes to stderr.
+      const scope: TenantContext = { tenantId: tenant.id, botInstanceId: null };
+      process.stdout.write(`${await container.bootstrapOwner.status(scope)}\n`);
+      return;
+    }
+
     // ONE reader for all three questions. Mixing `readline` with a direct read
     // of the same stdin is what silently swallowed the password on a pipe and
     // exited 0 having created nothing — see `Prompter`.
     const prompt = new Prompter(stdin, stdout);
     let result;
     try {
-      const username = args.username ?? (await prompt.line('Owner username: '));
-      const displayName = args.displayName ?? (await prompt.line('Display name: '));
+      // Checked as each answer arrives, not all three at the end. A bad
+      // username is worth knowing before typing a password twice, and the
+      // password is worth rejecting before the confirmation rather than after.
+      const username = checkOwnerUsername(args.username ?? (await prompt.line('Owner username: ')));
+      const displayName = checkOwnerDisplayName(
+        args.displayName ?? (await prompt.line('Display name: ')),
+      );
 
       // Never echoed, and never taken from argv. This prompt used to say
       // "(input is not hidden)" — accurately, since `rl.question` echoes —
       // directly beneath a comment claiming it was not echoed back. The comment
       // was the aspiration and the prompt was the truth; now they agree, and
       // unit tests hold them to it.
-      const password = await prompt.secret('Password: ');
+      const password = checkOwnerPassword(await prompt.secret('Password: '));
 
       // Typed twice, because it is typed BLIND.
       //
