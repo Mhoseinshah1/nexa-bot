@@ -435,8 +435,21 @@ generate_secrets() {
   #
   # It was BUILD_TIME until the build-identity block was removed from the
   # template; if a key is ever appended after this one, this list moves with it.
-  if secrets_complete "$app_env" SECRETS_KEK SECRETS_KEK_ID DATABASE_URL REDIS_URL \
-    WEB_ADMIN_ORIGINS DEPLOYMENT_TOPOLOGY NOTIFICATION_TRANSPORT; then have=$((have + 1)); else missing=$((missing + 1)); fi
+  # EITHER spelling of the key configuration counts as complete.
+  #
+  # A host installed before the keyring release has SECRETS_KEK and
+  # SECRETS_KEK_ID in its nexa.env and no SECRETS_KEYS, and the application
+  # still accepts that. Requiring the new names here would make a rerun on such
+  # a host decide its own configuration was half-written and refuse to
+  # continue — an installer that breaks the installations it already made.
+  if secrets_complete "$app_env" SECRETS_KEYS SECRETS_ACTIVE_KEY_ID DATABASE_URL REDIS_URL \
+    WEB_ADMIN_ORIGINS DEPLOYMENT_TOPOLOGY NOTIFICATION_TRANSPORT ||
+    secrets_complete "$app_env" SECRETS_KEK SECRETS_KEK_ID DATABASE_URL REDIS_URL \
+      WEB_ADMIN_ORIGINS DEPLOYMENT_TOPOLOGY NOTIFICATION_TRANSPORT; then
+    have=$((have + 1))
+  else
+    missing=$((missing + 1))
+  fi
 
   if [ "$missing" -eq 0 ]; then
     nexa_ok "secrets already exist; leaving them alone"
@@ -493,7 +506,7 @@ with open(target, "w", encoding="utf-8") as handle:
     "__POSTGRES_PASSWORD__=${pg_password}" \
     "__REDIS_PASSWORD__=${redis_password}" \
     "__SECRETS_KEK__=${kek}" \
-    "__SECRETS_KEK_ID__=${kek_id}" \
+    "__SECRETS_ACTIVE_KEY_ID__=${kek_id}" \
     "__DOMAIN__=${DOMAIN}" \
     "__EDGE_SUBNET__=${NEXA_EDGE_SUBNET:-172.29.0.0/24}"
 

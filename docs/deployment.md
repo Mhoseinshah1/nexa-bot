@@ -386,6 +386,59 @@ source without trusting any single one of them.
 Manifests live in `/var/lib/nexa/releases/<version>.json`. `current` and
 `previous` name the active release and the rollback target.
 
+## Secrets, keys and rotation
+
+Stored secrets are envelope-encrypted: a fresh 256-bit data key per secret,
+AES-256-GCM, and the data key wrapped by a key-encryption key from the keyring.
+
+**The keyring.** One key encrypts, all configured keys decrypt.
+
+```
+SECRETS_KEYS=install-20260903:<base64>,rotate-20261101:<base64>
+SECRETS_ACTIVE_KEY_ID=rotate-20261101
+SECRETS_ACCEPT_V1=true
+```
+
+An installation made before this release has `SECRETS_KEK` and `SECRETS_KEK_ID`
+instead. Those still work — they alias to a one-entry keyring — so adopting the
+v2 envelope needs no reinstall and no hand-edit.
+
+**Rotating a key.**
+
+1. Append a second `id:key` pair to `SECRETS_KEYS`. Do not remove the first.
+2. Point `SECRETS_ACTIVE_KEY_ID` at the new id, then `botctl restart`. New
+   secrets are now written under the new key; old rows still read.
+3. `botctl secrets rewrap` until it reports nothing left to re-encrypt. It is
+   bounded (`--batch`, `--max`), safe to interrupt, and a converged run writes
+   nothing at all.
+4. `botctl secrets status` — every row should show `v2` and the new key id.
+5. `botctl secrets retire-check --key <old id>` before removing the old pair.
+
+**What retirement does and does not mean.** `retire-check` never edits
+configuration; it reports whether removing a key would strand live ciphertext.
+It refuses while any row still names the key, refuses for the active key, and
+refuses while any row records a key id its envelope does not name — that last
+one because the dependency count reads the recorded column, so a row that
+disagrees with itself could hide a dependency.
+
+A pass means the key may leave `SECRETS_KEYS`. It does **not** mean the key
+material may be destroyed:
+
+- every retained backup taken before the rewrap still contains ciphertext under
+  that key, and taking a fresh backup afterwards does not make those readable;
+- so the key must remain available offline for as long as any retained backup
+  may contain ciphertext encrypted under it;
+- only once the last such backup has passed its retention window is destroying
+  the key material safe.
+
+**What v1 acceptance costs while it is on.** The v1 envelope carries no
+associated data, so a v1 ciphertext can be copied between rows and still
+decrypt. v2 binds each value to its purpose, tenant and row and refuses a
+transplant — but it does not protect values written under v1. Only re-encrypting
+every row and then setting `SECRETS_ACCEPT_V1=false` does that, and turning it
+off before `botctl secrets status` reports no v1 rows makes an installation
+unable to read its own secrets.
+
 ## Security properties
 
 Checked by tests, not just intended:

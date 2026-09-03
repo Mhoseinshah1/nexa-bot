@@ -102,9 +102,19 @@ botctl — operate a Nexa installation
   botctl logs [SERVICE]      follow logs
   botctl restart             restart the stack
 
-Update and rollback take an exclusive lock. Rollback changes the APPLICATION
+  botctl secrets status                    envelope versions and key ids in use
+  botctl secrets rewrap [--batch N] [--max N]
+                                           re-encrypt secrets under the active key
+  botctl secrets retire-check --key ID     whether a key can leave the keyring
+
+Update, rollback and `secrets rewrap` take an exclusive lock. Rollback changes the APPLICATION
 only: it never restores a database backup, because the backup predates the
 migration and restoring it would discard every write made since.
+
+`secrets retire-check` reports whether removing a key from SECRETS_KEYS would
+strand ciphertext. It never edits the configuration, and it is not permission to
+DESTROY the key material: backups taken before the re-encryption still contain
+ciphertext under that key.
 USAGE
 }
 
@@ -580,6 +590,41 @@ cmd_restart() {
   nexa_ok "restarted"
 }
 
+# ---------------------------------------------------------------------------
+# secrets — cryptographic maintenance
+#
+# Three verbs, and the third is deliberately named for what it does.
+#
+# `retire-check` PROVES a key is safe to remove from the keyring. It does not
+# remove it. A command called `retire` that ran inside a container could not
+# rewrite /etc/nexa/nexa.env on the host, so it would have had to either pretend
+# to have retired the key or grow a host-side config rewriter with its own
+# atomic-write, validation, restart and rollback story — a second updater, for a
+# step an operator performs once and wants to read before performing. The
+# operator edits SECRETS_KEYS; this says whether they may.
+# ---------------------------------------------------------------------------
+cmd_secrets() {
+  require_installed
+  local action="${1:-}"
+  shift || true
+  case "$action" in
+    status | rewrap | retire-check) ;;
+    *)
+      nexa_die "usage: botctl secrets <status|rewrap|retire-check> [--batch N] [--max N] [--key ID]"
+      ;;
+  esac
+
+  # rewrap WRITES, so it takes the same exclusive lock an update takes: a
+  # re-encryption interleaved with a migration is two writers on one database.
+  # status and retire-check only read.
+  if [ "$action" = "rewrap" ]; then
+    nexa_acquire_lock 0
+  fi
+
+  nexa_compose run --rm --no-deps -T --entrypoint node api \
+    dist/secrets.cli.js "$action" "$@"
+}
+
 main() {
   local command="${1:-}"
   shift || true
@@ -589,6 +634,7 @@ main() {
     backup) cmd_backup ;;
     update) cmd_update "$@" ;;
     rollback) cmd_rollback "$@" ;;
+    secrets) cmd_secrets "$@" ;;
     logs) cmd_logs "$@" ;;
     restart) cmd_restart "$@" ;;
     -h | --help | help | '') usage ;;

@@ -682,9 +682,8 @@ describe('the session cookie a production deployment issues', () => {
   // The file-level hook truncates between tests, and this describe's owner
   // lives in the same database, so it is re-seeded here rather than once.
   beforeEach(async () => {
-    const config = api.container.config;
     await resetDatabase(api.container.database.db);
-    await seed(api.container.database.db, config.SECRETS_KEK, config.SECRETS_KEK_ID);
+    await seed(api.container.database.db, api.container.cipher);
     await createAdmin(api.container, tenantA, {
       username: 'owner',
       password: 'the-owners-real-password',
@@ -1620,9 +1619,8 @@ describe('a stopped tenant closes its Telegram surface too', () => {
   });
 
   beforeEach(async () => {
-    const config = api.container.config;
     await resetDatabase(api.container.database.db);
-    await seed(api.container.database.db, config.SECRETS_KEK, config.SECRETS_KEK_ID);
+    await seed(api.container.database.db, api.container.cipher);
   });
 
   it('accepts an update while the tenant is active', async () => {

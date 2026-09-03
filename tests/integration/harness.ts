@@ -96,7 +96,7 @@ export async function createTestContext(
     container,
     async reset() {
       await resetDatabase(container.database.db);
-      await seed(container.database.db, config.SECRETS_KEK, config.SECRETS_KEK_ID);
+      await seed(container.database.db, container.cipher);
     },
     async close() {
       await container.shutdown();

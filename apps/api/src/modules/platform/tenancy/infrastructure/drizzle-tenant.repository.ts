@@ -173,7 +173,10 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository {
         'No bot instance with that id in this tenant.',
       );
     }
-    return this.cipher.decrypt({ keyId: row.tokenKeyId, ciphertext: row.tokenCiphertext });
+    return this.cipher.decrypt(
+      { keyId: row.tokenKeyId, ciphertext: row.tokenCiphertext },
+      { purpose: 'bot_instance.token', tenantId, entityId: row.id },
+    );
   }
 
   /**
@@ -195,6 +198,12 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository {
       .orderBy(botInstances.createdAt, botInstances.id)
       .limit(1);
     if (!row) return null;
-    return this.cipher.decrypt({ keyId: row.tokenKeyId, ciphertext: row.tokenCiphertext });
+    // The context names the row that was actually selected, not the tenant's
+    // "current" bot in the abstract. If these two ever disagree the decryption
+    // fails rather than returning another row's credential.
+    return this.cipher.decrypt(
+      { keyId: row.tokenKeyId, ciphertext: row.tokenCiphertext },
+      { purpose: 'bot_instance.token', tenantId, entityId: row.id },
+    );
   }
 }

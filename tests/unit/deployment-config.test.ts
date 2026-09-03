@@ -31,7 +31,7 @@ describe('the production environment template', () => {
     __SECRETS_KEK__: Buffer.from('nexa-deployment-template-test-key'.slice(0, 32)).toString(
       'base64',
     ),
-    __SECRETS_KEK_ID__: 'install-1',
+    __SECRETS_ACTIVE_KEY_ID__: 'install-1',
     __DOMAIN__: 'admin.example.com',
     __EDGE_SUBNET__: '172.29.0.0/24',
   };
