@@ -122,6 +122,59 @@ assert_not_contains 'a direct invocation hit the sudo refusal' \
 assert_contains 'a direct invocation failed for the wrong reason' \
   "$BOTCTL_OUTPUT" 'no current release is recorded'
 
+test_case 'the readiness parser answers correctly for every container shape'
+# The parser has been rewritten THREE times, and each time the suite could not
+# tell the new version from the old one — because the fake docker only ever
+# emits shapes the current rule happens to get right. Two inversions shipped
+# that way: one preferring an exited one-off over the healthy api, and one
+# preferring a RUNNING one-off reporting `starting` over the healthy api beside
+# it.
+#
+# So the rule is tested directly, as a table, against the real embedded Python
+# lifted out of the library. Compose builds a one-off from the same service
+# config, so a leftover carries the same healthcheck and can report `starting`
+# or `unhealthy` — but never `healthy`, because it serves nothing.
+parser="${NEXA_ROOT}/parser.py"
+python3 - "$NEXA_LIB" "$parser" <<'EXTRACT'
+import sys
+source = open(sys.argv[1], encoding="utf-8").read()
+start = source.index("import json, sys\nraw = sys.stdin.read().strip()")
+end = source.index("' 2>/dev/null || true)\"", start)
+open(sys.argv[2], "w", encoding="utf-8").write(source[start:end])
+EXTRACT
+assert_ok 'the readiness parser could not be extracted' test -s "$parser"
+
+parser_says() { printf '%b' "$1" | python3 "$parser"; }
+parser_case() {
+  local description="$1" expected="$2" shape="$3"
+  assert_equals "$description" "$expected" "$(parser_says "$shape")"
+  # Both JSON forms. `docker compose ps --format json` emits one object per
+  # line on some versions and a single array on others, and the parser must
+  # not answer differently depending on which.
+  local array
+  array="[$(printf '%b' "$shape" | paste -sd, -)]"
+  assert_equals "$description (array form)" "$expected" "$(parser_says "$array")"
+}
+
+RUN_STARTING='{"Service":"api","State":"running","Health":"starting"}'
+RUN_HEALTHY='{"Service":"api","State":"running","Health":"healthy"}'
+RUN_UNHEALTHY='{"Service":"api","State":"running","Health":"unhealthy"}'
+DEAD_STARTING='{"Service":"api","State":"exited","Health":"starting"}'
+
+parser_case 'a running one-off ahead of the healthy api hides it' \
+  healthy "${RUN_STARTING}\n${RUN_HEALTHY}"
+parser_case 'order decides the answer' \
+  healthy "${RUN_HEALTHY}\n${RUN_STARTING}"
+parser_case 'an unhealthy api beside a starting one is not healthy' \
+  unhealthy "${RUN_UNHEALTHY}\n"
+parser_case 'a corpse beside an api that is still created fast-fails it' \
+  created "${DEAD_STARTING}\n{\"Service\":\"api\",\"State\":\"created\"}"
+parser_case 'an api that only exited is not waited out' exited "${DEAD_STARTING}\n"
+parser_case 'a dead api is not waited out' dead '{"Service":"api","State":"dead"}\n'
+parser_case 'a restarting api is still coming up' restarting '{"Service":"api","State":"restarting"}\n'
+parser_case 'a running api with no health yet is not healthy' running '{"Service":"api","State":"running"}\n'
+parser_case 'another service is not the api' '' '{"Service":"worker","State":"running","Health":"healthy"}\n'
+
 test_case 'the update lock does not live in a world-writable directory'
 # Read out of the library with a CLEAN environment, so this asserts the
 # DEFAULT and not whatever the harness exported.
@@ -765,6 +818,62 @@ assert_contains 'the operator was told nothing about the running containers' \
   "$BOTCTL_OUTPUT" 'running containers were not changed'
 run_botctl version
 assert_equals 'the divergence survived' 0 "$BOTCTL_STATUS"
+
+teardown_root
+
+# =============================================================================
+# an installation with no release manifest
+# =============================================================================
+#
+# What every installation updated before `botctl update` learned to write one
+# looks like. It is not divergent — there is simply nothing to compare against
+# — and the difference has to survive all the way to each caller. Reported as a
+# disagreement, it refused to restart the stack, said the release and deploy.env
+# "disagree" when they may agree perfectly, and offered a repair that then died.
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+rm -f "${NEXA_STATE_DIR}/releases/v1.0.0.json"
+
+test_case 'a missing manifest is a warning, not a failure'
+run_botctl version
+assert_equals 'version failed on an installation that simply predates manifests' \
+  0 "$BOTCTL_STATUS"
+assert_contains 'the operator was not told why the facts are missing' \
+  "$BOTCTL_OUTPUT" 'no release manifest'
+assert_not_contains 'an absent manifest was reported as a disagreement' \
+  "$BOTCTL_OUTPUT" 'DIVERGENCE'
+run_botctl status
+assert_equals 'status failed on a healthy installation with no manifest' 0 "$BOTCTL_STATUS"
+
+test_case 'restart is not refused for want of a manifest'
+# `botctl restart` is refused only for a real disagreement, where a restart is
+# what would act on it. Refusing here left an installation that could not be
+# restarted at all until somebody hand-wrote JSON into /var/lib/nexa.
+reset_docker_log
+run_botctl restart
+assert_equals 'restart refused an installation with nothing wrong with it' 0 "$BOTCTL_STATUS"
+assert_not_contains 'restart claimed a disagreement that does not exist' \
+  "$BOTCTL_OUTPUT" 'disagree'
+
+test_case 'the advised repair records the manifest and does not invent a rollback target'
+# The warning says `botctl update <current>` records one, so it must. It used
+# to take a backup, run the migration, recreate the containers and THEN die on
+# the equal-pointer guard — because re-recording was routed through the
+# function that rotates the rollback pointer, which refuses to set `previous`
+# equal to `current`. deploy.env was left naming the old image.
+fake_set resolve_digest "$DIGEST_A"
+run_botctl update v1.0.0
+assert_equals 'the advised repair failed' 0 "$BOTCTL_STATUS"
+assert_ok 'the repair recorded no manifest' test -f "${NEXA_STATE_DIR}/releases/v1.0.0.json"
+assert_equals 'the repair did not repoint deploy.env' \
+  "registry.test/nexa@${DIGEST_A}" \
+  "$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE)"
+assert_fails 'the repair invented a rollback target pointing at itself' \
+  test -f "${NEXA_STATE_DIR}/previous"
+run_botctl version
+assert_equals 'version still fails after the repair' 0 "$BOTCTL_STATUS"
+assert_not_contains 'the repair left a fact unknown' "$BOTCTL_OUTPUT" 'unknown'
 
 teardown_root
 

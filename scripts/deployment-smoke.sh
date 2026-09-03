@@ -233,7 +233,11 @@ try:
     entries = parsed if isinstance(parsed, list) else [parsed]
 except Exception:
     entries = [json.loads(line) for line in raw.splitlines() if line.strip()]
-print(next((e.get("Health", "") for e in entries if e.get("Service") == "api"), ""))
+# The same rule as nexa_wait_ready, and for the same reason: the first api
+# entry may be a leftover one-off carrying the same healthcheck, which
+# reports starting. Only a RUNNING container has a health worth reading.
+running = [e for e in entries if e.get("Service") == "api" and e.get("State") == "running"]
+print("healthy" if "healthy" in [e.get("Health") or "" for e in running] else "")
 ' 2>/dev/null)" = "healthy" ]; do
   [ "$waited" -lt 180 ] || fail "the API never became ready"
   sleep 3

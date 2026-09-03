@@ -124,7 +124,15 @@ cmd_version() {
   # An interrupted commit leaves the recorded release and the configured image
   # disagreeing. Every other line above reads the manifests, so only this
   # compares them against what would actually start.
-  nexa_check_divergence || return 1
+  #
+  # 1 (a real disagreement) is a failure; 2 (no manifest, so unconfirmable) is
+  # a warning that has already been printed. `|| return 1` collapsed the two,
+  # which made `version` and `status` fail on a healthy, agreeing installation
+  # that simply predates the manifest — and `deployment-update-smoke.sh` gates
+  # on `botctl status`, so that exit code is load-bearing.
+  local divergence=0
+  nexa_check_divergence || divergence=$?
+  [ "$divergence" -ne 1 ] || return 1
   return 0
 }
 
@@ -144,12 +152,13 @@ cmd_status() {
     nexa_warn "could not read container state."
 
   local diverged=0
-  nexa_check_divergence || diverged=1
+  nexa_check_divergence || diverged=$?
 
   printf '\nreadiness: '
   if nexa_wait_ready 5; then
     printf 'ready\n'
-    [ "$diverged" -eq 0 ] || return 1
+    # Only a real disagreement (1) is a failure. See cmd_version.
+    [ "$diverged" -ne 1 ] || return 1
   else
     printf 'NOT READY\n'
     # SC2016: single quotes are correct — the backticks below are prose, not a
@@ -308,7 +317,8 @@ cmd_update() {
     # and commits — recording the manifest that was missing. Heavier than an
     # early return, and it is the only path that makes the warning's promise
     # true.
-    nexa_warn "${target} is already current but has no release manifest; re-recording it by running the update through."
+    nexa_warn "${target} is already current but has no release manifest, so what it runs cannot be confirmed."
+    nexa_warn "Re-recording it runs the full update: the TAG is resolved again, and if it now points somewhere else this will migrate to and start that image. The rollback target is not changed."
   fi
 
   # 1. RESOLVE. The tag is read once, here.
@@ -397,11 +407,23 @@ cmd_update() {
   #    behind: `botctl version` reporting `unknown`, and the second rollback
   #    refusing because the target's digest could not be read.
   nexa_write_manifest "$target" "$commit" "$digest"
-  nexa_commit_release "$target" "$current" "$target_image"
+  if [ "$target" = "$current" ]; then
+    # Re-recording the release that is ALREADY current. `nexa_commit_release`
+    # exists to rotate the rollback pointer, and rotating it here would set
+    # `previous` to the same value as `current` — which its own guard refuses,
+    # by design. Routing this case through it meant the repair died AFTER
+    # taking a backup, running the migration and recreating the containers,
+    # with a message about rollback pointers and deploy.env still naming the
+    # old image. The two facts that were missing are the manifest and the image
+    # pointer; nothing else about this installation changed.
+    nexa_set_deploy_image "$target_image"
+    nexa_ok "re-recorded ${target} (${digest})"
+  else
+    nexa_commit_release "$target" "$current" "$target_image"
+    nexa_ok "updated to ${target} (${digest})"
+    nexa_ok "rollback target is ${current}"
+  fi
   nexa_prune_releases
-
-  nexa_ok "updated to ${target} (${digest})"
-  nexa_ok "rollback target is ${current}"
 }
 
 # ---------------------------------------------------------------------------

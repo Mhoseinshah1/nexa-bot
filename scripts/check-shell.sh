@@ -106,9 +106,20 @@ OFFENDERS="$(find deploy scripts tests/deploy .github -type f \
         if ($0 ~ ("^[[:space:]]*" heredoc "[[:space:]]*$")) heredoc = ""
         next
       }
-      match($0, /<<-?[[:space:]]*['"'"'"]?[A-Za-z_][A-Za-z0-9_]*/) {
+      # Comments first, so a comment that MENTIONS a heredoc tag does not open
+      # one. `botctl` contains a <<REFUSAL block and a sentence about it; with
+      # the comment check after this rule, that sentence turned the rest of the
+      # file invisible to this check.
+      /^[[:space:]]*#/ { next }
+      # A real heredoc operator ends the line, apart from an optional closing
+      # quote and any further redirections. Prose does not: `echo "documented
+      # as <<MARKER in the manual"` has words after the tag, and treating that
+      # as an opener swallowed every following line in the file.
+      match($0, /(^|[[:space:]]|>|\))<<-?[[:space:]]*['"'"'"]?[A-Za-z_][A-Za-z0-9_]*['"'"'"]?[[:space:]]*([0-9]*[<>][^[:space:]]+[[:space:]]*)*$/) {
         tag = substr($0, RSTART, RLENGTH)
-        gsub(/^<<-?[[:space:]]*['"'"'"]?/, "", tag)
+        gsub(/^.*<<-?[[:space:]]*['"'"'"]?/, "", tag)
+        gsub(/['"'"'"].*$/, "", tag)
+        gsub(/[[:space:]].*$/, "", tag)
         heredoc = tag
         next
       }
@@ -117,7 +128,13 @@ OFFENDERS="$(find deploy scripts tests/deploy .github -type f \
       # there spliced `run: |` onto the first line of the script it introduces,
       # so any step whose first line began `head` or `grep -q` was reported —
       # and the same command on the third line was not. Positional nonsense.
-      /^[[:space:]]*(-[[:space:]]*)?([A-Za-z_.-]+|"[^"]*"|'"'"'[^'"'"']*'"'"')?[[:space:]]*:?[[:space:]]*\|[+-]?[[:space:]]*$/ { next }
+      # The key and its colon are REQUIRED. With both optional, `mount |` and
+      # `ls |` — one-word shell producers ending in a pipe — matched this rule
+      # and were skipped, so the join never happened and the consumer alone on
+      # the next line had no pipe left to match. That silently un-did the
+      # multi-line detection this check was widened for.
+      /^[[:space:]]*(-[[:space:]]+)?([A-Za-z_.-]+|"[^"]*"|'"'"'[^'"'"']*'"'"')[[:space:]]*:[[:space:]]*\|[+-]?[[:space:]]*$/ { next }
+      /^[[:space:]]*-[[:space:]]*\|[+-]?[[:space:]]*$/ { next }
 
       { line = $0 }
       joined != "" { line = joined " " $0; joined = "" }
@@ -129,7 +146,7 @@ OFFENDERS="$(find deploy scripts tests/deploy .github -type f \
         if (line ~ /\|\|[[:space:]]*true[[:space:]]*$/) next
         # A pipe is required. `grep -q file` with no pipeline is not this bug.
         if (line ~ /\|[[:space:]]*(LC_ALL=[^[:space:]]+[[:space:]]+|command[[:space:]]+)?(grep[^|]*(-[a-zA-Z]*q|-m[[:space:]]*[0-9])|head([[:space:]]|$))/) {
-          printf "%s:%d: %s\\n", f, n, line
+          printf "%s:%d: %s\n", f, n, line
         }
       }
     ' "$file"

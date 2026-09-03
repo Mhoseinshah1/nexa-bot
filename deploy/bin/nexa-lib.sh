@@ -359,9 +359,11 @@ elif api:
     # corpse alongside an api that is still `created` must not be read as the
     # api having died, because that backs out a release that was merely slow —
     # after the migration has already run.
+    # A missing State is not evidence of life. Treating "" as alive let one
+    # malformed entry beside a genuinely dead api suppress the fast-fail.
     states = [entry.get("State") or "" for entry in api]
-    alive = [state for state in states if state not in ("exited", "dead")]
-    print(alive[0] if alive else states[0])
+    alive = [state for state in states if state and state not in ("exited", "dead")]
+    print(alive[0] if alive else next((state for state in states if state), ""))
 ' 2>/dev/null || true)"
 
     case "$state" in
