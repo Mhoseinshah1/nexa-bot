@@ -295,7 +295,25 @@ services:
         # would serve 502s to the first requests after every deployment.
         condition: service_healthy
     healthcheck:
-      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:80/health/live']
+      # Against the INTERNAL health site (see deploy/caddy/Caddyfile), which
+      # imports the same routes snippet the public site does. The obvious
+      # check — loopback on :80 — sends Host: 127.0.0.1, which matches no site
+      # block in production, so it proves nothing about the deployment.
+      #
+      # Two assertions, because two different things break. The SPA root
+      # proves the asset volume was published and is being served: the one-shot
+      # that copies the Web Admin bundle once failed on every start while the
+      # API stayed healthy, and only the edge had nothing to serve. And
+      # /health/live proves the API handle block still precedes the SPA
+      # fallback — if it did not, this would still answer 200, with index.html.
+      #
+      # `grep -c`, not `grep -q`: a quiet grep exits on its first match and the
+      # writer dies of SIGPIPE. See scripts/check-shell.sh.
+      test:
+        - CMD-SHELL
+        - >-
+          wget -q -O /dev/null http://127.0.0.1:8080/ &&
+          wget -q -O - http://127.0.0.1:8080/health/live | grep -c '"status":"ok"' >/dev/null
       interval: 15s
       timeout: 5s
       retries: 6

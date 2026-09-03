@@ -28,7 +28,7 @@ scripts/claude-session-start.sh
 docker-compose.yml
 .editorconfig
 .prettierrc
-eslint.config.js
+eslint.config.mjs
 vitest.config.mts
 CLAUDE.md
 README.md

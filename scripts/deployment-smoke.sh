@@ -294,6 +294,43 @@ deep_code="$(curl -s -o /dev/null -w '%{http_code}' "${base}/settings")"
 [ "$deep_code" = "200" ] || fail "a deep link answered ${deep_code}; the SPA fallback is not working"
 pass "deep links fall back to the SPA"
 
+# The Telegram webhook must reach the API, not the SPA.
+#
+# This is the failure that has no symptom. The controller lives at
+# `/telegram/webhook/:botInstanceId` and there is no global route prefix, so
+# the path is not under /api; without its own handle block it lands on the SPA
+# fallback, which answers index.html with 200 — and 200 is exactly how
+# Telegram is told an update was accepted. Updates would be acknowledged and
+# discarded, silently, for as long as the feature stayed on.
+#
+# TELEGRAM_WEBHOOK_ENABLED is false in this deployment, so the controller is
+# not even registered and the API answers 404. That is the point: a 404 from
+# the API proves the request REACHED the API. Anything that returns the SPA
+# proves the edge swallowed it, and the edge behaves the same way whether the
+# feature is on or off.
+webhook_body="$(curl -s -X POST -H 'Content-Type: application/json' -d '{}' \
+  "${base}/telegram/webhook/01a06426-4d8d-741f-9985-656d51b610bb" || true)"
+case "$webhook_body" in
+  *'<div id="root">'* | *'<!doctype html'* | *'<!DOCTYPE html'*)
+    fail "the edge served the SPA for a Telegram webhook; updates would be acknowledged and thrown away"
+    ;;
+esac
+case "$webhook_body" in
+  *'{'*) : ;;
+  *) fail "the webhook did not reach the API (got: ${webhook_body})" ;;
+esac
+pass "the Telegram webhook reaches the API rather than the SPA"
+
+# A malformed bot id must get the API's own answer too, not a page.
+malformed_body="$(curl -s -X POST -H 'Content-Type: application/json' -d '{}' \
+  "${base}/telegram/webhook/not-a-uuid" || true)"
+case "$malformed_body" in
+  *'<div id="root">'* | *'<!doctype html'* | *'<!DOCTYPE html'*)
+    fail "a malformed webhook id was answered by the SPA"
+    ;;
+esac
+pass "a malformed webhook id is answered by the API"
+
 # The API prefix must reach the API, not the SPA. A 401 is the API answering;
 # HTML would mean the fallback swallowed it.
 api_body="$(curl -s "${base}/api/admin/v1/settings" || true)"

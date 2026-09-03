@@ -7,6 +7,12 @@
 
 {
 	email {$NEXA_ACME_EMAIL}
+	# The admin API is off here for the same reason it is off in CI. Nothing in
+	# this deployment reconfigures Caddy at runtime — `botctl` restarts the
+	# container — so the endpoint is a local-network control plane with no
+	# consumer. It binds 127.0.0.1:2019 by default and is not published, but
+	# "not published" is a compose property and this is the container's own.
+	admin off
 	# Everything else is Caddy's default and that is deliberate: automatic
 	# HTTPS from Let's Encrypt, HTTP/2 and HTTP/3, OCSP stapling, and an
 	# implicit :80 redirect to HTTPS for the site address below. Restating any
@@ -14,6 +20,27 @@
 }
 
 import routes.caddy
+
+# The container's own health endpoint, bound to LOOPBACK INSIDE the container:
+# not published by compose, and not reachable from the other containers on the
+# edge network either, because the address names 127.0.0.1 rather than a port
+# on all interfaces.
+#
+# It exists because the obvious healthcheck is wrong. Asking
+# `http://127.0.0.1:80/` on the production edge sends Host: 127.0.0.1, which
+# matches no site block — the only site is the operator's domain — so the
+# answer says nothing about whether the deployment's routing works. This site
+# imports THE SAME snippet the public site does, so a probe against it
+# exercises the real handle order, the real SPA fallback and the real asset
+# root.
+#
+# That is not hypothetical: the one-shot that publishes the Web Admin bundle
+# once failed on every start while the API stayed healthy, and only the edge
+# had nothing to serve. A check that asks Caddy whether Caddy is running would
+# have reported green throughout.
+http://127.0.0.1:8080 {
+	import nexa_routes
+}
 
 {$NEXA_DOMAIN} {
 	# HSTS is set HERE rather than in the shared snippet, because it is the one

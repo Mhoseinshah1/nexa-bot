@@ -34,9 +34,6 @@ describe('the production environment template', () => {
     __SECRETS_KEK_ID__: 'install-1',
     __DOMAIN__: 'admin.example.com',
     __EDGE_SUBNET__: '172.29.0.0/24',
-    __BUILD_VERSION__: '1.2.3',
-    __BUILD_COMMIT__: 'a'.repeat(40),
-    __BUILD_TIME__: '2026-01-01T00:00:00Z',
   };
 
   function render(overrides: Record<string, string> = {}): Record<string, string> {
@@ -104,11 +101,40 @@ describe('the production environment template', () => {
     expect(config.WEB_ADMIN_ORIGINS).toEqual(['https://admin.example.com']);
   });
 
-  it('carries the build identity the release manifest will report', () => {
+  it('does not name the build identity at all', () => {
+    // `env_file` beats an image's own ENV, so anything this template sets
+    // REPLACES the values stamped into the release at build time. The
+    // installer wrote `pending` for the commit and the build time — it cannot
+    // know either, having built nothing — and that placeholder then masked the
+    // real metadata permanently: /health/info reported `pending` on a
+    // correctly built release, for the life of the installation.
+    //
+    // Asserted against the raw template, not the parsed config, because the
+    // schema's defaults would hide a line that is present.
+    const raw = readFileSync(templatePath, 'utf8');
+    for (const key of ['BUILD_VERSION', 'BUILD_COMMIT', 'BUILD_TIME']) {
+      expect(raw, `the template sets ${key}, which would mask the image`).not.toMatch(
+        new RegExp(`^\\s*${key}=`, 'm'),
+      );
+    }
+    // And the installer must not reintroduce them through substitution.
+    const installer = readFileSync(join(__dirname, '../../deploy/install.sh'), 'utf8');
+    expect(installer, 'the installer still substitutes a build placeholder').not.toMatch(
+      /__BUILD_(VERSION|COMMIT|TIME)__/,
+    );
+    expect(installer, 'the installer still writes a pending placeholder').not.toMatch(
+      /=pending/,
+    );
+  });
+
+  it('still boots without a build identity, reporting the schema defaults', () => {
+    // The image supplies these in production. A container run outside the
+    // release flow must still start and still say something true about
+    // itself — `unknown` is a fact, `pending` was a claim nothing fulfilled.
     const config = configSchema.parse(render());
-    expect(config.BUILD_VERSION).toBe('1.2.3');
-    expect(config.BUILD_COMMIT).toBe('a'.repeat(40));
-    expect(config.BUILD_TIME).not.toBe('unknown');
+    expect(config.BUILD_VERSION).toBe('0.0.0-dev');
+    expect(config.BUILD_COMMIT).toBe('unknown');
+    expect(config.BUILD_TIME).toBe('unknown');
   });
 
   /**

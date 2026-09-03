@@ -387,15 +387,19 @@ generate_secrets() {
   local have=0 missing=0
   if secrets_complete "$pg_env" POSTGRES_USER POSTGRES_DB POSTGRES_PASSWORD; then have=$((have + 1)); else missing=$((missing + 1)); fi
   if secrets_complete "$redis_env" REDIS_PASSWORD; then have=$((have + 1)); else missing=$((missing + 1)); fi
-  # BUILD_TIME is last in the template, and that is why it is in this list.
-  # The keys before it sit in the first half of a 76-line file, so a write that
-  # died two thirds of the way through satisfied all of them — and a nexa.env
-  # missing DEPLOYMENT_TOPOLOGY is worse than one missing SECRETS_KEK, because
-  # that key HAS a schema default: losing it silently stops TRUSTED_PROXY_IPS
-  # being required, and the API boots ignoring X-Forwarded-For. A key from the
-  # end is the cheapest true test that the write reached it.
+  # NOTIFICATION_TRANSPORT is the last key in the template, and that is why it
+  # is in this list. The keys before it sit in the first half of the file, so a
+  # write that died two thirds of the way through satisfied all of them — and a
+  # nexa.env missing DEPLOYMENT_TOPOLOGY is worse than one missing SECRETS_KEK,
+  # because that key HAS a schema default: losing it silently stops
+  # TRUSTED_PROXY_IPS being required, and the API boots ignoring
+  # X-Forwarded-For. A key from the end is the cheapest true test that the
+  # write reached it.
+  #
+  # It was BUILD_TIME until the build-identity block was removed from the
+  # template; if a key is ever appended after this one, this list moves with it.
   if secrets_complete "$app_env" SECRETS_KEK SECRETS_KEK_ID DATABASE_URL REDIS_URL \
-    WEB_ADMIN_ORIGINS DEPLOYMENT_TOPOLOGY BUILD_TIME; then have=$((have + 1)); else missing=$((missing + 1)); fi
+    WEB_ADMIN_ORIGINS DEPLOYMENT_TOPOLOGY NOTIFICATION_TRANSPORT; then have=$((have + 1)); else missing=$((missing + 1)); fi
 
   if [ "$missing" -eq 0 ]; then
     nexa_ok "secrets already exist; leaving them alone"
@@ -447,9 +451,7 @@ with open(target, "w", encoding="utf-8") as handle:
     "__SECRETS_KEK_ID__=${kek_id}" \
     "__DOMAIN__=${DOMAIN}" \
     "__EDGE_SUBNET__=${NEXA_EDGE_SUBNET:-172.29.0.0/24}" \
-    "__BUILD_VERSION__=${VERSION}" \
-    "__BUILD_COMMIT__=pending" \
-    "__BUILD_TIME__=pending"
+    "__NOTHING__=unused"
 
   # Same rule for the substituted template: it is complete before it is named.
   chmod 0600 "${app_env}.partial"

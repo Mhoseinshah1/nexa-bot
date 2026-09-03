@@ -265,6 +265,38 @@ describe('the production Caddy routing', () => {
     expect(healthAt).toBeLessThan(fallbackAt);
   });
 
+  it('routes the Telegram webhook to the API, never to the SPA', () => {
+    // The controller is at `/telegram/webhook/:botInstanceId` and there is no
+    // global route prefix, so the path is NOT under /api. Without its own
+    // handle block it falls to the SPA fallback, which answers index.html
+    // with 200 — and 200 is precisely how Telegram is told an update was
+    // accepted. Every update would be acknowledged and discarded silently.
+    const telegramAt = routes.indexOf('@telegram path /telegram/webhook/*');
+    const fallbackAt = routes.indexOf('try_files {path} /index.html');
+    expect(telegramAt, 'the webhook path has no handle block').toBeGreaterThan(-1);
+    expect(telegramAt).toBeLessThan(fallbackAt);
+
+    // And it must reach the API rather than being served from disk.
+    const block = routes.slice(telegramAt, routes.indexOf('@assets path'));
+    expect(block).toMatch(/reverse_proxy api:3000/);
+    expect(block, 'the webhook block serves files').not.toMatch(/file_server|root \*/);
+  });
+
+  it('matches the real controller path, not a guess at it', () => {
+    // The route in the Caddyfile and the route in the controller are two
+    // copies of one fact. This is the test that notices when one moves.
+    const controller = readFileSync(
+      join(__dirname, '../../apps/api/src/surfaces/telegram/webhook.controller.ts'),
+      'utf8',
+    );
+    const declared = /@Post\('([^']+)'\)/.exec(controller)?.[1];
+    expect(declared, 'the webhook controller no longer declares a @Post path').toBeTruthy();
+    // `/telegram/webhook/:botInstanceId` must be covered by the Caddy matcher
+    // `/telegram/webhook/*`.
+    const prefix = declared!.replace(/\/:[^/]+$/, '');
+    expect(routes).toContain(`@telegram path ${prefix}/*`);
+  });
+
   it('proxies to the api service by name, never to a host port', () => {
     expect(routes).toMatch(/reverse_proxy api:3000/);
     expect(routes).not.toMatch(/reverse_proxy .*(127\.0\.0\.1|localhost)/);
@@ -289,6 +321,39 @@ describe('the production Caddy routing', () => {
     // next release no longer has.
     expect(routes).toMatch(/Cache-Control "no-store"/);
     expect(routes).toMatch(/Cache-Control "public, max-age=31536000, immutable"/);
+  });
+
+  it('health-checks the edge through the real routing, not through Caddy itself', () => {
+    const prod = readFileSync(join(__dirname, '../../deploy/caddy/Caddyfile'), 'utf8');
+    // A loopback request on :80 carries Host: 127.0.0.1, which matches no site
+    // block in production — the only site is the operator's domain — so it
+    // says nothing about whether the deployment routes. The internal site
+    // imports the SAME snippet the public one does.
+    expect(prod).toMatch(/http:\/\/127\.0\.0\.1:8080 \{/);
+    const internal = prod.slice(prod.indexOf('http://127.0.0.1:8080 {'));
+    expect(internal).toMatch(/import nexa_routes/);
+    // Loopback INSIDE the container: not published by compose, and not
+    // reachable from the other containers on the edge network either.
+    expect(prod, 'the health site binds all interfaces').not.toMatch(/^http:\/\/:8080/m);
+
+    const caddy = serviceBlock(compose, 'caddy');
+    expect(caddy).toContain('127.0.0.1:8080/');
+    expect(caddy, 'the healthcheck still asks Caddy about Caddy').not.toContain(
+      '127.0.0.1:80/health/live',
+    );
+    expect(caddy, 'the healthcheck does not prove the bundle is served').toMatch(
+      /127\.0\.0\.1:8080\/ /,
+    );
+    expect(compose, 'the health port is published').not.toMatch(/['"]8080:8080['"]/);
+  });
+
+  it('turns the Caddy admin API off in production as well as in CI', () => {
+    const prod = readFileSync(join(__dirname, '../../deploy/caddy/Caddyfile'), 'utf8');
+    const ci = readFileSync(join(__dirname, '../../deploy/caddy/Caddyfile.ci'), 'utf8');
+    // Nothing reconfigures Caddy at runtime here — botctl restarts the
+    // container — so the admin endpoint has no consumer in this deployment.
+    expect(prod).toMatch(/^\s*admin off$/m);
+    expect(ci).toMatch(/^\s*admin off$/m);
   });
 
   it('leaves HSTS to the production site block', () => {

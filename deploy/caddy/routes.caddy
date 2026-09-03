@@ -47,6 +47,28 @@
 		reverse_proxy api:3000
 	}
 
+	# --- The Telegram webhook ------------------------------------------------
+	#
+	# `/telegram/webhook/:botInstanceId`, and it is NOT under /api. Without this
+	# block the path falls to the SPA handler below, which answers index.html
+	# with 200 — and a 200 is exactly how Telegram is told an update was
+	# accepted. Every update would be acknowledged and thrown away, with
+	# nothing in any log, for as long as the feature stayed on.
+	#
+	# The default of TELEGRAM_WEBHOOK_ENABLED=false does not make that safe: it
+	# means the failure waits until the day somebody turns the feature on, and
+	# then presents as "Telegram is not delivering updates" rather than as a
+	# routing bug.
+	#
+	# No authentication here, and none by omission either: the controller
+	# verifies Telegram's secret-token header before it even parses the bot id,
+	# so an unknown or malformed id gets the API's own answer rather than a
+	# page. Caddy's job is to deliver the request to the thing that decides.
+	@telegram path /telegram/webhook/*
+	handle @telegram {
+		reverse_proxy api:3000
+	}
+
 	# --- The Web Admin -------------------------------------------------------
 
 	# Hashed filenames, so a year is safe and a new release busts the cache by
