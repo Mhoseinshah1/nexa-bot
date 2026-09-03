@@ -26,6 +26,7 @@ NEXA_LIB_DIR="${NEXA_LIB_DIR:-${NEXA_ROOT}/opt/nexa/lib}"
 NEXA_CONFIG_DIR="${NEXA_CONFIG_DIR:-${NEXA_ROOT}/etc/nexa}"
 NEXA_STATE_DIR="${NEXA_STATE_DIR:-${NEXA_ROOT}/var/lib/nexa}"
 NEXA_BACKUP_DIR="${NEXA_BACKUP_DIR:-${NEXA_ROOT}/var/backups/nexa}"
+NEXA_BIN_DIR="${NEXA_BIN_DIR:-${NEXA_ROOT}/usr/local/bin}"
 # The lock lives in the state directory, NOT in /var/lock.
 #
 # On Ubuntu /var/lock is a symlink to /run/lock, which is mode 1777. Two things
@@ -43,6 +44,20 @@ NEXA_LOCK_FILE="${NEXA_LOCK_FILE:-${NEXA_STATE_DIR}/nexa.lock}"
 NEXA_RELEASES_DIR="${NEXA_STATE_DIR}/releases"
 NEXA_CURRENT_FILE="${NEXA_STATE_DIR}/current"
 NEXA_PREVIOUS_FILE="${NEXA_STATE_DIR}/previous"
+
+# Host assets, staged per release.
+#
+# `botctl` itself, its library, the compose file, the env template and the
+# Caddy configuration live on the HOST, outside the immutable image. They are
+# release-versioned behaviour — `botctl secrets` exists in one release and not
+# the previous one — so a release that moves the image without moving them
+# leaves an installation running B and operated by A's tooling. That is exactly
+# what a real staging host showed: `botctl version` reported v0.1.0-staging.5
+# while `botctl secrets status` answered `unknown command "secrets"`.
+#
+# Each release's set is staged here under its version, so an update can install
+# the target's assets and a rollback can put the previous release's back.
+NEXA_ASSETS_DIR="${NEXA_STATE_DIR}/assets"
 
 # The image repository. A release is `${NEXA_IMAGE_REPO}@sha256:...`.
 NEXA_IMAGE_REPO="${NEXA_IMAGE_REPO:-ghcr.io/mhoseinshah1/nexa-bot}"
@@ -638,4 +653,156 @@ nexa_prune_releases() {
       rm -f -- "$name"
     fi
   done < <(ls -1t -- "$NEXA_RELEASES_DIR"/*.json 2>/dev/null || true)
+}
+
+# --- Host assets ------------------------------------------------------------
+#
+# The files that live on the host rather than in the image, and therefore have
+# to be moved deliberately when a release moves.
+#
+# One table, used by the installer, by `botctl update`, by `botctl rollback`
+# and by the tests. A file that is not here is a file that silently keeps its
+# old contents for the life of the installation — which is the whole defect.
+#
+# `compose.ci.yml` is deliberately absent: it is CI's topology, never a
+# production host's.
+nexa_asset_table() {
+  cat <<TABLE
+bin/botctl|${NEXA_BIN_DIR}/botctl|0755
+bin/nexa-lib.sh|${NEXA_LIB_DIR}/nexa-lib.sh|0644
+compose.yml|${NEXA_DEPLOY_DIR}/compose.yml|0644
+nexa.env.template|${NEXA_DEPLOY_DIR}/nexa.env.template|0644
+caddy/Caddyfile|${NEXA_DEPLOY_DIR}/caddy/Caddyfile|0644
+caddy/routes.caddy|${NEXA_DEPLOY_DIR}/caddy/routes.caddy|0644
+TABLE
+}
+
+nexa_assets_staged() {
+  [ -n "$1" ] && [ -d "${NEXA_ASSETS_DIR}/$1" ]
+}
+
+# The target release's own copy of the host assets, taken out of its image.
+#
+# Out of the IMAGE, not out of a git checkout: the checkout is mutable, may be
+# a different commit, and a production host is not required to have git at all.
+# The image is addressed by digest, so what lands here is what that release
+# shipped and nothing else.
+#
+# Staged under a `.partial` name and renamed only once every file is present,
+# so an interrupted extraction leaves no half-populated version directory for a
+# later activation to install from.
+nexa_stage_release_assets() {
+  local version="$1" image="$2"
+  # These paths are `rm -rf`ed below. An empty version would make that the
+  # assets directory itself, so the emptiness is refused here rather than
+  # guarded at each removal.
+  [ -n "$version" ] || nexa_die "internal error: staging host assets needs a release version."
+  [ -n "$image" ] || nexa_die "internal error: staging host assets needs an image."
+  local final="${NEXA_ASSETS_DIR:?}/${version:?}"
+  local partial="${final}.partial"
+
+  nexa_assets_staged "$version" && return 0
+
+  rm -rf "$partial"
+  mkdir -p "$partial" || nexa_die "cannot create ${partial}."
+  # `tar` out of the image and into the staging directory. One command, no
+  # container left behind, and nothing written outside ${partial}.
+  if ! docker run --rm --entrypoint tar "$image" -cf - -C /app deploy |
+    tar -xf - -C "$partial" --strip-components=1 2>/dev/null; then
+    rm -rf "$partial"
+    nexa_die "could not read the host assets out of ${image}. A release built before this mechanism existed does not carry them; update to a release that does, or reinstall."
+  fi
+
+  local source destination mode
+  while IFS='|' read -r source destination mode; do
+    [ -n "$source" ] || continue
+    [ -s "${partial}/${source}" ] || {
+      rm -rf "$partial"
+      nexa_die "${image} is missing the host asset ${source}. Refusing to install a partial set."
+    }
+  done <<EOF
+$(nexa_asset_table)
+EOF
+
+  rm -rf "$final"
+  mv -f "$partial" "$final" || nexa_die "cannot stage the host assets for ${version}."
+}
+
+# What is installed RIGHT NOW, kept under a version so a rollback has something
+# to put back.
+#
+# This is what makes an installation created before this mechanism upgradeable
+# without reinstalling: staging.1 through staging.4 never staged anything, so
+# the first update captures whatever those installs put on disk as the current
+# release's set.
+nexa_capture_live_assets() {
+  local version="$1"
+  [ -n "$version" ] || nexa_die "internal error: capturing host assets needs a release version."
+  nexa_assets_staged "$version" && return 0
+
+  local final="${NEXA_ASSETS_DIR:?}/${version:?}"
+  local partial="${final}.partial"
+  rm -rf "$partial"
+  mkdir -p "$partial/bin" "$partial/caddy" || nexa_die "cannot create ${partial}."
+
+  local source destination mode
+  while IFS='|' read -r source destination mode; do
+    [ -n "$source" ] || continue
+    if [ -r "$destination" ]; then
+      cp -p "$destination" "${partial}/${source}" || nexa_die "cannot copy ${destination}."
+    else
+      # An asset the current installation does not have. Recorded as absent
+      # rather than invented, so a rollback does not install a file this
+      # release never had.
+      rm -rf "$partial"
+      nexa_warn "cannot capture ${destination}: it is missing, so ${version}'s host assets cannot be recorded."
+      return 1
+    fi
+  done <<EOF
+$(nexa_asset_table)
+EOF
+
+  rm -rf "$final"
+  mv -f "$partial" "$final" ||
+    nexa_die "cannot record the host assets for ${version}."
+}
+
+# Put a staged release's assets into service.
+#
+# Each file is written beside its destination and RENAMED over it. Two reasons,
+# and the second is not theoretical:
+#
+#   - a rename is atomic, so an interruption leaves either the old file or the
+#     new one, never a truncated botctl;
+#   - `botctl` is replacing ITSELF while bash is still reading it. A rename
+#     swaps the directory entry and leaves the running process's open inode
+#     alone; copying over the same inode would rewrite the script under the
+#     interpreter mid-execution.
+nexa_activate_release_assets() {
+  local version="$1"
+  [ -n "$version" ] || nexa_die "internal error: activating host assets needs a release version."
+  local staged="${NEXA_ASSETS_DIR}/${version}"
+  [ -d "$staged" ] || nexa_die "no host assets are staged for ${version}."
+
+  local source destination mode tmp
+  while IFS='|' read -r source destination mode; do
+    [ -n "$source" ] || continue
+    [ -s "${staged}/${source}" ] || nexa_die "${version}'s staged ${source} is missing or empty."
+    mkdir -p "$(dirname "$destination")" || nexa_die "cannot create $(dirname "$destination")."
+    tmp="$(mktemp "${destination}.XXXXXX")" || nexa_die "cannot write beside ${destination}."
+    if ! cp "${staged}/${source}" "$tmp"; then
+      rm -f "$tmp"
+      nexa_die "cannot stage ${destination}."
+    fi
+    chmod "$mode" "$tmp" || { rm -f "$tmp"; nexa_die "cannot set the mode on ${destination}."; }
+    # Ownership follows the caller, which is root for every path that reaches
+    # here; stated rather than assumed, so a non-root caller fails loudly.
+    if [ "$(id -u)" -eq 0 ]; then
+      chown 0:0 "$tmp" || { rm -f "$tmp"; nexa_die "cannot set the owner on ${destination}."; }
+    fi
+    sync "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$destination" || nexa_die "cannot install ${destination}."
+  done <<EOF
+$(nexa_asset_table)
+EOF
 }

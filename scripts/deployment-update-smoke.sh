@@ -40,6 +40,11 @@ export NEXA_CONFIG_DIR="${ROOT}/etc/nexa"
 export NEXA_STATE_DIR="${ROOT}/var/lib/nexa"
 export NEXA_BACKUP_DIR="${ROOT}/var/backups/nexa"
 export NEXA_LOCK_FILE="${ROOT}/var/lib/nexa/nexa.lock"
+# Explicit, never inherited. Left unset this defaults to ${NEXA_ROOT}/usr/local/bin,
+# which is the real /usr/local/bin the moment NEXA_ROOT is empty — and this
+# script installs a botctl there.
+export NEXA_BIN_DIR="${ROOT}/usr/local/bin"
+export NEXA_LIB_DIR="${ROOT}/opt/nexa/lib"
 export NEXA_IMAGE_REPO="$IMAGE_REPO"
 export NEXA_LIB="${REPO}/deploy/bin/nexa-lib.sh"
 # A release that will never be ready must not hold the run for three minutes.
@@ -92,6 +97,19 @@ build_release() {
 build_release v1.0.0
 build_release v2.0.0
 
+# v2.0.0's HOST ASSETS have to differ from v1.0.0's, or "the update installed
+# the target release's botctl" is unfalsifiable: two builds of the same commit
+# ship byte-identical ones, and the check would pass without the update having
+# moved anything. One appended comment is enough to tell them apart, and leaves
+# the script itself working.
+docker build -t "${IMAGE_REPO}:v2.0.0" -f - . >/dev/null <<DOCKERFILE || fail "marking v2.0.0's host assets failed"
+FROM ${IMAGE_REPO}:v2.0.0
+USER root
+RUN printf '%s\n' '# nexa-smoke: v2.0.0 host assets' >> /app/deploy/bin/botctl
+USER node
+DOCKERFILE
+docker push --quiet "${IMAGE_REPO}:v2.0.0" >/dev/null || fail "pushing the marked v2.0.0 failed"
+
 # A release that starts and never passes its readiness probe. Derived from a
 # real one so everything else about it is identical: same layers, same
 # entrypoints, same migrator. Only the API's answer changes.
@@ -115,12 +133,18 @@ pass "v1.0.0, v2.0.0 and a deliberately-unready v3.0.0-broken are published"
 step "install at v1.0.0"
 # ---------------------------------------------------------------------------
 install -d -m 0700 "$NEXA_CONFIG_DIR"
-install -d -m 0755 "$NEXA_DEPLOY_DIR" "${NEXA_DEPLOY_DIR}/caddy"
+install -d -m 0755 "$NEXA_DEPLOY_DIR" "${NEXA_DEPLOY_DIR}/caddy" "$NEXA_LIB_DIR" "$NEXA_BIN_DIR"
 install -d -m 0750 "$NEXA_STATE_DIR" "${NEXA_STATE_DIR}/releases"
 install -d -m 0700 "$NEXA_BACKUP_DIR"
 install -m 0644 deploy/compose.yml "${NEXA_DEPLOY_DIR}/compose.yml"
 install -m 0644 deploy/caddy/Caddyfile deploy/caddy/Caddyfile.ci deploy/caddy/routes.caddy \
   "${NEXA_DEPLOY_DIR}/caddy/"
+# The rest of the host-asset set, exactly as `install.sh` lays it down. Without
+# it there is nothing for the update to capture under v1.0.0, and nothing for
+# the rollback to put back.
+install -m 0644 deploy/nexa.env.template "${NEXA_DEPLOY_DIR}/nexa.env.template"
+install -m 0644 deploy/bin/nexa-lib.sh "${NEXA_LIB_DIR}/nexa-lib.sh"
+install -m 0755 deploy/bin/botctl "${NEXA_BIN_DIR}/botctl"
 
 PG_PASSWORD="$(head -c 24 /dev/urandom | base64 -w0 | tr -d '=+/' | cut -c1-32)"
 REDIS_PASSWORD="$(head -c 24 /dev/urandom | base64 -w0 | tr -d '=+/' | cut -c1-32)"
@@ -222,7 +246,23 @@ esac
 case "$version_output" in
   *unknown*) fail "botctl version reports an unknown fact about a release it just installed" ;;
 esac
+# The host assets move with the release. This is the real-host defect: an
+# installation reporting v0.1.0-staging.5 from `botctl version` while
+# `botctl secrets status` answered `unknown command "secrets"`, because the
+# update moved the image and left /usr/local/bin/botctl alone.
+grep -qF '# nexa-smoke: v2.0.0 host assets' "${NEXA_BIN_DIR}/botctl" ||
+  fail "the update did not install v2.0.0's botctl; the host is running v2.0.0 with v1.0.0's tooling"
+[ "$(stat -c '%a' "${NEXA_BIN_DIR}/botctl")" = "755" ] ||
+  fail "the installed botctl is not executable after the update"
+[ "$(stat -c '%U:%G' "${NEXA_BIN_DIR}/botctl")" = "root:root" ] ||
+  fail "the installed botctl changed owner during the update"
+[ -s "${NEXA_LIB_DIR}/nexa-lib.sh" ] || fail "the update left no library beside the botctl it installed"
+[ -s "${NEXA_DEPLOY_DIR}/compose.yml" ] || fail "the update left no compose file"
+# What was replaced is recoverable: the outgoing release's set was recorded.
+[ -s "${NEXA_STATE_DIR}/assets/v1.0.0/bin/botctl" ] ||
+  fail "the update replaced the host assets without recording the ones it replaced"
 pass "v2.0.0 is current, by digest, with v1.0.0 preserved as the rollback target"
+pass "the host assets are v2.0.0's, and v1.0.0's were recorded"
 
 # ---------------------------------------------------------------------------
 step "a release that never becomes ready must not become current"
@@ -260,7 +300,14 @@ grep -qF "NEXA_IMAGE=${IMAGE_REPO}@${DIGEST_A}" "${NEXA_CONFIG_DIR}/deploy.env" 
 marker="$(compose exec -T postgres psql -U nexa -d nexa -tAc "SELECT note FROM smoke_marker" 2>/dev/null || true)"
 [ "$(printf '%s' "$marker" | tr -d '[:space:]')" = "written-under-v1" ] ||
   fail "the rollback lost data written before it; it must not restore the database"
+# The tooling rolls back with the application. Leaving v2.0.0's botctl and
+# compose file operating v1.0.0's image would be a compatibility contract, and
+# nothing here proves one.
+if grep -qF '# nexa-smoke: v2.0.0 host assets' "${NEXA_BIN_DIR}/botctl"; then
+  fail "the rollback left v2.0.0's botctl operating v1.0.0's image"
+fi
 pass "the rollback returned to v1.0.0 and left the database untouched"
+pass "the rollback returned the host assets to v1.0.0 too"
 
 # ---------------------------------------------------------------------------
 step "update again, to prove the installation is not stuck"

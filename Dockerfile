@@ -113,6 +113,14 @@ COPY --from=builder --chown=node:node /deploy/package.json ./package.json
 # The Web Admin bundle. Copied out to a volume at start-up; see deploy/compose.
 COPY --from=builder --chown=node:node /src/apps/web/dist ./web
 
+# The host-side operational assets this release ships with.
+#
+# Not run by the container. `botctl update` extracts them from the target
+# image so an update installs the tooling that belongs to the release it is
+# installing, from an artifact addressed by digest rather than from a git
+# checkout the production host is not required to have.
+COPY --from=builder --chown=node:node /src/deploy ./deploy
+
 # The `node` user (uid 1000) ships with the base image. The application never
 # needs to write to its own filesystem, so nothing here is owned by it for
 # writing — only for reading.
