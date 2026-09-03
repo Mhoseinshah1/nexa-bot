@@ -525,6 +525,100 @@ nexa_commit_release() {
 # One line, into place, or not at all. `printf > file` truncates first, so an
 # interruption mid-write leaves an empty `current` — an installation that
 # reports no release at all.
+# Rewrite /etc/nexa/nexa.env, setting some keys and removing others.
+#
+# The one function that edits the application's secret configuration, so the
+# rules that make that safe live in exactly one place rather than being
+# re-derived by each caller:
+#
+#   - VALUES NEVER APPEAR IN argv, in a log line, or in an error message. They
+#     are read from the caller's named variables here. `nexa.env` holds the key
+#     that decrypts every stored credential; a value that reaches `ps`, a shell
+#     history or a `set -x` trace has left the file.
+#   - The candidate is built beside the destination, given the destination's
+#     mode and owner BEFORE any content is written into it, and renamed over it.
+#     An interruption leaves the old file, never a half-written one.
+#   - The candidate is validated before the rename: every key that was there is
+#     still there unless it was named for removal, and every key being set has a
+#     non-empty value. A rewrite that silently dropped a line would be an
+#     installation that cannot boot, discovered at the restart.
+#
+# Usage: nexa_env_rewrite FILE REMOVE_CSV NAME1 NAME2 ...
+# where each NAME is the name of a shell VARIABLE whose name is the key and
+# whose value is the value — passed by reference precisely so no value is ever
+# an argument.
+nexa_env_rewrite() {
+  local file="$1" remove="$2"
+  shift 2
+
+  [ -r "$file" ] || nexa_die "cannot read ${file}."
+
+  local tmp
+  tmp="$(mktemp "${file}.XXXXXX")" || nexa_die "cannot write beside ${file}."
+  # Mode and owner first, while the file is still empty.
+  chmod 0600 "$tmp" || { rm -f "$tmp"; nexa_die "cannot set the mode on ${tmp}."; }
+  if [ "$(id -u)" -eq 0 ]; then
+    chown --reference="$file" "$tmp" 2>/dev/null ||
+      { rm -f "$tmp"; nexa_die "cannot set the owner on ${tmp}."; }
+  fi
+
+  # Every key this rewrite touches, so the old assignments are dropped exactly
+  # once and the new ones are appended in a known order.
+  local names=() name key drop_pattern
+  for name in "$@"; do names+=("$name"); done
+
+  local removals="${remove}"
+  for name in "${names[@]}"; do removals="${removals},${name}"; done
+
+  drop_pattern=""
+  local IFS_SAVE="$IFS"
+  IFS=','
+  for key in $removals; do
+    [ -n "$key" ] || continue
+    drop_pattern="${drop_pattern}${drop_pattern:+|}^${key}="
+  done
+  IFS="$IFS_SAVE"
+
+  local status=0
+  if [ -n "$drop_pattern" ]; then
+    # 0 (lines kept) and 1 (everything matched) are both fine; anything else
+    # means the file we would write is not the file we meant to write.
+    grep -Ev "$drop_pattern" -- "$file" >"$tmp" || status=$?
+  else
+    cat -- "$file" >"$tmp" || status=$?
+  fi
+  if [ "$status" -gt 1 ]; then
+    rm -f "$tmp"
+    nexa_die "could not read ${file} (grep exited ${status}); it is UNCHANGED. Check free space on /var."
+  fi
+
+  for name in "${names[@]}"; do
+    # `printf` with the value as an ARGUMENT to this shell's own builtin: it
+    # never becomes a process, so it never becomes a line in `ps`.
+    printf '%s=%s\n' "$name" "${!name}" >>"$tmp" || {
+      rm -f "$tmp"
+      nexa_die "could not write ${file} (is /var full?); it is UNCHANGED."
+    }
+  done
+
+  # Validate the candidate before it becomes the file.
+  for name in "${names[@]}"; do
+    if [ -z "$(nexa_env_value "$tmp" "$name" 2>/dev/null || true)" ]; then
+      rm -f "$tmp"
+      nexa_die "the rewritten ${file} has no value for ${name}; the original is UNCHANGED."
+    fi
+  done
+  # Nothing else may have been lost. DATABASE_URL is the cheapest true test that
+  # the file would still boot an application.
+  if [ -z "$(nexa_env_value "$tmp" DATABASE_URL 2>/dev/null || true)" ]; then
+    rm -f "$tmp"
+    nexa_die "the rewritten ${file} lost DATABASE_URL, so it would not boot. The original is UNCHANGED."
+  fi
+
+  sync "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$file" || nexa_die "cannot install ${file}."
+}
+
 nexa_write_atomic() {
   local path="$1" content="$2" tmp
   tmp="$(mktemp "${path}.XXXXXX")" || nexa_die "cannot write ${path}."

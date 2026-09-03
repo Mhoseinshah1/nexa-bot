@@ -23,10 +23,27 @@
 const KEY_ID = /^[A-Za-z0-9._-]{1,64}$/;
 const KEY_BYTES = 32;
 
+/**
+ * Which spelling the host's configuration uses.
+ *
+ * Not cosmetic, and not a nicety for the status report: it is the ONLY evidence
+ * on a host that says whether that installation predates the v2 envelope.
+ *
+ * `SECRETS_KEYS` can have been written by exactly two things — the installer of
+ * a keyring-era release, or `botctl secrets migrate-config`. Both are v2-era.
+ * `SECRETS_KEK` can only have been written by an installer that shipped before
+ * v2 existed, which is precisely the population that may hold v1 ciphertext.
+ *
+ * That is what lets v1 acceptance default to OFF without breaking the hosts
+ * that need it on. See `SECRETS_ACCEPT_V1` in the config schema.
+ */
+export type KeyringFormat = 'canonical' | 'legacy';
+
 export interface SecretKeyring {
   readonly activeKeyId: string;
   /** Every key this installation can decrypt with, including the active one. */
   readonly keys: ReadonlyMap<string, Buffer>;
+  readonly format: KeyringFormat;
 }
 
 export interface KeyringInput {
@@ -65,6 +82,12 @@ export function parseKeyring(input: KeyringInput): KeyringResult {
   const raw = (input.SECRETS_KEYS ?? '').trim();
   const legacyKey = (input.SECRETS_KEK ?? '').trim();
   const legacyId = (input.SECRETS_KEK_ID ?? '').trim();
+
+  // Decided by which spelling is PRESENT, before any of it is validated —
+  // SECRETS_KEYS wins when both are, exactly as the parsing below does. A
+  // format derived from whichever branch happened to succeed would call a host
+  // canonical because its legacy pair was malformed.
+  const format: KeyringFormat = raw.length > 0 ? 'canonical' : 'legacy';
 
   if (raw.length > 0) {
     for (const entry of raw.split(',')) {
@@ -135,5 +158,5 @@ export function parseKeyring(input: KeyringInput): KeyringResult {
   }
 
   if (problems.length > 0) return { ok: false, problems };
-  return { ok: true, keyring: { activeKeyId, keys } };
+  return { ok: true, keyring: { activeKeyId, keys, format } };
 }

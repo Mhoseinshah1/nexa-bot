@@ -25,6 +25,7 @@ const TENANT = '0192f100-0000-7000-8000-00000000aaaa';
 const ring = (entries: Record<string, string>, active: string): SecretKeyring => ({
   activeKeyId: active,
   keys: new Map(Object.entries(entries).map(([id, key]) => [id, Buffer.from(key, 'base64')])),
+  format: 'canonical',
 });
 
 /** A v1 value, produced exactly as the previous release produced them. */

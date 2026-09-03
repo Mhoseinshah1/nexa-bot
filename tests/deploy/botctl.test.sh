@@ -1652,4 +1652,204 @@ exec 9>&-
 
 teardown_root
 
+# =============================================================================
+# The secret configuration: migrating it, and switching v1 off
+# =============================================================================
+#
+# Two commands edit /etc/nexa/nexa.env, and that file holds the key that
+# decrypts every stored credential. So these tests care about three things in
+# roughly equal measure: that the conversion is exact, that it is safe to
+# interrupt or repeat, and that the key material does not appear anywhere
+# except the file.
+
+setup_root
+setup_fake_docker
+seed_release "vA" "$DIGEST_A"
+
+test_case "migrate-config converts the legacy spelling, preserving the id and the key"
+seed_nexa_env legacy
+run_botctl secrets migrate-config
+assert_equals "the migration failed" 0 "$BOTCTL_STATUS"
+assert_equals "SECRETS_KEYS is not the id:key pair" \
+  "${TEST_KEY_ID}:${TEST_KEK}" "$(nexa_env_key SECRETS_KEYS)"
+assert_equals "the active key id was not preserved" "$TEST_KEY_ID" "$(nexa_env_key SECRETS_ACTIVE_KEY_ID)"
+# The exact bytes, not merely something base64-shaped. A migration that
+# regenerated the key would leave an installation that cannot read a single
+# stored secret, and every other assertion here would still pass.
+written_keys="$(nexa_env_key SECRETS_KEYS)"
+assert_equals "the key bytes changed" "$TEST_KEK" "${written_keys#*:}"
+
+test_case "the legacy pair is gone, and nothing else was lost"
+assert_equals "SECRETS_KEK survived the migration" "" "$(nexa_env_key SECRETS_KEK)"
+assert_equals "SECRETS_KEK_ID survived the migration" "" "$(nexa_env_key SECRETS_KEK_ID)"
+assert_equals "DATABASE_URL was lost" \
+  "postgres://nexa:pw@postgres:5432/nexa" "$(nexa_env_key DATABASE_URL)"
+assert_equals "an unrelated key was lost" "telegram" "$(nexa_env_key NOTIFICATION_TRANSPORT)"
+assert_file_mode "the converted file is not 0600" "${NEXA_CONFIG_DIR}/nexa.env" 600
+
+test_case "the migration never prints the key material"
+# The assertion this file exists for. The command reads the KEK, concatenates
+# it and writes it — and must not put it in its own output, where it would land
+# in a terminal scrollback, a CI log or an operator's paste into a ticket.
+assert_not_contains "the key appeared in the migration output" "$BOTCTL_OUTPUT" "$TEST_KEK"
+# Nor a recognisable prefix of it: a truncated secret is still a secret.
+assert_not_contains "a prefix of the key appeared in the output" "$BOTCTL_OUTPUT" "${TEST_KEK:0:16}"
+assert_contains "the migration did not report the key id it used" "$BOTCTL_OUTPUT" "$TEST_KEY_ID"
+
+test_case "the key material never reaches the process table either"
+# `nexa_env_rewrite` takes VARIABLE NAMES and reads them by reference, so no
+# value is ever an argument. Checked against the fake docker log, which records
+# every argv this command line produced.
+assert_not_contains "the key reached a docker invocation" "$(docker_log)" "$TEST_KEK"
+
+test_case "rerunning the migration on a converted host changes nothing"
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl secrets migrate-config
+assert_equals "the rerun failed" 0 "$BOTCTL_STATUS"
+assert_equals "the rerun rewrote the file" "$before" "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_contains "the rerun did not say it had nothing to do" "$BOTCTL_OUTPUT" "already canonical"
+
+teardown_root
+
+setup_root
+setup_fake_docker
+seed_release "vA" "$DIGEST_A"
+
+test_case "a host that is canonical but still carries the dead legacy pair is told so"
+# The parser prefers SECRETS_KEYS, so those two lines are ignored — which makes
+# them worse than useless: they read like configuration and are not.
+seed_nexa_env canonical-with-stale-legacy
+run_botctl secrets migrate-config
+assert_equals "the command failed on a canonical host" 0 "$BOTCTL_STATUS"
+assert_contains "the dead legacy pair was not reported" "$BOTCTL_OUTPUT" "IGNORED"
+assert_equals "the command removed lines it only meant to report" \
+  "$TEST_KEK" "$(nexa_env_key SECRETS_KEK)"
+
+test_case "a half-configured host is refused rather than guessed at"
+seed_nexa_env id-without-key
+run_botctl secrets migrate-config
+assert_fails "an id with no key was accepted" test "$BOTCTL_STATUS" -eq 0
+assert_contains "the refusal did not say what was missing" "$BOTCTL_OUTPUT" "no SECRETS_KEK"
+assert_equals "the refused migration wrote a keyring anyway" "" "$(nexa_env_key SECRETS_KEYS)"
+
+test_case "a host with no key configuration at all is refused"
+seed_nexa_env empty
+run_botctl secrets migrate-config
+assert_fails "an empty configuration was accepted" test "$BOTCTL_STATUS" -eq 0
+assert_contains "the refusal did not say there was nothing to convert" \
+  "$BOTCTL_OUTPUT" "nothing to convert"
+
+teardown_root
+
+# --- switching v1 off ---------------------------------------------------------
+setup_root
+setup_fake_docker
+seed_release "vA" "$DIGEST_A"
+seed_nexa_env canonical
+
+test_case "disable-v1 refuses when the installation is not ready, and changes nothing"
+fake_set shutdown_ready 0
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl secrets disable-v1
+assert_fails "an unready installation was allowed to disable v1" test "$BOTCTL_STATUS" -eq 0
+assert_contains "the refusal did not carry the check's own reason" \
+  "$BOTCTL_OUTPUT" "still hold a v1 envelope"
+assert_contains "the refusal did not say nothing had changed" "$BOTCTL_OUTPUT" "Nothing was changed"
+assert_equals "a refused shutdown edited nexa.env" "$before" "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+
+test_case "disable-v1 writes the setting and restarts once the check passes"
+fake_set shutdown_ready 1
+reset_docker_log
+run_botctl secrets disable-v1
+assert_equals "the shutdown failed" 0 "$BOTCTL_STATUS"
+assert_equals "SECRETS_ACCEPT_V1 was not set to false" "false" "$(nexa_env_key SECRETS_ACCEPT_V1)"
+# Written is not applied. A setting the running process has not loaded is an
+# operator believing v1 is off while it is on, which is the exact failure this
+# command exists to prevent.
+assert_contains "the stack was not restarted" "$(docker_log)" "up -d"
+assert_equals "the keyring was disturbed" "${TEST_KEY_ID}:${TEST_KEK}" "$(nexa_env_key SECRETS_KEYS)"
+assert_not_contains "the key appeared in the shutdown output" "$BOTCTL_OUTPUT" "$TEST_KEK"
+assert_contains "the backup rule was not restated at the moment it starts to matter" \
+  "$BOTCTL_OUTPUT" "BACKUPS"
+
+test_case "rerunning disable-v1 is free"
+run_botctl secrets disable-v1
+assert_equals "the rerun failed" 0 "$BOTCTL_STATUS"
+assert_contains "the rerun did not say it had nothing to do" "$BOTCTL_OUTPUT" "already false"
+
+teardown_root
+
+setup_root
+setup_fake_docker
+seed_release "vA" "$DIGEST_A"
+seed_nexa_env canonical
+
+test_case "a stack that does not come back restores the previous setting"
+# The one path where writing the file is not the end of the story. An
+# installation that will not start is worse than one that still reads v1, and
+# the operator must not be left to work out which of the two they have.
+fake_set shutdown_ready 1
+fake_set api_health starting
+NEXA_READY_TIMEOUT=6 run_botctl secrets disable-v1
+assert_fails "a stack that never became ready reported success" test "$BOTCTL_STATUS" -eq 0
+assert_equals "the setting was left disabled on a stack that would not come back" \
+  "true" "$(nexa_env_key SECRETS_ACCEPT_V1)"
+assert_contains "the operator was not told the setting had been restored" \
+  "$BOTCTL_OUTPUT" "restored"
+assert_equals "the keyring was damaged by the back-out" \
+  "${TEST_KEY_ID}:${TEST_KEK}" "$(nexa_env_key SECRETS_KEYS)"
+fake_set api_health healthy
+
+teardown_root
+
+# --- the rest of the secrets surface, and the update path ---------------------
+setup_root
+setup_fake_docker
+seed_release "vA" "$DIGEST_A"
+seed_nexa_env canonical
+
+test_case "the read-only secrets subcommands still run, and take no lock"
+for action in status retire-check shutdown-check; do
+  reset_docker_log
+  if [ "$action" = "retire-check" ]; then
+    run_botctl secrets "$action" --key old
+  else
+    run_botctl secrets "$action"
+  fi
+  assert_equals "botctl secrets ${action} failed" 0 "$BOTCTL_STATUS"
+  assert_contains "botctl secrets ${action} did not reach the CLI" \
+    "$(docker_log)" "dist/secrets.cli.js ${action}"
+done
+
+test_case "an unknown secrets subcommand is refused with the full list"
+run_botctl secrets nonsense
+assert_fails "an unknown subcommand was accepted" test "$BOTCTL_STATUS" -eq 0
+for action in status rewrap retire-check shutdown-check migrate-config disable-v1; do
+  assert_contains "the usage does not name ${action}" "$BOTCTL_OUTPUT" "$action"
+done
+
+test_case "an update does not touch the secret configuration"
+# /etc/nexa survives an update by design — the layout table says so, and the
+# key that decrypts every stored credential is in there. This is the assertion
+# that keeps the host-asset mechanism away from it.
+seed_image_assets "$DIGEST_B" B
+fake_set resolve_digest "$DIGEST_B"
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl update vB
+assert_equals "the update failed" 0 "$BOTCTL_STATUS"
+assert_equals "the update rewrote nexa.env" "$before" "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+
+test_case "and neither does a rollback"
+# Which is the compatibility hazard worth stating rather than hiding: the
+# CONFIG does not roll back with the release, so a host migrated to the
+# canonical keyring keeps it when the image goes back.
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl rollback
+assert_equals "the rollback failed" 0 "$BOTCTL_STATUS"
+assert_equals "the rollback rewrote nexa.env" "$before" "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_equals "the rollback reverted the keyring format" \
+  "${TEST_KEY_ID}:${TEST_KEK}" "$(nexa_env_key SECRETS_KEYS)"
+
+teardown_root
+
 report
