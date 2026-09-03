@@ -23,11 +23,23 @@
  * with nothing writing it is the empty-table mistake this repository already
  * refuses.
  *
- * Only `bot_instance.token` exists, because only `bot_instances.token_ciphertext`
- * exists. Provider, panel and gateway credentials belong to Phase 3 and are not
- * declared here in advance.
+ * Panel credentials are three purposes rather than one `panel.secret`, and the
+ * distinction is cryptographic rather than tidy. All three live on one row, so
+ * tenant and entity are identical across them and the PURPOSE is the only thing
+ * separating their associated data. Collapse them and a password ciphertext
+ * moved into the username column decrypts perfectly well — which is exactly the
+ * transplant the v2 envelope exists to refuse.
+ *
+ * Gateway credentials belong to a later phase and are not declared in advance:
+ * a purpose with nothing writing it is the empty-table mistake this repository
+ * refuses, and `tests/unit/secret-registry.test.ts` fails the build for one.
  */
-export const SECRET_PURPOSES = ['bot_instance.token'] as const;
+export const SECRET_PURPOSES = [
+  'bot_instance.token',
+  'panel.username',
+  'panel.password',
+  'panel.api_token',
+] as const;
 export type SecretPurpose = (typeof SECRET_PURPOSES)[number];
 
 /**

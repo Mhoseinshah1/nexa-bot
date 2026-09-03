@@ -15,6 +15,14 @@ import {
 } from './settings.js';
 import { FEATURE_FLAG_SOURCES, FLAG_BLAST_RADII } from './features.js';
 import { PLACEHOLDER_TYPES, TEMPLATE_FORMATS, TEMPLATE_REVISION_ACTIONS } from './templates.js';
+import {
+  PANEL_BASE_URL_MAX_LENGTH,
+  PANEL_HEALTH_VIEWS,
+  PANEL_NAME_MAX_LENGTH,
+  PANEL_NAME_MIN_LENGTH,
+  PANEL_STATUSES,
+} from './panels.js';
+import { PROVIDER_CAPABILITIES, PROVIDER_FAILURE_KINDS, PROVIDER_TYPES } from './provider.js';
 
 /**
  * The HTTP seam.
@@ -661,3 +669,193 @@ export const CONTROL_ROUTES = {
   /** Readiness with dependency detail. Authenticated; see the schema. */
   systemReadiness: '/system/readiness',
 } as const;
+
+// ---------------------------------------------------------------------------
+// Panels
+// ---------------------------------------------------------------------------
+
+/**
+ * The panel seam.
+ *
+ * The single most important thing about these schemas is what is NOT in them.
+ * There is no credential field on any response — not the value, not a masked
+ * form of it, not the ciphertext, not the key id. The legacy web admin rendered
+ * a panel's stored password as readable text on its detail page (WEB-BR-007);
+ * an operator there could read every panel credential by visiting a page.
+ *
+ * A masked placeholder would be worse than the omission it pretends to be. An
+ * edit form populated with `********` submits `********` back, and the panel
+ * password becomes eight asterisks — so the shape below reports only WHETHER a
+ * credential is configured and when it was last replaced.
+ */
+export const panelCredentialStateSchema = z.object({
+  configured: z.boolean(),
+  /** Null when never set. Not a value, and not derivable into one. */
+  lastReplacedAt: nullableIsoTimestamp,
+});
+export type PanelCredentialState = z.infer<typeof panelCredentialStateSchema>;
+
+export const panelHealthSchema = z.object({
+  state: z.enum(PANEL_HEALTH_VIEWS),
+  checkedAt: nullableIsoTimestamp,
+  latencyMs: z.number().int().nonnegative().nullable(),
+  /** The normalized failure, never a provider message. Null when healthy. */
+  failure: z.enum(PROVIDER_FAILURE_KINDS).nullable(),
+  /** The upstream status, when there was one. A number discloses nothing. */
+  status: z.number().int().nullable(),
+  providerVersion: z.string().nullable(),
+  lastHealthyAt: nullableIsoTimestamp,
+  /**
+   * Whether the result is old enough that an operator should not act on it.
+   *
+   * Computed server-side against one constant rather than sent as a threshold
+   * for each client to apply differently — the legacy statistics screen counts
+   * CONFIGURED panels and calls them "connected" (RSV2-BR-021), which is the
+   * same class of mistake: a surface deciding for itself what a number means.
+   */
+  stale: z.boolean(),
+});
+export type PanelHealthResponse = z.infer<typeof panelHealthSchema>;
+
+export const panelSummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  providerType: z.enum(PROVIDER_TYPES),
+  providerName: z.string(),
+  baseUrl: z.string(),
+  status: z.enum(PANEL_STATUSES),
+  /**
+   * Declared by the adapter's descriptor, never discovered and never stored.
+   *
+   * A capability read from a row is a capability that can be stale, and a stale
+   * one is how an installation tries an operation the panel cannot do — or
+   * refuses one it can. The descriptor is code, so it is right by construction.
+   */
+  capabilities: z.array(z.enum(PROVIDER_CAPABILITIES)),
+  credentials: z.object({
+    username: panelCredentialStateSchema,
+    password: panelCredentialStateSchema,
+    apiToken: panelCredentialStateSchema,
+  }),
+  health: panelHealthSchema,
+  createdAt: isoTimestamp,
+  updatedAt: isoTimestamp,
+});
+export type PanelSummaryResponse = z.infer<typeof panelSummarySchema>;
+
+export const panelListResponseSchema = z.object({ panels: z.array(panelSummarySchema) });
+export type PanelListResponse = z.infer<typeof panelListResponseSchema>;
+
+export const panelResponseSchema = z.object({ panel: panelSummarySchema });
+export type PanelResponse = z.infer<typeof panelResponseSchema>;
+
+const panelNameSchema = z.string().trim().min(PANEL_NAME_MIN_LENGTH).max(PANEL_NAME_MAX_LENGTH);
+
+const panelBaseUrlSchema = z.string().trim().min(1).max(PANEL_BASE_URL_MAX_LENGTH);
+
+/**
+ * The credential half of a write.
+ *
+ * ABSENT and NULL mean different things, and that difference is the whole
+ * reason this is a separate shape. Absent means "leave whatever is stored" —
+ * so an operator who edits a panel's name and submits the form does not erase
+ * its password by not mentioning it. Null means "remove this credential", which
+ * is a deliberate act an operator has to perform on purpose.
+ *
+ * `.optional()` and `.nullable()` together are therefore load-bearing rather
+ * than permissive, and the service branches on `undefined` versus `null`.
+ */
+export const panelCredentialsInputSchema = z.object({
+  username: z.string().min(1).max(512).nullable().optional(),
+  password: z.string().min(1).max(1024).nullable().optional(),
+  apiToken: z.string().min(1).max(4096).nullable().optional(),
+});
+export type PanelCredentialsInput = z.infer<typeof panelCredentialsInputSchema>;
+
+export const createPanelRequestSchema = z.object({
+  name: panelNameSchema,
+  providerType: z.enum(PROVIDER_TYPES),
+  baseUrl: panelBaseUrlSchema,
+  credentials: panelCredentialsInputSchema.optional(),
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type CreatePanelRequest = z.infer<typeof createPanelRequestSchema>;
+
+/**
+ * A safe-configuration edit. Credentials are NOT here.
+ *
+ * Replacing a credential is a different permission (`panels.credentials.rotate`,
+ * CRITICAL) from editing a name (`panels.edit`, HIGH), so it is a different
+ * route. Accepting both on one endpoint would mean the endpoint had to hold the
+ * higher permission, and every name change would need the right to rotate
+ * credentials.
+ *
+ * `providerType` is absent deliberately: changing it would reinterpret the
+ * stored credentials against a different protocol. Archive the panel and make a
+ * new one.
+ */
+export const updatePanelRequestSchema = z.object({
+  name: panelNameSchema.optional(),
+  baseUrl: panelBaseUrlSchema.optional(),
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type UpdatePanelRequest = z.infer<typeof updatePanelRequestSchema>;
+
+export const setPanelCredentialsRequestSchema = z.object({
+  credentials: panelCredentialsInputSchema,
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type SetPanelCredentialsRequest = z.infer<typeof setPanelCredentialsRequestSchema>;
+
+export const setPanelStatusRequestSchema = z.object({
+  status: z.enum(PANEL_STATUSES),
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type SetPanelStatusRequest = z.infer<typeof setPanelStatusRequestSchema>;
+
+/**
+ * A connection test.
+ *
+ * Idempotency-keyed like every other state-changing command, because it IS one:
+ * it writes a health row and an audit entry. It is also the one operation that
+ * deliberately runs against a DISABLED panel — an operator disables a panel
+ * precisely because something is wrong with it, and "you may not test this
+ * until you re-enable it" would make them re-enable a panel to find out whether
+ * they should. It never runs against an ARCHIVED one.
+ */
+export const testPanelRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type TestPanelRequest = z.infer<typeof testPanelRequestSchema>;
+
+export const testPanelResponseSchema = z.object({
+  panel: panelSummarySchema,
+  /** False when this call replayed an earlier one rather than probing. */
+  probed: z.boolean(),
+});
+export type TestPanelResponse = z.infer<typeof testPanelResponseSchema>;
+
+export const PANEL_ROUTES = {
+  list: '/panels',
+  create: '/panels',
+  detail: (id: string) => `/panels/${encodeURIComponent(id)}`,
+  update: (id: string) => `/panels/${encodeURIComponent(id)}`,
+  credentials: (id: string) => `/panels/${encodeURIComponent(id)}/credentials`,
+  status: (id: string) => `/panels/${encodeURIComponent(id)}/status`,
+  test: (id: string) => `/panels/${encodeURIComponent(id)}/test`,
+  providers: '/providers',
+} as const;
+
+/** The provider catalogue, so a surface can populate a picker without guessing. */
+export const providerDescriptorSchema = z.object({
+  key: z.enum(PROVIDER_TYPES),
+  canonicalName: z.string(),
+  credentialShape: z.enum(['USERNAME_PASSWORD', 'OPAQUE_TOKEN', 'NONE']),
+  capabilities: z.array(z.enum(PROVIDER_CAPABILITIES)),
+  requiredActivationFields: z.array(z.string()),
+});
+
+export const providerListResponseSchema = z.object({
+  providers: z.array(providerDescriptorSchema),
+});
+export type ProviderListResponse = z.infer<typeof providerListResponseSchema>;
