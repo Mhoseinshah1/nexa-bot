@@ -118,6 +118,30 @@ export const PLATFORM_ERROR_CODES = {
   UNKNOWN_EVENT_TYPE: 'platform.unknown_event_type',
   CONFIG_INVALID: 'platform.config_invalid',
   SECRET_DECRYPT_FAILED: 'platform.secret_decrypt_failed',
+  /**
+   * Authenticated decryption failed. ONE code for every cause.
+   *
+   * A wrong tenant, a wrong row, a wrong purpose, a flipped ciphertext bit and
+   * an edited authentication tag are indistinguishable at the cryptographic
+   * boundary, and they must stay that way: a code that said WHICH
+   * authenticated field was wrong would be an oracle an attacker could query
+   * one field at a time. The audit trail records the attempt; the caller is
+   * told only that it failed.
+   */
+  SECRET_AUTH_FAILED: 'platform.secret_auth_failed',
+  /** The envelope names a key this installation does not hold. */
+  SECRET_KEY_UNKNOWN: 'platform.secret_key_unknown',
+  /** The envelope version is not one this release can read. */
+  SECRET_VERSION_UNSUPPORTED: 'platform.secret_version_unsupported',
+  /**
+   * The stored key id disagrees with the key id inside the envelope.
+   *
+   * Distinct from an authentication failure because it is not a cryptographic
+   * outcome — it is a bookkeeping contradiction, and it matters operationally:
+   * key retirement counts dependencies using the COLUMN, so a row whose column
+   * lies could let a key be retired while a ciphertext still needs it.
+   */
+  SECRET_KEY_ID_MISMATCH: 'platform.secret_key_id_mismatch',
   TELEGRAM_BAD_SECRET_TOKEN: 'telegram.bad_secret_token',
 } as const;
 

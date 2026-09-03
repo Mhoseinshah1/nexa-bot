@@ -1,3 +1,4 @@
+import type { SecretContext } from './secrets.js';
 import type { ActorContext, SourceSurface } from './actor.js';
 import type { ScopeContext } from './tenant.js';
 import type { CorrelationId } from './ids.js';
@@ -35,9 +36,23 @@ export interface EncryptedSecret {
 }
 
 export interface SecretCipher {
-  encrypt(plaintext: string): EncryptedSecret;
-  decrypt(secret: EncryptedSecret): string;
-  /** A stable, non-reversible display form, computed server-side. */
+  /**
+   * `context` is REQUIRED, and it is required on both sides on purpose.
+   *
+   * Making it a parameter rather than an option means every call site fails to
+   * compile until it says what the secret is for and which row owns it. A
+   * context that could be omitted would be omitted.
+   */
+  encrypt(plaintext: string, context: SecretContext): EncryptedSecret;
+  decrypt(secret: EncryptedSecret, context: SecretContext): string;
+  /**
+   * A stable, non-reversible display form, computed server-side.
+   *
+   * Derived from the ciphertext, so it CHANGES when a secret is re-encrypted
+   * under a new key. It is a visual confirmation that two operators are looking
+   * at the same stored value right now; it is not an identifier and nothing may
+   * persist it or compare it across a rewrap.
+   */
   mask(secret: EncryptedSecret): string;
 }
 
