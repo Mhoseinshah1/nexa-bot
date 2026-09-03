@@ -27,7 +27,11 @@ import {
   NOTIFICATION_STATUSES,
   NOTIFICATION_TRANSPORTS,
   OPERATIONAL_SEVERITIES,
+  PANEL_HEALTH_STATES,
+  PANEL_STATUSES,
   PERMISSION_OVERRIDE_EFFECTS,
+  PROVIDER_FAILURE_KINDS,
+  PROVIDER_TYPES,
   SOURCE_SURFACES,
   TEMPLATE_REVISION_ACTIONS,
   TENANT_KINDS,
@@ -57,6 +61,28 @@ function enumCheck(column: string, values: readonly string[]): SQL {
     })
     .join(', ');
   return sql.raw(`${column} IN (${list})`);
+}
+
+/**
+ * The same constraint for a column that is allowed to be NULL.
+ *
+ * `column IN (...)` is NULL — not false — when the column is NULL, and a CHECK
+ * passes on NULL. Relying on that is correct SQL and completely invisible to a
+ * reader, so it is stated: this column holds one of these values, or nothing.
+ */
+function nullableEnumCheck(column: string, values: readonly string[]): SQL {
+  if (!/^[a-z_][a-z0-9_]*$/.test(column)) {
+    throw new Error(`nullableEnumCheck: "${column}" is not a plain column name.`);
+  }
+  const list = values
+    .map((value) => {
+      if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+        throw new Error(`nullableEnumCheck: "${value}" is not a plain enum literal.`);
+      }
+      return `'${value.replace(/'/g, "''")}'`;
+    })
+    .join(', ');
+  return sql.raw(`${column} IS NULL OR ${column} IN (${list})`);
 }
 
 /**
@@ -1037,6 +1063,194 @@ export const aggregateSequences = pgTable(
   },
   (table) => [uniqueIndex('aggregate_sequences_pkey').on(table.aggregateType, table.aggregateId)],
 );
+// ---------------------------------------------------------------------------
+// Panels — a tenant's connections to the provider software it sells access to
+// ---------------------------------------------------------------------------
+
+/**
+ * A panel: what to call, and what an operator calls it.
+ *
+ * Three tables rather than one, and the split is by LIFETIME rather than by
+ * tidiness. This row changes when an operator edits configuration.
+ * `panel_credentials` changes when a credential is replaced, which is a
+ * different permission and a different audit action. `panel_health` changes on
+ * every probe — many times an hour once Phase 3C schedules them — and putting
+ * that in this row would move `updated_at` on a row nobody edited, make every
+ * probe contend with every operator edit for the same tuple lock, and drag
+ * ciphertext through the buffer pool on every list query.
+ *
+ * There is no `priority` or `sort` column. The legacy corpus does not evidence
+ * one (it is NOT_EXPOSED, which is not the same as absent), nothing in Phase 3
+ * orders panels, and panel SELECTION is Phase 4's problem. An integer column
+ * added then is a one-line additive migration; a column added now is a column
+ * whose meaning gets decided by whoever first writes to it.
+ *
+ * There is no customer-visibility flag either, and that is deliberate rather
+ * than forgotten. The legacy system gates a panel behind FOUR independent
+ * conditions — a display toggle, a tier-group set, a per-customer hidden list,
+ * and a separate delivery toggle (PBR-005) — and collapsing those into one
+ * boolean now is exactly the decision Phase 4 would have to undo. `status`
+ * here is operational: whether THIS installation uses the panel at all.
+ */
+export const panels = pgTable(
+  'panels',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    name: text('name').notNull(),
+    /**
+     * A value from `PROVIDER_TYPES`, constrained by the database.
+     *
+     * The CHECK is the outer half of a pair. It stops an unknown provider being
+     * written; `providerAdapter()` refuses to instantiate one if a migration or
+     * a direct write ever gets one past it. Either alone would leave a row that
+     * names an adapter nothing can build.
+     */
+    providerType: text('provider_type').notNull(),
+    baseUrl: text('base_url').notNull(),
+    status: text('status').notNull().default('ACTIVE'),
+    /** Set when the panel is archived, so the event has a time and not just a state. */
+    archivedAt: timestamptz('archived_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    index('panels_tenant_status_idx').on(table.tenantId, table.status),
+    /**
+     * Unique among a tenant's LIVE panels only.
+     *
+     * Archiving releases the name, which is the behaviour an operator expects:
+     * a panel replaced by a rebuilt one should be able to keep its label. A
+     * plain unique index would make the archive permanent in a way archiving is
+     * not supposed to be.
+     */
+    uniqueIndex('panels_tenant_name_live_key')
+      .on(table.tenantId, table.name)
+      .where(sql`status <> 'ARCHIVED'`),
+    check('panels_status_check', enumCheck('status', PANEL_STATUSES)),
+    check('panels_provider_type_check', enumCheck('provider_type', PROVIDER_TYPES)),
+    /** An archived panel has a time; a live one does not. Neither state can lie. */
+    check('panels_archived_at_check', sql`(status = 'ARCHIVED') = (archived_at IS NOT NULL)`),
+  ],
+);
+
+/**
+ * A panel's credentials, envelope-encrypted, one row per panel.
+ *
+ * Every column here is either ciphertext, the key id that decrypts it, or the
+ * time it was last replaced. There is no plaintext column and no column that
+ * could hold one. The legacy web admin rendered a panel's stored password as
+ * readable text on its detail page (WEB-BR-007) — a shape where the value
+ * exists in the clear anywhere is a shape where some page eventually shows it.
+ *
+ * `tenant_id` is denormalised from the panel deliberately. It is what the
+ * secret registry's rewrap reads to rebuild the AEAD context, and a rewrap that
+ * had to join to find the tenant would be one join away from re-encrypting a
+ * row under the wrong context.
+ *
+ * Each credential is nullable because providers differ: Marzban uses a username
+ * and a password, and a token-shaped provider uses neither. A NULL ciphertext
+ * and a NULL key id travel together — the CHECKs below refuse a half-written
+ * credential, which is what an interrupted write would otherwise leave.
+ */
+export const panelCredentials = pgTable(
+  'panel_credentials',
+  {
+    panelId: uuid('panel_id')
+      .primaryKey()
+      .references(() => panels.id),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    usernameCiphertext: text('username_ciphertext'),
+    usernameKeyId: text('username_key_id'),
+    usernameSetAt: timestamptz('username_set_at'),
+    passwordCiphertext: text('password_ciphertext'),
+    passwordKeyId: text('password_key_id'),
+    passwordSetAt: timestamptz('password_set_at'),
+    apiTokenCiphertext: text('api_token_ciphertext'),
+    apiTokenKeyId: text('api_token_key_id'),
+    apiTokenSetAt: timestamptz('api_token_set_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    index('panel_credentials_tenant_idx').on(table.tenantId),
+    check(
+      'panel_credentials_username_check',
+      sql`(username_ciphertext IS NULL) = (username_key_id IS NULL)
+          AND (username_ciphertext IS NULL) = (username_set_at IS NULL)`,
+    ),
+    check(
+      'panel_credentials_password_check',
+      sql`(password_ciphertext IS NULL) = (password_key_id IS NULL)
+          AND (password_ciphertext IS NULL) = (password_set_at IS NULL)`,
+    ),
+    check(
+      'panel_credentials_api_token_check',
+      sql`(api_token_ciphertext IS NULL) = (api_token_key_id IS NULL)
+          AND (api_token_ciphertext IS NULL) = (api_token_set_at IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * The LATEST health of a panel. One row, overwritten.
+ *
+ * Not a history table, and that is an argued decision rather than a shortcut.
+ * A history of probes is unbounded by construction — Phase 3C probes on a
+ * schedule — and the legacy system's own failure mode was a log group holding
+ * 36 + 15 + 8 + 1 identical TLS errors in one day with no way to collapse them.
+ * What an operator needs from history is "this condition started at T and is
+ * still going", and `operational_events` already answers exactly that, with a
+ * dedupe key and an occurrence counter and a resolution event. So health
+ * TRANSITIONS become operational events and the current state lives here.
+ *
+ * The absence of a row means never probed. That is why `state` has no
+ * `UNCHECKED` value: inventing a row to record that nothing has happened makes
+ * a never-checked panel indistinguishable from a checked one at a glance, which
+ * is the mistake behind the legacy statistics screen counting CONFIGURED panels
+ * and labelling them connected (RSV2-BR-021).
+ */
+export const panelHealth = pgTable(
+  'panel_health',
+  {
+    panelId: uuid('panel_id')
+      .primaryKey()
+      .references(() => panels.id),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    state: text('state').notNull(),
+    checkedAt: timestamptz('checked_at').notNull(),
+    latencyMs: integer('latency_ms').notNull(),
+    /** The normalized failure kind. NULL exactly when the state is HEALTHY or DEGRADED. */
+    failure: text('failure'),
+    /** The upstream HTTP status, when there was one. A number, never a body. */
+    statusCode: integer('status_code'),
+    providerVersion: text('provider_version'),
+    /**
+     * When this panel last answered successfully.
+     *
+     * Carried forward across failures on purpose: "unreachable, last worked
+     * four minutes ago" and "unreachable, last worked in March" are the same
+     * state and completely different problems.
+     */
+    lastHealthyAt: timestamptz('last_healthy_at'),
+  },
+  (table) => [
+    index('panel_health_tenant_idx').on(table.tenantId),
+    check('panel_health_state_check', enumCheck('state', PANEL_HEALTH_STATES)),
+    check('panel_health_failure_check', nullableEnumCheck('failure', PROVIDER_FAILURE_KINDS)),
+    /** A failing state names its failure; a succeeding one does not. */
+    check(
+      'panel_health_failure_presence_check',
+      sql`(state IN ('HEALTHY', 'DEGRADED')) = (failure IS NULL)`,
+    ),
+  ],
+);
 
 export const schema = {
   tenants,
@@ -1061,6 +1275,9 @@ export const schema = {
   notifications,
   notificationDeliveryAttempts,
   notificationReleasedClaims,
+  panels,
+  panelCredentials,
+  panelHealth,
 };
 
 /** Tables the database itself refuses to UPDATE or DELETE. */
