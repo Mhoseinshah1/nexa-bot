@@ -187,7 +187,11 @@ step "4. the stack comes up and the API becomes ready"
 compose up -d postgres redis >/dev/null || fail "the data services did not start"
 
 waited=0
-until [ "$(compose ps --format '{{.Service}} {{.Health}}' 2>/dev/null | grep -c healthy)" -ge 2 ]; do
+# `awk '$2 == "healthy"'`, not `grep -c healthy`: "healthy" is a SUBSTRING of
+# "unhealthy", so the count reached two the moment BOTH services were reporting
+# unhealthy — and this loop then exited and migrated against them.
+until [ "$(compose ps --format '{{.Service}} {{.Health}}' 2>/dev/null |
+  awk '$2 == "healthy" { n += 1 } END { print n + 0 }')" -ge 2 ]; do
   [ "$waited" -lt 120 ] || fail "PostgreSQL and Redis never became healthy"
   sleep 3
   waited=$((waited + 3))

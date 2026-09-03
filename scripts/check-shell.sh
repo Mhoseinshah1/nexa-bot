@@ -95,10 +95,30 @@ printf '\033[32mok\033[0m    %d helper scripts clean at shellcheck warning\n' "$
 # `.github` is in the scan set because the release workflow is shell too, and it
 # is the one that holds a token able to publish.
 OFFENDERS="$(find deploy scripts tests/deploy .github -type f \
-  \( -name '*.sh' -o -name 'botctl' -o -name '*.yml' \) 2>/dev/null |
+  \( -name '*.sh' -o -name 'botctl' -o -name '*.yml' -o -name '*.yaml' \) 2>/dev/null |
   grep -v 'check-shell.sh' |
   while IFS= read -r file; do
     awk -v f="$file" '
+      # Heredoc bodies are prose or data, not code this check has any business
+      # reading. Without this, a troubleshooting heredoc that MENTIONS a
+      # pipeline is reported as containing one.
+      heredoc != "" {
+        if ($0 ~ ("^[[:space:]]*" heredoc "[[:space:]]*$")) heredoc = ""
+        next
+      }
+      match($0, /<<-?[[:space:]]*['"'"'"]?[A-Za-z_][A-Za-z0-9_]*/) {
+        tag = substr($0, RSTART, RLENGTH)
+        gsub(/^<<-?[[:space:]]*['"'"'"]?/, "", tag)
+        heredoc = tag
+        next
+      }
+
+      # A trailing `|` in YAML is a BLOCK SCALAR indicator, not a pipe. Joining
+      # there spliced `run: |` onto the first line of the script it introduces,
+      # so any step whose first line began `head` or `grep -q` was reported —
+      # and the same command on the third line was not. Positional nonsense.
+      /^[[:space:]]*(-[[:space:]]*)?([A-Za-z_.-]+|"[^"]*"|'"'"'[^'"'"']*'"'"')?[[:space:]]*:?[[:space:]]*\|[+-]?[[:space:]]*$/ { next }
+
       { line = $0 }
       joined != "" { line = joined " " $0; joined = "" }
       /[|\\]$/ { joined = line; if (start == 0) start = NR; next }
@@ -107,8 +127,9 @@ OFFENDERS="$(find deploy scripts tests/deploy .github -type f \
         start = 0
         if (line ~ /^[[:space:]]*#/) next
         if (line ~ /\|\|[[:space:]]*true[[:space:]]*$/) next
-        if (line ~ /\|[[:space:]]*(grep[^|]*-[a-zA-Z]*q|head([[:space:]]|$))/) {
-          printf "%s:%d: %s\n", f, n, line
+        # A pipe is required. `grep -q file` with no pipeline is not this bug.
+        if (line ~ /\|[[:space:]]*(LC_ALL=[^[:space:]]+[[:space:]]+|command[[:space:]]+)?(grep[^|]*(-[a-zA-Z]*q|-m[[:space:]]*[0-9])|head([[:space:]]|$))/) {
+          printf "%s:%d: %s\\n", f, n, line
         }
       }
     ' "$file"

@@ -282,16 +282,33 @@ cmd_update() {
     # recorded release, re-running the update for the CURRENT version is
     # precisely the repair an operator would reach for, and returning early
     # made that advice a no-op. Repair it here instead.
-    if ! nexa_check_divergence >/dev/null 2>&1; then
-      local current_image
-      current_image="$(nexa_release_image "$current")" ||
-        nexa_die "cannot read ${current}'s image from its manifest; refusing to guess what it ran."
+    local divergence=0 current_image
+    nexa_check_divergence >/dev/null 2>&1 || divergence=$?
+
+    # A missing manifest (2) falls THROUGH to the full update path below, which
+    # resolves, pulls and records one — which is what the warning promises. The
+    # early return used to run first and die for want of that manifest, so the
+    # advertised recovery could not be followed at all.
+    if [ "$divergence" -eq 1 ] && current_image="$(nexa_release_image "$current")"; then
       nexa_set_deploy_image "$current_image"
-      nexa_ok "already running ${target}; repaired deploy.env, which named a different release."
+      nexa_ok "deploy.env named a different release and now names ${target}."
+      # Deliberately not "nothing to do": the CONTAINERS may still be running
+      # the image deploy.env used to name, and this command did not touch them.
+      # Saying what was and was not done is the difference between an operator
+      # who runs 'botctl restart' next and one who believes the matter closed.
+      nexa_log "The running containers were not changed. Run 'botctl restart' to bring them onto ${target}."
       return 0
     fi
-    nexa_ok "already running ${target}. Nothing to do."
-    return 0
+    if [ "$divergence" -eq 0 ]; then
+      nexa_ok "already running ${target}. Nothing to do."
+      return 0
+    fi
+    # divergence == 2: no manifest. Fall through to the full update path, which
+    # resolves, pulls, migrates (idempotently, to the schema already applied)
+    # and commits — recording the manifest that was missing. Heavier than an
+    # early return, and it is the only path that makes the warning's promise
+    # true.
+    nexa_warn "${target} is already current but has no release manifest; re-recording it by running the update through."
   fi
 
   # 1. RESOLVE. The tag is read once, here.
@@ -411,7 +428,7 @@ cmd_rollback() {
   # rollback reported success, changed nothing an operator wanted changed, and
   # repointed deploy.env AWAY from the release they were trying to reach.
   [ -n "$current" ] ||
-    nexa_die "no current release is recorded, so there is nothing to roll back FROM. The installation is incomplete; re-run the installer or 'botctl update'."
+    nexa_die "no current release is recorded, so there is nothing to roll back FROM. The installation is incomplete; re-run the installer. ('botctl update' refuses for the same reason, so it is not the way out of this.)"
   [ "$current" != "$previous" ] ||
     nexa_die "the current release and the rollback target are both ${current}, which an interrupted rollback leaves behind. 'botctl version' names the image that would actually start; run 'botctl update' for that version to settle it."
 
@@ -469,7 +486,12 @@ cmd_restart() {
   # release this installation says it runs. Refusing is the whole point: an
   # operator restarting a divergent installation is one keystroke from a
   # silent downgrade onto a schema that has already moved on.
-  nexa_check_divergence ||
+  # 2 is "no manifest, so this cannot be confirmed" — a warning, and no reason
+  # to refuse to start an installation. 1 is a real disagreement, and a restart
+  # is precisely what would act on it.
+  local divergence=0
+  nexa_check_divergence || divergence=$?
+  [ "$divergence" -ne 1 ] ||
     nexa_die "refusing to restart while the recorded release and deploy.env disagree, because a restart is exactly what would act on that. Settle it with 'botctl update' first."
   nexa_compose up -d --remove-orphans
   nexa_wait_ready || nexa_die "the stack restarted but the API is not ready."

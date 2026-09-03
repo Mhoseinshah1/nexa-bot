@@ -148,9 +148,17 @@ test_case 'an interrupted commit never reports a release it did not start'
 # No hook in the production code: `nexa_write_atomic` is overridden here to
 # fail on the Nth call, which is what a power cut looks like from inside
 # `nexa_commit_release`.
+# BOTH writers are counted. deploy.env is written by `nexa_set_deploy_image`,
+# not by `nexa_write_atomic`, so counting only the latter made the one
+# interruption that matters — after `current`, before deploy.env — unreachable.
+# The buggy ordering `previous; current; deploy.env` survived this test for
+# exactly that reason.
 nexa_write_atomic_source="$(declare -f nexa_write_atomic)"
 eval "nexa_write_atomic_real${nexa_write_atomic_source#nexa_write_atomic}"
 assert_ok 'the real writer was not captured' declare -F nexa_write_atomic_real
+nexa_set_deploy_image_source="$(declare -f nexa_set_deploy_image)"
+eval "nexa_set_deploy_image_real${nexa_set_deploy_image_source#nexa_set_deploy_image}"
+assert_ok 'the real image writer was not captured' declare -F nexa_set_deploy_image_real
 
 # `exit`, not `return`: this file runs without `set -e`, so a stub that merely
 # returns non-zero lets `nexa_commit_release` carry on to the next write and
@@ -169,9 +177,15 @@ nexa_write_atomic() {
   [ "$commit_writes" -le "${COMMIT_ALLOW:-99}" ] || exit 9
   nexa_write_atomic_real "$@"
 }
+# shellcheck disable=SC2317
+nexa_set_deploy_image() {
+  commit_writes=$((commit_writes + 1))
+  [ "$commit_writes" -le "${COMMIT_ALLOW:-99}" ] || exit 9
+  nexa_set_deploy_image_real "$@"
+}
 
 seed_release 'v1.0.0' "$DIGEST_A"
-for allow in 0 1 2; do
+for allow in 0 1 2 3; do
   printf 'v1.0.0\n' >"${NEXA_STATE_DIR}/current"
   rm -f "${NEXA_STATE_DIR}/previous"
   set_deploy_image "registry.test/nexa@${DIGEST_A}"
@@ -191,7 +205,12 @@ for allow in 0 1 2; do
       "registry.test/nexa@${DIGEST_B}" "$started"
   fi
 done
-unset -f nexa_write_atomic
+# RESTORED from the saved source, not `unset -f`. Unsetting removes the
+# override and leaves nothing behind — the library's original was overwritten
+# by the stub, so every later test calling it silently exercised a missing
+# function instead.
+eval "$nexa_write_atomic_source"
+eval "$nexa_set_deploy_image_source"
 COMMIT_ALLOW=99
 
 test_case 'a deploy.env rewrite that goes wrong changes nothing'
@@ -738,7 +757,12 @@ run_botctl version
 assert_fails 'the fixture is not divergent' test "$BOTCTL_STATUS" -eq 0
 run_botctl update v2.0.0
 assert_equals 'an update for the current version failed' 0 "$BOTCTL_STATUS"
-assert_contains 'the repair was not reported' "$BOTCTL_OUTPUT" 'repaired deploy.env'
+assert_contains 'the repair was not reported' "$BOTCTL_OUTPUT" 'now names v2.0.0'
+# And it must not claim more than it did. The CONTAINERS were not touched, so
+# "already running" on its own is an assertion about a thing this command did
+# not look at.
+assert_contains 'the operator was told nothing about the running containers' \
+  "$BOTCTL_OUTPUT" 'running containers were not changed'
 run_botctl version
 assert_equals 'the divergence survived' 0 "$BOTCTL_STATUS"
 

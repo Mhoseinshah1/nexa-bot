@@ -343,10 +343,25 @@ except json.JSONDecodeError:
 api = [entry for entry in entries if entry.get("Service") == "api"]
 running = [entry for entry in api if entry.get("State") == "running"]
 if running:
-    chosen = next((entry for entry in running if entry.get("Health")), running[0])
-    print(chosen.get("Health") or "running")
+    # The BEST health among the running entries, not the first one that has a
+    # health at all. A `compose run` container whose client was killed keeps
+    # RUNNING, and carries the same healthcheck, so it reports starting — and
+    # "first entry with a health" then answers starting while the real api next
+    # to it is healthy. Which entry comes first is not something compose
+    # promises, so that rule was correct only by luck of ordering.
+    healths = [entry.get("Health") or "" for entry in running]
+    if "healthy" in healths:
+        print("healthy")
+    else:
+        print(next((health for health in healths if health), "running"))
 elif api:
-    print(api[0].get("State") or "")
+    # Nothing running. Fast-fail only if EVERY entry is terminal: a leftover
+    # corpse alongside an api that is still `created` must not be read as the
+    # api having died, because that backs out a release that was merely slow —
+    # after the migration has already run.
+    states = [entry.get("State") or "" for entry in api]
+    alive = [state for state in states if state not in ("exited", "dead")]
+    print(alive[0] if alive else states[0])
 ' 2>/dev/null || true)"
 
     case "$state" in
@@ -519,11 +534,19 @@ nexa_check_divergence() {
   recorded="$(nexa_manifest_field "$version" digest 2>/dev/null || true)"
   if [ -z "$recorded" ]; then
     # No manifest for the release this installation says it runs. That is what
-    # the pre-manifest updater left behind, and those are precisely the
-    # installations most likely to be divergent — so staying silent here failed
-    # open on the population that needed the warning most.
-    nexa_warn "no release manifest for ${version}, so what this installation runs cannot be confirmed. 'botctl update ${version}' records one."
-    return 1
+    # the pre-manifest updater left behind, and those installations are the ones
+    # most likely to be divergent — so silence here would fail open on exactly
+    # the population that needs the warning.
+    #
+    # But it is NOT a divergence, and the difference has to survive to the
+    # caller. Return 2, not 1: with a single failure code, `botctl restart`
+    # refused to start the stack at all, said the release and deploy.env
+    # "disagree" when they may agree perfectly, and offered a repair that then
+    # died for want of the same manifest. Unknown is a warning; disagreement is
+    # a refusal.
+    nexa_warn "no release manifest for ${version}, so what this installation runs cannot be confirmed against source."
+    nexa_warn "'botctl update ${version}' records one. Until then 'botctl version' cannot report a commit or a digest."
+    return 2
   fi
   configured="$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE 2>/dev/null || true)"
   [ -n "$configured" ] || return 0
