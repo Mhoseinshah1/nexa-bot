@@ -34,7 +34,16 @@ sudo ./install.sh --domain admin.staging.example.com \
 - [ ] Docker Engine and the Compose plugin are installed (or already present).
 - [ ] The installer never asks to open a firewall port.
 - [ ] The first owner prompt hides the password and asks for confirmation.
+- [ ] A password shorter than twelve characters is refused with one sentence
+      that says how long it must be — not a stack trace.
+- [ ] **The owner step returns.** The first attempt at this checkpoint printed
+      `Owner "..." created` and then hung: the CLI held stdin open, so
+      `docker compose run --rm` never returned and the install stopped one step
+      before recording the release. The install must reach its summary on its
+      own, without a Ctrl+C.
 - [ ] It finishes with the panel URL and the `botctl` summary.
+- [ ] `sudo botctl version` names the installed version, commit and digest —
+      not "no current release is recorded".
 
 ## 2. Nothing secret was printed
 
@@ -43,6 +52,15 @@ sudo ./install.sh --domain admin.staging.example.com \
 - [ ] `sudo ls -la /etc/nexa` — the directory is `0700`, every file `0600`,
       all owned by `root`.
 - [ ] `history | grep -i pass` finds nothing from the install.
+
+## 2b. A rerun finishes an interrupted install
+
+- [ ] Rerun the exact same `install.sh` command line. It reports that the first
+      owner already exists from an earlier run, asks for no password, and
+      completes.
+- [ ] `sudo botctl version` and `sudo botctl status` agree with each other and
+      with the version installed.
+- [ ] Exactly one administrator can log in — the rerun created no second owner.
 
 ## 3. HTTPS and the panel
 

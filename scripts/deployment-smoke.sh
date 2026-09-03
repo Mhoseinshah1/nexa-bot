@@ -218,6 +218,42 @@ printf 'a-long-enough-smoke-password\n' |
   fail "the first owner could not be created"
 pass "the first owner is created from stdin"
 
+# The bootstrap CLI, on a REAL Docker TTY, must exit.
+#
+# This is the defect a fresh Ubuntu 24.04 staging install found, and the step
+# above cannot see it: `-T` means no TTY, so the CLI takes its buffered path and
+# the terminal reader never runs. On a TTY it did run, and it left stdin resumed
+# after the last prompt — the process stayed alive with its work finished,
+# `docker compose run --rm` never returned, and the install stopped one step
+# before writing the release manifest. The owner was created; `botctl version`
+# said "no current release is recorded" for good.
+#
+# So: allocate a real terminal — no `-T`, and `script` so compose has a TTY of
+# its own to allocate from — answer the prompts, and require the process to END.
+# An owner already exists, so the fence refuses this one, and that is fine: the
+# refusal lands AFTER the answers are read and the reader is closed, so a stdin
+# still resumed hangs here exactly as it hung on the host. What is asserted is
+# that the command RETURNS, not what it decided.
+owner_tty_log="${ROOT}/bootstrap-tty.log"
+owner_tty_command="docker compose --env-file ${NEXA_CONFIG_DIR}/deploy.env"
+owner_tty_command="${owner_tty_command} -f ${NEXA_DEPLOY_DIR}/compose.yml -f ${REPO}/deploy/compose.ci.yml"
+owner_tty_command="${owner_tty_command} run --rm --no-deps --entrypoint node api dist/bootstrap-owner.cli.js"
+
+owner_tty_status=0
+printf 'someone\nSomeone Else\nanother-long-smoke-password\nanother-long-smoke-password\n' |
+  timeout 120 script -qec "$owner_tty_command" /dev/null >"$owner_tty_log" 2>&1 ||
+  owner_tty_status=$?
+
+# 124 is `timeout` reporting that it had to kill the command. That is the whole
+# assertion: any other status means the process decided something and left.
+[ "$owner_tty_status" -ne 124 ] ||
+  fail "the bootstrap CLI never exited on a terminal (see ${owner_tty_log}); an install would hang here"
+[ "$owner_tty_status" -ne 0 ] ||
+  fail "a second bootstrap on a terminal SUCCEEDED; the first-owner fence is gone"
+grep -q 'bootstrap.already_completed' "$owner_tty_log" ||
+  fail "a second bootstrap on a terminal did not reach the first-owner fence (see ${owner_tty_log})"
+pass "the bootstrap CLI exits on a real terminal instead of hanging the install"
+
 compose up -d --remove-orphans >/dev/null || fail "the full stack did not start"
 
 waited=0

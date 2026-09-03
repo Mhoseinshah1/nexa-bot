@@ -114,6 +114,37 @@ A rerun is also refused when the version is unchanged but its tag has been
 manifest. That is an update wearing a rerun's name, and it would migrate and
 start new bytes with no backup and no rollback target.
 
+### Rerunning after the first owner exists
+
+The first owner is created several steps before the release manifest and the
+`current` pointer are written, so an install interrupted in that gap leaves a
+healthy installation with a real owner and no recorded release — `botctl
+version` reports "no current release is recorded". That happened on a real
+Ubuntu 24.04 staging host.
+
+A rerun handles it, and does so without weakening anything. Before prompting,
+the installer asks the application which of three states the database is in:
+
+| State          | Meaning                                                                     | What the installer does                                                                                                                 |
+| -------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `none`         | No administrator exists                                                     | Creates the first owner, as on a fresh host                                                                                             |
+| `bootstrapped` | Administrators exist **and this installation's own bootstrap created them** | Says so and carries on to the release commit. Nobody is asked for a password again                                                      |
+| `foreign`      | Administrators exist with no record of this bootstrap                       | **Stops.** This is somebody else's installation, and recording a release for it would attach this host's release identity to their data |
+
+The evidence is the audit record `BootstrapOwnerService` writes inside the same
+transaction as the owner, so there is no window in which the owner exists and
+the answer is "no" — which a marker file written after the bootstrap CLI
+returned would have had, in exactly the interruption it exists to recognise.
+`audit_logs` refuses DELETE at the database level and the retention sweeper
+touches only sessions and login attempts, so the answer does not expire.
+
+What this does **not** do is make bootstrap idempotent. `BootstrapOwnerService`
+still refuses outright whenever any administrator exists, whoever created them;
+it creates the first owner and nothing else. Only the installer's next step
+changes, never who may create an administrator. An answer the installer cannot
+read is refused too: creating an owner would risk a second one, and skipping
+would leave an installation nobody can log in to.
+
 ### Non-interactive installs
 
 The first owner's password is never a command-line argument, because `argv` is

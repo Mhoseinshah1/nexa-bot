@@ -298,7 +298,19 @@ case "${1:-}" in
       # release does" is expressible. With one global value the back-out could
       # never succeed, and the branch that reports it had no coverage.
       up) exit "$(read_state "up_exit_${NEXA_IMAGE##*@}" "$(read_state up_exit 0)")" ;;
-      run) exit "$(read_state run_exit 0)" ;;
+      run)
+        # `--status` is a READ, and the only thing it puts on stdout is one
+        # word. Modelled here rather than stubbed at the shell level, so the
+        # installer's own `owner_state` — the pipeline included — is what the
+        # tests exercise.
+        case "$*" in
+          *--status*)
+            [ "$(read_state owner_state_exit 0)" = "0" ] || exit 1
+            printf '%s\n' "$(read_state owner_state none)"
+            exit 0
+            ;;
+        esac
+        exit "$(read_state run_exit 0)" ;;
       exec)
         # Stand in for pg_dump: emit something that looks like a real dump so
         # the backup's own integrity checks have something to check.

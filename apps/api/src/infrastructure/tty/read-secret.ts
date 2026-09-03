@@ -127,7 +127,26 @@ export class TerminalReader {
     });
   }
 
-  /** Restores the terminal. A process that exits in raw mode leaves it broken. */
+  /**
+   * Restores the terminal AND releases the stream. A process that exits in raw
+   * mode leaves it broken; one that never exits is worse.
+   *
+   * The `pause()` is symmetric with `attach()`'s `resume()`, and it is
+   * load-bearing rather than tidy. Dropping the `data` listeners does NOT stop
+   * a stream that was explicitly resumed — it stays in flowing mode with its
+   * libuv handle referenced, so the event loop never empties. On a real Ubuntu
+   * 24.04 staging host the first owner was created and printed and the CLI then
+   * sat there for minutes: `docker compose run --rm` cannot return until its
+   * container's process does, so the install hung after its last useful step,
+   * before the release manifest was written.
+   *
+   * Measured, not reasoned: driving the compiled reader under a pseudo-terminal
+   * with `setRawMode(false)` alone leaves the process alive indefinitely, and
+   * adding this line makes it exit immediately. `unref()` also releases it, and
+   * is the wrong tool — it leaves the stream flowing, so bytes still arrive at a
+   * process that may exit mid-delivery. Pausing says what is meant: nothing is
+   * being read any more.
+   */
   close(): void {
     if (!this.attached) return;
     this.input.off('data', this.onData);
@@ -135,6 +154,7 @@ export class TerminalReader {
     this.input.off('close', this.onEnd);
     this.input.off('error', this.onEnd);
     this.input.setRawMode?.(false);
+    this.input.pause?.();
     this.attached = false;
   }
 

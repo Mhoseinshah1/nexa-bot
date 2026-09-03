@@ -398,6 +398,77 @@ assert_contains 'nothing calls refuse_digest_change between resolving the digest
 
 rm -f "${NEXA_STATE_DIR}/current"
 
+# ---------------------------------------------------------------------------
+# The interruption that a real Ubuntu 24.04 staging host produced.
+#
+# The owner is committed several steps before the release manifest and the
+# `current` pointer are written. That install stopped in the gap — the bootstrap
+# CLI created the owner, printed that it had, and then never exited — leaving a
+# HEALTHY installation whose `botctl version` said "no current release is
+# recorded" permanently, because the documented remedy is a rerun and a rerun
+# died at `bootstrap_owner` with BOOTSTRAP_ALREADY_DONE.
+# ---------------------------------------------------------------------------
+bootstrap_probe() {
+  bash -c '
+    . "$1" --domain admin.example.test --acme-email ops@example.test --version v1.0.0 >/dev/null 2>&1
+    bootstrap_owner 2>&1
+    printf "EXIT=%s\n" "$?"' _ "${REPO}/deploy/install.sh"
+}
+
+test_case 'a rerun after a successful bootstrap continues instead of dying'
+fake_set owner_state bootstrapped
+reset_docker_log
+probe="$(bootstrap_probe)"
+assert_contains 'the rerun did not recognise its own completed bootstrap' \
+  "$probe" 'already exists from an earlier run'
+assert_contains 'the rerun did not succeed' "$probe" 'EXIT=0'
+# And it asked nobody for a password: the only bootstrap-owner invocation is the
+# read. An interactive `run` here would be a second prompt for a credential the
+# installation already has.
+assert_not_contains 'the installer prompted for an owner it had already created' \
+  "$(docker_log | grep -F 'bootstrap-owner.cli.js' | grep -vF -- '--status' || true)" \
+  'bootstrap-owner.cli.js'
+
+test_case 'a database administered by somebody else is refused, not adopted'
+# The fence this must never become: "there is an administrator, so the bootstrap
+# must have worked". An administered database with no record of THIS
+# installation bootstrapping it is not a rerun — it is somebody else's data, and
+# writing a release manifest for it would attach this host's release identity
+# to it.
+fake_set owner_state foreign
+probe="$(bootstrap_probe)"
+assert_contains 'a foreign administered database was adopted' \
+  "$probe" 'did not create'
+assert_fails 'the installer continued past a foreign database' \
+  test "${probe#*EXIT=}" -eq 0
+
+test_case 'an unreadable owner state is refused rather than guessed'
+# Both guesses are wrong: creating an owner would be a second one, and skipping
+# would leave an installation nobody can log in to.
+fake_set owner_state_exit 1
+probe="$(bootstrap_probe)"
+assert_contains 'an unreadable owner state was guessed at' \
+  "$probe" 'could not determine whether'
+fake_set owner_state_exit 0
+
+test_case 'a fresh installation still bootstraps normally'
+fake_set owner_state none
+reset_docker_log
+probe="$(bootstrap_probe)"
+assert_contains 'a fresh install did not create the first owner' "$probe" 'first owner created'
+assert_contains 'the bootstrap CLI was never run' \
+  "$(docker_log)" 'bootstrap-owner.cli.js'
+
+test_case 'the recognised rerun reaches the release-state commit'
+# The behavioural tests above prove `bootstrap_owner` returns 0. This is what
+# makes that worth anything: main() writes the manifest and `current` AFTER it,
+# so a rerun that gets past it is a rerun that finishes recording the release.
+installer_tail="$(sed -n '/^  bootstrap_owner$/,/NEXA_CURRENT_FILE/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the manifest is not written after the owner step' \
+  "$installer_tail" 'nexa_write_manifest'
+assert_contains 'the current pointer is not written after the owner step' \
+  "$installer_tail" 'NEXA_CURRENT_FILE'
+
 test_case 'a truncated secret file is not mistaken for a finished one'
 # `[ -s "$file" ]` blessed a postgres.env with a user and a database and no
 # password, and a nexa.env truncated part-way — which is exactly what ENOSPC or
