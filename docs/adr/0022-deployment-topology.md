@@ -124,6 +124,13 @@ The first owner's password is never generated and never stored: it is read on
 the bootstrap CLI's stdin, which is the mechanism that CLI already implements
 precisely because argv is world-readable in `ps`.
 
+### The edge routes three prefixes, and the third is easy to forget
+
+`/api/*` and `/health/*` are obvious. `/telegram/webhook/*` is not: the
+controller sits outside the API prefix, so an edge that routes only the first
+two answers Telegram with the admin panel and a 200 — which Telegram reads as an
+accepted update. The failure has no symptom on either side.
+
 ### Update is a state machine with one durable commit point
 
 `botctl update` holds an exclusive `flock` for its whole run, so a second

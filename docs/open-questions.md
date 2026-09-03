@@ -112,12 +112,14 @@ mistaken for oversights:
   Closing it means signing at publish time and verifying before the pull, which
   is a key-management decision of its own. The digest-first model is arranged so
   that step can be added without changing anything else.
-- **Migration compatibility is policy with no mechanism.** Expand → deploy →
-  contract is what makes application rollback sound, and nothing checks that a
-  migration obeys it. A single same-release `DROP COLUMN` or `SET NOT NULL`
-  silently invalidates every rollback afterwards, and it surfaces only as the
-  previous release crash-looping AFTER `botctl rollback` has stopped the working
-  one. A gate belongs beside `check-migration-drift.sh`.
+- **Migration compatibility now has a mechanism, but not a proof.**
+  `tests/integration/migration-compatibility.test.ts` replays the previous
+  release's operations against this release's schema in a scratch database, and
+  refuses the obvious contracting statements in incoming migrations. That is
+  evidence for each transition as it is made. It is NOT a general guarantee for
+  all future migrations: the replay exercises the operations written into it,
+  and a migration that breaks something it does not name would still pass.
+  Widening the replay as the surface grows is the open work.
 
 ### `BLOCKER-SECRETS-V2` — the secret envelope
 

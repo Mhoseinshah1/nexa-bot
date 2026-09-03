@@ -171,10 +171,7 @@ describe('migration compatibility across the rollback window', () => {
     // test above proves THIS transition, and this one states the rule the next
     // migration has to obey.
     for (const entry of incoming) {
-      const sql = readFileSync(
-        join(__dirname, `../../apps/api/drizzle/${entry.tag}.sql`),
-        'utf8',
-      )
+      const sql = readFileSync(join(__dirname, `../../apps/api/drizzle/${entry.tag}.sql`), 'utf8')
         // Comments explain the rule and would otherwise trip it.
         .replace(/^\s*--.*$/gm, '')
         .toUpperCase();
@@ -187,8 +184,10 @@ describe('migration compatibility across the rollback window', () => {
         'RENAME COLUMN',
         'RENAME TO',
       ]) {
-        expect(sql, `${entry.tag} contains ${forbidden}, which the previous release may still need`)
-          .not.toContain(forbidden);
+        expect(
+          sql,
+          `${entry.tag} contains ${forbidden}, which the previous release may still need`,
+        ).not.toContain(forbidden);
       }
     }
   });

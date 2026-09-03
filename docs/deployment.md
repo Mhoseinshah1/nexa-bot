@@ -42,7 +42,15 @@ Five containers on one host, behind Compose.
 ```
 
 - **Caddy** is the only container that publishes a host port. It terminates
-  TLS, serves the Web Admin, and proxies `/api/*` and `/health/*` to the API.
+  TLS, serves the Web Admin, and proxies `/api/*`, `/health/*` and
+  `/telegram/webhook/*` to the API.
+
+  That last one is not optional. The webhook controller is at
+  `/telegram/webhook/:botInstanceId` and is **not** under `/api`, so without its
+  own route it falls to the SPA fallback and answers Telegram `index.html` with
+  a 200 — which Telegram reads as "update accepted". Every update would be
+  acknowledged and discarded, silently.
+
 - **PostgreSQL and Redis publish nothing.** They are on an internal network
   that Caddy is not attached to, so the internet-facing container has no route
   to the database at all.
@@ -252,6 +260,20 @@ The rule that makes application rollback sound:
 A migration may add. It may not, in the same release, remove or narrow anything
 the previous release still reads.
 
+**This is now checked, for the current transition.**
+`tests/integration/migration-compatibility.test.ts` migrates a scratch database
+to the PREVIOUS release, runs the operations that release performs, applies this
+release's migrations underneath it, and runs those operations again. A migration
+that broke the previous release fails there rather than during somebody's
+rollback. A second, cheaper check refuses `DROP COLUMN`, `DROP TABLE`,
+`SET NOT NULL`, `DROP CONSTRAINT`, `DROP DEFAULT` and renames in the incoming
+migrations.
+
+Neither is a general proof for all future migrations — the replay exercises the
+operations named in it, not every operation the previous release could perform.
+It is evidence for this transition and a gate for the next one, which is more
+than a documented rule and less than a mechanical guarantee.
+
 There is no automated destructive schema rollback and there will not be one: a
 down-migration that drops a column is a data-loss button beside a panic button.
 
@@ -269,6 +291,29 @@ A release is three facts that travel together:
 - a **version** — the label humans use, `v1.2.3`
 - a **source commit** — what it was built from
 - an **image digest** — what actually runs
+
+All three are stamped into the image at build time and are read **from the
+image**. The installer does not write them into `/etc/nexa/nexa.env`: `env_file`
+beats an image's own `ENV`, so anything written there would replace the
+immutable values permanently. An earlier version wrote `pending` for the commit
+and the build time, and `/health/info` then reported `pending` for the life of
+the installation.
+
+### What must be true before a release exists
+
+Publication is gated. `release.yml` will not build until:
+
+- the tag resolves to a commit, once, and every later job uses that **SHA**
+  rather than re-resolving a mutable tag;
+- a run of `.github/workflows/ci.yml` for **that exact SHA** completed with
+  conclusion `success` — cancelled, skipped, stale and timed-out are not a pass;
+- the version has **never been published**. A published version is immutable and
+  there is no force-republish switch; the way to publish different bytes is a
+  new version.
+
+The image is built for `linux/amd64` and `linux/arm64` — every architecture the
+installer accepts — and the published manifest is read back by digest and
+checked for both before the release is considered done.
 
 The digest is the identity. `latest` is never the installed identity, and
 `botctl version` reports all three so an installation can be tied back to
@@ -326,7 +371,38 @@ root-equivalent, so this is not a mitigable gap.
 CLIENT reads them, not the daemon. So that command's output is not safe to paste
 into a ticket, and `botctl status` exists partly so there is an output that is.
 
+### Changing the edge subnet
+
+`NEXA_EDGE_SUBNET` in `/etc/nexa/deploy.env` and `TRUSTED_PROXY_IPS` in
+`/etc/nexa/nexa.env` are two halves of one decision. The installer derives the
+second from the first once, and nothing keeps them in step afterwards.
+
+**If you change the edge subnet, change the trusted proxy set to match, and
+restart.** Otherwise the API stops believing Caddy's `X-Forwarded-For`, every
+request appears to originate from the proxy, and a single failed-login burst
+locks out every administrator. Nothing errors — the deployment just starts
+attributing all traffic to one address.
+
+```bash
+sudo sed -i 's|^NEXA_EDGE_SUBNET=.*|NEXA_EDGE_SUBNET=10.42.0.0/24|' /etc/nexa/deploy.env
+sudo sed -i 's|^TRUSTED_PROXY_IPS=.*|TRUSTED_PROXY_IPS=10.42.0.0/24|' /etc/nexa/nexa.env
+sudo botctl restart
+```
+
 ## Still outstanding
+
+**Images are digest-pinned but not signature-verified.** A release is addressed
+by digest everywhere after the tag is resolved once, and the release workflow
+records provenance and an SBOM. Provenance is not the same thing as
+verification: nothing at install or update time checks that the bytes were
+produced by this repository's release workflow, so the guarantee is only as
+strong as the registry account.
+
+Future hardening signs at publication and verifies before activation — the
+installer and `botctl update` would check the signature between resolving the
+digest and pulling it. Whether that is keyless (OIDC, tied to the workflow
+identity) or a managed key is unresolved, and picking wrongly is expensive to
+undo, so it is deliberately not decided here.
 
 **Release provenance is trust-on-first-use.** A release is pinned by digest, so
 the tag cannot be repointed under an installation and `botctl` addresses the

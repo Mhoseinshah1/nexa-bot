@@ -122,9 +122,7 @@ describe('the production environment template', () => {
     expect(installer, 'the installer still substitutes a build placeholder').not.toMatch(
       /__BUILD_(VERSION|COMMIT|TIME)__/,
     );
-    expect(installer, 'the installer still writes a pending placeholder').not.toMatch(
-      /=pending/,
-    );
+    expect(installer, 'the installer still writes a pending placeholder').not.toMatch(/=pending/);
   });
 
   it('still boots without a build identity, reporting the schema defaults', () => {
