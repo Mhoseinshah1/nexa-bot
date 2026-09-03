@@ -219,6 +219,8 @@ compose exec -T postgres psql -U nexa -d nexa -q -c \
 # ---------------------------------------------------------------------------
 step "update v1.0.0 -> v2.0.0"
 # ---------------------------------------------------------------------------
+BOTCTL_OWNER_BEFORE="$(stat -c '%U:%G' "${NEXA_BIN_DIR}/botctl")"
+BOTCTL_INODE_BEFORE="$(stat -c '%i' "${NEXA_BIN_DIR}/botctl")"
 "$BOTCTL" update v2.0.0 || fail "the update to v2.0.0 failed"
 [ "$(cat "${NEXA_STATE_DIR}/current")" = "v2.0.0" ] || fail "v2.0.0 did not become current"
 [ "$(cat "${NEXA_STATE_DIR}/previous")" = "v1.0.0" ] || fail "v1.0.0 is not the rollback target"
@@ -254,8 +256,10 @@ grep -qF '# nexa-smoke: v2.0.0 host assets' "${NEXA_BIN_DIR}/botctl" ||
   fail "the update did not install v2.0.0's botctl; the host is running v2.0.0 with v1.0.0's tooling"
 [ "$(stat -c '%a' "${NEXA_BIN_DIR}/botctl")" = "755" ] ||
   fail "the installed botctl is not executable after the update"
-[ "$(stat -c '%U:%G' "${NEXA_BIN_DIR}/botctl")" = "root:root" ] ||
+[ "$(stat -c '%U:%G' "${NEXA_BIN_DIR}/botctl")" = "$BOTCTL_OWNER_BEFORE" ] ||
   fail "the installed botctl changed owner during the update"
+[ "$(stat -c '%i' "${NEXA_BIN_DIR}/botctl")" != "$BOTCTL_INODE_BEFORE" ] ||
+  fail "the installed botctl kept its inode; it was written in place rather than renamed over"
 [ -s "${NEXA_LIB_DIR}/nexa-lib.sh" ] || fail "the update left no library beside the botctl it installed"
 [ -s "${NEXA_DEPLOY_DIR}/compose.yml" ] || fail "the update left no compose file"
 # What was replaced is recoverable: the outgoing release's set was recorded.
