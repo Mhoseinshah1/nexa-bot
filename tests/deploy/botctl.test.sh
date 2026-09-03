@@ -94,7 +94,7 @@ sudo_botctl() {
   local var="$1" value="$2"
   env -u NEXA_ROOT -u NEXA_DEPLOY_DIR -u NEXA_LIB_DIR -u NEXA_CONFIG_DIR \
     -u NEXA_STATE_DIR -u NEXA_BACKUP_DIR -u NEXA_LOCK_FILE -u NEXA_IMAGE_REPO \
-    -u NEXA_LIB -u NEXA_IMAGE \
+    -u NEXA_BIN_DIR -u NEXA_LIB -u NEXA_IMAGE \
     SUDO_USER=someone "$var=$value" "$BOTCTL" version 2>&1 || true
 }
 sudo_output="$(sudo_botctl NEXA_LIB "${NEXA_ROOT}/evil-lib.sh")"
@@ -1371,6 +1371,285 @@ assert_ok 'retention is unbounded' test "$remaining" -lt 8
 # `kept >= keep` deleted the KEEPth too, so a retention of five kept four and
 # the documentation said five.
 assert_equals 'retention does not keep the number it says' 5 "$remaining"
+teardown_root
+
+# =============================================================================
+# The host assets move with the release
+# =============================================================================
+#
+# The defect this section exists for was found on a real host, not in review.
+# After a successful `botctl update` to v0.1.0-staging.5, `botctl version`
+# reported staging.5 and `botctl secrets status` answered
+# `error unknown command "secrets"` — because the update moved the IMAGE and
+# left /usr/local/bin/botctl exactly as the previous release had installed it.
+# The same was true of the library it sources, the compose file that decides
+# the topology, the env template and the Caddy configuration.
+#
+# The fixtures below give release A a botctl without `secrets` and release B
+# one with it, and the assertions RUN the installed script rather than grepping
+# it. A test that greps proves the bytes changed; running it proves the
+# operator's command works.
+
+setup_root
+setup_fake_docker
+seed_release 'vA' "$DIGEST_A"
+# The live set is release A's: no `secrets`, exactly like the real host.
+write_live_assets A
+rm -rf "${NEXA_STATE_DIR}/assets/vA"
+seed_image_assets "$DIGEST_A" A
+seed_image_assets "$DIGEST_B" B
+fake_set resolve_digest "$DIGEST_B"
+
+test_case 'the real-host failure: the installed botctl gains the subcommand the release added'
+BOTCTL_INODE_BEFORE="$(stat -c '%i' "${NEXA_BIN_DIR}/botctl")"
+# Before: the exact symptom, reproduced.
+before="$("${NEXA_BIN_DIR}/botctl" secrets 2>&1 || true)"
+assert_contains 'the fixture did not reproduce the real-host symptom' \
+  "$before" 'unknown command "secrets"'
+
+run_botctl update vB
+assert_equals 'the update failed' 0 "$BOTCTL_STATUS"
+
+# After: the operator's command works, established by running it.
+after="$("${NEXA_BIN_DIR}/botctl" secrets 2>&1 || printf 'FAILED')"
+assert_contains 'the installed botctl did not gain `secrets` with the release' "$after" 'secrets ok (B)'
+assert_equals 'the installed botctl is not the target release' 'B' "$(installed_label)"
+
+test_case 'every coupled host asset moves too, not just botctl'
+# Each of these can drift independently, and each one that drifts is a
+# different failure: a stale library is a botctl calling functions that no
+# longer mean what it thinks; a stale compose.yml runs the new image under the
+# old topology; stale Caddy files route the new surfaces to the old paths.
+assert_equals 'nexa-lib.sh did not move with the release' \
+  'B' "$(asset_label "${NEXA_LIB_DIR}/nexa-lib.sh")"
+assert_equals 'compose.yml did not move with the release' \
+  'B' "$(asset_label "${NEXA_DEPLOY_DIR}/compose.yml")"
+assert_equals 'nexa.env.template did not move with the release' \
+  'B' "$(asset_label "${NEXA_DEPLOY_DIR}/nexa.env.template")"
+assert_equals 'the Caddyfile did not move with the release' \
+  'B' "$(asset_label "${NEXA_DEPLOY_DIR}/caddy/Caddyfile")"
+assert_equals 'the Caddy routes did not move with the release' \
+  'B' "$(asset_label "${NEXA_DEPLOY_DIR}/caddy/routes.caddy")"
+
+test_case 'the assets come from the target IMAGE, never from a checkout'
+log="$(docker_log)"
+assert_contains 'the assets were not extracted from the target image' \
+  "$log" "--entrypoint tar registry.test/nexa@${DIGEST_B}"
+assert_not_contains 'the update reached for git' "$log" 'git'
+# The repository this suite runs from is a checkout, and the installed files
+# must not be its.
+assert_not_contains 'an installed asset came from the repository checkout' \
+  "$(cat "${NEXA_DEPLOY_DIR}/compose.yml")" 'services:'
+
+test_case 'modes and ownership survive the replacement'
+assert_file_mode 'botctl is not executable' "${NEXA_BIN_DIR}/botctl" 755
+assert_file_mode 'the library is not 0644' "${NEXA_LIB_DIR}/nexa-lib.sh" 644
+assert_file_mode 'compose.yml is not 0644' "${NEXA_DEPLOY_DIR}/compose.yml" 644
+assert_file_mode 'the Caddyfile is not 0644' "${NEXA_DEPLOY_DIR}/caddy/Caddyfile" 644
+assert_equals 'the installed botctl changed owner' \
+  "$(stat -c '%u:%g' "${NEXA_BIN_DIR}/botctl")" "$(stat -c '%u:%g' "${NEXA_STATE_DIR}/assets/vB/bin/botctl")"
+
+test_case 'the replacement is a rename, not a write over the running script'
+# botctl replaces ITSELF while bash is still reading it. A rename swaps the
+# directory entry and leaves the running process's open inode alone; writing
+# over the same inode rewrites the script under the interpreter mid-execution,
+# and bash resumes at a byte offset into different text.
+#
+# The inode is how the two are told apart: `cp` over an existing file keeps it,
+# `mv` replaces it. Without this assertion the activation could be a plain `cp`
+# and every other check in this section would still pass.
+assert_fails 'the installed botctl kept its inode, so it was written in place' \
+  test "$(stat -c '%i' "${NEXA_BIN_DIR}/botctl")" -eq "$BOTCTL_INODE_BEFORE"
+
+test_case 'no temporary file is left beside a destination'
+leftovers="$(find "$NEXA_BIN_DIR" "$NEXA_LIB_DIR" "$NEXA_DEPLOY_DIR" -name 'botctl.??????' -o -name '*.partial' | wc -l)"
+assert_equals 'the activation left a temporary file behind' 0 "$leftovers"
+
+teardown_root
+
+# --- a failed update leaves the outgoing release's tooling usable -------------
+setup_root
+setup_fake_docker
+seed_release 'vA' "$DIGEST_A"
+write_live_assets A
+rm -rf "${NEXA_STATE_DIR}/assets/vA"
+seed_image_assets "$DIGEST_B" B
+fake_set resolve_digest "$DIGEST_B"
+
+test_case "a migration that fails puts the outgoing release's host assets back"
+# The update replaces the assets BEFORE the migration, so that the target runs
+# under its own compose file. That makes the failure paths load-bearing: an
+# update abandoned after the swap must not leave an installation running A and
+# operated by B's tooling.
+fake_set run_exit 1
+run_botctl update vB
+assert_fails 'a failed migration reported success' test "$BOTCTL_STATUS" -eq 0
+assert_equals "the failed update left the target release's botctl installed" 'A' "$(installed_label)"
+assert_equals "the failed update left the target release's compose file" \
+  'A' "$(asset_label "${NEXA_DEPLOY_DIR}/compose.yml")"
+assert_contains 'the installed botctl is not usable after the failed update' \
+  "$("${NEXA_BIN_DIR}/botctl" version 2>&1)" 'A'
+fake_set run_exit 0
+
+test_case "a target that will not start leaves the outgoing release's tooling"
+fake_set "up_exit_${DIGEST_B}" 1
+run_botctl update vB
+assert_fails 'a target that would not start reported success' test "$BOTCTL_STATUS" -eq 0
+assert_equals "a failed start left the target's botctl installed" 'A' "$(installed_label)"
+assert_equals "a failed start left the target's compose file installed" \
+  'A' "$(asset_label "${NEXA_DEPLOY_DIR}/compose.yml")"
+# The order matters and is asserted, not assumed: the outgoing release must be
+# restarted under ITS OWN compose file, so the restore has to happen before the
+# back-out `up`.
+assert_contains 'the outgoing release was not brought back' "$BOTCTL_OUTPUT" 'is running again'
+rm -f "${FAKE_DIR}/up_exit_${DIGEST_B}"
+
+test_case "a target that never becomes ready leaves the outgoing release's tooling"
+fake_set "api_health_${DIGEST_B}" starting
+NEXA_READY_TIMEOUT=6 run_botctl update vB
+assert_fails 'an unready target reported success' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'an unready target left its botctl installed' 'A' "$(installed_label)"
+rm -f "${FAKE_DIR}/api_health_${DIGEST_B}"
+
+test_case 'a release that does not carry its host assets is refused before anything changes'
+# The earlier attempts staged vB before failing, and re-using a complete
+# staged set is deliberate. Clear it so the extraction actually runs.
+rm -rf "${NEXA_STATE_DIR}/assets/vB"
+fake_set assets_missing 1
+run_botctl update vB
+assert_fails 'a release without host assets was accepted' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the refusal did not say what was missing' "$BOTCTL_OUTPUT" 'host assets'
+assert_equals 'a refused update still replaced the botctl' 'A' "$(installed_label)"
+assert_equals 'a refused update changed the current release' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+fake_set assets_missing 0
+
+test_case 'an interrupted extraction installs nothing and leaves no partial directory'
+rm -rf "${NEXA_STATE_DIR}/assets/vB"
+fake_set assets_truncated 1
+run_botctl update vB
+assert_fails 'a truncated extraction was accepted' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'a truncated extraction replaced the botctl' 'A' "$(installed_label)"
+assert_fails 'a truncated extraction left a version directory behind' \
+  test -d "${NEXA_STATE_DIR}/assets/vB"
+assert_fails 'a truncated extraction left a .partial directory behind' \
+  test -d "${NEXA_STATE_DIR}/assets/vB.partial"
+# And the next attempt, with the fault removed, must succeed rather than find
+# a half-staged directory and skip the extraction.
+fake_set assets_truncated 0
+run_botctl update vB
+assert_equals 'the retry after a truncated extraction failed' 0 "$BOTCTL_STATUS"
+assert_equals "the retry did not install the target release's botctl" 'B' "$(installed_label)"
+
+teardown_root
+
+# --- rollback -----------------------------------------------------------------
+setup_root
+setup_fake_docker
+seed_release 'vA' "$DIGEST_A"
+write_live_assets A
+rm -rf "${NEXA_STATE_DIR}/assets/vA"
+seed_image_assets "$DIGEST_B" B
+fake_set resolve_digest "$DIGEST_B"
+run_botctl update vB
+
+test_case 'rollback returns the host assets to the release it returns the image to'
+assert_equals 'the fixture did not reach the target release' 'B' "$(installed_label)"
+run_botctl rollback
+assert_equals 'the rollback failed' 0 "$BOTCTL_STATUS"
+assert_equals 'the rollback left the newer botctl operating the older image' 'A' "$(installed_label)"
+assert_equals 'the rollback left the newer compose file' \
+  'A' "$(asset_label "${NEXA_DEPLOY_DIR}/compose.yml")"
+assert_contains 'the rolled-back botctl still answers a command it never had' \
+  "$("${NEXA_BIN_DIR}/botctl" secrets 2>&1 || true)" 'unknown command "secrets"'
+assert_equals 'the rollback did not move the current pointer' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+
+test_case "a rollback that does not come back leaves the current release's tooling"
+run_botctl update vB
+assert_equals 'the second update failed' 0 "$BOTCTL_STATUS"
+fake_set "up_exit_${DIGEST_A}" 1
+run_botctl rollback
+assert_fails 'a rollback that could not start reported success' test "$BOTCTL_STATUS" -eq 0
+assert_equals "a failed rollback left the previous release's botctl installed" 'B' "$(installed_label)"
+rm -f "${FAKE_DIR}/up_exit_${DIGEST_A}"
+
+test_case "rollback refuses when the previous release's assets were never recorded"
+# An installation that predates this mechanism: its pointers were written by a
+# botctl that staged nothing. Rolling the IMAGE back there would leave the
+# current release's compose file describing a topology the older image was
+# never released with, which is a contract nothing here proves.
+rm -rf "${NEXA_STATE_DIR}/assets/vA"
+run_botctl rollback
+assert_fails 'a rollback without recorded assets was performed anyway' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the refusal did not say why' "$BOTCTL_OUTPUT" 'no host assets are recorded'
+assert_equals 'the refused rollback changed the current release' 'vB' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_equals 'the refused rollback changed the installed botctl' 'B' "$(installed_label)"
+
+teardown_root
+
+# --- the installations that already exist -------------------------------------
+setup_root
+setup_fake_docker
+seed_release 'vA' "$DIGEST_A"
+# staging.1 through staging.4 staged nothing: the mechanism did not exist. The
+# first update on such a host must still work, and must still leave something
+# to roll back to.
+rm -rf "${NEXA_STATE_DIR}/assets"
+write_live_assets A
+seed_image_assets "$DIGEST_B" B
+fake_set resolve_digest "$DIGEST_B"
+
+test_case 'an installation that staged nothing is upgradeable without reinstalling'
+run_botctl update vB
+assert_equals 'the update failed on an installation with no staged assets' 0 "$BOTCTL_STATUS"
+assert_equals "the upgrade did not install the target release's botctl" 'B' "$(installed_label)"
+assert_ok "the outgoing release's assets were not captured" \
+  test -f "${NEXA_STATE_DIR}/assets/vA/bin/botctl"
+assert_equals 'what was captured is not what was live' \
+  'A' "$(asset_label "${NEXA_STATE_DIR}/assets/vA/bin/botctl")"
+
+test_case 'and the rollback that upgrade made possible works'
+run_botctl rollback
+assert_equals 'the rollback after the first upgrade failed' 0 "$BOTCTL_STATUS"
+assert_equals 'the rollback did not restore the captured botctl' 'A' "$(installed_label)"
+
+test_case 'an installation missing a host asset is not silently half-captured'
+# If what is live cannot be recorded in full, there is nothing to put back, and
+# an update that proceeded anyway would be an update with no way home.
+run_botctl update vB
+rm -f "${NEXA_DEPLOY_DIR}/caddy/routes.caddy"
+rm -rf "${NEXA_STATE_DIR}/assets/vB"
+fake_set resolve_digest "$DIGEST_C"
+seed_image_assets "$DIGEST_C" C
+run_botctl update vC
+assert_fails 'an incomplete capture was accepted' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the refusal did not name the reason' "$BOTCTL_OUTPUT" 'cannot be recorded'
+assert_fails 'a refused capture left a partial directory behind' \
+  test -d "${NEXA_STATE_DIR}/assets/vB.partial"
+assert_equals 'a refused capture still replaced the botctl' 'B' "$(installed_label)"
+
+teardown_root
+
+# --- the lock -----------------------------------------------------------------
+setup_root
+setup_fake_docker
+seed_release 'vA' "$DIGEST_A"
+seed_image_assets "$DIGEST_B" B
+fake_set resolve_digest "$DIGEST_B"
+
+test_case 'the asset swap happens under the existing exclusive lock'
+# Two updates replacing /usr/local/bin/botctl at once is the one race that can
+# leave an operator with neither release's tooling. The lock that already
+# covers the migration must cover this too — asserted by holding it and
+# watching the update refuse before it touches anything.
+exec 9>"$NEXA_LOCK_FILE"
+flock -n 9
+run_botctl update vB
+assert_fails 'a second writer was admitted' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the refusal was not the lock' "$BOTCTL_OUTPUT" 'already running'
+assert_fails 'a locked-out update staged assets anyway' test -d "${NEXA_STATE_DIR}/assets/vB"
+assert_equals 'a locked-out update replaced the botctl' 'A' "$(installed_label)"
+exec 9>&-
+
 teardown_root
 
 report

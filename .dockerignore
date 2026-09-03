@@ -23,7 +23,16 @@ coverage
 # Nothing below is used at runtime.
 docs
 tests
-deploy
+# `deploy/` IS shipped, deliberately.
+#
+# botctl, its library, the compose file, the env template and the Caddy
+# configuration live on the host, outside the image — and they are
+# release-versioned behaviour. `botctl update` installs the TARGET release's
+# copies, and it can only do that if the release carries them. Excluding this
+# directory is what made an installation run v0.1.0-staging.5 while
+# `botctl secrets status` answered `unknown command "secrets"`.
+#
+# It is text, it is small, and it is not code the runtime executes.
 scripts/claude-session-start.sh
 docker-compose.yml
 .editorconfig

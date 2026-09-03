@@ -353,8 +353,8 @@ create_layout() {
   # 0700 on the configuration directory: every secret below is 0600, and the
   # directory mode means a non-root user cannot even traverse to them.
   install -d -m 0700 "$NEXA_CONFIG_DIR"
-  install -d -m 0755 "$NEXA_DEPLOY_DIR" "$NEXA_LIB_DIR"
-  install -d -m 0750 "$NEXA_STATE_DIR" "$NEXA_RELEASES_DIR"
+  install -d -m 0755 "$NEXA_DEPLOY_DIR" "$NEXA_LIB_DIR" "$NEXA_BIN_DIR"
+  install -d -m 0750 "$NEXA_STATE_DIR" "$NEXA_RELEASES_DIR" "$NEXA_ASSETS_DIR"
   install -d -m 0700 "$NEXA_BACKUP_DIR"
   # No directory is created for the lock: it lives in the state directory
   # above. An earlier version created one under /var/lock, which on Ubuntu is
@@ -527,8 +527,8 @@ install_assets() {
   install -m 0644 "${SCRIPT_DIR}/caddy/Caddyfile" "${NEXA_DEPLOY_DIR}/caddy/Caddyfile"
   install -m 0644 "${SCRIPT_DIR}/caddy/routes.caddy" "${NEXA_DEPLOY_DIR}/caddy/routes.caddy"
   install -m 0644 "${SCRIPT_DIR}/bin/nexa-lib.sh" "${NEXA_LIB_DIR}/nexa-lib.sh"
-  install -m 0755 "${SCRIPT_DIR}/bin/botctl" /usr/local/bin/botctl
-  nexa_ok "assets installed; botctl is at /usr/local/bin/botctl"
+  install -m 0755 "${SCRIPT_DIR}/bin/botctl" "${NEXA_BIN_DIR}/botctl"
+  nexa_ok "assets installed; botctl is at ${NEXA_BIN_DIR}/botctl"
 }
 
 write_deploy_env() {
@@ -766,6 +766,16 @@ main() {
   provision_installation
   start_everything
   bootstrap_owner
+
+  # What this install put on the host, recorded under its version.
+  #
+  # `botctl update` installs the TARGET release's assets and needs somewhere to
+  # put the outgoing ones back if the target does not come up. Recording them
+  # here means the first update after an install already has that set; an
+  # installation made before this mechanism existed gets it captured by the
+  # update itself.
+  nexa_capture_live_assets "$VERSION" ||
+    nexa_warn "the host assets for ${VERSION} could not be recorded; the first update will capture them."
 
   nexa_write_manifest "$VERSION" "$commit" "$digest"
   # Through the same atomic write botctl uses. `printf > file` truncates first,

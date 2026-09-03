@@ -426,9 +426,47 @@ cmd_update() {
   #    This is the reason the maintenance CLIs live in the application image.
   #    Running the current release's migrator would apply the schema the
   #    OUTGOING code expects, which is the wrong schema by definition.
+  # --- The host assets move with the release --------------------------------
+  #
+  # botctl, its library, compose.yml, the env template and the Caddy config are
+  # release-versioned behaviour that lives on the host. Updating the image and
+  # leaving them alone is what left a real staging installation reporting
+  # v0.1.0-staging.5 from `botctl version` while `botctl secrets status`
+  # answered `unknown command "secrets"`.
+  #
+  # Three steps, in this order, and the order is the safety argument:
+  #
+  #   1. STAGE the target's set out of its own image. A pure read; if the
+  #      release does not carry them this fails here, before anything on the
+  #      host has changed.
+  #   2. CAPTURE what is live now under the current version, so there is
+  #      something to put back. This is also what makes an installation created
+  #      before this mechanism upgradeable: staging.1-.4 staged nothing, and
+  #      this records whatever those installs left on disk.
+  #   3. ACTIVATE the target's set BEFORE the migration and the start, so the
+  #      target runs under its OWN compose file and Caddy routes rather than
+  #      the outgoing release's.
+  #
+  # Every failure from here on restores the current release's assets, so a
+  # failed update leaves an installation whose tooling still matches what is
+  # actually running.
+  nexa_step "installing ${target}'s host assets"
+  nexa_stage_release_assets "$target" "$target_image"
+  nexa_capture_live_assets "$current" ||
+    nexa_die "refusing to replace the host assets while ${current}'s cannot be recorded: a failed update would have nothing to put back."
+  nexa_activate_release_assets "$target"
+  nexa_ok "host assets are ${target}'s"
+
+  # Put the outgoing release's assets back. Used by every failure path below.
+  restore_host_assets() {
+    nexa_activate_release_assets "$current" ||
+      nexa_warn "could not restore ${current}'s host assets; ${NEXA_ASSETS_DIR}/${current} holds them."
+  }
+
   nexa_step "migrating with ${target}'s own migrator"
   if ! NEXA_IMAGE="$target_image" nexa_compose run --rm --no-deps \
     --entrypoint node api dist/infrastructure/persistence/migrate.js; then
+    restore_host_assets
     nexa_die "the migration FAILED. ${target} did not become current and ${current} is still running. The pre-migration backup is in ${NEXA_BACKUP_DIR}."
   fi
   nexa_ok "migrations applied"
@@ -437,6 +475,11 @@ cmd_update() {
   nexa_step "starting ${target}"
   if ! NEXA_IMAGE="$target_image" nexa_compose up -d --remove-orphans; then
     nexa_warn "the target release did not start; returning to ${current}."
+    # BEFORE the restart, not after: `nexa_compose` reads compose.yml, which is
+    # the target's until this puts the outgoing release's back. Restarting
+    # ${current} under ${target}'s compose file would bring it up under a
+    # topology it was never released with.
+    restore_host_assets
     # `up -d` returning zero says the containers were created, not that the
     # application works. Saying "is running again" without checking is how an
     # operator reads a reassuring message about an installation that is down.
@@ -452,6 +495,7 @@ cmd_update() {
   nexa_step "waiting for readiness"
   if ! NEXA_IMAGE="$target_image" nexa_wait_ready; then
     nexa_warn "${target} started but never became ready; returning to ${current}."
+    restore_host_assets
     if nexa_compose up -d --remove-orphans && nexa_wait_ready; then
       post_migration_reverted
       nexa_die "${target} failed its readiness check. ${current} is running again and is still the current release."
@@ -538,11 +582,33 @@ cmd_rollback() {
     nexa_die "cannot read ${previous}'s digest."
   nexa_pull_release "$digest"
 
+  # The host assets roll back WITH the application, explicitly.
+  #
+  # The alternative — leaving the newer tooling in place to operate the older
+  # image — would be a compatibility contract, and nothing here proves one.
+  # `compose.yml` in particular describes the topology a release was built for;
+  # starting ${previous} under ${current}'s compose file would run it in a
+  # shape it was never released with. So the rule is simple and testable: an
+  # installation runs one release's image and that same release's tooling.
+  #
+  # If ${previous}'s assets were never staged — an installation that predates
+  # this mechanism and has not updated since — say so and stop, rather than
+  # rolling the image back under tooling that belongs to a different release.
+  if ! nexa_assets_staged "$previous"; then
+    nexa_die "no host assets are recorded for ${previous}, so a rollback would leave ${current}'s botctl and compose file operating ${previous}'s image. Update to a release that stages them first, or reinstall ${previous}."
+  fi
+  nexa_activate_release_assets "$previous"
+
   if ! NEXA_IMAGE="$previous_image" nexa_compose up -d --remove-orphans; then
+    # Put ${current}'s assets back: the rollback did not happen, so the
+    # installation is still on ${current} and must still be operated as such.
+    # ${current} is non-empty here — the guard above refuses otherwise.
+    ! nexa_assets_staged "$current" || nexa_activate_release_assets "$current"
     nexa_die "${previous} did not start. NEITHER release has been deleted; run 'botctl logs'."
   fi
 
   if ! NEXA_IMAGE="$previous_image" nexa_wait_ready; then
+    ! nexa_assets_staged "$current" || nexa_activate_release_assets "$current"
     nexa_die "${previous} started but is NOT ready. Nothing has been deleted, and the current-release pointer still says ${current:-unknown}. Read 'botctl logs api' before doing anything else."
   fi
 

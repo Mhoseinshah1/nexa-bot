@@ -118,8 +118,11 @@ setup_root() {
   export NEXA_LOCK_FILE="${NEXA_STATE_DIR}/nexa.lock"
   export NEXA_IMAGE_REPO="registry.test/nexa"
 
+  export NEXA_BIN_DIR="${NEXA_ROOT}/usr/local/bin"
+
   mkdir -p "$NEXA_DEPLOY_DIR" "$NEXA_LIB_DIR" "$NEXA_STATE_DIR/releases" \
-    "$NEXA_BACKUP_DIR" "$(dirname "$NEXA_LOCK_FILE")"
+    "$NEXA_STATE_DIR/assets" "$NEXA_BACKUP_DIR" "$NEXA_BIN_DIR" \
+    "$(dirname "$NEXA_LOCK_FILE")"
   chmod 0700 "$NEXA_BACKUP_DIR"
   install -d -m 0700 "$NEXA_CONFIG_DIR"
 
@@ -141,7 +144,82 @@ EOF
   chmod 0600 "${NEXA_CONFIG_DIR}/postgres.env"
 
   : >"${NEXA_DEPLOY_DIR}/compose.yml"
+
+  # The host assets an installation has on disk. Every update captures these
+  # under the outgoing release before replacing them, so a root without them is
+  # a root on which no update can run — which is not the state a production
+  # host is ever in.
+  write_live_assets A
 }
+
+# The six files that live on the host rather than in the image, written as one
+# release shipped them. `label` is what distinguishes one release's set from
+# another's, and the botctl it writes is EXECUTABLE and answers differently per
+# label — which is what makes "the installed botctl gained `secrets`" a fact a
+# test can establish by running the thing, rather than by grepping it.
+write_asset_set() {
+  local dir="$1" label="$2"
+  mkdir -p "${dir}/bin" "${dir}/caddy"
+
+  cat >"${dir}/bin/botctl" <<BOTCTL
+#!/usr/bin/env bash
+# release ${label}
+case "\${1:-}" in
+  version) printf '${label}\n' ;;
+BOTCTL
+  # `secrets` exists in release B and not in release A. This is the real-host
+  # difference: staging.5's source has the subcommand, the installed script
+  # predates it.
+  case "$label" in
+    A) ;;
+    *) printf "  secrets) printf 'secrets ok (%s)\\\\n' ;;\n" "$label" \
+      >>"${dir}/bin/botctl" ;;
+  esac
+  cat >>"${dir}/bin/botctl" <<'BOTCTL'
+  *) printf 'error unknown command "%s"\n' "${1:-}" >&2; exit 1 ;;
+esac
+BOTCTL
+  chmod 0755 "${dir}/bin/botctl"
+
+  printf '# nexa-lib release %s\n' "$label" >"${dir}/bin/nexa-lib.sh"
+  printf '# compose release %s\n' "$label" >"${dir}/compose.yml"
+  printf '# env template release %s\n' "$label" >"${dir}/nexa.env.template"
+  printf '# Caddyfile release %s\n' "$label" >"${dir}/caddy/Caddyfile"
+  printf '# routes release %s\n' "$label" >"${dir}/caddy/routes.caddy"
+}
+
+# Put one release's set where an installation keeps it: the live destinations.
+write_live_assets() {
+  local label="$1" staging
+  staging="$(mktemp -d)"
+  write_asset_set "$staging" "$label"
+  mkdir -p "${NEXA_DEPLOY_DIR}/caddy" "$NEXA_LIB_DIR" "$NEXA_BIN_DIR"
+  install -m 0755 "${staging}/bin/botctl" "${NEXA_BIN_DIR}/botctl"
+  install -m 0644 "${staging}/bin/nexa-lib.sh" "${NEXA_LIB_DIR}/nexa-lib.sh"
+  install -m 0644 "${staging}/compose.yml" "${NEXA_DEPLOY_DIR}/compose.yml"
+  install -m 0644 "${staging}/nexa.env.template" "${NEXA_DEPLOY_DIR}/nexa.env.template"
+  install -m 0644 "${staging}/caddy/Caddyfile" "${NEXA_DEPLOY_DIR}/caddy/Caddyfile"
+  install -m 0644 "${staging}/caddy/routes.caddy" "${NEXA_DEPLOY_DIR}/caddy/routes.caddy"
+  rm -rf "$staging"
+}
+
+# Give an IMAGE the host assets its release shipped, so `botctl update` has
+# something to extract. Keyed by digest, because that is how the update
+# addresses the image — a fixture keyed by version would let a test pass while
+# botctl read the assets out of the wrong release.
+seed_image_assets() {
+  local digest="$1" label="$2"
+  local dir="${FAKE_DIR}/assets/${digest}/deploy"
+  rm -rf "${FAKE_DIR}/assets/${digest}"
+  mkdir -p "$dir"
+  write_asset_set "$dir" "$label"
+}
+
+# Read the release label out of a live asset, by running or reading it.
+installed_label() { "${NEXA_BIN_DIR}/botctl" version 2>/dev/null || printf 'none'; }
+# The release label a host asset carries. `botctl` opens with a shebang, so the
+# comment is not always the first line.
+asset_label() { sed -n 's/^#.*release //p' "$1" 2>/dev/null | sed -n 1p; }
 
 teardown_root() {
   [ -n "${NEXA_ROOT:-}" ] && [ -d "$NEXA_ROOT" ] && rm -rf "$NEXA_ROOT"
@@ -337,6 +415,40 @@ case "${1:-}" in
       *) exit 0 ;;
     esac
     ;;
+  run)
+    # `docker run --rm --entrypoint tar <image> -cf - -C /app deploy`: how the
+    # update reads the TARGET release's host assets out of its own image.
+    case "$*" in
+      *'--entrypoint tar'*)
+        if [ "$(read_state assets_missing 0)" != "0" ]; then
+          # A release built before the image carried its host assets. `tar`
+          # would not be there either, so the container fails to start.
+          exit 127
+        fi
+        _ref=""
+        for _arg in "$@"; do
+          case "$_arg" in
+            */nexa@*) _ref="${_arg##*@}" ;;
+          esac
+        done
+        _dir="${FAKE_DIR}/assets/${_ref}"
+        # A per-digest fixture if a test seeded one, otherwise the default set
+        # every release carries. Without the fallback every existing update
+        # test would have to know about host assets to keep passing.
+        [ -d "${_dir}/deploy" ] || _dir="${FAKE_DIR}/assets/default"
+        [ -d "${_dir}/deploy" ] || exit 1
+        if [ "$(read_state assets_truncated 0)" != "0" ]; then
+          # An extraction that dies part-way: the tar stream stops after the
+          # first file. `tar -x` reports the short read, and nothing may be
+          # activated from what landed.
+          tar -cf - -C "$_dir" deploy | head -c 1024
+          exit 1
+        fi
+        exec tar -cf - -C "$_dir" deploy
+        ;;
+    esac
+    exit 0
+    ;;
   *)
     exit 0
     ;;
@@ -345,6 +457,10 @@ FAKE
   chmod +x "${FAKE_DIR}/bin/docker"
   PATH="${FAKE_DIR}/bin:${PATH}"
   export PATH
+
+  # Every image carries a host-asset set unless a test says otherwise.
+  mkdir -p "${FAKE_DIR}/assets/default"
+  write_asset_set "${FAKE_DIR}/assets/default/deploy" B
 }
 
 fake_set() { printf '%s' "$2" >"${FAKE_DIR}/$1"; }
@@ -388,11 +504,24 @@ with open(sys.argv[1], "w", encoding="utf-8") as handle:
     }, handle)
 ' "${NEXA_STATE_DIR}/releases/${version}.json" "$version" "$digest"
   printf '%s\n' "$version" >"${NEXA_STATE_DIR}/current"
+  # A release the installation passed through has its host assets recorded,
+  # because every path that makes one current records them. A fixture without
+  # them is an installation that predates the mechanism, which is a state worth
+  # constructing deliberately and not worth every other test starting from.
+  stage_release_assets "$version"
   # deploy.env has to agree with the manifest, because a real installation's
   # does: they are written together by the same commit. A fixture where they
   # disagree is an installation mid-interrupted-update, which is a state worth
   # testing deliberately and not worth every other test starting from.
   set_deploy_image "registry.test/nexa@${digest}"
+}
+
+# Record a release's host assets where the library keeps them.
+stage_release_assets() {
+  local version="$1" label="${2:-$1}"
+  rm -rf "${NEXA_STATE_DIR}/assets/${version}"
+  mkdir -p "${NEXA_STATE_DIR}/assets/${version}"
+  write_asset_set "${NEXA_STATE_DIR}/assets/${version}" "$label"
 }
 
 # Rewrite deploy.env's NEXA_IMAGE without going through the library, so a test

@@ -69,6 +69,7 @@ Four locations, with four different lifetimes.
 | `/opt/nexa/lib`         | 0755     | `nexa-lib.sh`, shared by botctl and the installer     | replaced           |
 | `/etc/nexa`             | **0700** | `nexa.env`, `postgres.env`, `redis.env`, `deploy.env` | **yes**            |
 | `/var/lib/nexa`         | 0750     | release manifests, `current`, `previous`, the lock    | **yes**            |
+| `/var/lib/nexa/assets`  | 0750     | each release's host assets, so a rollback has them    | **yes**            |
 | `/var/backups/nexa`     | **0700** | database dumps                                        | **yes**            |
 | `/usr/local/bin/botctl` | 0755     | the operator CLI                                      | replaced           |
 
@@ -221,14 +222,17 @@ command that silently waits out a long migration tells the operator nothing;
 2. **Pull** by that digest. A tag repointed a second later cannot change what
    is installed.
 3. **Back up** the database.
-4. **Migrate**, using the _target_ release's own compiled migrator — so the
+4. **Install the target's host assets** — `botctl`, `nexa-lib.sh`,
+   `compose.yml`, `nexa.env.template` and the Caddy configuration — read out of
+   the target's own image. See below.
+5. **Migrate**, using the _target_ release's own compiled migrator — so the
    schema change is the one the incoming code expects, by construction.
-5. **Start** the target release.
-6. **Wait** for the API's readiness probe.
-7. **Commit**: write the release manifest, then the image pointer, then
+6. **Start** the target release.
+7. **Wait** for the API's readiness probe.
+8. **Commit**: write the release manifest, then the image pointer, then
    `previous`, then `current`.
 
-Step 7 is the only durable moment. Everything before it leaves the previous
+Step 8 is the only durable moment. Everything before it leaves the previous
 release current and running.
 
 The order inside step 7 is deliberate. The image pointer — what a restart or a
@@ -239,17 +243,92 @@ than one that reports the new release while quietly starting the old one.
 `botctl version` and `botctl status` compare the two and report a divergence
 loudly if they ever disagree.
 
+### The host assets move with the release
+
+Most of a release lives in the immutable image. Six files do not:
+
+| File                                  | What a stale copy costs                                 |
+| ------------------------------------- | ------------------------------------------------------- |
+| `/usr/local/bin/botctl`               | the operator CLI is the previous release's              |
+| `/opt/nexa/lib/nexa-lib.sh`           | botctl calls functions that do not mean what it expects |
+| `/opt/nexa/deploy/compose.yml`        | the new image runs under the old topology               |
+| `/opt/nexa/deploy/nexa.env.template`  | a rerun of the installer generates the old key set      |
+| `/opt/nexa/deploy/caddy/Caddyfile`    | the edge serves the previous release's configuration    |
+| `/opt/nexa/deploy/caddy/routes.caddy` | new surfaces are not routed                             |
+
+These are release-versioned behaviour, so `botctl update` moves them with the
+image. It reads them out of the **target image**, addressed by digest — never
+from a git checkout, which is mutable, may be a different commit, and is not
+required to exist on a production host at all.
+
+Three steps, in this order:
+
+1. **Stage** the target's set into `/var/lib/nexa/assets/<version>`, extracted
+   from its image. A pure read: a release that does not carry them fails here,
+   before anything on the host has changed. The extraction writes to a
+   `.partial` directory and renames it only once every file is present, so an
+   interrupted one leaves nothing for a later activation to install from.
+2. **Record** what is live now, under the outgoing release, so a failed update
+   has something to put back.
+3. **Activate** the target's set, before the migration and the start, so the
+   target runs under its own compose file and Caddy routes. Each file is
+   written beside its destination and renamed over it — atomic, so an
+   interruption leaves either the old file or the new one and never a truncated
+   `botctl`; and safe for a `botctl` that is replacing itself while bash is
+   still reading it, because a rename swaps the directory entry and leaves the
+   running process's inode alone.
+
+Every failure path from step 3 onwards puts the outgoing release's set back
+before restarting it, so a failed update leaves an installation whose tooling
+matches what is actually running.
+
+A rollback does the same in reverse: it activates the previous release's
+recorded set before starting its image. The alternative — leaving the newer
+tooling to operate the older image — would be a compatibility contract, and
+nothing here proves one. If the previous release's set was never recorded,
+`botctl rollback` says so and stops rather than mixing them.
+
+### Installations made before this mechanism existed
+
+An update is performed by the `botctl` that is **already installed**, so a host
+whose `botctl` predates this mechanism cannot be repaired by an update: the
+script that would move the host assets is the one that is missing. That is not
+a gap in the mechanism, it is what "the tool updates itself" means, and no
+amount of work in a later release can reach backwards into a script already on
+disk.
+
+Such a host needs one repair, once, and then never again:
+
+```bash
+# On the host, for the version it is ALREADY running. The installer is
+# idempotent: it recognises an existing installation, does not regenerate
+# secrets, and reports that the first owner already exists.
+sudo ./install.sh --domain <the same domain> --acme-email <the same address> \
+  --version <the version botctl currently reports>
+```
+
+That reinstalls the host assets from the release's own installer and records
+them, after which `botctl update` carries them forward on its own. Confirm with
+`botctl version` and then update normally.
+
+The mechanism itself needs no such repair on a host that already has it: an
+installation with nothing recorded in `/var/lib/nexa/assets` has whatever is
+live captured by the first update that runs, so there is always something to
+roll back to.
+
 ### What happens when it fails
 
-| Failure                        | Result                                                                              |
-| ------------------------------ | ----------------------------------------------------------------------------------- |
-| The version cannot be resolved | Current release untouched. Nothing pulled.                                          |
-| The image cannot be pulled     | Current release untouched. No backup, no migration.                                 |
-| The backup fails               | **The update does not proceed.** Nothing is migrated.                               |
-| The migration fails            | The target does not become current. The pre-migration backup is named in the error. |
-| The target does not start      | The previous release is restarted; it remains current.                              |
-| The target is never ready      | The previous release is restarted; it remains current.                              |
-| The rollback is not healthy    | Reported loudly. **Neither release is deleted.**                                    |
+| Failure                             | Result                                                                                                    |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| The version cannot be resolved      | Current release untouched. Nothing pulled.                                                                |
+| The image cannot be pulled          | Current release untouched. No backup, no migration.                                                       |
+| The backup fails                    | **The update does not proceed.** Nothing is migrated.                                                     |
+| The image carries no host assets    | Refused before anything on the host changes.                                                              |
+| The outgoing set cannot be recorded | Refused: a failed update would have nothing to put back.                                                  |
+| The migration fails                 | Host assets restored. The target does not become current. The pre-migration backup is named in the error. |
+| The target does not start           | Host assets restored, then the previous release is restarted; it remains current.                         |
+| The target is never ready           | Host assets restored, then the previous release is restarted; it remains current.                         |
+| The rollback is not healthy         | Reported loudly. **Neither release is deleted.**                                                          |
 
 The previous release is never deleted by the update that replaced it. Manifests
 are pruned to the five most recent by an update — a rollback prunes nothing —

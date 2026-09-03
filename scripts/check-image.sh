@@ -166,4 +166,35 @@ NODE_ENV_OUT=$(run printenv NODE_ENV)
 [ "$NODE_ENV_OUT" = "production" ] || fail "NODE_ENV is '$NODE_ENV_OUT', expected production"
 pass "NODE_ENV defaults to production in the image"
 
+# --- 9. The host assets the release must carry --------------------------------
+#
+# `botctl update` installs the TARGET release's botctl, library, compose file,
+# env template and Caddy configuration out of its image — that is the only
+# source that is immutable, digest-addressed and available on a host with no
+# git. A release built without them cannot be updated to, and the failure would
+# appear on somebody's production host rather than here.
+#
+# `tar` is what the update actually uses to read them, so this checks the exact
+# capability, not a proxy for it.
+HOST_ASSETS=(
+  deploy/bin/botctl
+  deploy/bin/nexa-lib.sh
+  deploy/compose.yml
+  deploy/nexa.env.template
+  deploy/caddy/Caddyfile
+  deploy/caddy/routes.caddy
+)
+missing=""
+for asset in "${HOST_ASSETS[@]}"; do
+  run test -s "/app/$asset" 2>/dev/null || missing="$missing $asset"
+done
+[ -z "$missing" ] || fail "the image does not carry its host assets:$missing"
+
+# And they must be readable THROUGH tar, in one stream, exactly as the update
+# reads them. `test -s` would still pass on a layout tar cannot walk.
+EXTRACTED=$(docker run --rm --network none --entrypoint tar "$IMAGE" \
+  -cf - -C /app deploy | tar -tf - | grep -c 'deploy/bin/botctl$' || true)
+[ "$EXTRACTED" = "1" ] || fail "the host assets cannot be read out of the image with tar"
+pass "the image carries the host assets an update installs"
+
 printf '\nThe production image carries artefacts and production dependencies, and nothing else.\n'
