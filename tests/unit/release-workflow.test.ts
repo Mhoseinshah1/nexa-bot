@@ -106,6 +106,29 @@ describe('the release workflow', () => {
     expect(Object.keys(inputs ?? {})).toEqual(['tag']);
   });
 
+  it('treats an unresolved registry lookup as a stop, not as absence', () => {
+    const gate = workflow.jobs.gate?.steps.map((s) => s.run ?? '').join('\n') ?? '';
+
+    // `docker manifest inspect` exits non-zero for a missing manifest AND for
+    // a registry that is down, a token that has expired, and a response it
+    // cannot parse. The one-liner it replaced read all of those as "never
+    // published", which publishes over an immutable version the moment the
+    // registry comes back.
+    expect(gate, 'a bare `if docker manifest inspect` reads any failure as absence').not.toMatch(
+      /if docker manifest inspect[^\n]*then/,
+    );
+
+    // Absence has to be a positive determination by the registry.
+    expect(gate).toContain('MANIFEST_UNKNOWN');
+    const classification = gate.slice(gate.indexOf('status=$?'));
+    expect(classification, 'the lookup output is captured but never classified').toContain(
+      'could not determine whether',
+    );
+    // And the unclassified case must actually stop.
+    const fallthrough = classification.slice(classification.indexOf('could not determine whether'));
+    expect(fallthrough).toContain('exit 1');
+  });
+
   it('serialises on the VERSION, so two trigger paths cannot publish it at once', () => {
     // `github.ref` is refs/tags/v1.0.0 for a tag push and refs/heads/main for a
     // workflow_dispatch launched from main, so keying on it put the two paths

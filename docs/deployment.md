@@ -102,6 +102,18 @@ It is **idempotent**: a run that fails at any step can be repeated. Secrets are
 never regenerated — a second run that minted a new database password would lock
 the installation out of its own data.
 
+The one exception is a secrets directory that is partly written, which only a
+kill between two of the three files can produce. The installer refuses it
+instead of filling in the rest, because the missing file's contents depend on
+the finished files' secrets and rescuing that state means more code reading
+secrets back. Nothing has started at that point: move `/etc/nexa` aside and
+rerun.
+
+A rerun is also refused when the version is unchanged but its tag has been
+**moved** — the resolved digest no longer matches the installed release's
+manifest. That is an update wearing a rerun's name, and it would migrate and
+start new bytes with no backup and no rollback target.
+
 ### Non-interactive installs
 
 The first owner's password is never a command-line argument, because `argv` is
@@ -282,7 +294,10 @@ its own code. `0015_single_primary_tenant` adds a unique index that permits one
 `PRIMARY` tenant, and it will not build on a database that already holds two —
 a state provisioning cannot produce, but a hand-written `INSERT` can. It fails
 loudly at migrate time with the index name, which is the correct outcome: the
-operator decides which tenant is primary, not the migration.
+operator decides which tenant is primary, not the migration. A development
+database seeded before this release is the one place it will actually happen —
+the old seed made both of its tenants `PRIMARY` — and there the answer is to
+reseed, not to reconcile.
 
 ## Reboots
 
@@ -438,13 +453,27 @@ here — one resolution, a digest everywhere after it, and `botctl version`
 reporting the digest so it can be compared against the release job's summary —
 is what makes the verification step addable later without changing the model.
 
-**Migration compatibility is policy with no mechanism.** The expand → deploy →
-contract rule below is what makes application rollback sound, and nothing in
-this repository checks that a migration obeys it. A single same-release
-`DROP COLUMN` or `SET NOT NULL` silently invalidates every rollback afterwards,
-and it surfaces only as the previous release crash-looping AFTER `botctl
-rollback` has already stopped the working one. A migration-review gate belongs
-beside `check-migration-drift.sh`.
+**Migration compatibility is checked for one transition, not proved in
+general.** The expand → deploy → contract rule is what makes application
+rollback sound. `tests/integration/migration-compatibility.test.ts` now replays
+the previous release's operations against this release's schema and refuses
+`DROP COLUMN`, `SET NOT NULL`, `DROP TABLE`, `DROP CONSTRAINT`, `DROP DEFAULT`,
+`TRUNCATE` and renames in the incoming migrations. What it does not do is prove
+the rule for operations the replay does not name, and its boundary is a tag in
+the file that a release has to move. A migration whose incompatibility lies
+outside both still surfaces only as the previous release crash-looping AFTER
+`botctl rollback` has stopped the working one.
+
+**A failed release verification burns the version.** `publish` pushes the
+version tag and `verify` reads the manifest back afterwards, so a release that
+fails verification is already installable and the gate's immutability rule then
+makes that version unpublishable for ever. Fixing it properly means pushing by
+digest, verifying, and assigning the tag from the verified digest — a change
+whose correctness turns on how the registry treats a re-pushed manifest, which
+nothing in this repository can exercise. It belongs with the first real
+registry acceptance, not with a static round. Until then the recovery is a
+version bump, and it is a version bump for a release nobody had installed yet,
+because the workflow fails loudly.
 
 **`BLOCKER-SECRETS-V2`.** The v1 secret envelope binds no context to its
 ciphertext, and a single configured KEK means rotation cannot read what the

@@ -6,6 +6,11 @@
 # Secrets in particular are generated ONCE — a rerun that minted a new database
 # password would lock the installation out of its own data.
 #
+# One state is refused rather than resumed: a secrets directory that is PARTLY
+# written, which only a kill between two of the three files can produce. See
+# `generate_secrets`. Nothing has started when that happens, so the remedy is to
+# move the directory aside and rerun.
+#
 # It needs root, because it installs packages, writes under /etc and /opt, and
 # manages Docker. What it will NOT do:
 #
@@ -153,6 +158,36 @@ refuse_version_change() {
   [ -n "$installed" ] || return 0
   [ "$installed" != "$VERSION" ] || return 0
   nexa_die "this host already runs ${installed}, and the installer is not an updater: it takes no backup, records no rollback target, and would repoint the deployment at ${VERSION} before anything had been migrated or started. Run instead: botctl update ${VERSION}"
+}
+
+# The same refusal, for the case the version string cannot see.
+#
+# A rerun with the SAME --version is supported, and it was accepted on the
+# strength of the version STRING alone. But a version is a tag, and a tag can be
+# moved: if `v1.2.0` has been repointed at different bytes, a rerun resolves the
+# new digest, rewrites deploy.env to it, and migrates and starts it — the exact
+# unannounced update `refuse_version_change` exists to prevent, wearing a name
+# that made it look like a no-op.
+#
+# The release workflow makes this impossible for images it publishes; a private
+# registry, a mirror, or a compromised one is where it happens. The digest is
+# the identity everywhere else in this deployment, so it is the identity here.
+#
+# Runs after the digest is resolved, because there is nothing to compare before
+# then. If no manifest was recorded for the installed version the check cannot
+# decide and does not pretend to — `nexa_check_divergence` reports that state
+# separately.
+refuse_digest_change() {
+  local resolved="$1" installed recorded
+  installed="$(nexa_current_version || true)"
+  [ -n "$installed" ] || return 0
+  # A DIFFERENT installed version already died in preflight; reaching here with
+  # one would mean this ran in the wrong order.
+  [ "$installed" = "$VERSION" ] || return 0
+  recorded="$(nexa_manifest_field "$VERSION" digest 2>/dev/null || true)"
+  [ -n "$recorded" ] || return 0
+  [ "$recorded" != "$resolved" ] || return 0
+  nexa_die "this host already runs ${VERSION}, but ${NEXA_IMAGE_REPO}:${VERSION} now resolves to ${resolved} while the installed release records ${recorded}. A published version is immutable, so that tag has been moved. The installer would migrate and start the new bytes with no backup and no rollback target. Find out why the tag moved; if the new image is the one you want, publish it as a NEW version and run: botctl update <that version>"
 }
 
 preflight() {
@@ -418,8 +453,16 @@ generate_secrets() {
   kek_id="install-$(date -u +%Y%m%d)"
 
   # Written by redirection, never echoed. Nothing below prints a value. Each
-  # file lands complete or not at all, so a kill or an ENOSPC between them
-  # leaves a state the next run can read correctly and resume from.
+  # file lands complete or not at all — no half-written secret is ever readable.
+  #
+  # What that does NOT buy is resumption. A kill BETWEEN two of these writes
+  # leaves some files complete and some absent, and the check above then dies
+  # rather than filling in the rest: the passwords in the finished files are
+  # already baked into `nexa.env`'s DATABASE_URL and REDIS_URL, and generating
+  # the missing half means reading the existing secrets back and threading them
+  # through — more code handling secrets, to rescue a state whose safe remedy
+  # is one command. Nothing has started at this point, so moving the directory
+  # aside and rerunning loses nothing. The refusal says so.
   write_secret_file "$pg_env" <<EOF
 POSTGRES_USER=nexa
 POSTGRES_DB=nexa
@@ -618,6 +661,7 @@ main() {
   digest="$(nexa_resolve_digest "$VERSION")" ||
     nexa_die "could not resolve ${NEXA_IMAGE_REPO}:${VERSION}."
   image="${NEXA_IMAGE_REPO}@${digest}"
+  refuse_digest_change "$digest"
   nexa_ok "${VERSION} is ${digest}"
 
   generate_secrets

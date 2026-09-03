@@ -160,11 +160,35 @@ jobs:
           #
           # No force-republish switch, deliberately: the way to publish
           # different bytes is a new version.
-          if docker manifest inspect "${IMAGE}:${TAG}" >/dev/null 2>&1; then
+          # A non-zero exit is NOT evidence of absence. `docker manifest
+          # inspect` fails the same way when the registry is down, when the
+          # token has expired, and when the response cannot be parsed — and
+          # reading any of those as "never published" is how an immutable
+          # version gets overwritten by the run that was supposed to protect
+          # it. Only a registry that DEFINITIVELY says the manifest is not
+          # there counts as absence; everything else stops the release.
+          set +e
+          lookup="$(docker manifest inspect "${IMAGE}:${TAG}" 2>&1)"
+          status=$?
+          set -e
+
+          if [ "$status" -eq 0 ]; then
             printf '%s:%s already exists in the registry.\n' "$IMAGE" "$TAG" >&2
             printf 'A published release version is immutable. Publish a new version instead.\n' >&2
             exit 1
           fi
+
+          case "$lookup" in
+            *"manifest unknown"* | *MANIFEST_UNKNOWN* | \
+            *"name unknown"* | *NAME_UNKNOWN* | \
+            *"repository name not known to registry"*) ;;
+            *)
+              printf 'could not determine whether %s:%s exists.\n' "$IMAGE" "$TAG" >&2
+              printf 'The registry did not answer "not found"; it said:\n%s\n' "$lookup" >&2
+              printf 'Refusing to publish on an unresolved lookup, because a wrong answer here overwrites an immutable version. Re-run once the registry is reachable.\n' >&2
+              exit 1
+              ;;
+          esac
           printf '%s:%s has not been published before.\n' "$IMAGE" "$TAG"
 
   publish:

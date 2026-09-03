@@ -66,6 +66,19 @@ REFUSAL
   unset _nexa_var
 fi
 
+# `NEXA_IMAGE` is cleared for EVERY caller, not just a delegated one.
+#
+# Compose gives a process-environment variable precedence over `--env-file`, so
+# `NEXA_IMAGE=other botctl restart` starts `other` while `botctl status` and
+# `botctl version` — which read deploy.env — report agreement. The divergence
+# check would then be blind to exactly the disagreement it exists to find, and
+# the installation would run an image nothing on the host records.
+#
+# deploy.env is the installation's image, full stop. botctl's own update and
+# rollback paths set NEXA_IMAGE per command (`NEXA_IMAGE=x nexa_compose ...`),
+# which is a child's environment and unaffected by this.
+unset NEXA_IMAGE
+
 # The library is installed beside this script's deployment, not beside the
 # script itself: /usr/local/bin holds one file, and everything else lives under
 # /opt/nexa. A missing library is a broken installation, not a fallback case.

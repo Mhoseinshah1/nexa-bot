@@ -360,6 +360,42 @@ installer_output="$(bash -c '
   refuse_version_change 2>&1' _ "${REPO}/deploy/install.sh" v1.0.0 || true)"
 assert_not_contains 'a rerun of the same version was refused' \
   "$installer_output" 'the installer is not an updater'
+
+test_case 'a rerun of the same version is refused when its tag has been moved'
+# The version guard above compares STRINGS, and a version is a tag. If v1.0.0
+# has been repointed at different bytes — a mirror, a private registry, a
+# compromised one — a rerun resolves the new digest, rewrites deploy.env and
+# migrates and starts it: the unannounced update the guard exists to prevent,
+# under a name that made it look like a no-op.
+nexa_write_manifest 'v1.0.0' 'c0ffee' "$DIGEST_A"
+digest_probe() {
+  bash -c '
+    . "$1" --domain admin.example.test --acme-email ops@example.test --version v1.0.0 >/dev/null 2>&1
+    refuse_digest_change "$2" 2>&1' _ "${REPO}/deploy/install.sh" "$2"
+}
+installer_output="$(digest_probe _ "$DIGEST_B" || true)"
+assert_contains 'a moved tag was accepted as a rerun' \
+  "$installer_output" 'that tag has been moved'
+assert_contains 'the refusal did not name the digest now recorded' \
+  "$installer_output" "$DIGEST_A"
+
+test_case 'a rerun of the same version and the same digest is still accepted'
+# The guard must not turn idempotency off: an interrupted install rerun by the
+# operator resolves the SAME digest and has to get through.
+installer_output="$(digest_probe _ "$DIGEST_A" || true)"
+assert_not_contains 'an unchanged digest was refused' \
+  "$installer_output" 'that tag has been moved'
+
+test_case 'the installer actually calls the moved-tag refusal'
+# The rule above is only reachable if the installer calls it, and the probe
+# calls it directly — so deleting the call site left both tests green. This is
+# the check that notices. It must run AFTER the digest is resolved (there is
+# nothing to compare before) and BEFORE deploy.env is rewritten (which is the
+# act being refused).
+installer_flow="$(sed -n '/nexa_resolve_digest "\$VERSION"/,/write_deploy_env/p' "${REPO}/deploy/install.sh")"
+assert_contains 'nothing calls refuse_digest_change between resolving the digest and writing deploy.env' \
+  "$installer_flow" 'refuse_digest_change "$digest"'
+
 rm -f "${NEXA_STATE_DIR}/current"
 
 test_case 'a truncated secret file is not mistaken for a finished one'
@@ -457,6 +493,21 @@ run_botctl status
 assert_contains 'an unhealthy api was reported as ready' "$BOTCTL_OUTPUT" 'NOT READY'
 assert_fails 'status exited zero with an unhealthy api' test "$BOTCTL_STATUS" -eq 0
 fake_set api_health 'healthy'
+
+test_case 'an inherited NEXA_IMAGE does not decide which image compose starts'
+# Compose gives a process-environment variable precedence over `--env-file`, so
+# before botctl cleared it, `NEXA_IMAGE=other botctl restart` started `other`
+# while `botctl version` and `botctl status` — which read deploy.env — reported
+# agreement. The divergence check was blind to precisely the disagreement it
+# exists to find. deploy.env is the installation's image; a caller does not get
+# to substitute one.
+reset_docker_log
+NEXA_IMAGE="registry.test/evil@${DIGEST_C}" run_botctl restart
+assert_equals 'restart exited non-zero' 0 "$BOTCTL_STATUS"
+assert_not_contains 'compose was given the image from the caller environment' \
+  "$(docker_log)" 'registry.test/evil'
+assert_contains 'compose was not given the image from deploy.env' \
+  "$(docker_log)" "[image=registry.test/nexa@${DIGEST_A}]"
 
 teardown_root
 
