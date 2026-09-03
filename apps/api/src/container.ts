@@ -12,7 +12,7 @@ import type {
 import { createTranslator } from '@nexa/i18n';
 import type { Translator } from '@nexa/contracts';
 
-import type { AppConfig } from './infrastructure/config/config.schema.js';
+import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
 import { SystemClock } from './infrastructure/clock.js';
 import { Uuidv7IdGenerator } from './infrastructure/ids.js';
 import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
@@ -158,7 +158,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const logger = createLogger(config.LOG_LEVEL, role);
   const clock = new SystemClock();
   const ids = new Uuidv7IdGenerator();
-  const cipher = new AesGcmSecretCipher(resolveKeyring(config), config.SECRETS_ACCEPT_V1);
+  // One resolution of the keyring, used for both the cipher's keys and the
+  // v1-acceptance default that depends on which spelling configured them.
+  // Resolving it twice would let the two answers come from different parses.
+  const keyring = resolveKeyring(config);
+  const cipher = new AesGcmSecretCipher(keyring, acceptsV1(config, keyring));
   const translator = createTranslator();
 
   const database = createDatabase(config.DATABASE_URL, config.DATABASE_POOL_MAX, {

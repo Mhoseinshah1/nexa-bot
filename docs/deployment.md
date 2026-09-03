@@ -475,12 +475,59 @@ AES-256-GCM, and the data key wrapped by a key-encryption key from the keyring.
 ```
 SECRETS_KEYS=install-20260903:<base64>,rotate-20261101:<base64>
 SECRETS_ACTIVE_KEY_ID=rotate-20261101
-SECRETS_ACCEPT_V1=true
+SECRETS_ACCEPT_V1=false
 ```
 
-An installation made before this release has `SECRETS_KEK` and `SECRETS_KEK_ID`
+An installation made before the keyring has `SECRETS_KEK` and `SECRETS_KEK_ID`
 instead. Those still work — they alias to a one-entry keyring — so adopting the
-v2 envelope needs no reinstall and no hand-edit.
+v2 envelope needs no reinstall and no hand-edit. They are the **legacy**
+spelling, and converting them is `botctl secrets migrate-config`.
+
+**Which spelling a host uses is load-bearing.** `botctl secrets status` prints
+it, because it decides the default for `SECRETS_ACCEPT_V1` when nothing in
+`nexa.env` sets it:
+
+| Configuration              | Default v1 acceptance | Why                                                            |
+| -------------------------- | --------------------- | -------------------------------------------------------------- |
+| `SECRETS_KEYS` (canonical) | **off**               | only a keyring-era installer or `migrate-config` writes it     |
+| `SECRETS_KEK` (legacy)     | on                    | only a pre-v2 installer writes it, and those hosts may hold v1 |
+
+An explicit `SECRETS_ACCEPT_V1` always wins, in both directions. The default is
+keyed this way rather than being a flat `true` because no host installed before
+the setting existed has a line deciding it — so a flat default meant acceptance
+was what happened when nobody chose, across the entire installed base.
+
+**Converting a pre-keyring host.**
+
+```bash
+sudo botctl secrets migrate-config   # SECRETS_KEK -> SECRETS_KEYS, in place
+sudo botctl restart                  # load it
+sudo botctl secrets status           # confirm: configuration canonical
+```
+
+It moves the same key bytes under the same key id, atomically (written beside
+the file and renamed over it, at the file's own mode and owner). It generates
+nothing, re-encrypts nothing, touches no database row, restarts nothing, and
+never prints, logs or passes key material through a command line. Rerunning it
+on an already-converted host reports that and changes nothing.
+
+**Turning v1 off.**
+
+```bash
+sudo botctl secrets shutdown-check   # may this installation stop reading v1?
+sudo botctl secrets disable-v1       # only if the check passes
+```
+
+`shutdown-check` fails closed and names every blocker at once: any v1 row, any
+envelope that is neither v1 nor v2, any row whose recorded key id disagrees with
+its envelope, a legacy-spelled configuration, or an active key that is not in
+the keyring. Each blocker names the command that clears it.
+
+`disable-v1` runs that check first and refuses without it, then writes
+`SECRETS_ACCEPT_V1=false` and **restarts**, because a setting the running
+process has not loaded is an operator believing v1 is off while it is on. If the
+stack does not come back ready, it restores the previous setting and restarts
+again rather than leaving the installation down.
 
 **Rotating a key.**
 
@@ -514,9 +561,20 @@ material may be destroyed:
 associated data, so a v1 ciphertext can be copied between rows and still
 decrypt. v2 binds each value to its purpose, tenant and row and refuses a
 transplant — but it does not protect values written under v1. Only re-encrypting
-every row and then setting `SECRETS_ACCEPT_V1=false` does that, and turning it
-off before `botctl secrets status` reports no v1 rows makes an installation
-unable to read its own secrets.
+every row and then refusing v1 does that, and turning it off before the rows are
+ready makes an installation unable to read its own secrets — which is what
+`shutdown-check` exists to prevent.
+
+**Restoring a backup after v1 is off.** A dump taken before the rewrap contains
+v1 ciphertext, and nothing about disabling v1 changes what is inside a file
+already written. Restoring such a dump into an installation that refuses v1
+leaves those rows unreadable. To restore one you need both halves back: the key
+material that was live when the dump was taken, and `SECRETS_ACCEPT_V1=true` for
+the duration of the restore — after which `botctl secrets rewrap` and
+`botctl secrets disable-v1` return the installation to the final state. This is
+the same rule as key retirement, stated for the other direction: **the live
+keyring is not the whole story, and a retained backup keeps its own
+requirements until it expires.**
 
 ## Security properties
 

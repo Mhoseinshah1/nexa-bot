@@ -145,11 +145,75 @@ EOF
 
   : >"${NEXA_DEPLOY_DIR}/compose.yml"
 
+  # The application configuration. Legacy by default: that is the shape every
+  # host installed before the keyring has, and it is the one the migration
+  # exists for.
+  seed_nexa_env legacy
+
   # The host assets an installation has on disk. Every update captures these
   # under the outgoing release before replacing them, so a root without them is
   # a root on which no update can run — which is not the state a production
   # host is ever in.
   write_live_assets A
+}
+
+# The application's own configuration, in one of the two spellings a real host
+# can be in.
+#
+# TEST_KEK is a fixed 32-byte value the assertions can look for BY NAME — the
+# point of most of these tests is that it never appears anywhere except the
+# file, so the suite has to know exactly what it is looking for.
+TEST_KEK="$(printf 'A%.0s' {1..42})Q=="
+TEST_KEY_ID="install-20260101"
+
+seed_nexa_env() {
+  local shape="$1" file="${NEXA_CONFIG_DIR}/nexa.env"
+  install -d -m 0700 "$NEXA_CONFIG_DIR"
+  if [ "$shape" = "legacy-truncated" ]; then
+    # What an ENOSPC or EIO part-way through the installer's write leaves: the
+    # keyring lines landed, the rest of the file did not.
+    {
+      printf 'SECRETS_KEK=%s\n' "$TEST_KEK"
+      printf 'SECRETS_KEK_ID=%s\n' "$TEST_KEY_ID"
+    } >"$file"
+    chmod 0600 "$file"
+    return 0
+  fi
+  {
+    printf 'NODE_ENV=production\n'
+    printf 'DATABASE_URL=postgres://nexa:pw@postgres:5432/nexa\n'
+    printf 'REDIS_URL=redis://:pw@redis:6379\n'
+    case "$shape" in
+      legacy)
+        printf 'SECRETS_KEK=%s\n' "$TEST_KEK"
+        printf 'SECRETS_KEK_ID=%s\n' "$TEST_KEY_ID"
+        ;;
+      canonical)
+        printf 'SECRETS_KEYS=%s:%s\n' "$TEST_KEY_ID" "$TEST_KEK"
+        printf 'SECRETS_ACTIVE_KEY_ID=%s\n' "$TEST_KEY_ID"
+        ;;
+      canonical-with-stale-legacy)
+        printf 'SECRETS_KEYS=%s:%s\n' "$TEST_KEY_ID" "$TEST_KEK"
+        printf 'SECRETS_ACTIVE_KEY_ID=%s\n' "$TEST_KEY_ID"
+        printf 'SECRETS_KEK=%s\n' "$TEST_KEK"
+        printf 'SECRETS_KEK_ID=%s\n' "$TEST_KEY_ID"
+        ;;
+      id-without-key)
+        printf 'SECRETS_KEK_ID=%s\n' "$TEST_KEY_ID"
+        ;;
+      empty) ;;
+    esac
+    printf 'WEB_ADMIN_ORIGINS=https://admin.example.test\n'
+    printf 'DEPLOYMENT_TOPOLOGY=edge\n'
+    printf 'NOTIFICATION_TRANSPORT=telegram\n'
+  } >"$file"
+  chmod 0600 "$file"
+}
+
+# Read one key out of the fake root's nexa.env without going through the
+# library, so a test can observe a file the library would refuse to write.
+nexa_env_key() {
+  sed -n "s/^$1=//p" "${NEXA_CONFIG_DIR}/nexa.env" | tail -n 1
 }
 
 # The six files that live on the host rather than in the image, written as one
@@ -386,6 +450,17 @@ case "${1:-}" in
             [ "$(read_state owner_state_exit 0)" = "0" ] || exit 1
             printf '%s\n' "$(read_state owner_state none)"
             exit 0
+            ;;
+          *shutdown-check*)
+            # The gate `botctl secrets disable-v1` acts on. Modelled here rather
+            # than stubbed at the shell level, so the command's own handling of
+            # a refusal is what the tests exercise.
+            if [ "$(read_state shutdown_ready 1)" = "1" ]; then
+              printf 'READY: no v1 ciphertext, no key-id mismatch, canonical keyring.\n'
+              exit 0
+            fi
+            printf 'NOT READY to disable v1:\n  - 3 row(s) still hold a v1 envelope.\n'
+            exit 1
             ;;
         esac
         exit "$(read_state run_exit 0)" ;;

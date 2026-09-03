@@ -2,6 +2,7 @@ import type { SecretCipher } from '@nexa/contracts';
 import { AesGcmSecretCipher } from '../crypto/secret-cipher.js';
 import { resolveKeyring } from '../crypto/resolve-keyring.js';
 import { loadConfig } from '../config/load-config.js';
+import { acceptsV1 } from '../config/config.schema.js';
 import { createDatabase, type Database } from './database.js';
 import { botInstances, tenants } from './schema.js';
 
@@ -127,7 +128,8 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const handle = createDatabase(config.DATABASE_URL, 1);
   try {
-    await seed(handle.db, new AesGcmSecretCipher(resolveKeyring(config), config.SECRETS_ACCEPT_V1));
+    const keyring = resolveKeyring(config);
+    await seed(handle.db, new AesGcmSecretCipher(keyring, acceptsV1(config, keyring)));
     console.warn('Seed applied.');
   } finally {
     await handle.close();

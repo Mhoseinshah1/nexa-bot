@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { parseKeyring } from '../crypto/keyring.js';
+import { parseKeyring, type SecretKeyring } from '../crypto/keyring.js';
 import { isValidTrustedEntry } from '../trusted-proxy.js';
 
 /**
@@ -72,21 +72,18 @@ export const configSchema = z
     /**
      * Whether v1 ciphertext may still be read.
      *
-     * True for this release, because every row written before it is v1 and an
-     * installation that cannot read its own secrets is an outage. It is a
-     * setting rather than a constant so that turning it off, once
-     * `botctl secrets status` reports no v1 rows anywhere, is a configuration
-     * change and a restart rather than a new release.
+     * Deliberately has NO default here, and is read through `acceptsV1` below
+     * rather than directly. A plain `.default('true')` made acceptance the
+     * thing that happens when nobody decides — and since a host installed
+     * before this setting existed has no such line in its `nexa.env`, "nobody
+     * decided" described every installation in production.
      *
-     * Worth being exact about what it costs while it is true: v1 carries no
-     * associated data, so a v1 ciphertext remains transplantable between rows.
-     * v2 does not retroactively protect v1 data — re-encrypting every row and
-     * then setting this to false does.
+     * Worth being exact about what acceptance costs: v1 carries no associated
+     * data, so a v1 ciphertext remains transplantable between rows. v2 does not
+     * retroactively protect v1 data — re-encrypting every row and then refusing
+     * v1 does.
      */
-    SECRETS_ACCEPT_V1: z
-      .enum(['true', 'false'])
-      .default('true')
-      .transform((value) => value === 'true'),
+    SECRETS_ACCEPT_V1: z.enum(['true', 'false']).optional(),
 
     /**
      * `password` is the real Web Admin authentication surface: username and
@@ -451,3 +448,39 @@ export const configSchema = z
   });
 
 export type AppConfig = z.infer<typeof configSchema>;
+
+/**
+ * Whether this installation reads v1 ciphertext — the one place that decides.
+ *
+ * An explicit `SECRETS_ACCEPT_V1` always wins, in both directions. What this
+ * function is really for is the case where the setting is ABSENT, which is not
+ * a rare edge: every host installed before the setting existed has no such line
+ * in `/etc/nexa/nexa.env`, and a flat `default('true')` therefore meant "on"
+ * for the entire installed base with nobody having chosen it.
+ *
+ * The default is keyed on the keyring's configuration format, because that is
+ * the only evidence on a host about which era it came from:
+ *
+ *   - `SECRETS_KEYS` (canonical) can only have been written by a keyring-era
+ *     installer or by `botctl secrets migrate-config`. Both are v2-era, so the
+ *     safe default is OFF.
+ *   - `SECRETS_KEK` (legacy) can only have been written by an installer that
+ *     shipped before v2 existed. That is exactly the population that may still
+ *     hold v1 rows, so the default there stays ON — turning it off underneath
+ *     them would make an installation unable to read its own secrets, which is
+ *     an outage caused by an upgrade nobody asked to change behaviour.
+ *
+ * It is not a silent fallback: `secrets status` prints the format and the
+ * resulting acceptance, and `secrets shutdown-check` refuses to call a
+ * legacy-configured host ready.
+ *
+ * Takes the parsed keyring rather than re-deriving the format, so there is one
+ * implementation of "which spelling is this host using".
+ */
+export function acceptsV1(
+  config: Pick<AppConfig, 'SECRETS_ACCEPT_V1'>,
+  keyring: Pick<SecretKeyring, 'format'>,
+): boolean {
+  if (config.SECRETS_ACCEPT_V1 !== undefined) return config.SECRETS_ACCEPT_V1 === 'true';
+  return keyring.format === 'legacy';
+}

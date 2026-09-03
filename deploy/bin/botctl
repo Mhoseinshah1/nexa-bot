@@ -102,10 +102,13 @@ botctl — operate a Nexa installation
   botctl logs [SERVICE]      follow logs
   botctl restart             restart the stack
 
-  botctl secrets status                    envelope versions and key ids in use
+  botctl secrets status                    configuration, envelope versions and key ids in use
   botctl secrets rewrap [--batch N] [--max N]
                                            re-encrypt secrets under the active key
   botctl secrets retire-check --key ID     whether a key can leave the keyring
+  botctl secrets migrate-config            convert a pre-keyring SECRETS_KEK host to SECRETS_KEYS
+  botctl secrets shutdown-check            whether v1 can be switched off yet
+  botctl secrets disable-v1                stop reading v1 ciphertext, once the check passes
 
 Update, rollback and `secrets rewrap` take an exclusive lock. Rollback changes the APPLICATION
 only: it never restores a database backup, because the backup predates the
@@ -115,6 +118,11 @@ migration and restoring it would discard every write made since.
 strand ciphertext. It never edits the configuration, and it is not permission to
 DESTROY the key material: backups taken before the re-encryption still contain
 ciphertext under that key.
+
+`secrets migrate-config` and `secrets disable-v1` are the only commands that
+edit /etc/nexa/nexa.env. Neither generates, changes or prints key material.
+`disable-v1` refuses unless `secrets shutdown-check` passes, and restores the
+previous setting if the stack does not come back.
 USAGE
 }
 
@@ -669,20 +677,156 @@ cmd_restart() {
 # step an operator performs once and wants to read before performing. The
 # operator edits SECRETS_KEYS; this says whether they may.
 # ---------------------------------------------------------------------------
+# Convert a pre-keyring host's secret configuration to the canonical spelling.
+#
+# The host that found this was installed before the keyring existed, so its
+# /etc/nexa/nexa.env holds SECRETS_KEK and SECRETS_KEK_ID and nothing else. That
+# still works — the parser aliases it to a one-entry keyring — but it leaves the
+# active key implicit and it is the marker that keeps v1 acceptance defaulting
+# on. Converting it is the prerequisite for turning v1 off.
+#
+# What this does NOT do, and the list is the point: it does not generate a key,
+# does not re-encrypt anything, does not touch the database, does not restart
+# the application, and does not print, log or pass through argv one byte of key
+# material. It moves two values from one spelling to another, in place.
+cmd_secrets_migrate_config() {
+  local file="${NEXA_CONFIG_DIR}/nexa.env"
+  [ -r "$file" ] || nexa_die "cannot read ${file}."
+
+  # Already canonical? Say so and stop. Rerunning must be free — an operator who
+  # cannot tell whether they ran it should be able to just run it again.
+  local existing_keys
+  existing_keys="$(nexa_env_value "$file" SECRETS_KEYS 2>/dev/null || true)"
+  if [ -n "${existing_keys//[[:space:]]/}" ]; then
+    nexa_ok "the secret configuration is already canonical; nothing to do."
+    # Deliberately reported, because a host can be canonical AND still carry the
+    # legacy pair — the parser prefers SECRETS_KEYS, so those two lines are dead
+    # weight that reads like configuration.
+    local stale_kek
+    stale_kek="$(nexa_env_value "$file" SECRETS_KEK 2>/dev/null || true)"
+    [ -z "${stale_kek//[[:space:]]/}" ] ||
+      nexa_warn "SECRETS_KEK is still present and is IGNORED (SECRETS_KEYS wins). Remove those two lines by hand once you are satisfied."
+    return 0
+  fi
+
+  local SECRETS_ACTIVE_KEY_ID legacy_key
+  SECRETS_ACTIVE_KEY_ID="$(nexa_env_value "$file" SECRETS_KEK_ID 2>/dev/null || true)"
+  legacy_key="$(nexa_env_value "$file" SECRETS_KEK 2>/dev/null || true)"
+
+  # Refusals name the KEY, never the value.
+  [ -n "${SECRETS_ACTIVE_KEY_ID//[[:space:]]/}" ] ||
+    nexa_die "${file} has neither SECRETS_KEYS nor SECRETS_KEK_ID, so there is nothing to convert and nothing to guess. This installation cannot decrypt anything as it stands."
+  [ -n "${legacy_key//[[:space:]]/}" ] ||
+    nexa_die "${file} has SECRETS_KEK_ID but no SECRETS_KEK. Refusing to write a keyring with an id and no key."
+  case "$SECRETS_ACTIVE_KEY_ID" in
+    *[!A-Za-z0-9._-]* | '')
+      nexa_die "SECRETS_KEK_ID is not a valid key id (letters, digits, dot, underscore, hyphen). Refusing to write a keyring the application would reject at boot."
+      ;;
+  esac
+
+  # The exact bytes, under the exact id. `id:key` is the canonical grammar; the
+  # id grammar forbids `:` and `,`, so this concatenation is unambiguous.
+  local SECRETS_KEYS="${SECRETS_ACTIVE_KEY_ID}:${legacy_key}"
+
+  nexa_step "converting the secret configuration to the canonical keyring"
+  # The lock, because this rewrites the file an update also writes.
+  nexa_acquire_lock 0
+  nexa_env_rewrite "$file" "SECRETS_KEK,SECRETS_KEK_ID" SECRETS_KEYS SECRETS_ACTIVE_KEY_ID
+
+  # Read back from the FILE rather than trusting the write. Comparing the byte
+  # lengths, never the values: an operator watching this run must learn that the
+  # key survived without learning the key.
+  local written
+  written="$(nexa_env_value "$file" SECRETS_KEYS 2>/dev/null || true)"
+  [ "${#written}" -eq "${#SECRETS_KEYS}" ] ||
+    nexa_die "the converted ${file} does not read back as written. Inspect it before restarting."
+
+  nexa_ok "SECRETS_KEYS and SECRETS_ACTIVE_KEY_ID are set; the key id is ${SECRETS_ACTIVE_KEY_ID}"
+  nexa_ok "the key material is unchanged and was never printed"
+  nexa_log "The running containers still hold the old configuration. Run 'botctl restart' to load it,"
+  nexa_log "then 'botctl secrets status' to confirm, and 'botctl secrets disable-v1' when ready."
+  nexa_warn "A rollback to a release older than the keyring does NOT undo this: /etc/nexa survives"
+  nexa_warn "an update, and a pre-keyring image cannot read SECRETS_KEYS. Roll back the CONFIG by"
+  nexa_warn "hand first if you ever need to go back that far."
+}
+
+# Stop reading v1 ciphertext — the switch, and its gate.
+#
+# `SECRETS_ACCEPT_V1=false` on an installation that still holds a v1 row does
+# not fail at boot. It fails the first time something reads that row, in
+# production, one credential at a time. So the evidence is gathered from the
+# rows and the keyring FIRST, by the application, and this refuses if any of it
+# is missing.
+#
+# And the setting is applied rather than merely written: a configuration change
+# the running process has not loaded is an operator believing v1 is off while it
+# is on, which is the failure this whole command exists to prevent.
+cmd_secrets_disable_v1() {
+  local file="${NEXA_CONFIG_DIR}/nexa.env"
+  [ -r "$file" ] || nexa_die "cannot read ${file}."
+
+  nexa_step "checking whether this installation can stop reading v1"
+  if ! nexa_compose run --rm --no-deps -T --entrypoint node api \
+    dist/secrets.cli.js shutdown-check; then
+    nexa_die "refusing to disable v1: the check above says this installation is not ready. Nothing was changed."
+  fi
+
+  local previous SECRETS_ACCEPT_V1
+  previous="$(nexa_env_value "$file" SECRETS_ACCEPT_V1 2>/dev/null || true)"
+  if [ "$previous" = "false" ]; then
+    nexa_ok "SECRETS_ACCEPT_V1 is already false; nothing to do."
+    return 0
+  fi
+
+  nexa_acquire_lock 0
+  SECRETS_ACCEPT_V1=false
+  nexa_env_rewrite "$file" "" SECRETS_ACCEPT_V1
+  nexa_ok "SECRETS_ACCEPT_V1=false"
+
+  nexa_step "restarting so the setting takes effect"
+  if ! (nexa_compose up -d --remove-orphans && nexa_wait_ready); then
+    # Put it back. An installation that will not come up is worse than one that
+    # still reads v1, and the operator must not be left to discover which of the
+    # two states they are in.
+    if [ -n "$previous" ]; then
+      SECRETS_ACCEPT_V1="$previous"
+    else
+      SECRETS_ACCEPT_V1=true
+    fi
+    nexa_env_rewrite "$file" "" SECRETS_ACCEPT_V1
+    nexa_compose up -d --remove-orphans >/dev/null 2>&1 || true
+    nexa_die "the stack did not come back after disabling v1, so SECRETS_ACCEPT_V1 has been restored to ${SECRETS_ACCEPT_V1} and the stack restarted. Read 'botctl logs api'."
+  fi
+
+  nexa_ok "v1 ciphertext is no longer accepted"
+  nexa_log "Old key material is still required by BACKUPS taken before the re-encryption: those"
+  nexa_log "dumps contain v1 ciphertext, and restoring one into this installation would leave those"
+  nexa_log "rows unreadable until SECRETS_ACCEPT_V1 is set back to true for the restore. Retiring a"
+  nexa_log "key from the live keyring is still not permission to destroy it."
+}
+
 cmd_secrets() {
   require_installed
   local action="${1:-}"
   shift || true
   case "$action" in
-    status | rewrap | retire-check) ;;
+    migrate-config)
+      cmd_secrets_migrate_config "$@"
+      return
+      ;;
+    disable-v1)
+      cmd_secrets_disable_v1 "$@"
+      return
+      ;;
+    status | rewrap | retire-check | shutdown-check) ;;
     *)
-      nexa_die "usage: botctl secrets <status|rewrap|retire-check> [--batch N] [--max N] [--key ID]"
+      nexa_die "usage: botctl secrets <status|rewrap|retire-check|shutdown-check|migrate-config|disable-v1> [--batch N] [--max N] [--key ID]"
       ;;
   esac
 
   # rewrap WRITES, so it takes the same exclusive lock an update takes: a
   # re-encryption interleaved with a migration is two writers on one database.
-  # status and retire-check only read.
+  # status, retire-check and shutdown-check only read.
   if [ "$action" = "rewrap" ]; then
     nexa_acquire_lock 0
   fi
