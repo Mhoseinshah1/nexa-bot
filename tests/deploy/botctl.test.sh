@@ -1732,6 +1732,22 @@ assert_fails "an id with no key was accepted" test "$BOTCTL_STATUS" -eq 0
 assert_contains "the refusal did not say what was missing" "$BOTCTL_OUTPUT" "no SECRETS_KEK"
 assert_equals "the refused migration wrote a keyring anyway" "" "$(nexa_env_key SECRETS_KEYS)"
 
+test_case "a rewrite that would leave an unbootable file is refused"
+# Found by falsification: removing the DATABASE_URL guard from
+# `nexa_env_rewrite` left the whole suite green, which meant the guard was a
+# claim rather than a rule. The state it protects against is real — a nexa.env
+# truncated part-way through a write keeps its first lines and loses the rest —
+# and rewriting one would produce a file that parses and cannot boot.
+seed_nexa_env legacy-truncated
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl secrets migrate-config
+assert_fails "a rewrite that loses DATABASE_URL was accepted" test "$BOTCTL_STATUS" -eq 0
+assert_contains "the refusal did not say what would have been lost" "$BOTCTL_OUTPUT" "DATABASE_URL"
+assert_contains "the refusal did not say the original was untouched" "$BOTCTL_OUTPUT" "UNCHANGED"
+assert_equals "the refused rewrite modified the file" "$before" "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_fails "the refused rewrite left a temporary file behind" \
+  test -n "$(find "$NEXA_CONFIG_DIR" -name 'nexa.env.??????' -print -quit)"
+
 test_case "a host with no key configuration at all is refused"
 seed_nexa_env empty
 run_botctl secrets migrate-config

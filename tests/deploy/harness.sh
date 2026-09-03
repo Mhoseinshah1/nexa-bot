@@ -169,6 +169,16 @@ TEST_KEY_ID="install-20260101"
 seed_nexa_env() {
   local shape="$1" file="${NEXA_CONFIG_DIR}/nexa.env"
   install -d -m 0700 "$NEXA_CONFIG_DIR"
+  if [ "$shape" = "legacy-truncated" ]; then
+    # What an ENOSPC or EIO part-way through the installer's write leaves: the
+    # keyring lines landed, the rest of the file did not.
+    {
+      printf 'SECRETS_KEK=%s\n' "$TEST_KEK"
+      printf 'SECRETS_KEK_ID=%s\n' "$TEST_KEY_ID"
+    } >"$file"
+    chmod 0600 "$file"
+    return 0
+  fi
   {
     printf 'NODE_ENV=production\n'
     printf 'DATABASE_URL=postgres://nexa:pw@postgres:5432/nexa\n'
