@@ -183,11 +183,10 @@ Only if `botctl` is reachable through `sudo` for a non-root operator:
 - [ ] `sudo env NEXA_LIB=/tmp/anything botctl status` refuses and names the
       variable. Honouring it would let whoever ran sudo choose the code this
       host executes as root.
-
-      Note the `env`: written as `NEXA_LIB=… sudo botctl status`, the variable
-      is set in **sudo's** environment and `env_reset` strips it before botctl
-      ever sees it, so that spelling proves nothing either way.
-
+- [ ] Note the `env` in that command. Written as `NEXA_LIB=… sudo botctl
+status`, the variable is set in **sudo's** own environment, where `env_reset`
+      strips it before botctl ever sees it — so that spelling proves nothing either
+      way, whichever result you get.
 - [ ] The sudoers rule keeps `env_reset` (it is the default; check for an
       `env_keep` or `SETENV` that turns it off). botctl's own refusal is a
       backstop: `BASH_ENV` is read by bash **before** the script runs, so no

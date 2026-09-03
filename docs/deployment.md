@@ -308,7 +308,7 @@ A sudoers rule for `botctl` **must keep `env_reset`**, which is the default:
 ```
 
 The refusal described above is a backstop, not the defence. `BASH_ENV` and
-similar are read by bash *before* the script's first line runs, so an
+similar are read by bash _before_ the script's first line runs, so an
 `env_keep` that passes them through cannot be defended against from inside the
 script they hijack.
 
