@@ -113,6 +113,13 @@
       "when": 1788418851655,
       "tag": "0015_single_primary_tenant",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1788418852655,
+      "tag": "0016_claim_exclusivity_serialisation",
+      "breakpoints": true
     }
   ]
 }
