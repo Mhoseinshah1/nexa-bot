@@ -123,6 +123,16 @@ mistaken for oversights:
 
 ### `BLOCKER-SECRETS-V2` — the secret envelope
 
+**Partly closed.** The v2 envelope, the keyring, the bounded rewrap and
+`secrets retire-check` all exist; new writes are v2 and bound to their purpose,
+tenant and row. What remains open is the LAST step: `SECRETS_ACCEPT_V1` still
+defaults to true, so a v1 ciphertext written by an earlier release is still
+readable and therefore still transplantable. Closing it means a release that
+defaults it to false and drops the legacy `SECRETS_KEK` alias, after
+`botctl secrets status` reports no v1 rows on the installations that matter.
+The description below is kept because it is the reasoning that produced the
+design.
+
 The v1 cipher encrypts a secret as an opaque value. Two consequences, neither
 acceptable once panel and gateway credentials exist:
 
