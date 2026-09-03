@@ -251,6 +251,8 @@ export const CONTROL_ERROR_CODES = {
  * port scanner with a friendly error format.
  */
 export const PANEL_ERROR_CODES = {
+  /** The request body does not match its contract schema. */
+  PANEL_REQUEST_INVALID: 'panel.request_invalid',
   PANEL_NOT_FOUND: 'panel.not_found',
   /** A name already used by another live panel of this tenant. */
   PANEL_NAME_TAKEN: 'panel.name_taken',
