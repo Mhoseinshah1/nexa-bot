@@ -1,5 +1,5 @@
 import { CALENDARS, CURRENCY_CODES, NexaError, PLATFORM_ERROR_CODES } from '@nexa/contracts';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { uuidv7 } from 'uuidv7';
 import { createDatabase } from './infrastructure/persistence/database.js';
 import { tenants } from './infrastructure/persistence/schema.js';
@@ -51,6 +51,17 @@ export interface ProvisionResult {
  * Restricted rather than sanitised: silently rewriting somebody's input to
  * something that fits is how an installation ends up with a name nobody chose.
  */
+/**
+ * The advisory-lock key for "provisioning this installation's primary tenant".
+ *
+ * An arbitrary constant, chosen once and never derived from input, so two
+ * installers agree on it without coordinating. PostgreSQL advisory locks share
+ * one namespace per database, so the value only has to be distinct from any
+ * other advisory lock this application takes — it takes no others today, and
+ * this comment is where the next one gets registered.
+ */
+const PROVISION_LOCK_KEY = 0x6e78_6131;
+
 const SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
 export function validateProvisionInput(input: ProvisionInput): void {
@@ -98,18 +109,38 @@ export async function provisionInstallation(
 
   const handle = createDatabase(databaseUrl, 1);
   try {
-    // One transaction, and the existence check is inside it. Two installers
-    // racing — an operator running the script twice in two terminals — would
-    // otherwise both see no tenant and both insert one, and the loser would
-    // die on the slug's unique index having already been told it succeeded.
+    // Two mechanisms, and they answer different questions.
+    //
+    // The partial unique index `tenants_single_primary_key` is the TRUTH: at
+    // most one row may have kind = 'PRIMARY', whatever writes it and however
+    // many writers there are. That is the installation's defining invariant
+    // and it belongs in the database.
+    //
+    // The advisory lock below makes concurrent first provisioning DETERMINISTIC
+    // rather than merely safe: without it both transactions reach the insert
+    // and one dies on the index, which is correct but surfaces as an error on
+    // a command the operator was told is idempotent. With it, the second
+    // transaction waits, then sees the committed row and reports "already
+    // exists" — the same answer a later rerun gives.
+    //
+    // What this replaced was `SELECT ... FOR UPDATE` on the empty table, and
+    // the comment claiming it serialised installers. It cannot: a row lock
+    // over zero rows locks nothing. Two first-run installers both saw an empty
+    // table and both inserted. With the same slug one happened to fail on
+    // `tenants_slug_key` — a different invariant catching this one by accident
+    // — and with different slugs both committed, leaving two primary tenants.
     return await handle.db.transaction(async (tx) => {
+      // Transaction-scoped, so it is released by COMMIT or ROLLBACK and cannot
+      // be leaked by a crash between statements. The key names this specific
+      // singleton; it is a constant, not derived from input.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${PROVISION_LOCK_KEY})`);
+
       const [existing] = await tx
         .select({ id: tenants.id, slug: tenants.slug })
         .from(tenants)
         .where(eq(tenants.kind, 'PRIMARY'))
         .orderBy(tenants.createdAt, tenants.id)
-        .limit(1)
-        .for('update');
+        .limit(1);
 
       if (existing) {
         return { tenantId: String(existing.id), slug: String(existing.slug), created: false };

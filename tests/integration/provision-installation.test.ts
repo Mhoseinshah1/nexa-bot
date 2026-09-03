@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { tenants } from '../../apps/api/src/infrastructure/persistence/schema';
 import { provisionInstallation } from '../../apps/api/src/provision-installation.cli';
 import { createTestContext, resetDatabase, testConfig, type TestContext } from './harness';
@@ -40,6 +40,110 @@ describe('provision-installation', () => {
 
   const primaries = async () =>
     ctx.container.database.db.select().from(tenants).where(eq(tenants.kind, 'PRIMARY'));
+
+  /**
+   * Two installers, started at once, against one database.
+   *
+   * Deterministic by construction rather than by timing: both promises are
+   * created before either is awaited, so both transactions are genuinely in
+   * flight, and the advisory lock — not a sleep — decides the order. A test
+   * that staggered them with a delay would prove only that sequential calls
+   * work, which is the case that was never in doubt.
+   */
+  it('two simultaneous installers with the same slug leave exactly one primary', async () => {
+    const both = await Promise.allSettled([
+      provisionInstallation(url(), input),
+      provisionInstallation(url(), input),
+    ]);
+
+    const fulfilled = both.filter((r) => r.status === 'fulfilled');
+    expect(fulfilled, `both calls failed: ${JSON.stringify(both)}`).toHaveLength(2);
+
+    const results = fulfilled.map((r) => (r as PromiseFulfilledResult<unknown>).value) as {
+      tenantId: string;
+      created: boolean;
+    }[];
+    // One created it; the other found it. Not one crash and one success.
+    expect(results.filter((r) => r.created)).toHaveLength(1);
+    expect(results.filter((r) => !r.created)).toHaveLength(1);
+    // And both are talking about the same tenant.
+    expect(new Set(results.map((r) => r.tenantId)).size).toBe(1);
+
+    expect(await primaries()).toHaveLength(1);
+  });
+
+  it('two simultaneous installers with DIFFERENT slugs still leave exactly one primary', async () => {
+    // The case the old `SELECT ... FOR UPDATE` could not catch at all. With
+    // the same slug the loser happened to die on `tenants_slug_key` — a
+    // different invariant catching this one by accident. With different slugs
+    // nothing stopped both from committing, and the installation ended up with
+    // two primary tenants, which is two installations sharing a database.
+    const both = await Promise.allSettled([
+      provisionInstallation(url(), { ...input, slug: 'nexa-one' }),
+      provisionInstallation(url(), { ...input, slug: 'nexa-two' }),
+    ]);
+
+    const rows = await primaries();
+    expect(rows, 'a second primary tenant was created').toHaveLength(1);
+
+    // The loser is deterministic: it either reports the existing tenant, or it
+    // fails cleanly. What it must never do is create a second one.
+    const fulfilled = both.filter((r) => r.status === 'fulfilled');
+    expect(fulfilled.length).toBeGreaterThanOrEqual(1);
+    for (const r of fulfilled) {
+      const value = (r as PromiseFulfilledResult<{ tenantId: string }>).value;
+      expect(value.tenantId).toBe(String(rows[0]!.id));
+    }
+  });
+
+  it('the database refuses a second primary tenant even when the CLI is bypassed', async () => {
+    // Raw SQL, because the invariant belongs to the database and not to the
+    // code that usually writes it. Anything reaching this table — a future
+    // service, a migration, an operator with psql — meets the same rule.
+    await provisionInstallation(url(), input);
+    const db = ctx.container.database.db;
+
+    let refusal: unknown;
+    try {
+      await db.execute(sql`
+        INSERT INTO tenants (id, kind, parent_tenant_id, slug, display_name, status,
+                             locale, display_timezone, calendar, currency)
+        VALUES (gen_random_uuid(), 'PRIMARY', NULL, 'a-different-slug', 'Second', 'ACTIVE',
+                'fa', 'Asia/Tehran', 'jalali', 'IRT')
+      `);
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal, 'the database accepted a second primary tenant').toBeDefined();
+    // Drizzle wraps the driver error, so the constraint name is on the cause.
+    // Asserting on the NAME rather than on "some error happened" is what
+    // proves this index refused it, and not the slug index or a CHECK.
+    const cause = (refusal as { cause?: { constraint?: string; message?: string } }).cause;
+    expect(
+      cause?.constraint ?? `${cause?.message ?? ''}${String(refusal)}`,
+      'refused by something other than the single-primary index',
+    ).toMatch(/tenants_single_primary_key/);
+
+    expect(await primaries()).toHaveLength(1);
+  });
+
+  it('a reseller tenant is still allowed alongside the primary', async () => {
+    // The index is partial. If it were not, this would fail — and resellers
+    // are the entire reason the tenants table has a `kind` at all.
+    const { tenantId } = await provisionInstallation(url(), input);
+    const db = ctx.container.database.db;
+
+    await db.execute(sql`
+      INSERT INTO tenants (id, kind, parent_tenant_id, slug, display_name, status,
+                           locale, display_timezone, calendar, currency)
+      VALUES (gen_random_uuid(), 'RESELLER_BOT', ${tenantId}, 'a-reseller', 'Reseller', 'ACTIVE',
+              'fa', 'Asia/Tehran', 'jalali', 'IRT')
+    `);
+
+    expect(await primaries()).toHaveLength(1);
+    const all = await db.select().from(tenants);
+    expect(all).toHaveLength(2);
+  });
 
   it('creates the primary tenant a fresh installation has none of', async () => {
     expect(await primaries(), 'a migrated database already had a tenant').toHaveLength(0);

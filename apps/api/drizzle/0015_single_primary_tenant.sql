@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "tenants_single_primary_key" ON "tenants" USING btree ("kind") WHERE kind = 'PRIMARY';
