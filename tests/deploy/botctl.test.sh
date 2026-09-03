@@ -384,7 +384,7 @@ DATABASE_URL=d
 REDIS_URL=r
 WEB_ADMIN_ORIGINS=https://admin.example.test
 DEPLOYMENT_TOPOLOGY=single-host
-BUILD_TIME=2026-01-01T00:00:00Z
+NOTIFICATION_TRANSPORT=telegram
 ENV
 }
 write_full_app_env
@@ -717,6 +717,24 @@ fake_set "api_health_${DIGEST_B}" 'healthy'
 assert_fails 'a failed readiness back-out exited zero' test "$BOTCTL_STATUS" -eq 0
 assert_contains 'an unhealthy readiness back-out was announced as recovered' \
   "$BOTCTL_OUTPUT" 'did not come back cleanly'
+
+test_case 'a post-migration back-out says the database was NOT reverted'
+# The most dangerous moment in the whole flow. The migration has run, so the
+# schema has already moved; the application is being put back. An operator who
+# reads "reverted to v1.0.0" and assumes the database went with it will reach
+# for the backup — which predates the migration and would discard every write
+# since. They have to be told, at the moment it happens, that reverting the
+# database is a separate and destructive step.
+fake_set "api_health_${DIGEST_B}" 'starting'
+NEXA_READY_TIMEOUT=6 run_botctl update v2.0.0
+fake_set "api_health_${DIGEST_B}" 'healthy'
+assert_fails 'an unready target exited zero' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the operator was not told the migration already ran' \
+  "$BOTCTL_OUTPUT" 'ALREADY RAN'
+assert_contains 'the operator was not told the database is not reverted' \
+  "$BOTCTL_OUTPUT" 'DATABASE IS NOT REVERTED'
+assert_contains 'the operator was not warned about restoring the backup' \
+  "$BOTCTL_OUTPUT" 'discard every write made since'
 
 test_case 'a target that dies is backed out without waiting out the timeout'
 # An api container that EXITED is not listed by `docker compose ps` without

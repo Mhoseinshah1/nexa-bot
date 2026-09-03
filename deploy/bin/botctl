@@ -364,6 +364,19 @@ cmd_update() {
   fi
   nexa_ok "backup complete"
 
+  # What an operator has to know once the migration has run and the target
+  # then failed. Printed by BOTH post-migration failure paths, from one place,
+  # because two copies of a warning this important will eventually disagree.
+  post_migration_warning() {
+    nexa_warn "The migration to ${target} ALREADY RAN, so the database may have changed."
+    nexa_warn "Nexa has reverted the APPLICATION to ${current}. The DATABASE IS NOT REVERTED and"
+    nexa_warn "restoring it is NOT automatic: the pre-update backup in ${NEXA_BACKUP_DIR} predates"
+    nexa_warn "the migration, so restoring it would discard every write made since. That is a"
+    nexa_warn "separate, deliberately destructive disaster-recovery step — see docs/deployment.md."
+    nexa_warn "${current} is expected to keep working against ${target}'s schema: migrations in a"
+    nexa_warn "release only add, which is what makes this rollback safe. Read 'botctl logs api'."
+  }
+
   # 4. MIGRATE, using the TARGET release's own compiled migrator.
   #
   #    This is the reason the maintenance CLIs live in the application image.
@@ -384,8 +397,10 @@ cmd_update() {
     # application works. Saying "is running again" without checking is how an
     # operator reads a reassuring message about an installation that is down.
     if nexa_compose up -d --remove-orphans && nexa_wait_ready; then
+      post_migration_warning
       nexa_die "${target} failed to start. ${current} is running again, is ready, and is still the current release."
     fi
+    post_migration_warning
     nexa_die "${target} failed to start AND ${current} did not come back cleanly. The installation may be down; run 'botctl logs' and 'botctl rollback'."
   fi
 
@@ -394,8 +409,10 @@ cmd_update() {
   if ! NEXA_IMAGE="$target_image" nexa_wait_ready; then
     nexa_warn "${target} started but never became ready; returning to ${current}."
     if nexa_compose up -d --remove-orphans && nexa_wait_ready; then
+      post_migration_warning
       nexa_die "${target} failed its readiness check. ${current} is running again and is still the current release."
     fi
+    post_migration_warning
     nexa_die "${target} failed its readiness check AND ${current} did not come back cleanly. Both releases are intact; run 'botctl logs api'."
   fi
 
