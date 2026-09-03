@@ -391,7 +391,7 @@ describe('the Telegram webhook honours bot status', () => {
     await migrateOnce(config.DATABASE_URL);
     api = await createApiApp(config);
     await resetDatabase(api.container.database.db);
-    await seed(api.container.database.db, config.SECRETS_KEK, config.SECRETS_KEK_ID);
+    await seed(api.container.database.db, api.container.cipher);
   });
 
   afterAll(async () => {
@@ -455,9 +455,8 @@ describe('the login route checks Origin like every other write', () => {
   });
 
   beforeEach(async () => {
-    const config = api.container.config;
     await resetDatabase(api.container.database.db);
-    await seed(api.container.database.db, config.SECRETS_KEK, config.SECRETS_KEK_ID);
+    await seed(api.container.database.db, api.container.cipher);
     api.container.setInstallationTenant(tenantA.tenantId);
     await createAdmin(api.container, tenantA, {
       username: 'owner',

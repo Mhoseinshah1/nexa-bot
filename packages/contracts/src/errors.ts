@@ -117,7 +117,6 @@ export const PLATFORM_ERROR_CODES = {
   IDEMPOTENCY_IN_FLIGHT: 'platform.idempotency_in_flight',
   UNKNOWN_EVENT_TYPE: 'platform.unknown_event_type',
   CONFIG_INVALID: 'platform.config_invalid',
-  SECRET_DECRYPT_FAILED: 'platform.secret_decrypt_failed',
   /**
    * Authenticated decryption failed. ONE code for every cause.
    *

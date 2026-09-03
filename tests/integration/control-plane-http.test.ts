@@ -54,9 +54,8 @@ describe('control plane HTTP surface', () => {
   });
 
   beforeEach(async () => {
-    const config = api.container.config;
     await resetDatabase(api.container.database.db);
-    await seed(api.container.database.db, config.SECRETS_KEK, config.SECRETS_KEK_ID);
+    await seed(api.container.database.db, api.container.cipher);
     api.container.setInstallationTenant(tenantA.tenantId);
 
     await createAdmin(api.container, tenantA, {

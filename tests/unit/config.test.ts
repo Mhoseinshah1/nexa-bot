@@ -90,7 +90,11 @@ describe('configuration', () => {
     expect(problems.length).toBeGreaterThanOrEqual(4);
     expect(problems.join('\n')).toContain('DATABASE_URL');
     expect(problems.join('\n')).toContain('REDIS_URL');
-    expect(problems.join('\n')).toContain('SECRETS_KEK');
+    // Reported ALONGSIDE the others rather than after they are fixed. Zod
+    // skips an object refinement once a field has failed, so this is the case
+    // that regressed silently when the single KEK became an optional keyring.
+    expect(problems.join('\n')).toContain('SECRETS_KEYS');
+    expect(problems.join('\n')).toContain('no secret keys are configured');
   });
 
   it('defaults to real password authentication', () => {

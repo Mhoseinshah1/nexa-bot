@@ -16,6 +16,7 @@ import type { AppConfig } from './infrastructure/config/config.schema.js';
 import { SystemClock } from './infrastructure/clock.js';
 import { Uuidv7IdGenerator } from './infrastructure/ids.js';
 import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
+import { resolveKeyring } from './infrastructure/crypto/resolve-keyring.js';
 import { createLogger } from './infrastructure/logging/logger.js';
 import { createDatabase, type DatabaseHandle } from './infrastructure/persistence/database.js';
 import { createRedis, type RedisHandle } from './infrastructure/redis/redis.js';
@@ -157,7 +158,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const logger = createLogger(config.LOG_LEVEL, role);
   const clock = new SystemClock();
   const ids = new Uuidv7IdGenerator();
-  const cipher = new AesGcmSecretCipher(config.SECRETS_KEK, config.SECRETS_KEK_ID);
+  const cipher = new AesGcmSecretCipher(resolveKeyring(config), config.SECRETS_ACCEPT_V1);
   const translator = createTranslator();
 
   const database = createDatabase(config.DATABASE_URL, config.DATABASE_POOL_MAX, {

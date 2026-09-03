@@ -45,9 +45,8 @@ describe('admin HTTP surface', () => {
   });
 
   beforeEach(async () => {
-    const config = api.container.config;
     await resetDatabase(api.container.database.db);
-    await seed(api.container.database.db, config.SECRETS_KEK, config.SECRETS_KEK_ID);
+    await seed(api.container.database.db, api.container.cipher);
     // The tenant is resolved at boot; re-seeding replaces the rows, so the
     // installation tenant is re-resolved to match.
     api.container.setInstallationTenant(tenantA.tenantId);

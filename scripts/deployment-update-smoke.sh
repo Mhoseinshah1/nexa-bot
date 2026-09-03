@@ -139,7 +139,7 @@ open(sys.argv[2], "w", encoding="utf-8").write(text)
   "__POSTGRES_PASSWORD__=${PG_PASSWORD}" \
   "__REDIS_PASSWORD__=${REDIS_PASSWORD}" \
   "__SECRETS_KEK__=$(head -c 32 /dev/urandom | base64 -w0)" \
-  "__SECRETS_KEK_ID__=smoke-1" \
+  "__SECRETS_ACTIVE_KEY_ID__=smoke-1" \
   "__DOMAIN__=localhost" \
   "__EDGE_SUBNET__=172.29.0.0/24"
 sed -i 's|^WEB_ADMIN_ORIGINS=.*|WEB_ADMIN_ORIGINS=https://localhost|' "${NEXA_CONFIG_DIR}/nexa.env"

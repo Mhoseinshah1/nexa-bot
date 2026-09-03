@@ -1,4 +1,6 @@
+import type { SecretCipher } from '@nexa/contracts';
 import { AesGcmSecretCipher } from '../crypto/secret-cipher.js';
+import { resolveKeyring } from '../crypto/resolve-keyring.js';
 import { loadConfig } from '../config/load-config.js';
 import { createDatabase, type Database } from './database.js';
 import { botInstances, tenants } from './schema.js';
@@ -23,11 +25,20 @@ export const SEED_IDS = {
   botB1: '01900000-0000-7000-8000-00000000b001',
 } as const;
 
-export async function seed(db: Database, kekBase64: string, kekId: string): Promise<void> {
-  const cipher = new AesGcmSecretCipher(kekBase64, kekId);
-
-  const encrypted = (token: string) => {
-    const secret = cipher.encrypt(token);
+/**
+ * Takes the cipher rather than key material.
+ *
+ * The seed has no business knowing how keys are configured, and once a keyring
+ * replaced the single KEK the alternative was passing a keyring through ten
+ * call sites that only ever wanted "encrypt this".
+ */
+export async function seed(db: Database, cipher: SecretCipher): Promise<void> {
+  const encrypted = (token: string, tenantId: string, entityId: string) => {
+    const secret = cipher.encrypt(token, {
+      purpose: 'bot_instance.token',
+      tenantId,
+      entityId,
+    });
     return { tokenCiphertext: secret.ciphertext, tokenKeyId: secret.keyId };
   };
 
@@ -92,21 +103,21 @@ export async function seed(db: Database, kekBase64: string, kekId: string): Prom
         tenantId: SEED_IDS.tenantA,
         username: 'acme_store_bot',
         status: 'ACTIVE',
-        ...encrypted('000000:seed-token-acme-1'),
+        ...encrypted('000000:seed-token-acme-1', SEED_IDS.tenantA, SEED_IDS.botA1),
       },
       {
         id: SEED_IDS.botA2,
         tenantId: SEED_IDS.tenantA,
         username: 'acme_support_bot',
         status: 'STOPPED',
-        ...encrypted('000000:seed-token-acme-2'),
+        ...encrypted('000000:seed-token-acme-2', SEED_IDS.tenantA, SEED_IDS.botA2),
       },
       {
         id: SEED_IDS.botB1,
         tenantId: SEED_IDS.tenantB,
         username: 'globex_store_bot',
         status: 'ACTIVE',
-        ...encrypted('000000:seed-token-globex-1'),
+        ...encrypted('000000:seed-token-globex-1', SEED_IDS.tenantB, SEED_IDS.botB1),
       },
     ])
     .onConflictDoNothing();
@@ -116,7 +127,7 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const handle = createDatabase(config.DATABASE_URL, 1);
   try {
-    await seed(handle.db, config.SECRETS_KEK, config.SECRETS_KEK_ID);
+    await seed(handle.db, new AesGcmSecretCipher(resolveKeyring(config), config.SECRETS_ACCEPT_V1));
     console.warn('Seed applied.');
   } finally {
     await handle.close();

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseKeyring } from '../crypto/keyring.js';
 import { isValidTrustedEntry } from '../trusted-proxy.js';
 
 /**
@@ -45,8 +46,47 @@ export const configSchema = z
 
     REDIS_URL: z.string().min(1).startsWith('redis'),
 
-    SECRETS_KEK: base64Key(32),
-    SECRETS_KEK_ID: z.string().min(1),
+    /**
+     * The keyring: `id:base64,id:base64`, and the id of the one key new
+     * secrets are encrypted with.
+     *
+     * Both optional in the schema and neither optional in effect — the
+     * refinement below requires a usable keyring by one route or the other,
+     * and reports every problem with it at once.
+     */
+    SECRETS_KEYS: z.string().optional(),
+    SECRETS_ACTIVE_KEY_ID: z.string().optional(),
+
+    /**
+     * The v1 spelling, still accepted.
+     *
+     * Every installation that exists today was installed with these two and
+     * nothing else. Adopting the v2 envelope must not require reinstalling or
+     * hand-editing /etc/nexa/nexa.env, so they alias to a one-entry keyring
+     * whose only key is the active one — which is precisely what v1 did.
+     * Removing them is a later, deliberate release.
+     */
+    SECRETS_KEK: base64Key(32).optional(),
+    SECRETS_KEK_ID: z.string().min(1).optional(),
+
+    /**
+     * Whether v1 ciphertext may still be read.
+     *
+     * True for this release, because every row written before it is v1 and an
+     * installation that cannot read its own secrets is an outage. It is a
+     * setting rather than a constant so that turning it off, once
+     * `botctl secrets status` reports no v1 rows anywhere, is a configuration
+     * change and a restart rather than a new release.
+     *
+     * Worth being exact about what it costs while it is true: v1 carries no
+     * associated data, so a v1 ciphertext remains transplantable between rows.
+     * v2 does not retroactively protect v1 data — re-encrypting every row and
+     * then setting this to false does.
+     */
+    SECRETS_ACCEPT_V1: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((value) => value === 'true'),
 
     /**
      * `password` is the real Web Admin authentication surface: username and
@@ -225,6 +265,15 @@ export const configSchema = z
     BUILD_TIME: z.string().default('unknown'),
   })
   .superRefine((config, ctx) => {
+    // Parsed by the same function the container resolves with, so what an
+    // operator is told at boot and what the process actually loads cannot
+    // drift into two nearly-identical implementations.
+    const keyring = parseKeyring(config);
+    if (!keyring.ok) {
+      for (const problem of keyring.problems) {
+        ctx.addIssue({ code: 'custom', path: ['SECRETS_KEYS'], message: problem });
+      }
+    }
     if (config.AUTH_MODE === 'none' && config.NODE_ENV !== 'development') {
       ctx.addIssue({
         code: 'custom',

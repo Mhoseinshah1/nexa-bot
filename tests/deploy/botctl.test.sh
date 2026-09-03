@@ -485,6 +485,19 @@ printf 'POSTGRES_USER=nexa\nPOSTGRES_DB=nexa\n' >"${NEXA_CONFIG_DIR}/postgres.en
 printf 'REDIS_PASSWORD=x\n' >"${NEXA_CONFIG_DIR}/redis.env"
 write_full_app_env() {
   cat >"${NEXA_CONFIG_DIR}/nexa.env" <<'ENV'
+SECRETS_KEYS=install-1:k
+SECRETS_ACTIVE_KEY_ID=install-1
+DATABASE_URL=d
+REDIS_URL=r
+WEB_ADMIN_ORIGINS=https://admin.example.test
+DEPLOYMENT_TOPOLOGY=single-host
+NOTIFICATION_TRANSPORT=telegram
+ENV
+}
+
+# The same file as an installation made BEFORE the keyring release still has it.
+write_legacy_app_env() {
+  cat >"${NEXA_CONFIG_DIR}/nexa.env" <<'ENV'
 SECRETS_KEK=k
 SECRETS_KEK_ID=i
 DATABASE_URL=d
@@ -508,7 +521,7 @@ test_case 'a nexa.env truncated two thirds of the way through is not complete'
 # absence silently stops TRUSTED_PROXY_IPS being required and the API boots
 # ignoring X-Forwarded-For.
 printf 'POSTGRES_USER=nexa\nPOSTGRES_DB=nexa\nPOSTGRES_PASSWORD=p\n' >"${NEXA_CONFIG_DIR}/postgres.env"
-printf 'SECRETS_KEK=k\nSECRETS_KEK_ID=i\nDATABASE_URL=d\nREDIS_URL=r\n' >"${NEXA_CONFIG_DIR}/nexa.env"
+printf 'SECRETS_KEYS=install-1:k\nSECRETS_ACTIVE_KEY_ID=install-1\nDATABASE_URL=d\nREDIS_URL=r\n' >"${NEXA_CONFIG_DIR}/nexa.env"
 probe="$(secrets_probe || true)"
 assert_not_contains 'a truncated nexa.env was accepted as complete' \
   "$probe" 'secrets already exist'
@@ -518,6 +531,20 @@ write_full_app_env
 printf 'POSTGRES_USER=nexa\nPOSTGRES_DB=nexa\nPOSTGRES_PASSWORD=   \n' >"${NEXA_CONFIG_DIR}/postgres.env"
 probe="$(secrets_probe || true)"
 assert_not_contains 'a whitespace-only password was accepted' "$probe" 'secrets already exist'
+
+test_case 'an installation made before the keyring release is still complete'
+# The regression this exists to stop: after `secrets_complete` was taught the
+# new key names, a rerun on a host whose nexa.env still says SECRETS_KEK decided
+# its own configuration was half-written and refused to continue. An installer
+# that breaks the installations it already made is worse than one that cannot
+# adopt a new format.
+write_legacy_app_env
+printf 'POSTGRES_USER=nexa\nPOSTGRES_DB=nexa\nPOSTGRES_PASSWORD=p\n' >"${NEXA_CONFIG_DIR}/postgres.env"
+printf 'REDIS_PASSWORD=r\n' >"${NEXA_CONFIG_DIR}/redis.env"
+probe="$(secrets_probe || true)"
+assert_contains 'a legacy single-KEK installation was called incomplete' \
+  "$probe" 'secrets already exist'
+write_full_app_env
 
 test_case 'a complete set of secrets is left alone'
 printf 'POSTGRES_USER=nexa\nPOSTGRES_DB=nexa\nPOSTGRES_PASSWORD=p\n' >"${NEXA_CONFIG_DIR}/postgres.env"

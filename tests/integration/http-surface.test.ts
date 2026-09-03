@@ -46,7 +46,7 @@ describe('HTTP surface', () => {
     await migrateOnce(config.DATABASE_URL);
     api = await createApiApp(config);
     await resetDatabase(api.container.database.db);
-    await seed(api.container.database.db, config.SECRETS_KEK, config.SECRETS_KEK_ID);
+    await seed(api.container.database.db, api.container.cipher);
   });
 
   afterAll(async () => {
@@ -360,7 +360,7 @@ describe('readiness when a dependency is down', () => {
     // the other tests.
     api = await createApiApp({ ...config, REDIS_URL: 'redis://127.0.0.1:6399' });
     await resetDatabase(api.container.database.db);
-    await seed(api.container.database.db, config.SECRETS_KEK, config.SECRETS_KEK_ID);
+    await seed(api.container.database.db, api.container.cipher);
     await createAdmin(api.container, tenantA, {
       username: 'reader',
       password: 'a-perfectly-fine-password',
