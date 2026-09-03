@@ -17,77 +17,180 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-# The minimum that lets this publish. `contents: read` to check out,
-# `packages: write` to push to GHCR, and nothing else.
-permissions:
-  contents: read
-  packages: write
+# Declared empty at the top so no job inherits anything by accident; each job
+# below asks for exactly what it needs. Only `publish` gets `packages: write`.
+permissions: {}
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
-  publish:
-    name: Build and publish the release image
+  # Nothing is built, let alone published, until this job says the exact source
+  # commit passed the repository's own required verification — and until it
+  # confirms the version has never been published before.
+  gate:
+    name: Verify the source commit and the version
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      packages: read
     outputs:
-      digest: ${{ steps.build.outputs.digest }}
-      version: ${{ steps.identity.outputs.version }}
-      commit: ${{ steps.identity.outputs.commit }}
-      image: ${{ steps.identity.outputs.image }}
+      tag: ${{ steps.request.outputs.tag }}
+      sha: ${{ steps.source.outputs.sha }}
+      image: ${{ steps.source.outputs.image }}
     steps:
-      # Every value that reaches a `run:` block below arrives through `env:`
-      # and is used as a quoted shell variable. Interpolating `${{ }}` directly
-      # into a script splices the value into the source before the shell sees
-      # it, so a tag containing shell syntax would execute in a job that holds
-      # a token able to publish to every installation.
+      # Every value that reaches a `run:` block arrives through `env:` and is
+      # used as a quoted shell variable. Interpolating `${{ }}` into a script
+      # splices the value into the source before the shell sees it.
       - name: Validate the requested tag
         id: request
         env:
           REQUESTED: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          # A release tag and nothing else. This is also what stops a `ref:`
-          # below from being anything but a tag name.
+          # A release tag and nothing else. This is also what stops the
+          # checkout below from being pointed at a branch or a fork's SHA.
           #
-          # Bash's own `=~`, not `printf | grep -E`. grep matches PER LINE, so a
-          # multi-line value passes as soon as any one of its lines matches —
-          # and the accepted value is then written to $GITHUB_OUTPUT, where a
-          # second line is a second step output. `=~` anchors to the whole
-          # string. (Reaching this needs repository write access via
-          # workflow_dispatch, since a git tag cannot contain a newline; it is
-          # still the wrong check in the job that publishes releases.)
+          # Bash's own `=~`, not `printf | grep -E`: grep matches PER LINE, so
+          # a multi-line value passes as soon as one of its lines does, and the
+          # accepted value is then written to $GITHUB_OUTPUT where a second
+          # line is a second step output.
           if [[ ! $REQUESTED =~ ^v[0-9A-Za-z][0-9A-Za-z._-]{0,62}$ ]]; then
             printf 'refusing to release from "%s": releases are tagged v<version>\n' "$REQUESTED" >&2
             exit 1
           fi
           printf 'tag=%s\n' "$REQUESTED" >>"$GITHUB_OUTPUT"
 
-      # Pinned to an immutable commit, per this repository's CI policy. A tag
-      # is a moving pointer that whoever controls the action's repository can
-      # repoint at any time, and this job holds a token that can publish.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          # Validated above against a strict pattern, so this cannot be a
-          # branch, a SHA belonging to a fork, or anything containing a slash.
           ref: refs/tags/${{ steps.request.outputs.tag }}
 
-      - name: Establish the release identity
-        id: identity
+      - name: Resolve the tag to an immutable commit
+        id: source
         env:
-          TAG: ${{ steps.request.outputs.tag }}
           OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
-          # GHCR rejects an uppercase repository path, and a GitHub owner may
-          # legitimately contain capitals.
+          # Resolved ONCE, here, and every job below is pinned to this SHA
+          # rather than re-resolving the tag. A tag is a mutable pointer: two
+          # jobs that each resolve it can legitimately get different commits.
           owner="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
           {
-            printf 'version=%s\n' "$TAG"
-            printf 'commit=%s\n' "$(git rev-parse HEAD)"
-            printf 'built=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            printf 'sha=%s\n' "$(git rev-parse HEAD^{commit})"
             printf 'image=%s/%s/nexa-bot\n' "$REGISTRY" "$owner"
           } >>"$GITHUB_OUTPUT"
+
+      # --- The CI gate ------------------------------------------------------
+      #
+      # Model B of the two the owner allowed: ask GitHub what actually ran for
+      # this exact commit, rather than re-running a weaker copy of CI here.
+      #
+      # Fails closed on everything ambiguous. A tag can be pushed by anyone
+      # with write access, and without this a release could be published from a
+      # commit that never passed a single check.
+      - name: Require CI to have passed for this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ steps.source.outputs.sha }}
+          WORKFLOW: .github/workflows/ci.yml
+        run: |
+          set -euo pipefail
+          # `head_sha` is an exact filter, and every returned run is checked
+          # against it again anyway: trusting the filter alone would make this
+          # gate depend on a query parameter rather than on the data.
+          runs="$(gh api --paginate \
+            "repos/${REPO}/actions/runs?head_sha=${SHA}&status=completed&per_page=100" \
+            --jq '.workflow_runs[] | [.path, .head_sha, .conclusion, .event, .html_url] | @tsv')"
+
+          if [ -z "$runs" ]; then
+            printf 'no completed workflow run exists for %s.\n' "$SHA" >&2
+            printf 'A release is published only from a commit that passed CI. Push the commit to a branch or open a pull request, let CI run, then tag it.\n' >&2
+            exit 1
+          fi
+
+          # `success` and nothing else. `cancelled`, `skipped`, `stale`,
+          # `neutral`, `action_required` and `timed_out` are all NOT a pass,
+          # and treating any of them as one is how a gate becomes decoration.
+          passed=0
+          while IFS="$(printf '\t')" read -r path head conclusion event url; do
+            [ "$path" = "$WORKFLOW" ] || continue
+            [ "$head" = "$SHA" ] || continue
+            [ "$conclusion" = "success" ] || continue
+            printf 'found a passing %s run for %s (%s): %s\n' "$path" "$SHA" "$event" "$url"
+            passed=1
+          done <<EOF
+          $runs
+          EOF
+
+          if [ "$passed" -ne 1 ]; then
+            printf 'no SUCCESSFUL %s run for %s.\n' "$WORKFLOW" "$SHA" >&2
+            printf 'Completed runs seen for this commit:\n%s\n' "$runs" >&2
+            exit 1
+          fi
+
+      # --- A published version is immutable ---------------------------------
+      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to republish a version that already exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.source.outputs.image }}
+          TAG: ${{ steps.request.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # `workflow_dispatch` takes an arbitrary existing tag, so without
+          # this a second run could rebuild v1.0.0 and move it to a new digest.
+          # Installations pin digests and would not follow it, but two
+          # different images would answer to one version name and no operator
+          # could tell which one an installation was told to install.
+          #
+          # No force-republish switch, deliberately: the way to publish
+          # different bytes is a new version.
+          if docker manifest inspect "${IMAGE}:${TAG}" >/dev/null 2>&1; then
+            printf '%s:%s already exists in the registry.\n' "$IMAGE" "$TAG" >&2
+            printf 'A published release version is immutable. Publish a new version instead.\n' >&2
+            exit 1
+          fi
+          printf '%s:%s has not been published before.\n' "$IMAGE" "$TAG"
+
+  publish:
+    name: Build and publish the release image
+    runs-on: ubuntu-latest
+    needs: gate
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      version: ${{ needs.gate.outputs.tag }}
+      commit: ${{ needs.gate.outputs.sha }}
+      image: ${{ needs.gate.outputs.image }}
+    steps:
+      # Checked out by the SHA the gate resolved, NOT by re-resolving the tag.
+      # A tag is a mutable pointer; two jobs that each resolve it can get two
+      # different commits, and only one of them passed the gate.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+
+      - name: Stamp the build time
+        id: identity
+        run: |
+          set -euo pipefail
+          printf 'built=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$GITHUB_OUTPUT"
+
+      # arm64 is emulated on an amd64 runner. It is here because the installer
+      # accepts aarch64, and accepting an architecture with no published bytes
+      # is a promise the registry cannot keep.
+      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+        with:
+          platforms: arm64
 
       - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
 
@@ -103,12 +206,16 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.identity.outputs.image }}:${{ steps.identity.outputs.version }}
+          # Both architectures the installer accepts. Without this the action
+          # builds only the runner's native platform, and an aarch64 host would
+          # be told a release exists that has no bytes for it.
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ needs.gate.outputs.image }}:${{ needs.gate.outputs.tag }}
           # Facts about the build, not credentials. Build arguments land in
           # image metadata, so nothing secret may ever appear here.
           build-args: |
-            BUILD_VERSION=${{ steps.identity.outputs.version }}
-            BUILD_COMMIT=${{ steps.identity.outputs.commit }}
+            BUILD_VERSION=${{ needs.gate.outputs.tag }}
+            BUILD_COMMIT=${{ needs.gate.outputs.sha }}
             BUILD_TIME=${{ steps.identity.outputs.built }}
           provenance: true
           sbom: true
@@ -118,8 +225,8 @@ jobs:
       # actually published, rather than trusting either in isolation.
       - name: Record the release identity
         env:
-          VERSION: ${{ steps.identity.outputs.version }}
-          COMMIT: ${{ steps.identity.outputs.commit }}
+          VERSION: ${{ needs.gate.outputs.tag }}
+          COMMIT: ${{ needs.gate.outputs.sha }}
           DIGEST: ${{ steps.build.outputs.digest }}
           BUILT: ${{ steps.identity.outputs.built }}
         run: |
@@ -137,14 +244,14 @@ jobs:
   verify:
     name: Verify the published image
     runs-on: ubuntu-latest
-    needs: publish
+    needs: [gate, publish]
     permissions:
       contents: read
       packages: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: refs/tags/${{ needs.publish.outputs.version }}
+          ref: ${{ needs.gate.outputs.sha }}
 
       - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
         with:
@@ -164,6 +271,28 @@ jobs:
         run: |
           set -euo pipefail
           reference="${IMAGE}@${DIGEST}"
+
+          # Every architecture the installer accepts must have real bytes in
+          # the published index. `SUPPORTED_ARCH` in deploy/install.sh is
+          # x86_64 and aarch64; those are amd64 and arm64 in Docker's naming,
+          # and this is the check that stops the two lists drifting apart.
+          #
+          # Read off the manifest that was actually pushed, by digest. If the
+          # arm64 build silently did not happen, the release fails here rather
+          # than an aarch64 operator discovering it at install time.
+          architectures="$(docker buildx imagetools inspect "$reference" --raw |
+            python3 -c 'import json,sys; d=json.load(sys.stdin); print(" ".join(sorted({m["platform"]["architecture"] for m in d.get("manifests", []) if m.get("platform", {}).get("architecture") not in (None, "unknown")})))')"
+          printf 'published architectures: %s\n' "$architectures"
+          for required in amd64 arm64; do
+            case " $architectures " in
+              *" $required "*) ;;
+              *)
+                printf 'the published manifest has no %s image, but the installer accepts it.\n' "$required" >&2
+                exit 1
+                ;;
+            esac
+          done
+
           docker pull --quiet "$reference"
           # The image must agree with the release identity. A published image
           # whose metadata names a different commit is a release nobody can
