@@ -103,6 +103,21 @@ mistaken for oversights:
 - **No secret rotation tooling.** Rotating the database password or the KEK on
   a live installation has no supported procedure yet; the KEK half of that
   belongs to `BLOCKER-SECRETS-V2` below.
+- **Release provenance is trust-on-first-use.** A release is pinned by digest,
+  so a tag cannot be repointed under an installation once it has been resolved.
+  Nothing verifies who BUILT that digest: `nexa_resolve_digest` trusts whatever
+  the registry answers with the first time a version is named, so anyone able to
+  publish to the package — a leaked `packages: write` token, a compromised
+  runner — can publish a digest every installation will then faithfully pin.
+  Closing it means signing at publish time and verifying before the pull, which
+  is a key-management decision of its own. The digest-first model is arranged so
+  that step can be added without changing anything else.
+- **Migration compatibility is policy with no mechanism.** Expand → deploy →
+  contract is what makes application rollback sound, and nothing checks that a
+  migration obeys it. A single same-release `DROP COLUMN` or `SET NOT NULL`
+  silently invalidates every rollback afterwards, and it surfaces only as the
+  previous release crash-looping AFTER `botctl rollback` has stopped the working
+  one. A gate belongs beside `check-migration-drift.sh`.
 
 ### `BLOCKER-SECRETS-V2` — the secret envelope
 
