@@ -110,8 +110,11 @@ cmd_version() {
   if [ -z "$version" ]; then
     nexa_die "no current release is recorded. The installation is incomplete."
   fi
-  commit="$(nexa_manifest_field "$version" commit || printf 'unknown')"
-  digest="$(nexa_manifest_field "$version" digest || printf 'unknown')"
+  # `2>/dev/null`: a malformed manifest makes the reader raise, and an operator
+  # pasting `botctl version` into a ticket should get `unknown`, not a Python
+  # traceback about a file they have never heard of.
+  commit="$(nexa_manifest_field "$version" commit 2>/dev/null || printf 'unknown')"
+  digest="$(nexa_manifest_field "$version" digest 2>/dev/null || printf 'unknown')"
 
   printf 'version   %s\n' "$version"
   printf 'commit    %s\n' "$commit"
@@ -423,7 +426,7 @@ cmd_update() {
     # — and the next `botctl rollback` refuses. Better said here than
     # discovered then.
     [ "$(nexa_previous_version || true)" != "$target" ] ||
-      nexa_warn "the rollback target is also ${target}, so 'botctl rollback' will refuse until that is settled." 
+      nexa_warn "the rollback target is also ${target}, so 'botctl rollback' will refuse until that is settled."
   else
     nexa_commit_release "$target" "$current" "$target_image"
     nexa_ok "updated to ${target} (${digest})"

@@ -554,7 +554,11 @@ nexa_check_divergence() {
     # `botctl restart` go ahead and start the other release.
     configured="$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE 2>/dev/null || true)"
     running="$(nexa_version_for_image "$configured" 2>/dev/null || true)"
-    if [ -n "$running" ] && [ "$running" != "$version" ]; then
+    # No `!= $version` test: we are in this branch only because ${version} has
+    # no manifest, and `nexa_version_for_image` resolves through the same field,
+    # so it can never answer with ${version}. A condition that cannot be false
+    # reads as a guard and is not one.
+    if [ -n "$running" ]; then
       nexa_warn "DIVERGENCE: this installation records ${version}, which has no manifest, but deploy.env would start ${running}."
       nexa_warn "A restart or a reboot would start ${running}. 'botctl update ${running}' settles it."
       return 1

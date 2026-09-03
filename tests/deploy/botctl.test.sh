@@ -890,6 +890,18 @@ assert_equals 'restart refused an installation with nothing wrong with it' 0 "$B
 assert_not_contains 'restart claimed a disagreement that does not exist' \
   "$BOTCTL_OUTPUT" 'disagree'
 
+test_case 're-recording says so when it leaves the two pointers equal'
+# The repair deliberately does not touch `previous`, so an interrupted rollback
+# that made the pointers equal survives it — and the next `botctl rollback`
+# refuses. Better said here than discovered then.
+printf 'v1.0.0\n' >"${NEXA_STATE_DIR}/previous"
+fake_set resolve_digest "$DIGEST_A"
+run_botctl update v1.0.0
+assert_equals 'the repair failed with equal pointers' 0 "$BOTCTL_STATUS"
+assert_contains 'the operator was not warned that rollback will refuse' \
+  "$BOTCTL_OUTPUT" 'rollback target is also'
+rm -f "${NEXA_STATE_DIR}/previous" "${NEXA_STATE_DIR}/releases/v1.0.0.json"
+
 test_case 'the advised repair records the manifest and does not invent a rollback target'
 # The warning says `botctl update <current>` records one, so it must. It used
 # to take a backup, run the migration, recreate the containers and THEN die on
@@ -1004,6 +1016,15 @@ assert_contains 'the equal pointers were not named' "$BOTCTL_OUTPUT" 'both'
 assert_equals 'a refused rollback still repointed deploy.env' \
   "registry.test/nexa@${DIGEST_A}" \
   "$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE)"
+
+test_case 'the library refuses to record one release as both pointers'
+# The second of the two equal-pointer guards, asserted on its OWN wording.
+# `cmd_rollback` has one too, and each caught the other's mutation while the
+# suite stayed green — so neither was individually falsifiable and the update
+# path's use of this one went unnoticed for two rounds.
+probe="$( (nexa_commit_release v1.0.0 v1.0.0 "registry.test/nexa@${DIGEST_A}") 2>&1 || true)"
+assert_contains 'the library recorded a release as its own rollback target' \
+  "$probe" 'both the current release and the rollback target'
 
 test_case 'rollback refuses when no current release is recorded'
 # The other way the equal pair used to be built — deliberately, by a

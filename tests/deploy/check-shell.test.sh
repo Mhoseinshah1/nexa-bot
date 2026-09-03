@@ -46,13 +46,19 @@ probe() {
   local output status=0
   output="$(cd "$PROBE_ROOT" && bash "$TIER3" 2>&1)" || status=$?
   rm -f "${PROBE_ROOT}/${path}"
+  # A `case`, not `printf | grep -q`. The file that enforces this ban had been
+  # executing it — and it was the only executed instance in the file, every
+  # other being probe data. It is also the exact failure this whole check is
+  # about: a large enough $output would SIGPIPE the printf and misreport a
+  # flagged verdict as an error.
   if [ "$status" -eq 0 ]; then
     printf 'clean'
-  elif printf '%s' "$output" | grep -q 'exits early'; then
-    printf 'flagged'
-  else
-    printf 'error: %s' "$output"
+    return 0
   fi
+  case "$output" in
+    *'exits early'*) printf 'flagged' ;;
+    *) printf 'error: %s' "$output" ;;
+  esac
 }
 
 expect_flagged() {
@@ -102,6 +108,31 @@ gzip -dc z | grep -q TABLE'
 expect_flagged 'after a string ENDING at a tag' scripts/p.sh 'printf "%s\n" "the block tagged <<REFUSAL"
 docker ps | grep -q api'
 
+test_case 'a false opener that later closes must not swallow the file silently'
+# The one shape no earlier probe had, and the one that matters most: prose
+# containing a tag, an offender after it, and a REAL heredoc later whose
+# terminator closes the false one. The end-of-file backstop never fires, so a
+# wrong opener rule reports the file clean and says nothing at all.
+#
+# This is a regression test in the strict sense — the rule that made
+# `cat <<EOF | tee x` open correctly also made this prose open, and the check
+# stopped reporting an offender the commit before it had caught.
+expect_flagged 'prose with a tag, then an offender, then a real heredoc' scripts/p.sh 'echo "the usual form is: cat <<EOF | tee log"
+find . | grep -q z
+cat <<EOF
+x
+EOF'
+expect_flagged 'the same shape in a workflow, where the token lives' .github/workflows/p.yml '      - name: x # the form is cat <<EOF | tee
+        run: |
+          find . | grep -q z
+      - name: y
+        run: |
+          cat >f <<EOF
+          body
+          EOF'
+expect_flagged 'a comment whose tag ENDS the line' scripts/p.sh '# the usual form is cat <<EOF
+ls | head -n 1'
+
 test_case 'an unterminated heredoc is an error, not silence'
 # The failure mode this converts: any spelling that opens a heredoc which never
 # closes hides every following line. Rather than enumerate the spellings, the
@@ -122,6 +153,8 @@ expect_clean 'an indented <<- heredoc' scripts/p.sh 'cat <<-EOF
 expect_clean 'a heredoc piped onward' scripts/p.sh 'cat <<EOF | tee /tmp/log
 find . | head -n 1
 EOF'
+expect_flagged 'a pipeline inside a command substitution inside quotes' scripts/p.sh 'v="$(find . | head -n 1)"'
+expect_clean 'a pipe inside a quoted argument is not a pipeline' scripts/p.sh 'grep -E "a|b" file'
 
 test_case 'a YAML block scalar is not a pipeline'
 # `run: |` ends a line with a pipe and means the opposite. Joining there

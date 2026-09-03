@@ -94,82 +94,109 @@ printf '\033[32mok\033[0m    %d helper scripts clean at shellcheck warning\n' "$
 #
 # `.github` is in the scan set because the release workflow is shell too, and it
 # is the one that holds a token able to publish.
+# The awk program lives in a quoted heredoc rather than inside a single-quoted
+# `awk '...'`, so it can contain both kinds of quote without escaping. That is
+# not cosmetic: this program has to reason ABOUT quotes, and writing it inline
+# is how the previous three versions ended up guessing instead.
+read -r -d '' TIER3_AWK <<'AWK' || true
+# Reduce a line to the shell CODE on it: no quoted strings, no trailing
+# comment. Everything this check asks — does a heredoc open here, does a
+# pipeline end in an early-exiting consumer — is a question about code, and
+# asking it of prose is what produced every previous defect in this check.
+#
+# Three versions of this rule tried to tell an operator from prose by where it
+# sat on the line: "not in a comment", then "the tag ends the line", then "the
+# tag ends the line or is followed by a pipe". Each admitted a spelling the one
+# before it excluded, and the last one SILENTLY skipped the rest of a file
+# whenever a real heredoc later closed the false one. Removing the strings is
+# the property they were all approximating.
+# A quoted run is dropped ONLY when it holds no `$`. A command substitution is
+# code — `v="$(find . | head -n 1)"` is exactly the pipeline this check exists
+# to find — so anything that could expand is kept rather than guessed at.
+function code(s,   out, run, i, c, q, n, prev) {
+  out = ""; run = ""; q = ""; n = length(s)
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    if (q == "") {
+      if (c == "\\") { i++; continue }
+      if (c == "'" || c == "\"") { q = c; run = ""; continue }
+      prev = (out == "") ? " " : substr(out, length(out))
+      if (c == "#" && prev ~ /[[:space:]]/) break
+      out = out c
+    } else {
+      if (c == "\\" && q == "\"") { i++; continue }
+      if (c == q) { q = ""; if (index(run, "$") > 0) out = out run; continue }
+      run = run c
+    }
+  }
+  if (q != "" && index(run, "$") > 0) out = out run
+  return out
+}
+
+# `<<'EOF'` and `<<"EOF"` are heredoc operators whose tag happens to be
+# quoted. Unquote the TAG before the strings are removed, or the operator
+# disappears with them and the body is read as code.
+{
+  norm = $0
+  while (match(norm, /<<-?[[:space:]]*['"][A-Za-z_][A-Za-z0-9_]*['"]/)) {
+    seg = substr(norm, RSTART, RLENGTH)
+    gsub(/['"]/, "", seg)
+    norm = substr(norm, 1, RSTART - 1) seg substr(norm, RSTART + RLENGTH)
+  }
+  bare = code(norm)
+}
+
+# Inside a heredoc body: data, not code. The terminator is matched against the
+# raw line, because a terminator is not code either.
+heredoc != "" {
+  if ($0 ~ ("^[[:space:]]*" heredoc "[[:space:]]*$")) heredoc = ""
+  next
+}
+
+# A heredoc opener, now decided on the code alone. `cat <<EOF | tee x` opens
+# one; `echo "the form is cat <<EOF | tee"` does not, because the quoted run is
+# gone before we look.
+match(bare, /<<-?[[:space:]]*[A-Za-z_][A-Za-z0-9_]*/) {
+  tag = substr(bare, RSTART, RLENGTH)
+  sub(/^<<-?[[:space:]]*/, "", tag)
+  heredoc = tag
+  next
+}
+
+# A trailing `|` in YAML is a block-scalar indicator, not a pipe.
+bare ~ /^[[:space:]]*(-[[:space:]]+)?([A-Za-z0-9_.-]+|"[^"]*"|'[^']*')[[:space:]]*:[[:space:]]*\|[+-]?[[:space:]]*$/ { next }
+bare ~ /^[[:space:]]*-[[:space:]]*\|[+-]?[[:space:]]*$/ { next }
+
+{ line = bare; raw = $0 }
+joined != "" { line = joined " " bare; raw = joined_raw " " $0; joined = "" }
+line ~ /[|\\]$/ { joined = line; joined_raw = raw; if (start == 0) start = NR; next }
+{
+  n = (start ? start : NR)
+  start = 0
+  # A decided exit status: the caller has already said it does not care.
+  if (line ~ /\|\|[[:space:]]*true[[:space:]]*$/) next
+  if (line ~ /\|[[:space:]]*(LC_ALL=[^[:space:]]+[[:space:]]+|command[[:space:]]+)?(grep[^|]*(-[a-zA-Z]*q|-m[[:space:]]*[0-9])|head([[:space:]]|$))/) {
+    printf "%s:%d: %s\n", f, n, raw
+  }
+}
+
+# Reaching the end of a file still inside a heredoc means the rules above lost
+# track, and every line since was skipped. Loud, rather than a clean report.
+END {
+  if (heredoc != "") {
+    printf "%s:EOF: still inside heredoc <<%s; the rest of this file was NOT checked\n", f, heredoc
+  }
+}
+AWK
+
 OFFENDERS="$(find deploy scripts tests/deploy .github -type f \
   \( -name '*.sh' -o -name 'botctl' -o -name '*.yml' -o -name '*.yaml' \) 2>/dev/null |
   # The check and its test both contain the pattern as DATA — one in its
-  # explanation, one in its probes. Neither is a pipeline anything executes.
-  grep -vE 'check-shell\.(sh|test\.sh)' |
+  # explanation, one in its probes. Anchored on the path separator so a future
+  # `deploy/check-shell.sh` is not silently dropped from the privileged scan.
+  grep -vE '(^|/)check-shell(\.test)?\.sh$' |
   while IFS= read -r file; do
-    awk -v f="$file" '
-      # Heredoc bodies are prose or data, not code this check has any business
-      # reading. Without this, a troubleshooting heredoc that MENTIONS a
-      # pipeline is reported as containing one.
-      heredoc != "" {
-        if ($0 ~ ("^[[:space:]]*" heredoc "[[:space:]]*$")) heredoc = ""
-        next
-      }
-      # Comments first, so a comment that MENTIONS a heredoc tag does not open
-      # one. `botctl` contains a <<REFUSAL block and a sentence about it; with
-      # the comment check after this rule, that sentence turned the rest of the
-      # file invisible to this check.
-      /^[[:space:]]*#/ { next }
-      # A real heredoc operator ends the line, apart from an optional closing
-      # quote and any further redirections. Prose does not: `echo "documented
-      # as <<MARKER in the manual"` has words after the tag, and treating that
-      # as an opener swallowed every following line in the file.
-      # `cat <<EOF | tee x` is a real opener: the pipe applies to the command,
-      # not to the tag. Requiring end-of-line outright meant the heredoc never
-      # opened and its BODY was scanned as code.
-      match($0, /(^|[[:space:]]|>|\))<<-?[[:space:]]*['"'"'"]?[A-Za-z_][A-Za-z0-9_]*['"'"'"]?[[:space:]]*([0-9]*[<>][^[:space:]]+[[:space:]]*)*([|;&].*)?$/) {
-        tag = substr($0, RSTART, RLENGTH)
-        gsub(/^.*<<-?[[:space:]]*['"'"'"]?/, "", tag)
-        gsub(/['"'"'"].*$/, "", tag)
-        gsub(/[[:space:]].*$/, "", tag)
-        heredoc = tag
-        next
-      }
-
-      # A trailing `|` in YAML is a BLOCK SCALAR indicator, not a pipe. Joining
-      # there spliced `run: |` onto the first line of the script it introduces,
-      # so any step whose first line began `head` or `grep -q` was reported —
-      # and the same command on the third line was not. Positional nonsense.
-      # The key and its colon are REQUIRED. With both optional, `mount |` and
-      # `ls |` — one-word shell producers ending in a pipe — matched this rule
-      # and were skipped, so the join never happened and the consumer alone on
-      # the next line had no pipe left to match. That silently un-did the
-      # multi-line detection this check was widened for.
-      # Digits belong in keys: `run2:`, `python3:`, `step2:`. Without them the
-      # indicator was joined onto the first body line and that line reported.
-      /^[[:space:]]*(-[[:space:]]+)?([A-Za-z0-9_.-]+|"[^"]*"|'"'"'[^'"'"']*'"'"')[[:space:]]*:[[:space:]]*\|[+-]?[[:space:]]*$/ { next }
-      /^[[:space:]]*-[[:space:]]*\|[+-]?[[:space:]]*$/ { next }
-
-      { line = $0 }
-      joined != "" { line = joined " " $0; joined = "" }
-      /[|\\]$/ { joined = line; if (start == 0) start = NR; next }
-      {
-        n = (start ? start : NR)
-        start = 0
-        if (line ~ /^[[:space:]]*#/) next
-        if (line ~ /\|\|[[:space:]]*true[[:space:]]*$/) next
-        # A pipe is required. `grep -q file` with no pipeline is not this bug.
-        if (line ~ /\|[[:space:]]*(LC_ALL=[^[:space:]]+[[:space:]]+|command[[:space:]]+)?(grep[^|]*(-[a-zA-Z]*q|-m[[:space:]]*[0-9])|head([[:space:]]|$))/) {
-          printf "%s:%d: %s\n", f, n, line
-        }
-      }
-      # The backstop that makes every future spelling of this bug loud.
-      #
-      # Whatever heuristic decides what opens a heredoc will eventually be
-      # fooled — twice already, by a comment and then by a string ending at a
-      # tag — and the failure is SILENT: every following line is skipped and
-      # the check reports the file clean. Refusing to reach the end of a file
-      # while still inside one converts that whole class into a failure with a
-      # file and a tag on it.
-      END {
-        if (heredoc != "") {
-          printf "%s:EOF: still inside heredoc <<%s; the rest of this file was NOT checked\n", f, heredoc
-        }
-      }
-    ' "$file"
+    awk -v f="$file" "$TIER3_AWK" "$file"
   done || true)"
 if [ -n "$OFFENDERS" ]; then
   printf '%s\n' "$OFFENDERS" >&2
