@@ -1000,6 +1000,9 @@ describe('panels', () => {
       // (`panel-probe-throttle.test.ts`) where it is the subject rather than an
       // obstacle.
       probeCooldownMs: 0,
+      // Generous, so these suites — which are about something else — never
+      // hit the tenant-wide bound. Its own suite pins it low.
+      probeBudget: { capacity: 10_000, refillPerMs: 1 },
       adapters: (type: ProviderType) => ({ ...providerAdapter(type), probe: async () => outcome }),
     });
     return scripted.testConnection(tenantA, adminActorFor(owner), panelId, {

@@ -561,6 +561,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // which is the case the window exists to prevent — and the two values are
       // configured independently, so nothing else keeps them in a sane order.
       probeCooldownMs: Math.max(config.PANEL_PROBE_COOLDOWN_MS, config.PANEL_HTTP_TIMEOUT_MS),
+      probeBudget: {
+        capacity: config.PANEL_PROBE_TENANT_LIMIT,
+        refillPerMs: config.PANEL_PROBE_TENANT_LIMIT / config.PANEL_PROBE_TENANT_WINDOW_MS,
+      },
       adapters: providerAdapter,
     }),
     settingsService,

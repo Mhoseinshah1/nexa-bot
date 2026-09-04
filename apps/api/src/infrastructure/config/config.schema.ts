@@ -302,6 +302,24 @@ export const configSchema = z
      * zero would eventually be one that had.
      */
     PANEL_PROBE_COOLDOWN_MS: z.coerce.number().int().min(1_000).max(600_000).default(10_000),
+    /**
+     * How many REAL outbound provider probes a tenant may make, and over what
+     * window — across every panel it has and every API process.
+     *
+     * The per-panel cooldown is reset by a configuration change on purpose,
+     * so an operator can retest a corrected credential at once. That also
+     * means alternating two configurations retests on every change, and the
+     * total volume of outbound probes needs a bound configuration cannot
+     * reset. A token bucket of LIMIT tokens refilling continuously at
+     * LIMIT per WINDOW: a burst of LIMIT, then one every WINDOW/LIMIT.
+     */
+    PANEL_PROBE_TENANT_LIMIT: z.coerce.number().int().min(1).max(10_000).default(30),
+    PANEL_PROBE_TENANT_WINDOW_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(24 * 60 * 60 * 1000)
+      .default(300_000),
     /** Response bytes kept from a panel. Reading stops the moment it is passed. */
     PANEL_HTTP_MAX_RESPONSE_BYTES: z.coerce
       .number()

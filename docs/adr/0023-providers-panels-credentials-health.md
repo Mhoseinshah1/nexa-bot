@@ -390,6 +390,56 @@ the schema, and is raised to `PANEL_HTTP_TIMEOUT_MS` when that is larger — a
 window shorter than a probe can run would let a second request start while the
 first is still on the wire. There is no off switch.
 
+### A tenant-wide budget of real probes, taken in the same transaction as the claim
+
+The per-panel claim bounds one panel under one configuration. It does not
+bound a tenant: every edit of the address or a credential is a new
+configuration and a fresh claim, and every panel is its own row, so an operator
+alternating two addresses — or twenty panels — could send real login attempts
+at whatever rate the API accepts requests. The claim is correct and still
+insufficient, because it was built to make "I clicked twice" cheap, not to
+bound outbound traffic.
+
+So a second limiter sits beside it: **one token bucket per tenant**, in
+`panel_probe_budgets`, `capacity` tokens refilled continuously at `capacity`
+per window (`PANEL_PROBE_TENANT_LIMIT`, default 30, and
+`PANEL_PROBE_TENANT_WINDOW_MS`, default five minutes). It is keyed by the
+tenant and nothing else — no panel, no configuration digest, no address — which
+is what makes it immune to the alternation the claim allows. It is one row per
+tenant holding a count and a time, and nothing an operator typed.
+
+The two are taken in **one short transaction**, in a fixed order, and neither
+is held for the probe itself:
+
+1. the per-panel claim, exactly as before. A request the cooldown replays
+   returns stored health here and **spends nothing**: it costs the tenant no
+   capacity, because it will send no traffic;
+2. the tenant token, by a single `INSERT … ON CONFLICT DO UPDATE … WHERE
+accrued >= 1 RETURNING`. Refill is computed inside the statement from the
+   row's own `refilled_at`, so two processes racing on the same row serialise
+   on its lock and see the tokens the other one already took. A refusal here
+   raises, and the transaction **rolls the fresh claim back** with it — a
+   request that was refused does not leave a claim that would make the next
+   request, after the tenant has capacity again, replay instead of probe.
+
+Both allow, and exactly one permission is committed. Then the probe runs,
+outside any transaction, as it always has. **The token is spent whether or not
+the provider answered**: an authentication failure, a timeout, a TLS error and
+a malformed response are all real outbound attempts, and counting only
+successes would make the limiter cheapest for the most abusive shape. What is
+**not** charged is anything refused before it could go outbound — a malformed
+id, a permission the actor lacks, an unsupported provider type, and a target
+the SSRF policy refuses, which is checked before the transaction on the same
+stored address the probe would use.
+
+The refusal is `panel.probe_limited`, a `RATE_LIMITED` error mapped to HTTP
+429 with a `Retry-After` computed from the refill rate, and one deduplicated
+operational event per tenant. Neither says which panel, which address or which
+credential; the state carries none of those either. It does not clear on a
+credential or address replacement — that is the point — and it does not need
+Redis: the bucket is PostgreSQL state the API processes already share, and the
+refill is arithmetic on the clock the transaction was given.
+
 ### Every write path takes a scope and an actor
 
 Every method takes a `ScopeContext` and an `ActorContext` and checks its
@@ -427,6 +477,10 @@ they still had it.
 - A panel cannot be tested twice inside the cooldown, including by two
   different operators. That is the point, and the cost is that the second one
   sees a result they did not cause, with its own `checked at`.
+- A tenant cannot send more than thirty real probes in five minutes across all
+  its panels and configurations, by default. An operator commissioning many
+  panels at once will hit it and be told when to retry; the alternative was a
+  bound that any address edit reset.
 - An operator who runs the database somewhere the denied list does not name and
   under a hostname the connection string does not use is not covered. That is a
   deployment this repository does not produce, and the remedy is a CIDR in

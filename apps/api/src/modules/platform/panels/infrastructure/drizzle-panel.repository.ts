@@ -11,6 +11,7 @@ import type { Database, Executor } from '../../../../infrastructure/persistence/
 import {
   panelCredentials,
   panelHealth,
+  panelProbeBudgets,
   panelProbeClaims,
   panels,
 } from '../../../../infrastructure/persistence/schema.js';
@@ -22,6 +23,7 @@ import type {
   PanelRecord,
   PanelRepository,
   PanelView,
+  ProbeBudget,
   UpdatePanelInput,
 } from '../application/ports.js';
 
@@ -268,8 +270,9 @@ export class DrizzlePanelRepository implements PanelRepository {
     configuration: string,
     at: Date,
     notClaimedSince: Date,
+    tx?: TransactionScope,
   ): Promise<boolean> {
-    const claimed = await this.db
+    const claimed = await executorOf(this.db, tx)
       .insert(panelProbeClaims)
       .values({ panelId, tenantId: scope.tenantId, configuration, claimedAt: at })
       .onConflictDoUpdate({
@@ -289,6 +292,60 @@ export class DrizzlePanelRepository implements PanelRepository {
       })
       .returning({ panelId: panelProbeClaims.panelId });
     return claimed.length > 0;
+  }
+
+  /**
+   * ONE statement. The refill, the cap and the take happen inside it, and
+   * the conflict path re-evaluates `WHERE` against the row as it stands after
+   * the lock wait — so of N processes racing for the last token, exactly one
+   * gets it. A `SELECT` then an `UPDATE` would let all of them read "one
+   * left".
+   *
+   * `refilled_at` moves only on a successful take. A refused take leaves the
+   * row alone, so the accrual it was refused against keeps accruing.
+   */
+  async takeProbeBudget(
+    scope: TenantContext,
+    bucket: ProbeBudget,
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<{ permitted: true; remaining: number } | { permitted: false; retryAfterMs: number }> {
+    const { capacity, refillPerMs } = bucket;
+    // Tokens as of `at`: what was there, plus what accrued since, capped.
+    const accrued = sql`LEAST(
+      ${capacity}::double precision,
+      ${panelProbeBudgets.tokens}
+        + GREATEST(0, EXTRACT(EPOCH FROM (${at}::timestamptz - ${panelProbeBudgets.refilledAt})) * 1000)
+          * ${refillPerMs}::double precision
+    )`;
+    const taken = await tx.tx
+      .insert(panelProbeBudgets)
+      .values({ tenantId: scope.tenantId, tokens: capacity - 1, refilledAt: at })
+      .onConflictDoUpdate({
+        target: panelProbeBudgets.tenantId,
+        set: { tokens: sql`${accrued} - 1`, refilledAt: at },
+        setWhere: sql`${accrued} >= 1`,
+      })
+      .returning({ tokens: panelProbeBudgets.tokens });
+    const row = taken[0];
+    if (row !== undefined) return { permitted: true, remaining: Math.floor(row.tokens) };
+
+    // Refused. Read what is there to say when a token will exist; informational
+    // only, and read after the refusal rather than in the same statement so the
+    // statement above stays a single conditional write.
+    const [state] = await tx.tx
+      .select({ tokens: panelProbeBudgets.tokens, refilledAt: panelProbeBudgets.refilledAt })
+      .from(panelProbeBudgets)
+      .where(eq(panelProbeBudgets.tenantId, scope.tenantId));
+    const have =
+      state === undefined
+        ? 0
+        : Math.min(
+            capacity,
+            state.tokens + Math.max(0, at.getTime() - state.refilledAt.getTime()) * refillPerMs,
+          );
+    const retryAfterMs = Math.max(1, Math.ceil((1 - have) / refillPerMs));
+    return { permitted: false, retryAfterMs };
   }
 }
 

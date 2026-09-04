@@ -108,6 +108,9 @@ describe('the panel connection-test throttle', () => {
       }),
       urlPolicy: { allowLoopback: true },
       probeCooldownMs: COOLDOWN_MS,
+      // Generous, so these suites — which are about something else — never
+      // hit the tenant-wide bound. Its own suite pins it low.
+      probeBudget: { capacity: 10_000, refillPerMs: 1 },
       adapters: (type: ProviderType) => ({
         ...providerAdapter(type),
         probe: async () => {
@@ -172,6 +175,7 @@ describe('the panel connection-test throttle', () => {
       setStatus: real.setStatus.bind(real),
       nameTaken: real.nameTaken.bind(real),
       recordHealth: real.recordHealth.bind(real),
+      takeProbeBudget: real.takeProbeBudget.bind(real),
       claimProbe: async (...args: Parameters<PanelRepository['claimProbe']>) => {
         await barrier();
         return real.claimProbe(...args);
