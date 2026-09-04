@@ -294,6 +294,17 @@ nexa_pull_release() {
 # `/health/ready` a load balancer would use, run from inside the container by
 # the compose healthcheck. Polling from the host would need the edge, TLS and
 # DNS to be working to answer a question about the application.
+# Both application services, not the API alone.
+#
+# The worker is half of the application: the outbox relay, the notification
+# dispatcher and the sweepers run there and nowhere else. A release whose API
+# answers its probe while its worker is in a crash loop was accepted as
+# "ready" — and every domain event queued, every alert stayed unsent, and the
+# update reported success. So readiness is the API healthy AND the worker
+# healthy, and the worker's health is a real signal: its container check reads
+# a heartbeat the process writes only after it has reached the database.
+NEXA_READY_SERVICES="api worker"
+
 nexa_wait_ready() {
   # An explicit argument WINS; NEXA_READY_TIMEOUT is the default when there is
   # none. The other way round — the environment overriding the caller — meant
@@ -316,7 +327,8 @@ nexa_wait_ready() {
     # the `exited | dead` fast-fail below is reachable, which is the difference
     # between a failed release being backed out in seconds and in six minutes
     # (this wait, then the back-out's own).
-    state="$(nexa_compose ps --all --format json api 2>/dev/null |
+    # shellcheck disable=SC2086
+    state="$(nexa_compose ps --all --format json $NEXA_READY_SERVICES 2>/dev/null |
       python3 -c '
 import json, sys
 raw = sys.stdin.read().strip()
@@ -352,33 +364,54 @@ except json.JSONDecodeError:
 #
 # A container that is RUNNING is the only one whose health means anything.
 # Among those, prefer one that has a health status; if none is running, report
-# the state of the first api entry, so `exited` and `dead` are seen and acted
-# on. (No apostrophes in this block: it is inside a single-quoted `python3 -c`,
-# and one would end the program early.)
-api = [entry for entry in entries if entry.get("Service") == "api"]
-running = [entry for entry in api if entry.get("State") == "running"]
-if running:
-    # The BEST health among the running entries, not the first one that has a
-    # health at all. A `compose run` container whose client was killed keeps
-    # RUNNING, and carries the same healthcheck, so it reports starting — and
-    # "first entry with a health" then answers starting while the real api next
-    # to it is healthy. Which entry comes first is not something compose
-    # promises, so that rule was correct only by luck of ordering.
-    healths = [entry.get("Health") or "" for entry in running]
-    if "healthy" in healths:
-        print("healthy")
-    else:
-        print(next((health for health in healths if health), "running"))
-elif api:
-    # Nothing running. Fast-fail only if EVERY entry is terminal: a leftover
-    # corpse alongside an api that is still `created` must not be read as the
-    # api having died, because that backs out a release that was merely slow —
-    # after the migration has already run.
-    # A missing State is not evidence of life. Treating "" as alive let one
-    # malformed entry beside a genuinely dead api suppress the fast-fail.
-    states = [entry.get("State") or "" for entry in api]
-    alive = [state for state in states if state and state not in ("exited", "dead")]
-    print(alive[0] if alive else next((state for state in states if state), ""))
+# the state of the first entry, so `exited` and `dead` are seen and acted on.
+# (No apostrophes in this block: it is inside a single-quoted `python3 -c`, and
+# one would end the program early.)
+def verdict(service):
+    mine = [entry for entry in entries if entry.get("Service") == service]
+    running = [entry for entry in mine if entry.get("State") == "running"]
+    if running:
+        # The BEST health among the running entries, not the first one that
+        # has a health at all. A `compose run` container whose client was
+        # killed keeps RUNNING, and carries the same healthcheck, so it reports
+        # starting — and "first entry with a health" then answers starting
+        # while the real container next to it is healthy. Which entry comes
+        # first is not something compose promises, so that rule was correct
+        # only by luck of ordering.
+        healths = [entry.get("Health") or "" for entry in running]
+        if "healthy" in healths:
+            return "healthy"
+        return next((health for health in healths if health), "running")
+    if mine:
+        # Nothing running. Fast-fail only if EVERY entry is terminal: a
+        # leftover corpse alongside a container that is still `created` must
+        # not be read as it having died, because that backs out a release that
+        # was merely slow — after the migration has already run.
+        # A missing State is not evidence of life. Treating "" as alive let
+        # one malformed entry beside a genuinely dead api suppress the
+        # fast-fail.
+        states = [entry.get("State") or "" for entry in mine]
+        alive = [state for state in states if state and state not in ("exited", "dead")]
+        return alive[0] if alive else next((state for state in states if state), "")
+    # Not listed at all. Not "healthy", not terminal: the loop keeps waiting,
+    # which is what a service that has not been created yet deserves — and a
+    # service that is MISSING from a topology that requires it never becomes
+    # healthy, so the wait times out rather than passing.
+    return ""
+
+# Every required service, and the answer is the WORST of them. A terminal
+# state anywhere fast-fails the whole wait: an api that is healthy beside a
+# worker that has died is not a release that works, and waiting out the
+# timeout for it would only delay the back-out. Anything else reports the
+# first service that is not healthy, so the caller sees what it is waiting on.
+required = ["api", "worker"]
+verdicts = [verdict(service) for service in required]
+if any(v in ("exited", "dead") for v in verdicts):
+    print(next(v for v in verdicts if v in ("exited", "dead")))
+elif all(v == "healthy" for v in verdicts):
+    print("healthy")
+else:
+    print(next((v for v in verdicts if v != "healthy"), ""))
 ' 2>/dev/null || true)"
 
     case "$state" in
@@ -771,8 +804,47 @@ caddy/routes.caddy|${NEXA_DEPLOY_DIR}/caddy/routes.caddy|0644
 TABLE
 }
 
+# Staged sets are keyed by DIGEST, never by version.
+#
+# A version is a tag, and a tag is a pointer somebody can move. Keyed by
+# version, a set staged from digest A was silently reused for an update that
+# had just resolved the same tag to digest B — the image ran B's code under A's
+# compose file and A's botctl, and nothing on the host could tell. The digest
+# is the identity everything else in this installation already uses (ADR-0022:
+# a release is a digest), so the assets use it too, and a moved tag stages a
+# new set rather than finding an old one.
+#
+# The directory carries a `release` marker naming the version for a human
+# reading /var/lib/nexa; nothing reads it back.
+nexa_assets_path() {
+  local digest="$1"
+  nexa_valid_digest "$digest" || return 1
+  printf '%s/%s' "$NEXA_ASSETS_DIR" "${digest#sha256:}"
+}
+
 nexa_assets_staged() {
-  [ -n "$1" ] && [ -d "${NEXA_ASSETS_DIR}/$1" ]
+  local path
+  path="$(nexa_assets_path "${1:-}")" || return 1
+  [ -d "$path" ]
+}
+
+# The digest whose assets are LIVE on this host right now: the current
+# release's, from its manifest — or, on an installation whose current release
+# has no manifest, from what deploy.env would actually start. Nothing else is
+# evidence of what is installed.
+nexa_live_digest() {
+  local version="${1:-}" digest image
+  if [ -n "$version" ]; then
+    digest="$(nexa_manifest_field "$version" digest 2>/dev/null || true)"
+    if nexa_valid_digest "$digest"; then
+      printf '%s' "$digest"
+      return 0
+    fi
+  fi
+  image="$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE 2>/dev/null || true)"
+  digest="${image##*@}"
+  nexa_valid_digest "$digest" || return 1
+  printf '%s' "$digest"
 }
 
 # The target release's own copy of the host assets, taken out of its image.
@@ -783,19 +855,23 @@ nexa_assets_staged() {
 # shipped and nothing else.
 #
 # Staged under a `.partial` name and renamed only once every file is present,
-# so an interrupted extraction leaves no half-populated version directory for a
-# later activation to install from.
+# so an interrupted extraction leaves no half-populated directory for a later
+# activation to install from.
 nexa_stage_release_assets() {
-  local version="$1" image="$2"
-  # These paths are `rm -rf`ed below. An empty version would make that the
-  # assets directory itself, so the emptiness is refused here rather than
-  # guarded at each removal.
-  [ -n "$version" ] || nexa_die "internal error: staging host assets needs a release version."
+  local digest="$1" image="$2" version="${3:-}"
+  # These paths are `rm -rf`ed below. A malformed digest would make that the
+  # assets directory itself, so it is refused here rather than guarded at each
+  # removal.
+  local final
+  final="$(nexa_assets_path "$digest")" || nexa_die "internal error: staging host assets needs a digest."
   [ -n "$image" ] || nexa_die "internal error: staging host assets needs an image."
-  local final="${NEXA_ASSETS_DIR:?}/${version:?}"
+  case "$image" in
+    *"@${digest}") : ;;
+    *) nexa_die "internal error: refusing to stage host assets for ${digest} out of ${image}." ;;
+  esac
   local partial="${final}.partial"
 
-  nexa_assets_staged "$version" && return 0
+  nexa_assets_staged "$digest" && return 0
 
   rm -rf "$partial"
   mkdir -p "$partial" || nexa_die "cannot create ${partial}."
@@ -817,24 +893,25 @@ nexa_stage_release_assets() {
   done <<EOF
 $(nexa_asset_table)
 EOF
+  printf '%s\n' "${version:-unknown}" >"${partial}/release"
 
   rm -rf "$final"
-  mv -f "$partial" "$final" || nexa_die "cannot stage the host assets for ${version}."
+  mv -f "$partial" "$final" || nexa_die "cannot stage the host assets for ${digest}."
 }
 
-# What is installed RIGHT NOW, kept under a version so a rollback has something
-# to put back.
+# What is installed RIGHT NOW, kept under the digest that is live so a rollback
+# has something to put back.
 #
 # This is what makes an installation created before this mechanism upgradeable
 # without reinstalling: staging.1 through staging.4 never staged anything, so
 # the first update captures whatever those installs put on disk as the current
 # release's set.
 nexa_capture_live_assets() {
-  local version="$1"
-  [ -n "$version" ] || nexa_die "internal error: capturing host assets needs a release version."
-  nexa_assets_staged "$version" && return 0
+  local digest="$1" version="${2:-}"
+  local final
+  final="$(nexa_assets_path "$digest")" || nexa_die "internal error: capturing host assets needs a digest."
+  nexa_assets_staged "$digest" && return 0
 
-  local final="${NEXA_ASSETS_DIR:?}/${version:?}"
   local partial="${final}.partial"
   rm -rf "$partial"
   mkdir -p "$partial/bin" "$partial/caddy" || nexa_die "cannot create ${partial}."
@@ -849,19 +926,69 @@ nexa_capture_live_assets() {
       # rather than invented, so a rollback does not install a file this
       # release never had.
       rm -rf "$partial"
-      nexa_warn "cannot capture ${destination}: it is missing, so ${version}'s host assets cannot be recorded."
+      nexa_warn "cannot capture ${destination}: it is missing, so the live host assets cannot be recorded."
       return 1
     fi
   done <<EOF
 $(nexa_asset_table)
 EOF
+  printf '%s\n' "${version:-unknown}" >"${partial}/release"
 
   rm -rf "$final"
   mv -f "$partial" "$final" ||
-    nexa_die "cannot record the host assets for ${version}."
+    nexa_die "cannot record the host assets for ${digest}."
 }
 
-# Put a staged release's assets into service.
+# The generation directory an activation works in, and its journal.
+#
+# Activation replaces six files at six fixed paths, and it can fail after any
+# of them. The old shape replaced them one by one and stopped at the first
+# failure, which left an installation with three of one release's files and
+# three of another's — the state nothing was written for, and the one an
+# operator finds when `botctl` calls a library function that does not exist.
+#
+# So an activation is a JOURNALLED unit. Before the first file moves, the live
+# copy of every destination is saved under this directory; as each file is
+# replaced, one line is appended to the journal; on any failure the journal is
+# replayed backwards and every saved copy goes back; on success the directory
+# is removed. A directory found here at the START of an activation is an
+# activation that was interrupted — by a power cut, a kill — and is replayed
+# first, so the host is whole before it is changed again.
+NEXA_ACTIVATING_DIR="${NEXA_STATE_DIR}/assets/.activating"
+
+# Undo a journalled activation: every destination the journal names goes back
+# to the copy saved beside it, or is removed if there was none.
+nexa_restore_activation() {
+  local journal="${NEXA_ACTIVATING_DIR}/journal" line source destination existed saved tmp
+  [ -r "$journal" ] || { rm -rf "$NEXA_ACTIVATING_DIR"; return 0; }
+  local failed=0
+  # Backwards, so the most recent replacement is undone first. `tac` is
+  # coreutils and present everywhere this runs.
+  while IFS='|' read -r source destination existed; do
+    [ -n "$destination" ] || continue
+    saved="${NEXA_ACTIVATING_DIR}/saved/${source}"
+    if [ "$existed" = "1" ]; then
+      # Back into place the same way it was put there: beside, then renamed
+      # over, so the restore is as atomic as the replacement was.
+      if tmp="$(mktemp "${destination}.XXXXXX" 2>/dev/null)" &&
+        cp -p "$saved" "$tmp" && mv -f "$tmp" "$destination"; then
+        :
+      else
+        rm -f "${tmp:-}" 2>/dev/null
+        nexa_warn "could not put ${destination} back; its previous copy is at ${saved}."
+        failed=1
+      fi
+    else
+      rm -f "$destination" || failed=1
+    fi
+  done < <(tac "$journal")
+  if [ "$failed" -eq 0 ]; then
+    rm -rf "$NEXA_ACTIVATING_DIR"
+  fi
+  return "$failed"
+}
+
+# Put a staged release's assets into service, as one unit.
 #
 # Each file is written beside its destination and RENAMED over it. Two reasons,
 # and the second is not theoretical:
@@ -872,31 +999,96 @@ EOF
 #     swaps the directory entry and leaves the running process's open inode
 #     alone; copying over the same inode would rewrite the script under the
 #     interpreter mid-execution.
+#
+# And the whole set is validated before the first rename, the live set is saved
+# before it, and every failure after it restores every file already replaced —
+# see NEXA_ACTIVATING_DIR above.
 nexa_activate_release_assets() {
-  local version="$1"
-  [ -n "$version" ] || nexa_die "internal error: activating host assets needs a release version."
-  local staged="${NEXA_ASSETS_DIR}/${version}"
-  [ -d "$staged" ] || nexa_die "no host assets are staged for ${version}."
+  local digest="$1" staged
+  staged="$(nexa_assets_path "$digest")" || nexa_die "internal error: activating host assets needs a digest."
+  [ -d "$staged" ] || nexa_die "no host assets are staged for ${digest}."
 
-  local source destination mode tmp
+  # An activation that never finished. Put the host back first; changing it
+  # again on top of a half-applied set would lose the copies that make the
+  # restore possible.
+  if [ -d "$NEXA_ACTIVATING_DIR" ]; then
+    nexa_warn "a previous host-asset activation was interrupted; restoring the set it replaced first."
+    nexa_restore_activation ||
+      nexa_die "could not restore the interrupted activation under ${NEXA_ACTIVATING_DIR}. Inspect it before retrying; nothing has been changed."
+  fi
+
+  # 1. VALIDATE everything before touching anything.
+  local source destination mode
   while IFS='|' read -r source destination mode; do
     [ -n "$source" ] || continue
-    [ -s "${staged}/${source}" ] || nexa_die "${version}'s staged ${source} is missing or empty."
-    mkdir -p "$(dirname "$destination")" || nexa_die "cannot create $(dirname "$destination")."
-    tmp="$(mktemp "${destination}.XXXXXX")" || nexa_die "cannot write beside ${destination}."
-    if ! cp "${staged}/${source}" "$tmp"; then
-      rm -f "$tmp"
-      nexa_die "cannot stage ${destination}."
-    fi
-    chmod "$mode" "$tmp" || { rm -f "$tmp"; nexa_die "cannot set the mode on ${destination}."; }
-    # Ownership follows the caller, which is root for every path that reaches
-    # here; stated rather than assumed, so a non-root caller fails loudly.
-    if [ "$(id -u)" -eq 0 ]; then
-      chown 0:0 "$tmp" || { rm -f "$tmp"; nexa_die "cannot set the owner on ${destination}."; }
-    fi
-    sync "$tmp" 2>/dev/null || true
-    mv -f "$tmp" "$destination" || nexa_die "cannot install ${destination}."
+    [ -s "${staged}/${source}" ] || nexa_die "${digest}'s staged ${source} is missing or empty."
   done <<EOF
 $(nexa_asset_table)
 EOF
+
+  # 2. SAVE the live set, and open the journal.
+  mkdir -p "${NEXA_ACTIVATING_DIR}/saved/bin" "${NEXA_ACTIVATING_DIR}/saved/caddy" ||
+    nexa_die "cannot create ${NEXA_ACTIVATING_DIR}."
+  local journal="${NEXA_ACTIVATING_DIR}/journal"
+  : >"$journal"
+  while IFS='|' read -r source destination mode; do
+    [ -n "$source" ] || continue
+    if [ -e "$destination" ]; then
+      cp -p "$destination" "${NEXA_ACTIVATING_DIR}/saved/${source}" || {
+        rm -rf "$NEXA_ACTIVATING_DIR"
+        nexa_die "cannot save ${destination} before replacing it; nothing has been changed."
+      }
+    fi
+  done <<EOF
+$(nexa_asset_table)
+EOF
+
+  # 3. REPLACE, journalling each file, and undo everything on the first failure.
+  local tmp existed
+  activation_failed() {
+    nexa_warn "$1"
+    if nexa_restore_activation; then
+      nexa_die "the host assets were NOT changed: every file already replaced has been put back."
+    fi
+    nexa_die "the host assets are in a MIXED state and could not all be put back. The journal and the saved copies are under ${NEXA_ACTIVATING_DIR}; the next activation will retry the restore."
+  }
+  while IFS='|' read -r source destination mode; do
+    [ -n "$source" ] || continue
+    mkdir -p "$(dirname "$destination")" || activation_failed "cannot create $(dirname "$destination")."
+    tmp="$(mktemp "${destination}.XXXXXX")" || activation_failed "cannot write beside ${destination}."
+    if ! cp "${staged}/${source}" "$tmp"; then
+      rm -f "$tmp"
+      activation_failed "cannot stage ${destination}."
+    fi
+    if ! chmod "$mode" "$tmp"; then
+      rm -f "$tmp"
+      activation_failed "cannot set the mode on ${destination}."
+    fi
+    # Ownership follows the caller, which is root for every path that reaches
+    # here; stated rather than assumed, so a non-root caller fails loudly.
+    if [ "$(id -u)" -eq 0 ]; then
+      if ! chown 0:0 "$tmp"; then
+        rm -f "$tmp"
+        activation_failed "cannot set the owner on ${destination}."
+      fi
+    fi
+    sync "$tmp" 2>/dev/null || true
+    existed=0
+    [ ! -e "$destination" ] || existed=1
+    # The journal line goes in BEFORE the rename. Written after, a crash
+    # between the two would leave a replaced file the restore knows nothing
+    # about; written before, the worst case is a restore that puts back a file
+    # which was never replaced — which is a copy of itself.
+    printf '%s|%s|%s\n' "$source" "$destination" "$existed" >>"$journal"
+    if ! mv -f "$tmp" "$destination"; then
+      rm -f "$tmp"
+      activation_failed "cannot install ${destination}."
+    fi
+  done <<EOF
+$(nexa_asset_table)
+EOF
+
+  # 4. DONE. The saved generation is no longer needed; the staged directory
+  # under the digest is what a rollback uses.
+  rm -rf "$NEXA_ACTIVATING_DIR"
 }

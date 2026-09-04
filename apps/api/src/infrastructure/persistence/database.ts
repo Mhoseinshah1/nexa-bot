@@ -12,10 +12,41 @@ export type Database = NodePgDatabase<typeof schema>;
  */
 export type Executor = Database | Parameters<Parameters<Database['transaction']>[0]>[0];
 
+export interface ClientOptions {
+  /**
+   * An absolute time (epoch milliseconds) by which every statement `fn` runs
+   * must have finished, enforced by PostgreSQL.
+   *
+   * This is what makes a bounded probe actually bounded. A `Promise.race`
+   * against a timer returns to the caller on time and leaves the losing query
+   * running on a connection nobody will release until it finishes — and a
+   * readiness endpoint polled every few seconds against a stalled database
+   * turns that into a pool full of orphans. Here the remaining time is
+   * computed when the connection is ACQUIRED, not when it was asked for, and
+   * set as `statement_timeout` for the checkout: a statement that overruns is
+   * cancelled by the server, the client sees `57014 query_canceled`, and the
+   * connection is back in the pool. A checkout that acquires its connection
+   * after the deadline has already passed — it was queued behind others — is
+   * released untouched, so work never starts on behalf of a caller that has
+   * already answered. `RESET` on release puts the pool's own configured value
+   * back for the next borrower.
+   */
+  readonly deadlineAt?: number;
+}
+
 export interface DatabaseHandle {
   readonly db: Database;
   readonly pool: Pool;
-  withClient<T>(fn: (client: PoolClient) => Promise<T>): Promise<T>;
+  withClient<T>(fn: (client: PoolClient) => Promise<T>, options?: ClientOptions): Promise<T>;
+  /**
+   * `withClient`, with the checkout wrapped as a query builder.
+   *
+   * For a caller that has a repository-style read to run under a deadline —
+   * the readiness probe's outbox-lag query — and must not construct a drizzle
+   * instance itself, because database access belongs in this adapter and
+   * nowhere else.
+   */
+  withExecutor<T>(fn: (executor: Database) => Promise<T>, options?: ClientOptions): Promise<T>;
   close(): Promise<void>;
 }
 
@@ -79,13 +110,43 @@ export function createDatabase(
   return {
     db,
     pool,
-    async withClient(fn) {
+    async withClient(fn, options) {
       const client = await pool.connect();
+      const deadline = options?.deadlineAt;
+      let bounded: number | undefined;
+      if (deadline !== undefined) {
+        bounded = Math.floor(deadline - Date.now());
+        if (bounded <= 0) {
+          client.release();
+          throw new Error('the checkout was acquired after its deadline had passed');
+        }
+      }
+      // Released with `true` — destroyed rather than returned — if the
+      // session's timeout could not be put back. A connection whose
+      // statement_timeout is silently three seconds would fail the next
+      // borrower's ordinary work in a way nothing would explain.
+      let destroy = false;
       try {
+        if (bounded !== undefined) {
+          // Interpolated as an integer, never as a parameter: `SET` takes no
+          // bind parameters, and the value is an integer this code computed
+          // rather than anything a caller supplied.
+          await client.query(`SET statement_timeout = ${bounded}`);
+        }
         return await fn(client);
       } finally {
-        client.release();
+        if (bounded !== undefined) {
+          try {
+            await client.query('RESET statement_timeout');
+          } catch {
+            destroy = true;
+          }
+        }
+        client.release(destroy);
       }
+    },
+    withExecutor(fn, options) {
+      return this.withClient((client) => fn(drizzle(client, { schema })), options);
     },
     async close() {
       await pool.end();

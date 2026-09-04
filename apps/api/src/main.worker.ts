@@ -3,6 +3,7 @@ import { isNexaError } from '@nexa/contracts';
 import { resolveInstallationTenant } from './bootstrap.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
+import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
 
 /**
@@ -28,12 +29,37 @@ async function main(): Promise<void> {
   // The same coordinator as the API. The worker's own boolean guard was the
   // better half of the two and still had no deadline; one policy is easier to
   // reason about than two that differ in which failure they survive.
+  // The signal the container's health check reads. Written only after a real
+  // round trip to the database, so "healthy" means the worker can do its job,
+  // not merely that its process exists. Stopped first on shutdown, so a worker
+  // that is draining is not reported as alive after it has stopped taking
+  // work.
+  const heartbeat = startHeartbeat({
+    path: config.WORKER_HEARTBEAT_PATH,
+    intervalMs: config.WORKER_HEARTBEAT_INTERVAL_MS,
+    now: () => container.clock.now().getTime(),
+    logger: container.logger,
+    check: async () => {
+      try {
+        await container.database.withClient((client) => client.query('SELECT 1'), {
+          deadlineAt: Date.now() + config.WORKER_HEARTBEAT_INTERVAL_MS,
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  });
+
   const { shutdown } = createShutdownCoordinator({
     name: 'worker',
     logger: container.logger,
     timeoutMs: config.SHUTDOWN_TIMEOUT_MS,
     exit: (code) => process.exit(code),
-    close: () => container.shutdown(),
+    close: async () => {
+      heartbeat.stop();
+      await container.shutdown();
+    },
   });
 
   process.on('SIGTERM', () => void shutdown('SIGTERM'));

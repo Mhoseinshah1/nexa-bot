@@ -248,11 +248,28 @@ services:
   worker:
     <<: *app-common
     command: ['node', 'dist/main.worker.js']
-    # DELIBERATELY no healthcheck. The worker serves no HTTP and exposes no
-    # port, so any check here would amount to "is the process running", which
-    # is what `restart: unless-stopped` already acts on and what
-    # `botctl status` already reports. A check that restates the container
-    # state would look like a liveness guarantee it is not.
+    # A real signal, not "is the process running". The worker serves no HTTP,
+    # so it writes a heartbeat file every WORKER_HEARTBEAT_INTERVAL_MS (10s by
+    # default) — and only after a round trip to the database succeeds. This
+    # check reads the file's age: younger than 30s is healthy. A worker in a
+    # crash loop, alive with a blocked event loop, or alive and cut off from
+    # PostgreSQL goes unhealthy within a check or two, and `botctl` treats an
+    # unhealthy worker as a release that is not ready (C8).
+    #
+    # The path and the age must agree with the defaults in config.schema.ts;
+    # a unit test pins them together.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "const fs=require('fs');try{const s=fs.readFileSync('/tmp/nexa-worker.heartbeat','utf8').trim();const at=Number(s);process.exit(s!==''&&Number.isFinite(at)&&Date.now()-at<=30000?0:1)}catch{process.exit(1)}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   caddy:
     image: caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648

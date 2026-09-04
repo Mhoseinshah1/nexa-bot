@@ -31,6 +31,8 @@ interface Args {
   readonly batch: number;
   readonly max: number;
   readonly keyId: string | null;
+  /** `status --json`: counts and booleans only, for `botctl status` to read. */
+  readonly json?: boolean;
 }
 
 class UsageError extends Error {}
@@ -67,6 +69,7 @@ function parseArgs(argv: readonly string[]): Args {
     throw new UsageError('retire-check needs --key <id>: the key you are asking about.');
   }
   return {
+    json: argv.includes('--json'),
     command,
     batch: positive('--batch', 100),
     max: positive('--max', Number.MAX_SAFE_INTEGER),
@@ -375,6 +378,25 @@ async function main(): Promise<void> {
     const preamble = configurationLines(keyring, config).join('\n');
 
     if (args.command === 'status') {
+      if (args.json) {
+        // For `botctl status`. Every field is a count or a boolean; there is
+        // no field a key id, a ciphertext or a value could be put in.
+        const v1Rows = statuses.reduce((sum, status) => sum + (status.byVersion.get('v1') ?? 0), 0);
+        const rows = statuses.reduce((sum, status) => sum + status.rowCount, 0);
+        const mismatched = statuses.reduce((sum, status) => sum + status.mismatched, 0);
+        process.stdout.write(
+          `${JSON.stringify({
+            format: keyring.format,
+            acceptV1: acceptsV1(config, keyring),
+            explicit: config.SECRETS_ACCEPT_V1 !== undefined,
+            v1Rows,
+            rows,
+            mismatched,
+          })}\n`,
+        );
+        if (!healthy) process.exitCode = 1;
+        return;
+      }
       process.stdout.write(`${preamble}${text}\n`);
       if (!healthy) process.exitCode = 1;
       return;

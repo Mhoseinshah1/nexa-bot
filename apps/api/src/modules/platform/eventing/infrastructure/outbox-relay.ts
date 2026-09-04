@@ -1,10 +1,12 @@
 import { and, asc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import {
+  systemContext,
   type Clock,
   type DomainEvent,
   type EventType,
   type Logger,
   type ActorRef,
+  type ScopeContext,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -37,6 +39,22 @@ export interface RelayBatchResult {
  * `published_at` update replays the message. That is why every consumer records
  * its own applied event ids in `processed_messages` — the redelivery is
  * received, and its effect happens once.
+ *
+ * "Once" is only true because the claim and the effect are ONE transaction.
+ * Each consumer receives the relay's transaction and writes through it, so the
+ * `processed_messages` row and whatever the consumer wrote commit together or
+ * roll back together. The earlier shape — the claim inside the relay's
+ * transaction, the effect on the consumer's own pooled connection — was two
+ * commits: the effect could land and the claim then roll back, and the
+ * redelivery applied the effect again. Worse, a consumer that THREW left its
+ * claim committed beside the failure bookkeeping, so the retry found the pair
+ * already claimed, skipped the consumer, and marked the message published with
+ * no effect ever having happened.
+ *
+ * Each message is dispatched under its own SAVEPOINT. A consumer failure rolls
+ * back that message's claim and partial effect while the batch transaction
+ * stays usable, so the attempt count and error can still be recorded and the
+ * other messages in the batch still publish.
  *
  * The relay never gives up on a message and has no dead-letter queue: an event
  * that cannot be delivered is a bug to fix, not a message to discard. It backs
@@ -138,11 +156,20 @@ export class OutboxRelay {
 
         const event = toDomainEvent(row);
         try {
-          await this.dispatch(tx, event);
-          await tx
-            .update(outboxMessages)
-            .set({ publishedAt: this.clock.now(), lastError: null })
-            .where(sql`${outboxMessages.id} = ${row.id}`);
+          // A SAVEPOINT per message. Drizzle turns a nested `transaction()` on
+          // a transaction into SAVEPOINT / ROLLBACK TO, so a consumer that
+          // throws takes its claim and its half-written effect back with it —
+          // and the batch transaction is still live for the bookkeeping below.
+          // Without the savepoint the failed statement would have aborted the
+          // whole transaction, and "record the attempt" would itself fail
+          // with `current transaction is aborted`.
+          await tx.transaction(async (attempt) => {
+            await this.dispatch(attempt, event);
+            await attempt
+              .update(outboxMessages)
+              .set({ publishedAt: this.clock.now(), lastError: null })
+              .where(sql`${outboxMessages.id} = ${row.id}`);
+          });
           published += 1;
         } catch (error) {
           failed += 1;
@@ -182,7 +209,11 @@ export class OutboxRelay {
 
       if (claim.length === 0) continue;
 
-      await consumer.handle(event);
+      // The consumer's effect goes through THIS transaction — the one that
+      // holds the claim — so the two are one commit. Handing it the scope the
+      // event belongs to lets a consumer that records by scope do so without
+      // reconstructing it.
+      await consumer.handle(event, { tx, scope: scopeOf(event) });
     }
   }
 
@@ -212,12 +243,18 @@ export class OutboxRelay {
    * indefinitely, and be pulled out of service. The relay is healthy; it is
    * waiting, which is what it was told to do.
    */
-  async lagMs(): Promise<number> {
-    const [row] = await this.db
+  async lagMs(executor: Executor = this.db): Promise<number> {
+    // The executor is a parameter so the readiness probe can run this on a
+    // connection whose statement timeout it has bounded; on the pool it would
+    // run under the pool's much longer default and outlive the probe.
+    const [row] = await executor
       .select({ occurredAt: outboxMessages.occurredAt })
       .from(outboxMessages)
       .where(
-        and(isNull(outboxMessages.publishedAt), eligibleForDispatch(await this.activeTenantIds())),
+        and(
+          isNull(outboxMessages.publishedAt),
+          eligibleForDispatch(await this.activeTenantIds(executor)),
+        ),
       )
       .orderBy(asc(outboxMessages.occurredAt))
       .limit(1);
@@ -272,6 +309,13 @@ function eligibleForDispatch(activeTenantIds: readonly string[]) {
   // worth looking at.
   if (activeTenantIds.length === 0) return isNull(outboxMessages.tenantId);
   return or(isNull(outboxMessages.tenantId), inArray(outboxMessages.tenantId, activeTenantIds));
+}
+
+/** The scope a consumer acts in for this event: the tenant's, or the platform's. */
+function scopeOf(event: DomainEvent): ScopeContext {
+  return event.tenantId === null
+    ? systemContext('outbox-relay')
+    : { tenantId: event.tenantId as never, botInstanceId: null };
 }
 
 function toDomainEvent(row: typeof outboxMessages.$inferSelect): DomainEvent {
