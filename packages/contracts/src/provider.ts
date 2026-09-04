@@ -92,6 +92,31 @@ export interface ProviderDescriptor {
   readonly key: ProviderType;
   readonly canonicalName: string;
   readonly credentialShape: CredentialShape;
+  /**
+   * The operations THIS RELEASE can actually execute for this provider.
+   *
+   * Not a feature matrix, and not a statement about what the panel supports.
+   * `supportsCapability` answers from this array and the providers endpoint
+   * publishes it verbatim, so every entry is a promise the product makes to an
+   * operator — and one it must be able to keep by calling code that exists.
+   *
+   * The field carried two meanings for a release, and that is what forced this
+   * comment: one provider listed what its adapter did, another listed what its
+   * panel could do in a later phase, and the same field on the same endpoint
+   * meant different things depending on which row you read. Phase 3 connection
+   * adapters therefore expose exactly `HEALTH_CHECK`.
+   *
+   * **Widening this list is a code and test change, never a declaration.** A
+   * capability appears here in the same commit as the operation behind it:
+   * implemented, wired into the application, and tested for that provider. The
+   * catalogue is then fail-closed by construction — an operation that is not
+   * listed cannot be offered, which is the correct failure when the
+   * alternative is offering one nothing can perform.
+   *
+   * If a later phase genuinely needs "what could this panel do in principle" —
+   * to plan a migration, or to warn before a downgrade — that is a SEPARATE
+   * concept with its own name. This field is not to be overloaded again.
+   */
   readonly capabilities: readonly ProviderCapability[];
   /**
    * Fields that must be configured before this provider can build a config at
@@ -376,32 +401,22 @@ export function supportsCapability(
  * discarded, so there is no third credential to rotate and nothing to leak from
  * a database dump.
  *
- * `DELIVER_CONFIG_FILE` is declared because Marzban-compatible panels serve
- * per-user configuration files; the flow that delivers them is Phase 4, and
- * declaring the capability now is what lets Phase 4 add it without touching
- * this contract.
+ * **Capabilities are exactly `HEALTH_CHECK`**, because that is what this
+ * release can execute for Marzban: the adapter implements
+ * `ProviderConnectionAdapter` and nothing else. It previously declared the
+ * fourteen operations a Marzban-compatible panel serves — creating users,
+ * reading usage, delivering configuration files — on the reasoning that
+ * declaring them now would let Phase 4 add the flows without touching this
+ * contract. That reasoning is rejected: the endpoint publishing this array is
+ * how the product tells an operator what it can do, so the array was
+ * advertising operations no code could perform. Each returns in the commit
+ * that implements it.
  */
 const MARZBAN: ProviderDescriptor = {
   key: 'marzban',
   canonicalName: 'Marzban',
   credentialShape: 'USERNAME_PASSWORD',
-  capabilities: [
-    'CREATE_USER',
-    'RENEW_USER',
-    'DELETE_USER',
-    'DISABLE_USER',
-    'ENABLE_USER',
-    'READ_USAGE',
-    'RESET_USAGE',
-    'ADD_VOLUME',
-    'ADD_TIME',
-    'ROTATE_SUBSCRIPTION_LINK',
-    'DELIVER_SUBSCRIPTION_LINK',
-    'DELIVER_RAW_CONFIGS',
-    'DELIVER_CONFIG_FILE',
-    'LIMIT_DEVICES',
-    'HEALTH_CHECK',
-  ],
+  capabilities: ['HEALTH_CHECK'],
   requiredActivationFields: [],
 };
 
@@ -430,24 +445,10 @@ const MARZBAN: ProviderDescriptor = {
  * the panel does not derive it from its own address. That is Phase 4's
  * business; it is declared here so the seam stays visible.
  *
- * **Capabilities are what this release can DO, not what the panel could do.**
- *
- * Phase 3B implements authentication, connection testing and a read-only
- * health probe, so `HEALTH_CHECK` is the list. It previously carried the
- * fourteen operations 3X-UI supports in principle — creating users, resetting
- * traffic, delivering subscriptions — and none of them exists for this
- * provider. That was not a harmless aspiration: `supports()` answers from this
- * array and the providers endpoint publishes it verbatim, so the release was
- * telling operators it could create a 3X-UI user. Each entry returns when the
- * operation behind it is implemented and tested, in the phase that implements
- * it, and not before.
- *
- * This leaves the catalogue INCONSISTENT with Marzban, which still declares
- * fourteen capabilities while implementing only the same connection half.
- * Marzban is deliberately untouched here — correcting it is not this narrow
- * fix's business, and doing it silently would change another provider's
- * published surface — but the two now mean different things, and the one that
- * is wrong is Marzban's. It is recorded in `docs/providers/sanaei-3xui.md`.
+ * **Capabilities are exactly `HEALTH_CHECK`**, on the same rule as every other
+ * provider: this release implements authentication, connection testing and a
+ * read-only health probe for 3X-UI, and declaring more would advertise
+ * operations no code can perform.
  */
 const SANAEI: ProviderDescriptor = {
   key: 'sanaei',
