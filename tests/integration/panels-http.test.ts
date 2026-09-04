@@ -146,13 +146,13 @@ describe('panel HTTP surface', () => {
     expect(response.statusCode).toBe(200);
 
     const body = providerListResponseSchema.parse(response.json());
-    // ONLY what this release has an adapter for. `sanaei` is in the frozen
-    // descriptor catalogue and its adapter is Phase 3B, so advertising it
-    // offered a configuration that every create rejects — and the previous
-    // version of this test asserted both keys, which is how the endpoint and
-    // its test agreed with each other and disagreed with the product.
-    expect(body.providers.map((provider) => provider.key)).toEqual(['marzban']);
-    expect(body.providers.some((provider) => provider.key === 'sanaei')).toBe(false);
+    // ONLY what this release has an ADAPTER for, which is the whole point of
+    // the endpoint reading the registry rather than the descriptor catalogue:
+    // for one release `sanaei` was in the catalogue with no adapter, and
+    // advertising it would have offered a configuration every create rejects.
+    // Phase 3B implemented it, so it is listed now — and it is listed because
+    // the adapter exists, not because the name does.
+    expect(body.providers.map((provider) => provider.key).sort()).toEqual(['marzban', 'sanaei']);
     // A catalogue of code: every tenant sees the same list, and it describes
     // what an adapter declares rather than what a panel row happens to say.
     const marzban = body.providers.find((provider) => provider.key === 'marzban');

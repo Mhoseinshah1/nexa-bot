@@ -8,7 +8,10 @@ import {
 import type { ProviderProbeOutcome, ProviderType } from '@nexa/contracts';
 import { DrizzlePanelCredentialStore } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-credentials';
 import { PanelService } from '../../apps/api/src/modules/platform/panels/application/panel.service';
-import { providerAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
+import {
+  IMPLEMENTED_PROVIDER_TYPES,
+  providerAdapter,
+} from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
 import { DrizzlePanelRepository } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel.repository';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
 import { AesGcmSecretCipher } from '../../apps/api/src/infrastructure/crypto/secret-cipher';
@@ -619,14 +622,34 @@ describe('panels', () => {
     expect(await ctx.container.database.db.select().from(panels)).toEqual([]);
   });
 
-  it('refuses a declared provider type this release has no adapter for', async () => {
-    // `sanaei` is in the frozen contracts and has no adapter yet. Refused at
-    // CREATE, not at the first probe: the legacy bot let an operator configure
-    // a panel it could never talk to and reported success (SOURCE_BUG-XUI-001).
-    await expect(create(owner, tenantA, { providerType: 'sanaei' })).rejects.toMatchObject({
-      code: 'panel.provider_type_unsupported',
-    });
+  it('refuses a provider type this release cannot operate, before writing a row', async () => {
+    // Refused at CREATE, not at the first probe: the legacy bot let an
+    // operator configure a panel it could never talk to and reported success
+    // (SOURCE_BUG-XUI-001).
+    //
+    // `sanaei` was this case until Phase 3B implemented it, and it was refused
+    // by the REGISTRY. A name this release has never heard of is refused one
+    // layer earlier, by the request schema, which is why the code differs —
+    // and both layers matter: the schema stops an operator typing a name, and
+    // the registry stops a row that reached the database another way (a
+    // downgrade, a hand-written insert) from being operated by the wrong
+    // adapter. The registry's own refusal is asserted in the unit suite.
+    await expect(
+      create(owner, tenantA, { providerType: 'a-provider-from-a-newer-release' }),
+    ).rejects.toMatchObject({ code: 'panel.request_invalid' });
     expect(await ctx.container.database.db.select().from(panels)).toEqual([]);
+  });
+
+  it('creates a panel for every provider type this release implements', async () => {
+    // The positive half: a type the registry resolves is configurable, and the
+    // row records the type it was created with.
+    for (const providerType of IMPLEMENTED_PROVIDER_TYPES) {
+      const { view } = await create(owner, tenantA, {
+        providerType,
+        name: `Panel ${providerType}`,
+      });
+      expect(view.panel.providerType).toBe(providerType);
+    }
   });
 
   it('refuses a URL the policy blocks, at write time', async () => {

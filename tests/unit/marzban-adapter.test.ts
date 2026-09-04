@@ -1,10 +1,14 @@
 import { createServer, type Server } from 'node:http';
 import { once } from 'node:events';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { ProviderTarget } from '@nexa/contracts';
+import { PROVIDER_TYPES, type ProviderTarget } from '@nexa/contracts';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
 import { MarzbanAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/marzban.adapter';
-import { providerAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
+import {
+  IMPLEMENTED_PROVIDER_TYPES,
+  providerAdapter,
+} from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
+import { SanaeiAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/sanaei.adapter';
 
 /**
  * The Marzban adapter, against a deterministic fake Marzban.
@@ -258,10 +262,28 @@ describe('the adapter registry', () => {
     expect(providerAdapter('marzban')).toBeInstanceOf(MarzbanAdapter);
   });
 
-  it('refuses a type it knows but has not implemented, naming which', () => {
-    // `sanaei` is in the contract and lands in 3B. What must never happen is
-    // a panel of that type being silently operated by a DIFFERENT adapter.
-    expect(() => providerAdapter('sanaei')).toThrow(/does not yet implement/);
+  it('implements every provider type the contract declares', () => {
+    // `sanaei` was the declared-but-unimplemented case for a release, and this
+    // test asserted its refusal. Phase 3B implemented it, so there is no
+    // member left to exercise that arm with — and the arm stays, because the
+    // next provider will pass through the same state.
+    //
+    // What replaces the old assertion is the same guarantee stated positively:
+    // every type the contract declares resolves to an adapter, so a panel can
+    // never be created with a type nothing can operate.
+    expect([...IMPLEMENTED_PROVIDER_TYPES].sort()).toEqual([...PROVIDER_TYPES].sort());
+    for (const type of PROVIDER_TYPES) {
+      expect(() => providerAdapter(type), type).not.toThrow();
+      expect(providerAdapter(type).descriptor.key).toBe(type);
+    }
+  });
+
+  it('gives each type its OWN adapter, never a default', () => {
+    // The failure this file exists to prevent: a panel of one type silently
+    // operated by another type's adapter.
+    expect(providerAdapter('marzban')).toBeInstanceOf(MarzbanAdapter);
+    expect(providerAdapter('sanaei')).toBeInstanceOf(SanaeiAdapter);
+    expect(providerAdapter('sanaei')).not.toBeInstanceOf(MarzbanAdapter);
   });
 
   it('refuses a type it does not know at all', () => {
@@ -275,7 +297,7 @@ describe('the adapter registry', () => {
 
   it('never puts a credential or a URL in its refusal', () => {
     try {
-      providerAdapter('sanaei');
+      providerAdapter('a-provider-from-a-newer-release');
       expect.unreachable('should have thrown');
     } catch (error) {
       expect(String(error)).not.toMatch(/password|token|https?:\/\//i);
