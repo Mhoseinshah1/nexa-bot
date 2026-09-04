@@ -104,17 +104,27 @@ const test = (admin: SeededAdmin, scope: typeof tenantA, panelId: string) =>
 // Credential selection
 // ===========================================================================
 describe('a Sanaei panel chooses its authentication mode deterministically', () => {
-  it('uses the API token when one is configured', async () => {
+  it('uses the API token even when a username and password are also configured', async () => {
+    // ALL THREE credentials, deliberately. With only a token configured, both
+    // orderings of the resolver pick the token, so a panel like that cannot
+    // tell a correct precedence from a reversed one — and the precedence is
+    // the most security-relevant decision in the resolver.
     const server = await panel({ tokens: TOKENS });
-    const { view } = await create(owner, tenantA, server.baseUrl, { apiToken: CANARY.token });
+    const { view } = await create(owner, tenantA, server.baseUrl, {
+      apiToken: CANARY.token,
+      username: CANARY.username,
+      password: CANARY.password,
+    });
 
     const result = await test(owner, tenantA, view.panel.id);
     expect(result.view.health).not.toBeNull();
     expect(result.view.health?.state).toBe('HEALTHY');
     expect(result.view.health?.providerVersion).toBe('3.7.0');
-    // Bearer mode: one request, no login.
+    // Bearer mode: one request, carrying the token, and no login at all.
     expect(server.requests).toHaveLength(1);
     expect(server.requests[0]?.headers['authorization']).toBe(`Bearer ${CANARY.token}`);
+    expect(server.requests.map((r) => r.path)).not.toContain('/login');
+    expect(JSON.stringify(server.requests)).not.toContain(CANARY.password);
   });
 
   it('uses username and password when no token is configured', async () => {
@@ -152,6 +162,31 @@ describe('a Sanaei panel chooses its authentication mode deterministically', () 
     expect(server.requests).toHaveLength(1);
     expect(server.requests.map((r) => r.path)).not.toContain('/login');
     expect(JSON.stringify(server.requests)).not.toContain(CANARY.password);
+  });
+
+  it('records a wrong session password as AUTH_FAILED, never as degraded', async () => {
+    // The health row is where an operator reads what to do, and the two answers
+    // are opposite instructions: DEGRADED says the credentials are fine and
+    // something else is wrong, AUTH_FAILED says replace them. A login that
+    // returns HTTP 200 with success:false must land on the second — falsification
+    // showed the unit suite catching that inversion alone, which left the layer
+    // that actually writes the row unprotected.
+    const server = await panel();
+    const { view } = await create(owner, tenantA, server.baseUrl, {
+      username: CANARY.username,
+      password: 'the-wrong-password-entirely',
+    });
+
+    const result = await test(owner, tenantA, view.panel.id);
+    expect(result.view.health?.state).toBe('AUTH_FAILED');
+    expect(result.view.health?.failure).toBe('AUTHENTICATION_FAILED');
+    expect(result.view.health?.state).not.toBe('DEGRADED');
+    // It stopped at the login: no status read followed.
+    expect(server.requests.map((r) => r.path.replace(/^\//, ''))).toEqual([
+      'csrf-token',
+      'getTwoFactorEnable',
+      'login',
+    ]);
   });
 
   it('refuses before contacting anything when no usable credential exists', async () => {

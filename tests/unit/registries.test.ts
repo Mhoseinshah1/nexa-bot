@@ -1,4 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { PROVIDER_TYPES } from '@nexa/contracts';
+import {
+  IMPLEMENTED_PROVIDER_TYPES,
+  providerAdapter,
+} from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
 import {
   FEATURE_FLAGS,
   SETTINGS,
@@ -168,5 +173,47 @@ describe('the feature flag registry', () => {
       'ops_notifications',
       'template_overrides',
     ]);
+  });
+});
+
+/**
+ * The provider registry.
+ *
+ * Here, beside the settings and feature registries, because it is one: a map
+ * from a declared identifier to the code that implements it, and the thing
+ * every surface reads to decide what an operator may configure.
+ *
+ * It had no test of its own, and falsification found the hole — removing
+ * `sanaei` from the adapter map left this file 14/14 green, so the only thing
+ * standing between a deleted registration and a release was a provider-specific
+ * suite. `IMPLEMENTED_PROVIDER_TYPES` is what the providers endpoint lists, so
+ * a silent removal is an operator losing a provider with nothing red.
+ */
+describe('the provider registry', () => {
+  it('implements exactly the provider types this release claims', () => {
+    // Written as an EXACT list rather than a subset. A subset assertion passes
+    // when a registration disappears, which is the failure this exists to
+    // catch; and it passes when one appears, which should be a deliberate
+    // edit here rather than a silent widening of what operators can configure.
+    expect([...IMPLEMENTED_PROVIDER_TYPES].sort()).toEqual(['marzban', 'sanaei']);
+  });
+
+  it('resolves every implemented type to an adapter that declares that type', () => {
+    for (const type of IMPLEMENTED_PROVIDER_TYPES) {
+      const adapter = providerAdapter(type);
+      // The adapter's OWN descriptor key, not the lookup key: a map entry
+      // pointing at another provider's adapter would satisfy the first
+      // assertion and operate somebody's panel with the wrong protocol.
+      expect(adapter.descriptor.key, type).toBe(type);
+      expect(adapter.supports('HEALTH_CHECK'), type).toBe(true);
+    }
+  });
+
+  it('declares no provider type it cannot operate', () => {
+    // The Phase 3A state — a type in the contract with no adapter — was real
+    // and is allowed by the registry's type. What must not happen is a surface
+    // advertising one, so this states the current position: every declared
+    // type is implemented.
+    expect([...PROVIDER_TYPES].sort()).toEqual([...IMPLEMENTED_PROVIDER_TYPES].sort());
   });
 });
