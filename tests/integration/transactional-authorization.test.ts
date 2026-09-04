@@ -4,6 +4,7 @@ import type { ActorContext, AdminSessionId } from '@nexa/contracts';
 import {
   auditLogs,
   notifications,
+  operationalEvents,
   outboxMessages,
 } from '../../apps/api/src/infrastructure/persistence/schema';
 import {
@@ -243,6 +244,53 @@ describe('fresh transactional authorization', () => {
    * password-rotated administrator's write still committed. A comment
    * promising a guarantee the code did not provide.
    */
+  it('records an EARLY refusal the same way in every phase', async () => {
+    // Four services check a permission before opening a transaction, because
+    // the replay path and the connection test both act before one exists. The
+    // three written in Phase 2 hand-rolled that recording inline and the one
+    // written in Phase 3A used `recordMutationDenial`, so an identical refusal
+    // left different evidence depending on which phase wrote the endpoint: the
+    // inline version recorded a DENIED row for ANY throw — a missing tenant
+    // context is not a denial of `settings.edit` — and emitted no operational
+    // event at all.
+    //
+    // They now share one recorder. This asserts the pair it produces, so a
+    // future service that hand-rolls it again is visibly different.
+    const support = await createAdmin(ctx.container, tenantA, {
+      username: 'denied_early',
+      roleKeys: ['support'],
+    });
+
+    await expect(
+      ctx.container.settingsService.set(tenantA, adminActorFor(support), {
+        key: 'ops.notifications.max_attempts',
+        value: 3,
+        expectedVersion: null,
+        idempotencyKey: `early-denial-${Date.now()}`,
+      }),
+    ).rejects.toMatchObject({ code: 'platform.permission_denied' });
+
+    // Queried by action rather than through `auditRows`, which scopes to the
+    // suite's own admin and would silently return nothing for this one.
+    const denials = (
+      await ctx.container.database.db
+        .select()
+        .from(auditLogs)
+        .where(and(eq(auditLogs.action, 'settings.set'), eq(auditLogs.actorId, support.id)))
+    ).filter((row) => row.result === 'DENIED');
+    expect(denials, 'the early refusal left no audit evidence').toHaveLength(1);
+    expect(
+      (denials[0]?.after as { deniedPermission?: string } | null)?.deniedPermission,
+      'the audit row does not name the permission that was refused',
+    ).toBe('settings.edit');
+
+    const events = await ctx.container.database.db.select().from(operationalEvents);
+    expect(
+      events.some((event) => event.code.includes('denied') || event.code.includes('permission')),
+      'the early refusal emitted no operational event',
+    ).toBe(true);
+  }, 30_000);
+
   it('refuses a control-plane write whose session is revoked before the transaction', async () => {
     const sessionId = ctx.container.ids.uuid() as AdminSessionId;
     await ctx.container.sessions.create(tenantA, {
