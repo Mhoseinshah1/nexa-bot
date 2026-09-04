@@ -4,6 +4,7 @@ import type { Clock, Instant, ProviderProbeOutcome, ProviderType } from '@nexa/c
 import {
   operationalEvents,
   panelProbeBudgets,
+  panelProbeClaims,
 } from '../../apps/api/src/infrastructure/persistence/schema';
 import { DrizzlePanelCredentialStore } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-credentials';
 import { DrizzlePanelRepository } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel.repository';
@@ -370,6 +371,37 @@ describe('the tenant-wide probe budget', () => {
       code: 'panel.probe_limited',
     });
     expect(probes).toBe(5);
+  });
+
+  // The atomicity rule, stated directly rather than through a retiming: a
+  // request the BUDGET refuses must not leave a fresh claim behind, or the
+  // tenant's next permitted request on that panel would be replayed as a
+  // cooldown instead of probed.
+  it('leaves no claim behind when the budget refuses, so the next permitted request probes', async () => {
+    // One token every ten seconds, under a SIXTY-second cooldown: when the
+    // token comes back, a claim committed at the refusal would still be well
+    // inside the cooldown and would turn the retry into a replay.
+    const svc = service(bucket(1, 10_000), ctx, { allowLoopback: true }, MINUTE);
+    const first = await panelFor(svc, owner, tenantA, 'Charged');
+    const second = await panelFor(svc, owner, tenantA, 'Refused');
+    expect((await test(svc, owner, tenantA, first)).probed).toBe(true);
+    await expect(test(svc, owner, tenantA, second)).rejects.toMatchObject({
+      code: 'panel.probe_limited',
+    });
+
+    const claimsFor = async (panelId: string) =>
+      ctx.container.database.db
+        .select()
+        .from(panelProbeClaims)
+        .where(eq(panelProbeClaims.panelId, panelId as never));
+    expect(await claimsFor(first)).toHaveLength(1);
+    expect(await claimsFor(second)).toHaveLength(0);
+
+    clock.advance(10_001);
+    const retry = await test(svc, owner, tenantA, second);
+    expect(retry.probed).toBe(true);
+    expect(await claimsFor(second)).toHaveLength(1);
+    expect(probes).toBe(2);
   });
 
   // 15 + 16 ------------------------------------------------------------------
