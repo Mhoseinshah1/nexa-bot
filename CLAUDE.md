@@ -7,9 +7,11 @@ and the notification dispatcher polls Postgres.)
 
 **Phases 0, 1 and 2 are done: foundation, identity and RBAC, then the control
 plane** — templates, settings, feature flags, notifications and the operational
-log. There are still no product features: no purchases, payments, wallet,
-providers, resellers or customer-facing Telegram operations. Do not add them
-without an explicit instruction.
+log. **Phase 3A is in progress**: providers, panels, credentials and health —
+an operator can configure a panel, replace its credentials and test its
+connection. There are still no product features: no purchases, payments,
+wallet, resellers or customer-facing Telegram operations, and nothing consumes
+a panel yet. Do not add them without an explicit instruction.
 
 **The deployment checkpoint after Phase 2 is done too**: an immutable image,
 a production Compose topology behind Caddy, an Ubuntu installer, and `botctl`
@@ -30,6 +32,22 @@ Three deployment rules that are easy to break by accident:
 Authentication and authorization are real. Every new write path takes a
 `ScopeContext` and an `ActorContext` and checks a permission through the guard —
 never by inspecting an actor's type, and never by not drawing a button.
+
+Four Phase 3 rules that are easy to break by accident (ADR-0023):
+
+- A panel credential travels **one way**. The repository projection selects the
+  three set-at timestamps and never a ciphertext, so no response builder can
+  acquire a value. Never add a masked stand-in either — `********` can be
+  resubmitted as the real password.
+- A provider type is **code**, not a row, and the adapter is resolved before the
+  panel row is written. A panel that cannot be operated must not become a row.
+- Health is **latest state only**, and `DISABLED` and `UNCHECKED` are projected
+  rather than stored. A probe result changes health and nothing else — never a
+  status, never a credential.
+- Private addresses are **deliberately reachable**; only destinations that are
+  never a panel are refused. Redirects are never followed and the socket is
+  pinned to a pre-validated address, which is why that code is on `node:http`
+  rather than `fetch`.
 
 Three Phase 2 rules that are easy to break by accident:
 
