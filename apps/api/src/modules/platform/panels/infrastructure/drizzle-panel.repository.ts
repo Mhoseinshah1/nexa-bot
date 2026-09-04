@@ -46,11 +46,10 @@ export class DrizzlePanelRepository implements PanelRepository {
     const rows = await this.db
       .select({
         panel: panels,
-        credentials: {
-          usernameSetAt: panelCredentials.usernameSetAt,
-          passwordSetAt: panelCredentials.passwordSetAt,
-          apiTokenSetAt: panelCredentials.apiTokenSetAt,
-        },
+        // FLAT, not a nested group. See `toView` for why.
+        usernameSetAt: panelCredentials.usernameSetAt,
+        passwordSetAt: panelCredentials.passwordSetAt,
+        apiTokenSetAt: panelCredentials.apiTokenSetAt,
         health: panelHealth,
       })
       .from(panels)
@@ -72,11 +71,10 @@ export class DrizzlePanelRepository implements PanelRepository {
     const [row] = await this.db
       .select({
         panel: panels,
-        credentials: {
-          usernameSetAt: panelCredentials.usernameSetAt,
-          passwordSetAt: panelCredentials.passwordSetAt,
-          apiTokenSetAt: panelCredentials.apiTokenSetAt,
-        },
+        // FLAT, not a nested group. See `toView` for why.
+        usernameSetAt: panelCredentials.usernameSetAt,
+        passwordSetAt: panelCredentials.passwordSetAt,
+        apiTokenSetAt: panelCredentials.apiTokenSetAt,
         health: panelHealth,
       })
       .from(panels)
@@ -207,11 +205,9 @@ export class DrizzlePanelRepository implements PanelRepository {
 
 interface Row {
   panel: typeof panels.$inferSelect;
-  credentials: {
-    usernameSetAt: Date | null;
-    passwordSetAt: Date | null;
-    apiTokenSetAt: Date | null;
-  } | null;
+  usernameSetAt: Date | null;
+  passwordSetAt: Date | null;
+  apiTokenSetAt: Date | null;
   health: typeof panelHealth.$inferSelect | null;
 }
 
@@ -233,13 +229,40 @@ function toRecord(row: typeof panels.$inferSelect): PanelRecord {
   };
 }
 
+/**
+ * A joined row as a view.
+ *
+ * The three credential timestamps are selected FLAT rather than as a nested
+ * group, and that is load-bearing rather than stylistic.
+ *
+ * Drizzle collapses a nested selection to `null` when the FIRST column in the
+ * group is null — not when they are all null, which is what the shape suggests
+ * and what this file originally assumed. Grouped as
+ * `{ usernameSetAt, passwordSetAt, apiTokenSetAt }`, a panel with a password
+ * and no username came back with the whole group null, so the API reported
+ * every credential as NOT CONFIGURED while the row plainly held one. An
+ * operator would have re-entered a password that was already right; a
+ * token-only provider — which never has a username — would have reported
+ * itself unconfigured forever, and Sanaei is exactly that shape.
+ *
+ * Selecting flat removes the inference entirely: three nullable columns, each
+ * meaning what it says, with no library rule between the row and the answer.
+ * Reordering the group to put a non-null column first would also have worked
+ * and was rejected: it would leave the next author one innocuous reordering
+ * away from the same bug, with nothing in the file to warn them.
+ *
+ * `health` is still a whole-table reference. That case is well defined —
+ * Drizzle knows the table and returns null only when the joined row is absent —
+ * and its first column is the non-null primary key, so it is correct under
+ * either rule. The regression tests pin both directions regardless.
+ */
 function toView(row: Row): PanelView {
   return {
     panel: toRecord(row.panel),
     credentials: {
-      usernameSetAt: row.credentials?.usernameSetAt ?? null,
-      passwordSetAt: row.credentials?.passwordSetAt ?? null,
-      apiTokenSetAt: row.credentials?.apiTokenSetAt ?? null,
+      usernameSetAt: row.usernameSetAt,
+      passwordSetAt: row.passwordSetAt,
+      apiTokenSetAt: row.apiTokenSetAt,
     },
     health:
       row.health === null
