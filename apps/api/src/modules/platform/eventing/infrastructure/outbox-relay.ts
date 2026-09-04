@@ -244,12 +244,18 @@ export class OutboxRelay {
    * indefinitely, and be pulled out of service. The relay is healthy; it is
    * waiting, which is what it was told to do.
    */
-  async lagMs(): Promise<number> {
-    const [row] = await this.db
+  async lagMs(executor: Executor = this.db): Promise<number> {
+    // The executor is a parameter so the readiness probe can run this on a
+    // connection whose statement timeout it has bounded; on the pool it would
+    // run under the pool's much longer default and outlive the probe.
+    const [row] = await executor
       .select({ occurredAt: outboxMessages.occurredAt })
       .from(outboxMessages)
       .where(
-        and(isNull(outboxMessages.publishedAt), eligibleForDispatch(await this.activeTenantIds())),
+        and(
+          isNull(outboxMessages.publishedAt),
+          eligibleForDispatch(await this.activeTenantIds(executor)),
+        ),
       )
       .orderBy(asc(outboxMessages.occurredAt))
       .limit(1);

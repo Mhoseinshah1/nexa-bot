@@ -1,6 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import type { DependencyStatus } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
+import { schema } from '../../infrastructure/persistence/schema.js';
+import { migrationsFolder } from '../../infrastructure/persistence/migrate.js';
+import {
+  compareMigrations,
+  expectedMigrations,
+  type ExpectedMigration,
+} from '../../infrastructure/persistence/migration-state.js';
 
 /**
  * Whether this process can serve traffic, and why not.
@@ -18,6 +26,14 @@ import { CONTAINER, type Container } from '../../container.js';
  */
 @Injectable()
 export class ReadinessProbe {
+  /**
+   * What this release's journal says the schema must contain. Read once: the
+   * files do not change while the process runs, and a probe that read the
+   * migration folder on every poll would put twenty file reads on a path a
+   * load balancer hits every few seconds.
+   */
+  private expected: readonly ExpectedMigration[] | null = null;
+
   constructor(@Inject(CONTAINER) private readonly container: Container) {}
 
   async run(): Promise<{ degraded: boolean; dependencies: DependencyStatus[] }> {
@@ -39,21 +55,42 @@ export class ReadinessProbe {
    * rejecting — correct for a queue, fatal for a probe. `/health/ready` is
    * polled by a load balancer that has no timeout of its own, so the bound has
    * to be here.
+   *
+   * For the database it is enforced by PostgreSQL, as a `statement_timeout`
+   * on the probe's own checkout (see `withClient`). The timer below is the
+   * bound for Redis and the backstop for everything else; it is NOT what
+   * stops a database query. A `Promise.race` that "wins" against a query
+   * leaves that query running on a connection nobody can release, and a
+   * probe polled every few seconds against a stalled database fills the pool
+   * with exactly those. That was C15.
    */
-  private static readonly PROBE_TIMEOUT_MS = 3_000;
+  static readonly PROBE_TIMEOUT_MS = 3_000;
+
+  /**
+   * The timer sits BEHIND the database's own deadline on purpose. When both
+   * are due, PostgreSQL cancels the statement first and the probe learns of
+   * it as `57014`; the timer then only ever fires for Redis, for a checkout
+   * still waiting on the pool, or as the backstop nothing should reach.
+   */
+  private static readonly BACKSTOP_MS = ReadinessProbe.PROBE_TIMEOUT_MS + 500;
 
   private async timed(
     name: string,
-    probe: () => Promise<{ ok: boolean; detail?: string }>,
+    probe: (deadlineAt: number) => Promise<{ ok: boolean; detail?: string }>,
   ): Promise<DependencyStatus> {
     const started = Date.now();
+    // ONE absolute deadline for everything this probe does, handed to every
+    // checkout it makes. A checkout that waits on the pool and is granted a
+    // connection late gets only the time that is left, or nothing — so no
+    // query starts on behalf of an answer that has already gone out.
+    const deadlineAt = started + ReadinessProbe.PROBE_TIMEOUT_MS;
     try {
       const result = await Promise.race([
-        probe(),
+        probe(deadlineAt),
         new Promise<{ ok: boolean; detail?: string }>((resolve) =>
           setTimeout(
             () => resolve({ ok: false, detail: 'timeout' }),
-            ReadinessProbe.PROBE_TIMEOUT_MS,
+            ReadinessProbe.BACKSTOP_MS,
           ).unref?.(),
         ),
       ]);
@@ -82,9 +119,17 @@ export class ReadinessProbe {
     }
   }
 
+  /** A checkout whose every statement PostgreSQL will cancel at the probe's deadline. */
+  private bounded<T>(
+    deadlineAt: number,
+    fn: Parameters<Container['database']['withClient']>[0],
+  ): Promise<T> {
+    return this.container.database.withClient(fn, { deadlineAt }) as Promise<T>;
+  }
+
   private checkDatabase(): Promise<DependencyStatus> {
-    return this.timed('postgres', async () => {
-      await this.container.database.withClient((client) => client.query('SELECT 1'));
+    return this.timed('postgres', async (deadlineAt) => {
+      await this.bounded(deadlineAt, (client) => client.query('SELECT 1'));
       return { ok: true };
     });
   }
@@ -100,26 +145,64 @@ export class ReadinessProbe {
   }
 
   /**
-   * A process running against a schema older than its code is not ready. This
-   * catches the deployment that starts before its migration finishes.
+   * The schema is the one this code was built for — not merely "some schema".
+   *
+   * Compared by identity against this release's own journal: every expected
+   * migration applied, with the content this release ships. A database behind
+   * the release (the deployment that starts before its migration finishes, or
+   * a migration that died part-way through) is not ready. A database AHEAD of
+   * the release — the shape a rollback leaves, because migrations only add —
+   * is ready. A history this release cannot account for is not.
+   *
+   * No application secret is needed to answer this; the query reads the
+   * migrations table and nothing else.
    */
   private checkMigrations(): Promise<DependencyStatus> {
-    return this.timed('migrations', async () => {
-      const result = await this.container.database.withClient((client) =>
-        client.query<{ count: string }>(
-          `SELECT count(*)::text AS count FROM drizzle.__drizzle_migrations`,
-        ),
+    return this.timed('migrations', async (deadlineAt) => {
+      this.expected ??= expectedMigrations(migrationsFolder());
+      const result = await this.bounded<{ rows: { hash: string; created_at: string }[] }>(
+        deadlineAt,
+        (client) =>
+          client.query<{ hash: string; created_at: string }>(
+            `SELECT hash, created_at::text AS created_at
+               FROM drizzle.__drizzle_migrations
+              ORDER BY created_at ASC`,
+          ),
       );
-      const applied = Number(result.rows[0]?.count ?? '0');
-      return applied > 0
-        ? { ok: true, detail: `${applied} applied` }
-        : { ok: false, detail: 'no migrations applied' };
+      const applied = result.rows.map((row) => ({
+        hash: row.hash,
+        createdAt: Number(row.created_at),
+      }));
+      const verdict = compareMigrations(applied, this.expected);
+      switch (verdict.state) {
+        case 'current':
+          return { ok: true, detail: `${verdict.applied} applied` };
+        case 'ahead':
+          return {
+            ok: true,
+            detail: `${verdict.expected} applied, ${verdict.extra} newer than this release`,
+          };
+        case 'none':
+          return { ok: false, detail: 'no migrations applied' };
+        case 'behind':
+          return {
+            ok: false,
+            detail: `behind: ${verdict.applied} of ${verdict.expected} applied, next ${verdict.missing[0]}`,
+          };
+        case 'diverged':
+          return { ok: false, detail: `diverged: ${verdict.reason}` };
+      }
     });
   }
 
   private checkOutboxLag(): Promise<DependencyStatus> {
-    return this.timed('outbox', async () => {
-      const lag = await this.container.relay.lagMs();
+    return this.timed('outbox', async (deadlineAt) => {
+      // On a bounded checkout too. This is the one probe that reads an
+      // application table, and a slow table scan here is exactly the query
+      // that used to outlive the probe.
+      const lag = await this.bounded<number>(deadlineAt, (client) =>
+        this.container.relay.lagMs(drizzle(client, { schema })),
+      );
       const healthy = lag <= this.container.config.OUTBOX_RELAY_MAX_LAG_MS;
       return { ok: healthy, detail: `oldest unpublished ${lag}ms` };
     });
@@ -132,6 +215,10 @@ export class ReadinessProbe {
  */
 function classifyProbeFailure(error: unknown): string {
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  // PostgreSQL's own wording for a statement it cancelled at our bound.
+  if (message.includes('canceling statement') || message.includes('after its deadline')) {
+    return 'timeout';
+  }
   if (message.includes('econnrefused') || message.includes('enotfound')) return 'unreachable';
   if (message.includes('etimedout') || message.includes('timeout')) return 'timeout';
   if (message.includes('password') || message.includes('authentication')) return 'auth failed';
