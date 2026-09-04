@@ -346,4 +346,56 @@ describe('the outbound client — the DNS pin', () => {
     if (result.ok) return;
     expect(result.failure).toBe('BLOCKED_TARGET');
   });
+
+  it('refuses a NAME the SYSTEM resolver points into a denied network', async () => {
+    // Real resolution, no injected resolver: `localhost` is resolved by the
+    // machine, and what comes back decides. Nothing about the URL as written
+    // is refusable — it is a name, not a literal; loopback is explicitly
+    // ALLOWED here; the name is not in `deniedHosts`, which is empty. The only
+    // rule that can refuse it is the one applied to the resolved address, so a
+    // pass here means resolution-time validation ran.
+    //
+    // Both loopback forms are denied because the system may answer with either
+    // and an allowed second answer would be dialled instead of refused.
+    const guarded = new SafeHttpClient({
+      allowLoopback: true,
+      totalTimeoutMs: 5_000,
+      maxResponseBytes: 4096,
+      maxRetries: 0,
+      caCertificates: [ca],
+      deniedSubnets: ['127.0.0.0/8', '::1/128'],
+    });
+
+    const result = await guarded.send(`https://${HOSTNAME}:${port}`, {
+      method: 'GET',
+      path: '/',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure).toBe('BLOCKED_TARGET');
+  });
+
+  it('reaches that same NAME when the denied network is a different one', async () => {
+    // The control, and the one that fails if the carve-out ever widens into
+    // "refuse private space". Same client, same URL, same real resolution —
+    // only the configured network differs, and this request must not be
+    // blocked. It is asserted as "not blocked" rather than as a success
+    // because which loopback address the system hands back is the machine's
+    // choice, and only one of them has a server on it.
+    const elsewhere = new SafeHttpClient({
+      allowLoopback: true,
+      totalTimeoutMs: 5_000,
+      maxResponseBytes: 4096,
+      maxRetries: 0,
+      caCertificates: [ca],
+      deniedSubnets: ['10.0.0.0/8', 'fd00::/8'],
+    });
+
+    const result = await elsewhere.send(`https://${HOSTNAME}:${port}`, {
+      method: 'GET',
+      path: '/',
+    });
+    expect(result.ok ? 'ok' : result.failure).not.toBe('BLOCKED_TARGET');
+    if (result.ok) expect(JSON.parse(result.bodyText)).toEqual({ served: 'B' });
+  });
 });

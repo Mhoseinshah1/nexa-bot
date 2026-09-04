@@ -49,6 +49,8 @@ export const URL_POLICY_REFUSALS = [
   'PLAINTEXT_TO_PUBLIC_HOST',
   'HOST_MISSING',
   'ADDRESS_NOT_ALLOWED',
+  /** This installation's own database, cache or data network. */
+  'INFRASTRUCTURE_TARGET',
 ] as const;
 export type UrlPolicyRefusal = (typeof URL_POLICY_REFUSALS)[number];
 
@@ -61,6 +63,34 @@ export interface UrlPolicyOptions {
    * permitting it in a test cannot leak into the container's client.
    */
   readonly allowLoopback: boolean;
+  /**
+   * Networks this installation refuses to call because they are its OWN.
+   *
+   * Private space stays reachable on purpose — a self-hosted panel on
+   * `10.0.0.0/8` is the ordinary case — but the API container shares a bridge
+   * network with PostgreSQL and Redis, so "private is allowed" also meant an
+   * operator could point a panel at Nexa's own data subnet and read the
+   * difference between a refused connection and an open port. Response bodies
+   * never come back, which does not matter: `UNREACHABLE` versus `TLS_FAILED`
+   * versus a timeout is a port scanner with three states.
+   *
+   * The CIDRs come from deployment configuration (`NEXA_DATA_SUBNET`, which
+   * compose already pins so `TRUSTED_PROXY_IPS` can be exact) rather than from
+   * a constant here, because an operator who moves the network to avoid a
+   * collision must not silently lose the protection.
+   */
+  readonly deniedSubnets?: readonly string[];
+  /**
+   * Hostnames this installation refuses to call, whatever they resolve to.
+   *
+   * Defence in depth beside the subnets, derived from `DATABASE_URL` and
+   * `REDIS_URL`. On the production topology those are `postgres` and `redis` —
+   * names that resolve only inside the data network, so the subnet rule already
+   * covers them. This covers the arrangement where they do not: a managed
+   * database on a public address, or a host entry pointing somewhere the CIDR
+   * list does not mention.
+   */
+  readonly deniedHosts?: readonly string[];
 }
 
 export type UrlPolicyVerdict =
@@ -161,7 +191,107 @@ function ipv6Allowed(address: string, options: UrlPolicyOptions): boolean {
  * resolves to, and again inside the socket factory on the address actually
  * being dialled. The second call is what makes the first one binding.
  */
+/**
+ * Whether an address falls inside one of the denied networks.
+ *
+ * Bitwise on the packed address, so a prefix that is not a whole number of
+ * bytes is handled correctly — `172.29.1.0/23` covers `172.29.0.0` too, and a
+ * comparison written on the dotted string would miss that entirely.
+ *
+ * An unparseable CIDR is IGNORED rather than treated as matching everything or
+ * as matching nothing quietly: `parseCidr` returns null and the entry simply
+ * does not participate, which the config schema prevents from happening by
+ * validating the list at boot.
+ */
+function withinDeniedSubnet(address: string, options: UrlPolicyOptions): boolean {
+  const subnets = options.deniedSubnets ?? [];
+  if (subnets.length === 0) return false;
+
+  // IPv4-mapped IPv6 is compared as the IPv4 it is, the same unwrapping the
+  // allow rules do. Without it `::ffff:172.29.1.5` would walk past a v4 CIDR.
+  const unmapped = unmapIpv4(address.toLowerCase());
+  const candidate = unmapped ?? address;
+  const packed = packAddress(candidate);
+  if (packed === null) return false;
+
+  for (const cidr of subnets) {
+    const parsed = parseCidr(cidr);
+    if (parsed === null) continue;
+    if (parsed.bytes.length !== packed.length) continue;
+    if (sharesPrefix(packed, parsed.bytes, parsed.prefix)) return true;
+  }
+  return false;
+}
+
+/** An address as bytes: four for IPv4, sixteen for IPv6. Null when it is neither. */
+function packAddress(address: string): Uint8Array | null {
+  const family = isIP(address);
+  if (family === 4) {
+    const octets = ipv4Octets(address);
+    return octets === null ? null : Uint8Array.from(octets);
+  }
+  if (family !== 6) return null;
+
+  // Expand `::` and any embedded IPv4 tail into sixteen bytes.
+  const lower = address.toLowerCase();
+  const [headText = '', tailText] = lower.split('::');
+  const toGroups = (text: string): number[] =>
+    text === '' ? [] : text.split(':').map((g) => Number.parseInt(g, 16));
+  let head = toGroups(headText);
+  const tail = tailText === undefined ? [] : toGroups(tailText);
+  if (head.some(Number.isNaN) || tail.some(Number.isNaN)) return null;
+  if (tailText === undefined) {
+    if (head.length !== 8) return null;
+  } else {
+    const fill = 8 - head.length - tail.length;
+    if (fill < 0) return null;
+    head = [...head, ...Array<number>(fill).fill(0)];
+  }
+  const groups = [...head, ...tail];
+  if (groups.length !== 8) return null;
+
+  const bytes = new Uint8Array(16);
+  groups.forEach((group, i) => {
+    bytes[i * 2] = (group >> 8) & 0xff;
+    bytes[i * 2 + 1] = group & 0xff;
+  });
+  return bytes;
+}
+
+function parseCidr(cidr: string): { bytes: Uint8Array; prefix: number } | null {
+  const [base, lengthText] = cidr.trim().split('/');
+  if (base === undefined || lengthText === undefined) return null;
+  const bytes = packAddress(base);
+  if (bytes === null) return null;
+  const prefix = Number.parseInt(lengthText, 10);
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > bytes.length * 8) return null;
+  return { bytes, prefix };
+}
+
+function sharesPrefix(a: Uint8Array, b: Uint8Array, prefix: number): boolean {
+  const wholeBytes = prefix >> 3;
+  for (let i = 0; i < wholeBytes; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  const remainder = prefix & 7;
+  if (remainder === 0) return true;
+  const mask = (0xff << (8 - remainder)) & 0xff;
+  return ((a[wholeBytes] ?? 0) & mask) === ((b[wholeBytes] ?? 0) & mask);
+}
+
+/** Whether a hostname is one this installation refuses to call by name. */
+function isDeniedHost(hostname: string, options: UrlPolicyOptions): boolean {
+  const denied = options.deniedHosts ?? [];
+  const host = hostname.toLowerCase().replace(/\.$/, '');
+  return denied.some((entry) => entry.toLowerCase().replace(/\.$/, '') === host);
+}
+
 export function addressAllowed(address: string, options: UrlPolicyOptions): AddressVerdict {
+  // FIRST, so no allow rule below can hand back a yes for this installation's
+  // own data network. This is also the check the resolution path and the DNS
+  // pin both run, which is what makes a hostname resolving into the subnet
+  // refused rather than only a literal.
+  if (withinDeniedSubnet(address, options)) return { allowed: false };
   const family = isIP(address);
   if (family === 4) return { allowed: ipv4Allowed(address, options) };
   if (family === 6) return { allowed: ipv6Allowed(address, options) };
@@ -232,13 +362,29 @@ export function checkUrl(raw: string, options: UrlPolicyOptions): UrlPolicyVerdi
   }
   if (url.hostname === '') return { allowed: false, refusal: 'HOST_MISSING' };
 
+  // This installation's own infrastructure, by NAME. Textual only, and never
+  // the whole defence: `addressAllowed` refuses the denied subnets after
+  // resolution, which is what catches a name that points into them without
+  // being one of these. Both exist because either alone has a gap — a name
+  // that is not in this list can still resolve inside the subnet, and a
+  // database on a public address is in no subnet at all.
+  if (isDeniedHost(url.hostname, options)) {
+    return { allowed: false, refusal: 'INFRASTRUCTURE_TARGET' };
+  }
+
   // A bracketed IPv6 literal arrives as `[::1]`; strip the brackets before
   // asking whether it is an address, or every IPv6 host reads as a name and
   // skips the address rules entirely.
   const host = url.hostname.startsWith('[') ? url.hostname.slice(1, -1) : url.hostname;
 
   if (isIP(host) !== 0 && !addressAllowed(host, options).allowed) {
-    return { allowed: false, refusal: 'ADDRESS_NOT_ALLOWED' };
+    // Same refusal either way as far as the caller is concerned; the two are
+    // separated only so the operator message can say which rule applied
+    // without naming the network it applied.
+    return {
+      allowed: false,
+      refusal: withinDeniedSubnet(host, options) ? 'INFRASTRUCTURE_TARGET' : 'ADDRESS_NOT_ALLOWED',
+    };
   }
   if (url.protocol === 'http:' && isPublicAddress(host)) {
     return { allowed: false, refusal: 'PLAINTEXT_TO_PUBLIC_HOST' };
@@ -261,6 +407,11 @@ export function refusalMessage(refusal: UrlPolicyRefusal): string {
       return 'The panel address is not a valid URL. It must include a scheme, for example https://panel.example.com.';
     case 'SCHEME_NOT_ALLOWED':
       return 'The panel address must use http or https.';
+    case 'INFRASTRUCTURE_TARGET':
+      // Says which rule refused and nothing about what is behind it. Naming
+      // the subnet, the resolved address or the service would answer the
+      // question the refusal exists to stop being asked.
+      return 'The panel address points at this installation\u2019s own infrastructure, which it will not call. Use the address the panel is reachable at from outside this server.';
     case 'CREDENTIALS_IN_URL':
       return 'The panel address must not embed a username or password. Set the credentials on the panel instead.';
     case 'PLAINTEXT_TO_PUBLIC_HOST':

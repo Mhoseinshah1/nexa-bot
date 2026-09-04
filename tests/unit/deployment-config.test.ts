@@ -34,6 +34,7 @@ describe('the production environment template', () => {
     __SECRETS_ACTIVE_KEY_ID__: 'install-1',
     __DOMAIN__: 'admin.example.com',
     __EDGE_SUBNET__: '172.29.0.0/24',
+    __DATA_SUBNET__: '172.29.1.0/24',
   };
 
   function render(overrides: Record<string, string> = {}): Record<string, string> {
@@ -123,6 +124,32 @@ describe('the production environment template', () => {
       /__BUILD_(VERSION|COMMIT|TIME)__/,
     );
     expect(installer, 'the installer still writes a pending placeholder').not.toMatch(/=pending/);
+  });
+
+  it('substitutes every placeholder the template contains', () => {
+    // The two files are one mechanism split across a repository. A key added
+    // to the template with no matching substitution in the installer produces
+    // a literal `__NAME__` in `/etc/nexa/nexa.env`, which the schema rejects at
+    // boot — after the installer has reported success. The test above proves
+    // the RENDER leaves nothing behind; this proves the render is the same set
+    // the installer actually performs.
+    const raw = readFileSync(templatePath, 'utf8');
+    const installer = readFileSync(join(__dirname, '../../deploy/install.sh'), 'utf8');
+    // Assignments only. The header comment names `__PLACEHOLDER__` when it
+    // explains the mechanism, and that is prose, not a value to fill in.
+    const placeholders = new Set(
+      [...raw.matchAll(/^[A-Z][A-Z0-9_]*=.*$/gm)].flatMap((line) =>
+        [...line[0].matchAll(/__[A-Z0-9_]+__/g)].map((m) => m[0]),
+      ),
+    );
+    expect(placeholders.size, 'the template has no placeholders at all').toBeGreaterThan(0);
+    for (const placeholder of placeholders) {
+      expect(installer, `install.sh never substitutes ${placeholder}`).toContain(placeholder);
+      expect(
+        SUBSTITUTIONS,
+        `this test never renders ${placeholder}, so it proves nothing about it`,
+      ).toHaveProperty(placeholder);
+    }
   });
 
   it('the installer checks the LAST key in the template for a torn write', () => {

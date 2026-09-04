@@ -218,8 +218,34 @@ allows the rest:
 | multicast, reserved, broadcast, unspecified | refused                                    | not a host                                                                             |
 | loopback                                    | refused unless explicitly enabled          | in a container the API's loopback is the API                                           |
 | private RFC1918 / ULA                       | **allowed**                                | the legitimate self-hosted case                                                        |
+| this installation's own data network        | refused                                    | the API shares a bridge with PostgreSQL and Redis; see below                           |
 | public addresses                            | allowed over https; plaintext http refused |                                                                                        |
 | any redirect                                | refused, never followed                    |                                                                                        |
+
+The one carve-out inside the permissive rule is **this installation's own
+network**. "Private is allowed" also meant an operator with `panels.edit` could
+aim a panel at the compose bridge the API shares with PostgreSQL and Redis. No
+response body ever comes back, which does not settle it: `UNREACHABLE` versus
+`TLS_FAILED` versus a timeout is a port scanner with three states, and the
+services behind that bridge are unauthenticated by design because only Nexa is
+supposed to be on it.
+
+Two rules, because either alone has a gap:
+
+- **`PANEL_HTTP_DENIED_SUBNETS`**, checked against the RESOLVED address, so a
+  hostname pointing into the network is refused as surely as a literal. It
+  defaults to `172.29.1.0/24` and the installer substitutes the real
+  `NEXA_DATA_SUBNET` — the same value compose pins so `TRUSTED_PROXY_IPS` can be
+  exact — because an operator who moves the network to avoid a collision must
+  not silently lose the protection.
+- **The hostnames in `DATABASE_URL` and `REDIS_URL`**, refused by name. This
+  covers the arrangement the CIDR list cannot: a managed database on a public
+  address is in no denied subnet at all.
+
+Everything else about private space is unchanged: `10.20.30.40:2053` is a panel
+and stays reachable; only the network Nexa itself is on is not. The refusal
+names the rule and never the host, address, port or network — a message that
+described what it refused would be the oracle the rule exists to close.
 
 Three implementation points matter more than the table:
 
@@ -336,6 +362,11 @@ they still had it.
 - Health carries no history. "When did this panel start failing" is not
   answerable from `panel_health` alone; the operational log is where that
   belongs when someone asks for it.
-- The SSRF policy is deliberately permissive about private space, and the
-  port-scanning residue above is accepted until a deployment-level egress
-  control exists.
+- The SSRF policy is deliberately permissive about private space. Nexa's own
+  data network is carved out of that permission; the residue — an operator can
+  still distinguish reachable from unreachable across the rest of a private
+  network — is accepted until a deployment-level egress control exists.
+- An operator who runs the database somewhere the denied list does not name and
+  under a hostname the connection string does not use is not covered. That is a
+  deployment this repository does not produce, and the remedy is a CIDR in
+  `PANEL_HTTP_DENIED_SUBNETS` rather than more code.

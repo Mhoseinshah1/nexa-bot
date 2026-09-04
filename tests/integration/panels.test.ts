@@ -21,6 +21,7 @@ import {
   createTestContext,
   tenantA,
   tenantB,
+  testConfig,
   type SeededAdmin,
   type TestContext,
 } from './harness';
@@ -1165,4 +1166,107 @@ describe('panel credential rewrap', () => {
       ),
     );
   }
+});
+
+/**
+ * The carve-out for this installation's OWN network.
+ *
+ * Private space stays reachable — a self-hosted panel on a LAN is the ordinary
+ * case and the rest of this file depends on it — but the API container shares a
+ * bridge network with PostgreSQL and Redis, so "private is allowed" also meant
+ * an operator with panel permissions could aim a panel at Nexa's own data
+ * services and read the difference between a refused connection and an open
+ * port. Response bodies never come back, which does not help: three distinct
+ * outcomes is a port scanner.
+ *
+ * Built from the config the container was actually constructed with, so this
+ * tests the wiring — connection strings to policy to service — and not a
+ * hand-written list that could drift from it.
+ */
+describe('panels — this installation’s own network', () => {
+  /** A network nothing in this suite uses, standing in for the data subnet. */
+  const DATA_SUBNET = '10.77.0.0/16';
+  const OVERRIDES = {
+    // Loopback ALLOWED, which is what makes the two tests below meaningful:
+    // the data services are on loopback here, so anything that refuses them
+    // must be refusing them for being the data services.
+    PANEL_HTTP_ALLOW_LOOPBACK: 'true',
+    PANEL_HTTP_DENIED_SUBNETS: DATA_SUBNET,
+  };
+  const config = testConfig(OVERRIDES);
+
+  let ctx: TestContext;
+  let owner: SeededAdmin;
+  let counter = 0;
+
+  beforeEach(async () => {
+    ctx ??= await createTestContext(OVERRIDES);
+    await ctx.reset();
+    owner = await createAdmin(ctx.container, tenantA, {
+      username: 'owner_net',
+      roleKeys: ['owner'],
+    });
+  });
+
+  afterAll(async () => {
+    await ctx?.close();
+  });
+
+  const at = (baseUrl: string) =>
+    ctx.container.panels.create(tenantA, adminActorFor(owner), {
+      name: `Net ${(counter += 1)}`,
+      providerType: 'marzban' as ProviderType,
+      baseUrl,
+      idempotencyKey: `net-key-${counter}`,
+    });
+
+  /** The host and port a connection string actually names. */
+  const service = (connectionString: string) => {
+    const url = new URL(connectionString);
+    return `https://${url.hostname}:${url.port === '' ? '8443' : url.port}`;
+  };
+
+  it('refuses the database this installation is running against', async () => {
+    await expect(at(service(config.DATABASE_URL))).rejects.toMatchObject({
+      code: 'panel.target_blocked',
+    });
+    expect(await ctx.container.database.db.select().from(panels)).toEqual([]);
+  });
+
+  it('refuses the cache this installation is running against', async () => {
+    await expect(at(service(config.REDIS_URL))).rejects.toMatchObject({
+      code: 'panel.target_blocked',
+    });
+    expect(await ctx.container.database.db.select().from(panels)).toEqual([]);
+  });
+
+  it('refuses an address inside the configured data network', async () => {
+    await expect(at('https://10.77.1.4:2053')).rejects.toMatchObject({
+      code: 'panel.target_blocked',
+    });
+    expect(await ctx.container.database.db.select().from(panels)).toEqual([]);
+  });
+
+  it('still accepts a private panel outside it, which is the ordinary case', async () => {
+    // The control. A carve-out that widened into "refuse private space" would
+    // pass every test above and break the product.
+    const { view } = await at('https://10.78.1.4:2053');
+    expect(view.panel.baseUrl).toBe('https://10.78.1.4:2053/');
+  });
+
+  it('still accepts a public panel, unchanged', async () => {
+    const { view } = await at('https://panel.example.test:2096');
+    expect(view.panel.baseUrl).toBe('https://panel.example.test:2096/');
+  });
+
+  it('tells the operator nothing about what is behind the refusal', async () => {
+    // The refusal is an oracle if it describes what it refused. It says which
+    // rule applied and never the host, the address, the port or the network.
+    const error = await at(service(config.DATABASE_URL)).catch((thrown: unknown) => thrown);
+    const text = JSON.stringify(error).toLowerCase();
+    const databaseHost = new URL(config.DATABASE_URL).hostname;
+    for (const leak of [databaseHost, '10.77', 'subnet', 'postgres', 'redis', '5432', '6379']) {
+      expect(text, `the refusal leaks ${leak}`).not.toContain(leak.toLowerCase());
+    }
+  });
 });

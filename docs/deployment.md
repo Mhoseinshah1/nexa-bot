@@ -643,6 +643,31 @@ sudo sed -i 's|^TRUSTED_PROXY_IPS=.*|TRUSTED_PROXY_IPS=10.42.0.0/24|' /etc/nexa/
 sudo botctl restart
 ```
 
+### Changing the data subnet
+
+`NEXA_DATA_SUBNET` in `/etc/nexa/deploy.env` and `PANEL_HTTP_DENIED_SUBNETS` in
+`/etc/nexa/nexa.env` are the same arrangement, for a different reason. The
+second is the list of networks the panel HTTP client refuses to call because
+they are this installation's own: PostgreSQL and Redis sit on that bridge, and
+private addresses are otherwise deliberately reachable so a self-hosted panel on
+a LAN works. The installer derives one from the other once, and nothing keeps
+them in step afterwards.
+
+**If you change the data subnet, change the denied list to match, and restart.**
+Otherwise an operator with permission to edit a panel can aim one at the
+database or the cache and read reachability off the health result. Nothing
+errors — the protection is simply pointed at a network nothing is on.
+
+```bash
+sudo sed -i 's|^NEXA_DATA_SUBNET=.*|NEXA_DATA_SUBNET=10.42.1.0/24|' /etc/nexa/deploy.env
+sudo sed -i 's|^PANEL_HTTP_DENIED_SUBNETS=.*|PANEL_HTTP_DENIED_SUBNETS=10.42.1.0/24|' /etc/nexa/nexa.env
+sudo botctl restart
+```
+
+The value is a comma-separated list, so a deployment with more than one network
+of its own can name them all. A panel on any other private address is
+unaffected.
+
 ## Still outstanding
 
 **Images are digest-pinned but not signature-verified.** A release is addressed

@@ -6,6 +6,7 @@ import {
   URL_POLICY_REFUSALS,
   type UrlPolicyRefusal,
 } from '../../apps/api/src/infrastructure/net/url-policy';
+import { infrastructureHosts } from '../../apps/api/src/infrastructure/net/infrastructure-hosts';
 
 /**
  * The SSRF policy, as a table.
@@ -177,5 +178,152 @@ describe('what a refusal is allowed to say', () => {
       expect(message).not.toMatch(/\d+\.\d+\.\d+\.\d+/);
       expect(message).not.toMatch(/169\.254|127\.0\.0|RFC1918|fe80/i);
     }
+  });
+});
+
+/**
+ * Nexa's own data network.
+ *
+ * The SSRF policy allows RFC1918 deliberately, because a self-hosted panel on a
+ * private network is the ordinary case. That decision also handed an operator
+ * with `panels.edit` a route to the API container's own bridge, where
+ * PostgreSQL and Redis live: bodies never come back, but unreachable, refused
+ * and timed out are three distinguishable answers, which is a port scanner.
+ *
+ * These prove the carve-out refuses this installation's network WITHOUT
+ * refusing private space generally — the two halves are the whole point, so
+ * both are asserted every time.
+ */
+describe('the URL policy — this installation’s own network', () => {
+  const DATA_SUBNET = '172.29.1.0/24';
+  const guarded = {
+    allowLoopback: false,
+    deniedSubnets: [DATA_SUBNET],
+    deniedHosts: ['postgres', 'redis'],
+  };
+
+  it('refuses a literal address inside the data subnet', () => {
+    for (const host of ['172.29.1.1', '172.29.1.5', '172.29.1.254']) {
+      const verdict = checkUrl(`https://${host}:5432`, guarded);
+      expect(verdict.allowed, `${host} was allowed`).toBe(false);
+      if (verdict.allowed) return;
+      expect(verdict.refusal).toBe('INFRASTRUCTURE_TARGET');
+    }
+  });
+
+  it('still allows a legitimate private panel outside that subnet', () => {
+    // The control, and the one that matters most: a policy that refused all of
+    // RFC1918 would pass every test above and break the product.
+    for (const host of ['10.20.30.40', '192.168.1.10', '172.29.0.5', '172.30.1.5', '172.16.4.4']) {
+      expect(checkUrl(`https://${host}:2053`, guarded).allowed, `${host} was refused`).toBe(true);
+    }
+  });
+
+  it('refuses the infrastructure hostnames by name', () => {
+    for (const host of ['postgres', 'redis', 'POSTGRES', 'redis.']) {
+      const verdict = checkUrl(`https://${host}:5432`, guarded);
+      expect(verdict.allowed, `${host} was allowed`).toBe(false);
+      if (verdict.allowed) return;
+      expect(verdict.refusal).toBe('INFRASTRUCTURE_TARGET');
+    }
+  });
+
+  it('refuses a data-subnet address however it is spelled', () => {
+    // The same canonicalisation the rest of the policy relies on, applied to
+    // the carve-out: a decimal or IPv4-mapped spelling must not walk past it.
+    for (const host of ['2887581957', '::ffff:172.29.1.5', '0254.035.1.5']) {
+      const url = host.includes(':') ? `https://[${host}]:5432` : `https://${host}:5432`;
+      expect(checkUrl(url, guarded).allowed, `${host} was allowed`).toBe(false);
+    }
+  });
+
+  it('judges addresses the same way at resolution time', () => {
+    // `checkUrl` sees the URL; `addressAllowed` sees what a NAME resolved to,
+    // and it is the one the client and the DNS pin both call. A hostname that
+    // resolves into the subnet is refused there, so the textual host list is
+    // never the only defence.
+    expect(addressAllowed('172.29.1.5', guarded).allowed).toBe(false);
+    expect(addressAllowed('10.20.30.40', guarded).allowed).toBe(true);
+  });
+
+  it('matches a prefix that is not a whole number of bytes', () => {
+    const narrow = { allowLoopback: false, deniedSubnets: ['172.29.0.0/23'] };
+    expect(addressAllowed('172.29.0.9', narrow).allowed).toBe(false);
+    expect(addressAllowed('172.29.1.9', narrow).allowed).toBe(false);
+    expect(addressAllowed('172.29.2.9', narrow).allowed).toBe(true);
+  });
+
+  it('refuses an IPv6 data network when one is configured', () => {
+    const v6 = { allowLoopback: false, deniedSubnets: ['fd00:dead:beef::/48'] };
+    expect(addressAllowed('fd00:dead:beef::5', v6).allowed).toBe(false);
+    expect(addressAllowed('fd00:dead:beee::5', v6).allowed).toBe(true);
+  });
+
+  it('changes nothing when no network is configured', () => {
+    // An installation that never sets the key keeps the previous behaviour
+    // exactly, so this cannot break an existing deployment by existing.
+    const open = { allowLoopback: false };
+    expect(addressAllowed('172.29.1.5', open).allowed).toBe(true);
+    expect(checkUrl('https://postgres:5432', open).allowed).toBe(true);
+  });
+
+  it('names nothing internal in the refusal it shows an operator', () => {
+    const message = refusalMessage('INFRASTRUCTURE_TARGET');
+    for (const leak of ['172.29', 'postgres', 'redis', 'subnet', '5432', '6379']) {
+      expect(message.toLowerCase(), `the message leaks ${leak}`).not.toContain(leak);
+    }
+  });
+
+  it('leaves the metadata and link-local refusals exactly as they were', () => {
+    // The carve-out must not become the only address rule. These are refused
+    // whether or not a data subnet is configured.
+    for (const options of [guarded, { allowLoopback: false }]) {
+      expect(checkUrl('http://169.254.169.254/latest/meta-data/', options).allowed).toBe(false);
+      expect(addressAllowed('169.254.169.254', options).allowed).toBe(false);
+      expect(addressAllowed('224.0.0.1', options).allowed).toBe(false);
+    }
+  });
+});
+
+describe('the hostnames derived from this installation’s own connection strings', () => {
+  it('takes the host of each service it is given', () => {
+    expect(
+      infrastructureHosts([
+        'postgres://nexa:secret@db.internal:5432/nexa',
+        'redis://cache.internal:6379',
+      ]),
+    ).toEqual(['db.internal', 'cache.internal']);
+  });
+
+  it('unwraps an IPv6 literal, which the policy compares unbracketed', () => {
+    expect(infrastructureHosts(['redis://[fd00::2]:6379'])).toEqual(['fd00::2']);
+  });
+
+  it('contributes nothing for a string that is not a URL', () => {
+    // A bad connection string must not stop the process booting from HERE. The
+    // connection attempt reports it far more usefully.
+    expect(infrastructureHosts(['not a url', ''])).toEqual([]);
+  });
+
+  it('refuses both derived hosts and nothing else', () => {
+    // The end of the derivation: what comes out of the connection strings is
+    // what the policy refuses by name. Both sources are covered, and a host
+    // that is neither stays reachable.
+    const options = {
+      allowLoopback: false,
+      deniedHosts: infrastructureHosts([
+        'postgres://nexa:secret@db.internal:5432/nexa',
+        'redis://cache.internal:6379',
+      ]),
+    };
+    expect(checkUrl('https://db.internal:5432', options)).toMatchObject({
+      allowed: false,
+      refusal: 'INFRASTRUCTURE_TARGET',
+    });
+    expect(checkUrl('https://cache.internal:6379', options)).toMatchObject({
+      allowed: false,
+      refusal: 'INFRASTRUCTURE_TARGET',
+    });
+    expect(checkUrl('https://panel.example.com:2053', options).allowed).toBe(true);
   });
 });

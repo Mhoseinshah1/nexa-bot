@@ -14,6 +14,7 @@ import type { Translator } from '@nexa/contracts';
 
 import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
 import { readFileSync } from 'node:fs';
+import { infrastructureHosts } from './infrastructure/net/infrastructure-hosts.js';
 import { SafeHttpClient } from './infrastructure/net/safe-http.js';
 import { DrizzlePanelRepository } from './modules/platform/panels/infrastructure/drizzle-panel.repository.js';
 import { DrizzlePanelCredentialStore } from './modules/platform/panels/infrastructure/drizzle-panel-credentials.js';
@@ -338,8 +339,17 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * adapter receives a client it cannot widen. Nothing else in the process
    * constructs one.
    */
-  const panelHttp = new SafeHttpClient({
+  // One policy object, shared by the client and the service, so the URL a
+  // panel is created with and the address the socket goes to are judged by
+  // exactly the same rules. Two copies would be two things to keep in step.
+  const urlPolicy = {
     allowLoopback: config.PANEL_HTTP_ALLOW_LOOPBACK,
+    deniedSubnets: config.PANEL_HTTP_DENIED_SUBNETS,
+    deniedHosts: infrastructureHosts([config.DATABASE_URL, config.REDIS_URL]),
+  };
+
+  const panelHttp = new SafeHttpClient({
+    ...urlPolicy,
     // Read once, at construction. A per-request read would put a filesystem
     // call on every probe, and a bundle that vanished mid-run would turn a
     // configuration mistake into an intermittent TLS failure.
@@ -545,7 +555,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       clock,
       ids,
       http: panelHttp,
-      urlPolicy: { allowLoopback: config.PANEL_HTTP_ALLOW_LOOPBACK },
+      urlPolicy,
       adapters: providerAdapter,
     }),
     settingsService,

@@ -275,8 +275,12 @@ export class PanelService {
   private validateUrl(raw: string): string {
     const verdict = checkUrl(raw, this.deps.urlPolicy);
     if (!verdict.allowed) {
+      // Both address refusals are PANEL_TARGET_BLOCKED: "this installation will
+      // not call there" is the same answer to the operator whether the reason
+      // is a metadata endpoint or Nexa's own data network, and a distinct code
+      // would let a caller tell those apart by probing.
       const code =
-        verdict.refusal === 'ADDRESS_NOT_ALLOWED'
+        verdict.refusal === 'ADDRESS_NOT_ALLOWED' || verdict.refusal === 'INFRASTRUCTURE_TARGET'
           ? PANEL_ERROR_CODES.PANEL_TARGET_BLOCKED
           : PANEL_ERROR_CODES.PANEL_URL_INVALID;
       throw errors.validation(code, refusalMessage(verdict.refusal));
