@@ -233,10 +233,31 @@ Three implementation points matter more than the table:
   misconfiguration the operator should fix or somebody moving the request to a
   host the policy already refused. Following it would re-open every question the
   policy answers, one hop later.
+- **The pin only applies to NAMES, and it is not covered by a test.**
+  `net.connect` skips resolution entirely for an IP literal, so `lookup` is
+  never called there — correct, because a literal is its own address and was
+  already judged. It fires for the case that matters, `https://panel.example.com`.
+  A mutation that deleted the pin outright left every test in `safe-http` green,
+  which is stated here rather than left to be discovered: the `localhost` test
+  refuses at the address check, before a socket exists, so it covers the check
+  and not the pin. Reaching the pin in a test needs a NAME, and the policy
+  refuses plaintext http to a name (below), so it needs a TLS server and a CA
+  seam in the client. That is worth doing when the client grows a CA option for
+  private certificate authorities — a self-hosted panel behind one is a real
+  configuration — and not before, because a production seam whose only consumer
+  is a test is worse than an untested line.
 - **Normalisation is the WHATWG parser's.** `2130706433`, `0177.0.0.1`,
   `0x7f.0.0.1` and `127.1` all canonicalise to `127.0.0.1` before any check
   runs, and `::ffff:192.168.1.1` is unmapped to its IPv4 form by the one helper
   both the allow rule and the plaintext rule use.
+
+**Plaintext to a hostname is refused, even a private one.** `isPublicAddress`
+treats a name as public, so `http://panel.lan:2053` is refused while
+`http://192.168.1.10:2053` is allowed. The rule is about what crosses the wire
+in the common case and it cannot resolve the name before deciding. The cost is
+real: an operator whose panel is plain http behind a private DNS name must use
+its address or put TLS in front of it. The refusal names the reason, so it is at
+least self-explanatory at the point it happens.
 
 **The tradeoff, stated precisely.** Allowing private space means an operator who
 can configure a panel can direct a request from the Nexa host into its own
