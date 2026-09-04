@@ -52,6 +52,39 @@ export interface SafeHttpOptions extends UrlPolicyOptions {
    * scheduled probes is the health scheduler's job, not this client's.
    */
   readonly maxRetries: number;
+  /**
+   * Additional certificate authorities to trust, as PEM.
+   *
+   * For the self-hosted case this product is built around: a panel behind an
+   * organisation's own CA presents a certificate no public trust store knows.
+   * Without this the operator's only options are to disable verification —
+   * which this client will not do — or to put a publicly-trusted certificate in
+   * front of a machine that may not be reachable from the internet at all.
+   *
+   * ADDITIONAL, never instead of. The system trust store still applies, and
+   * verification stays on: there is no `rejectUnauthorized: false` anywhere in
+   * this file and adding one would defeat the point of the rest of it. Leaving
+   * this undefined — which is the default and what production uses unless an
+   * operator sets `PANEL_HTTP_CA_FILE` — means ordinary public verification.
+   */
+  readonly caCertificates?: readonly string[];
+  /**
+   * How a hostname becomes addresses. Defaults to the system resolver.
+   *
+   * A port, in the sense this codebase already uses for `Clock` and
+   * `IdGenerator`: DNS is I/O, and I/O that a security decision depends on has
+   * to be controllable or the decision cannot be tested. The pin below is the
+   * case in point — it is the difference between "we checked an address" and
+   * "we connected to the address we checked", and those two are
+   * indistinguishable to a test unless the two resolutions can be made to
+   * disagree.
+   *
+   * The alternatives were considered and are worse: a test cannot make the
+   * SYSTEM resolver answer differently on successive queries without rewriting
+   * `/etc/resolv.conf` or `/etc/hosts` mid-request, which needs root, races the
+   * connection, and would not survive a CI runner. This is the smaller change.
+   */
+  readonly resolve?: (hostname: string) => Promise<readonly LookupAddress[] | null>;
 }
 
 export const DEFAULT_SAFE_HTTP: Omit<SafeHttpOptions, 'allowLoopback'> = {
@@ -170,7 +203,7 @@ export class SafeHttpClient {
     const hostname = url.hostname.startsWith('[') ? url.hostname.slice(1, -1) : url.hostname;
 
     // Resolve ONCE, judge every answer, and keep the one that will be dialled.
-    const addresses = await resolveAll(hostname);
+    const addresses = await (this.options.resolve ?? resolveAll)(hostname);
     if (addresses === null) return { ok: false, failure: 'UNREACHABLE', status: null };
     const permitted = addresses.filter(
       (entry) => addressAllowed(entry.address, this.options).allowed,
@@ -222,20 +255,60 @@ export class SafeHttpClient {
             // configured. Only where the socket goes is pinned.
             host: hostname,
             ...(secure ? { servername: hostname } : {}),
+            // Trusted IN ADDITION to the system store, and only over TLS.
+            // Verification is never turned off; this only widens what counts
+            // as a valid issuer, which is what an internal CA needs.
+            ...(secure && this.options.caCertificates !== undefined
+              ? { ca: [...this.options.caCertificates] }
+              : {}),
             port: url.port === '' ? (secure ? 443 : 80) : Number(url.port),
+            // No connection pool, and this is part of the pin rather than a
+            // performance choice. The global agent keys sockets by host and
+            // port, NOT by the address they were opened to — so a pooled socket
+            // outlives the address check that authorised it, and a later
+            // request to the same name would ride a connection to an address
+            // this call never approved. A probe is one request every few
+            // minutes; a fresh socket costs nothing worth having here.
+            agent: false,
             method: request.method,
             path: `${url.pathname}${url.search}`,
             headers,
             // The pin. `net.connect` calls this instead of resolving again, so
             // the socket goes to an address that was judged allowed — there is
             // no second resolution for a rebinding attack to win.
-            lookup: (_host, _opts, callback) => {
-              // Re-checked here rather than trusted from the closure. This is
-              // the last point before a socket exists, and a check at the last
-              // point is the one that cannot be skipped by a path that
-              // constructs options differently later.
+            lookup: (_host, opts, callback) => {
+              // UNREACHABLE today, and kept deliberately. `pinned` is chosen
+              // from `permitted`, which is already filtered by exactly this
+              // predicate, so this branch cannot fire as the code stands — a
+              // mutation deleting it leaves every test green, which is stated
+              // here rather than left for someone to discover and mistake for
+              // covered ground.
+              //
+              // It earns its place against one specific future edit: a change
+              // to how `pinned` is selected — picking from `addresses` rather
+              // than `permitted`, say, or taking a caller-supplied address —
+              // would silently hand a forbidden destination to the socket, and
+              // this is the last statement before one exists.
               if (!addressAllowed(pinned.address, this.options).allowed) {
                 (callback as (error: Error | null) => void)(new Error('address not allowed'));
+                return;
+              }
+              // Two shapes, and answering with the wrong one breaks the request
+              // rather than the pin. Node asks with `all: true` — happy-eyeballs
+              // does, and it is on by default since Node 20 — and then requires
+              // an ARRAY; the three-argument form yields
+              // `ERR_INVALID_IP_ADDRESS: Invalid IP address: undefined`.
+              //
+              // This was wrong until the pin got a test that reaches a socket.
+              // Nothing caught it because an IP-literal URL never calls `lookup`
+              // at all, and every other test in this suite uses one. A panel
+              // addressed by hostname — which is the ordinary case, and the only
+              // case the pin exists for — failed every probe, and the operator
+              // would have read it as an unreachable panel.
+              if (opts !== null && typeof opts === 'object' && opts.all === true) {
+                (callback as (e: Error | null, a: LookupAddress[]) => void)(null, [
+                  { address: pinned.address, family: pinned.family },
+                ]);
                 return;
               }
               (callback as (e: Error | null, a: string, f: number) => void)(
