@@ -17,6 +17,7 @@ import { SafeHttpClient } from './infrastructure/net/safe-http.js';
 import { DrizzlePanelRepository } from './modules/platform/panels/infrastructure/drizzle-panel.repository.js';
 import { DrizzlePanelCredentialStore } from './modules/platform/panels/infrastructure/drizzle-panel-credentials.js';
 import { PanelService } from './modules/platform/panels/application/panel.service.js';
+import { providerAdapter } from './modules/platform/providers/infrastructure/adapter-registry.js';
 import { SystemClock } from './infrastructure/clock.js';
 import { Uuidv7IdGenerator } from './infrastructure/ids.js';
 import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
@@ -538,6 +539,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       ids,
       http: panelHttp,
       urlPolicy: { allowLoopback: config.PANEL_HTTP_ALLOW_LOOPBACK },
+      adapters: providerAdapter,
     }),
     settingsService,
     settingsResolver,

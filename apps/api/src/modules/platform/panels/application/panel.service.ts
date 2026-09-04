@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import {
   createPanelRequestSchema,
   errors,
-  isProviderType,
   setPanelCredentialsRequestSchema,
   setPanelStatusRequestSchema,
   testPanelRequestSchema,
@@ -18,6 +17,7 @@ import {
   type OperationalEventRecorder,
   type PanelHealthState,
   type PanelStatus,
+  type ProviderConnectionAdapter,
   type ProviderCredentials,
   type ProviderProbeOutcome,
   type ProviderType,
@@ -35,7 +35,6 @@ import {
   type UrlPolicyOptions,
 } from '../../../../infrastructure/net/url-policy.js';
 import type { SafeHttpClient } from '../../../../infrastructure/net/safe-http.js';
-import { providerAdapter } from '../../providers/infrastructure/adapter-registry.js';
 import type {
   PanelCredentialStore,
   PanelCredentialWrite,
@@ -50,7 +49,14 @@ const PANELS_CREDENTIALS_ROTATE = 'panels.credentials.rotate' as const;
 
 export interface CreatePanelCommand {
   readonly name: string;
-  readonly providerType: string;
+  /**
+   * Already narrowed by the contract schema, which enumerates the types.
+   *
+   * Typed as `ProviderType` rather than `string` so that the only remaining
+   * question at this layer is whether an ADAPTER exists — a different question
+   * with a different answer, and one the type system cannot settle.
+   */
+  readonly providerType: ProviderType;
   readonly baseUrl: string;
   readonly credentials?: PanelCredentialWrite;
   readonly idempotencyKey: string;
@@ -81,6 +87,15 @@ export interface PanelServiceDeps {
   readonly ids: IdGenerator;
   readonly http: SafeHttpClient;
   readonly urlPolicy: UrlPolicyOptions;
+  /**
+   * Which adapter operates a provider type.
+   *
+   * Injected rather than imported so the scheduled prober in 3C composes the
+   * same service without reaching around it, and so a test can drive the
+   * service against a scripted outcome without patching a module binding. The
+   * registry it is wired to refuses an unknown type; nothing here relaxes that.
+   */
+  readonly adapters: (type: ProviderType) => ProviderConnectionAdapter;
 }
 
 function hashRequest(value: unknown): string {
@@ -228,14 +243,22 @@ export class PanelService {
       idempotencyKey: parsed.idempotencyKey,
     };
 
-    if (!isProviderType(command.providerType)) {
-      throw errors.validation(
-        PANEL_ERROR_CODES.PROVIDER_TYPE_UNSUPPORTED,
-        'That provider type is not one this release supports.',
-        { providerType: command.providerType },
-      );
-    }
+    // Two different refusals, and the difference is the operator's next move.
+    //
+    // A string that is not a provider type at all never gets here: the contract
+    // schema enumerates them, so `parseCommand` above has already refused it and
+    // named `providerType` as the offending field. What DOES get here is a type
+    // the contracts declare and this release has no adapter for — `sanaei`
+    // today — and refusing it at CREATE time rather than at the first probe is
+    // the point. The legacy bot let an operator configure a panel it could
+    // never talk to and told them it had succeeded (SOURCE_BUG-XUI-001); a
+    // panel that cannot be operated should not become a row.
+    //
+    // This also closes the loop the registry opens: no persisted provider
+    // string can name an adapter that does not exist, because the adapter is
+    // resolved before the row is written and again before it is used.
     const providerType: ProviderType = command.providerType;
+    this.deps.adapters(providerType);
     const baseUrl = this.validateUrl(command.baseUrl);
 
     // Checked HERE, before the idempotency store is consulted.
@@ -295,15 +318,25 @@ export class PanelService {
             entityType: 'Panel',
             entityId: panelId,
             before: null,
-            // Safe fields only. `credentialsSet` names WHICH credentials were
+            // Safe fields only. `configured` names WHICH credential kinds were
             // supplied and never what they were — an audit entry that recorded
             // the value would be the legacy web admin's cleartext readback
             // with a timestamp on it.
+            //
+            // The field is `configured` and not `credentialsSet` for a reason
+            // worth keeping: the audit writer redacts any key containing
+            // `credential`, so the more obvious name made this entry read
+            // `[redacted]` and the audit lost the one fact it was recording.
+            // The fix is the name, never the redactor — a key that looks like
+            // it holds a credential SHOULD be redacted, because the next author
+            // to add one will not be as careful as this one. `configured` is
+            // also the word the API's own credential state uses, so the two
+            // surfaces say the same thing.
             after: {
               name: command.name,
               providerType,
               baseUrl,
-              credentialsSet: credentialKindsIn(command.credentials),
+              configured: credentialKindsIn(command.credentials),
             },
             result: 'SUCCESS',
           },
@@ -587,7 +620,7 @@ export class PanelService {
     }
 
     const credentials = await this.deps.credentials.read(tenant, panelId);
-    const provider = providerAdapter(before.panel.providerType);
+    const provider = this.deps.adapters(before.panel.providerType);
     const target = toProviderCredentials(credentials, provider.descriptor.credentialShape);
     if (target === null) {
       throw errors.preconditionFailed(
