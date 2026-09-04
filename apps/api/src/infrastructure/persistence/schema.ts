@@ -1120,6 +1120,22 @@ export const panels = pgTable(
   (table) => [
     index('panels_tenant_status_idx').on(table.tenantId, table.status),
     /**
+     * The monitor's driving scan: every ACTIVE panel on the installation.
+     *
+     * Partial on purpose. `panels_tenant_status_idx` leads with `tenant_id`,
+     * which is right for every operator read and useless to a monitor that
+     * asks the question across tenants. This one is small — only the panels
+     * that are actually monitored are in it — and carries `tenant_id` so the
+     * tenant-fair window function can group without going back to the heap.
+     *
+     * `DISABLED` and `ARCHIVED` panels are not in the index at all, which is
+     * the same rule the monitor enforces, expressed where the planner can use
+     * it.
+     */
+    index('panels_monitor_active_idx')
+      .on(table.tenantId, table.id)
+      .where(sql`status = 'ACTIVE'`),
+    /**
      * Unique among a tenant's LIVE panels only.
      *
      * Archiving releases the name, which is the behaviour an operator expects:
@@ -1267,9 +1283,50 @@ export const panelHealth = pgTable(
      * state and completely different problems.
      */
     lastHealthyAt: timestamptz('last_healthy_at'),
+    /**
+     * How many probes in a row have failed, ending with this one.
+     *
+     * Zero on any success. It exists so the background monitor can back off a
+     * panel that keeps failing instead of asking again at the same rate — a
+     * deterministic rejection retried on a schedule is a credential-stuffing
+     * loop pointed at the operator's own panel.
+     *
+     * A counter, NOT a history. The row still describes one probe: the latest
+     * one. Nothing here can reconstruct what the previous failures were, and
+     * nothing is appended.
+     */
+    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+    /**
+     * The earliest moment the background monitor may probe this panel again.
+     *
+     * Stored rather than computed in the discovery query, for two reasons that
+     * both matter. It is indexable — a cadence expressed as a CASE over state,
+     * failure kind and three configured intervals cannot be — and it keeps the
+     * cadence policy in one testable function instead of duplicated between
+     * TypeScript and SQL.
+     *
+     * The cost is stated plainly: changing a cadence interval takes effect for
+     * each panel at its next probe, not immediately. That is bounded by one
+     * cycle per panel and is the deliberate trade.
+     *
+     * `DEFAULT now()` rather than nullable, so a row written by a release that
+     * predates this column — a rollback, then a roll forward — reads as due
+     * rather than as never due. Due is absorbed by the batch bound, the
+     * concurrency bound and the tenant budget; never-due would be a monitor
+     * that silently stops.
+     */
+    nextProbeAt: timestamptz('next_probe_at').notNull().defaultNow(),
   },
   (table) => [
     index('panel_health_tenant_idx').on(table.tenantId),
+    /**
+     * The monitor's driving index: the due panels, most overdue first.
+     *
+     * Discovery asks one question — "which panels are due now" — across every
+     * tenant, and without this it is a sequential scan of every health row on
+     * the installation on every tick.
+     */
+    index('panel_health_next_probe_idx').on(table.nextProbeAt),
     /**
      * The pair, not the two halves.
      *

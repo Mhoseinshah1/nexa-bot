@@ -130,6 +130,11 @@ describe('the tenant-wide probe budget', () => {
           return answer();
         },
       }),
+      cadence: {
+        healthyIntervalMs: 10 * 60 * 1000,
+        retryableIntervalMs: 2 * 60 * 1000,
+        nonRetryableIntervalMs: 60 * 60 * 1000,
+      },
     });
 
   const panelFor = async (

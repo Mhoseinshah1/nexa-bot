@@ -144,7 +144,14 @@ open(sys.argv[2], "w", encoding="utf-8").write(source[start:end])
 EXTRACT
 assert_ok 'the readiness parser could not be extracted' test -s "$parser"
 
-parser_says() { printf '%b' "$1" | python3 "$parser"; }
+# The required list is data the library resolves per wait — the intersection of
+# what readiness demands with what the ACTIVE compose file defines — and the
+# parser reads it from the environment. Tests set `PARSER_REQUIRED` to model a
+# topology; the default is the current one.
+PARSER_REQUIRED='api worker monitor'
+parser_says() {
+  printf '%b' "$1" | NEXA_REQUIRED_SERVICES="$PARSER_REQUIRED" python3 "$parser"
+}
 parser_case() {
   local description="$1" expected="$2" shape="$3"
   assert_equals "$description" "$expected" "$(parser_says "$shape")"
@@ -169,13 +176,22 @@ WORKER_STARTING='{"Service":"worker","State":"running","Health":"starting"}'
 WORKER_UNHEALTHY='{"Service":"worker","State":"running","Health":"unhealthy"}'
 WORKER_EXITED='{"Service":"worker","State":"exited","Health":"unhealthy"}'
 WORKER_RESTARTING='{"Service":"worker","State":"restarting"}'
+# The monitor is required too, and for a reason the worker's does not cover:
+# panel health is written by that process and nowhere else, so an installation
+# whose monitor is dead shows every panel's health frozen at its last value —
+# a stale answer indistinguishable from a fresh one.
+MONITOR_HEALTHY='{"Service":"monitor","State":"running","Health":"healthy"}'
+MONITOR_STARTING='{"Service":"monitor","State":"running","Health":"starting"}'
+MONITOR_UNHEALTHY='{"Service":"monitor","State":"running","Health":"unhealthy"}'
+MONITOR_EXITED='{"Service":"monitor","State":"exited","Health":"unhealthy"}'
+MONITOR_RESTARTING='{"Service":"monitor","State":"restarting"}'
 
 parser_case 'a running one-off ahead of the healthy api hides it' \
-  healthy "${RUN_STARTING}\n${RUN_HEALTHY}\n${WORKER_HEALTHY}"
+  healthy "${RUN_STARTING}\n${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
 parser_case 'order decides the answer' \
-  healthy "${RUN_HEALTHY}\n${RUN_STARTING}\n${WORKER_HEALTHY}"
+  healthy "${RUN_HEALTHY}\n${RUN_STARTING}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
 parser_case 'an unhealthy api beside a starting one is not healthy' \
-  unhealthy "${RUN_UNHEALTHY}\n${WORKER_HEALTHY}"
+  unhealthy "${RUN_UNHEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
 parser_case 'a corpse beside an api that is still created fast-fails it' \
   created "${DEAD_STARTING}\n{\"Service\":\"api\",\"State\":\"created\"}\n${WORKER_HEALTHY}"
 parser_case 'an api that only exited is not waited out' exited "${DEAD_STARTING}\n${WORKER_HEALTHY}"
@@ -195,17 +211,17 @@ parser_case 'a State-less entry after a corpse is not read as life' \
 
 # --- C8: the worker is half of the application -------------------------------
 parser_case 'C8: api healthy + worker healthy is ready' \
-  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}"
+  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
 parser_case 'C8: api healthy + worker STOPPED is not ready, and fast-fails' \
-  exited "${RUN_HEALTHY}\n${WORKER_EXITED}"
+  exited "${RUN_HEALTHY}\n${WORKER_EXITED}\n${MONITOR_HEALTHY}"
 parser_case 'C8: api healthy + worker in a crash loop is not ready' \
-  restarting "${RUN_HEALTHY}\n${WORKER_RESTARTING}"
+  restarting "${RUN_HEALTHY}\n${WORKER_RESTARTING}\n${MONITOR_HEALTHY}"
 parser_case 'C8: api healthy + worker unhealthy is not ready' \
-  unhealthy "${RUN_HEALTHY}\n${WORKER_UNHEALTHY}"
+  unhealthy "${RUN_HEALTHY}\n${WORKER_UNHEALTHY}\n${MONITOR_HEALTHY}"
 parser_case 'C8: api healthy + worker still starting is not ready yet' \
-  starting "${RUN_HEALTHY}\n${WORKER_STARTING}"
+  starting "${RUN_HEALTHY}\n${WORKER_STARTING}\n${MONITOR_HEALTHY}"
 parser_case 'C8: worker healthy + api unhealthy is not ready' \
-  unhealthy "${RUN_UNHEALTHY}\n${WORKER_HEALTHY}"
+  unhealthy "${RUN_UNHEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
 parser_case 'C8: worker healthy + api dead fast-fails' \
   dead "{\"Service\":\"api\",\"State\":\"dead\"}\n${WORKER_HEALTHY}"
 parser_case 'C8: an api alone — the old accepted shape — is not ready' \
@@ -213,11 +229,44 @@ parser_case 'C8: an api alone — the old accepted shape — is not ready' \
 parser_case 'C8: a worker alone is not ready either' \
   '' "${WORKER_HEALTHY}\n"
 parser_case 'C8: a healthy worker one-off beside a dead worker still fast-fails' \
-  exited "${RUN_HEALTHY}\n${WORKER_EXITED}"
+  exited "${RUN_HEALTHY}\n${WORKER_EXITED}\n${MONITOR_HEALTHY}"
 parser_case 'C8: a worker one-off reporting starting beside a healthy worker is healthy' \
-  healthy "${RUN_HEALTHY}\n${WORKER_STARTING}\n${WORKER_HEALTHY}"
+  healthy "${RUN_HEALTHY}\n${WORKER_STARTING}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
 parser_case 'C8: a service that is neither api nor worker is ignored' \
-  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n{\"Service\":\"caddy\",\"State\":\"exited\"}"
+  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}\n{\"Service\":\"caddy\",\"State\":\"exited\"}"
+
+# --- 3C: the monitor is the third half of the application --------------------
+#
+# Panel health has exactly one writer. A release whose api and worker are both
+# healthy while its monitor is dead serves every request correctly and stops
+# telling the truth about panels — health stays frozen at whatever it was, with
+# nothing in the response to say so. So it is required, and each row below
+# isolates the monitor: everything else is healthy.
+parser_case '3C: api + worker healthy but the monitor STOPPED is not ready, and fast-fails' \
+  exited "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_EXITED}"
+parser_case '3C: api + worker healthy but the monitor crash-loops is not ready' \
+  restarting "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_RESTARTING}"
+parser_case '3C: api + worker healthy but the monitor unhealthy is not ready' \
+  unhealthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_UNHEALTHY}"
+parser_case '3C: api + worker healthy but the monitor still starting is not ready yet' \
+  starting "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_STARTING}"
+parser_case '3C: the previously accepted api + worker shape is no longer ready' \
+  '' "${RUN_HEALTHY}\n${WORKER_HEALTHY}"
+parser_case '3C: a monitor one-off reporting starting beside a healthy monitor is healthy' \
+  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_STARTING}\n${MONITOR_HEALTHY}"
+
+# The rollback direction, and it is the reason the required list is resolved
+# from the compose file rather than hardcoded. Host assets are
+# release-versioned: a rollback activates the TARGET release's compose.yml and
+# then waits for readiness while this library is still the one in memory. A
+# release that predates the monitor defines no such service, and demanding one
+# would time out every rollback to it — after the assets had already moved.
+PARSER_REQUIRED='api worker'
+parser_case '3C: a topology without a monitor is ready on api + worker alone' \
+  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}"
+parser_case '3C: a topology without a monitor still requires its worker' \
+  exited "${RUN_HEALTHY}\n${WORKER_EXITED}"
+PARSER_REQUIRED='api worker monitor'
 
 test_case 'the update lock does not live in a world-writable directory'
 # Read out of the library with a CLEAN environment, so this asserts the
@@ -1971,6 +2020,90 @@ assert_fails 'a rollback whose worker died reported success' test "$BOTCTL_STATU
 assert_equals 'a failed rollback moved the current pointer' 'vB' "$(cat "${NEXA_STATE_DIR}/current")"
 assert_equals "a failed rollback left the previous release's tooling" 'B' "$(installed_label)"
 rm -f "${FAKE_DIR}/worker_state_${DIGEST_A}"
+
+teardown_root
+
+# =============================================================================
+# 3C — the monitor is required, and a topology without one still rolls back
+# =============================================================================
+setup_root
+setup_fake_docker
+seed_release 'vA' "$DIGEST_A"
+write_live_assets A
+stage_release_assets "$DIGEST_A" A
+seed_image_assets "$DIGEST_B" B
+fake_set resolve_digest "$DIGEST_B"
+
+test_case '3C: a target whose monitor stays exited is backed out'
+# The failure this catches has no other symptom. Every request is served
+# correctly by a release with a dead monitor; what stops is panel health being
+# written, so an operator reads a health that is frozen at whatever it was and
+# has no way to tell.
+fake_set "monitor_state_${DIGEST_B}" exited
+NEXA_READY_TIMEOUT=60 run_botctl update vB
+assert_fails 'a target with a dead monitor became current' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'a dead monitor advanced the current release' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_equals 'deploy.env was repointed at a release whose monitor died' \
+  "registry.test/nexa@${DIGEST_A}" "$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE)"
+rm -f "${FAKE_DIR}/monitor_state_${DIGEST_B}"
+
+test_case '3C: a monitor that never becomes healthy is not accepted'
+fake_set "monitor_health_${DIGEST_B}" starting
+NEXA_READY_TIMEOUT=6 run_botctl update vB
+assert_fails 'an unhealthy monitor was accepted as ready' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'an unhealthy monitor advanced the current release' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+rm -f "${FAKE_DIR}/monitor_health_${DIGEST_B}"
+
+test_case '3C: api and worker healthy do not excuse a crash-looping monitor'
+fake_set "monitor_state_${DIGEST_B}" restarting
+NEXA_READY_TIMEOUT=6 run_botctl update vB
+assert_fails 'a crash-looping monitor was accepted as ready' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'a crash-looping monitor advanced the current release' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+rm -f "${FAKE_DIR}/monitor_state_${DIGEST_B}"
+
+test_case '3C: all three healthy is ready, and the update completes'
+run_botctl update vB
+assert_equals 'a healthy api, worker and monitor were not accepted' 0 "$BOTCTL_STATUS"
+assert_equals 'the update did not advance' 'vB' "$(cat "${NEXA_STATE_DIR}/current")"
+
+test_case '3C: status reports NOT READY when only the monitor is down'
+fake_set monitor_state exited
+run_botctl status
+assert_contains 'a dead monitor was reported as ready' "$BOTCTL_OUTPUT" 'NOT READY'
+assert_fails 'status exited zero with a dead monitor' test "$BOTCTL_STATUS" -eq 0
+fake_set monitor_state running
+run_botctl status
+assert_contains 'a healthy monitor was not reported as ready' "$BOTCTL_OUTPUT" 'readiness: ready'
+
+test_case '3C: a rollback to a release with no monitor service is still valid'
+# The compatibility requirement, and the reason readiness intersects what it
+# requires with what the ACTIVE compose file defines rather than hardcoding
+# three services.
+#
+# Host assets are release-versioned. A rollback activates the target release's
+# compose.yml and then waits for readiness while THIS library is still the one
+# in memory. vA predates the monitor, so its topology has no such service and
+# its containers never report one. A hardcoded requirement would wait out the
+# whole timeout and report a rollback failure — after the assets had already
+# moved, which is the worst moment to be wrong.
+fake_set compose_services 'api worker postgres redis caddy'
+fake_set monitor_state absent
+NEXA_READY_TIMEOUT=30 run_botctl rollback
+assert_equals 'a rollback to a monitor-less topology was refused' 0 "$BOTCTL_STATUS"
+assert_equals 'the rollback did not move the current pointer' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+
+test_case '3C: a monitor-less topology still requires its api and worker'
+# The relaxation is exactly one service wide. Dropping the monitor from the
+# topology must not drop the two that were always required — otherwise the
+# intersection would be a way to make any release ready by shipping a compose
+# file that defines nothing.
+fake_set worker_state exited
+NEXA_READY_TIMEOUT=6 run_botctl status
+assert_contains 'a monitor-less topology with a dead worker was reported ready' \
+  "$BOTCTL_OUTPUT" 'NOT READY'
+fake_set worker_state running
+fake_set compose_services 'api worker monitor postgres redis caddy'
+fake_set monitor_state running
 
 teardown_root
 

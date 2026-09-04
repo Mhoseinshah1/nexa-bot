@@ -31,13 +31,13 @@ Five containers on one host, behind Compose.
                  └─────┬─────┘
                        │  edge network
                  ┌─────┴─────┐
-                 │    api    │──────────────┐
-                 └─────┬─────┘              │
-                       │                    │  edge (egress to Telegram)
-   data network ┌──────┴──────┐      ┌──────┴──────┐
-                │             │      │   worker    │
-          ┌─────┴─────┐ ┌─────┴────┐ └──────┬──────┘
-          │ postgres  │ │  redis   │◄───────┘
+                 │    api    │──────────────┬───────────────┐
+                 └─────┬─────┘              │               │
+                       │                    │  edge (Telegram, panels)
+   data network ┌──────┴──────┐      ┌──────┴──────┐ ┌──────┴──────┐
+                │             │      │   worker    │ │   monitor   │
+          ┌─────┴─────┐ ┌─────┴────┐ └──────┬──────┘ └──────┬──────┘
+          │ postgres  │ │  redis   │◄───────┴───────────────┘
           └───────────┘ └──────────┘
 ```
 
@@ -54,9 +54,19 @@ Five containers on one host, behind Compose.
 - **PostgreSQL and Redis publish nothing.** They are on an internal network
   that Caddy is not attached to, so the internet-facing container has no route
   to the database at all.
-- **api** and **worker** are the same image with different commands. Both reach
-  the internet through the edge network — the worker needs it, because the
-  notification dispatcher runs there and calls Telegram.
+- **api**, **worker** and **monitor** are the same image with different
+  commands — `dist/main.js`, `dist/main.worker.js`, `dist/main.monitor.js`. All
+  three reach the internet through the edge network: the worker because the
+  notification dispatcher calls Telegram, the monitor because it probes
+  operators' panels.
+- **monitor** is a third role rather than a timer inside one of the other two.
+  A panel probe is an outbound call to somebody else's machine with a timeout
+  measured in seconds; on the API's event loop a fleet of slow panels becomes
+  slow Telegram replies, and inside the worker it delays notification delivery.
+  Panel health is written by this process and nowhere else, which is why
+  readiness requires it: an installation whose monitor is dead serves every
+  request correctly and reports every panel's health frozen at whatever it last
+  was.
 - Redis stores nothing yet (see ADR-0022) and runs without persistence.
 
 ## Filesystem layout
@@ -209,13 +219,29 @@ The section names the exact next commands for its state — `migrate-config`,
 token. When the shutdown is complete it repeats the caveat that matters then:
 backups taken before the re-encryption still hold v1 ciphertext.
 
-Readiness, for `status`, for `update` and for `rollback`, means **both**
-application containers healthy. The API's check is its own `/health/ready`;
-the worker serves no HTTP, so its check reads a heartbeat file the worker
-writes every ten seconds, and only after a round trip to the database
-succeeds. A worker in a crash loop, alive with a blocked event loop, or alive
-and cut off from PostgreSQL goes unhealthy within a check or two, and a release
-in that state is backed out exactly as one whose API never answered.
+Readiness, for `status`, for `update` and for `rollback`, means **all three**
+application containers healthy. The API's check is its own `/health/ready`.
+Neither the worker nor the monitor serves HTTP, so each writes a heartbeat file
+its container check reads — the worker's every ten seconds and only after a
+round trip to the database succeeds; the monitor's under the same rule plus one
+more, that a monitoring iteration has COMPLETED recently. A process whose timer
+still fires while every tick throws is not monitoring anything, and a heartbeat
+that only proved the process existed would report it healthy for ever. A
+deliberately disabled monitor (`PANEL_MONITOR_ENABLED=false`) stays healthy: it
+is a process doing nothing on purpose, not a broken one.
+
+Any of the three in a crash loop, alive with a blocked event loop, or alive and
+cut off from PostgreSQL goes unhealthy within a check or two, and a release in
+that state is backed out exactly as one whose API never answered.
+
+The required set is intersected with what the ACTIVE compose file defines, and
+that is what keeps rolling back to an older release valid. Host assets are
+release-versioned: a rollback activates the target's `compose.yml` and then
+waits for readiness while the new library is still in memory. A release that
+predates the monitor defines no such service, and demanding one would time out
+every rollback to it — after the assets had already moved. The relaxation is
+exactly one service wide; a monitor-less topology still requires its API and its
+worker.
 
 ## Backups
 
@@ -432,24 +458,25 @@ roll back to.
 
 ### What happens when it fails
 
-| Failure                             | Result                                                                                                    |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| The version cannot be resolved      | Current release untouched. Nothing pulled.                                                                |
-| The image cannot be pulled          | Current release untouched. No backup, no migration.                                                       |
-| The backup fails                    | **The update does not proceed.** Nothing is migrated.                                                     |
-| The pre-migration check fails       | **The update stops before migrating.** Host assets untouched; the check's own message says what to fix.   |
-| The image carries no host assets    | Refused before anything on the host changes.                                                              |
-| The outgoing set cannot be recorded | Refused: a failed update would have nothing to put back.                                                  |
-| The migration fails                 | Host assets restored. The target does not become current. The pre-migration backup is named in the error. |
-| The target does not start           | Host assets restored, then the previous release is restarted; it remains current.                         |
-| The target is never ready           | Host assets restored, then the previous release is restarted; it remains current.                         |
-| The target's worker is not healthy  | Treated as "never ready": a healthy API beside a dead or crash-looping worker is not a working release.   |
-| Activation fails part-way           | Every file already replaced is put back from the saved copy; nothing else has changed.                    |
-| The rollback is not healthy         | Reported loudly. **Neither release is deleted.**                                                          |
-| The previous set was never recorded | Recovered from the previous release's image, by the digest in its manifest; the version tag is not read.  |
-| The previous image cannot be pulled | Rollback refused before anything changes. The current release is untouched.                               |
-| The previous image has no assets    | Rollback refused before anything changes. No partial set is left under its digest.                        |
-| The image's commit disagrees        | Rollback refused: the image was built from a commit the manifest does not record.                         |
+| Failure                             | Result                                                                                                                                  |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| The version cannot be resolved      | Current release untouched. Nothing pulled.                                                                                              |
+| The image cannot be pulled          | Current release untouched. No backup, no migration.                                                                                     |
+| The backup fails                    | **The update does not proceed.** Nothing is migrated.                                                                                   |
+| The pre-migration check fails       | **The update stops before migrating.** Host assets untouched; the check's own message says what to fix.                                 |
+| The image carries no host assets    | Refused before anything on the host changes.                                                                                            |
+| The outgoing set cannot be recorded | Refused: a failed update would have nothing to put back.                                                                                |
+| The migration fails                 | Host assets restored. The target does not become current. The pre-migration backup is named in the error.                               |
+| The target does not start           | Host assets restored, then the previous release is restarted; it remains current.                                                       |
+| The target is never ready           | Host assets restored, then the previous release is restarted; it remains current.                                                       |
+| The target's worker is not healthy  | Treated as "never ready": a healthy API beside a dead or crash-looping worker is not a working release.                                 |
+| The target's monitor is not healthy | Treated as "never ready" too: panel health has one writer, and a release that stops writing it looks perfectly well from every request. |
+| Activation fails part-way           | Every file already replaced is put back from the saved copy; nothing else has changed.                                                  |
+| The rollback is not healthy         | Reported loudly. **Neither release is deleted.**                                                                                        |
+| The previous set was never recorded | Recovered from the previous release's image, by the digest in its manifest; the version tag is not read.                                |
+| The previous image cannot be pulled | Rollback refused before anything changes. The current release is untouched.                                                             |
+| The previous image has no assets    | Rollback refused before anything changes. No partial set is left under its digest.                                                      |
+| The image's commit disagrees        | Rollback refused: the image was built from a commit the manifest does not record.                                                       |
 
 The previous release is never deleted by the update that replaced it. Manifests
 are pruned to the five most recent by an update — a rollback prunes nothing —

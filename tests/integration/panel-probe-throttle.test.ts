@@ -118,6 +118,11 @@ describe('the panel connection-test throttle', () => {
           return answer();
         },
       }),
+      cadence: {
+        healthyIntervalMs: 10 * 60 * 1000,
+        retryableIntervalMs: 2 * 60 * 1000,
+        nonRetryableIntervalMs: 60 * 60 * 1000,
+      },
     });
 
   const panelFor = async (admin: SeededAdmin, scope: typeof tenantA, name: string) => {

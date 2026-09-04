@@ -320,6 +320,99 @@ export const configSchema = z
       .min(1_000)
       .max(24 * 60 * 60 * 1000)
       .default(300_000),
+    /**
+     * Background panel health monitoring.
+     *
+     * Five knobs, not twenty: whether the loop runs, how often it wakes, and
+     * the three cadences that follow from what the last probe found. Batch
+     * size and concurrency bound the work; everything else is derived.
+     */
+    PANEL_MONITOR_ENABLED: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((value) => value === 'true'),
+    /**
+     * How often the loop wakes to look for work.
+     *
+     * Not the probe cadence — a tick that finds nothing due does nothing. It
+     * bounds how late a due panel can be, and it is the interval the heartbeat
+     * is judged against.
+     */
+    PANEL_MONITOR_TICK_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(10 * 60 * 1000)
+      .default(30_000),
+    /**
+     * How long a HEALTHY result is allowed to stand before a re-probe.
+     *
+     * Ten minutes against a `PANEL_HEALTH_FRESH_FOR_MS` of fifteen: the
+     * refresh lands comfortably before the result an operator reads goes
+     * stale, with room for a missed tick.
+     *
+     * The ceiling is twelve, not fifteen, and the difference is the anti-herd
+     * spread. A panel is re-probed at its interval PLUS up to a tenth of it,
+     * so a fifteen-minute cadence would put the last panel in the fleet past
+     * the freshness window every cycle — the staleness flag would then mean
+     * "the monitor is slow" rather than "this answer is old". Twelve leaves
+     * the spread inside the window. `MONITOR_MAX_HEALTHY_INTERVAL_MS` states
+     * the same bound where the spread is defined, and a unit test pins this
+     * ceiling under it so the two cannot drift apart.
+     */
+    PANEL_MONITOR_HEALTHY_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(30_000)
+      .max(12 * 60 * 1000)
+      .default(10 * 60 * 1000),
+    /**
+     * After a RETRYABLE failure — a timeout, an unreachable host, a provider
+     * error. Trying again soon is the point: these are the failures that fix
+     * themselves.
+     */
+    PANEL_MONITOR_RETRYABLE_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(10_000)
+      .max(60 * 60 * 1000)
+      .default(2 * 60 * 1000),
+    /**
+     * After a NON-RETRYABLE failure — rejected credentials, a panel wanting a
+     * second factor, a refused target, a malformed answer.
+     *
+     * Long, and that is the safety property rather than a tuning choice. A
+     * stable bad credential retried on a short cadence is a credential-stuffing
+     * loop pointed at the operator's own panel, and both providers this release
+     * speaks to lock an account for exactly that. An operator who fixes the
+     * credential does not wait this out: replacing one changes the panel's
+     * configuration, which makes it due immediately.
+     */
+    PANEL_MONITOR_NONRETRYABLE_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(60_000)
+      .max(24 * 60 * 60 * 1000)
+      .default(60 * 60 * 1000),
+    /** Panels considered in one tick. The query is LIMITed by this. */
+    PANEL_MONITOR_BATCH_SIZE: z.coerce.number().int().min(1).max(1_000).default(50),
+    /** Probes in flight at once. Bounds outbound sockets and pool checkouts. */
+    PANEL_MONITOR_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(4),
+    /**
+     * The share of a tenant's probe budget the background loop may not touch,
+     * as a percentage held back for operators.
+     *
+     * Background monitoring is bounded by the same tenant bucket as everything
+     * else — there is no second budget and no side door. What this adds is a
+     * FLOOR: the monitor's take is refused while fewer than this share of the
+     * capacity remains, so an operator pressing "Test connection" still finds
+     * capacity on a tenant whose panels are all failing and retrying. Enforced
+     * inside the same atomic statement that takes the token, so it holds across
+     * however many monitor replicas are running.
+     */
+    PANEL_MONITOR_BUDGET_RESERVE_PERCENT: z.coerce.number().int().min(0).max(90).default(40),
+    /** Where the monitor writes its heartbeat, and how often. */
+    PANEL_MONITOR_HEARTBEAT_PATH: z.string().trim().min(1).default('/tmp/nexa-monitor.heartbeat'),
     /** Response bytes kept from a panel. Reading stops the moment it is passed. */
     PANEL_HTTP_MAX_RESPONSE_BYTES: z.coerce
       .number()

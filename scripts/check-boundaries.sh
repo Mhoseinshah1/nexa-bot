@@ -424,6 +424,33 @@ if [ -d "$ADAPTER_DIR" ]; then
   fi
 fi
 
+# --- The background monitor does not know which provider it is probing -------
+# The monitor asks a repository which panels are due, hands each to the shared
+# probe core, and stores what comes back. Which adapter operates the panel, which
+# credential shape it needs and what its answers mean are decided ONCE, in the
+# core and the registry, from the descriptor.
+#
+# A branch here — `if (providerType === 'sanaei')` — would be the first of a
+# set that has to be extended for every provider added afterwards, in a file
+# whose author is thinking about scheduling rather than about protocols. The
+# provider-specific knowledge belongs in the adapter, which is the thing that
+# gets tested against a real server.
+#
+# `scan_source` drops comment lines, so the prose above (and the same argument
+# in the service's own docblock) does not trip the check.
+MONITOR_FILE=apps/api/src/modules/platform/panels/application/panel-monitor.service.ts
+if [ -f "$MONITOR_FILE" ]; then
+  PROVIDER_BRANCH=$(scan_source \
+    "(providerType|provider_type)\\s*(===|!==|==|!=)|['\"](marzban|sanaei)['\"]" \
+    "$MONITOR_FILE")
+  if [ -n "$PROVIDER_BRANCH" ]; then
+    fail "The panel monitor branches on a provider type" "$PROVIDER_BRANCH" \
+         "Provider-specific behaviour belongs in the adapter and the descriptor. The monitor schedules probes; it does not know what a panel speaks."
+  else
+    pass "the panel monitor does not branch on a provider type"
+  fi
+fi
+
 echo
 if [ "$FAILED" -ne 0 ]; then
   echo "Boundary checks failed."

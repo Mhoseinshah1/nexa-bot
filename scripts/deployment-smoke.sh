@@ -167,7 +167,7 @@ for line in text.splitlines():
         service = line.strip().rstrip(":")
     if "published:" in line and service:
         published.setdefault(service, []).append(line.strip())
-for name in ("postgres", "redis", "api", "worker"):
+for name in ("postgres", "redis", "api", "worker", "monitor"):
     if published.get(name):
         problems.append(f"{name} publishes a host port: {published[name]}")
 if not published.get("caddy"):
@@ -277,6 +277,39 @@ print("healthy" if "healthy" in [e.get("Health") or "" for e in running] else ""
   waited=$((waited + 3))
 done
 pass "the API is ready"
+
+# The worker AND the monitor, not the API alone.
+#
+# Both write a heartbeat file that their container healthcheck reads, and the
+# monitor's proves more than existence: it is written only when a round trip to
+# PostgreSQL succeeds AND the monitoring loop has completed an iteration. A
+# monitor that comes up healthy here is the whole Phase 3C pipeline working end
+# to end in a real container — config parsed, container built, discovery query
+# planned and executed, heartbeat written — which no unit test can assert.
+#
+# This is also the signal `botctl` waits on, so a failure here is a release
+# that `nexa_wait_ready` would refuse.
+for service in worker monitor; do
+  waited=0
+  until [ "$(compose ps --format json "$service" 2>/dev/null | SERVICE="$service" python3 -c '
+import json, os, sys
+raw = sys.stdin.read().strip()
+entries = []
+try:
+    parsed = json.loads(raw)
+    entries = parsed if isinstance(parsed, list) else [parsed]
+except Exception:
+    entries = [json.loads(line) for line in raw.splitlines() if line.strip()]
+name = os.environ["SERVICE"]
+running = [e for e in entries if e.get("Service") == name and e.get("State") == "running"]
+print("healthy" if "healthy" in [e.get("Health") or "" for e in running] else "")
+' 2>/dev/null)" = "healthy" ]; do
+    [ "$waited" -lt 180 ] || fail "the ${service} never became healthy"
+    sleep 3
+    waited=$((waited + 3))
+  done
+  pass "the ${service} is healthy"
+done
 
 # ---------------------------------------------------------------------------
 step "5. the database and Redis are not reachable from the host"

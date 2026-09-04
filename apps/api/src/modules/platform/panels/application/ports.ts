@@ -43,6 +43,21 @@ export interface PanelHealthRecord {
   readonly statusCode: number | null;
   readonly providerVersion: string | null;
   readonly lastHealthyAt: Date | null;
+  /**
+   * Probes that have failed in a row, ending with this one. Zero on success.
+   *
+   * The backoff input. A counter and not a history: it says how long this has
+   * been going on, and nothing about what the earlier failures were.
+   */
+  readonly consecutiveFailures: number;
+  /**
+   * The earliest the background monitor may probe this panel again.
+   *
+   * Written by every probe, the operator's included — a manual test is a real
+   * probe with a real answer, and a monitor that re-dialled the panel a second
+   * later would be asking a question that was just answered.
+   */
+  readonly nextProbeAt: Date;
 }
 
 /** A panel with everything a surface may see about it. */
@@ -58,6 +73,17 @@ export interface CreatePanelInput {
   readonly name: string;
   readonly providerType: ProviderType;
   readonly baseUrl: string;
+  /**
+   * From the `Clock` port, not the database's `now()`.
+   *
+   * `panels.updated_at` is not decoration: the monitor's discovery compares it
+   * against the last probe's `checked_at` to decide that a panel was
+   * reconfigured and is due again. `checked_at` comes from the clock, so if
+   * this came from the database the comparison would straddle two clocks —
+   * and any skew between the application and PostgreSQL would make every
+   * panel either permanently due or permanently not.
+   */
+  readonly at: Date;
 }
 
 export interface UpdatePanelInput {
@@ -117,6 +143,8 @@ export interface PanelRepository {
     scope: TenantContext,
     panelId: string,
     input: UpdatePanelInput,
+    /** From the `Clock` port. See `CreatePanelInput.at`. */
+    at: Date,
     tx: TransactionScope,
   ): Promise<PanelRecord | null>;
   setStatus(
@@ -189,12 +217,89 @@ export interface PanelRepository {
    * first, a request the cooldown merely replays never reaches here and never
    * spends capacity.
    */
+  /**
+   * Takes one token from the tenant's bucket, atomically.
+   *
+   * `reserve` is the number of tokens the caller must leave behind: 0 for an
+   * operator, positive for the background monitor, so background work cannot
+   * spend a tenant's last capacity and lock an operator out of their own
+   * "Test connection" button. One bucket, one bound, two floors.
+   */
   takeProbeBudget(
     scope: TenantContext,
     bucket: ProbeBudget,
     at: Date,
     tx: TransactionScope,
+    reserve?: number,
   ): Promise<{ permitted: true; remaining: number } | { permitted: false; retryAfterMs: number }>;
+}
+
+/**
+ * Why a panel came up for a background probe. Reported, never branched on for
+ * whether to probe — being in the result set IS the decision.
+ */
+export const MONITOR_DUE_REASONS = [
+  /** No health row: this panel has never been probed. */
+  'NEVER_CHECKED',
+  /** Its address, status or a credential changed after the last probe. */
+  'CONFIGURATION_CHANGED',
+  /** Its scheduled next probe time has arrived. */
+  'INTERVAL_ELAPSED',
+] as const;
+export type MonitorDueReason = (typeof MONITOR_DUE_REASONS)[number];
+
+/** One panel the monitor may consider, named with the tenant that owns it. */
+export interface DuePanel {
+  readonly tenantId: string;
+  readonly panelId: string;
+  readonly reason: MonitorDueReason;
+}
+
+/**
+ * Finding the panels a background probe is due for, across every tenant.
+ *
+ * A SEPARATE port from `PanelRepository`, and the only deliberately
+ * cross-tenant read in this module. That separation is the whole point. Every
+ * method on `PanelRepository` takes a `TenantContext` and filters on it, and
+ * making one of them optional-tenant would put a cross-tenant read one
+ * forgotten argument away from every call site that lists panels.
+ *
+ * What this port returns is a pair of identifiers and a reason — no name, no
+ * address, no credential, no health. The monitor takes the `tenantId` from each
+ * row, builds a `TenantContext` from it, and does everything else through the
+ * ordinary tenant-scoped repository. So the cross-tenant surface is exactly one
+ * query returning exactly two ids, and nothing downstream of it is cross-tenant
+ * at all.
+ */
+export interface PanelMonitorRepository {
+  /**
+   * The next `limit` panels due for a background probe, most overdue first,
+   * fairly distributed across tenants.
+   *
+   * Bounded, ordered and index-supported, because the alternative — select the
+   * panels and filter them in JavaScript — is an unbounded read of every panel
+   * on the installation on every tick, and it gets slower exactly as an
+   * installation grows.
+   *
+   * ONLY `ACTIVE` panels. `DISABLED` means the operator said stop using this
+   * for now and `ARCHIVED` means finished; neither is a panel to go on dialling
+   * unattended. The filter is in the SQL and in the partial index the SQL uses,
+   * so a `DISABLED` panel is not merely skipped — it is not in the index the
+   * query reads.
+   *
+   * Fairness is a per-tenant `row_number()`, not `ORDER BY due_at LIMIT n`.
+   * With the latter, one tenant holding a hundred overdue panels takes every
+   * slot in every cycle and no other tenant is ever probed. With the former,
+   * every tenant's most overdue panel is considered before any tenant's
+   * second.
+   *
+   * There is no cursor parameter and that is deliberate: a probe advances the
+   * panel's `next_probe_at`, so the schedule column IS the cursor. A panel that
+   * was just probed drops out of the result set on its own, and the next tick
+   * starts from a genuinely different head rather than paging over a set that
+   * is moving underneath it.
+   */
+  dueForMonitoring(now: Date, limit: number): Promise<DuePanel[]>;
 }
 
 /** The tenant-wide bound on real outbound probes: a bucket's size and refill. */

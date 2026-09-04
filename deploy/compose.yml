@@ -281,6 +281,37 @@ services:
       retries: 3
       start_period: 40s
 
+  monitor:
+    <<: *app-common
+    command: ['node', 'dist/main.monitor.js']
+    # The third process role, from the SAME image. Not an interval inside the
+    # API — unattended outbound calls to an operator's panels must not share an
+    # event loop with the Telegram webhook — and not folded into the worker,
+    # whose jobs are internal and whose delivery must not wait behind a hanging
+    # panel.
+    #
+    # The heartbeat proves more than the worker's does. It is written only when
+    # a round trip to PostgreSQL succeeds AND the monitoring loop has COMPLETED
+    # an iteration recently, so a process whose timer still fires while every
+    # tick throws goes unhealthy instead of reporting success for ever. A
+    # deliberately disabled monitor (PANEL_MONITOR_ENABLED=false) stays healthy:
+    # it is a process doing nothing on purpose, not a broken one.
+    #
+    # The path and the age must agree with the defaults in config.schema.ts; a
+    # unit test pins them together.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "const fs=require('fs');try{const s=fs.readFileSync('/tmp/nexa-monitor.heartbeat','utf8').trim();const at=Number(s);process.exit(s!==''&&Number.isFinite(at)&&Date.now()-at<=30000?0:1)}catch{process.exit(1)}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
   caddy:
     image: caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
     restart: unless-stopped

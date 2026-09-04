@@ -127,7 +127,25 @@ RUN printf '%s\n' \
 USER node
 DOCKERFILE
 docker push --quiet "${IMAGE_REPO}:v3.0.0-broken" >/dev/null || fail "pushing the broken release failed"
-pass "v1.0.0, v2.0.0 and a deliberately-unready v3.0.0-broken are published"
+
+# A release whose API and worker are perfect and whose MONITOR never becomes
+# healthy. Same layers, same migrator, same everything else — only the monitor
+# entrypoint changes, to a process that idles for ever and writes no heartbeat.
+#
+# This is the Phase 3C shape of the same trap: the containers all start, the
+# API answers every request correctly, and the one thing that stops is panel
+# health being written. An operator then reads a health frozen at whatever it
+# last was, with nothing in the response to say so. If readiness did not
+# require the monitor, this release would go current and nothing would notice.
+docker build -t "${IMAGE_REPO}:v4.0.0-nomonitor" -f - . >/dev/null <<DOCKERFILE || fail "building the monitor-less release failed"
+FROM ${IMAGE_REPO}:v2.0.0
+USER root
+RUN printf '%s\n' "setInterval(() => {}, 60000);" > /app/dist/main.monitor.js
+USER node
+DOCKERFILE
+docker push --quiet "${IMAGE_REPO}:v4.0.0-nomonitor" >/dev/null ||
+  fail "pushing the monitor-less release failed"
+pass "v1.0.0, v2.0.0, an unready v3.0.0-broken and a monitor-dead v4.0.0-nomonitor are published"
 
 # ---------------------------------------------------------------------------
 step "install at v1.0.0"
@@ -335,6 +353,29 @@ until "$BOTCTL" status >/dev/null 2>&1; do
   waited=$((waited + 3))
 done
 pass "the failed release did not become current, and v2.0.0 came back"
+
+# ---------------------------------------------------------------------------
+step "a release whose monitor never becomes healthy must not become current"
+# ---------------------------------------------------------------------------
+# The api and the worker of this release are byte-identical to v2.0.0's, so
+# every previous check in this script would pass on it. What is broken is the
+# third process role, and the only thing that can catch it is readiness
+# requiring the monitor.
+if "$BOTCTL" update v4.0.0-nomonitor; then
+  fail "an update to a release whose monitor never becomes healthy reported success"
+fi
+[ "$(cat "${NEXA_STATE_DIR}/current")" = "v2.0.0" ] ||
+  fail "a release with a dead monitor became current"
+grep -qF "NEXA_IMAGE=${IMAGE_REPO}@${DIGEST_B}" "${NEXA_CONFIG_DIR}/deploy.env" ||
+  fail "deploy.env was repointed at a release whose monitor never became healthy"
+
+waited=0
+until "$BOTCTL" status >/dev/null 2>&1; do
+  [ "$waited" -lt 120 ] || fail "v2.0.0 did not come back after the monitor-less update"
+  sleep 3
+  waited=$((waited + 3))
+done
+pass "a dead monitor backs the release out, and v2.0.0 came back"
 
 # ---------------------------------------------------------------------------
 step "rollback v2.0.0 -> v1.0.0"

@@ -303,7 +303,53 @@ nexa_pull_release() {
 # update reported success. So readiness is the API healthy AND the worker
 # healthy, and the worker's health is a real signal: its container check reads
 # a heartbeat the process writes only after it has reached the database.
-NEXA_READY_SERVICES="api worker"
+# The monitor joins them for the same reason, and for one of its own: panel
+# health is written by that process and nowhere else, so an installation whose
+# monitor is dead reports every panel's health frozen at whatever it last was —
+# a stale answer that looks exactly like a fresh one until an operator acts on
+# it. API healthy plus worker healthy plus monitor dead is not a release that
+# works.
+NEXA_READY_SERVICES="api worker monitor"
+
+# The required services that the ACTIVE compose file actually defines.
+#
+# Readiness must judge the topology of the release that is running, and during
+# an update or a rollback that is not always this botctl's own. Host assets are
+# release-versioned: a rollback activates the target release's compose.yml and
+# then waits for readiness while THIS library is still the one in memory. A
+# release that predates the monitor has no such service, and demanding one
+# would make every rollback to it time out and be reported as a failure — after
+# the assets had already moved.
+#
+# Hardcoding the old pair instead would be the opposite bug: a dead monitor
+# would pass as ready for ever.
+#
+# So the requirement is the intersection: everything in NEXA_READY_SERVICES
+# that this topology defines. Forward, that is all three. Backward, it is
+# whatever the older release had. If compose cannot be read at all the list is
+# returned unchanged, so a broken compose file times out honestly rather than
+# quietly relaxing the requirement.
+nexa_required_services() {
+  local defined="" service required=""
+  defined="$(nexa_compose config --services 2>/dev/null || true)"
+  if [ -z "$defined" ]; then
+    printf '%s' "$NEXA_READY_SERVICES"
+    return 0
+  fi
+  # A case match on the newline-delimited list, not `grep -q`: a pipeline whose
+  # consumer exits early returns 141 under `pipefail` precisely when it
+  # succeeds, and `set -e` then aborts the script.
+  for service in $NEXA_READY_SERVICES; do
+    case "
+${defined}
+" in
+      *"
+${service}
+"*) required="${required:+${required} }${service}" ;;
+    esac
+  done
+  printf '%s' "$required"
+}
 
 nexa_wait_ready() {
   # An explicit argument WINS; NEXA_READY_TIMEOUT is the default when there is
@@ -315,7 +361,13 @@ nexa_wait_ready() {
   # So: `status` passes 5 and always gets 5; `update` and `rollback` pass
   # nothing and take the variable, which is what the smoke test lowers so a
   # failure case does not take three minutes to prove.
-  local timeout="${1:-${NEXA_READY_TIMEOUT:-180}}" waited=0 state
+  local timeout="${1:-${NEXA_READY_TIMEOUT:-180}}" waited=0 state required
+  # Resolved once per wait, not once per poll: the compose file does not change
+  # underneath a single wait, and re-reading it every two seconds would put a
+  # `compose config` between every poll of a release that is trying to start.
+  required="$(nexa_required_services)"
+  [ -n "$required" ] ||
+    nexa_die "the active compose file defines none of the services readiness requires (${NEXA_READY_SERVICES}). Refusing to call this installation ready."
   while [ "$waited" -lt "$timeout" ]; do
     # SC2016: the single quotes are the point. This is Python source, and the
     # shell must not expand anything inside it — an interpolated value here
@@ -328,8 +380,8 @@ nexa_wait_ready() {
     # between a failed release being backed out in seconds and in six minutes
     # (this wait, then the back-out's own).
     # shellcheck disable=SC2086
-    state="$(nexa_compose ps --all --format json $NEXA_READY_SERVICES 2>/dev/null |
-      python3 -c '
+    state="$(nexa_compose ps --all --format json $required 2>/dev/null |
+      NEXA_REQUIRED_SERVICES="$required" python3 -c '
 import json, sys
 raw = sys.stdin.read().strip()
 if not raw:
@@ -404,7 +456,12 @@ def verdict(service):
 # worker that has died is not a release that works, and waiting out the
 # timeout for it would only delay the back-out. Anything else reports the
 # first service that is not healthy, so the caller sees what it is waiting on.
-required = ["api", "worker"]
+# From the environment, never interpolated into this source: the list is data,
+# and a value spliced into a program is code. It is the intersection of what
+# readiness requires with what the ACTIVE compose file defines, so a rollback to
+# a release without the monitor asks about the services that release has.
+import os
+required = os.environ.get("NEXA_REQUIRED_SERVICES", "").split()
 verdicts = [verdict(service) for service in required]
 if any(v in ("exited", "dead") for v in verdicts):
     print(next(v for v in verdicts if v in ("exited", "dead")))

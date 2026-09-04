@@ -7,11 +7,12 @@ and the notification dispatcher polls Postgres.)
 
 **Phases 0, 1 and 2 are done: foundation, identity and RBAC, then the control
 plane** — templates, settings, feature flags, notifications and the operational
-log. **Phase 3A is in progress**: providers, panels, credentials and health —
-an operator can configure a panel, replace its credentials and test its
-connection. There are still no product features: no purchases, payments,
-wallet, resellers or customer-facing Telegram operations, and nothing consumes
-a panel yet. Do not add them without an explicit instruction.
+log. **Phase 3 is in progress**: 3A gave providers, panels, credentials and
+health; 3B added the MHSanaei/3x-ui v3.7.0 adapter; **3C is the current work**
+— a dedicated `monitor` process role that keeps panel health up to date on a
+schedule. There are still no product features: no purchases, payments, wallet,
+resellers or customer-facing Telegram operations, and nothing consumes a panel
+yet. Do not add them without an explicit instruction.
 
 **The deployment checkpoint after Phase 2 is done too**: an immutable image,
 a production Compose topology behind Caddy, an Ubuntu installer, and `botctl`
@@ -49,6 +50,22 @@ Four Phase 3 rules that are easy to break by accident (ADR-0023):
   pinned to a pre-validated address, which is why that code is on `node:http`
   rather than `fetch`.
 
+Four more from Phase 3C:
+
+- There is **one probe implementation**, `panels/application/probe-core.ts`.
+  The operator's connection test and the background monitor are two wrappers
+  over it. Never copy it; the copy that would silently keep the old behaviour
+  is the unattended one that dials panels on a timer.
+- The monitor probes **ACTIVE panels only**, and the rule is enforced in the
+  discovery query and again in the core. `DISABLED` means the operator said
+  stop using this for now.
+- Background work takes the SAME tenant probe budget with a **reserve floor**,
+  never a second bucket. A second bucket would raise a tenant's total outbound
+  rate, which is the bound's whole purpose.
+- Nothing about a probe is decided in a process. The per-panel claim and the
+  budget are conditional writes; **two monitor replicas are the normal case**,
+  briefly, on every rolling update.
+
 Three Phase 2 rules that are easy to break by accident:
 
 - A template body is stored **raw** and rendered nowhere near where it is
@@ -77,7 +94,8 @@ packages/contracts   frozen spec: types, schemas, catalogs, ports. Depends on no
 packages/i18n        the shared Persian catalogue, used by BOTH server and web
 apps/api             src/modules/<context>/{domain,application,infrastructure}
                      src/surfaces/{telegram,web}   src/infrastructure/  (adapters)
-                     entrypoints: main.ts (api), main.worker.ts (worker)
+                     entrypoints: main.ts (api), main.worker.ts (worker),
+                                  main.monitor.ts (panel health monitor)
 apps/web             React admin shell; may import @nexa/contracts and @nexa/i18n only
 ```
 
