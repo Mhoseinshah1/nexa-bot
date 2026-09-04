@@ -4,7 +4,6 @@ import {
   API_PREFIX,
   PANEL_HEALTH_FRESH_FOR_MS,
   PANEL_ROUTES,
-  PROVIDER_DESCRIPTORS,
   providerDescriptor,
   type PanelHealthResponse,
   type PanelListResponse,
@@ -14,6 +13,10 @@ import {
   type TenantContext,
   type TestPanelResponse,
 } from '@nexa/contracts';
+import {
+  IMPLEMENTED_PROVIDER_TYPES,
+  providerAdapter,
+} from '../../modules/platform/providers/infrastructure/adapter-registry.js';
 import { CONTAINER, type Container } from '../../container.js';
 import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
@@ -38,13 +41,19 @@ export class PanelsController {
 
   @Get(PANEL_ROUTES.providers)
   async providers(@Req() request: FastifyRequest): Promise<ProviderListResponse> {
-    // Authenticated, because it describes what this installation can operate.
+    // Authenticated, because it describes what this installation can operate —
+    // and it now does, which it did not before.
     // No permission beyond a session: it is a catalogue of code, identical for
     // every tenant, and a permission nobody can be denied is a permission that
     // exists to be looked at rather than enforced.
     await this.authenticate(request);
+    // Only the types this release has an ADAPTER for. The descriptor catalogue
+    // is the frozen contract and lists `sanaei`, whose adapter is Phase 3B; a
+    // client shown it would offer a configuration that every create rejects
+    // with PROVIDER_TYPE_UNSUPPORTED, which is the legacy bot's "your panel was
+    // added successfully" failure wearing better manners.
     return {
-      providers: PROVIDER_DESCRIPTORS.map((descriptor) => ({
+      providers: implementedDescriptors().map((descriptor) => ({
         key: descriptor.key,
         canonicalName: descriptor.canonicalName,
         credentialShape: descriptor.credentialShape,
@@ -213,4 +222,14 @@ export class PanelsController {
 
 function state(setAt: Date | null): { configured: boolean; lastReplacedAt: string | null } {
   return { configured: setAt !== null, lastReplacedAt: setAt?.toISOString() ?? null };
+}
+
+/**
+ * The descriptors of provider types this release can actually operate.
+ *
+ * Resolved through the registry rather than filtered by name, so the list
+ * cannot drift from the adapters that exist: a type here has been constructed.
+ */
+function implementedDescriptors() {
+  return IMPLEMENTED_PROVIDER_TYPES.map((type) => providerAdapter(type).descriptor);
 }

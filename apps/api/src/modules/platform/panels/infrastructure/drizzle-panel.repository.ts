@@ -1,4 +1,5 @@
 import { and, asc, eq, ne, sql } from 'drizzle-orm';
+import { errors, PANEL_ERROR_CODES } from '@nexa/contracts';
 import type {
   PanelHealthState,
   PanelStatus,
@@ -12,6 +13,7 @@ import {
   panelHealth,
   panels,
 } from '../../../../infrastructure/persistence/schema.js';
+import { isUniqueViolation } from '../../../../infrastructure/persistence/sqlstate.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
   CreatePanelInput,
@@ -130,17 +132,37 @@ export class DrizzlePanelRepository implements PanelRepository {
     at: Date,
     tx: TransactionScope,
   ): Promise<PanelRecord | null> {
-    const [row] = await tx.tx
-      .update(panels)
-      .set({
-        status,
-        // The CHECK constraint requires these to agree, so they are set
-        // together rather than left to a caller to remember.
-        archivedAt: status === 'ARCHIVED' ? at : null,
-        updatedAt: at,
-      })
-      .where(and(eq(panels.id, panelId), eq(panels.tenantId, scope.tenantId)))
-      .returning();
+    let row: typeof panels.$inferSelect | undefined;
+    try {
+      [row] = await tx.tx
+        .update(panels)
+        .set({
+          status,
+          // The CHECK constraint requires these to agree, so they are set
+          // together rather than left to a caller to remember.
+          archivedAt: status === 'ARCHIVED' ? at : null,
+          updatedAt: at,
+        })
+        .where(and(eq(panels.id, panelId), eq(panels.tenantId, scope.tenantId)))
+        .returning();
+    } catch (error) {
+      // Restoring an archived panel makes it live again, and the name it had
+      // may since have been taken by another panel — archiving RELEASES a name
+      // on purpose, so this is an ordinary thing for an operator to hit. The
+      // partial unique index catches it either way; without this it escaped as
+      // an unhandled 500 rather than the conflict the API documents.
+      //
+      // Named constraint, not bare 23505: `panels` can grow another unique
+      // index, and mapping an unrelated violation to "name taken" would be a
+      // confident wrong answer instead of an honest error.
+      if (isUniqueViolation(error, 'panels_tenant_name_live_key')) {
+        throw errors.conflict(
+          PANEL_ERROR_CODES.PANEL_NAME_TAKEN,
+          'Another panel of this tenant already uses that name. Rename it before restoring this one.',
+        );
+      }
+      throw error;
+    }
     return row === undefined ? null : toRecord(row);
   }
 

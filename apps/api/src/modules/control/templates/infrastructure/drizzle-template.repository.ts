@@ -1,6 +1,7 @@
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { CONTROL_ERROR_CODES, errors } from '@nexa/contracts';
 import type { ScopeContext, TemplateKey, TemplateRevisionAction } from '@nexa/contracts';
+import { isUniqueViolation } from '../../../../infrastructure/persistence/sqlstate.js';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   templateOverrides,
@@ -297,27 +298,4 @@ export class DrizzleTemplateRepository implements TemplateRepository {
       throw error;
     }
   }
-}
-
-/** Postgres `unique_violation`. */
-function isUniqueViolation(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && findCode(error) === '23505';
-}
-
-/**
- * The SQLSTATE, wherever the driver put it.
- *
- * `node-postgres` sets `code` on its own error; Drizzle wraps that in a
- * `DrizzleQueryError` and puts the original on `cause`. Reading only the outer
- * object would make this check quietly never match.
- */
-function findCode(error: object, depth = 0): string | undefined {
-  // Bounded. An error whose `cause` chain loops back on itself would otherwise
-  // hang the request rather than report a conflict, and a driver is not
-  // obliged to keep that chain acyclic.
-  if (depth > 5) return undefined;
-  const direct = (error as { code?: unknown }).code;
-  if (typeof direct === 'string') return direct;
-  const cause = (error as { cause?: unknown }).cause;
-  return typeof cause === 'object' && cause !== null ? findCode(cause, depth + 1) : undefined;
 }

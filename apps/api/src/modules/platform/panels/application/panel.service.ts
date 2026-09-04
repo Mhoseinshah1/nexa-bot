@@ -3,6 +3,7 @@ import {
   createPanelRequestSchema,
   errors,
   setPanelCredentialsRequestSchema,
+  uuidV7Schema,
   setPanelStatusRequestSchema,
   testPanelRequestSchema,
   updatePanelRequestSchema,
@@ -217,6 +218,30 @@ export class PanelService {
   }
 
   /**
+   * A panel id, or a refusal that is not a 500.
+   *
+   * `panels.id` is a `uuid` column, so a path segment that is not one reaches
+   * PostgreSQL as `invalid input syntax for type uuid` — an unhandled error,
+   * logged as an internal failure, answered as 500. `GET /panels/not-a-uuid`
+   * did exactly that. A malformed identifier is a malformed request and says
+   * nothing about what exists, so it is refused as one.
+   *
+   * Validated HERE rather than in the controller so a Telegram admin surface
+   * added later inherits the rule instead of rediscovering it, which is the
+   * same reason bodies are parsed in this layer.
+   */
+  private panelId(candidate: string): string {
+    const parsed = uuidV7Schema.safeParse(candidate);
+    if (!parsed.success) {
+      throw errors.validation(
+        PANEL_ERROR_CODES.PANEL_REQUEST_INVALID,
+        'That is not a valid panel identifier.',
+      );
+    }
+    return parsed.data;
+  }
+
+  /**
    * The panel, or NOT_FOUND.
    *
    * Another tenant's panel id produces exactly what a nonexistent one does. A
@@ -224,7 +249,7 @@ export class PanelService {
    * exists somewhere on the installation, and panel ids appear in URLs.
    */
   private async require(tenant: TenantContext, panelId: string): Promise<PanelView> {
-    const view = await this.deps.repository.find(tenant, panelId);
+    const view = await this.deps.repository.find(tenant, this.panelId(panelId));
     if (view === null) {
       throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
     }

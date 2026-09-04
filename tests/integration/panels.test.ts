@@ -697,6 +697,38 @@ describe('panels', () => {
     ).rejects.toMatchObject({ code: 'panel.archived' });
   });
 
+  it('refuses to restore a panel whose name was taken while it was archived', async () => {
+    // C11. Archiving RELEASES the name on purpose, so another panel can take
+    // it — which makes restoring the first one an ordinary thing to attempt
+    // and an ordinary thing to refuse. The partial unique index caught it
+    // either way; what escaped was an unhandled 500 rather than the documented
+    // conflict, so an operator was told the system broke rather than what to do.
+    const { view } = await create(owner, tenantA, { name: 'Recycled name' });
+    const actor = adminActorFor(owner);
+    await ctx.container.panels.setStatus(tenantA, actor, view.panel.id, {
+      status: 'ARCHIVED',
+      idempotencyKey: key(),
+    });
+    await create(owner, tenantA, { name: 'Recycled name' });
+
+    await expect(
+      ctx.container.panels.setStatus(tenantA, actor, view.panel.id, {
+        status: 'ACTIVE',
+        idempotencyKey: key(),
+      }),
+    ).rejects.toMatchObject({ code: 'panel.name_taken' });
+
+    // And the archived panel is still archived: the refusal rolled back.
+    const after = await ctx.container.panels.get(tenantA, actor, view.panel.id);
+    expect(after.panel.status).toBe('ARCHIVED');
+  });
+
+  it('refuses a malformed panel identifier before it reaches PostgreSQL', async () => {
+    await expect(
+      ctx.container.panels.get(tenantA, adminActorFor(owner), 'not-a-uuid'),
+    ).rejects.toMatchObject({ code: 'panel.request_invalid' });
+  });
+
   it('restores an archived panel and keeps its credentials', async () => {
     const { view } = await create(owner, tenantA, { credentials: { password: PASSWORD } });
     const actor = adminActorFor(owner);
