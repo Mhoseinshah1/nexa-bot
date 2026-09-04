@@ -845,6 +845,17 @@ export class PanelService {
  * `updatedAt` moves for the address and the status; the three credential
  * timestamps move when a credential is replaced or removed.
  */
+function configurationOf(view: PanelView): string {
+  return [
+    view.panel.baseUrl,
+    view.panel.status,
+    view.panel.updatedAt.getTime(),
+    view.credentials.usernameSetAt?.getTime() ?? 0,
+    view.credentials.passwordSetAt?.getTime() ?? 0,
+    view.credentials.apiTokenSetAt?.getTime() ?? 0,
+  ].join('|');
+}
+
 /**
  * The same identity, as an opaque token safe to keep in a row.
  *
@@ -857,17 +868,6 @@ export class PanelService {
  */
 function configurationFingerprint(view: PanelView): string {
   return createHash('sha256').update(configurationOf(view)).digest('hex');
-}
-
-function configurationOf(view: PanelView): string {
-  return [
-    view.panel.baseUrl,
-    view.panel.status,
-    view.panel.updatedAt.getTime(),
-    view.credentials.usernameSetAt?.getTime() ?? 0,
-    view.credentials.passwordSetAt?.getTime() ?? 0,
-    view.credentials.apiTokenSetAt?.getTime() ?? 0,
-  ].join('|');
 }
 
 /** Which credential kinds a write mentions, optionally filtered. Never values. */
