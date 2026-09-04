@@ -8,7 +8,8 @@
     "pnpm": ">=10.0.0"
   },
   "scripts": {
-    "typecheck": "pnpm -r --workspace-concurrency=1 typecheck",
+    "typecheck": "pnpm -r --workspace-concurrency=1 typecheck && pnpm typecheck:tests",
+    "typecheck:tests": "tsc -p tsconfig.tests.json",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

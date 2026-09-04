@@ -1112,7 +1112,11 @@ describe('panel credential rewrap', () => {
   /** Writes through the real store, built on whichever keyring is current. */
   function writeCredentials(
     panelId: string,
-    write: { username?: string; password?: string; apiToken?: string },
+    write: {
+      username?: string | undefined;
+      password?: string | undefined;
+      apiToken?: string | undefined;
+    },
   ) {
     const store = new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher);
     return ctx.container.uow.run(tenantA, (tx) =>
