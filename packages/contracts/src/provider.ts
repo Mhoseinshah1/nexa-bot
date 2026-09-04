@@ -7,11 +7,21 @@ import type { ServiceId } from './ids.js';
  * capabilities as data. Capabilities are never inferred from a version string,
  * and no code outside the adapter registry branches on provider type.
  *
- * The evidence says the differences are of kind, not degree: 3X-UI carries a
- * single opaque token where Marzban has a username and password, and requires a
- * separately configured subscription-link domain because its sub URL is not
- * derived from the panel address. A manual-sale provider has no backend at all.
- * An interface validated against one implementation is not an interface.
+ * The differences are of kind, not degree, and they are now verified rather
+ * than assumed. These are separate products with separate APIs; nothing below
+ * is shared between them beyond this interface.
+ *
+ *   - **Marzban** authenticates with a username and password, which it
+ *     exchanges through its own API for an ephemeral Bearer token. Nexa stores
+ *     the pair and never the token: the token lives for one probe.
+ *   - **Sanaei / 3X-UI v3.7.0** accepts EITHER a scoped Bearer API token or a
+ *     browser-style session obtained by logging in — and that login is bound to
+ *     a CSRF token minted in the same session, so it is a sequence rather than
+ *     a request. It also needs a separately configured subscription-link
+ *     domain, because its sub URL is not derived from the panel address.
+ *
+ * A manual-sale provider has no backend at all. An interface validated against
+ * one implementation is not an interface.
  *
  * Phase 0 shipped the vocabulary; Phase 3 populates the descriptors and
  * implements the CONNECTION half. The service half — creating users, reading
