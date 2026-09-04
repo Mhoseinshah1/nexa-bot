@@ -429,27 +429,31 @@ const MARZBAN: ProviderDescriptor = {
  * The subscription-link domain still has to be configured separately, because
  * the panel does not derive it from its own address. That is Phase 4's
  * business; it is declared here so the seam stays visible.
+ *
+ * **Capabilities are what this release can DO, not what the panel could do.**
+ *
+ * Phase 3B implements authentication, connection testing and a read-only
+ * health probe, so `HEALTH_CHECK` is the list. It previously carried the
+ * fourteen operations 3X-UI supports in principle — creating users, resetting
+ * traffic, delivering subscriptions — and none of them exists for this
+ * provider. That was not a harmless aspiration: `supports()` answers from this
+ * array and the providers endpoint publishes it verbatim, so the release was
+ * telling operators it could create a 3X-UI user. Each entry returns when the
+ * operation behind it is implemented and tested, in the phase that implements
+ * it, and not before.
+ *
+ * This leaves the catalogue INCONSISTENT with Marzban, which still declares
+ * fourteen capabilities while implementing only the same connection half.
+ * Marzban is deliberately untouched here — correcting it is not this narrow
+ * fix's business, and doing it silently would change another provider's
+ * published surface — but the two now mean different things, and the one that
+ * is wrong is Marzban's. It is recorded in `docs/providers/sanaei-3xui.md`.
  */
 const SANAEI: ProviderDescriptor = {
   key: 'sanaei',
   canonicalName: 'Sanaei (3X-UI)',
   credentialShape: 'TOKEN_OR_USERNAME_PASSWORD',
-  capabilities: [
-    'CREATE_USER',
-    'RENEW_USER',
-    'DELETE_USER',
-    'DISABLE_USER',
-    'ENABLE_USER',
-    'READ_USAGE',
-    'RESET_USAGE',
-    'ADD_VOLUME',
-    'ADD_TIME',
-    'DELIVER_SUBSCRIPTION_LINK',
-    'DELIVER_RAW_CONFIGS',
-    'LIMIT_DEVICES',
-    'INACTIVE_ACCOUNT_INBOUND',
-    'HEALTH_CHECK',
-  ],
+  capabilities: ['HEALTH_CHECK'],
   requiredActivationFields: ['subscriptionDomain'],
 };
 
