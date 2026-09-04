@@ -15,7 +15,6 @@ import {
   tenants,
 } from '../../../../infrastructure/persistence/schema.js';
 import type { EventConsumer } from '../application/event-consumer.js';
-import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 
 export interface OutboxRelayOptions {
   readonly batchSize: number;

@@ -223,3 +223,35 @@ mismatched halves of itself.
 **Baking configuration into the image.** An image that contains a domain or a
 key is not the same image the next customer runs, which defeats the point of a
 digest.
+
+## Amendments — Stabilization B
+
+Recorded here rather than rewritten into the sections above, so the original
+reasoning stays legible beside what changed it.
+
+- **Readiness means both application containers.** The decision to wait for
+  readiness before committing an update stands; what "ready" reads has grown.
+  The worker serves no HTTP and had no health check, so an update whose API
+  answered beside a crash-looping worker was accepted. The worker now writes a
+  heartbeat file only after a round trip to the database succeeds, its
+  container check reads that file's age, and `botctl` requires the API and
+  the worker healthy — a terminal state on either fast-fails the wait.
+- **Host assets are keyed by digest.** "A release is a digest, never a tag"
+  applied to the image and not to the host assets staged from it, which were
+  keyed by version and therefore reusable across a moved tag. They now live
+  under `/var/lib/nexa/assets/<digest>`, and the outgoing set is recorded under
+  the digest that is live.
+- **Activation is journalled.** The six host files are replaced as one unit:
+  the live set is saved first, each replacement is journalled before its
+  rename, any failure replays the journal, and an interrupted activation is
+  restored before the next one begins. The mixed state — three files from one
+  release, three from another — cannot be left behind.
+- **A pre-migration check runs the target's migrator in check-only mode**
+  between the backup and the migration. It exists for migration 0015, which
+  is applied everywhere and immutable, and which a legacy development seed
+  makes fail with a raw constraint error; a refusal stops the update before
+  migrating, in a sentence rather than a stack trace, and repairs nothing.
+- **`botctl status` reports the v1-ciphertext position** — acceptance from
+  configuration, remaining rows from the application, "unable to determine"
+  when the application cannot answer — with the exact next commands. The
+  Secret Envelope cryptography and the acceptance defaults are unchanged.

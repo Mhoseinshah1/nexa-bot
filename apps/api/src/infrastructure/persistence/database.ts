@@ -38,6 +38,15 @@ export interface DatabaseHandle {
   readonly db: Database;
   readonly pool: Pool;
   withClient<T>(fn: (client: PoolClient) => Promise<T>, options?: ClientOptions): Promise<T>;
+  /**
+   * `withClient`, with the checkout wrapped as a query builder.
+   *
+   * For a caller that has a repository-style read to run under a deadline —
+   * the readiness probe's outbox-lag query — and must not construct a drizzle
+   * instance itself, because database access belongs in this adapter and
+   * nowhere else.
+   */
+  withExecutor<T>(fn: (executor: Database) => Promise<T>, options?: ClientOptions): Promise<T>;
   close(): Promise<void>;
 }
 
@@ -135,6 +144,9 @@ export function createDatabase(
         }
         client.release(destroy);
       }
+    },
+    withExecutor(fn, options) {
+      return this.withClient((client) => fn(drizzle(client, { schema })), options);
     },
     async close() {
       await pool.end();

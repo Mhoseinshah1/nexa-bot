@@ -1,8 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { drizzle } from 'drizzle-orm/node-postgres';
 import type { DependencyStatus } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { schema } from '../../infrastructure/persistence/schema.js';
 import { migrationsFolder } from '../../infrastructure/persistence/migrate.js';
 import {
   compareMigrations,
@@ -200,8 +198,9 @@ export class ReadinessProbe {
       // On a bounded checkout too. This is the one probe that reads an
       // application table, and a slow table scan here is exactly the query
       // that used to outlive the probe.
-      const lag = await this.bounded<number>(deadlineAt, (client) =>
-        this.container.relay.lagMs(drizzle(client, { schema })),
+      const lag = await this.container.database.withExecutor(
+        (executor) => this.container.relay.lagMs(executor),
+        { deadlineAt },
       );
       const healthy = lag <= this.container.config.OUTBOX_RELAY_MAX_LAG_MS;
       return { ok: healthy, detail: `oldest unpublished ${lag}ms` };
