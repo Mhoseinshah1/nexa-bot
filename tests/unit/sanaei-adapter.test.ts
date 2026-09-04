@@ -134,6 +134,33 @@ describe('the Sanaei adapter — Bearer API token', () => {
     expect(asText(outcome)).not.toContain('not permitted');
   });
 
+  it('5b. a 404 on the status route is NOT a rejected credential', async () => {
+    // The finding: this adapter always sends X-Requested-With, and that header
+    // is exactly what makes v3.7.0 answer 401 rather than 404 for an
+    // unauthenticated request. So under Nexa's own request mode a 404 cannot
+    // be the unauthenticated answer — it is a moved webBasePath, a proxy, or
+    // an upstream that does not serve the route. Reporting it as an
+    // authentication failure sends an operator to rotate a token that works.
+    const server = await panel({ tokens: TOKENS, behaviour: 'status-404' });
+    const outcome = await probe(server, withToken(CANARY.token));
+    expect(outcome).toEqual({ ok: false, failure: 'PROVIDER_ERROR', status: 404 });
+    expect(outcome).not.toMatchObject({ failure: 'AUTHENTICATION_FAILED' });
+  });
+
+  it('5c. a reachable panel at the WRONG configured base path is not a credential problem', async () => {
+    // The same rule reached the way an operator actually reaches it: the panel
+    // is served under one base path and configured under another, so every
+    // request 404s. The token is perfectly valid.
+    const server = await panel({ basePath: '/real-path/', tokens: TOKENS });
+    const wrong = `${server.origin}/wrong-path/`;
+    const outcome = await new SanaeiAdapter().probe(
+      { baseUrl: wrong, credentials: withToken(CANARY.token) },
+      client(wrong),
+    );
+    expect(outcome).toMatchObject({ ok: false, status: 404 });
+    expect(outcome).not.toMatchObject({ failure: 'AUTHENTICATION_FAILED' });
+  });
+
   it('6. refuses a malformed status body rather than reporting health', async () => {
     const server = await panel({ tokens: TOKENS, behaviour: 'status-html' });
     const outcome = await probe(server, withToken(CANARY.token));
@@ -237,6 +264,65 @@ describe('the Sanaei adapter — session compatibility mode', () => {
       'csrf-token',
       'getTwoFactorEnable',
     ]);
+    expect(asText(server.requests)).not.toContain(CANARY.password);
+  });
+
+  // --- Finding 1: the 2FA answer must be a boolean --------------------------
+  const malformed2fa: ReadonlyArray<{ readonly label: string; readonly behaviour: Behaviour }> = [
+    { label: 'obj missing', behaviour: 'twofactor-obj-missing' },
+    { label: 'obj null', behaviour: 'twofactor-obj-null' },
+    { label: 'obj the STRING "true"', behaviour: 'twofactor-obj-string' },
+    { label: 'obj an object', behaviour: 'twofactor-obj-object' },
+    { label: 'success false', behaviour: 'twofactor-success-false' },
+  ];
+
+  for (const { label, behaviour } of malformed2fa) {
+    it(`15b. a 2FA answer with ${label} submits NO credential`, async () => {
+      // The rule: "not exactly true" is not permission to try a password. An
+      // incompatible or rewritten answer to "is a second factor required" is a
+      // compatibility failure, and finding out by submitting the operator's
+      // credentials is what the pre-login question exists to avoid.
+      const server = await panel({ behaviour });
+      const outcome = await probe(server, withPassword());
+      expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+
+      // The load-bearing half: no login was attempted at all.
+      const paths = server.requests.map((r) => r.path.replace(/^\//, ''));
+      expect(paths).toEqual(['csrf-token', 'getTwoFactorEnable']);
+      expect(paths).not.toContain('login');
+      const seen = asText(server.requests);
+      expect(seen).not.toContain(CANARY.password);
+      expect(seen).not.toContain(CANARY.username);
+    });
+  }
+
+  // --- Finding 4: only the official session cookie is replayed ---------------
+  it('16b. replays ONLY the 3x-ui cookie, never an unrelated one', async () => {
+    // A panel origin can carry cookies that are nothing to do with 3X-UI — a
+    // proxy, a WAF, an analytics tag. Sending them back on requests that carry
+    // a CSRF token and a password is not part of the v3.7.0 contract.
+    const server = await panel({ behaviour: 'csrf-extra-cookie' });
+    const outcome = await probe(server, withPassword());
+    expect(outcome).toMatchObject({ ok: true, degraded: false });
+
+    const afterMint = server.requests.filter((r) => !r.path.endsWith('csrf-token'));
+    expect(afterMint.length).toBeGreaterThan(0);
+    for (const request of afterMint) {
+      const cookie = request.headers['cookie'] ?? '';
+      expect(cookie, request.path).toMatch(/^3x-ui=/);
+      expect(cookie, request.path).not.toContain('attacker-extra-cookie');
+      expect(cookie, request.path).not.toContain(CANARY.extraCookie);
+    }
+    expect(asText(server.requests)).not.toContain(CANARY.extraCookie);
+    expect(asText(outcome)).not.toContain(CANARY.extraCookie);
+  });
+
+  it('16c. refuses when csrf-token sets no 3x-ui cookie, submitting no credential', async () => {
+    const server = await panel({ behaviour: 'csrf-no-session-cookie' });
+    const outcome = await probe(server, withPassword());
+    expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+    // Stopped at the mint: neither the 2FA question nor a login followed.
+    expect(server.requests.map((r) => r.path.replace(/^\//, ''))).toEqual(['csrf-token']);
     expect(asText(server.requests)).not.toContain(CANARY.password);
   });
 
@@ -575,5 +661,33 @@ describe('the Sanaei provider registration', () => {
 
   it('declares the two-mode credential shape the source establishes', () => {
     expect(providerAdapter('sanaei').descriptor.credentialShape).toBe('TOKEN_OR_USERNAME_PASSWORD');
+  });
+
+  it('claims ONLY the capability Phase 3B implements', () => {
+    // `supports()` answers from the descriptor and the providers endpoint
+    // publishes it verbatim, so a capability listed here is a capability this
+    // release tells operators it has. Phase 3B implements authentication,
+    // connection testing and a read-only health probe — and nothing else for
+    // this provider.
+    const adapter = providerAdapter('sanaei');
+    expect([...adapter.descriptor.capabilities]).toEqual(['HEALTH_CHECK']);
+    expect(adapter.supports('HEALTH_CHECK')).toBe(true);
+    for (const unimplemented of [
+      'CREATE_USER',
+      'RENEW_USER',
+      'DELETE_USER',
+      'DISABLE_USER',
+      'ENABLE_USER',
+      'READ_USAGE',
+      'RESET_USAGE',
+      'ADD_VOLUME',
+      'ADD_TIME',
+      'DELIVER_SUBSCRIPTION_LINK',
+      'DELIVER_RAW_CONFIGS',
+      'LIMIT_DEVICES',
+      'INACTIVE_ACCOUNT_INBOUND',
+    ] as const) {
+      expect(adapter.supports(unimplemented), unimplemented).toBe(false);
+    }
   });
 });

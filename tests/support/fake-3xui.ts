@@ -85,7 +85,23 @@ export type Behaviour =
   /** Only the status route redirects. */
   | 'redirect-status'
   /** Accepts the connection and never answers. */
-  | 'hang';
+  | 'hang'
+  /** `getTwoFactorEnable` omits `obj` entirely. */
+  | 'twofactor-obj-missing'
+  /** `getTwoFactorEnable` answers `obj: null`. */
+  | 'twofactor-obj-null'
+  /** `getTwoFactorEnable` answers the STRING "true", not the boolean. */
+  | 'twofactor-obj-string'
+  /** `getTwoFactorEnable` answers an object. */
+  | 'twofactor-obj-object'
+  /** `getTwoFactorEnable` answers `success: false`. */
+  | 'twofactor-success-false'
+  /** A valid session, and `panel/api/server/status` answers 404. */
+  | 'status-404'
+  /** csrf-token sets an unrelated cookie ALONGSIDE the session cookie. */
+  | 'csrf-extra-cookie'
+  /** csrf-token sets ONLY an unrelated cookie — no `3x-ui` at all. */
+  | 'csrf-no-session-cookie';
 
 export interface Fake3xUi {
   readonly baseUrl: string;
@@ -110,6 +126,7 @@ export const CANARY = {
   username: 'canary-user-11223344',
   cookie: 'canary-cookie-value-778899aabbccddee',
   csrf: 'canary-csrf-token-556677889900aabbccdd',
+  extraCookie: 'canary-unrelated-cookie-ff00ff00ff00ff00',
 } as const;
 
 const STATUS_OBJ = {
@@ -190,9 +207,26 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
         const id = `${CANARY.cookie}-${issued}`;
         const csrf = `${CANARY.csrf}-${issued}`;
         sessions.set(id, { csrf, loggedIn: false });
-        json(200, envelope(true, csrf), {
-          'set-cookie': `3x-ui=${id}; Path=${basePath}; Expires=Wed, 09 Jun 2027 10:18:14 GMT; HttpOnly`,
-        });
+        const session = `3x-ui=${id}; Path=${basePath}; Expires=Wed, 09 Jun 2027 10:18:14 GMT; HttpOnly`;
+        // A second cookie carrying a canary. Anything else at this origin — a
+        // proxy, a WAF, an analytics tag — can set one, and replaying it back
+        // on a credential-bearing request is not part of the v3.7.0 contract.
+        const extra = `attacker-extra-cookie=${CANARY.extraCookie}; Path=/`;
+        if (behaviour === 'csrf-no-session-cookie') {
+          // No `3x-ui` at all: not this contract.
+          response.writeHead(200, { 'content-type': 'application/json', 'set-cookie': extra });
+          response.end(JSON.stringify(envelope(true, csrf)));
+          return;
+        }
+        if (behaviour === 'csrf-extra-cookie') {
+          response.writeHead(200, {
+            'content-type': 'application/json',
+            'set-cookie': [session, extra],
+          });
+          response.end(JSON.stringify(envelope(true, csrf)));
+          return;
+        }
+        json(200, envelope(true, csrf), { 'set-cookie': session });
         return;
       }
 
@@ -207,8 +241,20 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
           response.end();
           return;
         }
-        json(200, envelope(true, options.twoFactorEnabled === true));
-        return;
+        switch (behaviour) {
+          case 'twofactor-obj-missing':
+            return void json(200, { success: true, msg: '' });
+          case 'twofactor-obj-null':
+            return void json(200, envelope(true, null));
+          case 'twofactor-obj-string':
+            return void json(200, envelope(true, 'true'));
+          case 'twofactor-obj-object':
+            return void json(200, envelope(true, {}));
+          case 'twofactor-success-false':
+            return void json(200, envelope(false, null, 'cannot read setting'));
+          default:
+            return void json(200, envelope(true, options.twoFactorEnabled === true));
+        }
       }
 
       if (route === 'login') {
@@ -298,6 +344,12 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
         }
 
         switch (behaviour) {
+          case 'status-404':
+            // Authenticated, and the route is not there: a moved base path, a
+            // proxy, or an upstream that does not serve it. Answered as a real
+            // panel answers an absent route.
+            response.writeHead(404, { 'content-type': 'text/html' });
+            return void response.end('<html><body>404 page not found</body></html>');
           case 'status-obj-null':
             return void json(200, envelope(true, null));
           case 'status-html':

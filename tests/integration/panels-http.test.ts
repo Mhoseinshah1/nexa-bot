@@ -160,6 +160,38 @@ describe('panel HTTP surface', () => {
     expect(marzban?.capabilities.length).toBeGreaterThan(0);
   });
 
+  it('publishes for Sanaei only the capability this release implements', () => {
+    // This endpoint is where a capability becomes a public claim: whatever is
+    // listed here is what the product tells an operator it can do. Phase 3B
+    // implements authentication, connection testing and a read-only health
+    // probe for 3X-UI, so anything else would be an advertisement with no
+    // implementation behind it.
+    return get(PANEL_ROUTES.providers, ownerCookie).then((response) => {
+      const body = providerListResponseSchema.parse(response.json());
+      const sanaei = body.providers.find((provider) => provider.key === 'sanaei');
+      expect(sanaei?.capabilities).toEqual(['HEALTH_CHECK']);
+      for (const unimplemented of ['CREATE_USER', 'RENEW_USER', 'READ_USAGE', 'ADD_VOLUME']) {
+        expect(sanaei?.capabilities, unimplemented).not.toContain(unimplemented);
+      }
+    });
+  });
+
+  it('gives a Sanaei panel summary the same truthful capability set', async () => {
+    // The per-panel view reads the same descriptor as the catalogue. Asserted
+    // separately because they are two code paths, and a panel summary that
+    // disagreed with the catalogue would be the split brain this codebase
+    // exists to avoid.
+    const created = await createPanel(ownerCookie, {
+      name: 'Sanaei surface',
+      providerType: 'sanaei',
+      credentials: { apiToken: 'a-token-for-the-surface-test' },
+    });
+    expect(created.statusCode).toBe(201);
+    const body = panelResponseSchema.parse(created.json());
+    expect(body.panel.capabilities).toEqual(['HEALTH_CHECK']);
+    expect(body.panel.capabilities).not.toContain('CREATE_USER');
+  });
+
   it('creates a panel and returns credential STATE, never a value', async () => {
     const response = await createPanel(ownerCookie, {
       credentials: { username: USERNAME, password: PASSWORD },

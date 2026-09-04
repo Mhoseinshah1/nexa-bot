@@ -24,11 +24,23 @@ does, this document and the deterministic fake are the two places to change.
 
 The **connection half** only: authenticate, and read what the panel says about
 itself. Creating clients, mutating inbounds, resetting traffic, delivering
-subscriptions and scheduling background health are all later phases. The
-descriptor's capability list describes the PROVIDER, exactly as Marzban's does;
-the adapter interface it satisfies is `ProviderConnectionAdapter`, and
-`IMPLEMENTED_PROVIDER_TYPES` is what states this release can actually operate a
-`sanaei` panel.
+subscriptions and scheduling background health are all later phases.
+
+**The declared capability set is therefore exactly `HEALTH_CHECK`.** It briefly
+listed the fourteen operations 3X-UI supports in principle, which was wrong in a
+way that mattered: `supports()` answers from that array and the providers
+endpoint publishes it verbatim, so the release was telling operators it could
+create a 3X-UI user. Each entry returns when the operation behind it is
+implemented and tested, in the phase that implements it.
+
+> **Known inconsistency, deliberately not fixed here.** Marzban still declares
+> fourteen capabilities while implementing only the same connection half. That
+> makes the two descriptors mean different things — Sanaei's lists what the
+> adapter does, Marzban's lists what the panel could do — and the one that is
+> wrong is Marzban's. It is left alone because correcting another provider's
+> published surface is not this narrow fix's business, and doing it silently
+> would be worse than saying so. It should be corrected before any release
+> claims capability-driven behaviour.
 
 ## Authentication
 
@@ -79,9 +91,16 @@ API request **401** when that header is present and **404** when it is not.
 Without it a rejected token arrives as a 404 — indistinguishable from a panel
 served at a different base path — and "your token is wrong" would be reported
 as "there is nothing there". Because the adapter always sends it, a 404 on this
-path is the documented unauthenticated answer, and it is classified as an
-authentication failure for that reason and no other. Arbitrary remote 404s
-elsewhere are not treated as auth failures.
+path is the documented unauthenticated answer.
+
+**And therefore a 404 is NOT an authentication failure.** Because the adapter
+always sends that header, the unauthenticated answer it actually receives is 401. A 404 means something else: a `webBasePath` that no longer matches, a
+reverse proxy routing the panel elsewhere, or an upstream that does not serve
+the route. It is reported as `PROVIDER_ERROR` — the panel answered, so it is
+reachable, and the fault is on its side. Classifying it as a credential problem
+would send an operator to rotate a working token while the real fault stayed
+where it was, and on a panel with a login limiter rotating and retesting is not
+free.
 
 ### Mode B — session with CSRF
 
@@ -97,6 +116,14 @@ elsewhere are not treated as auth failures.
    request: `defaultLoginLimiter` blocks an IP-and-username pair after enough
    failures, so discovering 2FA by submitting a login that cannot succeed would
    spend the operator's own lockout budget to learn it.
+
+   `obj` must be a **boolean**. `true` stops the probe; `false` continues; and
+   anything else — missing, `null`, the string `"true"`, an object, or
+   `success: false` — is `MALFORMED_RESPONSE` **with no credential submitted**.
+   Treating "not exactly `true`" as "2FA is off" would let an incompatible
+   release, a rewritten body or a route that is not this endpoint cause Nexa to
+   submit the operator's username and password to find out.
+
 3. `POST login` with the same cookie and token, JSON `{username, password}`.
 4. `GET panel/api/server/status` with the session cookie.
 
@@ -174,10 +201,21 @@ origin receives no request at all.
 
 ## Cookies
 
-Ephemeral, adapter-local, and the lifetime of **one probe**. Cookies are
-captured from `Set-Cookie`, kept as name and value only, replayed on the
-following requests of the same flow, and discarded. `Domain` and `Path` are
-dropped deliberately — honouring `Domain` would be the one way a cookie could
+Ephemeral, adapter-local, and the lifetime of **one probe**.
+
+**Only the `3x-ui` cookie is replayed** — the session cookie v3.7.0 registers in
+`internal/web/web.go` (`sessions.Sessions("3x-ui", store)`). It is captured from
+`csrf-token`, replaced if a later same-origin response rotates it, and sent as
+`Cookie: 3x-ui=<value>` and nothing else. Every other `Set-Cookie` is read past
+and dropped: a panel origin can carry cookies belonging to a proxy, a WAF or an
+analytics tag, and replaying those on requests that carry a CSRF token and a
+password is not part of this contract. A `csrf-token` response that sets no
+`3x-ui` cookie at all is `MALFORMED_RESPONSE` with nothing submitted — it is not
+speaking this contract, which is a compatibility answer rather than an
+invitation to try a password.
+
+This is deliberately not a cookie jar. Name and value only; `Domain` and `Path`
+are dropped, because honouring `Domain` would be the one way a cookie could
 widen where it is sent.
 
 Never persisted to the database or disk, never logged, never returned in an
@@ -191,17 +229,19 @@ a comma-joined string cannot be split back into the cookies that were set.
 
 ## Error classification
 
-| Situation                                                              | Kind                                  |
-| ---------------------------------------------------------------------- | ------------------------------------- |
-| Rejected token, 401/403/404 on the API path, or login `success: false` | `AUTHENTICATION_FAILED`               |
-| 2FA enabled with only a username and password                          | `AUTHENTICATION_REQUIRES_INTERACTION` |
-| DNS, refused connection, network down                                  | `UNREACHABLE`                         |
-| Deadline exceeded                                                      | `TIMEOUT`                             |
-| Certificate or handshake                                               | `TLS_FAILED`                          |
-| URL policy refusal                                                     | `BLOCKED_TARGET`                      |
-| Not JSON, no envelope, `obj` null, no `xray`, oversized                | `MALFORMED_RESPONSE`                  |
-| The panel answered with its own failure                                | `PROVIDER_ERROR`                      |
-| A credential shape this provider cannot use                            | `UNSUPPORTED_CAPABILITY`              |
+| Situation                                                            | Kind                                          |
+| -------------------------------------------------------------------- | --------------------------------------------- |
+| Rejected token (401), scope refusal (403), or login `success: false` | `AUTHENTICATION_FAILED`                       |
+| **404 on the API path** — moved base path, proxy, absent route       | `PROVIDER_ERROR` (never a credential problem) |
+| 2FA enabled with only a username and password                        | `AUTHENTICATION_REQUIRES_INTERACTION`         |
+| DNS, refused connection, network down                                | `UNREACHABLE`                                 |
+| Deadline exceeded                                                    | `TIMEOUT`                                     |
+| Certificate or handshake                                             | `TLS_FAILED`                                  |
+| URL policy refusal                                                   | `BLOCKED_TARGET`                              |
+| Not JSON, no envelope, `obj` null, no `xray`, oversized              | `MALFORMED_RESPONSE`                          |
+| A 2FA answer that is not a boolean, or no `3x-ui` cookie minted      | `MALFORMED_RESPONSE`, nothing submitted       |
+| The panel answered with its own failure                              | `PROVIDER_ERROR`                              |
+| A credential shape this provider cannot use                          | `UNSUPPORTED_CAPABILITY`                      |
 
 These are the existing normalized kinds; only the 2FA case needed a new one.
 `AUTHENTICATION_REQUIRES_INTERACTION` and `AUTHENTICATION_FAILED` are both

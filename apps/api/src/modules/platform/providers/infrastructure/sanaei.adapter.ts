@@ -153,51 +153,74 @@ function fromTransport(result: Extract<ProviderHttpResult, { ok: false }>): Prov
 /**
  * An HTTP status from an authenticated `/panel/api` call, as an outcome.
  *
- * The three that mean "your credentials were seen and refused" are evidence,
- * not guesswork. 401 is `checkAPIAuth` rejecting an unknown token when the XHR
- * header is present; 404 is the SAME rejection when it is not, which this
- * adapter still maps here because it always sends the header, so a 404 on this
- * path is the documented unauthenticated answer rather than an arbitrary
- * missing page; 403 is `enforceTokenScope` refusing a token whose scope does
- * not reach `/server/status`. All three are an operator credential problem and
- * none is retryable.
+ * TWO statuses mean "your credentials were seen and refused", and the third one
+ * that looks like it does is the interesting case.
+ *
+ * 401 is `checkAPIAuth` rejecting an unknown token. It is the answer Nexa
+ * actually receives, because this adapter always sends
+ * `X-Requested-With: XMLHttpRequest`, and that header is exactly what makes
+ * v3.7.0 answer 401 instead of 404. 403 is `enforceTokenScope` refusing a token
+ * whose scope does not reach `/server/status`. Both are the operator's
+ * credential to fix, and neither is retryable.
+ *
+ * **404 is NOT an authentication failure here**, and mapping it as one was a
+ * defect. The reasoning that produced it — "404 is what checkAPIAuth answers an
+ * unauthenticated request" — is true only of a request WITHOUT the XHR header,
+ * which is not a request this adapter makes. Under Nexa's own request mode the
+ * unauthenticated answer is 401, so a 404 means something else entirely: a
+ * `webBasePath` that no longer matches, a reverse proxy routing the panel
+ * somewhere else, or an upstream that does not serve this route at all. Telling
+ * an operator to replace a valid token in any of those cases sends them to
+ * rotate a working credential while the real fault stays where it is — and on a
+ * panel with a login limiter, rotating and retesting is not free.
+ *
+ * It becomes `PROVIDER_ERROR`: the panel answered, so it is reachable, and the
+ * problem is on its side. `MALFORMED_RESPONSE` would be the wrong half of the
+ * taxonomy — nothing was malformed, a route was absent.
  */
 function fromApiStatus(status: number): ProviderProbeOutcome {
-  if (status === 401 || status === 403 || status === 404) {
+  if (status === 401 || status === 403) {
     return { ok: false, failure: 'AUTHENTICATION_FAILED', status };
   }
   return { ok: false, failure: 'PROVIDER_ERROR', status };
 }
 
 /**
- * The session cookies to replay, from a response's `Set-Cookie`.
+ * The name of the v3.7.0 session cookie, and the ONLY cookie this adapter
+ * replays. `sessions.Sessions("3x-ui", store)` in `internal/web/web.go`.
+ */
+const SESSION_COOKIE = '3x-ui';
+
+/**
+ * The session cookie's new value, if this response set one.
  *
- * Name and value only — everything after the first `;` is an instruction to a
- * browser about persistence and scope, and this is not a browser. Path, Domain,
- * Expires and Max-Age are therefore not merely unused but deliberately dropped:
- * honouring `Domain` would be the one way a cookie could widen where it is
- * sent, and there is no code here that could do that.
+ * Deliberately not a cookie jar. Carrying every `Set-Cookie` a panel happens to
+ * send would mean replaying cookies belonging to whatever else is deployed at
+ * that origin — an analytics tag, a WAF, a reverse proxy's own session — back
+ * to the panel on requests that carry credentials, and none of that is part of
+ * the v3.7.0 contract. One named cookie is the whole of what authentication
+ * needs, so one named cookie is all that is kept; anything else is read past
+ * and dropped.
  *
- * The lifetime of what this returns is one probe. It is a local, is passed
- * forward through the three requests of a single session flow, and goes out of
+ * Name and value only. Everything after the first `;` instructs a browser about
+ * persistence and scope, and this is not a browser: honouring `Domain` would be
+ * the one way a cookie could widen where it is sent, and there is no code here
+ * that could do that.
+ *
+ * The lifetime of the returned value is one probe. It lives in a local, is
+ * passed forward through the requests of a single session flow, and goes out of
  * scope with them. Nothing writes it to a row, a log or an error.
  */
-function cookiesFrom(setCookie: readonly string[], carried: string): string {
-  const jar = new Map<string, string>();
-  for (const entry of carried.split('; ')) {
-    const equals = entry.indexOf('=');
-    if (equals > 0) jar.set(entry.slice(0, equals), entry.slice(equals + 1));
-  }
+function sessionCookieFrom(setCookie: readonly string[]): string | null {
   for (const header of setCookie) {
     const pair = header.split(';', 1)[0] ?? '';
     const equals = pair.indexOf('=');
     if (equals <= 0) continue;
-    const name = pair.slice(0, equals).trim();
+    if (pair.slice(0, equals).trim() !== SESSION_COOKIE) continue;
     const value = pair.slice(equals + 1).trim();
-    if (name.length === 0) continue;
-    jar.set(name, value);
+    if (value.length > 0) return value;
   }
-  return [...jar].map(([name, value]) => `${name}=${value}`).join('; ');
+  return null;
 }
 
 export class SanaeiAdapter implements ProviderConnectionAdapter {
@@ -254,17 +277,20 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
       return { ok: false, failure: 'MALFORMED_RESPONSE', status: csrf.status };
     }
     const csrfToken = minted.obj;
-    let cookies = cookiesFrom(csrf.setCookie, '');
-    if (cookies.length === 0 || csrfToken.length === 0) {
+    let session = sessionCookieFrom(csrf.setCookie);
+    if (session === null || csrfToken.length === 0) {
       // v3.7.0 binds the token to the session it was minted in. Without the
-      // cookie there is no session to bind to, so a login would be refused for
-      // a reason that has nothing to do with the operator's credentials.
+      // `3x-ui` cookie there is no session to bind to, so a login would be
+      // refused for a reason that has nothing to do with the operator's
+      // credentials — and a panel that set some OTHER cookie instead is not
+      // speaking this contract, which is a compatibility answer rather than an
+      // invitation to submit a password and find out.
       return { ok: false, failure: 'MALFORMED_RESPONSE', status: csrf.status };
     }
     const authHeaders = (): Record<string, string> => ({
       ...XHR_HEADER,
       'x-csrf-token': csrfToken,
-      cookie: cookies,
+      cookie: `${SESSION_COOKIE}=${session}`,
     });
 
     // Asked before any credential is sent. A panel with 2FA on cannot be
@@ -284,12 +310,24 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
     if (twoFactorBody === null || !twoFactorBody.success) {
       return { ok: false, failure: 'MALFORMED_RESPONSE', status: twoFactor.status };
     }
-    if (twoFactorBody.obj === true) {
+    // `getTwoFactorEnable` returns a BOOLEAN in `obj`, and this insists on one.
+    //
+    // The reading that matters is what happens to everything else. Treating
+    // "not exactly true" as "2FA is off" would mean a panel answering `null`,
+    // `"true"`, `{}` or nothing at all — an incompatible release, a proxy
+    // rewriting the body, a route that is not this endpoint — causing Nexa to
+    // submit the operator's username and password to find out. A malformed
+    // answer to "is a second factor required" is not permission to try one
+    // without it, so it is a compatibility failure and no credential is sent.
+    if (typeof twoFactorBody.obj !== 'boolean') {
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: twoFactor.status };
+    }
+    if (twoFactorBody.obj) {
       // Deliberately terminal. Nexa stores no TOTP seed and generates no code,
       // so there is nothing to try; retrying would only feed the login limiter.
       return { ok: false, failure: 'AUTHENTICATION_REQUIRES_INTERACTION', status: null };
     }
-    cookies = cookiesFrom(twoFactor.setCookie, cookies);
+    session = sessionCookieFrom(twoFactor.setCookie) ?? session;
 
     const login = await http.send({
       method: 'POST',
@@ -320,12 +358,14 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
       // wrong 2FA code all land here, and all three are the same remedy.
       return { ok: false, failure: 'AUTHENTICATION_FAILED', status: login.status };
     }
-    cookies = cookiesFrom(login.setCookie, cookies);
+    // A login that rotates the session replaces it; one that does not keeps
+    // the cookie the flow already holds.
+    session = sessionCookieFrom(login.setCookie) ?? session;
 
     const status = await http.send({
       method: 'GET',
       path: STATUS_PATH,
-      headers: { ...XHR_HEADER, cookie: cookies },
+      headers: { ...XHR_HEADER, cookie: `${SESSION_COOKIE}=${session}` },
     });
     return this.readStatus(status, true);
   }
