@@ -5,6 +5,7 @@ import {
   type OperationalEventRecorder,
 } from '@nexa/contracts';
 import type { EventConsumer } from '../../eventing/application/event-consumer.js';
+import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 
 /**
  * The one consumer Phase 0 ships.
@@ -20,8 +21,11 @@ export class PingLogConsumer implements EventConsumer {
 
   constructor(private readonly recorder: OperationalEventRecorder) {}
 
-  async handle(event: DomainEvent): Promise<void> {
+  async handle(event: DomainEvent, tx: TransactionScope): Promise<void> {
     const payload = event.payload as { source?: string };
+    // Through the relay's transaction, never the pool. The projection and the
+    // relay's claim on this event then commit together, which is what makes
+    // "applied once" a fact rather than a race.
     await this.recorder.record(
       event.tenantId === null
         ? systemContext('outbox-relay')
@@ -33,6 +37,7 @@ export class PingLogConsumer implements EventConsumer {
         context: { eventId: event.eventId, sequence: event.sequence },
         correlationId: event.correlationId as never,
       },
+      tx,
     );
   }
 }
