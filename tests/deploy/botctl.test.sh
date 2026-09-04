@@ -2359,6 +2359,12 @@ fake_set "assets_missing_${DIGEST_S7}" 1
 run_botctl rollback
 assert_fails 'a rollback from an image without assets reported success' test "$BOTCTL_STATUS" -eq 0
 assert_contains 'the refusal did not name the recovery' "$BOTCTL_OUTPUT" 'could not be recovered'
+assert_contains 'the refusal did not say nothing changed' "$BOTCTL_OUTPUT" 'Nothing has been changed'
+# The refusal is the recovery's own, before the rollback went any further:
+# the current release's set was not touched, and activation never began.
+assert_not_contains 'the rollback went on to the current release after the refusal' \
+  "$(docker_log)" "--entrypoint tar registry.test/nexa@${DIGEST_S8}"
+assert_not_contains 'activation was reached with nothing staged' "$BOTCTL_OUTPUT" 'no host assets are staged'
 assert_equals 'the refused rollback changed the live botctl' 'B' "$(installed_label)"
 assert_equals 'the refused rollback moved current' 'v0.1.0-staging.8' "$(cat "${NEXA_STATE_DIR}/current")"
 assert_fails 'a set was recorded from an image that had none' test -d "$(assets_dir_for "$DIGEST_S7")"
@@ -2370,7 +2376,13 @@ fake_set "revision_${DIGEST_S7}" deadbeef
 run_botctl rollback
 assert_fails 'a rollback from a disagreeing image reported success' test "$BOTCTL_STATUS" -eq 0
 assert_contains 'the disagreement was not named' "$BOTCTL_OUTPUT" 'was built from deadbeef'
+assert_contains 'the refusal did not say nothing changed' "$BOTCTL_OUTPUT" 'Nothing has been changed'
+assert_not_contains 'a disagreeing image was still read for its assets' \
+  "$(docker_log)" "--entrypoint tar registry.test/nexa@${DIGEST_S7}"
+assert_not_contains 'the rollback went on to the current release after the refusal' \
+  "$(docker_log)" "--entrypoint tar registry.test/nexa@${DIGEST_S8}"
 assert_equals 'the refused rollback changed the live botctl' 'B' "$(installed_label)"
+assert_fails 'a set was recorded from a disagreeing image' test -d "$(assets_dir_for "$DIGEST_S7")"
 teardown_root
 
 staging8_host
