@@ -1360,7 +1360,7 @@ export const panelProbeBudgets = pgTable(
     /** When `tokens` was last true. Refill is computed forward from here. */
     refilledAt: timestamptz('refilled_at').notNull(),
   },
-  (table) => [check('panel_probe_budgets_tokens_check', sql`tokens >= 0`)],
+  () => [check('panel_probe_budgets_tokens_check', sql`tokens >= 0`)],
 );
 
 export const schema = {
