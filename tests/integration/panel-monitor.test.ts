@@ -1057,6 +1057,54 @@ describe('the panel health monitor', () => {
     expect(m.iterationIsFresh(now.getTime() + 30_000 * 4)).toBe(false);
   });
 
+  it('is fresh from the moment it starts, and stale if it never completes a tick', async () => {
+    // The boot grace, and it is a real deployment defect this pins. The
+    // heartbeat is armed BEFORE the loop runs — it has to be, because it is
+    // what proves the database is reachable — so its first beat lands before
+    // any tick has completed. Without a grace the file does not exist for a
+    // whole heartbeat interval, and a healthy monitor reports `health:
+    // starting` while api and worker are already healthy: `botctl status`,
+    // whose probe is deliberately five seconds, then calls the installation
+    // not ready.
+    const broken = new PanelMonitorService(
+      {
+        discovery: {
+          dueForMonitoring: async () => {
+            throw new Error('the database is gone');
+          },
+        },
+        probe: probeDeps(),
+        guard: ctx.container.guard,
+        audit: ctx.container.audit,
+        opsLog: ctx.container.opsLog,
+        sessions: ctx.container.sessions,
+        uow: ctx.container.uow,
+        clock,
+        ids: ctx.container.ids,
+        logger: ctx.container.logger,
+        batchSize: 50,
+        concurrency: 4,
+        budgetReserve: 0,
+      },
+      30_000,
+    );
+    // Before starting: no grace at all.
+    expect(broken.iterationIsFresh(now.getTime())).toBe(false);
+
+    broken.start();
+    try {
+      // Started, and its ticks throw — but it is young, so it is healthy.
+      expect(broken.iterationIsFresh(now.getTime())).toBe(true);
+      expect(broken.iterationIsFresh(now.getTime() + 30_000 * 3)).toBe(true);
+      // Three intervals later with no tick completed, it is not starting up.
+      expect(broken.iterationIsFresh(now.getTime() + 30_000 * 3 + 1)).toBe(false);
+    } finally {
+      await broken.stop();
+    }
+    // And a stopped loop has no grace: a draining monitor is not alive.
+    expect(broken.iterationIsFresh(now.getTime())).toBe(false);
+  });
+
   it('does not report a completed tick when discovery itself fails', async () => {
     const m = new PanelMonitorService(
       {

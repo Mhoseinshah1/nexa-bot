@@ -124,6 +124,24 @@ export class PanelMonitorService {
    * to expose.
    */
   private lastCompletedTickAt: number | null = null;
+  /**
+   * When `start()` was called, or null if this loop was never started.
+   *
+   * The grace the container health check needs at boot. The heartbeat is armed
+   * before the loop runs — it has to be, because it is what proves the database
+   * is reachable — so its FIRST beat lands before any tick has completed. Without
+   * a grace that beat writes nothing, the file does not exist for a whole
+   * heartbeat interval, and the container's first check fails on a monitor that
+   * is perfectly healthy and merely young. That is exactly what a real
+   * deployment saw: api and worker healthy at thirteen seconds, monitor still
+   * `health: starting`, and `botctl status` — whose probe is deliberately five
+   * seconds — reporting the installation not ready.
+   *
+   * It is a grace, not an exemption. Once the window passes, a loop that has
+   * never completed a tick is reported dead, which is the whole point of asking
+   * about iterations rather than about the process.
+   */
+  private startedAt: number | null = null;
 
   constructor(
     private readonly deps: PanelMonitorDeps,
@@ -133,6 +151,7 @@ export class PanelMonitorService {
   start(): void {
     if (this.timer !== null) return;
     this.stopping = false;
+    this.startedAt = this.deps.clock.now().getTime();
     // The first tick runs immediately rather than one interval later. A monitor
     // that restarts more often than its interval — a crash loop, a day of
     // deploys — would otherwise never probe anything at all.
@@ -143,6 +162,10 @@ export class PanelMonitorService {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    // A stopped loop has no grace: a draining monitor must not be reported as
+    // alive, and `main.monitor.ts` stops the heartbeat first for the same
+    // reason.
+    this.startedAt = null;
     if (this.timer !== null) {
       clearInterval(this.timer);
       this.timer = null;
@@ -165,8 +188,13 @@ export class PanelMonitorService {
    * and a container must not be restarted for being briefly busy.
    */
   iterationIsFresh(now: number): boolean {
-    if (this.lastCompletedTickAt === null) return false;
-    return now - this.lastCompletedTickAt <= this.intervalMs * 3;
+    const window = this.intervalMs * 3;
+    if (this.lastCompletedTickAt !== null) return now - this.lastCompletedTickAt <= window;
+    // Never completed one. Healthy only while still inside the first window
+    // after `start()` — a loop that has been up for three intervals without
+    // finishing a tick is not starting up, it is broken. A monitor that was
+    // never started at all has no grace and is not fresh.
+    return this.startedAt !== null && now - this.startedAt <= window;
   }
 
   /** One pass. Exposed so a test can run it without waiting for the timer. */

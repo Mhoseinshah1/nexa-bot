@@ -231,7 +231,25 @@ json.dump({"version": "v1.0.0", "commit": sys.argv[2], "digest": sys.argv[3],
 ' "${NEXA_STATE_DIR}/releases/v1.0.0.json" "$COMMIT" "$DIGEST_A" "$IMAGE_REPO"
 printf 'v1.0.0\n' >"${NEXA_STATE_DIR}/current"
 
-"$BOTCTL" status >/dev/null || fail "the installation is not ready at v1.0.0"
+# A bounded WAIT, not a single probe.
+#
+# `botctl status` uses a deliberately quick five-second readiness check — a
+# status command that hangs is one nobody runs while something is wrong — and
+# the stack has only just been started here. The three application containers
+# come healthy at their own pace: the api answers `/health/ready` at once, and
+# the worker and the monitor are judged on a heartbeat file their container
+# checks read on a ten-second interval. Asserting readiness on the first probe
+# was asserting that every check had already fired.
+waited=0
+until "$BOTCTL" status >/dev/null 2>&1; do
+  [ "$waited" -lt 180 ] || {
+    "$BOTCTL" status || true
+    compose ps || true
+    fail "the installation never became ready at v1.0.0"
+  }
+  sleep 3
+  waited=$((waited + 3))
+done
 pass "installed and ready at v1.0.0"
 
 # Something to notice if a rollback ever restored the database. A routine
