@@ -362,8 +362,42 @@ matches what is actually running.
 A rollback does the same in reverse: it activates the previous release's
 recorded set before starting its image. The alternative — leaving the newer
 tooling to operate the older image — would be a compatibility contract, and
-nothing here proves one. If the previous release's set was never recorded,
-`botctl rollback` says so and stops rather than mixing them.
+nothing here proves one.
+
+### A set that was never recorded is recovered from the image, by digest
+
+An installation whose last update was performed by a `botctl` that keyed
+host assets by **version** — every host that ran staging.7 or earlier when it
+took staging.8 — has manifests and digests for both releases but no set under
+either digest: only `/var/lib/nexa/assets/<version>` directories written by the
+old tooling. That is exactly the state the first `botctl rollback` on the
+staging host found, and it refused.
+
+It no longer refuses; it recovers, and it does so from the only source it can
+trust. A version-named directory is **not** identity: nothing records which
+digest it was extracted from, a tag can be moved, and a directory on disk can be
+edited. So the recovery reads the previous release's **manifest**, takes the
+**digest recorded there**, pulls `IMAGE_REPO@<digest>` — the previous **version
+tag is never resolved**, because a moved tag would install a different release
+under the old name — and stages the set from that immutable image under
+`/var/lib/nexa/assets/<digest>` through the same extraction, `.partial` rename
+and completeness check an update uses. Where the image carries a source-commit
+label and the manifest records a commit, the two must agree. Only a set that
+came through all of that is activated.
+
+If any of it fails — the image can no longer be pulled, it carries no complete
+host-asset set, or its commit disagrees with the manifest — the rollback refuses
+**before anything on the host has changed**, names the reason, and leaves the
+current release exactly as it was. The version-named directories are left where
+they are, inert: they are neither trusted nor deleted, and pruning them is the
+operator's decision.
+
+The current release gets the same treatment on the way out. If its own set is
+not recorded under its digest, it is recovered from its image by digest — the
+one that is live, read from the manifest — so a rollback whose activation fails
+part-way has a set to put back. The `assets/<version>` directory that the old
+`botctl` wrote for it is not used for that either, even though it is probably
+right: "probably" is the property this mechanism exists to remove.
 
 ### Installations made before this mechanism existed
 
@@ -374,7 +408,10 @@ a gap in the mechanism, it is what "the tool updates itself" means, and no
 amount of work in a later release can reach backwards into a script already on
 disk.
 
-Such a host needs one repair, once, and then never again:
+Rollback needs no repair on such a host: the section above recovers what it
+needs from the image, by digest. An update does not, because an update is the
+thing the missing script would have performed. Such a host needs one repair,
+once, and then never again:
 
 ```bash
 # On the host, for the version it is ALREADY running. The installer is
@@ -409,6 +446,10 @@ roll back to.
 | The target's worker is not healthy  | Treated as "never ready": a healthy API beside a dead or crash-looping worker is not a working release.   |
 | Activation fails part-way           | Every file already replaced is put back from the saved copy; nothing else has changed.                    |
 | The rollback is not healthy         | Reported loudly. **Neither release is deleted.**                                                          |
+| The previous set was never recorded | Recovered from the previous release's image, by the digest in its manifest; the version tag is not read.  |
+| The previous image cannot be pulled | Rollback refused before anything changes. The current release is untouched.                               |
+| The previous image has no assets    | Rollback refused before anything changes. No partial set is left under its digest.                        |
+| The image's commit disagrees        | Rollback refused: the image was built from a commit the manifest does not record.                         |
 
 The previous release is never deleted by the update that replaced it. Manifests
 are pruned to the five most recent by an update — a rollback prunes nothing —

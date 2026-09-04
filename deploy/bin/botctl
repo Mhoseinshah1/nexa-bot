@@ -739,13 +739,27 @@ cmd_rollback() {
   # If ${previous}'s assets were never staged — an installation that predates
   # this mechanism and has not updated since — say so and stop, rather than
   # rolling the image back under tooling that belongs to a different release.
-  if ! nexa_assets_staged "$digest"; then
-    nexa_die "no host assets are recorded for ${previous} (${digest}), so a rollback would leave ${current}'s botctl and compose file operating ${previous}'s image. Update to a release that stages them first, or reinstall ${previous}."
+  # ${previous}'s set, under its digest. On an installation whose last update
+  # was performed by a botctl that keyed sets by version, there is none — and
+  # it is recovered from ${previous}'s immutable image, by the digest its
+  # manifest records, never from the version-named directory and never by
+  # resolving its tag. If that is not possible the rollback stops HERE, before
+  # anything on the host has changed.
+  if ! nexa_ensure_release_assets "$digest" "$previous"; then
+    nexa_die "no host assets are recorded for ${previous} (${digest}) and they could not be recovered from ${NEXA_IMAGE_REPO}@${digest}, so a rollback would leave ${current}'s botctl and compose file operating ${previous}'s image. Nothing has been changed. Check that the image is still published, or reinstall ${previous}."
   fi
-  # The set to put back if THIS does not work out: whatever is live, under
-  # the digest that is running.
+  # The set to put back if THIS does not work out: ${current}'s, under the
+  # digest that is running. Recovered from ${current}'s image the same way if
+  # it was never recorded — best effort, because a rollback whose target is
+  # sound must not be refused for the sake of its own undo — and, failing
+  # that, captured from what is live, which IS ${current}'s set.
   local current_digest
   current_digest="$(nexa_live_digest "$current" || true)"
+  if [ -n "$current_digest" ] && ! nexa_assets_staged "$current_digest"; then
+    nexa_ensure_release_assets "$current_digest" "$current" ||
+      nexa_capture_live_assets "$current_digest" "$current" ||
+      nexa_warn "${current}'s host assets could not be recorded; a failed rollback will not be able to put them back."
+  fi
   nexa_activate_release_assets "$digest"
 
   if ! NEXA_IMAGE="$previous_image" nexa_compose up -d --remove-orphans; then
