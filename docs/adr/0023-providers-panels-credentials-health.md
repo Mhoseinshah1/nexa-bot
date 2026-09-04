@@ -233,23 +233,57 @@ Three implementation points matter more than the table:
   misconfiguration the operator should fix or somebody moving the request to a
   host the policy already refused. Following it would re-open every question the
   policy answers, one hop later.
-- **The pin only applies to NAMES, and it is not covered by a test.**
+- **The pin applies to NAMES, and it is tested against a real socket.**
   `net.connect` skips resolution entirely for an IP literal, so `lookup` is
   never called there — correct, because a literal is its own address and was
-  already judged. It fires for the case that matters, `https://panel.example.com`.
-  A mutation that deleted the pin outright left every test in `safe-http` green,
-  which is stated here rather than left to be discovered: the `localhost` test
-  refuses at the address check, before a socket exists, so it covers the check
-  and not the pin. Reaching the pin in a test needs a NAME, and the policy
-  refuses plaintext http to a name (below), so it needs a TLS server and a CA
-  seam in the client. That is worth doing when the client grows a CA option for
-  private certificate authorities — a self-hosted panel behind one is a real
-  configuration — and not before, because a production seam whose only consumer
-  is a test is worse than an untested line.
+  already judged. It fires for the case that matters,
+  `https://panel.example.com`.
+
+  `tests/unit/safe-http-dns-pin.test.ts` proves it end to end. Two HTTPS
+  servers listen on the same port on different loopback addresses and answer
+  with different bodies: `127.0.0.2`, which the client's resolver returns and
+  the policy approves, and `127.0.0.1`, which is what the system returns for
+  `localhost` and therefore where a second resolution would land. Both present
+  the same certificate, issued by a CA generated in the test and trusted only
+  through `caCertificates`, so TLS succeeds against either and the body is the
+  only difference. The test asserts the approved body. Deleting the pin, or
+  re-resolving inside it, makes the request SUCCEED against the other server —
+  so the test fails on the destination rather than on an error, which is the
+  failure this defence exists to prevent.
+
+  Fixing the test found a defect the pin had all along: Node calls `lookup`
+  with `all: true` (happy-eyeballs, on by default since Node 20) and requires
+  an array, while the callback answered with the three-argument form. Every
+  request to a hostname failed with `ERR_INVALID_IP_ADDRESS` — which is to say
+  every real panel, since panels are addressed by name, and the operator would
+  have read it as an unreachable panel. Nothing caught it because an IP-literal
+  URL never calls `lookup` and every other test used one.
+
+  A second finding from the same test: the pin is only sound with connection
+  pooling off. `https.globalAgent` keys sockets by host and port, not by the
+  address they were opened to, so a pooled socket outlives the check that
+  authorised it. The client now sets `agent: false`; a probe is one request
+  every few minutes, so a fresh socket costs nothing worth having.
+
+  One line inside the pin is still not covered: the re-check of
+  `addressAllowed` before the callback answers. It cannot fire as the code
+  stands — `pinned` is chosen from an already-filtered list — and a mutation
+  deleting it leaves every test green. It is kept for one future edit (a change
+  to how `pinned` is selected) and its comment says plainly that it is
+  unreachable today, so nobody mistakes it for covered ground.
+
 - **Normalisation is the WHATWG parser's.** `2130706433`, `0177.0.0.1`,
   `0x7f.0.0.1` and `127.1` all canonicalise to `127.0.0.1` before any check
   runs, and `::ffff:192.168.1.1` is unmapped to its IPv4 form by the one helper
   both the allow rule and the plaintext rule use.
+
+**A private CA is supported, and verification is never disabled.**
+`PANEL_HTTP_CA_FILE` adds an operator's own certificate authority to the ones
+trusted for panel calls. Additional to the system trust store, never instead of
+it: there is no `rejectUnauthorized: false` anywhere in this codebase, and the
+alternative for an operator whose panel sits behind an internal CA would be
+exactly that. Unset — the default, and what a normal installation runs — means
+ordinary public verification.
 
 **Plaintext to a hostname is refused, even a private one.** `isPublicAddress`
 treats a name as public, so `http://panel.lan:2053` is refused while
