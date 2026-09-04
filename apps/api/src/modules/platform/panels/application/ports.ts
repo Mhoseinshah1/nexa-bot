@@ -98,8 +98,19 @@ export interface PanelCredentialWrite {
  * that did not.
  */
 export interface PanelRepository {
-  list(scope: TenantContext, options: { includeArchived: boolean }): Promise<PanelView[]>;
-  find(scope: TenantContext, panelId: string): Promise<PanelView | null>;
+  /**
+   * Reads take an OPTIONAL transaction, and a caller inside one must pass it.
+   *
+   * Not a convenience: a read on the pool from inside a transaction holds one
+   * connection while asking for another, which deadlocks the pool under
+   * concurrency rather than merely being slow.
+   */
+  list(
+    scope: TenantContext,
+    options: { includeArchived: boolean },
+    tx?: TransactionScope,
+  ): Promise<PanelView[]>;
+  find(scope: TenantContext, panelId: string, tx?: TransactionScope): Promise<PanelView | null>;
   create(scope: TenantContext, input: CreatePanelInput, tx: TransactionScope): Promise<PanelRecord>;
   /** Returns null when no panel of this tenant has that id. */
   update(
@@ -116,7 +127,12 @@ export interface PanelRepository {
     tx: TransactionScope,
   ): Promise<PanelRecord | null>;
   /** Whether a LIVE panel of this tenant already uses the name. */
-  nameTaken(scope: TenantContext, name: string, exceptPanelId: string | null): Promise<boolean>;
+  nameTaken(
+    scope: TenantContext,
+    name: string,
+    exceptPanelId: string | null,
+    tx?: TransactionScope,
+  ): Promise<boolean>;
   recordHealth(
     scope: TenantContext,
     panelId: string,

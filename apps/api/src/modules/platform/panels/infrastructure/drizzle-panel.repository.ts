@@ -7,7 +7,7 @@ import type {
   ProviderType,
   TenantContext,
 } from '@nexa/contracts';
-import type { Database } from '../../../../infrastructure/persistence/database.js';
+import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   panelCredentials,
   panelHealth,
@@ -41,11 +41,29 @@ import type {
  * turns any panel id into an oracle for whether it exists somewhere on the
  * installation.
  */
+/**
+ * The transaction's connection when there is one, the pool otherwise.
+ *
+ * A read issued on the pool from inside a transaction takes a SECOND
+ * connection while already holding one. At `DATABASE_POOL_MAX` concurrent
+ * mutations every connection is held by a transaction waiting for a connection
+ * that will never come, and the process deadlocks until the idle-transaction
+ * timeout unwinds it. `authorized-mutation.ts` names that hazard exactly; these
+ * reads used to walk into it.
+ */
+function executorOf(db: Database, tx?: TransactionScope): Executor {
+  return tx?.tx ?? db;
+}
+
 export class DrizzlePanelRepository implements PanelRepository {
   constructor(private readonly db: Database) {}
 
-  async list(scope: TenantContext, options: { includeArchived: boolean }): Promise<PanelView[]> {
-    const rows = await this.db
+  async list(
+    scope: TenantContext,
+    options: { includeArchived: boolean },
+    tx?: TransactionScope,
+  ): Promise<PanelView[]> {
+    const rows = await executorOf(this.db, tx)
       .select({
         panel: panels,
         // FLAT, not a nested group. See `toView` for why.
@@ -69,8 +87,12 @@ export class DrizzlePanelRepository implements PanelRepository {
     return rows.map((row) => toView(row));
   }
 
-  async find(scope: TenantContext, panelId: string): Promise<PanelView | null> {
-    const [row] = await this.db
+  async find(
+    scope: TenantContext,
+    panelId: string,
+    tx?: TransactionScope,
+  ): Promise<PanelView | null> {
+    const [row] = await executorOf(this.db, tx)
       .select({
         panel: panels,
         // FLAT, not a nested group. See `toView` for why.
@@ -170,8 +192,9 @@ export class DrizzlePanelRepository implements PanelRepository {
     scope: TenantContext,
     name: string,
     exceptPanelId: string | null,
+    tx?: TransactionScope,
   ): Promise<boolean> {
-    const [row] = await this.db
+    const [row] = await executorOf(this.db, tx)
       .select({ id: panels.id })
       .from(panels)
       .where(

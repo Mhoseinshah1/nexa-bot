@@ -31,6 +31,7 @@ import {
   recordMutationDenial,
   runAuthorizedMutation,
 } from '../../access/application/authorized-mutation.js';
+import { rememberOnce } from '../../idempotency/application/remember-once.js';
 import type { SessionRepository } from '../../identity/application/ports.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
@@ -248,8 +249,12 @@ export class PanelService {
    * distinguishable "forbidden" would turn any id into an oracle for whether it
    * exists somewhere on the installation, and panel ids appear in URLs.
    */
-  private async require(tenant: TenantContext, panelId: string): Promise<PanelView> {
-    const view = await this.deps.repository.find(tenant, this.panelId(panelId));
+  private async require(
+    tenant: TenantContext,
+    panelId: string,
+    tx?: TransactionScope,
+  ): Promise<PanelView> {
+    const view = await this.deps.repository.find(tenant, this.panelId(panelId), tx);
     if (view === null) {
       throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
     }
@@ -351,7 +356,7 @@ export class PanelService {
       PANELS_EDIT,
       { action: 'panel.create', entityType: 'Panel', entityId: null },
       async (tx) => {
-        if (await this.deps.repository.nameTaken(tenant, command.name, null)) {
+        if (await this.deps.repository.nameTaken(tenant, command.name, null, tx)) {
           throw errors.conflict(
             PANEL_ERROR_CODES.PANEL_NAME_TAKEN,
             'Another panel of this tenant already uses that name.',
@@ -397,7 +402,8 @@ export class PanelService {
           },
           tx,
         );
-        await this.deps.idempotency.remember(
+        await rememberOnce(
+          this.deps.idempotency,
           scope,
           actor.surface,
           command.idempotencyKey,
@@ -441,7 +447,7 @@ export class PanelService {
       PANELS_EDIT,
       { action: 'panel.update', entityType: 'Panel', entityId: panelId },
       async (tx) => {
-        const before = await this.require(tenant, panelId);
+        const before = await this.require(tenant, panelId, tx);
         if (before.panel.status === 'ARCHIVED') {
           throw errors.preconditionFailed(
             PANEL_ERROR_CODES.PANEL_ARCHIVED,
@@ -450,7 +456,7 @@ export class PanelService {
         }
         if (
           command.name !== undefined &&
-          (await this.deps.repository.nameTaken(tenant, command.name, panelId))
+          (await this.deps.repository.nameTaken(tenant, command.name, panelId, tx))
         ) {
           throw errors.conflict(
             PANEL_ERROR_CODES.PANEL_NAME_TAKEN,
@@ -478,7 +484,8 @@ export class PanelService {
           },
           tx,
         );
-        await this.deps.idempotency.remember(
+        await rememberOnce(
+          this.deps.idempotency,
           scope,
           actor.surface,
           command.idempotencyKey,
@@ -540,7 +547,7 @@ export class PanelService {
       PANELS_CREDENTIALS_ROTATE,
       { action: 'panel.credentials.replace', entityType: 'Panel', entityId: panelId },
       async (tx) => {
-        const before = await this.require(tenant, panelId);
+        const before = await this.require(tenant, panelId, tx);
         if (before.panel.status === 'ARCHIVED') {
           throw errors.preconditionFailed(
             PANEL_ERROR_CODES.PANEL_ARCHIVED,
@@ -567,7 +574,8 @@ export class PanelService {
           },
           tx,
         );
-        await this.deps.idempotency.remember(
+        await rememberOnce(
+          this.deps.idempotency,
           scope,
           actor.surface,
           idempotencyKey,
@@ -612,7 +620,7 @@ export class PanelService {
       PANELS_EDIT,
       { action: 'panel.status', entityType: 'Panel', entityId: panelId },
       async (tx) => {
-        const before = await this.require(tenant, panelId);
+        const before = await this.require(tenant, panelId, tx);
         const updated = await this.deps.repository.setStatus(tenant, panelId, status, now, tx);
         if (updated === null) {
           throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
@@ -630,7 +638,8 @@ export class PanelService {
           },
           tx,
         );
-        await this.deps.idempotency.remember(
+        await rememberOnce(
+          this.deps.idempotency,
           scope,
           actor.surface,
           idempotencyKey,
@@ -697,6 +706,12 @@ export class PanelService {
       );
     }
 
+    // What this probe is ABOUT to test, captured before the network call. Every
+    // field a probe depends on is here: the address it dials and the three
+    // credential timestamps, which move whenever a credential is replaced or
+    // removed. `updatedAt` covers the address and the status.
+    const testing = configurationOf(before);
+
     const startedAt = this.deps.clock.now();
     const outcome = await provider.probe(
       { baseUrl: before.panel.baseUrl, credentials: target },
@@ -717,6 +732,18 @@ export class PanelService {
       PANELS_EDIT,
       { action: 'panel.test', entityType: 'Panel', entityId: panelId },
       async (tx) => {
+        // Re-read INSIDE the transaction that would store the result. Anything
+        // that changed the panel or its credentials while the probe was in
+        // flight makes this answer describe a configuration that no longer
+        // exists, and health is what an operator trusts when deciding whether
+        // their fix worked.
+        const current = await this.require(tenant, panelId, tx);
+        if (configurationOf(current) !== testing) {
+          throw errors.conflict(
+            PANEL_ERROR_CODES.PANEL_CONFIGURATION_CHANGED,
+            'This panel changed while the connection test was running. Run the test again.',
+          );
+        }
         await this.deps.repository.recordHealth(tenant, panelId, health, tx);
         await this.deps.audit.record(
           scope,
@@ -734,7 +761,8 @@ export class PanelService {
           },
           tx,
         );
-        await this.deps.idempotency.remember(
+        await rememberOnce(
+          this.deps.idempotency,
           scope,
           actor.surface,
           idempotencyKey,
@@ -758,6 +786,26 @@ export class PanelService {
       clock: this.deps.clock,
     };
   }
+}
+
+/**
+ * Everything a probe's answer depends on, as one comparable value.
+ *
+ * A timestamp tuple rather than a stored version column: all four already move
+ * for exactly the reasons that invalidate a probe, so there is nothing new to
+ * maintain and no column that can be forgotten on a write path added later.
+ * `updatedAt` moves for the address and the status; the three credential
+ * timestamps move when a credential is replaced or removed.
+ */
+function configurationOf(view: PanelView): string {
+  return [
+    view.panel.baseUrl,
+    view.panel.status,
+    view.panel.updatedAt.getTime(),
+    view.credentials.usernameSetAt?.getTime() ?? 0,
+    view.credentials.passwordSetAt?.getTime() ?? 0,
+    view.credentials.apiTokenSetAt?.getTime() ?? 0,
+  ].join('|');
 }
 
 /** Which credential kinds a write mentions, optionally filtered. Never values. */
