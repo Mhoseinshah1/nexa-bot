@@ -64,7 +64,7 @@ describe('the installation policy', () => {
         NEXA_DATA_SUBNET: '172.31.44.0/24',
         PANEL_HTTP_DENIED_SUBNETS: extras,
       });
-      expect(policy.deniedSubnets[0]).toBe('172.31.44.0/24');
+      expect(policy.deniedSubnets?.[0]).toBe('172.31.44.0/24');
     }
   });
 
