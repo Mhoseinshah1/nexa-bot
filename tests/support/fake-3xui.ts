@@ -40,6 +40,17 @@ export interface Fake3xUiOptions {
   readonly tls?: { readonly key: string; readonly cert: string };
   /** Where a redirecting behaviour points. */
   readonly redirectTo?: string;
+  /**
+   * The loopback address to bind. Defaults to 127.0.0.1.
+   *
+   * An integration test running against the real container policy needs
+   * another one: that policy denies the hostnames in DATABASE_URL and
+   * REDIS_URL, which in a test environment IS 127.0.0.1. Binding a panel at
+   * 127.0.0.2 is the honest shape of the production case — a self-hosted panel
+   * reachable in private space while this installation's own data services
+   * stay refused.
+   */
+  readonly host?: string;
 }
 
 export type Behaviour =
@@ -335,11 +346,12 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
       ? createHttpServer(handler)
       : createHttpsServer({ key: options.tls.key, cert: options.tls.cert }, handler);
 
-  server.listen(0, '127.0.0.1');
+  const host = options.host ?? '127.0.0.1';
+  server.listen(0, host);
   await once(server, 'listening');
   const { port } = server.address() as AddressInfo;
   const scheme = options.tls === undefined ? 'http' : 'https';
-  const origin = `${scheme}://127.0.0.1:${port}`;
+  const origin = `${scheme}://${host}:${port}`;
 
   return {
     baseUrl: `${origin}${basePath}`,

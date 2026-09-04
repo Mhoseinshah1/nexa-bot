@@ -485,3 +485,38 @@ they still had it.
   under a hostname the connection string does not use is not covered. That is a
   deployment this repository does not produce, and the remedy is a CIDR in
   `PANEL_HTTP_DENIED_SUBNETS` rather than more code.
+
+## Amendments — Phase 3B (Sanaei / 3X-UI)
+
+- **A provider may have two authentication modes, and the resolver chooses.**
+  MHSanaei/3x-ui v3.7.0 (`f727d04f6522bb94a8fb52e8352fdcafb51c11e1`)
+  authenticates `/panel/api/*` with either a scoped Bearer token or a session
+  cookie, so `TOKEN_OR_USERNAME_PASSWORD` joined the credential shapes. The
+  selection is made once, in `toProviderCredentials`, and the adapter is handed
+  an already-narrowed shape — which is what makes "a rejected API token is
+  never retried as the password" structural rather than a rule each adapter has
+  to remember. `UNK-XUI-010` closes with it.
+- **Session authentication is a CSRF sequence, not a login.** v3.7.0 puts
+  `POST login` behind `CSRFMiddleware`, so the flow is `GET csrf-token` (which
+  mints the token AND the `3x-ui` cookie it is bound to), then
+  `POST getTwoFactorEnable`, then `POST login`, then the status read. Bearer
+  callers bypass CSRF entirely, so mode A remains a single request. The 2FA
+  question is asked before any credential is submitted because the panel blocks
+  an IP-and-username pair after enough failures, and learning about 2FA by
+  failing a login spends the operator's own lockout budget.
+- **`AUTHENTICATION_REQUIRES_INTERACTION` is a distinct failure.** A 2FA panel
+  with only a username and password is not a rejected credential, and reporting
+  it as one would send an operator to retype a correct password — feeding the
+  same limiter. Nexa stores no TOTP seed and generates no code; the remedy is
+  an API token, and the failure kind says so.
+- **Cookies are ephemeral and adapter-local.** One probe, name and value only,
+  never persisted, never logged, never across origins or panels. `Set-Cookie`
+  is exposed on the HTTP result as a typed array because the flattened header
+  map cannot represent a repeated header — not as a widening of what an adapter
+  may contact, which the client still decides.
+- **Paths are relative and never start with a slash.** `webBasePath` is a real
+  upstream setting, and a leading slash would discard it under WHATWG
+  resolution and address the origin root instead of the panel.
+- **A boundary check now enforces the transport rule.** A provider adapter that
+  imports a network client directly fails the build; the guard skips comments,
+  so the adapters can keep explaining why they do not.
