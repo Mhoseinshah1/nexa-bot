@@ -282,6 +282,19 @@ export const configSchema = z
      * SSRF pivot. The integration suite sets it true to reach a local fake
      * server, which is the only legitimate use.
      */
+    /**
+     * A PEM bundle of extra certificate authorities to trust for panel calls.
+     *
+     * The self-hosted case: a panel behind an organisation's own CA presents a
+     * certificate no public trust store knows. Without this the operator's only
+     * routes are to disable verification, which this installation will not do,
+     * or to obtain a public certificate for a machine that may not be reachable
+     * from the internet.
+     *
+     * Additional, never instead of — the system trust store still applies and
+     * verification stays on. Unset means ordinary public verification.
+     */
+    PANEL_HTTP_CA_FILE: z.string().min(1).optional(),
     PANEL_HTTP_ALLOW_LOOPBACK: z
       .enum(['true', 'false'])
       .default('false')

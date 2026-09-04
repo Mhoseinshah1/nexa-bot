@@ -13,6 +13,7 @@ import { createTranslator } from '@nexa/i18n';
 import type { Translator } from '@nexa/contracts';
 
 import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
+import { readFileSync } from 'node:fs';
 import { SafeHttpClient } from './infrastructure/net/safe-http.js';
 import { DrizzlePanelRepository } from './modules/platform/panels/infrastructure/drizzle-panel.repository.js';
 import { DrizzlePanelCredentialStore } from './modules/platform/panels/infrastructure/drizzle-panel-credentials.js';
@@ -339,6 +340,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const panelHttp = new SafeHttpClient({
     allowLoopback: config.PANEL_HTTP_ALLOW_LOOPBACK,
+    // Read once, at construction. A per-request read would put a filesystem
+    // call on every probe, and a bundle that vanished mid-run would turn a
+    // configuration mistake into an intermittent TLS failure.
+    ...(config.PANEL_HTTP_CA_FILE === undefined
+      ? {}
+      : { caCertificates: [readFileSync(config.PANEL_HTTP_CA_FILE, 'utf8')] }),
     totalTimeoutMs: config.PANEL_HTTP_TIMEOUT_MS,
     maxResponseBytes: config.PANEL_HTTP_MAX_RESPONSE_BYTES,
     // No retry on an operator-triggered probe. Scheduled probing in 3C owns
