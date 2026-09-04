@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.base.json",
+
+  // Typechecks the test suite, which `pnpm typecheck` otherwise does not: the
+  // package tsconfigs cover `src` only, so a test could name a type that does
+  // not exist and nothing said so. A Phase 3 test asserted two
+  // `ProviderFailureKind` values that were never in the enum, and it reached a
+  // committed file because no check would have caught it.
+  //
+  // The list below is an EXCLUDE list on purpose. An include list would have to
+  // be extended for every new test file, and the one nobody remembers to add is
+  // the one that needed checking. This way a new file is covered the moment it
+  // exists, and the debt is an explicit list that only ever shrinks.
+  //
+  // Every entry is a Phase 1 or Phase 2 test that predates this check. None is
+  // excluded because it is hard to fix; they are excluded because fixing
+  // seventeen unrelated files inside a provider change would bury the change,
+  // and each fix is a judgement about what that test meant to assert. Delete an
+  // entry, fix the file, keep the two together in one commit.
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023"],
+    "types": ["node"]
+  },
+  "include": ["tests/**/*.ts"],
+  "exclude": [
+    "tests/integration/bootstrap-status.test.ts",
+    "tests/integration/codex-findings-round-2.test.ts",
+    "tests/integration/codex-findings.test.ts",
+    "tests/integration/control-plane-invariants.test.ts",
+    "tests/integration/control-plane-isolation.test.ts",
+    "tests/integration/identity-concurrency.test.ts",
+    "tests/integration/notification-claim-exclusivity.test.ts",
+    "tests/integration/notification-delivery.test.ts",
+    "tests/integration/operational-events.test.ts",
+    "tests/unit/authorization.test.ts",
+    "tests/unit/recording-transport-hold.test.ts",
+    "tests/unit/registries.test.ts",
+    "tests/unit/release-workflow.test.ts",
+    "tests/unit/retention-sweeper.test.ts",
+    "tests/unit/secrets-and-ids.test.ts",
+    "tests/unit/session-view.test.ts"
+  ]
+}

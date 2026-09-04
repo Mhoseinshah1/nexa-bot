@@ -13,6 +13,12 @@ import { createTranslator } from '@nexa/i18n';
 import type { Translator } from '@nexa/contracts';
 
 import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
+import { readFileSync } from 'node:fs';
+import { SafeHttpClient } from './infrastructure/net/safe-http.js';
+import { DrizzlePanelRepository } from './modules/platform/panels/infrastructure/drizzle-panel.repository.js';
+import { DrizzlePanelCredentialStore } from './modules/platform/panels/infrastructure/drizzle-panel-credentials.js';
+import { PanelService } from './modules/platform/panels/application/panel.service.js';
+import { providerAdapter } from './modules/platform/providers/infrastructure/adapter-registry.js';
 import { SystemClock } from './infrastructure/clock.js';
 import { Uuidv7IdGenerator } from './infrastructure/ids.js';
 import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
@@ -130,6 +136,7 @@ export interface Container {
   readonly recordPing: RecordPingService;
 
   // Control plane — Phase 2
+  readonly panels: PanelService;
   readonly settingsService: SettingsService;
   readonly settingsResolver: SettingsResolver;
   readonly featureFlags: FeatureFlagsService;
@@ -324,6 +331,29 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const settingRepository = new DrizzleSettingRepository(database.db);
   const settingsResolver = new SettingsResolver(settingRepository, opsLog);
+  /**
+   * One HTTP client for every provider call this process makes.
+   *
+   * Built here with the installation's policy and budgets bound in, so an
+   * adapter receives a client it cannot widen. Nothing else in the process
+   * constructs one.
+   */
+  const panelHttp = new SafeHttpClient({
+    allowLoopback: config.PANEL_HTTP_ALLOW_LOOPBACK,
+    // Read once, at construction. A per-request read would put a filesystem
+    // call on every probe, and a bundle that vanished mid-run would turn a
+    // configuration mistake into an intermittent TLS failure.
+    ...(config.PANEL_HTTP_CA_FILE === undefined
+      ? {}
+      : { caCertificates: [readFileSync(config.PANEL_HTTP_CA_FILE, 'utf8')] }),
+    totalTimeoutMs: config.PANEL_HTTP_TIMEOUT_MS,
+    maxResponseBytes: config.PANEL_HTTP_MAX_RESPONSE_BYTES,
+    // No retry on an operator-triggered probe. Scheduled probing in 3C owns
+    // its own backoff; a client that retried underneath it would multiply the
+    // two.
+    maxRetries: 0,
+  });
+
   const settingsService = new SettingsService(
     guard,
     uow,
@@ -503,6 +533,21 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       );
     },
     recordPing,
+    panels: new PanelService({
+      repository: new DrizzlePanelRepository(database.db),
+      credentials: new DrizzlePanelCredentialStore(database.db, cipher),
+      guard,
+      audit,
+      opsLog,
+      sessions,
+      uow,
+      idempotency,
+      clock,
+      ids,
+      http: panelHttp,
+      urlPolicy: { allowLoopback: config.PANEL_HTTP_ALLOW_LOOPBACK },
+      adapters: providerAdapter,
+    }),
     settingsService,
     settingsResolver,
     featureFlags,

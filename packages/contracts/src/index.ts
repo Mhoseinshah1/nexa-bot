@@ -26,6 +26,7 @@ export * from './errors.js';
 export * from './metrics.js';
 export * from './state-machine.js';
 export * from './provider.js';
+export * from './panels.js';
 export * from './pricing.js';
 export * from './templates.js';
 export * from './settings.js';

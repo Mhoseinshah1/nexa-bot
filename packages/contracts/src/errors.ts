@@ -101,6 +101,15 @@ export const errors = {
     new NexaError({ kind: 'PERMISSION_DENIED', code, message, ...(details ? { details } : {}) }),
   unauthenticated: (code: string, message: string) =>
     new NexaError({ kind: 'UNAUTHENTICATED', code, message }),
+  /**
+   * The request is well-formed and the thing it asks for is not currently
+   * possible — an archived panel being edited, say. Distinct from CONFLICT,
+   * which means somebody else changed the state underneath you: retrying a
+   * conflict after re-reading can succeed, while retrying this cannot until
+   * the precondition itself is changed.
+   */
+  preconditionFailed: (code: string, message: string, details?: Record<string, unknown>) =>
+    new NexaError({ kind: 'PRECONDITION_FAILED', code, message, ...(details ? { details } : {}) }),
   configuration: (code: string, message: string, details?: Record<string, unknown>) =>
     new NexaError({ kind: 'CONFIGURATION', code, message, ...(details ? { details } : {}) }),
   internal: (code: string, message: string, cause?: unknown) =>
@@ -223,4 +232,46 @@ export const CONTROL_ERROR_CODES = {
    * one that cannot succeed.
    */
   NOTIFICATION_RECORD_ORPHANED: 'control.notification_record_orphaned',
+} as const;
+
+/**
+ * Codes emitted by panels, providers and the outbound HTTP layer.
+ *
+ * `PANEL_NOT_FOUND` is deliberately the only answer to "that panel is not
+ * yours". A tenant asking about another tenant's panel id gets exactly what it
+ * gets for an id that never existed, because a distinguishable "forbidden"
+ * turns any id into an oracle for whether it exists somewhere on the
+ * installation.
+ *
+ * `PANEL_TARGET_BLOCKED` names a URL this installation refuses to call. It is a
+ * VALIDATION failure rather than an upstream one: nothing was contacted, and
+ * saying so is what stops an operator retrying a URL that will never be
+ * allowed. What it must never say is WHICH rule matched or what the host
+ * resolved to — a blocked-target message that names the resolved address is a
+ * port scanner with a friendly error format.
+ */
+export const PANEL_ERROR_CODES = {
+  /** The request body does not match its contract schema. */
+  PANEL_REQUEST_INVALID: 'panel.request_invalid',
+  PANEL_NOT_FOUND: 'panel.not_found',
+  /** A name already used by another live panel of this tenant. */
+  PANEL_NAME_TAKEN: 'panel.name_taken',
+  /** The base URL is malformed, uses a scheme this installation will not call, or embeds credentials. */
+  PANEL_URL_INVALID: 'panel.url_invalid',
+  /** The URL is well-formed and resolves somewhere this installation refuses to call. */
+  PANEL_TARGET_BLOCKED: 'panel.target_blocked',
+  /** An operation that only makes sense on a live panel, asked of an archived one. */
+  PANEL_ARCHIVED: 'panel.archived',
+  /** A probe was asked for on a panel with no credentials configured. */
+  PANEL_CREDENTIALS_MISSING: 'panel.credentials_missing',
+  /**
+   * A persisted provider type that this release has no adapter for.
+   *
+   * Reached only when a value gets past the CHECK constraint — a migration, a
+   * direct database write, or a downgrade to a release that knows fewer
+   * providers. It fails closed rather than falling back to a default adapter,
+   * because the default would be operating somebody's production panel with the
+   * wrong protocol.
+   */
+  PROVIDER_TYPE_UNSUPPORTED: 'panel.provider_type_unsupported',
 } as const;

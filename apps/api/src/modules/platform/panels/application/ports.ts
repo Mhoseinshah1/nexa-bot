@@ -1,0 +1,157 @@
+import type {
+  PanelHealthState,
+  PanelStatus,
+  ProviderFailureKind,
+  ProviderType,
+  TenantContext,
+} from '@nexa/contracts';
+import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+
+/**
+ * A panel, as the application sees it.
+ *
+ * Note what is NOT here: no ciphertext, no key id, no credential of any kind.
+ * A repository method that returned one would put it within reach of a
+ * response builder, and a response builder that has it will eventually send it.
+ * The only way to reach a credential is `PanelCredentialReader`, which is a
+ * different port with a different consumer.
+ */
+export interface PanelRecord {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly name: string;
+  readonly providerType: ProviderType;
+  readonly baseUrl: string;
+  readonly status: PanelStatus;
+  readonly archivedAt: Date | null;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+
+/** Which credentials a panel has, and when each was last replaced. Never the values. */
+export interface PanelCredentialSummary {
+  readonly usernameSetAt: Date | null;
+  readonly passwordSetAt: Date | null;
+  readonly apiTokenSetAt: Date | null;
+}
+
+export interface PanelHealthRecord {
+  readonly state: PanelHealthState;
+  readonly checkedAt: Date;
+  readonly latencyMs: number;
+  readonly failure: ProviderFailureKind | null;
+  readonly statusCode: number | null;
+  readonly providerVersion: string | null;
+  readonly lastHealthyAt: Date | null;
+}
+
+/** A panel with everything a surface may see about it. */
+export interface PanelView {
+  readonly panel: PanelRecord;
+  readonly credentials: PanelCredentialSummary;
+  /** Null when this panel has never been probed. Absence IS the state. */
+  readonly health: PanelHealthRecord | null;
+}
+
+export interface CreatePanelInput {
+  readonly id: string;
+  readonly name: string;
+  readonly providerType: ProviderType;
+  readonly baseUrl: string;
+}
+
+export interface UpdatePanelInput {
+  readonly name?: string;
+  readonly baseUrl?: string;
+}
+
+/**
+ * What a credential write says about ONE credential.
+ *
+ * Three states, and the difference between the first two is the whole point:
+ *
+ *   `undefined` — not mentioned. Leave whatever is stored.
+ *   `null`      — remove it. A deliberate act.
+ *   a value     — replace it.
+ *
+ * An operator editing a panel's name must not erase its password by not
+ * mentioning it, and an operator who means to remove a credential must be able
+ * to say so. A shape that could not tell those apart would have to pick one,
+ * and either choice is a data-loss bug for the other case.
+ */
+export type CredentialWrite = string | null | undefined;
+
+export interface PanelCredentialWrite {
+  readonly username: CredentialWrite;
+  readonly password: CredentialWrite;
+  readonly apiToken: CredentialWrite;
+}
+
+/**
+ * Panels, always within a tenant.
+ *
+ * EVERY method takes a `TenantContext` and every query filters on it. Not one
+ * of them resolves a panel by id alone — a panel id is a UUID an operator can
+ * see, and "the caller knows the id" is not an authorization decision. A method
+ * that took only an id would be one call site away from a cross-tenant read,
+ * and the call site that made that mistake would look exactly like the ones
+ * that did not.
+ */
+export interface PanelRepository {
+  list(scope: TenantContext, options: { includeArchived: boolean }): Promise<PanelView[]>;
+  find(scope: TenantContext, panelId: string): Promise<PanelView | null>;
+  create(scope: TenantContext, input: CreatePanelInput, tx: TransactionScope): Promise<PanelRecord>;
+  /** Returns null when no panel of this tenant has that id. */
+  update(
+    scope: TenantContext,
+    panelId: string,
+    input: UpdatePanelInput,
+    tx: TransactionScope,
+  ): Promise<PanelRecord | null>;
+  setStatus(
+    scope: TenantContext,
+    panelId: string,
+    status: PanelStatus,
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<PanelRecord | null>;
+  /** Whether a LIVE panel of this tenant already uses the name. */
+  nameTaken(scope: TenantContext, name: string, exceptPanelId: string | null): Promise<boolean>;
+  recordHealth(
+    scope: TenantContext,
+    panelId: string,
+    health: PanelHealthRecord,
+    tx: TransactionScope,
+  ): Promise<void>;
+}
+
+/**
+ * Reading and writing the encrypted half.
+ *
+ * A separate port from `PanelRepository` deliberately. The repository is used
+ * by every read path; this one is used by exactly two callers — the probe,
+ * which needs the values, and the credential write, which replaces them. A
+ * single port carrying both would put `readCredentials` in scope everywhere a
+ * panel is listed.
+ */
+export interface PanelCredentialStore {
+  /**
+   * The decrypted credentials for one panel, or null when none are set.
+   *
+   * The only function in the codebase that produces a panel credential in
+   * plaintext. It is never called from a surface, never logged, and its result
+   * never enters a response, an audit payload or a health record.
+   */
+  read(
+    scope: TenantContext,
+    panelId: string,
+  ): Promise<{ username: string | null; password: string | null; apiToken: string | null } | null>;
+  /** Applies a partial write. Absent fields are left alone; nulls are removed. */
+  write(
+    scope: TenantContext,
+    panelId: string,
+    write: PanelCredentialWrite,
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<PanelCredentialSummary>;
+}

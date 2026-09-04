@@ -257,6 +257,49 @@ export const configSchema = z
     NOTIFICATION_BACKOFF_BASE_MS: z.coerce.number().int().min(100).max(60_000).default(5_000),
     NOTIFICATION_BACKOFF_MAX_MS: z.coerce.number().int().min(1000).max(3_600_000).default(300_000),
 
+    /**
+     * How long an outbound provider call may take, in total.
+     *
+     * DNS, connect, TLS, request and the whole response body. A per-socket
+     * timeout does not bound a panel that sends a byte every few seconds
+     * forever, which is the shape that ties up a worker without ever looking
+     * like a failure.
+     */
+    PANEL_HTTP_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(10_000),
+    /** Response bytes kept from a panel. Reading stops the moment it is passed. */
+    PANEL_HTTP_MAX_RESPONSE_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1_024)
+      .max(8 * 1024 * 1024)
+      .default(512 * 1024),
+    /**
+     * Whether a panel may live on this process's own loopback interface.
+     *
+     * FALSE in production, and the default matters: the API runs in a
+     * container, so its loopback is itself — a panel URL pointing there
+     * reaches Nexa's own internals rather than a panel, which is the classic
+     * SSRF pivot. The integration suite sets it true to reach a local fake
+     * server, which is the only legitimate use.
+     */
+    /**
+     * A PEM bundle of extra certificate authorities to trust for panel calls.
+     *
+     * The self-hosted case: a panel behind an organisation's own CA presents a
+     * certificate no public trust store knows. Without this the operator's only
+     * routes are to disable verification, which this installation will not do,
+     * or to obtain a public certificate for a machine that may not be reachable
+     * from the internet.
+     *
+     * Additional, never instead of — the system trust store still applies and
+     * verification stays on. Unset means ordinary public verification.
+     */
+    PANEL_HTTP_CA_FILE: z.string().min(1).optional(),
+    PANEL_HTTP_ALLOW_LOOPBACK: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((value) => value === 'true'),
+
     BUILD_VERSION: z.string().default('0.0.0-dev'),
     BUILD_COMMIT: z.string().default('unknown'),
     BUILD_TIME: z.string().default('unknown'),
@@ -270,6 +313,16 @@ export const configSchema = z
       for (const problem of keyring.problems) {
         ctx.addIssue({ code: 'custom', path: ['SECRETS_KEYS'], message: problem });
       }
+    }
+    if (config.PANEL_HTTP_ALLOW_LOOPBACK && config.NODE_ENV === 'production') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['PANEL_HTTP_ALLOW_LOOPBACK'],
+        message:
+          "PANEL_HTTP_ALLOW_LOOPBACK is permitted only outside production. In production the API's " +
+          'loopback interface is the API itself, so a panel URL pointing there reaches this ' +
+          "installation's own internals rather than a panel.",
+      });
     }
     if (config.AUTH_MODE === 'none' && config.NODE_ENV !== 'development') {
       ctx.addIssue({
