@@ -332,22 +332,39 @@ export const configSchema = z
      */
     PANEL_HTTP_CA_FILE: z.string().min(1).optional(),
     /**
-     * Networks a panel may never point at, because they are this installation's.
+     * This installation's own data network, which a panel may never point at.
      *
-     * Comma-separated CIDRs. Private space stays reachable — a self-hosted
-     * panel on `10.0.0.0/8` is the ordinary case — but the API container shares
-     * a bridge network with PostgreSQL and Redis, so without this an operator
-     * with `panels.edit` could aim a panel at Nexa's own data subnet and read
-     * an open port off the difference between failure kinds.
+     * Private space stays reachable — a self-hosted panel on `10.0.0.0/8` is
+     * the ordinary case — but the API container shares a bridge network with
+     * PostgreSQL and Redis, so without this an operator with `panels.edit`
+     * could aim a panel at Nexa's own data subnet and read an open port off
+     * the difference between failure kinds.
      *
-     * Deployment sets it from `NEXA_DATA_SUBNET`, which compose already pins so
-     * `TRUSTED_PROXY_IPS` can be exact. Defaulted to that pin's own default so
-     * a stock installation is protected without the operator doing anything,
-     * and overridable so one that moved the network keeps the protection.
+     * Set by compose from `NEXA_DATA_SUBNET` in deploy.env — the same file and
+     * the same expression that create the network — so the runtime learns the
+     * subnet from the thing that owns it rather than from a copy an operator
+     * has to keep in step. An installation whose nexa.env predates this key is
+     * therefore protected on its first start under a compose file that passes
+     * it, whatever subnet it uses. Optional only because a process run outside
+     * compose (a developer's shell, a test) has no data network to name.
+     */
+    NEXA_DATA_SUBNET: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => (value === '' ? undefined : value))
+      .refine(
+        (value) => value === undefined || CIDR.test(value),
+        'NEXA_DATA_SUBNET must be a CIDR, for example 172.29.1.0/24.',
+      ),
+    /**
+     * EXTRA networks a panel may never point at, beyond the installation's
+     * own. Comma-separated CIDRs, empty by default: the installation subnet
+     * is not configured here and cannot be removed here.
      */
     PANEL_HTTP_DENIED_SUBNETS: z
       .string()
-      .default('172.29.1.0/24')
+      .default('')
       .transform((value) =>
         value
           .split(',')
@@ -356,7 +373,7 @@ export const configSchema = z
       )
       .refine(
         (entries) => entries.every((entry) => CIDR.test(entry)),
-        'PANEL_HTTP_DENIED_SUBNETS must be a comma-separated list of CIDRs, for example 172.29.1.0/24.',
+        'PANEL_HTTP_DENIED_SUBNETS must be a comma-separated list of CIDRs, for example 10.99.0.0/24.',
       ),
     PANEL_HTTP_ALLOW_LOOPBACK: z
       .enum(['true', 'false'])

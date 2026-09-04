@@ -37,6 +37,16 @@ x-app-common: &app-common
     # exposure; it is a reason not to paste `docker compose config` output into
     # a ticket. `botctl status` exists partly so there is an output that can be.
     - ${NEXA_CONFIG_DIR:-/etc/nexa}/nexa.env
+  environment:
+    # THE installation's data network, handed to the application by the same
+    # file and the same expression that define the network below. The panel
+    # HTTP policy refuses it unconditionally, so a panel can never be pointed
+    # at this installation's own PostgreSQL or Redis. One value, one source:
+    # an installation whose nexa.env predates the policy is protected all the
+    # same, and an operator who moved the subnet to avoid a collision keeps
+    # the protection without copying the value into a second file. Extra
+    # networks an operator wants refused go in PANEL_HTTP_DENIED_SUBNETS.
+    NEXA_DATA_SUBNET: ${NEXA_DATA_SUBNET:-172.29.1.0/24}
   security_opt:
     - no-new-privileges:true
   cap_drop:

@@ -766,28 +766,32 @@ sudo botctl restart
 
 ### Changing the data subnet
 
-`NEXA_DATA_SUBNET` in `/etc/nexa/deploy.env` and `PANEL_HTTP_DENIED_SUBNETS` in
-`/etc/nexa/nexa.env` are the same arrangement, for a different reason. The
-second is the list of networks the panel HTTP client refuses to call because
-they are this installation's own: PostgreSQL and Redis sit on that bridge, and
-private addresses are otherwise deliberately reachable so a self-hosted panel on
-a LAN works. The installer derives one from the other once, and nothing keeps
-them in step afterwards.
-
-**If you change the data subnet, change the denied list to match, and restart.**
-Otherwise an operator with permission to edit a panel can aim one at the
-database or the cache and read reachability off the health result. Nothing
-errors — the protection is simply pointed at a network nothing is on.
+`NEXA_DATA_SUBNET` in `/etc/nexa/deploy.env` is the **one** place this
+installation's own data network is named. PostgreSQL and Redis sit on that
+bridge, and the panel HTTP client must refuse to call it — private addresses are
+otherwise deliberately reachable so a self-hosted panel on a LAN works. Compose
+passes the same value into the API's environment, and the runtime always denies
+it. There is no second copy to keep in step: the denial follows the subnet
+because it is read from the same variable that creates the network, and it is
+not something `nexa.env` can turn off or leave out.
 
 ```bash
 sudo sed -i 's|^NEXA_DATA_SUBNET=.*|NEXA_DATA_SUBNET=10.42.1.0/24|' /etc/nexa/deploy.env
-sudo sed -i 's|^PANEL_HTTP_DENIED_SUBNETS=.*|PANEL_HTTP_DENIED_SUBNETS=10.42.1.0/24|' /etc/nexa/nexa.env
 sudo botctl restart
 ```
 
-The value is a comma-separated list, so a deployment with more than one network
-of its own can name them all. A panel on any other private address is
-unaffected.
+`PANEL_HTTP_DENIED_SUBNETS` in `/etc/nexa/nexa.env` is for **additional**
+networks — a second bridge, a management VLAN — as a comma-separated list. It is
+merged after the installation's own subnet and never replaces it. An empty or
+absent value means "nothing extra", which is the ordinary case, and a
+`nexa.env` written by an earlier release that never had the key is exactly as
+protected as a fresh one. A panel on any other private address is unaffected.
+
+Before staging.8 was accepted, the installer copied the subnet into
+`PANEL_HTTP_DENIED_SUBNETS` once and nothing kept the two in step, so an
+installation upgraded from a `nexa.env` that predated the key was protected only
+because its subnet happened to be the default. That is the arrangement this
+replaces.
 
 ## Still outstanding
 

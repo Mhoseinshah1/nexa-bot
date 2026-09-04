@@ -232,12 +232,17 @@ supposed to be on it.
 
 Two rules, because either alone has a gap:
 
-- **`PANEL_HTTP_DENIED_SUBNETS`**, checked against the RESOLVED address, so a
-  hostname pointing into the network is refused as surely as a literal. It
-  defaults to `172.29.1.0/24` and the installer substitutes the real
-  `NEXA_DATA_SUBNET` — the same value compose pins so `TRUSTED_PROXY_IPS` can be
-  exact — because an operator who moves the network to avoid a collision must
-  not silently lose the protection.
+- **The installation's own data subnet**, checked against the RESOLVED
+  address, so a hostname pointing into the network is refused as surely as a
+  literal. The runtime reads it as `NEXA_DATA_SUBNET`, which compose passes in
+  from the same `deploy.env` variable that creates the network, so an operator
+  who moves the network to avoid a collision cannot lose the protection and
+  nothing in `nexa.env` can switch it off or leave it out. The application
+  carries **no default** for it: `172.29.1.0/24` is the topology's default, not
+  a security property, and a policy that assumed it would protect an upgraded
+  installation only by coincidence — which is what the staging.8 acceptance
+  found, on a `nexa.env` written before the key existed. `PANEL_HTTP_DENIED_SUBNETS`
+  is the list of **additional** operator networks, merged after the subnet.
 - **The hostnames in `DATABASE_URL` and `REDIS_URL`**, refused by name. This
   covers the arrangement the CIDR list cannot: a managed database on a public
   address is in no denied subnet at all.
