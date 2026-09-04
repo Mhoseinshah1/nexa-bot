@@ -160,20 +160,28 @@ RUN_STARTING='{"Service":"api","State":"running","Health":"starting"}'
 RUN_HEALTHY='{"Service":"api","State":"running","Health":"healthy"}'
 RUN_UNHEALTHY='{"Service":"api","State":"running","Health":"unhealthy"}'
 DEAD_STARTING='{"Service":"api","State":"exited","Health":"starting"}'
+# The worker is REQUIRED (C8). Every shape below that expects `healthy` carries
+# a healthy worker; the api-only shapes that used to answer healthy now do not,
+# and that is the finding: a release whose worker is missing or dead was
+# accepted.
+WORKER_HEALTHY='{"Service":"worker","State":"running","Health":"healthy"}'
+WORKER_STARTING='{"Service":"worker","State":"running","Health":"starting"}'
+WORKER_UNHEALTHY='{"Service":"worker","State":"running","Health":"unhealthy"}'
+WORKER_EXITED='{"Service":"worker","State":"exited","Health":"unhealthy"}'
+WORKER_RESTARTING='{"Service":"worker","State":"restarting"}'
 
 parser_case 'a running one-off ahead of the healthy api hides it' \
-  healthy "${RUN_STARTING}\n${RUN_HEALTHY}"
+  healthy "${RUN_STARTING}\n${RUN_HEALTHY}\n${WORKER_HEALTHY}"
 parser_case 'order decides the answer' \
-  healthy "${RUN_HEALTHY}\n${RUN_STARTING}"
+  healthy "${RUN_HEALTHY}\n${RUN_STARTING}\n${WORKER_HEALTHY}"
 parser_case 'an unhealthy api beside a starting one is not healthy' \
-  unhealthy "${RUN_UNHEALTHY}\n"
+  unhealthy "${RUN_UNHEALTHY}\n${WORKER_HEALTHY}"
 parser_case 'a corpse beside an api that is still created fast-fails it' \
-  created "${DEAD_STARTING}\n{\"Service\":\"api\",\"State\":\"created\"}"
-parser_case 'an api that only exited is not waited out' exited "${DEAD_STARTING}\n"
-parser_case 'a dead api is not waited out' dead '{"Service":"api","State":"dead"}\n'
-parser_case 'a restarting api is still coming up' restarting '{"Service":"api","State":"restarting"}\n'
-parser_case 'a running api with no health yet is not healthy' running '{"Service":"api","State":"running"}\n'
-parser_case 'another service is not the api' '' '{"Service":"worker","State":"running","Health":"healthy"}\n'
+  created "${DEAD_STARTING}\n{\"Service\":\"api\",\"State\":\"created\"}\n${WORKER_HEALTHY}"
+parser_case 'an api that only exited is not waited out' exited "${DEAD_STARTING}\n${WORKER_HEALTHY}"
+parser_case 'a dead api is not waited out' dead "{\"Service\":\"api\",\"State\":\"dead\"}\n${WORKER_HEALTHY}"
+parser_case 'a restarting api is still coming up' restarting "{\"Service\":\"api\",\"State\":\"restarting\"}\n${WORKER_HEALTHY}"
+parser_case 'a running api with no health yet is not healthy' running "{\"Service\":\"api\",\"State\":\"running\"}\n${WORKER_HEALTHY}"
 # The rule the previous commit changed, and the one row the table did not have
 # — so that commit could not tell its own change from its predecessor. An entry
 # with no State at all is not evidence of life; treating "" as alive let one
@@ -181,9 +189,35 @@ parser_case 'another service is not the api' '' '{"Service":"worker","State":"ru
 # readiness timeouts.
 NO_STATE='{"Service":"api","Health":"starting"}'
 parser_case 'an entry with no State does not suppress the fast-fail' \
-  exited "${NO_STATE}\n${DEAD_STARTING}"
+  exited "${NO_STATE}\n${DEAD_STARTING}\n${WORKER_HEALTHY}"
 parser_case 'a State-less entry after a corpse is not read as life' \
-  exited "${DEAD_STARTING}\n${NO_STATE}"
+  exited "${DEAD_STARTING}\n${NO_STATE}\n${WORKER_HEALTHY}"
+
+# --- C8: the worker is half of the application -------------------------------
+parser_case 'C8: api healthy + worker healthy is ready' \
+  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}"
+parser_case 'C8: api healthy + worker STOPPED is not ready, and fast-fails' \
+  exited "${RUN_HEALTHY}\n${WORKER_EXITED}"
+parser_case 'C8: api healthy + worker in a crash loop is not ready' \
+  restarting "${RUN_HEALTHY}\n${WORKER_RESTARTING}"
+parser_case 'C8: api healthy + worker unhealthy is not ready' \
+  unhealthy "${RUN_HEALTHY}\n${WORKER_UNHEALTHY}"
+parser_case 'C8: api healthy + worker still starting is not ready yet' \
+  starting "${RUN_HEALTHY}\n${WORKER_STARTING}"
+parser_case 'C8: worker healthy + api unhealthy is not ready' \
+  unhealthy "${RUN_UNHEALTHY}\n${WORKER_HEALTHY}"
+parser_case 'C8: worker healthy + api dead fast-fails' \
+  dead "{\"Service\":\"api\",\"State\":\"dead\"}\n${WORKER_HEALTHY}"
+parser_case 'C8: an api alone — the old accepted shape — is not ready' \
+  '' "${RUN_HEALTHY}\n"
+parser_case 'C8: a worker alone is not ready either' \
+  '' "${WORKER_HEALTHY}\n"
+parser_case 'C8: a healthy worker one-off beside a dead worker still fast-fails' \
+  exited "${RUN_HEALTHY}\n${WORKER_EXITED}"
+parser_case 'C8: a worker one-off reporting starting beside a healthy worker is healthy' \
+  healthy "${RUN_HEALTHY}\n${WORKER_STARTING}\n${WORKER_HEALTHY}"
+parser_case 'C8: a service that is neither api nor worker is ignored' \
+  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n{\"Service\":\"caddy\",\"State\":\"exited\"}"
 
 test_case 'the update lock does not live in a world-writable directory'
 # Read out of the library with a CLEAN environment, so this asserts the
@@ -1395,7 +1429,7 @@ setup_fake_docker
 seed_release 'vA' "$DIGEST_A"
 # The live set is release A's: no `secrets`, exactly like the real host.
 write_live_assets A
-rm -rf "${NEXA_STATE_DIR}/assets/vA"
+rm -rf "$(assets_dir_for "$DIGEST_A")"
 seed_image_assets "$DIGEST_A" A
 seed_image_assets "$DIGEST_B" B
 fake_set resolve_digest "$DIGEST_B"
@@ -1447,7 +1481,7 @@ assert_file_mode 'the library is not 0644' "${NEXA_LIB_DIR}/nexa-lib.sh" 644
 assert_file_mode 'compose.yml is not 0644' "${NEXA_DEPLOY_DIR}/compose.yml" 644
 assert_file_mode 'the Caddyfile is not 0644' "${NEXA_DEPLOY_DIR}/caddy/Caddyfile" 644
 assert_equals 'the installed botctl changed owner' \
-  "$(stat -c '%u:%g' "${NEXA_BIN_DIR}/botctl")" "$(stat -c '%u:%g' "${NEXA_STATE_DIR}/assets/vB/bin/botctl")"
+  "$(stat -c '%u:%g' "${NEXA_BIN_DIR}/botctl")" "$(stat -c '%u:%g' "$(assets_dir_for "$DIGEST_B")/bin/botctl")"
 
 test_case 'the replacement is a rename, not a write over the running script'
 # botctl replaces ITSELF while bash is still reading it. A rename swaps the
@@ -1472,7 +1506,7 @@ setup_root
 setup_fake_docker
 seed_release 'vA' "$DIGEST_A"
 write_live_assets A
-rm -rf "${NEXA_STATE_DIR}/assets/vA"
+rm -rf "$(assets_dir_for "$DIGEST_A")"
 seed_image_assets "$DIGEST_B" B
 fake_set resolve_digest "$DIGEST_B"
 
@@ -1514,7 +1548,7 @@ rm -f "${FAKE_DIR}/api_health_${DIGEST_B}"
 test_case 'a release that does not carry its host assets is refused before anything changes'
 # The earlier attempts staged vB before failing, and re-using a complete
 # staged set is deliberate. Clear it so the extraction actually runs.
-rm -rf "${NEXA_STATE_DIR}/assets/vB"
+rm -rf "$(assets_dir_for "$DIGEST_B")"
 fake_set assets_missing 1
 run_botctl update vB
 assert_fails 'a release without host assets was accepted' test "$BOTCTL_STATUS" -eq 0
@@ -1524,15 +1558,15 @@ assert_equals 'a refused update changed the current release' 'vA' "$(cat "${NEXA
 fake_set assets_missing 0
 
 test_case 'an interrupted extraction installs nothing and leaves no partial directory'
-rm -rf "${NEXA_STATE_DIR}/assets/vB"
+rm -rf "$(assets_dir_for "$DIGEST_B")"
 fake_set assets_truncated 1
 run_botctl update vB
 assert_fails 'a truncated extraction was accepted' test "$BOTCTL_STATUS" -eq 0
 assert_equals 'a truncated extraction replaced the botctl' 'A' "$(installed_label)"
 assert_fails 'a truncated extraction left a version directory behind' \
-  test -d "${NEXA_STATE_DIR}/assets/vB"
+  test -d "$(assets_dir_for "$DIGEST_B")"
 assert_fails 'a truncated extraction left a .partial directory behind' \
-  test -d "${NEXA_STATE_DIR}/assets/vB.partial"
+  test -d "$(assets_dir_for "$DIGEST_B").partial"
 # And the next attempt, with the fault removed, must succeed rather than find
 # a half-staged directory and skip the extraction.
 fake_set assets_truncated 0
@@ -1547,7 +1581,7 @@ setup_root
 setup_fake_docker
 seed_release 'vA' "$DIGEST_A"
 write_live_assets A
-rm -rf "${NEXA_STATE_DIR}/assets/vA"
+rm -rf "$(assets_dir_for "$DIGEST_A")"
 seed_image_assets "$DIGEST_B" B
 fake_set resolve_digest "$DIGEST_B"
 run_botctl update vB
@@ -1577,7 +1611,7 @@ test_case "rollback refuses when the previous release's assets were never record
 # botctl that staged nothing. Rolling the IMAGE back there would leave the
 # current release's compose file describing a topology the older image was
 # never released with, which is a contract nothing here proves.
-rm -rf "${NEXA_STATE_DIR}/assets/vA"
+rm -rf "$(assets_dir_for "$DIGEST_A")"
 run_botctl rollback
 assert_fails 'a rollback without recorded assets was performed anyway' test "$BOTCTL_STATUS" -eq 0
 assert_contains 'the refusal did not say why' "$BOTCTL_OUTPUT" 'no host assets are recorded'
@@ -1603,9 +1637,9 @@ run_botctl update vB
 assert_equals 'the update failed on an installation with no staged assets' 0 "$BOTCTL_STATUS"
 assert_equals "the upgrade did not install the target release's botctl" 'B' "$(installed_label)"
 assert_ok "the outgoing release's assets were not captured" \
-  test -f "${NEXA_STATE_DIR}/assets/vA/bin/botctl"
+  test -f "$(assets_dir_for "$DIGEST_A")/bin/botctl"
 assert_equals 'what was captured is not what was live' \
-  'A' "$(asset_label "${NEXA_STATE_DIR}/assets/vA/bin/botctl")"
+  'A' "$(asset_label "$(assets_dir_for "$DIGEST_A")/bin/botctl")"
 
 test_case 'and the rollback that upgrade made possible works'
 run_botctl rollback
@@ -1617,14 +1651,14 @@ test_case 'an installation missing a host asset is not silently half-captured'
 # an update that proceeded anyway would be an update with no way home.
 run_botctl update vB
 rm -f "${NEXA_DEPLOY_DIR}/caddy/routes.caddy"
-rm -rf "${NEXA_STATE_DIR}/assets/vB"
+rm -rf "$(assets_dir_for "$DIGEST_B")"
 fake_set resolve_digest "$DIGEST_C"
 seed_image_assets "$DIGEST_C" C
 run_botctl update vC
 assert_fails 'an incomplete capture was accepted' test "$BOTCTL_STATUS" -eq 0
 assert_contains 'the refusal did not name the reason' "$BOTCTL_OUTPUT" 'cannot be recorded'
 assert_fails 'a refused capture left a partial directory behind' \
-  test -d "${NEXA_STATE_DIR}/assets/vB.partial"
+  test -d "$(assets_dir_for "$DIGEST_B").partial"
 assert_equals 'a refused capture still replaced the botctl' 'B' "$(installed_label)"
 
 teardown_root
@@ -1646,7 +1680,7 @@ flock -n 9
 run_botctl update vB
 assert_fails 'a second writer was admitted' test "$BOTCTL_STATUS" -eq 0
 assert_contains 'the refusal was not the lock' "$BOTCTL_OUTPUT" 'already running'
-assert_fails 'a locked-out update staged assets anyway' test -d "${NEXA_STATE_DIR}/assets/vB"
+assert_fails 'a locked-out update staged assets anyway' test -d "$(assets_dir_for "$DIGEST_B")"
 assert_equals 'a locked-out update replaced the botctl' 'A' "$(installed_label)"
 exec 9>&-
 
@@ -1865,6 +1899,358 @@ assert_equals "the rollback failed" 0 "$BOTCTL_STATUS"
 assert_equals "the rollback rewrote nexa.env" "$before" "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
 assert_equals "the rollback reverted the keyring format" \
   "${TEST_KEY_ID}:${TEST_KEK}" "$(nexa_env_key SECRETS_KEYS)"
+
+teardown_root
+
+# =============================================================================
+# C8 — the worker is half of the application, and readiness knows it
+# =============================================================================
+setup_root
+setup_fake_docker
+seed_release 'vA' "$DIGEST_A"
+write_live_assets A
+# What is recorded under the running digest IS what is live, as on any
+# installation the installer or an update made.
+stage_release_assets "$DIGEST_A" A
+seed_image_assets "$DIGEST_B" B
+fake_set resolve_digest "$DIGEST_B"
+
+test_case 'C8: a target whose worker stays exited is backed out, without waiting out the timeout'
+fake_set "worker_state_${DIGEST_B}" exited
+started=$(date +%s)
+NEXA_READY_TIMEOUT=60 run_botctl update vB
+elapsed=$(( $(date +%s) - started ))
+assert_fails 'a target with a dead worker became current' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'a dead worker advanced the current release' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_equals 'deploy.env was repointed at a release whose worker died' \
+  "registry.test/nexa@${DIGEST_A}" "$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE)"
+assert_contains 'the previous release was not brought back' "$BOTCTL_OUTPUT" 'is running again and is still the current release'
+assert_ok 'an exited worker was waited out rather than fast-failed' test "$elapsed" -lt 40
+assert_equals "the back-out left the target's tooling installed" 'A' "$(installed_label)"
+rm -f "${FAKE_DIR}/worker_state_${DIGEST_B}"
+
+test_case 'C8: a target whose worker crash-loops is not accepted'
+fake_set "worker_state_${DIGEST_B}" restarting
+NEXA_READY_TIMEOUT=6 run_botctl update vB
+assert_fails 'a crash-looping worker was accepted as ready' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'a crash-looping worker advanced the current release' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+rm -f "${FAKE_DIR}/worker_state_${DIGEST_B}"
+
+test_case 'C8: a worker that never becomes healthy is not accepted'
+fake_set "worker_health_${DIGEST_B}" starting
+NEXA_READY_TIMEOUT=6 run_botctl update vB
+assert_fails 'an unhealthy worker was accepted as ready' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'an unhealthy worker advanced the current release' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+rm -f "${FAKE_DIR}/worker_health_${DIGEST_B}"
+
+test_case 'C8: a healthy worker does not excuse an unhealthy api'
+fake_set "api_health_${DIGEST_B}" unhealthy
+NEXA_READY_TIMEOUT=6 run_botctl update vB
+assert_fails 'an unhealthy api was accepted because the worker was fine' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'an unhealthy api advanced the current release' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+rm -f "${FAKE_DIR}/api_health_${DIGEST_B}"
+
+test_case 'C8: both healthy is ready, and the update completes'
+run_botctl update vB
+assert_equals 'a healthy api and worker were not accepted' 0 "$BOTCTL_STATUS"
+assert_equals 'the update did not advance' 'vB' "$(cat "${NEXA_STATE_DIR}/current")"
+
+test_case 'C8: status reports NOT READY when the worker is down and the api is fine'
+fake_set worker_state exited
+run_botctl status
+assert_contains 'a dead worker was reported as ready' "$BOTCTL_OUTPUT" 'NOT READY'
+assert_fails 'status exited zero with a dead worker' test "$BOTCTL_STATUS" -eq 0
+fake_set worker_state running
+run_botctl status
+assert_contains 'a healthy worker was not reported as ready' "$BOTCTL_OUTPUT" 'readiness: ready'
+
+test_case 'C8: rollback is gated on the worker too'
+fake_set "worker_state_${DIGEST_A}" exited
+NEXA_READY_TIMEOUT=6 run_botctl rollback
+assert_fails 'a rollback whose worker died reported success' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'a failed rollback moved the current pointer' 'vB' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_equals "a failed rollback left the previous release's tooling" 'B' "$(installed_label)"
+rm -f "${FAKE_DIR}/worker_state_${DIGEST_A}"
+
+teardown_root
+
+# =============================================================================
+# C9 — host assets are keyed by digest, never by version
+# =============================================================================
+setup_root
+setup_fake_docker
+seed_release 'vA' "$DIGEST_A"
+write_live_assets A
+stage_release_assets "$DIGEST_A" A
+seed_image_assets "$DIGEST_B" B
+seed_image_assets "$DIGEST_C" C
+
+test_case 'C9: a tag that moved between attempts stages the NEW digest, never the old'
+# 1. vX resolves to B; 2. B is staged; 3. the update is interrupted after
+# staging (the migration fails); 4. vX now resolves to C; 5. the retry must
+# stage and install C. Keyed by version, "vX is already staged" would have
+# installed B's files under C's image.
+fake_set resolve_digest "$DIGEST_B"
+fake_set run_exit 1
+run_botctl update vX
+assert_fails 'the interrupted update reported success' test "$BOTCTL_STATUS" -eq 0
+assert_ok 'the first attempt did not stage the digest it resolved' test -d "$(assets_dir_for "$DIGEST_B")"
+assert_equals 'the interrupted update left the target tooling live' 'A' "$(installed_label)"
+fake_set run_exit 0
+fake_set resolve_digest "$DIGEST_C"
+reset_docker_log
+run_botctl update vX
+assert_equals 'the retry failed' 0 "$BOTCTL_STATUS"
+assert_equals 'the retry installed the OLD digest'"'"'s tooling' 'C' "$(installed_label)"
+assert_equals 'the retry installed the old compose file' 'C' "$(asset_label "${NEXA_DEPLOY_DIR}/compose.yml")"
+assert_contains 'the retry did not read its assets out of the new digest' \
+  "$(docker_log)" "--entrypoint tar registry.test/nexa@${DIGEST_C}"
+assert_ok 'the new digest was not staged' test -d "$(assets_dir_for "$DIGEST_C")"
+assert_equals 'the manifest does not record the digest that was installed' \
+  "$DIGEST_C" "$(manifest_field vX digest)"
+assert_fails 'a version-keyed directory appeared' test -e "${NEXA_STATE_DIR}/assets/vX"
+
+test_case 'C9: the same digest reuses its staged set rather than extracting again'
+run_botctl rollback
+assert_equals 'the rollback to vA failed' 0 "$BOTCTL_STATUS"
+reset_docker_log
+run_botctl update vY
+assert_equals 'the second update to the same digest failed' 0 "$BOTCTL_STATUS"
+assert_not_contains 'a digest already staged was extracted again' \
+  "$(docker_log)" "--entrypoint tar registry.test/nexa@${DIGEST_C}"
+assert_equals 'the reused set is not the digest'"'"'s' 'C' "$(installed_label)"
+
+test_case 'C9: rollback puts back the set recorded under the outgoing DIGEST'
+run_botctl rollback
+assert_equals 'the rollback failed' 0 "$BOTCTL_STATUS"
+assert_equals 'the rollback did not restore the previous digest'"'"'s tooling' 'A' "$(installed_label)"
+
+teardown_root
+
+# =============================================================================
+# C12 — activation is one unit: every injected failure restores the whole set
+# =============================================================================
+c12_fixture() {
+  setup_root
+  setup_fake_docker
+  seed_release 'vA' "$DIGEST_A"
+  write_live_assets A
+  stage_release_assets "$DIGEST_A" A
+  seed_image_assets "$DIGEST_B" B
+  fake_set resolve_digest "$DIGEST_B"
+}
+c12_assert_intact() {
+  local label="$1" why="$2" path
+  assert_equals "${why}: botctl" "$label" "$(installed_label)"
+  for path in "${NEXA_LIB_DIR}/nexa-lib.sh" "${NEXA_DEPLOY_DIR}/compose.yml" \
+    "${NEXA_DEPLOY_DIR}/nexa.env.template" "${NEXA_DEPLOY_DIR}/caddy/Caddyfile" \
+    "${NEXA_DEPLOY_DIR}/caddy/routes.caddy"; do
+    assert_equals "${why}: ${path##*/}" "$label" "$(asset_label "$path")"
+  done
+  assert_fails "${why}: an activation generation was left behind" test -d "${NEXA_STATE_DIR}/assets/.activating"
+  assert_equals "${why}: a temporary file was left beside a destination" '' \
+    "$(find "$NEXA_BIN_DIR" "$NEXA_LIB_DIR" "$NEXA_DEPLOY_DIR" -name '*.??????' -newer "${NEXA_CONFIG_DIR}/deploy.env" 2>/dev/null | grep -v '\.partial$' || true)"
+}
+
+# Seven interruption points: each of the three tools, at the first, a middle
+# and the last asset. The destination is resolved AFTER the fixture creates the
+# root, from the asset's table entry.
+for fault in \
+  "cp|bin/botctl" \
+  "chmod|compose.yml" \
+  "mv|caddy/routes.caddy" \
+  "mv|bin/nexa-lib.sh" \
+  "cp|nexa.env.template" \
+  "chmod|caddy/Caddyfile" \
+  "mv|bin/botctl"; do
+  c12_fixture
+  cmd="${fault%%|*}"
+  source_asset="${fault#*|}"
+  case "$source_asset" in
+    bin/botctl) dest="${NEXA_BIN_DIR}/botctl" ;;
+    bin/nexa-lib.sh) dest="${NEXA_LIB_DIR}/nexa-lib.sh" ;;
+    *) dest="${NEXA_DEPLOY_DIR}/${source_asset}" ;;
+  esac
+  test_case "C12: a failed ${cmd} on ${dest##*/} restores the previous complete set"
+  inject_activation_fault "$cmd" "$dest"
+  run_botctl update vB
+  clear_activation_fault
+  assert_fails "a failed ${cmd} on ${dest##*/} reported success" test "$BOTCTL_STATUS" -eq 0
+  assert_contains 'the operator was not told the set was put back' "$BOTCTL_OUTPUT" 'put back'
+  c12_assert_intact A "after a failed ${cmd} on ${dest##*/}"
+  assert_equals "a failed ${cmd} advanced the current release" 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+  assert_not_contains "a failed activation went on to migrate" "$(docker_log)" 'migrate.js --preflight-never'
+  # And with the fault gone the same update succeeds: nothing about the
+  # failure poisoned the staged set or the host.
+  run_botctl update vB
+  assert_equals "the retry after a failed ${cmd} failed" 0 "$BOTCTL_STATUS"
+  c12_assert_intact B "after the retry following a failed ${cmd} on ${dest##*/}"
+  teardown_root
+done
+
+test_case 'C12: an activation interrupted by a crash is restored before the host is changed again'
+c12_fixture
+# A generation directory as a kill between the third and fourth rename leaves
+# it: three destinations already B'"'"'s, the journal naming them, A'"'"'s copies saved.
+gen="${NEXA_STATE_DIR}/assets/.activating"
+mkdir -p "${gen}/saved/bin" "${gen}/saved/caddy"
+cp -p "${NEXA_BIN_DIR}/botctl" "${gen}/saved/bin/botctl"
+cp -p "${NEXA_LIB_DIR}/nexa-lib.sh" "${gen}/saved/bin/nexa-lib.sh"
+cp -p "${NEXA_DEPLOY_DIR}/compose.yml" "${gen}/saved/compose.yml"
+staged_b="$(mktemp -d)"
+write_asset_set "$staged_b" B
+install -m 0755 "${staged_b}/bin/botctl" "${NEXA_BIN_DIR}/botctl"
+install -m 0644 "${staged_b}/bin/nexa-lib.sh" "${NEXA_LIB_DIR}/nexa-lib.sh"
+install -m 0644 "${staged_b}/compose.yml" "${NEXA_DEPLOY_DIR}/compose.yml"
+rm -rf "$staged_b"
+printf 'bin/botctl|%s|1\nbin/nexa-lib.sh|%s|1\ncompose.yml|%s|1\n' \
+  "${NEXA_BIN_DIR}/botctl" "${NEXA_LIB_DIR}/nexa-lib.sh" "${NEXA_DEPLOY_DIR}/compose.yml" >"${gen}/journal"
+assert_equals 'the fixture is not half-activated' 'B' "$(installed_label)"
+assert_equals 'the fixture is not half-activated (routes)' 'A' "$(asset_label "${NEXA_DEPLOY_DIR}/caddy/routes.caddy")"
+run_botctl status
+assert_contains 'status did not report the interrupted activation' "$BOTCTL_OUTPUT" 'activation was interrupted'
+# The next activation replays the restore FIRST, then applies. Driven through
+# the library in a fresh shell so the paths are this root'"'"'s.
+stage_release_assets "$DIGEST_C" C
+recovery="$(bash -c '. "$NEXA_LIB" && nexa_activate_release_assets "$1"' _ "$DIGEST_C" 2>&1 || true)"
+assert_contains 'the recovery was silent' "$recovery" 'interrupted'
+c12_assert_intact C 'after recovering an interrupted activation and applying a new one'
+# And a recovery whose restore is the LAST thing (nothing applied after it):
+# rebuild the interruption, then activate A'"'"'s own set, which must first put
+# A back from the journal and then re-apply A — the same files either way.
+teardown_root
+
+test_case 'C12: a failure after readiness rolls the host assets back with the application'
+c12_fixture
+fake_set "api_health_${DIGEST_B}" starting
+NEXA_READY_TIMEOUT=6 run_botctl update vB
+assert_fails 'an unready target reported success' test "$BOTCTL_STATUS" -eq 0
+c12_assert_intact A 'after a target that never became ready'
+teardown_root
+
+# =============================================================================
+# B-EXTRA-1 — the pre-migration preflight
+# =============================================================================
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+write_live_assets A
+seed_image_assets "$DIGEST_B" B
+fake_set resolve_digest "$DIGEST_B"
+
+test_case 'preflight: two PRIMARY tenants stop the update before the migration, after the backup'
+fake_set preflight_exit 2
+reset_docker_log
+run_botctl update v2.0.0
+log="$(docker_log)"
+assert_fails 'an update that failed preflight reported success' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the preflight did not run from the TARGET image' "$log" "migrate.js --preflight [image=registry.test/nexa@${DIGEST_B}]"
+# The migration command was never entered: every migrate.js line is the preflight.
+assert_equals 'the migrator was entered after a failed preflight' '' \
+  "$(printf '%s\n' "$log" | grep 'migrate.js' | grep -v -- '--preflight' || true)"
+backup_at="$(printf '%s\n' "$log" | grep -n 'exec -T postgres pg_dump' | sed -n '1p' | cut -d: -f1)"
+preflight_at="$(printf '%s\n' "$log" | grep -n -- '--preflight' | sed -n '1p' | cut -d: -f1)"
+assert_ok 'no backup was taken before the preflight' test -n "$backup_at"
+assert_ok 'the preflight ran before the backup' test "${backup_at:-9999}" -lt "${preflight_at:-0}"
+assert_ok 'no backup file exists' test -n "$(find "$NEXA_BACKUP_DIR" -name '*.sql.gz' -print -quit)"
+assert_equals 'the current release changed' 'v1.0.0' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_equals 'deploy.env was repointed' "registry.test/nexa@${DIGEST_A}" \
+  "$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE)"
+assert_fails 'a rollback target was invented' test -f "${NEXA_STATE_DIR}/previous"
+assert_equals 'the host assets were touched before the preflight' 'A' "$(installed_label)"
+assert_fails 'the target'"'"'s assets were staged before the preflight' test -d "$(assets_dir_for "$DIGEST_B")"
+assert_contains 'the operator was not told the update stopped before migrating' \
+  "$BOTCTL_OUTPUT" 'stopped BEFORE migrating'
+assert_contains 'the check'"'"'s own sentence was not relayed' "$BOTCTL_OUTPUT" "kind = 'PRIMARY'"
+assert_contains 'the sentence does not name the migration' "$BOTCTL_OUTPUT" '0015_single_primary_tenant'
+assert_contains 'the operator was not pointed at the backup' "$BOTCTL_OUTPUT" "$NEXA_BACKUP_DIR"
+assert_not_contains 'a stack trace was the explanation' "$BOTCTL_OUTPUT" 'at async'
+assert_not_contains 'a raw driver error was the explanation' "$BOTCTL_OUTPUT" '23505'
+
+test_case 'preflight: exactly one PRIMARY tenant lets the update proceed'
+fake_set preflight_exit 0
+run_botctl update v2.0.0
+assert_equals 'a clean preflight did not let the update proceed' 0 "$BOTCTL_STATUS"
+assert_equals 'the update did not advance' 'v2.0.0' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_contains 'the passing preflight was not reported' "$BOTCTL_OUTPUT" 'can take v2.0.0'"'"'s migrations'
+
+teardown_root
+
+# =============================================================================
+# B-EXTRA-2 — v1 visibility in `botctl status`
+# =============================================================================
+status_secrets_probe() {
+  run_botctl status
+  printf '%s' "$BOTCTL_OUTPUT"
+}
+
+setup_root
+setup_fake_docker
+seed_release 'vA' "$DIGEST_A"
+
+test_case 'status: a canonical keyring with no v1 rows reports the shutdown complete'
+seed_nexa_env canonical
+fake_set secrets_json '{"format":"canonical","acceptV1":false,"explicit":false,"v1Rows":0,"rows":4,"mismatched":0}'
+out="$(status_secrets_probe)"
+assert_contains 'the configuration was not named' "$out" 'configuration  canonical'
+assert_contains 'acceptance was not reported as off by default' "$out" 'accept v1      no  (default)'
+assert_contains 'the shutdown was not reported complete' "$out" 'v1 shutdown    complete'
+assert_not_contains 'a warning was raised with nothing to warn about' "$out" 'WARNING'
+assert_contains 'the old-backup caveat was dropped' "$out" 'backups taken before the re-encryption'
+assert_contains 'readiness disappeared from status' "$out" 'readiness: ready'
+assert_not_contains 'status printed the KEK' "$out" "$TEST_KEK"
+assert_not_contains 'status printed a key id it had no need to' "$out" "$TEST_KEY_ID"
+
+test_case 'status: a legacy configuration with v1 rows warns and names every step in order'
+seed_nexa_env legacy
+fake_set secrets_json '{"format":"legacy","acceptV1":true,"explicit":false,"v1Rows":3,"rows":4,"mismatched":0}'
+out="$(status_secrets_probe)"
+assert_contains 'the legacy configuration was not named' "$out" 'configuration  legacy'
+assert_contains 'the default-on acceptance was not reported' "$out" 'accept v1      yes  (default)'
+assert_contains 'the remaining rows were not counted' "$out" 'v1 rows        3 of 4'
+assert_contains 'no warning about remaining v1 ciphertext' "$out" 'still hold v1 ciphertext'
+for step in 'botctl secrets migrate-config' 'botctl secrets rewrap' 'botctl secrets shutdown-check' 'botctl secrets disable-v1'; do
+  assert_contains "the remedy does not name ${step}" "$out" "$step"
+done
+assert_not_contains 'status printed the KEK' "$out" "$TEST_KEK"
+
+test_case 'status: legacy configuration with NO v1 rows distinguishes compatibility from ciphertext'
+fake_set secrets_json '{"format":"legacy","acceptV1":true,"explicit":false,"v1Rows":0,"rows":4,"mismatched":0}'
+out="$(status_secrets_probe)"
+assert_contains 'rows were not reported as zero' "$out" 'v1 rows        0 of 4'
+assert_contains 'the compatibility-only case was not distinguished' "$out" 'no row holds v1 ciphertext, but v1 is still accepted'
+assert_contains 'the conversion step was not named' "$out" 'botctl secrets migrate-config'
+assert_not_contains 'rewrap was suggested with nothing to rewrap' "$out" 'botctl secrets rewrap'
+
+test_case 'status: an explicit SECRETS_ACCEPT_V1=true on a canonical keyring is reported as explicit'
+seed_nexa_env canonical
+printf 'SECRETS_ACCEPT_V1=true\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+fake_set secrets_json '{"format":"canonical","acceptV1":true,"explicit":true,"v1Rows":0,"rows":4,"mismatched":0}'
+out="$(status_secrets_probe)"
+assert_contains 'the explicit setting was reported as a default' "$out" 'accept v1      yes  (SECRETS_ACCEPT_V1)'
+assert_contains 'the warning did not name the explicit setting' "$out" 'SECRETS_ACCEPT_V1=true'
+assert_not_contains 'migrate-config was suggested on a canonical keyring' "$out" 'migrate-config'
+assert_contains 'disable-v1 was not named' "$out" 'botctl secrets disable-v1'
+
+test_case 'status: v1 rows with v1 NOT accepted is the loud case'
+seed_nexa_env canonical
+printf 'SECRETS_ACCEPT_V1=false\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+fake_set secrets_json '{"format":"canonical","acceptV1":false,"explicit":true,"v1Rows":2,"rows":4,"mismatched":0}'
+out="$(status_secrets_probe)"
+assert_contains 'unreadable rows were not called out' "$out" 'cannot be read'
+assert_contains 'the remedy did not say to re-enable v1 first' "$out" 'SECRETS_ACCEPT_V1=true'
+assert_contains 'the remedy did not name rewrap' "$out" 'botctl secrets rewrap'
+
+test_case 'status: when the application cannot answer, the rows are unable to determine, not zero'
+seed_nexa_env legacy
+fake_set secrets_json_exit 1
+out="$(status_secrets_probe)"
+assert_contains 'an unanswerable count was reported as a number' "$out" 'v1 rows        unable to determine'
+assert_not_contains 'an unanswerable count was reported as zero' "$out" 'v1 rows        0'
+assert_not_contains 'shutdown was declared complete without evidence' "$out" 'shutdown    complete'
+assert_contains 'the operator was not pointed at the full command' "$out" 'botctl secrets status'
+assert_contains 'readiness disappeared when the secrets read failed' "$out" 'readiness:'
+fake_set secrets_json_exit 0
 
 teardown_root
 

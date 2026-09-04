@@ -768,14 +768,14 @@ main() {
   start_everything
   bootstrap_owner
 
-  # What this install put on the host, recorded under its version.
+  # What this install put on the host, recorded under the DIGEST it runs.
   #
   # `botctl update` installs the TARGET release's assets and needs somewhere to
   # put the outgoing ones back if the target does not come up. Recording them
   # here means the first update after an install already has that set; an
   # installation made before this mechanism existed gets it captured by the
   # update itself.
-  nexa_capture_live_assets "$VERSION" ||
+  nexa_capture_live_assets "$digest" "$VERSION" ||
     nexa_warn "the host assets for ${VERSION} could not be recorded; the first update will capture them."
 
   nexa_write_manifest "$VERSION" "$commit" "$digest"

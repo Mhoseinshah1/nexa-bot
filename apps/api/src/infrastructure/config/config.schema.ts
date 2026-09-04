@@ -222,6 +222,17 @@ export const configSchema = z
     OUTBOX_RELAY_BATCH_SIZE: z.coerce.number().int().min(1).max(1000).default(100),
     OUTBOX_RELAY_POLL_INTERVAL_MS: z.coerce.number().int().min(50).max(60_000).default(1000),
     OUTBOX_RELAY_MAX_LAG_MS: z.coerce.number().int().min(1000).default(300_000),
+    /**
+     * Where the worker writes its heartbeat, and how often.
+     *
+     * The worker serves no HTTP, so this file is its health check: written
+     * every interval after a real database round trip, read by the container
+     * check in compose.yml, which requires it to be younger than three
+     * intervals. A path under /tmp, which the runtime image's non-root user
+     * can write and which is private to the container.
+     */
+    WORKER_HEARTBEAT_PATH: z.string().min(1).default('/tmp/nexa-worker.heartbeat'),
+    WORKER_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
 
     /**
      * How long a graceful shutdown may take before the process leaves anyway.

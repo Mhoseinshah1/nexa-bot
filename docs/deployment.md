@@ -191,6 +191,32 @@ botctl restart             restart the stack
 None of these print a secret. `botctl status` deliberately shows container
 state rather than configuration, so its output can be pasted into a ticket.
 
+`botctl status` also reports the installation's position on v1 ciphertext,
+because an operator should not have to know that `botctl secrets status` exists
+to learn they are still carrying the envelope this project is retiring. Two
+facts, kept apart because they have different remedies:
+
+- **whether v1 is accepted** — configuration, read from `/etc/nexa/nexa.env` by
+  key presence only, with the same default rule the application applies
+  (legacy `SECRETS_KEK` means on, canonical `SECRETS_KEYS` means off, an
+  explicit `SECRETS_ACCEPT_V1` wins);
+- **whether v1 rows remain** — data, asked of the application. When the stack
+  cannot answer, the line says `unable to determine`, which is a different fact
+  from `0`.
+
+The section names the exact next commands for its state — `migrate-config`,
+`rewrap`, `shutdown-check`, `disable-v1` — and prints no key, ciphertext or
+token. When the shutdown is complete it repeats the caveat that matters then:
+backups taken before the re-encryption still hold v1 ciphertext.
+
+Readiness, for `status`, for `update` and for `rollback`, means **both**
+application containers healthy. The API's check is its own `/health/ready`;
+the worker serves no HTTP, so its check reads a heartbeat file the worker
+writes every ten seconds, and only after a round trip to the database
+succeeds. A worker in a crash loop, alive with a blocked event loop, or alive
+and cut off from PostgreSQL goes unhealthy within a check or two, and a release
+in that state is backed out exactly as one whose API never answered.
+
 ## Backups
 
 `botctl backup` runs `pg_dump` inside the database container and writes
@@ -243,6 +269,38 @@ than one that reports the new release while quietly starting the old one.
 `botctl version` and `botctl status` compare the two and report a divergence
 loudly if they ever disagree.
 
+### Migration preflight
+
+Between the backup and the migration, the update runs the **target** release's
+migrator in check-only mode:
+
+```
+node dist/infrastructure/persistence/migrate.js --preflight
+```
+
+It reads the database with the connection string alone — no application secret
+— and refuses conditions a migration would not survive. The one it exists for:
+migration `0015_single_primary_tenant` creates a partial unique index that
+requires at most one tenant with `kind = 'PRIMARY'`. A database seeded by an
+early development build can hold more, and against it 0015 failed inside
+PostgreSQL with a raw `23505`, after the backup, with a stack trace as the only
+explanation. 0015 is applied everywhere and is therefore immutable, and no
+later migration can help, because execution never reaches it.
+
+When the check refuses, the update stops **before** migrating: the current
+release is still current, the database was not changed, the host assets were
+not touched, and the backup just taken is where the message says. The check
+never repairs anything — which tenant is the real one is not a decision a
+script may take on production data. Decide, remove or re-kind the others, and
+run the update again. For a legacy **development** database whose extra
+PRIMARY rows came from an old seed, resetting the database is the honest
+remedy.
+
+A tenants table without a `kind` column, or no tenants table at all, passes:
+the check is about one condition and says nothing about anything older or
+newer. `runMigrations` itself runs the same check first, so the installer, CI
+and a developer's shell are under the same rule.
+
 ### The host assets move with the release
 
 Most of a release lives in the immutable image. Six files do not:
@@ -263,13 +321,13 @@ required to exist on a production host at all.
 
 Three steps, in this order:
 
-1. **Stage** the target's set into `/var/lib/nexa/assets/<version>`, extracted
+1. **Stage** the target's set into `/var/lib/nexa/assets/<digest>`, extracted
    from its image. A pure read: a release that does not carry them fails here,
    before anything on the host has changed. The extraction writes to a
    `.partial` directory and renames it only once every file is present, so an
    interrupted one leaves nothing for a later activation to install from.
-2. **Record** what is live now, under the outgoing release, so a failed update
-   has something to put back.
+2. **Record** what is live now, under the digest that is running, so a failed
+   update has something to put back.
 3. **Activate** the target's set, before the migration and the start, so the
    target runs under its own compose file and Caddy routes. Each file is
    written beside its destination and renamed over it — atomic, so an
@@ -277,6 +335,25 @@ Three steps, in this order:
    `botctl`; and safe for a `botctl` that is replacing itself while bash is
    still reading it, because a rename swaps the directory entry and leaves the
    running process's inode alone.
+
+**Sets are keyed by digest, never by version.** A version is a tag, and a tag
+can be moved. Keyed by version, a set staged from one digest was silently
+reused by a later attempt that had resolved the same tag to a different digest,
+and the image ran one release's code under another's compose file and `botctl`.
+The digest is the identity every other part of an installation already uses (a
+release _is_ a digest), so a moved tag stages a new set rather than finding an
+old one. Each directory carries a `release` marker naming the version, for a
+human reading `/var/lib/nexa`; nothing reads it back.
+
+**Activation is one unit.** Before the first file moves, the live copy of every
+destination is saved under `/var/lib/nexa/assets/.activating/` and a journal
+is opened; as each file is replaced, one line is appended; on any failure the
+journal is replayed backwards and every saved copy goes back; on success the
+directory is removed. An installation therefore never holds three files from
+one release and three from another. If that directory exists when an update or
+rollback begins — the previous activation was interrupted by a power cut or a
+kill — the restore is replayed first, before anything else changes, and
+`botctl status` says so until it has been.
 
 Every failure path from step 3 onwards puts the outgoing release's set back
 before restarting it, so a failed update leaves an installation whose tooling
@@ -323,11 +400,14 @@ roll back to.
 | The version cannot be resolved      | Current release untouched. Nothing pulled.                                                                |
 | The image cannot be pulled          | Current release untouched. No backup, no migration.                                                       |
 | The backup fails                    | **The update does not proceed.** Nothing is migrated.                                                     |
+| The pre-migration check fails       | **The update stops before migrating.** Host assets untouched; the check's own message says what to fix.   |
 | The image carries no host assets    | Refused before anything on the host changes.                                                              |
 | The outgoing set cannot be recorded | Refused: a failed update would have nothing to put back.                                                  |
 | The migration fails                 | Host assets restored. The target does not become current. The pre-migration backup is named in the error. |
 | The target does not start           | Host assets restored, then the previous release is restarted; it remains current.                         |
 | The target is never ready           | Host assets restored, then the previous release is restarted; it remains current.                         |
+| The target's worker is not healthy  | Treated as "never ready": a healthy API beside a dead or crash-looping worker is not a working release.   |
+| Activation fails part-way           | Every file already replaced is put back from the saved copy; nothing else has changed.                    |
 | The rollback is not healthy         | Reported loudly. **Neither release is deleted.**                                                          |
 
 The previous release is never deleted by the update that replaced it. Manifests

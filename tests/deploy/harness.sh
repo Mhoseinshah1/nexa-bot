@@ -290,6 +290,64 @@ teardown_root() {
   return 0
 }
 
+# --- Fake cp, mv and chmod: failure injection for host-asset activation --------
+#
+# The library replaces six files with `cp`, `chmod` and `mv`; these fakes pass
+# every call straight through to the real binary UNLESS a test has named a
+# command and a destination — then that one call fails, once, and the marker it
+# leaves makes every later call (the restore's included) succeed. No hook in the
+# production code: the point is that the library cannot tell the difference
+# between this and a full disk.
+#
+# ONE directory for the whole suite, created once and removed at exit — not
+# under a per-test root. Roots are torn down between tests, and bash caches the
+# path it found a command at, so a `chmod` that lived in a deleted root broke
+# every later test that called one.
+setup_fake_tools() {
+  if [ -n "${FAKE_TOOLS_DIR:-}" ] && [ -d "$FAKE_TOOLS_DIR" ]; then
+    return 0
+  fi
+  FAKE_TOOLS_DIR="$(mktemp -d)"
+  export FAKE_TOOLS_DIR
+  # shellcheck disable=SC2064
+  trap "rm -rf '${FAKE_TOOLS_DIR}'" EXIT
+  local tool
+  for tool in cp mv chmod; do
+    cat >"${FAKE_TOOLS_DIR}/${tool}" <<FAKE
+#!/usr/bin/env bash
+real="\$(command -v -p ${tool})"
+if [ "\${FAKE_FAIL_CMD:-}" = "${tool}" ] && [ -n "\${FAKE_FAIL_DEST:-}" ] && [ ! -e "\${FAKE_FAIL_MARKER:-/nonexistent}" ]; then
+  for _arg in "\$@"; do :; done
+  case "\$_arg" in
+    "\${FAKE_FAIL_DEST}"*)
+      : >"\${FAKE_FAIL_MARKER}"
+      printf '${tool}: injected failure on %s\\n' "\$_arg" >&2
+      exit 1
+      ;;
+  esac
+fi
+exec "\$real" "\$@"
+FAKE
+    chmod +x "${FAKE_TOOLS_DIR}/${tool}"
+  done
+  PATH="${FAKE_TOOLS_DIR}:${PATH}"
+  export PATH
+  hash -r
+}
+
+# Make the NEXT cp/mv/chmod whose last argument starts with DEST fail, once.
+inject_activation_fault() {
+  local cmd="$1" dest="$2"
+  export FAKE_FAIL_CMD="$cmd" FAKE_FAIL_DEST="$dest"
+  export FAKE_FAIL_MARKER="${FAKE_TOOLS_DIR}/fired.$$.$RANDOM"
+  rm -f "$FAKE_FAIL_MARKER"
+}
+clear_activation_fault() {
+  unset FAKE_FAIL_CMD FAKE_FAIL_DEST
+  [ -z "${FAKE_FAIL_MARKER:-}" ] || rm -f "$FAKE_FAIL_MARKER"
+  unset FAKE_FAIL_MARKER
+}
+
 # --- A fake docker ------------------------------------------------------------
 #
 # Installed first on PATH. It writes every invocation to a log so a test can
@@ -429,6 +487,25 @@ case "${1:-}" in
             # coverage at all.
             printf '{"Service":"api","State":"running","Health":"%s"}\n' \
               "$(read_state "api_health_${NEXA_IMAGE##*@}" "$(read_state api_health healthy)")"
+            # The worker, the same way: per-image health, and a container that
+            # died is listed only with `--all` and only as its corpse. A
+            # `worker_state` of `restarting` models the crash loop compose
+            # shows for a process that keeps exiting under `restart:
+            # unless-stopped` — running is never reported for it.
+            _worker_state="$(read_state "worker_state_${NEXA_IMAGE##*@}" "$(read_state worker_state running)")"
+            case "$_worker_state" in
+              running)
+                printf '{"Service":"worker","State":"running","Health":"%s"}\n' \
+                  "$(read_state "worker_health_${NEXA_IMAGE##*@}" "$(read_state worker_health healthy)")"
+                ;;
+              exited | dead)
+                case "$*" in
+                  *--all*) printf '{"Service":"worker","State":"%s"}\n' "$_worker_state" ;;
+                esac
+                ;;
+              absent) ;;
+              *) printf '{"Service":"worker","State":"%s"}\n' "$_worker_state" ;;
+            esac
             ;;
           *)
             printf 'api running healthy\npostgres running healthy\nredis running healthy\n'
@@ -461,6 +538,25 @@ case "${1:-}" in
             fi
             printf 'NOT READY to disable v1:\n  - 3 row(s) still hold a v1 envelope.\n'
             exit 1
+            ;;
+          *'secrets.cli.js status --json'*)
+            # What `botctl status` asks the application for: counts and
+            # booleans, or nothing when the stack cannot answer.
+            [ "$(read_state secrets_json_exit 0)" = "0" ] || exit 1
+            read_state secrets_json '{"format":"canonical","acceptV1":false,"explicit":false,"v1Rows":0,"rows":4,"mismatched":0}'
+            printf '\n'
+            exit 0
+            ;;
+          *--preflight*)
+            # The pre-migration check, run by the TARGET image before the
+            # migration. Its refusal has its own exit code (2) and its own
+            # sentence, and `botctl update` must relay both.
+            if [ "$(read_state preflight_exit 0)" != "0" ]; then
+              printf '%s\n' "$(read_state preflight_message "Migration preflight failed: this database has 2 tenants with kind = 'PRIMARY', and migration 0015_single_primary_tenant requires exactly one. Nothing was migrated.")" >&2
+              exit "$(read_state preflight_exit 0)"
+            fi
+            printf 'Migration preflight passed for postgres://***@postgres:5432/nexa\n' >&2
+            exit 0
             ;;
         esac
         exit "$(read_state run_exit 0)" ;;
@@ -530,8 +626,12 @@ case "${1:-}" in
 esac
 FAKE
   chmod +x "${FAKE_DIR}/bin/docker"
+
+  setup_fake_tools
+
   PATH="${FAKE_DIR}/bin:${PATH}"
   export PATH
+  hash -r
 
   # Every image carries a host-asset set unless a test says otherwise.
   mkdir -p "${FAKE_DIR}/assets/default"
@@ -583,7 +683,7 @@ with open(sys.argv[1], "w", encoding="utf-8") as handle:
   # because every path that makes one current records them. A fixture without
   # them is an installation that predates the mechanism, which is a state worth
   # constructing deliberately and not worth every other test starting from.
-  stage_release_assets "$version"
+  stage_release_assets "$digest" "$version"
   # deploy.env has to agree with the manifest, because a real installation's
   # does: they are written together by the same commit. A fixture where they
   # disagree is an installation mid-interrupted-update, which is a state worth
@@ -591,13 +691,17 @@ with open(sys.argv[1], "w", encoding="utf-8") as handle:
   set_deploy_image "registry.test/nexa@${digest}"
 }
 
-# Record a release's host assets where the library keeps them.
+# Record a release's host assets where the library keeps them: under the
+# DIGEST, which is how the library addresses them (C9).
 stage_release_assets() {
-  local version="$1" label="${2:-$1}"
-  rm -rf "${NEXA_STATE_DIR}/assets/${version}"
-  mkdir -p "${NEXA_STATE_DIR}/assets/${version}"
-  write_asset_set "${NEXA_STATE_DIR}/assets/${version}" "$label"
+  local digest="$1" label="$2"
+  local dir="${NEXA_STATE_DIR}/assets/${digest#sha256:}"
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  write_asset_set "$dir" "$label"
+  printf 'seeded\n' >"${dir}/release"
 }
+assets_dir_for() { printf '%s/assets/%s' "$NEXA_STATE_DIR" "${1#sha256:}"; }
 
 # Rewrite deploy.env's NEXA_IMAGE without going through the library, so a test
 # can construct a state the library would refuse to write.

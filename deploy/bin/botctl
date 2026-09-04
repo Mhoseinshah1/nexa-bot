@@ -173,6 +173,109 @@ cmd_version() {
 # ---------------------------------------------------------------------------
 # status
 # ---------------------------------------------------------------------------
+
+# The v1-ciphertext position, in `botctl status`, so an operator does not have
+# to know that `botctl secrets status` exists to learn they are still carrying
+# the envelope this project is retiring.
+#
+# Two facts, kept apart because they have different remedies:
+#
+#   - whether v1 is ACCEPTED, which is configuration: read here from
+#     /etc/nexa/nexa.env by KEY PRESENCE only (never a value), and reported
+#     with the same default rule the application applies — legacy SECRETS_KEK
+#     means on, canonical SECRETS_KEYS means off, an explicit SECRETS_ACCEPT_V1
+#     wins either way;
+#   - whether v1 ROWS remain, which is data: asked of the application, which
+#     is the only thing that can read the table. When it cannot answer, the
+#     answer is "unable to determine", which is a different fact from "none".
+#
+# Nothing here prints a key, a ciphertext or a token. The application's
+# `--json` summary carries counts and booleans and nothing else.
+status_secrets() {
+  local file="${NEXA_CONFIG_DIR}/nexa.env"
+  printf '\nsecrets:\n'
+  [ -r "$file" ] || {
+    printf '  configuration  unreadable (%s)\n' "$file"
+    return 0
+  }
+
+  local keys kek explicit format accept accept_source
+  keys="$(nexa_env_value "$file" SECRETS_KEYS 2>/dev/null || true)"
+  kek="$(nexa_env_value "$file" SECRETS_KEK 2>/dev/null || true)"
+  explicit="$(nexa_env_value "$file" SECRETS_ACCEPT_V1 2>/dev/null || true)"
+  if [ -n "${keys//[[:space:]]/}" ]; then
+    format=canonical
+  elif [ -n "${kek//[[:space:]]/}" ]; then
+    format=legacy
+  else
+    format=unknown
+  fi
+  case "$explicit" in
+    true) accept=yes; accept_source='SECRETS_ACCEPT_V1' ;;
+    false) accept=no; accept_source='SECRETS_ACCEPT_V1' ;;
+    *)
+      if [ "$format" = legacy ]; then accept=yes; else accept=no; fi
+      accept_source='default'
+      ;;
+  esac
+  printf '  configuration  %s\n' "$format"
+  printf '  accept v1      %s  (%s)\n' "$accept" "$accept_source"
+
+  # The rows. One bounded read through the application; a stack that is down
+  # answers nothing, and that is reported as exactly that.
+  local summary v1_rows='' total_rows=''
+  summary="$(nexa_compose run --rm --no-deps -T --entrypoint node api \
+    dist/secrets.cli.js status --json 2>/dev/null || true)"
+  if [ -n "$summary" ]; then
+    # SC2016: Python source, not shell.
+    # shellcheck disable=SC2016
+    read -r v1_rows total_rows < <(printf '%s' "$summary" | python3 -c '
+import json, sys
+try:
+    data = json.loads(sys.stdin.read())
+    print(int(data["v1Rows"]), int(data["rows"]))
+except Exception:
+    sys.exit(1)
+' 2>/dev/null || true)
+  fi
+  if [ -z "$v1_rows" ]; then
+    printf '  v1 rows        unable to determine (the application could not read the database)\n'
+    if [ "$accept" = yes ]; then
+      printf '\n  v1 ciphertext is still accepted. Once the stack is up, run:\n'
+      printf '    botctl secrets status\n'
+    fi
+    return 0
+  fi
+  printf '  v1 rows        %s of %s\n' "$v1_rows" "$total_rows"
+
+  if [ "$v1_rows" -gt 0 ] && [ "$accept" = no ]; then
+    printf '\n  WARNING: %s row(s) still hold v1 ciphertext and v1 is NOT accepted, so those\n' "$v1_rows"
+    printf '  rows cannot be read. Set SECRETS_ACCEPT_V1=true in %s, restart, then:\n' "$file"
+    printf '    botctl secrets rewrap\n    botctl secrets shutdown-check\n    botctl secrets disable-v1\n'
+    return 0
+  fi
+  if [ "$v1_rows" -gt 0 ]; then
+    printf '\n  WARNING: %s row(s) still hold v1 ciphertext. Re-encrypt them, then turn v1 off:\n' "$v1_rows"
+    [ "$format" != legacy ] || printf '    botctl secrets migrate-config\n'
+    printf '    botctl secrets rewrap\n    botctl secrets shutdown-check\n    botctl secrets disable-v1\n'
+    return 0
+  fi
+  if [ "$accept" = yes ]; then
+    printf '\n  WARNING: no row holds v1 ciphertext, but v1 is still accepted'
+    if [ "$format" = legacy ]; then
+      printf ' — the legacy\n  single-key configuration defaults it on. Convert, then turn it off:\n'
+      printf '    botctl secrets migrate-config\n'
+    else
+      printf ' (SECRETS_ACCEPT_V1=true).\n  Turn it off:\n'
+    fi
+    printf '    botctl secrets shutdown-check\n    botctl secrets disable-v1\n'
+    return 0
+  fi
+  printf '  v1 shutdown    complete: no v1 ciphertext, v1 not accepted\n'
+  printf '  note           backups taken before the re-encryption still hold v1 ciphertext;\n'
+  printf '                 restoring one needs the old key material and SECRETS_ACCEPT_V1=true\n'
+}
+
 cmd_status() {
   require_installed
   local version
@@ -187,6 +290,14 @@ cmd_status() {
 
   local diverged=0
   nexa_check_divergence || diverged=$?
+
+  # A host-asset activation that never finished. Said here, because the next
+  # update or rollback will replay its restore first and an operator should
+  # not learn that from the update's output.
+  [ ! -d "$NEXA_ACTIVATING_DIR" ] ||
+    nexa_warn "a host-asset activation was interrupted and has not been restored; the next 'botctl update' or 'botctl rollback' will put the previous set back before proceeding."
+
+  status_secrets
 
   printf '\nreadiness: '
   if nexa_wait_ready 5; then
@@ -429,7 +540,26 @@ cmd_update() {
     nexa_warn "try to fix a container that will not start."
   }
 
-  # 4. MIGRATE, using the TARGET release's own compiled migrator.
+  # 4. PREFLIGHT. A read of the database by the TARGET release's own migrator,
+  #    asking whether the migrations it is about to run can succeed at all.
+  #
+  #    Migration 0015 requires at most one PRIMARY tenant; a database seeded
+  #    by an early development build can hold more, and against it 0015 fails
+  #    inside PostgreSQL with a raw 23505 — after the backup, after the host
+  #    assets were swapped, with a stack trace as the only explanation. 0015 is
+  #    applied everywhere and therefore immutable, and no later migration can
+  #    help because execution never reaches it. So the target's migrator is
+  #    asked first, here, before anything on the host has changed. A refusal
+  #    is the check's own sentence, and the update stops with the current
+  #    release still current and the database untouched.
+  nexa_step "checking the database before migrating"
+  if ! NEXA_IMAGE="$target_image" nexa_compose run --rm --no-deps \
+    --entrypoint node api dist/infrastructure/persistence/migrate.js --preflight; then
+    nexa_die "the pre-migration check FAILED (its message is above), so the update stopped BEFORE migrating. ${current} is still running and is still the current release; the database was not changed, and the host assets were not touched. The backup just taken is in ${NEXA_BACKUP_DIR}."
+  fi
+  nexa_ok "the database can take ${target}'s migrations"
+
+  # 5. MIGRATE, using the TARGET release's own compiled migrator.
   #
   #    This is the reason the maintenance CLIs live in the application image.
   #    Running the current release's migrator would apply the schema the
@@ -458,17 +588,24 @@ cmd_update() {
   # Every failure from here on restores the current release's assets, so a
   # failed update leaves an installation whose tooling still matches what is
   # actually running.
+  # Keyed by DIGEST on both sides. The target's set is the set its image
+  # carries, so its key is the digest just resolved; the outgoing set is
+  # whatever is live, recorded under the digest that is actually running. A
+  # set keyed by version was reused across a moved tag (C9).
+  local current_digest
+  current_digest="$(nexa_live_digest "$current")" ||
+    nexa_die "cannot tell which image ${current} runs — neither its manifest nor deploy.env names a digest — so its host assets cannot be recorded and a failed update would have nothing to put back."
   nexa_step "installing ${target}'s host assets"
-  nexa_stage_release_assets "$target" "$target_image"
-  nexa_capture_live_assets "$current" ||
+  nexa_stage_release_assets "$digest" "$target_image" "$target"
+  nexa_capture_live_assets "$current_digest" "$current" ||
     nexa_die "refusing to replace the host assets while ${current}'s cannot be recorded: a failed update would have nothing to put back."
-  nexa_activate_release_assets "$target"
+  nexa_activate_release_assets "$digest"
   nexa_ok "host assets are ${target}'s"
 
   # Put the outgoing release's assets back. Used by every failure path below.
   restore_host_assets() {
-    nexa_activate_release_assets "$current" ||
-      nexa_warn "could not restore ${current}'s host assets; ${NEXA_ASSETS_DIR}/${current} holds them."
+    nexa_activate_release_assets "$current_digest" ||
+      nexa_warn "could not restore ${current}'s host assets; $(nexa_assets_path "$current_digest") holds them."
   }
 
   nexa_step "migrating with ${target}'s own migrator"
@@ -479,7 +616,7 @@ cmd_update() {
   fi
   nexa_ok "migrations applied"
 
-  # 5. START the target.
+  # 6. START the target.
   nexa_step "starting ${target}"
   if ! NEXA_IMAGE="$target_image" nexa_compose up -d --remove-orphans; then
     nexa_warn "the target release did not start; returning to ${current}."
@@ -499,7 +636,7 @@ cmd_update() {
     nexa_die "${target} failed to start AND ${current} did not come back cleanly. The installation may be down; run 'botctl logs' and 'botctl rollback'."
   fi
 
-  # 6. VERIFY. A container that started is not an application that works.
+  # 7. VERIFY. A container that started is not an application that works.
   nexa_step "waiting for readiness"
   if ! NEXA_IMAGE="$target_image" nexa_wait_ready; then
     nexa_warn "${target} started but never became ready; returning to ${current}."
@@ -512,7 +649,7 @@ cmd_update() {
     nexa_die "${target} failed its readiness check AND ${current} did not come back cleanly. Both releases are intact; run 'botctl logs api'."
   fi
 
-  # 7. COMMIT. The single durable moment. Everything above this line leaves the
+  # 8. COMMIT. The single durable moment. Everything above this line leaves the
   #    installation on ${current}; everything below is bookkeeping about a
   #    release that is already running and already healthy.
   #
@@ -602,21 +739,25 @@ cmd_rollback() {
   # If ${previous}'s assets were never staged — an installation that predates
   # this mechanism and has not updated since — say so and stop, rather than
   # rolling the image back under tooling that belongs to a different release.
-  if ! nexa_assets_staged "$previous"; then
-    nexa_die "no host assets are recorded for ${previous}, so a rollback would leave ${current}'s botctl and compose file operating ${previous}'s image. Update to a release that stages them first, or reinstall ${previous}."
+  if ! nexa_assets_staged "$digest"; then
+    nexa_die "no host assets are recorded for ${previous} (${digest}), so a rollback would leave ${current}'s botctl and compose file operating ${previous}'s image. Update to a release that stages them first, or reinstall ${previous}."
   fi
-  nexa_activate_release_assets "$previous"
+  # The set to put back if THIS does not work out: whatever is live, under
+  # the digest that is running.
+  local current_digest
+  current_digest="$(nexa_live_digest "$current" || true)"
+  nexa_activate_release_assets "$digest"
 
   if ! NEXA_IMAGE="$previous_image" nexa_compose up -d --remove-orphans; then
     # Put ${current}'s assets back: the rollback did not happen, so the
     # installation is still on ${current} and must still be operated as such.
     # ${current} is non-empty here — the guard above refuses otherwise.
-    ! nexa_assets_staged "$current" || nexa_activate_release_assets "$current"
+    ! nexa_assets_staged "$current_digest" || nexa_activate_release_assets "$current_digest"
     nexa_die "${previous} did not start. NEITHER release has been deleted; run 'botctl logs'."
   fi
 
   if ! NEXA_IMAGE="$previous_image" nexa_wait_ready; then
-    ! nexa_assets_staged "$current" || nexa_activate_release_assets "$current"
+    ! nexa_assets_staged "$current_digest" || nexa_activate_release_assets "$current_digest"
     nexa_die "${previous} started but is NOT ready. Nothing has been deleted, and the current-release pointer still says ${current:-unknown}. Read 'botctl logs api' before doing anything else."
   fi
 
