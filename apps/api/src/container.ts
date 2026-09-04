@@ -14,7 +14,7 @@ import type { Translator } from '@nexa/contracts';
 
 import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
 import { readFileSync } from 'node:fs';
-import { infrastructureHosts } from './infrastructure/net/infrastructure-hosts.js';
+import { panelUrlPolicy } from './infrastructure/net/installation-policy.js';
 import { SafeHttpClient } from './infrastructure/net/safe-http.js';
 import { DrizzlePanelRepository } from './modules/platform/panels/infrastructure/drizzle-panel.repository.js';
 import { DrizzlePanelCredentialStore } from './modules/platform/panels/infrastructure/drizzle-panel-credentials.js';
@@ -342,11 +342,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   // One policy object, shared by the client and the service, so the URL a
   // panel is created with and the address the socket goes to are judged by
   // exactly the same rules. Two copies would be two things to keep in step.
-  const urlPolicy = {
-    allowLoopback: config.PANEL_HTTP_ALLOW_LOOPBACK,
-    deniedSubnets: config.PANEL_HTTP_DENIED_SUBNETS,
-    deniedHosts: infrastructureHosts([config.DATABASE_URL, config.REDIS_URL]),
-  };
+  // The installation's own data network first and always, then whatever
+  // extra networks the operator listed — see `panelUrlPolicy`, which the
+  // deployment smoke test runs inside the real container against the real
+  // environment.
+  const urlPolicy = panelUrlPolicy(config);
 
   const panelHttp = new SafeHttpClient({
     ...urlPolicy,
@@ -561,6 +561,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // which is the case the window exists to prevent — and the two values are
       // configured independently, so nothing else keeps them in a sane order.
       probeCooldownMs: Math.max(config.PANEL_PROBE_COOLDOWN_MS, config.PANEL_HTTP_TIMEOUT_MS),
+      probeBudget: {
+        capacity: config.PANEL_PROBE_TENANT_LIMIT,
+        refillPerMs: config.PANEL_PROBE_TENANT_LIMIT / config.PANEL_PROBE_TENANT_WINDOW_MS,
+      },
       adapters: providerAdapter,
     }),
     settingsService,

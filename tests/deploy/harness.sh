@@ -418,12 +418,28 @@ case "${1:-}" in
     exit 0
     ;;
   pull)
-    exit "$(read_state pull_exit 0)"
+    # Per-digest when a test asks for it, so "the previous release's image is
+    # no longer published" is expressible while the target's still is.
+    _ref=""
+    for _arg in "$@"; do
+      case "$_arg" in
+        */nexa@*) _ref="${_arg##*@}" ;;
+      esac
+    done
+    exit "$(read_state "pull_exit_${_ref}" "$(read_state pull_exit 0)")"
     ;;
   image)
     # image inspect <ref> --format ...
+    _ref=""
+    for _arg in "$@"; do
+      case "$_arg" in
+        */nexa@*) _ref="${_arg##*@}" ;;
+      esac
+    done
     case "$*" in
-      *org.opencontainers.image.revision*) printf 'cafebabe\n' ;;
+      # The commit the image was built from, per digest when a test says so:
+      # the recovery cross-checks it against the manifest.
+      *org.opencontainers.image.revision*) printf '%s\n' "$(read_state "revision_${_ref}" cafebabe)" ;;
       *) printf 'sha256:deadbeef\n' ;;
     esac
     exit 0
@@ -591,17 +607,17 @@ case "${1:-}" in
     # update reads the TARGET release's host assets out of its own image.
     case "$*" in
       *'--entrypoint tar'*)
-        if [ "$(read_state assets_missing 0)" != "0" ]; then
-          # A release built before the image carried its host assets. `tar`
-          # would not be there either, so the container fails to start.
-          exit 127
-        fi
         _ref=""
         for _arg in "$@"; do
           case "$_arg" in
             */nexa@*) _ref="${_arg##*@}" ;;
           esac
         done
+        if [ "$(read_state "assets_missing_${_ref}" "$(read_state assets_missing 0)")" != "0" ]; then
+          # A release built before the image carried its host assets. `tar`
+          # would not be there either, so the container fails to start.
+          exit 127
+        fi
         _dir="${FAKE_DIR}/assets/${_ref}"
         # A per-digest fixture if a test seeded one, otherwise the default set
         # every release carries. Without the fallback every existing update

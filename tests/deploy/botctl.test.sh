@@ -2254,4 +2254,173 @@ fake_set secrets_json_exit 0
 
 teardown_root
 
+# =============================================================================
+# Fix A — the real staging.8 host: version-keyed sets, digest-keyed rollback
+# =============================================================================
+# The exact state the staging host was in after staging.7's botctl performed
+# the update to staging.8: both releases have manifests and digests, the
+# assets directory holds only VERSION-named sets written by the old botctl,
+# and there is no set under either digest. The rollback refused — safely —
+# and this is the fixture that must not refuse any more, without trusting
+# anything it should not.
+DIGEST_S7="$DIGEST_A"
+DIGEST_S8="$DIGEST_B"
+staging8_host() {
+  setup_root
+  setup_fake_docker
+  seed_release 'v0.1.0-staging.7' "$DIGEST_S7"
+  seed_release 'v0.1.0-staging.8' "$DIGEST_S8"
+  printf 'v0.1.0-staging.7\n' >"${NEXA_STATE_DIR}/previous"
+  # The old botctl keyed by version. What it left is not evidence: staging.7's
+  # directory is seeded with a set labelled M — a stale or tampered copy — and
+  # the recovery must never install it.
+  rm -rf "$(assets_dir_for "$DIGEST_S7")" "$(assets_dir_for "$DIGEST_S8")"
+  mkdir -p "${NEXA_STATE_DIR}/assets/v0.1.0-staging.7" "${NEXA_STATE_DIR}/assets/v0.1.0-staging.8"
+  write_asset_set "${NEXA_STATE_DIR}/assets/v0.1.0-staging.7" M
+  write_asset_set "${NEXA_STATE_DIR}/assets/v0.1.0-staging.8" B
+  write_live_assets B
+  # The images, addressed by digest, carry their own sets and their own commit.
+  seed_image_assets "$DIGEST_S7" A
+  seed_image_assets "$DIGEST_S8" B
+  fake_set "revision_${DIGEST_S7}" c0ffee
+  fake_set "revision_${DIGEST_S8}" c0ffee
+  # The staging.7 TAG has since been moved: resolving it would find C, and a
+  # rollback that resolved it would install the wrong release.
+  seed_image_assets "$DIGEST_C" C
+  fake_set resolve_digest "$DIGEST_C"
+  reset_docker_log
+}
+
+staging8_host
+test_case 'Fix A: rollback recovers the previous release'"'"'s assets from its immutable image'
+run_botctl rollback
+log="$(docker_log)"
+assert_equals 'the rollback failed on the real staging shape' 0 "$BOTCTL_STATUS"
+assert_equals 'the live botctl is not staging.7'"'"'s' 'A' "$(installed_label)"
+assert_equals 'the live compose file is not staging.7'"'"'s' 'A' "$(asset_label "${NEXA_DEPLOY_DIR}/compose.yml")"
+assert_contains 'the recovery did not say what it did' "$BOTCTL_OUTPUT" 'recovered from'
+assert_contains 'the previous image was not pulled BY DIGEST' "$log" "pull --quiet registry.test/nexa@${DIGEST_S7}"
+assert_contains 'the assets were not read out of the previous image' "$log" "--entrypoint tar registry.test/nexa@${DIGEST_S7}"
+assert_not_contains 'the previous VERSION tag was resolved' "$log" 'imagetools inspect'
+assert_not_contains 'the previous VERSION tag was resolved (manifest)' "$log" 'manifest inspect'
+assert_not_contains 'the moved tag'"'"'s digest was used' "$log" "$DIGEST_C"
+assert_ok 'no set was recorded under the previous digest' test -s "$(assets_dir_for "$DIGEST_S7")/bin/botctl"
+assert_equals 'the recorded set is not from the image' 'A' "$(asset_label "$(assets_dir_for "$DIGEST_S7")/bin/botctl")"
+assert_equals 'current did not move' 'v0.1.0-staging.7' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_equals 'previous did not move' 'v0.1.0-staging.8' "$(cat "${NEXA_STATE_DIR}/previous")"
+assert_equals 'deploy.env does not name the previous digest' \
+  "registry.test/nexa@${DIGEST_S7}" "$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE)"
+assert_fails 'an activation generation was left behind' test -d "${NEXA_STATE_DIR}/assets/.activating"
+assert_not_contains 'the rollback touched the database' "$log" 'migrate.js'
+
+test_case 'Fix A: the version-named directory was neither trusted nor copied'
+for path in "${NEXA_BIN_DIR}/botctl" "${NEXA_LIB_DIR}/nexa-lib.sh" "${NEXA_DEPLOY_DIR}/compose.yml" \
+  "${NEXA_DEPLOY_DIR}/nexa.env.template" "${NEXA_DEPLOY_DIR}/caddy/Caddyfile" "${NEXA_DEPLOY_DIR}/caddy/routes.caddy"; do
+  assert_not_contains "the stale version directory went live via ${path##*/}" "$(cat "$path")" 'release M'
+done
+assert_not_contains 'the stale set reached the digest directory' \
+  "$(cat "$(assets_dir_for "$DIGEST_S7")/bin/botctl")" 'release M'
+# Left where it was, inert.
+assert_equals 'the legacy directory was altered' 'M' "$(asset_label "${NEXA_STATE_DIR}/assets/v0.1.0-staging.7/bin/botctl")"
+
+test_case 'Fix A: the current release'"'"'s own set was recovered under its digest too'
+assert_ok 'no set was recorded under the current digest' test -s "$(assets_dir_for "$DIGEST_S8")/bin/botctl"
+assert_equals 'the current set is not from its image' 'B' "$(asset_label "$(assets_dir_for "$DIGEST_S8")/bin/botctl")"
+assert_contains 'the current image was not read by digest' "$log" "--entrypoint tar registry.test/nexa@${DIGEST_S8}"
+
+test_case 'Fix A: the rollback can itself be rolled back, with both sets now recorded'
+reset_docker_log
+run_botctl rollback
+assert_equals 'the second rollback failed' 0 "$BOTCTL_STATUS"
+assert_equals 'the second rollback did not restore staging.8'"'"'s tooling' 'B' "$(installed_label)"
+assert_not_contains 'a recorded set was extracted again' "$(docker_log)" '--entrypoint tar'
+teardown_root
+
+staging8_host
+test_case 'Fix A: an unavailable previous image refuses the rollback before anything changes'
+fake_set "pull_exit_${DIGEST_S7}" 1
+run_botctl rollback
+assert_fails 'a rollback without the previous image reported success' test "$BOTCTL_STATUS" -eq 0
+# The pull by digest is the first thing a rollback does, and it is what refuses
+# here: the image is gone, so the assets cannot be recovered from it either.
+assert_contains 'the refusal did not say the image could not be pulled' "$BOTCTL_OUTPUT" "could not pull registry.test/nexa at ${DIGEST_S7}"
+assert_contains 'the refusal did not say nothing changed' "$BOTCTL_OUTPUT" 'The current release is untouched'
+assert_equals 'the refused rollback changed the live botctl' 'B' "$(installed_label)"
+assert_equals 'the refused rollback moved current' 'v0.1.0-staging.8' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_fails 'a partial set was left under the previous digest' test -d "$(assets_dir_for "$DIGEST_S7")"
+assert_fails 'a .partial directory was left behind' test -d "$(assets_dir_for "$DIGEST_S7").partial"
+assert_fails 'an activation generation was left behind' test -d "${NEXA_STATE_DIR}/assets/.activating"
+assert_not_contains 'the refused rollback fell back to the version directory' "$(cat "${NEXA_BIN_DIR}/botctl")" 'release M'
+teardown_root
+
+staging8_host
+test_case 'Fix A: a previous image without a complete host-asset set refuses the rollback'
+fake_set "assets_missing_${DIGEST_S7}" 1
+run_botctl rollback
+assert_fails 'a rollback from an image without assets reported success' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the refusal did not name the recovery' "$BOTCTL_OUTPUT" 'could not be recovered'
+assert_contains 'the refusal did not say nothing changed' "$BOTCTL_OUTPUT" 'Nothing has been changed'
+# The refusal is the recovery's own, before the rollback went any further:
+# the current release's set was not touched, and activation never began.
+assert_not_contains 'the rollback went on to the current release after the refusal' \
+  "$(docker_log)" "--entrypoint tar registry.test/nexa@${DIGEST_S8}"
+assert_not_contains 'activation was reached with nothing staged' "$BOTCTL_OUTPUT" 'no host assets are staged'
+assert_equals 'the refused rollback changed the live botctl' 'B' "$(installed_label)"
+assert_equals 'the refused rollback moved current' 'v0.1.0-staging.8' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_fails 'a set was recorded from an image that had none' test -d "$(assets_dir_for "$DIGEST_S7")"
+teardown_root
+
+staging8_host
+test_case 'Fix A: an image whose commit disagrees with the manifest is not trusted'
+fake_set "revision_${DIGEST_S7}" deadbeef
+run_botctl rollback
+assert_fails 'a rollback from a disagreeing image reported success' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the disagreement was not named' "$BOTCTL_OUTPUT" 'was built from deadbeef'
+assert_contains 'the refusal did not say nothing changed' "$BOTCTL_OUTPUT" 'Nothing has been changed'
+assert_not_contains 'a disagreeing image was still read for its assets' \
+  "$(docker_log)" "--entrypoint tar registry.test/nexa@${DIGEST_S7}"
+assert_not_contains 'the rollback went on to the current release after the refusal' \
+  "$(docker_log)" "--entrypoint tar registry.test/nexa@${DIGEST_S8}"
+assert_equals 'the refused rollback changed the live botctl' 'B' "$(installed_label)"
+assert_fails 'a set was recorded from a disagreeing image' test -d "$(assets_dir_for "$DIGEST_S7")"
+teardown_root
+
+staging8_host
+test_case 'Fix A: an activation failure during the recovered rollback restores the current set'
+inject_activation_fault mv "${NEXA_DEPLOY_DIR}/compose.yml"
+run_botctl rollback
+clear_activation_fault
+assert_fails 'a rollback whose activation failed reported success' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'the live botctl is not the current release'"'"'s after the failed activation' 'B' "$(installed_label)"
+for path in "${NEXA_LIB_DIR}/nexa-lib.sh" "${NEXA_DEPLOY_DIR}/compose.yml" "${NEXA_DEPLOY_DIR}/nexa.env.template" \
+  "${NEXA_DEPLOY_DIR}/caddy/Caddyfile" "${NEXA_DEPLOY_DIR}/caddy/routes.caddy"; do
+  assert_equals "a failed activation left ${path##*/} half-applied" 'B' "$(asset_label "$path")"
+done
+assert_fails 'an activation generation was left behind' test -d "${NEXA_STATE_DIR}/assets/.activating"
+assert_equals 'a failed activation moved current' 'v0.1.0-staging.8' "$(cat "${NEXA_STATE_DIR}/current")"
+# And the recovered set is still there for the retry, which now succeeds.
+run_botctl rollback
+assert_equals 'the retry after the failed activation failed' 0 "$BOTCTL_STATUS"
+assert_equals 'the retry did not install staging.7'"'"'s tooling' 'A' "$(installed_label)"
+teardown_root
+
+# An installation that already keys by digest is unchanged: no pull of the
+# assets, no extraction, no recovery message.
+setup_root
+setup_fake_docker
+seed_release 'vA' "$DIGEST_A"
+write_live_assets A
+stage_release_assets "$DIGEST_A" A
+seed_image_assets "$DIGEST_B" B
+fake_set resolve_digest "$DIGEST_B"
+run_botctl update vB
+test_case 'Fix A: an installation already keyed by digest rolls back exactly as before'
+reset_docker_log
+run_botctl rollback
+assert_equals 'the ordinary rollback failed' 0 "$BOTCTL_STATUS"
+assert_equals 'the ordinary rollback did not restore the previous tooling' 'A' "$(installed_label)"
+assert_not_contains 'a recorded set was extracted again' "$(docker_log)" '--entrypoint tar'
+assert_not_contains 'a recovery was announced with nothing to recover' "$BOTCTL_OUTPUT" 'recovering them'
+teardown_root
+
 report

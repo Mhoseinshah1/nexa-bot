@@ -255,3 +255,20 @@ reasoning stays legible beside what changed it.
   configuration, remaining rows from the application, "unable to determine"
   when the application cannot answer — with the exact next commands. The
   Secret Envelope cryptography and the acceptance defaults are unchanged.
+
+## Amendments — staging.8 upgrade transition
+
+- **A set that was never recorded is recovered from the image, by digest.**
+  "Host assets are keyed by digest" was true of every set the new `botctl`
+  wrote and of none the old one had. An installation whose last update was
+  performed by the version-keyed tooling had no digest set for either release,
+  and the first rollback on the staging host refused. `botctl rollback` now
+  recovers a missing set from `IMAGE_REPO@<the digest in the manifest>` —
+  the same pull, extraction, `.partial` rename and completeness check an
+  update uses, plus a source-commit cross-check against the manifest — and
+  refuses before anything changes if that image is unavailable, incomplete or
+  built from a different commit. The version-named directories the old tooling
+  wrote are never read as identity and never copied: a tag can move and a
+  directory can be edited, and neither records which digest it came from. The
+  outgoing release's set is recovered the same way when it too is missing, so
+  a failed activation still has something to put back.

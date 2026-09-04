@@ -265,6 +265,19 @@ export const PANEL_ERROR_CODES = {
   /** A probe was asked for on a panel with no credentials configured. */
   PANEL_CREDENTIALS_MISSING: 'panel.credentials_missing',
   /**
+   * This tenant has used its outbound-probe capacity for now.
+   *
+   * The per-panel cooldown is deliberately configuration-aware, so an
+   * operator who corrects an address or a credential can test it at once.
+   * That also means alternating two configurations retests on every change,
+   * and the total number of real provider probes a tenant makes has to be
+   * bounded by something that configuration cannot reset. This is that bound:
+   * a token bucket per tenant, across every panel and every API process, that
+   * counts only requests which were about to make a real outbound call. The
+   * details carry a retry-after and nothing about any target.
+   */
+  PANEL_PROBE_LIMITED: 'panel.probe_limited',
+  /**
    * The panel changed while its connection test was in flight.
    *
    * A probe reads a panel's address and credentials, then spends as long as the

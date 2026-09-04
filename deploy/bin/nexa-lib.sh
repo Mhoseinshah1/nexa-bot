@@ -939,6 +939,71 @@ EOF
     nexa_die "cannot record the host assets for ${digest}."
 }
 
+# Make sure a release's host-asset set exists under its digest, from the only
+# source that is evidence of what that release shipped: its immutable image.
+#
+# This is the transition from the version-keyed sets earlier releases wrote
+# to the digest-keyed sets this one requires. The real staging host showed the
+# gap exactly: staging.7's botctl performed the update to staging.8 and staged
+# by version, so staging.8's botctl then found nothing under either digest and
+# refused to roll back — a SAFE refusal, and a rollback that should have been
+# possible, because staging.7 has a manifest, a recorded digest and a published
+# immutable image.
+#
+# The recovery reads the manifest's digest and stages from IMAGE@DIGEST, and
+# nothing else:
+#
+#   - never `assets/<version>`: that directory was written by whatever botctl
+#     was installed at the time, from whatever the tag pointed at then, and
+#     its name proves nothing about its contents. A moved tag is why C9 exists
+#     and it is why that directory is not evidence. It is left where it is,
+#     inert, for an operator to look at.
+#   - never the version TAG: a tag is a pointer somebody can move. The digest
+#     in the manifest is what this installation actually ran.
+#
+# The staged set goes through the same extraction and validation an update's
+# does. If the image cannot be pulled or does not carry a complete set, this
+# returns 1 having changed nothing, and the caller refuses.
+nexa_ensure_release_assets() {
+  local digest="$1" version="${2:-}" image label commit
+  nexa_valid_digest "$digest" || return 1
+  nexa_assets_staged "$digest" && return 0
+
+  image="${NEXA_IMAGE_REPO}@${digest}"
+  nexa_warn "no host assets are recorded under ${digest}${version:+ (${version})}; recovering them from the immutable image."
+  # BY DIGEST. `nexa_pull_release` refuses anything else, and it verifies the
+  # daemon holds exactly what was asked for. A pull failure is a die inside
+  # it, so it runs in a subshell and the failure is a return.
+  if ! (nexa_pull_release "$digest") >/dev/null 2>&1; then
+    nexa_warn "could not pull ${image}."
+    return 1
+  fi
+
+  # Cross-check, where the facts exist: the image at this digest records the
+  # commit it was built from, and the manifest records the commit the release
+  # was published from. A disagreement means the manifest and the digest do
+  # not describe the same release, and nothing recovered from either should be
+  # trusted. The digest stays the identity; the label is the witness.
+  if [ -n "$version" ]; then
+    commit="$(nexa_manifest_field "$version" commit 2>/dev/null || true)"
+    label="$(docker image inspect "$image" \
+      --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)"
+    if [ -n "$commit" ] && [ "$commit" != "unknown" ] && [ -n "$label" ] && [ "$label" != "$commit" ]; then
+      nexa_warn "${image} was built from ${label} but the manifest for ${version} records ${commit}; refusing to recover host assets from it."
+      return 1
+    fi
+  fi
+
+  # The same staging, extraction and validation as an update. In a subshell
+  # for the same reason as the pull: its refusals are dies.
+  if ! (nexa_stage_release_assets "$digest" "$image" "$version") >/dev/null 2>&1; then
+    nexa_warn "${image} does not carry a complete host-asset set."
+    return 1
+  fi
+  nexa_assets_staged "$digest" || return 1
+  nexa_ok "host assets for ${version:-$digest} recovered from ${image}"
+}
+
 # The generation directory an activation works in, and its journal.
 #
 # Activation replaces six files at six fixed paths, and it can fail after any

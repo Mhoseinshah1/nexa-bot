@@ -165,9 +165,10 @@ open(sys.argv[2], "w", encoding="utf-8").write(text)
   "__SECRETS_KEK__=$(head -c 32 /dev/urandom | base64 -w0)" \
   "__SECRETS_ACTIVE_KEY_ID__=smoke-1" \
   "__DOMAIN__=localhost" \
-  "__EDGE_SUBNET__=172.29.0.0/24" \
-  "__DATA_SUBNET__=172.29.1.0/24"
+  "__EDGE_SUBNET__=172.29.0.0/24"
 sed -i 's|^WEB_ADMIN_ORIGINS=.*|WEB_ADMIN_ORIGINS=https://localhost|' "${NEXA_CONFIG_DIR}/nexa.env"
+# An nexa.env that predates the policy: no data-subnet key of any kind.
+sed -i '/^PANEL_HTTP_DENIED_SUBNETS=/d; /^NEXA_DATA_SUBNET=/d' "${NEXA_CONFIG_DIR}/nexa.env"
 
 DIGEST_A="$(docker buildx imagetools inspect "${IMAGE_REPO}:v1.0.0" --format '{{.Manifest.Digest}}')"
 {
@@ -177,7 +178,11 @@ DIGEST_A="$(docker buildx imagetools inspect "${IMAGE_REPO}:v1.0.0" --format '{{
   printf 'NEXA_CONFIG_DIR=%s\n' "$NEXA_CONFIG_DIR"
   printf 'NEXA_DEPLOY_DIR=%s\n' "$NEXA_DEPLOY_DIR"
   printf 'NEXA_EDGE_SUBNET=172.29.0.0/24\n'
-  printf 'NEXA_DATA_SUBNET=172.29.1.0/24\n'
+  # NOT the default. The installation's data network must be refused by the
+  # panel HTTP policy because deploy.env names it — the real staging host had
+  # no PANEL_HTTP_DENIED_SUBNETS in its upgraded nexa.env and was protected
+  # only because its subnet happened to equal the application's default.
+  printf 'NEXA_DATA_SUBNET=172.31.44.0/24\n'
   printf 'NEXA_CI_HTTP_PORT=%s\n' "$HTTP_PORT"
 } >"${NEXA_CONFIG_DIR}/deploy.env"
 umask 022
@@ -274,6 +279,41 @@ grep -qF '# nexa-smoke: v2.0.0 host assets' "${NEXA_BIN_DIR}/botctl" ||
   fail "the update left an activation generation behind after succeeding"
 pass "v2.0.0 is current, by digest, with v1.0.0 preserved as the rollback target"
 pass "the host assets are v2.0.0's, and v1.0.0's were recorded"
+
+# ---------------------------------------------------------------------------
+step "the upgraded installation refuses its own data network, from compose, not from nexa.env"
+# ---------------------------------------------------------------------------
+# Inside the RUNNING api container, with the environment compose actually
+# gave it, through the same function the process built its policy from. The
+# nexa.env above has no subnet key at all, and the subnet is not the default.
+policy="$(compose exec -T api node --input-type=module -e '
+const { loadConfig } = await import("/app/dist/infrastructure/config/load-config.js");
+const { panelUrlPolicy } = await import("/app/dist/infrastructure/net/installation-policy.js");
+const { checkUrl } = await import("/app/dist/infrastructure/net/url-policy.js");
+const config = loadConfig();
+const policy = panelUrlPolicy(config);
+const say = (name, url) => console.log(name + "=" + (checkUrl(url, policy).allowed ? "allowed" : "denied"));
+console.log("subnet=" + (config.NEXA_DATA_SUBNET ?? "unset"));
+console.log("extras=" + config.PANEL_HTTP_DENIED_SUBNETS.join(","));
+say("data", "https://172.31.44.7:5432");
+say("data-other-host", "https://172.31.44.200:2053");
+say("postgres-by-name", "https://postgres:5432");
+say("redis-by-name", "https://redis:6379");
+say("private-panel", "https://10.20.30.40:2053");
+say("default-subnet-not-special", "https://172.29.1.5:8443");
+say("public-panel", "https://panel.example.com:2096");
+' 2>&1)" || fail "the policy could not be read inside the api container: ${policy}"
+printf '%s\n' "$policy" | sed 's/^/    /'
+grep -qx 'subnet=172.31.44.0/24' <<<"$policy" || fail "the runtime did not receive the installation subnet from compose"
+grep -qx 'extras=' <<<"$policy" || fail "the upgraded nexa.env unexpectedly carries extra denied subnets"
+grep -qx 'data=denied' <<<"$policy" || fail "the installation's own data network is NOT denied on the upgraded host"
+grep -qx 'data-other-host=denied' <<<"$policy" || fail "another address in the data network is not denied"
+grep -qx 'postgres-by-name=denied' <<<"$policy" || fail "the database hostname is not denied"
+grep -qx 'redis-by-name=denied' <<<"$policy" || fail "the cache hostname is not denied"
+grep -qx 'private-panel=allowed' <<<"$policy" || fail "a legitimate private panel is refused: private support was broken"
+grep -qx 'default-subnet-not-special=allowed' <<<"$policy" || fail "the application default subnet is still hardcoded as the security property"
+grep -qx 'public-panel=allowed' <<<"$policy" || fail "a public panel is refused"
+pass "the upgraded installation denies 172.31.44.0/24 because deploy.env names it, and nothing else"
 
 # ---------------------------------------------------------------------------
 step "a release that never becomes ready must not become current"

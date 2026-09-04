@@ -86,6 +86,23 @@ describe('the production compose topology', () => {
     expect(anchor).toMatch(/networks:[\s\S]*- data[\s\S]*- edge/);
   });
 
+  it('hands the application the SAME data-subnet expression that creates the network', () => {
+    // Fix B. The panel HTTP policy denies the installation's own data network
+    // because compose tells the process which network that is — from
+    // deploy.env, through the one expression below — not because nexa.env
+    // carries a copy that an upgrade or an operator has to keep in step.
+    const expression = '${NEXA_DATA_SUBNET:-172.29.1.0/24}';
+    expect(compose).toContain(`NEXA_DATA_SUBNET: ${expression}`);
+    expect(compose).toContain(`- subnet: ${expression}`);
+    expect(
+      compose.split(expression).length - 1,
+      'the expression appears more or fewer than twice',
+    ).toBe(2);
+    // Through the shared anchor, so api AND worker receive it.
+    const anchor = compose.slice(compose.indexOf('x-app-common:'), compose.indexOf('\nservices:'));
+    expect(anchor).toContain('NEXA_DATA_SUBNET:');
+  });
+
   it('mounts no Docker socket, uses no host network and runs nothing privileged', () => {
     // Any of these would make a container compromise a host compromise.
     expect(compose).not.toMatch(/docker\.sock/);

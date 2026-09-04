@@ -13,6 +13,7 @@ import {
   unique,
   uniqueIndex,
   uuid,
+  doublePrecision,
 } from 'drizzle-orm/pg-core';
 import { sql, type SQL } from 'drizzle-orm';
 import {
@@ -1333,6 +1334,35 @@ export const panelProbeClaims = pgTable(
   ],
 );
 
+/**
+ * One row per tenant: how many real outbound provider probes it may still
+ * make right now.
+ *
+ * A token bucket, refilled continuously: `tokens` as of `refilled_at`, and the
+ * take that reads it adds what has accrued since, caps at the capacity, and
+ * subtracts one — in ONE statement under the row lock, so two API processes
+ * racing for the last token cannot both get it. The capacity and the refill
+ * rate are configuration, not columns; the row holds only what cannot be
+ * recomputed.
+ *
+ * Nothing about any panel is here — no address, no name, no configuration —
+ * and that is the point: the per-panel cooldown is deliberately reset by a
+ * configuration change, and this bound is deliberately not.
+ */
+export const panelProbeBudgets = pgTable(
+  'panel_probe_budgets',
+  {
+    tenantId: uuid('tenant_id')
+      .primaryKey()
+      .references(() => tenants.id),
+    /** Whole and fractional tokens; fractional because refill is continuous. */
+    tokens: doublePrecision('tokens').notNull(),
+    /** When `tokens` was last true. Refill is computed forward from here. */
+    refilledAt: timestamptz('refilled_at').notNull(),
+  },
+  () => [check('panel_probe_budgets_tokens_check', sql`tokens >= 0`)],
+);
+
 export const schema = {
   tenants,
   botInstances,
@@ -1360,6 +1390,7 @@ export const schema = {
   panelCredentials,
   panelHealth,
   panelProbeClaims,
+  panelProbeBudgets,
 };
 
 /** Tables the database itself refuses to UPDATE or DELETE. */

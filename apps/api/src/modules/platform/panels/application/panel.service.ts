@@ -25,6 +25,7 @@ import {
   type ScopeContext,
   type TenantContext,
   type UnitOfWork,
+  NexaError,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import {
@@ -45,6 +46,7 @@ import type {
   PanelCredentialWrite,
   PanelHealthRecord,
   PanelRepository,
+  ProbeBudget,
   PanelView,
 } from './ports.js';
 
@@ -115,6 +117,11 @@ export interface PanelServiceDeps {
    * last probe of the SAME configuration is what the caller gets back.
    */
   readonly probeCooldownMs: number;
+  /**
+   * The tenant-wide bound on real outbound probes, across every panel the
+   * tenant has and every API process. See `PanelRepository.takeProbeBudget`.
+   */
+  readonly probeBudget: ProbeBudget;
 }
 
 function hashRequest(value: unknown): string {
@@ -740,15 +747,61 @@ export class PanelService {
     // credential or an address is exactly when an operator needs an answer now,
     // and the answer they get must not be one measured against what they just
     // changed.
+    // The address is judged again, as written, before any capacity is spent.
+    // It was judged at create and at update, but the policy can have changed
+    // underneath a stored panel — an installation's data subnet, say — and a
+    // refusal that costs nothing is the right answer to that. Only a
+    // resolution-time refusal, which needs the network, counts as a probe.
+    const verdict = checkUrl(before.panel.baseUrl, this.deps.urlPolicy);
+    if (!verdict.allowed) {
+      throw errors.validation(
+        PANEL_ERROR_CODES.PANEL_TARGET_BLOCKED,
+        refusalMessage(verdict.refusal),
+      );
+    }
+
+    // Two bounds, taken together in one SHORT transaction — no network inside
+    // it — and in this order:
+    //
+    //   1. the per-panel claim, which is configuration-aware: a corrected
+    //      address or credential may be retested at once;
+    //   2. the tenant-wide budget, which is configuration-BLIND: however many
+    //      times a panel is reconfigured, the tenant's real outbound probes
+    //      stay under one bound.
+    //
+    // A request the cooldown merely replays stops at step 1 and spends no
+    // budget. A request the budget refuses rolls the transaction back, so no
+    // claim is left recorded for a probe that never happened. Both together
+    // decide once, atomically, whether ONE outbound call may be made — and
+    // committing before the call is what stops two simultaneous requests
+    // from both making it.
     const startedAt = this.deps.clock.now();
-    const claimed = await this.deps.repository.claimProbe(
-      tenant,
-      panelId,
-      configurationFingerprint(before),
-      startedAt,
-      new Date(startedAt.getTime() - this.deps.probeCooldownMs),
-    );
-    if (!claimed) {
+    const permission = await this.deps.uow
+      .run(scope, async (tx) => {
+        const claimed = await this.deps.repository.claimProbe(
+          tenant,
+          panelId,
+          configurationFingerprint(before),
+          startedAt,
+          new Date(startedAt.getTime() - this.deps.probeCooldownMs),
+          tx,
+        );
+        if (!claimed) return { kind: 'cooldown' as const };
+        const budget = await this.deps.repository.takeProbeBudget(
+          tenant,
+          this.deps.probeBudget,
+          startedAt,
+          tx,
+        );
+        if (!budget.permitted) throw new ProbeBudgetExhausted(budget.retryAfterMs);
+        return { kind: 'permitted' as const };
+      })
+      .catch((error: unknown) => {
+        if (error instanceof ProbeBudgetExhausted) return { kind: 'limited' as const, error };
+        throw error;
+      });
+
+    if (permission.kind === 'cooldown') {
       // No probe, no health write, no audit entry: nothing happened, and
       // `probed: false` is how the caller is told so. The view carries whatever
       // health is stored, which is what every other read of this panel returns
@@ -759,6 +812,29 @@ export class PanelService {
       // ordinary "I clicked twice" case look like a failure, and an operator
       // would learn to retry through it.
       return { view: before, probed: false };
+    }
+
+    if (permission.kind === 'limited') {
+      const retryAfterSeconds = Math.max(1, Math.ceil(permission.error.retryAfterMs / 1000));
+      // One deduplicated operational event per tenant, not one row per
+      // refused request: a limiter that is being leaned on would otherwise
+      // fill the operations view with the thing it is preventing.
+      await this.deps.opsLog.record(scope, {
+        code: 'panel.probe.limited',
+        severity: 'WARN',
+        message:
+          'Panel connection tests are being refused: this tenant has used its outbound-probe capacity.',
+        dedupeKey: 'panel.probe.limited',
+        context: { retryAfterSeconds },
+      });
+      // A RATE_LIMITED error carrying when to retry and nothing about any
+      // target, counter or network.
+      throw new NexaError({
+        kind: 'RATE_LIMITED',
+        code: PANEL_ERROR_CODES.PANEL_PROBE_LIMITED,
+        message: 'Too many connection tests for this tenant. Try again later.',
+        details: { retryAfterSeconds },
+      });
     }
 
     const outcome = await provider.probe(
@@ -833,6 +909,13 @@ export class PanelService {
       sessions: this.deps.sessions,
       clock: this.deps.clock,
     };
+  }
+}
+
+/** Thrown inside the permission transaction to roll it back; never escapes the service. */
+class ProbeBudgetExhausted extends Error {
+  constructor(readonly retryAfterMs: number) {
+    super('probe budget exhausted');
   }
 }
 

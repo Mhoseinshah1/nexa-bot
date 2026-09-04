@@ -34,7 +34,6 @@ describe('the production environment template', () => {
     __SECRETS_ACTIVE_KEY_ID__: 'install-1',
     __DOMAIN__: 'admin.example.com',
     __EDGE_SUBNET__: '172.29.0.0/24',
-    __DATA_SUBNET__: '172.29.1.0/24',
   };
 
   function render(overrides: Record<string, string> = {}): Record<string, string> {
@@ -124,6 +123,19 @@ describe('the production environment template', () => {
       /__BUILD_(VERSION|COMMIT|TIME)__/,
     );
     expect(installer, 'the installer still writes a pending placeholder').not.toMatch(/=pending/);
+  });
+
+  it('does not carry a copy of the data subnet', () => {
+    // Fix B. The runtime learns the installation subnet from compose, which
+    // reads deploy.env. A second copy in nexa.env was the value the real
+    // staging host did NOT have after its upgrade, and it is exactly the
+    // value an operator who moves the network would forget.
+    const raw = readFileSync(templatePath, 'utf8');
+    expect(raw).not.toMatch(/^\s*PANEL_HTTP_DENIED_SUBNETS=/m);
+    expect(raw).not.toMatch(/^\s*NEXA_DATA_SUBNET=/m);
+    const config = configSchema.parse(render());
+    expect(config.NEXA_DATA_SUBNET).toBeUndefined();
+    expect(config.PANEL_HTTP_DENIED_SUBNETS).toEqual([]);
   });
 
   it('substitutes every placeholder the template contains, everywhere it is rendered', () => {

@@ -170,7 +170,39 @@ export interface PanelRepository {
     configuration: string,
     at: Date,
     notClaimedSince: Date,
+    tx?: TransactionScope,
   ): Promise<boolean>;
+  /**
+   * Take one unit of this tenant's outbound-probe capacity, or report that
+   * none is left and when one will be.
+   *
+   * A token bucket per tenant, in the database, computed and taken in ONE
+   * statement under the row lock — so every API process shares the same
+   * bound and two of them racing for the last token cannot both get it. The
+   * bucket knows nothing about panels or configurations: it is the bound the
+   * per-panel cooldown cannot provide, precisely because that cooldown is
+   * reset by a configuration change on purpose.
+   *
+   * Run inside the same transaction as `claimProbe`, after it. If this is
+   * refused the caller rolls the transaction back, so a panel claim is never
+   * left recorded for a probe that did not happen; and because the claim runs
+   * first, a request the cooldown merely replays never reaches here and never
+   * spends capacity.
+   */
+  takeProbeBudget(
+    scope: TenantContext,
+    bucket: ProbeBudget,
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<{ permitted: true; remaining: number } | { permitted: false; retryAfterMs: number }>;
+}
+
+/** The tenant-wide bound on real outbound probes: a bucket's size and refill. */
+export interface ProbeBudget {
+  /** Tokens the bucket holds when full; also the largest burst. */
+  readonly capacity: number;
+  /** Tokens added per millisecond, continuously. `capacity / window` for "N per window". */
+  readonly refillPerMs: number;
 }
 
 /**
