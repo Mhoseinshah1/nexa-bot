@@ -556,6 +556,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       ids,
       http: panelHttp,
       urlPolicy,
+      // Floored at the HTTP budget. A cooldown shorter than a probe can run
+      // would let a second request start while the first is still on the wire,
+      // which is the case the window exists to prevent — and the two values are
+      // configured independently, so nothing else keeps them in a sane order.
+      probeCooldownMs: Math.max(config.PANEL_PROBE_COOLDOWN_MS, config.PANEL_HTTP_TIMEOUT_MS),
       adapters: providerAdapter,
     }),
     settingsService,

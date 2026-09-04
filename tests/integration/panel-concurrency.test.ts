@@ -349,6 +349,12 @@ describe('panel service under concurrency', () => {
         maxRetries: 0,
       }),
       urlPolicy: { allowLoopback: true },
+      // No throttle. These tests are about what the service does with a probe
+      // OUTCOME, and several of them probe one panel repeatedly to watch a
+      // health state move. The cooldown has its own suite
+      // (`panel-probe-throttle.test.ts`) where it is the subject rather than an
+      // obstacle.
+      probeCooldownMs: 0,
       adapters: (type: ProviderType) => ({ ...providerAdapter(type), probe }),
     });
   }

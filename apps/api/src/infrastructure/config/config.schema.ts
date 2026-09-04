@@ -272,6 +272,25 @@ export const configSchema = z
      * like a failure.
      */
     PANEL_HTTP_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(10_000),
+    /**
+     * How long one panel's connection test occupies that panel.
+     *
+     * A probe logs into somebody else's panel. Repeated without a bound it is
+     * two problems: a way to sweep a network one panel edit at a time, and a
+     * way to lock the provider account it authenticates against — several panel
+     * packages lock after a handful of failed logins. Within the window the
+     * caller gets the stored result of the last probe of the same
+     * configuration, and changing the panel or a credential bypasses it.
+     *
+     * Floored at the HTTP budget rather than taken as given: a cooldown shorter
+     * than a probe can run would let a second request start while the first is
+     * still on the wire, which is the case the window exists to prevent.
+     *
+     * There is no off switch. A value floored at one second is the smallest
+     * thing that still bounds a loop, and a deployment that could set this to
+     * zero would eventually be one that had.
+     */
+    PANEL_PROBE_COOLDOWN_MS: z.coerce.number().int().min(1_000).max(600_000).default(10_000),
     /** Response bytes kept from a panel. Reading stops the moment it is passed. */
     PANEL_HTTP_MAX_RESPONSE_BYTES: z.coerce
       .number()

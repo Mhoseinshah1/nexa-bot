@@ -11,6 +11,7 @@ import type { Database, Executor } from '../../../../infrastructure/persistence/
 import {
   panelCredentials,
   panelHealth,
+  panelProbeClaims,
   panels,
 } from '../../../../infrastructure/persistence/schema.js';
 import { isUniqueViolation } from '../../../../infrastructure/persistence/sqlstate.js';
@@ -245,6 +246,49 @@ export class DrizzlePanelRepository implements PanelRepository {
         // reachable ones get exercised and noticed.
         setWhere: sql`${panelHealth.tenantId} = ${scope.tenantId}`,
       });
+  }
+
+  /**
+   * ONE statement, on the pool, outside any transaction.
+   *
+   * The insert covers the panel that has never been probed and the update
+   * covers every panel after that, and PostgreSQL decides between them under a
+   * row lock. On the conflict path it re-evaluates `setWhere` against the
+   * row as it stands AFTER waiting for whoever held the lock, so of two
+   * requests arriving together exactly one sees a claimable row — which is the
+   * property a `SELECT` then an `UPDATE` cannot have and a process-local guard
+   * cannot have across two containers.
+   *
+   * `RETURNING` is how the caller learns which happened. A claim it did not
+   * take returns no row.
+   */
+  async claimProbe(
+    scope: TenantContext,
+    panelId: string,
+    configuration: string,
+    at: Date,
+    notClaimedSince: Date,
+  ): Promise<boolean> {
+    const claimed = await this.db
+      .insert(panelProbeClaims)
+      .values({ panelId, tenantId: scope.tenantId, configuration, claimedAt: at })
+      .onConflictDoUpdate({
+        target: panelProbeClaims.panelId,
+        set: { configuration, claimedAt: at },
+        // Either the panel has changed since the claim was taken — in which
+        // case whatever that probe is measuring is no longer the question
+        // being asked — or the claim is old enough that a new probe is not a
+        // repeat of it. The tenant predicate is belt and braces: the service
+        // resolved the panel within the tenant before reaching here.
+        setWhere: sql`
+          ${panelProbeClaims.tenantId} = ${scope.tenantId}
+          AND (
+            ${panelProbeClaims.configuration} <> ${configuration}
+            OR ${panelProbeClaims.claimedAt} <= ${notClaimedSince}
+          )`,
+      })
+      .returning({ panelId: panelProbeClaims.panelId });
+    return claimed.length > 0;
   }
 }
 

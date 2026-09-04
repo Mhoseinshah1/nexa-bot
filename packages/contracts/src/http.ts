@@ -830,7 +830,12 @@ export type TestPanelRequest = z.infer<typeof testPanelRequestSchema>;
 
 export const testPanelResponseSchema = z.object({
   panel: panelSummarySchema,
-  /** False when this call replayed an earlier one rather than probing. */
+  /**
+   * False when no probe was made and the panel's stored health is what came
+   * back — either this call replayed an earlier one under the same idempotency
+   * key, or a probe of the same configuration ran recently enough that
+   * repeating it would be a way to hammer the provider.
+   */
   probed: z.boolean(),
 });
 export type TestPanelResponse = z.infer<typeof testPanelResponseSchema>;

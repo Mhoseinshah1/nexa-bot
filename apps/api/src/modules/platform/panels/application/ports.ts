@@ -139,6 +139,38 @@ export interface PanelRepository {
     health: PanelHealthRecord,
     tx: TransactionScope,
   ): Promise<void>;
+  /**
+   * Take the right to probe this panel, or report that somebody else holds it.
+   *
+   * True means this caller may make the network call. False means a probe of
+   * the SAME configuration started AFTER `notClaimedSince` — either it is still
+   * running or it finished recently enough that repeating it would be a way to
+   * hammer the provider, and the caller must return the stored result instead
+   * of making another.
+   *
+   * A `notClaimedSince` of `at` itself therefore always grants the claim, which
+   * is how a suite that is testing something else asks for no throttling at
+   * all. Nothing in production can produce that: the cooldown is floored well
+   * above zero at both the schema and the container.
+   *
+   * Deliberately NOT inside the caller's transaction, and deliberately one
+   * statement. The point is that a second request finds the claim immediately;
+   * a claim held open in an uncommitted transaction would be invisible to it,
+   * and every concurrent probe would proceed. Whether the claim is granted must
+   * be decided by the database, not by the process, because two API containers
+   * share the panel and nothing else.
+   *
+   * `configuration` is an opaque digest. A claim taken under one configuration
+   * never blocks a probe of a different one: replacing a credential or an
+   * address is exactly when an operator needs an answer now.
+   */
+  claimProbe(
+    scope: TenantContext,
+    panelId: string,
+    configuration: string,
+    at: Date,
+    notClaimedSince: Date,
+  ): Promise<boolean>;
 }
 
 /**

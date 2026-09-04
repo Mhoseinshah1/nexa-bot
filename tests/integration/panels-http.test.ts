@@ -394,11 +394,16 @@ describe('panel HTTP surface', () => {
     // A base URL that resolves to a loopback address with nothing listening.
     // The probe genuinely runs: this exercises the client, the adapter's error
     // normalization and the health write together, with no fake in the path.
+    //
+    // 127.0.0.2 rather than 127.0.0.1, and the difference is load-bearing: this
+    // suite's database and cache answer on 127.0.0.1, so that address is on the
+    // infrastructure denylist and a panel may not point at it. Any other
+    // loopback address is an ordinary refused connection.
     const created = panelResponseSchema.parse(
       (
         await createPanel(ownerCookie, {
           name: 'Nothing listening',
-          baseUrl: 'http://127.0.0.1:9',
+          baseUrl: 'http://127.0.0.2:9',
           credentials: { username: USERNAME, password: PASSWORD },
         })
       ).json(),

@@ -101,6 +101,20 @@ export interface PanelServiceDeps {
    * registry it is wired to refuses an unknown type; nothing here relaxes that.
    */
   readonly adapters: (type: ProviderType) => ProviderConnectionAdapter;
+  /**
+   * How long one panel's connection test occupies the panel, in milliseconds.
+   *
+   * A probe is an operator-triggered outbound request that logs into somebody
+   * else's panel, so repeating it on a loop is two problems at once: it is a
+   * way to sweep a network one panel edit at a time, and it is a way to lock
+   * the provider account it authenticates against — several panel software
+   * packages lock after a handful of failed logins.
+   *
+   * Long enough to stop a loop, short enough that an operator fixing a
+   * credential does not wait on it. Within the window the stored result of the
+   * last probe of the SAME configuration is what the caller gets back.
+   */
+  readonly probeCooldownMs: number;
 }
 
 function hashRequest(value: unknown): string {
@@ -716,7 +730,37 @@ export class PanelService {
     // removed. `updatedAt` covers the address and the status.
     const testing = configurationOf(before);
 
+    // The throttle, and it is a CLAIM rather than a timestamp comparison the
+    // service makes for itself. Two API containers share this panel and share
+    // nothing else, so the decision belongs in the database; and a claim taken
+    // before the network call, rather than a cooldown started after it, is what
+    // stops two simultaneous requests from both reaching the provider.
+    //
+    // A claim under a different configuration never blocks: replacing a
+    // credential or an address is exactly when an operator needs an answer now,
+    // and the answer they get must not be one measured against what they just
+    // changed.
     const startedAt = this.deps.clock.now();
+    const claimed = await this.deps.repository.claimProbe(
+      tenant,
+      panelId,
+      configurationFingerprint(before),
+      startedAt,
+      new Date(startedAt.getTime() - this.deps.probeCooldownMs),
+    );
+    if (!claimed) {
+      // No probe, no health write, no audit entry: nothing happened, and
+      // `probed: false` is how the caller is told so. The view carries whatever
+      // health is stored, which is what every other read of this panel returns
+      // — a result from the last probe that completed, with its own
+      // `checkedAt`, and never a stale result presented as a fresh one.
+      //
+      // Not an error, deliberately. A cooldown that threw would make the
+      // ordinary "I clicked twice" case look like a failure, and an operator
+      // would learn to retry through it.
+      return { view: before, probed: false };
+    }
+
     const outcome = await provider.probe(
       { baseUrl: before.panel.baseUrl, credentials: target },
       this.deps.http.forBase(before.panel.baseUrl),
@@ -801,6 +845,20 @@ export class PanelService {
  * `updatedAt` moves for the address and the status; the three credential
  * timestamps move when a credential is replaced or removed.
  */
+/**
+ * The same identity, as an opaque token safe to keep in a row.
+ *
+ * A digest, so a claim row holds nothing readable — not the panel's address,
+ * not its status. There is no credential VALUE in the input to hash in the
+ * first place: `configurationOf` reads the three set-at timestamps, which move
+ * when a credential is replaced and say nothing about what it is. A design that
+ * fingerprinted the credentials themselves would put a verifier for a panel
+ * password in a table that is not the credential table.
+ */
+function configurationFingerprint(view: PanelView): string {
+  return createHash('sha256').update(configurationOf(view)).digest('hex');
+}
+
 function configurationOf(view: PanelView): string {
   return [
     view.panel.baseUrl,
