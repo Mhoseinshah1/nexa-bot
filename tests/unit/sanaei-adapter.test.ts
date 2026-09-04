@@ -320,10 +320,16 @@ describe('the Sanaei adapter — session compatibility mode', () => {
   it('16c. refuses when csrf-token sets no 3x-ui cookie, submitting no credential', async () => {
     const server = await panel({ behaviour: 'csrf-no-session-cookie' });
     const outcome = await probe(server, withPassword());
-    expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
-    // Stopped at the mint: neither the 2FA question nor a login followed.
+
+    // The STRUCTURAL claim first, deliberately. Falsification showed that when
+    // the outcome-code assertion leads, a mutation that carries on past the
+    // mint fails with "wrong error code" — which names the symptom and hides
+    // the defect. What this test is actually about is that the flow STOPS at
+    // the mint: no 2FA question, no login, nothing carried onward.
     expect(server.requests.map((r) => r.path.replace(/^\//, ''))).toEqual(['csrf-token']);
     expect(asText(server.requests)).not.toContain(CANARY.password);
+    expect(asText(server.requests)).not.toContain(CANARY.extraCookie);
+    expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
   });
 
   it('16. never sends a twoFactorCode field', async () => {
