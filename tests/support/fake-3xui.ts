@@ -1,4 +1,9 @@
-import { createServer as createHttpServer, type Server } from 'node:http';
+import {
+  createServer as createHttpServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
@@ -130,10 +135,7 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
   const sessions = new Map<string, { csrf: string; loggedIn: boolean }>();
   let issued = 0;
 
-  const handler = (
-    request: import('node:http').IncomingMessage,
-    response: import('node:http').ServerResponse,
-  ): void => {
+  const handler = (request: IncomingMessage, response: ServerResponse): void => {
     const chunks: Buffer[] = [];
     request.on('data', (chunk: Buffer) => chunks.push(chunk));
     request.on('end', () => {
