@@ -1,4 +1,5 @@
 import { and, asc, eq, ne, sql } from 'drizzle-orm';
+import { errors, PANEL_ERROR_CODES } from '@nexa/contracts';
 import type {
   PanelHealthState,
   PanelStatus,
@@ -6,12 +7,14 @@ import type {
   ProviderType,
   TenantContext,
 } from '@nexa/contracts';
-import type { Database } from '../../../../infrastructure/persistence/database.js';
+import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   panelCredentials,
   panelHealth,
+  panelProbeClaims,
   panels,
 } from '../../../../infrastructure/persistence/schema.js';
+import { isUniqueViolation } from '../../../../infrastructure/persistence/sqlstate.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
   CreatePanelInput,
@@ -39,11 +42,29 @@ import type {
  * turns any panel id into an oracle for whether it exists somewhere on the
  * installation.
  */
+/**
+ * The transaction's connection when there is one, the pool otherwise.
+ *
+ * A read issued on the pool from inside a transaction takes a SECOND
+ * connection while already holding one. At `DATABASE_POOL_MAX` concurrent
+ * mutations every connection is held by a transaction waiting for a connection
+ * that will never come, and the process deadlocks until the idle-transaction
+ * timeout unwinds it. `authorized-mutation.ts` names that hazard exactly; these
+ * reads used to walk into it.
+ */
+function executorOf(db: Database, tx?: TransactionScope): Executor {
+  return tx?.tx ?? db;
+}
+
 export class DrizzlePanelRepository implements PanelRepository {
   constructor(private readonly db: Database) {}
 
-  async list(scope: TenantContext, options: { includeArchived: boolean }): Promise<PanelView[]> {
-    const rows = await this.db
+  async list(
+    scope: TenantContext,
+    options: { includeArchived: boolean },
+    tx?: TransactionScope,
+  ): Promise<PanelView[]> {
+    const rows = await executorOf(this.db, tx)
       .select({
         panel: panels,
         // FLAT, not a nested group. See `toView` for why.
@@ -67,8 +88,12 @@ export class DrizzlePanelRepository implements PanelRepository {
     return rows.map((row) => toView(row));
   }
 
-  async find(scope: TenantContext, panelId: string): Promise<PanelView | null> {
-    const [row] = await this.db
+  async find(
+    scope: TenantContext,
+    panelId: string,
+    tx?: TransactionScope,
+  ): Promise<PanelView | null> {
+    const [row] = await executorOf(this.db, tx)
       .select({
         panel: panels,
         // FLAT, not a nested group. See `toView` for why.
@@ -130,17 +155,37 @@ export class DrizzlePanelRepository implements PanelRepository {
     at: Date,
     tx: TransactionScope,
   ): Promise<PanelRecord | null> {
-    const [row] = await tx.tx
-      .update(panels)
-      .set({
-        status,
-        // The CHECK constraint requires these to agree, so they are set
-        // together rather than left to a caller to remember.
-        archivedAt: status === 'ARCHIVED' ? at : null,
-        updatedAt: at,
-      })
-      .where(and(eq(panels.id, panelId), eq(panels.tenantId, scope.tenantId)))
-      .returning();
+    let row: typeof panels.$inferSelect | undefined;
+    try {
+      [row] = await tx.tx
+        .update(panels)
+        .set({
+          status,
+          // The CHECK constraint requires these to agree, so they are set
+          // together rather than left to a caller to remember.
+          archivedAt: status === 'ARCHIVED' ? at : null,
+          updatedAt: at,
+        })
+        .where(and(eq(panels.id, panelId), eq(panels.tenantId, scope.tenantId)))
+        .returning();
+    } catch (error) {
+      // Restoring an archived panel makes it live again, and the name it had
+      // may since have been taken by another panel — archiving RELEASES a name
+      // on purpose, so this is an ordinary thing for an operator to hit. The
+      // partial unique index catches it either way; without this it escaped as
+      // an unhandled 500 rather than the conflict the API documents.
+      //
+      // Named constraint, not bare 23505: `panels` can grow another unique
+      // index, and mapping an unrelated violation to "name taken" would be a
+      // confident wrong answer instead of an honest error.
+      if (isUniqueViolation(error, 'panels_tenant_name_live_key')) {
+        throw errors.conflict(
+          PANEL_ERROR_CODES.PANEL_NAME_TAKEN,
+          'Another panel of this tenant already uses that name. Rename it before restoring this one.',
+        );
+      }
+      throw error;
+    }
     return row === undefined ? null : toRecord(row);
   }
 
@@ -148,8 +193,9 @@ export class DrizzlePanelRepository implements PanelRepository {
     scope: TenantContext,
     name: string,
     exceptPanelId: string | null,
+    tx?: TransactionScope,
   ): Promise<boolean> {
-    const [row] = await this.db
+    const [row] = await executorOf(this.db, tx)
       .select({ id: panels.id })
       .from(panels)
       .where(
@@ -200,6 +246,49 @@ export class DrizzlePanelRepository implements PanelRepository {
         // reachable ones get exercised and noticed.
         setWhere: sql`${panelHealth.tenantId} = ${scope.tenantId}`,
       });
+  }
+
+  /**
+   * ONE statement, on the pool, outside any transaction.
+   *
+   * The insert covers the panel that has never been probed and the update
+   * covers every panel after that, and PostgreSQL decides between them under a
+   * row lock. On the conflict path it re-evaluates `setWhere` against the
+   * row as it stands AFTER waiting for whoever held the lock, so of two
+   * requests arriving together exactly one sees a claimable row — which is the
+   * property a `SELECT` then an `UPDATE` cannot have and a process-local guard
+   * cannot have across two containers.
+   *
+   * `RETURNING` is how the caller learns which happened. A claim it did not
+   * take returns no row.
+   */
+  async claimProbe(
+    scope: TenantContext,
+    panelId: string,
+    configuration: string,
+    at: Date,
+    notClaimedSince: Date,
+  ): Promise<boolean> {
+    const claimed = await this.db
+      .insert(panelProbeClaims)
+      .values({ panelId, tenantId: scope.tenantId, configuration, claimedAt: at })
+      .onConflictDoUpdate({
+        target: panelProbeClaims.panelId,
+        set: { configuration, claimedAt: at },
+        // Either the panel has changed since the claim was taken — in which
+        // case whatever that probe is measuring is no longer the question
+        // being asked — or the claim is old enough that a new probe is not a
+        // repeat of it. The tenant predicate is belt and braces: the service
+        // resolved the panel within the tenant before reaching here.
+        setWhere: sql`
+          ${panelProbeClaims.tenantId} = ${scope.tenantId}
+          AND (
+            ${panelProbeClaims.configuration} <> ${configuration}
+            OR ${panelProbeClaims.claimedAt} <= ${notClaimedSince}
+          )`,
+      })
+      .returning({ panelId: panelProbeClaims.panelId });
+    return claimed.length > 0;
   }
 }
 

@@ -40,6 +40,20 @@ import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http'
  * on an error, which is the failure mode that matters.
  */
 
+const PUBLIC_TLS_ORIGIN = 'https://registry.npmjs.org';
+
+/** Whether this sandbox can reach a publicly trusted TLS endpoint at all. */
+async function publicTlsReachable(): Promise<boolean> {
+  const plain = new SafeHttpClient({
+    allowLoopback: false,
+    totalTimeoutMs: 15_000,
+    maxResponseBytes: 8192,
+    maxRetries: 0,
+  });
+  const probe = await plain.send(PUBLIC_TLS_ORIGIN, { method: 'GET', path: '/' });
+  return probe.ok;
+}
+
 const HOSTNAME = 'localhost';
 const APPROVED = '127.0.0.2';
 const SECOND_RESOLUTION = '127.0.0.1';
@@ -231,6 +245,87 @@ describe('the outbound client — the DNS pin', () => {
     expect(result.ok, 'an untrusted certificate was accepted').toBe(false);
   });
 
+  it('keeps trusting the public roots when a private CA is configured', async () => {
+    // C4. `ca` REPLACES Node's trust store rather than extending it, so passing
+    // only the operator's PEM made every panel with an ordinary publicly
+    // trusted certificate fail the moment `PANEL_HTTP_CA_FILE` was set. The
+    // client now builds the list from the bundled roots plus the operator's.
+    //
+    // Proved against a REAL public endpoint, because that is the only thing
+    // that can distinguish "extends" from "replaces": a local CA cannot stand
+    // in for the Mozilla bundle. Skipped rather than failed when the sandbox
+    // has no egress, so the suite stays honest about what it actually checked.
+    const reachable = await publicTlsReachable();
+    if (!reachable) {
+      console.warn('no public TLS egress; C4 public-root assertion skipped');
+      return;
+    }
+
+    const withPrivateCa = new SafeHttpClient({
+      allowLoopback: false,
+      totalTimeoutMs: 15_000,
+      maxResponseBytes: 8192,
+      maxRetries: 0,
+      caCertificates: [ca],
+    });
+
+    const result = await withPrivateCa.send(PUBLIC_TLS_ORIGIN, { method: 'GET', path: '/' });
+    expect(
+      result.ok,
+      'a publicly trusted endpoint stopped validating once a private CA was configured',
+    ).toBe(true);
+  });
+
+  it('trusts a server signed by the configured private CA', async () => {
+    // The other half of C4: adding the operator's roots must still work. The
+    // pin test above already relies on this, but it is asserted here directly
+    // so the pair reads as one guarantee rather than a side effect.
+    const address = serverA.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+
+    const client = new SafeHttpClient({
+      allowLoopback: true,
+      totalTimeoutMs: 5_000,
+      maxResponseBytes: 4096,
+      maxRetries: 0,
+      caCertificates: [ca],
+      resolve: async () => [{ address: APPROVED, family: 4 }],
+    });
+
+    const result = await client.send(`https://${HOSTNAME}:${address.port}`, {
+      method: 'GET',
+      path: '/',
+    });
+    expect(result.ok, 'the configured private CA was not trusted').toBe(true);
+  });
+
+  it('bounds a stalled DNS resolver, which the deadline used to start after', async () => {
+    // C6. The deadline was created inside the socket phase, so resolution ran
+    // outside it: a resolver that never answered left the call open forever
+    // while the docblock promised the timeout covered DNS.
+    //
+    // The resolver here never settles. Only a deadline that starts BEFORE
+    // resolution can end this call.
+    const started = Date.now();
+    const client = new SafeHttpClient({
+      allowLoopback: true,
+      totalTimeoutMs: 700,
+      maxResponseBytes: 4096,
+      maxRetries: 0,
+      caCertificates: [ca],
+      resolve: () => new Promise(() => {}),
+    });
+
+    const result = await client.send(`https://${HOSTNAME}:9`, { method: 'GET', path: '/' });
+    const elapsed = Date.now() - started;
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure).toBe('TIMEOUT');
+    // Bounded, and bounded by the configured budget rather than by luck.
+    expect(elapsed).toBeLessThan(5_000);
+  });
+
   it('still refuses an address the policy rejects, even when resolution offers it', async () => {
     // The pin dials only approved addresses; it does not become a way to reach
     // one the policy refused. Loopback off makes both destinations forbidden.
@@ -250,5 +345,57 @@ describe('the outbound client — the DNS pin', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.failure).toBe('BLOCKED_TARGET');
+  });
+
+  it('refuses a NAME the SYSTEM resolver points into a denied network', async () => {
+    // Real resolution, no injected resolver: `localhost` is resolved by the
+    // machine, and what comes back decides. Nothing about the URL as written
+    // is refusable — it is a name, not a literal; loopback is explicitly
+    // ALLOWED here; the name is not in `deniedHosts`, which is empty. The only
+    // rule that can refuse it is the one applied to the resolved address, so a
+    // pass here means resolution-time validation ran.
+    //
+    // Both loopback forms are denied because the system may answer with either
+    // and an allowed second answer would be dialled instead of refused.
+    const guarded = new SafeHttpClient({
+      allowLoopback: true,
+      totalTimeoutMs: 5_000,
+      maxResponseBytes: 4096,
+      maxRetries: 0,
+      caCertificates: [ca],
+      deniedSubnets: ['127.0.0.0/8', '::1/128'],
+    });
+
+    const result = await guarded.send(`https://${HOSTNAME}:${port}`, {
+      method: 'GET',
+      path: '/',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure).toBe('BLOCKED_TARGET');
+  });
+
+  it('reaches that same NAME when the denied network is a different one', async () => {
+    // The control, and the one that fails if the carve-out ever widens into
+    // "refuse private space". Same client, same URL, same real resolution —
+    // only the configured network differs, and this request must not be
+    // blocked. It is asserted as "not blocked" rather than as a success
+    // because which loopback address the system hands back is the machine's
+    // choice, and only one of them has a server on it.
+    const elsewhere = new SafeHttpClient({
+      allowLoopback: true,
+      totalTimeoutMs: 5_000,
+      maxResponseBytes: 4096,
+      maxRetries: 0,
+      caCertificates: [ca],
+      deniedSubnets: ['10.0.0.0/8', 'fd00::/8'],
+    });
+
+    const result = await elsewhere.send(`https://${HOSTNAME}:${port}`, {
+      method: 'GET',
+      path: '/',
+    });
+    expect(result.ok ? 'ok' : result.failure).not.toBe('BLOCKED_TARGET');
+    if (result.ok) expect(JSON.parse(result.bodyText)).toEqual({ served: 'B' });
   });
 });

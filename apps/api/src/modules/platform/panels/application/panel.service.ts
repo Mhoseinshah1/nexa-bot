@@ -3,6 +3,7 @@ import {
   createPanelRequestSchema,
   errors,
   setPanelCredentialsRequestSchema,
+  uuidV7Schema,
   setPanelStatusRequestSchema,
   testPanelRequestSchema,
   updatePanelRequestSchema,
@@ -30,6 +31,7 @@ import {
   recordMutationDenial,
   runAuthorizedMutation,
 } from '../../access/application/authorized-mutation.js';
+import { rememberOnce } from '../../idempotency/application/remember-once.js';
 import type { SessionRepository } from '../../identity/application/ports.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
@@ -99,6 +101,20 @@ export interface PanelServiceDeps {
    * registry it is wired to refuses an unknown type; nothing here relaxes that.
    */
   readonly adapters: (type: ProviderType) => ProviderConnectionAdapter;
+  /**
+   * How long one panel's connection test occupies the panel, in milliseconds.
+   *
+   * A probe is an operator-triggered outbound request that logs into somebody
+   * else's panel, so repeating it on a loop is two problems at once: it is a
+   * way to sweep a network one panel edit at a time, and it is a way to lock
+   * the provider account it authenticates against — several panel software
+   * packages lock after a handful of failed logins.
+   *
+   * Long enough to stop a loop, short enough that an operator fixing a
+   * credential does not wait on it. Within the window the stored result of the
+   * last probe of the SAME configuration is what the caller gets back.
+   */
+  readonly probeCooldownMs: number;
 }
 
 function hashRequest(value: unknown): string {
@@ -217,14 +233,42 @@ export class PanelService {
   }
 
   /**
+   * A panel id, or a refusal that is not a 500.
+   *
+   * `panels.id` is a `uuid` column, so a path segment that is not one reaches
+   * PostgreSQL as `invalid input syntax for type uuid` — an unhandled error,
+   * logged as an internal failure, answered as 500. `GET /panels/not-a-uuid`
+   * did exactly that. A malformed identifier is a malformed request and says
+   * nothing about what exists, so it is refused as one.
+   *
+   * Validated HERE rather than in the controller so a Telegram admin surface
+   * added later inherits the rule instead of rediscovering it, which is the
+   * same reason bodies are parsed in this layer.
+   */
+  private panelId(candidate: string): string {
+    const parsed = uuidV7Schema.safeParse(candidate);
+    if (!parsed.success) {
+      throw errors.validation(
+        PANEL_ERROR_CODES.PANEL_REQUEST_INVALID,
+        'That is not a valid panel identifier.',
+      );
+    }
+    return parsed.data;
+  }
+
+  /**
    * The panel, or NOT_FOUND.
    *
    * Another tenant's panel id produces exactly what a nonexistent one does. A
    * distinguishable "forbidden" would turn any id into an oracle for whether it
    * exists somewhere on the installation, and panel ids appear in URLs.
    */
-  private async require(tenant: TenantContext, panelId: string): Promise<PanelView> {
-    const view = await this.deps.repository.find(tenant, panelId);
+  private async require(
+    tenant: TenantContext,
+    panelId: string,
+    tx?: TransactionScope,
+  ): Promise<PanelView> {
+    const view = await this.deps.repository.find(tenant, this.panelId(panelId), tx);
     if (view === null) {
       throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
     }
@@ -245,8 +289,12 @@ export class PanelService {
   private validateUrl(raw: string): string {
     const verdict = checkUrl(raw, this.deps.urlPolicy);
     if (!verdict.allowed) {
+      // Both address refusals are PANEL_TARGET_BLOCKED: "this installation will
+      // not call there" is the same answer to the operator whether the reason
+      // is a metadata endpoint or Nexa's own data network, and a distinct code
+      // would let a caller tell those apart by probing.
       const code =
-        verdict.refusal === 'ADDRESS_NOT_ALLOWED'
+        verdict.refusal === 'ADDRESS_NOT_ALLOWED' || verdict.refusal === 'INFRASTRUCTURE_TARGET'
           ? PANEL_ERROR_CODES.PANEL_TARGET_BLOCKED
           : PANEL_ERROR_CODES.PANEL_URL_INVALID;
       throw errors.validation(code, refusalMessage(verdict.refusal));
@@ -326,7 +374,7 @@ export class PanelService {
       PANELS_EDIT,
       { action: 'panel.create', entityType: 'Panel', entityId: null },
       async (tx) => {
-        if (await this.deps.repository.nameTaken(tenant, command.name, null)) {
+        if (await this.deps.repository.nameTaken(tenant, command.name, null, tx)) {
           throw errors.conflict(
             PANEL_ERROR_CODES.PANEL_NAME_TAKEN,
             'Another panel of this tenant already uses that name.',
@@ -372,7 +420,8 @@ export class PanelService {
           },
           tx,
         );
-        await this.deps.idempotency.remember(
+        await rememberOnce(
+          this.deps.idempotency,
           scope,
           actor.surface,
           command.idempotencyKey,
@@ -416,7 +465,7 @@ export class PanelService {
       PANELS_EDIT,
       { action: 'panel.update', entityType: 'Panel', entityId: panelId },
       async (tx) => {
-        const before = await this.require(tenant, panelId);
+        const before = await this.require(tenant, panelId, tx);
         if (before.panel.status === 'ARCHIVED') {
           throw errors.preconditionFailed(
             PANEL_ERROR_CODES.PANEL_ARCHIVED,
@@ -425,7 +474,7 @@ export class PanelService {
         }
         if (
           command.name !== undefined &&
-          (await this.deps.repository.nameTaken(tenant, command.name, panelId))
+          (await this.deps.repository.nameTaken(tenant, command.name, panelId, tx))
         ) {
           throw errors.conflict(
             PANEL_ERROR_CODES.PANEL_NAME_TAKEN,
@@ -453,7 +502,8 @@ export class PanelService {
           },
           tx,
         );
-        await this.deps.idempotency.remember(
+        await rememberOnce(
+          this.deps.idempotency,
           scope,
           actor.surface,
           command.idempotencyKey,
@@ -515,7 +565,7 @@ export class PanelService {
       PANELS_CREDENTIALS_ROTATE,
       { action: 'panel.credentials.replace', entityType: 'Panel', entityId: panelId },
       async (tx) => {
-        const before = await this.require(tenant, panelId);
+        const before = await this.require(tenant, panelId, tx);
         if (before.panel.status === 'ARCHIVED') {
           throw errors.preconditionFailed(
             PANEL_ERROR_CODES.PANEL_ARCHIVED,
@@ -542,7 +592,8 @@ export class PanelService {
           },
           tx,
         );
-        await this.deps.idempotency.remember(
+        await rememberOnce(
+          this.deps.idempotency,
           scope,
           actor.surface,
           idempotencyKey,
@@ -587,7 +638,7 @@ export class PanelService {
       PANELS_EDIT,
       { action: 'panel.status', entityType: 'Panel', entityId: panelId },
       async (tx) => {
-        const before = await this.require(tenant, panelId);
+        const before = await this.require(tenant, panelId, tx);
         const updated = await this.deps.repository.setStatus(tenant, panelId, status, now, tx);
         if (updated === null) {
           throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
@@ -605,7 +656,8 @@ export class PanelService {
           },
           tx,
         );
-        await this.deps.idempotency.remember(
+        await rememberOnce(
+          this.deps.idempotency,
           scope,
           actor.surface,
           idempotencyKey,
@@ -672,7 +724,43 @@ export class PanelService {
       );
     }
 
+    // What this probe is ABOUT to test, captured before the network call. Every
+    // field a probe depends on is here: the address it dials and the three
+    // credential timestamps, which move whenever a credential is replaced or
+    // removed. `updatedAt` covers the address and the status.
+    const testing = configurationOf(before);
+
+    // The throttle, and it is a CLAIM rather than a timestamp comparison the
+    // service makes for itself. Two API containers share this panel and share
+    // nothing else, so the decision belongs in the database; and a claim taken
+    // before the network call, rather than a cooldown started after it, is what
+    // stops two simultaneous requests from both reaching the provider.
+    //
+    // A claim under a different configuration never blocks: replacing a
+    // credential or an address is exactly when an operator needs an answer now,
+    // and the answer they get must not be one measured against what they just
+    // changed.
     const startedAt = this.deps.clock.now();
+    const claimed = await this.deps.repository.claimProbe(
+      tenant,
+      panelId,
+      configurationFingerprint(before),
+      startedAt,
+      new Date(startedAt.getTime() - this.deps.probeCooldownMs),
+    );
+    if (!claimed) {
+      // No probe, no health write, no audit entry: nothing happened, and
+      // `probed: false` is how the caller is told so. The view carries whatever
+      // health is stored, which is what every other read of this panel returns
+      // — a result from the last probe that completed, with its own
+      // `checkedAt`, and never a stale result presented as a fresh one.
+      //
+      // Not an error, deliberately. A cooldown that threw would make the
+      // ordinary "I clicked twice" case look like a failure, and an operator
+      // would learn to retry through it.
+      return { view: before, probed: false };
+    }
+
     const outcome = await provider.probe(
       { baseUrl: before.panel.baseUrl, credentials: target },
       this.deps.http.forBase(before.panel.baseUrl),
@@ -692,6 +780,18 @@ export class PanelService {
       PANELS_EDIT,
       { action: 'panel.test', entityType: 'Panel', entityId: panelId },
       async (tx) => {
+        // Re-read INSIDE the transaction that would store the result. Anything
+        // that changed the panel or its credentials while the probe was in
+        // flight makes this answer describe a configuration that no longer
+        // exists, and health is what an operator trusts when deciding whether
+        // their fix worked.
+        const current = await this.require(tenant, panelId, tx);
+        if (configurationOf(current) !== testing) {
+          throw errors.conflict(
+            PANEL_ERROR_CODES.PANEL_CONFIGURATION_CHANGED,
+            'This panel changed while the connection test was running. Run the test again.',
+          );
+        }
         await this.deps.repository.recordHealth(tenant, panelId, health, tx);
         await this.deps.audit.record(
           scope,
@@ -709,7 +809,8 @@ export class PanelService {
           },
           tx,
         );
-        await this.deps.idempotency.remember(
+        await rememberOnce(
+          this.deps.idempotency,
           scope,
           actor.surface,
           idempotencyKey,
@@ -733,6 +834,40 @@ export class PanelService {
       clock: this.deps.clock,
     };
   }
+}
+
+/**
+ * Everything a probe's answer depends on, as one comparable value.
+ *
+ * A timestamp tuple rather than a stored version column: all four already move
+ * for exactly the reasons that invalidate a probe, so there is nothing new to
+ * maintain and no column that can be forgotten on a write path added later.
+ * `updatedAt` moves for the address and the status; the three credential
+ * timestamps move when a credential is replaced or removed.
+ */
+function configurationOf(view: PanelView): string {
+  return [
+    view.panel.baseUrl,
+    view.panel.status,
+    view.panel.updatedAt.getTime(),
+    view.credentials.usernameSetAt?.getTime() ?? 0,
+    view.credentials.passwordSetAt?.getTime() ?? 0,
+    view.credentials.apiTokenSetAt?.getTime() ?? 0,
+  ].join('|');
+}
+
+/**
+ * The same identity, as an opaque token safe to keep in a row.
+ *
+ * A digest, so a claim row holds nothing readable — not the panel's address,
+ * not its status. There is no credential VALUE in the input to hash in the
+ * first place: `configurationOf` reads the three set-at timestamps, which move
+ * when a credential is replaced and say nothing about what it is. A design that
+ * fingerprinted the credentials themselves would put a verifier for a panel
+ * password in a table that is not the credential table.
+ */
+function configurationFingerprint(view: PanelView): string {
+  return createHash('sha256').update(configurationOf(view)).digest('hex');
 }
 
 /** Which credential kinds a write mentions, optionally filtered. Never values. */

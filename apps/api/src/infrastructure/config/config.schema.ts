@@ -33,6 +33,12 @@ const base64Key = (bytes: number) =>
       message: 'must not be all zero bytes',
     });
 
+/**
+ * A CIDR, loosely. The policy parses it properly; this only stops a typo from
+ * becoming a subnet that silently matches nothing.
+ */
+const CIDR = /^[0-9a-fA-F:.]+\/\d{1,3}$/;
+
 export const configSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -266,6 +272,25 @@ export const configSchema = z
      * like a failure.
      */
     PANEL_HTTP_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(10_000),
+    /**
+     * How long one panel's connection test occupies that panel.
+     *
+     * A probe logs into somebody else's panel. Repeated without a bound it is
+     * two problems: a way to sweep a network one panel edit at a time, and a
+     * way to lock the provider account it authenticates against — several panel
+     * packages lock after a handful of failed logins. Within the window the
+     * caller gets the stored result of the last probe of the same
+     * configuration, and changing the panel or a credential bypasses it.
+     *
+     * Floored at the HTTP budget rather than taken as given: a cooldown shorter
+     * than a probe can run would let a second request start while the first is
+     * still on the wire, which is the case the window exists to prevent.
+     *
+     * There is no off switch. A value floored at one second is the smallest
+     * thing that still bounds a loop, and a deployment that could set this to
+     * zero would eventually be one that had.
+     */
+    PANEL_PROBE_COOLDOWN_MS: z.coerce.number().int().min(1_000).max(600_000).default(10_000),
     /** Response bytes kept from a panel. Reading stops the moment it is passed. */
     PANEL_HTTP_MAX_RESPONSE_BYTES: z.coerce
       .number()
@@ -295,6 +320,33 @@ export const configSchema = z
      * verification stays on. Unset means ordinary public verification.
      */
     PANEL_HTTP_CA_FILE: z.string().min(1).optional(),
+    /**
+     * Networks a panel may never point at, because they are this installation's.
+     *
+     * Comma-separated CIDRs. Private space stays reachable — a self-hosted
+     * panel on `10.0.0.0/8` is the ordinary case — but the API container shares
+     * a bridge network with PostgreSQL and Redis, so without this an operator
+     * with `panels.edit` could aim a panel at Nexa's own data subnet and read
+     * an open port off the difference between failure kinds.
+     *
+     * Deployment sets it from `NEXA_DATA_SUBNET`, which compose already pins so
+     * `TRUSTED_PROXY_IPS` can be exact. Defaulted to that pin's own default so
+     * a stock installation is protected without the operator doing anything,
+     * and overridable so one that moved the network keeps the protection.
+     */
+    PANEL_HTTP_DENIED_SUBNETS: z
+      .string()
+      .default('172.29.1.0/24')
+      .transform((value) =>
+        value
+          .split(',')
+          .map((entry) => entry.trim())
+          .filter((entry) => entry !== ''),
+      )
+      .refine(
+        (entries) => entries.every((entry) => CIDR.test(entry)),
+        'PANEL_HTTP_DENIED_SUBNETS must be a comma-separated list of CIDRs, for example 172.29.1.0/24.',
+      ),
     PANEL_HTTP_ALLOW_LOOPBACK: z
       .enum(['true', 'false'])
       .default('false')

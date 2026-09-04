@@ -1,4 +1,6 @@
 import { lookup as dnsLookup } from 'node:dns';
+import { readFileSync } from 'node:fs';
+import { rootCertificates } from 'node:tls';
 import { request as httpRequest, type ClientRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { LookupAddress } from 'node:dns';
@@ -149,6 +151,88 @@ interface Attempt {
   readonly bodyText: string;
 }
 
+/**
+ * Every authority this process trusts by default, as PEM.
+ *
+ * `tls.rootCertificates` is the BUNDLED Mozilla set and deliberately excludes
+ * anything `NODE_EXTRA_CA_CERTS` added — Node merges that file in only when it
+ * builds the default context, which is exactly the context `ca` replaces. So a
+ * list built from `rootCertificates` alone still silently narrows trust for any
+ * installation using that variable, which is the same defect one layer down.
+ *
+ * Read once. An unreadable path is ignored rather than fatal: Node itself warns
+ * and continues in that case, and refusing to start over a CA file that the
+ * process was already running without would be a worse failure than the one it
+ * prevents.
+ */
+let defaultTrustAnchors: readonly string[] | null = null;
+
+function trustAnchors(): readonly string[] {
+  if (defaultTrustAnchors !== null) return defaultTrustAnchors;
+  const extraPath = process.env['NODE_EXTRA_CA_CERTS'];
+  let extra: string[] = [];
+  if (extraPath !== undefined && extraPath !== '') {
+    try {
+      extra = [readFileSync(extraPath, 'utf8')];
+    } catch {
+      extra = [];
+    }
+  }
+  defaultTrustAnchors = [...rootCertificates, ...extra];
+  return defaultTrustAnchors;
+}
+
+/**
+ * One deadline for one attempt, started BEFORE anything can block.
+ *
+ * It used to be a `setTimeout` created inside the socket phase, which meant the
+ * DNS resolution that runs first was outside it: a resolver that never answered
+ * left the call open indefinitely, and `PANEL_HTTP_TIMEOUT_MS` bounded nothing
+ * despite the docblock promising it covered DNS. A stalled resolver is exactly
+ * the case the bound exists for, because it is the one the operator cannot see.
+ *
+ * `expired()` is what the socket phase reports as TIMEOUT rather than a socket
+ * error, and `onExpire` lets it destroy the request it has in flight. A late
+ * resolver answer after expiry is ignored, because `race` has already settled.
+ */
+interface Deadline {
+  expired(): boolean;
+  /** The socket phase registers its own abort here. At most one subscriber. */
+  onExpire(abort: () => void): void;
+  /** Resolves with TIMEOUT if `work` has not settled by then. */
+  race(work: Promise<ProviderHttpResult>): Promise<ProviderHttpResult>;
+  cancel(): void;
+}
+
+function startDeadline(totalTimeoutMs: number): Deadline {
+  let fired = false;
+  let abort: (() => void) | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const expiry = new Promise<ProviderHttpResult>((resolve) => {
+    timer = setTimeout(() => {
+      fired = true;
+      abort?.();
+      resolve({ ok: false, failure: 'TIMEOUT', status: null });
+    }, totalTimeoutMs);
+    timer.unref?.();
+  });
+
+  return {
+    expired: () => fired,
+    onExpire: (fn) => {
+      abort = fn;
+      // Already gone by the time the socket phase registered. Abort now, or
+      // the request it just opened would outlive the deadline that fired.
+      if (fired) fn();
+    },
+    race: (work) => Promise.race([work, expiry]),
+    cancel: () => {
+      if (timer !== null) clearTimeout(timer);
+    },
+  };
+}
+
 export class SafeHttpClient {
   constructor(private readonly options: SafeHttpOptions) {}
 
@@ -199,11 +283,35 @@ export class SafeHttpClient {
     return { ok: false, failure, status };
   }
 
+  /**
+   * One attempt, under one deadline that covers every blocking step.
+   *
+   * The deadline is started here rather than in `dial`, so resolution is inside
+   * it. `dial`'s own result wins if it arrives first; otherwise the deadline
+   * settles the attempt as TIMEOUT and aborts whatever `dial` had open.
+   */
   private async attempt(url: URL, request: ProviderHttpRequest): Promise<ProviderHttpResult> {
+    const deadline = startDeadline(this.options.totalTimeoutMs);
+    try {
+      return await deadline.race(this.dial(url, request, deadline));
+    } finally {
+      deadline.cancel();
+    }
+  }
+
+  private async dial(
+    url: URL,
+    request: ProviderHttpRequest,
+    deadline: Deadline,
+  ): Promise<ProviderHttpResult> {
     const hostname = url.hostname.startsWith('[') ? url.hostname.slice(1, -1) : url.hostname;
 
     // Resolve ONCE, judge every answer, and keep the one that will be dialled.
     const addresses = await (this.options.resolve ?? resolveAll)(hostname);
+    // The deadline may have fired while the resolver was thinking. `race` has
+    // already settled the attempt, so this return value is discarded — the
+    // point is to stop here rather than open a socket nobody is waiting for.
+    if (deadline.expired()) return { ok: false, failure: 'TIMEOUT', status: null };
     if (addresses === null) return { ok: false, failure: 'UNREACHABLE', status: null };
     const permitted = addresses.filter(
       (entry) => addressAllowed(entry.address, this.options).allowed,
@@ -227,24 +335,26 @@ export class SafeHttpClient {
 
     return new Promise<ProviderHttpResult>((resolve) => {
       let settled = false;
-      let timedOut = false;
       let outgoing: ClientRequest | null = null;
 
       const finish = (result: ProviderHttpResult): void => {
         if (settled) return;
         settled = true;
-        clearTimeout(deadline);
         outgoing?.destroy();
         resolve(result);
       };
 
-      // ONE deadline for the whole call. A per-socket timeout does not bound a
-      // server that sends a byte every few seconds forever, which is the shape
-      // that ties up a worker without ever looking like a failure.
-      const deadline = setTimeout(() => {
-        timedOut = true;
+      // The deadline started before resolution and is owned by `attempt`. All
+      // this phase does is give it something to abort: a per-socket timeout
+      // would not bound a server that sends a byte every few seconds forever,
+      // and would not have bounded the resolver at all.
+      deadline.onExpire(() => {
         finish({ ok: false, failure: 'TIMEOUT', status: null });
-      }, this.options.totalTimeoutMs);
+      });
+      // `onExpire` fires synchronously when the deadline is already gone, so
+      // the attempt can be settled before there is anything to send. Opening
+      // the request anyway would leave a socket outliving its own deadline.
+      if (settled) return;
 
       try {
         outgoing = send(
@@ -255,11 +365,19 @@ export class SafeHttpClient {
             // configured. Only where the socket goes is pinned.
             host: hostname,
             ...(secure ? { servername: hostname } : {}),
-            // Trusted IN ADDITION to the system store, and only over TLS.
+            // Trusted IN ADDITION to the public roots, and only over TLS.
+            //
+            // `ca` REPLACES Node's default trust store rather than extending
+            // it — passing only the operator's PEM made every panel with an
+            // ordinary publicly-trusted certificate fail `TLS_FAILED` the
+            // moment `PANEL_HTTP_CA_FILE` was set, while the comment here
+            // claimed the opposite. So the list is built explicitly: every
+            // anchor this process trusts by default first, then the operator's.
+            //
             // Verification is never turned off; this only widens what counts
             // as a valid issuer, which is what an internal CA needs.
             ...(secure && this.options.caCertificates !== undefined
-              ? { ca: [...this.options.caCertificates] }
+              ? { ca: [...trustAnchors(), ...this.options.caCertificates] }
               : {}),
             port: url.port === '' ? (secure ? 443 : 80) : Number(url.port),
             // No connection pool, and this is part of the pin rather than a
@@ -365,17 +483,21 @@ export class SafeHttpClient {
               });
             });
             response.on('error', (error: unknown) => {
-              finish({ ok: false, failure: failureFromError(error, timedOut), status: code });
+              finish({
+                ok: false,
+                failure: failureFromError(error, deadline.expired()),
+                status: code,
+              });
             });
           },
         );
       } catch (error) {
-        finish({ ok: false, failure: failureFromError(error, timedOut), status: null });
+        finish({ ok: false, failure: failureFromError(error, deadline.expired()), status: null });
         return;
       }
 
       outgoing.on('error', (error: unknown) => {
-        finish({ ok: false, failure: failureFromError(error, timedOut), status: null });
+        finish({ ok: false, failure: failureFromError(error, deadline.expired()), status: null });
       });
 
       if (body !== null) outgoing.write(body.payload);

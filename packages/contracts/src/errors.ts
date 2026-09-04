@@ -265,6 +265,18 @@ export const PANEL_ERROR_CODES = {
   /** A probe was asked for on a panel with no credentials configured. */
   PANEL_CREDENTIALS_MISSING: 'panel.credentials_missing',
   /**
+   * The panel changed while its connection test was in flight.
+   *
+   * A probe reads a panel's address and credentials, then spends as long as the
+   * network takes. If a rotation or an address change commits in that window,
+   * the answer describes a configuration that no longer exists — and writing it
+   * as the panel's health would mark replacement credentials healthy on the
+   * strength of a login the old ones performed, or bury the evidence that a
+   * corrected panel now works. The result is refused rather than stored, and
+   * the operator is asked to run the test again against what the panel is now.
+   */
+  PANEL_CONFIGURATION_CHANGED: 'panel.configuration_changed',
+  /**
    * A persisted provider type that this release has no adapter for.
    *
    * Reached only when a value gets past the CHECK constraint — a migration, a

@@ -146,7 +146,13 @@ describe('panel HTTP surface', () => {
     expect(response.statusCode).toBe(200);
 
     const body = providerListResponseSchema.parse(response.json());
-    expect(body.providers.map((provider) => provider.key).sort()).toEqual(['marzban', 'sanaei']);
+    // ONLY what this release has an adapter for. `sanaei` is in the frozen
+    // descriptor catalogue and its adapter is Phase 3B, so advertising it
+    // offered a configuration that every create rejects — and the previous
+    // version of this test asserted both keys, which is how the endpoint and
+    // its test agreed with each other and disagreed with the product.
+    expect(body.providers.map((provider) => provider.key)).toEqual(['marzban']);
+    expect(body.providers.some((provider) => provider.key === 'sanaei')).toBe(false);
     // A catalogue of code: every tenant sees the same list, and it describes
     // what an adapter declares rather than what a panel row happens to say.
     const marzban = body.providers.find((provider) => provider.key === 'marzban');
@@ -210,6 +216,32 @@ describe('panel HTTP surface', () => {
       for (const secret of [PASSWORD, USERNAME, 'tok-http-9182', 'a-new-password-value-71']) {
         expect(response.body, `a credential reached ${response.statusCode}`).not.toContain(secret);
       }
+    }
+  });
+
+  it('answers a malformed panel identifier with a 4xx, not a 500', async () => {
+    // C13. `panels.id` is a `uuid` column, so a path segment that is not one
+    // reached PostgreSQL as `invalid input syntax for type uuid` and came back
+    // as an internal error with a stack in the log. Every panel route had it.
+    for (const path of [
+      PANEL_ROUTES.detail('not-a-uuid'),
+      PANEL_ROUTES.update('not-a-uuid'),
+      PANEL_ROUTES.credentials('not-a-uuid'),
+      PANEL_ROUTES.status('not-a-uuid'),
+      PANEL_ROUTES.test('not-a-uuid'),
+    ]) {
+      const response =
+        path === PANEL_ROUTES.detail('not-a-uuid')
+          ? await get(path, ownerCookie)
+          : await post(path, ownerCookie, {
+              idempotencyKey: idempotencyKey(),
+              name: 'x',
+              status: 'ACTIVE',
+              credentials: {},
+            });
+      expect(response.statusCode, `${path} did not answer 4xx`).toBeGreaterThanOrEqual(400);
+      expect(response.statusCode, `${path} answered a server error`).toBeLessThan(500);
+      expect(response.json()).toMatchObject({ error: { kind: 'VALIDATION' } });
     }
   });
 
@@ -362,11 +394,16 @@ describe('panel HTTP surface', () => {
     // A base URL that resolves to a loopback address with nothing listening.
     // The probe genuinely runs: this exercises the client, the adapter's error
     // normalization and the health write together, with no fake in the path.
+    //
+    // 127.0.0.2 rather than 127.0.0.1, and the difference is load-bearing: this
+    // suite's database and cache answer on 127.0.0.1, so that address is on the
+    // infrastructure denylist and a panel may not point at it. Any other
+    // loopback address is an ordinary refused connection.
     const created = panelResponseSchema.parse(
       (
         await createPanel(ownerCookie, {
           name: 'Nothing listening',
-          baseUrl: 'http://127.0.0.1:9',
+          baseUrl: 'http://127.0.0.2:9',
           credentials: { username: USERNAME, password: PASSWORD },
         })
       ).json(),

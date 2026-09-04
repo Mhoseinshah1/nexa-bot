@@ -22,7 +22,10 @@ import {
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
-import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
+import {
+  recordMutationDenial,
+  runAuthorizedMutation,
+} from '../../../platform/access/application/authorized-mutation.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
@@ -187,14 +190,19 @@ export class FeatureFlagsService {
     try {
       await this.guard.check(scope, actor, FEATURES_EDIT);
     } catch (denial) {
-      await this.audit.record(scope, actor, {
-        action: 'features.set',
-        entityType: 'FeatureFlag',
-        entityId: null,
-        before: null,
-        after: null,
-        result: 'DENIED',
-      });
+      // One recorder for every early refusal in the codebase. The inline
+      // version this replaces wrote a DENIED row for ANY throw — including a
+      // missing tenant context, which is not a denial of this permission — and
+      // emitted no operational event, so the same refusal was recorded
+      // differently depending on which phase wrote the endpoint.
+      await recordMutationDenial(
+        { guard: this.guard, audit: this.audit, opsLog: this.opsLog },
+        scope,
+        actor,
+        FEATURES_EDIT,
+        { action: 'features.set', entityType: 'FeatureFlag', entityId: null },
+        denial,
+      );
       throw denial;
     }
 

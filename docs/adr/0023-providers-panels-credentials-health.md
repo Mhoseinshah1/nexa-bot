@@ -218,8 +218,34 @@ allows the rest:
 | multicast, reserved, broadcast, unspecified | refused                                    | not a host                                                                             |
 | loopback                                    | refused unless explicitly enabled          | in a container the API's loopback is the API                                           |
 | private RFC1918 / ULA                       | **allowed**                                | the legitimate self-hosted case                                                        |
+| this installation's own data network        | refused                                    | the API shares a bridge with PostgreSQL and Redis; see below                           |
 | public addresses                            | allowed over https; plaintext http refused |                                                                                        |
 | any redirect                                | refused, never followed                    |                                                                                        |
+
+The one carve-out inside the permissive rule is **this installation's own
+network**. "Private is allowed" also meant an operator with `panels.edit` could
+aim a panel at the compose bridge the API shares with PostgreSQL and Redis. No
+response body ever comes back, which does not settle it: `UNREACHABLE` versus
+`TLS_FAILED` versus a timeout is a port scanner with three states, and the
+services behind that bridge are unauthenticated by design because only Nexa is
+supposed to be on it.
+
+Two rules, because either alone has a gap:
+
+- **`PANEL_HTTP_DENIED_SUBNETS`**, checked against the RESOLVED address, so a
+  hostname pointing into the network is refused as surely as a literal. It
+  defaults to `172.29.1.0/24` and the installer substitutes the real
+  `NEXA_DATA_SUBNET` — the same value compose pins so `TRUSTED_PROXY_IPS` can be
+  exact — because an operator who moves the network to avoid a collision must
+  not silently lose the protection.
+- **The hostnames in `DATABASE_URL` and `REDIS_URL`**, refused by name. This
+  covers the arrangement the CIDR list cannot: a managed database on a public
+  address is in no denied subnet at all.
+
+Everything else about private space is unchanged: `10.20.30.40:2053` is a panel
+and stays reachable; only the network Nexa itself is on is not. The refusal
+names the rule and never the host, address, port or network — a message that
+described what it refused would be the oracle the rule exists to close.
 
 Three implementation points matter more than the table:
 
@@ -306,6 +332,59 @@ latency. Closing that needs an egress proxy on a network that can reach panels
 and nothing else, which is a deployment topology decision and not a code one. It
 is recorded here rather than implied.
 
+### One connection test per panel per cooldown, claimed in the database
+
+A connection test is an operator-triggered outbound request that logs into
+somebody else's panel, and repeating it is two separate problems. It multiplies
+the network-probing surface the section above bounds — an address the policy
+allows can be swept as fast as the button can be pressed — and a login retried
+on a loop locks the provider account it authenticates with, which several panel
+packages do after a handful of failures.
+
+So a probe must first take a **claim** on the panel: one row in
+`panel_probe_claims`, written by a single `INSERT … ON CONFLICT DO UPDATE …
+WHERE … RETURNING` on the pool, outside any transaction.
+
+Three properties follow from that shape, and none of them survives a different
+one:
+
+- **Two simultaneous requests cannot both probe.** PostgreSQL takes a row lock
+  on the conflict path and re-evaluates the `WHERE` against the row as it stands
+  after the wait, so exactly one of them sees a claimable row. A `SELECT` then
+  an `UPDATE` — which is what any decision made in the process looks like —
+  lets both read "free" and both proceed.
+- **It holds across containers.** The claim is state two API processes share;
+  an in-memory cooldown is per process, and the deployment runs more than one.
+- **Nobody waits.** The refused request returns immediately with the panel's
+  stored health and `probed: false`. There is no sleep inside an HTTP request,
+  and no error either: a cooldown that threw would make "I clicked twice" look
+  like a failure and teach an operator to retry through it.
+
+The claim is keyed by the panel and carries the tenant, so one tenant's cooldown
+is invisible to another; the tenant predicate is in the statement as well as in
+the service that resolved the panel.
+
+**A claim is only ever for one configuration.** It stores a digest of the same
+identity the in-flight guard compares — address, status, and the three
+credential set-at timestamps — and a claim taken under a different one never
+blocks. Replacing a credential or an address is exactly when an operator needs
+an answer now, and it must not be the previous answer: the throttled path
+returns stored health, so without this it would return a result measured against
+the configuration they just changed. Nothing about a credential's VALUE is
+hashed or stored — the set-at timestamps move when a credential is replaced and
+say nothing about what it is, and a digest of the credentials themselves would
+put a verifier for a panel password in a table that is not the credential table.
+
+The identity is a timestamp tuple, so two writes inside the same millisecond are
+indistinguishable. That is the resolution the in-flight guard has always had and
+the same window it accepts; closing it would mean a revision column on every
+panel write path, which is a larger change than the case justifies.
+
+`PANEL_PROBE_COOLDOWN_MS` defaults to ten seconds, is floored at one second by
+the schema, and is raised to `PANEL_HTTP_TIMEOUT_MS` when that is larger — a
+window shorter than a probe can run would let a second request start while the
+first is still on the wire. There is no off switch.
+
 ### Every write path takes a scope and an actor
 
 Every method takes a `ScopeContext` and an `ActorContext` and checks its
@@ -336,6 +415,14 @@ they still had it.
 - Health carries no history. "When did this panel start failing" is not
   answerable from `panel_health` alone; the operational log is where that
   belongs when someone asks for it.
-- The SSRF policy is deliberately permissive about private space, and the
-  port-scanning residue above is accepted until a deployment-level egress
-  control exists.
+- The SSRF policy is deliberately permissive about private space. Nexa's own
+  data network is carved out of that permission; the residue — an operator can
+  still distinguish reachable from unreachable across the rest of a private
+  network — is accepted until a deployment-level egress control exists.
+- A panel cannot be tested twice inside the cooldown, including by two
+  different operators. That is the point, and the cost is that the second one
+  sees a result they did not cause, with its own `checked at`.
+- An operator who runs the database somewhere the denied list does not name and
+  under a hostname the connection string does not use is not covered. That is a
+  deployment this repository does not produce, and the remedy is a CIDR in
+  `PANEL_HTTP_DENIED_SUBNETS` rather than more code.

@@ -34,6 +34,7 @@ describe('the production environment template', () => {
     __SECRETS_ACTIVE_KEY_ID__: 'install-1',
     __DOMAIN__: 'admin.example.com',
     __EDGE_SUBNET__: '172.29.0.0/24',
+    __DATA_SUBNET__: '172.29.1.0/24',
   };
 
   function render(overrides: Record<string, string> = {}): Record<string, string> {
@@ -123,6 +124,46 @@ describe('the production environment template', () => {
       /__BUILD_(VERSION|COMMIT|TIME)__/,
     );
     expect(installer, 'the installer still writes a pending placeholder').not.toMatch(/=pending/);
+  });
+
+  it('substitutes every placeholder the template contains, everywhere it is rendered', () => {
+    // The template and the scripts that fill it in are one mechanism split
+    // across a repository. A key added to the template with no matching
+    // substitution produces a literal `__NAME__` in the rendered file, which
+    // the schema rejects at boot — after the script has reported success. The
+    // test above proves the RENDER leaves nothing behind; this proves the
+    // render is the same set the scripts actually perform.
+    //
+    // THREE renderers, not one, and that is the lesson. `PANEL_HTTP_DENIED_SUBNETS`
+    // was added to the template and to the installer, and both deployment
+    // smoke tests then failed in CI on a literal placeholder, because each
+    // renders the same template through its own substitution list. A check
+    // that knew only about the installer would not have said so.
+    const raw = readFileSync(templatePath, 'utf8');
+    const renderers = (
+      [
+        'deploy/install.sh',
+        'scripts/deployment-smoke.sh',
+        'scripts/deployment-update-smoke.sh',
+      ] as const
+    ).map((path) => [path, readFileSync(join(__dirname, '../..', path), 'utf8')] as const);
+    // Assignments only. The header comment names `__PLACEHOLDER__` when it
+    // explains the mechanism, and that is prose, not a value to fill in.
+    const placeholders = new Set(
+      [...raw.matchAll(/^[A-Z][A-Z0-9_]*=.*$/gm)].flatMap((line) =>
+        [...line[0].matchAll(/__[A-Z0-9_]+__/g)].map((m) => m[0]),
+      ),
+    );
+    expect(placeholders.size, 'the template has no placeholders at all').toBeGreaterThan(0);
+    for (const placeholder of placeholders) {
+      for (const [path, text] of renderers) {
+        expect(text, `${path} never substitutes ${placeholder}`).toContain(placeholder);
+      }
+      expect(
+        SUBSTITUTIONS,
+        `this test never renders ${placeholder}, so it proves nothing about it`,
+      ).toHaveProperty(placeholder);
+    }
   });
 
   it('the installer checks the LAST key in the template for a torn write', () => {
