@@ -313,7 +313,7 @@ grep -qx 'redis-by-name=denied' <<<"$policy" || fail "the cache hostname is not 
 grep -qx 'private-panel=allowed' <<<"$policy" || fail "a legitimate private panel is refused: private support was broken"
 grep -qx 'default-subnet-not-special=allowed' <<<"$policy" || fail "the application default subnet is still hardcoded as the security property"
 grep -qx 'public-panel=allowed' <<<"$policy" || fail "a public panel is refused"
-pass "the upgraded installation denies 172.31.44.0/24 because deploy.env names it, and nothing else""
+pass "the upgraded installation denies 172.31.44.0/24 because deploy.env names it, and nothing else"
 
 # ---------------------------------------------------------------------------
 step "a release that never becomes ready must not become current"
