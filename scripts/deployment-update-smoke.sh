@@ -263,9 +263,15 @@ grep -qF '# nexa-smoke: v2.0.0 host assets' "${NEXA_BIN_DIR}/botctl" ||
   fail "the installed botctl kept its inode; it was written in place rather than renamed over"
 [ -s "${NEXA_LIB_DIR}/nexa-lib.sh" ] || fail "the update left no library beside the botctl it installed"
 [ -s "${NEXA_DEPLOY_DIR}/compose.yml" ] || fail "the update left no compose file"
-# What was replaced is recoverable: the outgoing release's set was recorded.
-[ -s "${NEXA_STATE_DIR}/assets/v1.0.0/bin/botctl" ] ||
-  fail "the update replaced the host assets without recording the ones it replaced"
+# What was replaced is recoverable: the outgoing release's set was recorded —
+# under the DIGEST it runs, never the version (C9). A version-keyed directory
+# would be the moved-tag bug coming back.
+[ -s "${NEXA_STATE_DIR}/assets/${DIGEST_A#sha256:}/bin/botctl" ] ||
+  fail "the update replaced the host assets without recording the ones it replaced under their digest"
+[ ! -e "${NEXA_STATE_DIR}/assets/v1.0.0" ] && [ ! -e "${NEXA_STATE_DIR}/assets/v2.0.0" ] ||
+  fail "the update keyed a host-asset set by version rather than by digest"
+[ ! -e "${NEXA_STATE_DIR}/assets/.activating" ] ||
+  fail "the update left an activation generation behind after succeeding"
 pass "v2.0.0 is current, by digest, with v1.0.0 preserved as the rollback target"
 pass "the host assets are v2.0.0's, and v1.0.0's were recorded"
 
