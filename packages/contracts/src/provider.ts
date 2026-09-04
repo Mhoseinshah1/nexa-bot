@@ -40,7 +40,27 @@ export const PROVIDER_CAPABILITIES = [
 ] as const;
 export type ProviderCapability = (typeof PROVIDER_CAPABILITIES)[number];
 
-export const CREDENTIAL_SHAPES = ['USERNAME_PASSWORD', 'OPAQUE_TOKEN', 'NONE'] as const;
+/**
+ * What a provider needs in order to authenticate.
+ *
+ * `TOKEN_OR_USERNAME_PASSWORD` is not a convenience: 3X-UI v3.7.0 accepts a
+ * scoped Bearer API token AND a browser-style session login, and both
+ * authenticate the same `/panel/api` surface. A provider that genuinely has two
+ * modes must say so, because the alternative is a descriptor that names one and
+ * an adapter that quietly tries the other.
+ *
+ * The SELECTION between them is made once, by the credential resolver, and the
+ * adapter is handed an already-narrowed `OPAQUE_TOKEN` or `USERNAME_PASSWORD`.
+ * That is what makes "a configured API token is never silently replaced by the
+ * password" a property of the resolver rather than a rule every adapter has to
+ * remember.
+ */
+export const CREDENTIAL_SHAPES = [
+  'USERNAME_PASSWORD',
+  'OPAQUE_TOKEN',
+  'TOKEN_OR_USERNAME_PASSWORD',
+  'NONE',
+] as const;
 export type CredentialShape = (typeof CREDENTIAL_SHAPES)[number];
 
 /**
@@ -129,6 +149,9 @@ export interface CreateProviderUserInput {
  * and each maps to exactly one operator remedy:
  *
  *   `AUTHENTICATION_FAILED`  the credentials were rejected — replace them
+ *   `AUTHENTICATION_REQUIRES_INTERACTION`
+ *                            the credentials are not rejected and cannot be
+ *                            used unattended — configure an API token
  *   `UNREACHABLE`            DNS, connection refused, network down — check the host
  *   `TIMEOUT`                it answered too slowly, or not at all in time
  *   `TLS_FAILED`             certificate or handshake — check the certificate
@@ -139,6 +162,19 @@ export interface CreateProviderUserInput {
  */
 export const PROVIDER_FAILURE_KINDS = [
   'AUTHENTICATION_FAILED',
+  /**
+   * The panel wants a second factor this installation deliberately cannot
+   * supply.
+   *
+   * Distinct from `AUTHENTICATION_FAILED` because the remedy is different and
+   * the wrong remedy is harmful. "The credentials were rejected" sends an
+   * operator to retype a password that is very probably correct, and 3X-UI
+   * v3.7.0 blocks an IP-and-username pair after enough failed attempts — so
+   * conflating the two turns a configuration gap into a lockout. What this
+   * says instead is: this panel requires a one-time code, Nexa does not store
+   * or generate one, configure an API token for unattended access.
+   */
+  'AUTHENTICATION_REQUIRES_INTERACTION',
   'UNREACHABLE',
   'TIMEOUT',
   'TLS_FAILED',
@@ -158,6 +194,9 @@ export type ProviderFailureKind = (typeof PROVIDER_FAILURE_KINDS)[number];
  */
 export const PROVIDER_FAILURE_RETRYABLE: Readonly<Record<ProviderFailureKind, boolean>> = {
   AUTHENTICATION_FAILED: false,
+  // Retrying cannot conjure a second factor, and each attempt counts against
+  // the panel's own login limiter.
+  AUTHENTICATION_REQUIRES_INTERACTION: false,
   UNREACHABLE: true,
   TIMEOUT: true,
   TLS_FAILED: false,
@@ -235,6 +274,23 @@ export type ProviderHttpResult =
       readonly headers: Readonly<Record<string, string>>;
       /** Bounded by the client. An adapter never sees more than the cap. */
       readonly bodyText: string;
+      /**
+       * `Set-Cookie` values, one entry per header, exactly as sent.
+       *
+       * Separate from `headers` because that map is `Record<string, string>`
+       * and `Set-Cookie` is the one header that legitimately repeats. Joining
+       * repeated values with a comma — which is what flattening does — is
+       * ambiguous for cookies specifically, since an `Expires` attribute
+       * contains a comma of its own, so a joined string cannot be split back
+       * into the cookies that were actually set.
+       *
+       * Exposed because a session-authenticating provider cannot work without
+       * it, and the alternative was an adapter opening its own socket. Reading
+       * a header is not a widening of what an adapter may CONTACT: the client
+       * still decides the destination, and nothing here lets a cookie reach an
+       * origin the client did not already allow.
+       */
+      readonly setCookie: readonly string[];
     }
   | { readonly ok: false; readonly failure: ProviderFailureKind; readonly status: number | null };
 
@@ -352,29 +408,32 @@ const MARZBAN: ProviderDescriptor = {
 /**
  * Sanaei / 3X-UI.
  *
- * A session cookie from a form login rather than a bearer token, and a
- * subscription-link domain that must be configured separately because the panel
- * does not derive it from its own address.
+ * TWO authentication modes, and that is a fact from the source rather than an
+ * accommodation: MHSanaei/3x-ui v3.7.0 (`f727d04f6522bb94a8fb52e8352fdcafb51c11e1`)
+ * authenticates `/panel/api/*` with EITHER a scoped Bearer API token or a
+ * browser-style session cookie obtained by logging in. `checkAPIAuth` in
+ * `internal/web/controller/api.go` accepts both, so a descriptor naming only
+ * one would be describing a panel that does not exist.
  *
- * The adapter is Phase 3B. The descriptor is declared here because
- * `PROVIDER_TYPES` and the CHECK constraint are one contract change, and
- * splitting an enum across two releases means a migration to widen a constraint
- * for a value the code already knew about.
+ * Phase 3B resolves them in a fixed order — a configured API token is used as
+ * a token and is never silently replaced by the password — and the resolver,
+ * not the adapter, is where that happens.
  *
- * `USERNAME_PASSWORD` is 3X-UI's own documented login and NOT a finding from
- * the research corpus, which is explicit that this is unknown: `UNK-XUI-010`
- * records that the API surface and what the legacy bot's single `توکن` actually
- * authenticated against were never observable. The legacy bot collected one
- * opaque field and stored it in its password column with the username left null
- * (WEB-BR-007) — a UI-layer shape, not a protocol fact. Phase 3B validates this
- * against a deterministic fake server; `UNK-XUI-010` stays open until a real
- * panel says otherwise, and the descriptor is the one place to change if it
- * does.
+ * `UNK-XUI-010` is CLOSED by this, and it is worth saying how, because the
+ * corpus could not close it: the research recorded that the legacy bot
+ * collected one opaque `توکن` field and stored it in its password column with
+ * the username left null (WEB-BR-007), which is a UI-layer shape and not a
+ * protocol fact. The upstream source settles it, and the deterministic fake
+ * server in this repository reproduces the wire contract it establishes.
+ *
+ * The subscription-link domain still has to be configured separately, because
+ * the panel does not derive it from its own address. That is Phase 4's
+ * business; it is declared here so the seam stays visible.
  */
 const SANAEI: ProviderDescriptor = {
   key: 'sanaei',
   canonicalName: 'Sanaei (3X-UI)',
-  credentialShape: 'USERNAME_PASSWORD',
+  credentialShape: 'TOKEN_OR_USERNAME_PASSWORD',
   capabilities: [
     'CREATE_USER',
     'RENEW_USER',

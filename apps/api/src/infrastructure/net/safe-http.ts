@@ -475,11 +475,24 @@ export class SafeHttpClient {
                   ? value.join(', ')
                   : (value ?? '');
               }
+              // `Set-Cookie` is kept UNJOINED as well. It is the one header
+              // that legitimately repeats, and the flattened map above cannot
+              // represent that: an `Expires` attribute contains a comma, so a
+              // comma-joined string cannot be split back into the cookies that
+              // were actually set. A provider that authenticates with a session
+              // needs the real values; `node:http` already parses them into an
+              // array, so this loses nothing and invents nothing.
+              const rawSetCookie = response.headers['set-cookie'];
               finish({
                 ok: true,
                 status: code,
                 headers: collected,
                 bodyText: Buffer.concat(chunks).toString('utf8'),
+                setCookie: Array.isArray(rawSetCookie)
+                  ? [...rawSetCookie]
+                  : rawSetCookie === undefined
+                    ? []
+                    : [rawSetCookie],
               });
             });
             response.on('error', (error: unknown) => {

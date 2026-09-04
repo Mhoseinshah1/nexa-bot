@@ -22,7 +22,12 @@ import {
   PANEL_NAME_MIN_LENGTH,
   PANEL_STATUSES,
 } from './panels.js';
-import { PROVIDER_CAPABILITIES, PROVIDER_FAILURE_KINDS, PROVIDER_TYPES } from './provider.js';
+import {
+  CREDENTIAL_SHAPES,
+  PROVIDER_CAPABILITIES,
+  PROVIDER_FAILURE_KINDS,
+  PROVIDER_TYPES,
+} from './provider.js';
 
 /**
  * The HTTP seam.
@@ -855,7 +860,9 @@ export const PANEL_ROUTES = {
 export const providerDescriptorSchema = z.object({
   key: z.enum(PROVIDER_TYPES),
   canonicalName: z.string(),
-  credentialShape: z.enum(['USERNAME_PASSWORD', 'OPAQUE_TOKEN', 'NONE']),
+  // From the frozen list, not a copy of it: a shape added to the catalogue
+  // and forgotten here would be a provider the surface cannot describe.
+  credentialShape: z.enum(CREDENTIAL_SHAPES),
   capabilities: z.array(z.enum(PROVIDER_CAPABILITIES)),
   requiredActivationFields: z.array(z.string()),
 });
