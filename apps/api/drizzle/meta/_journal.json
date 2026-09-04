@@ -148,6 +148,13 @@
       "when": 1788526884421,
       "tag": "0020_panel_probe_budgets",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1788534205876,
+      "tag": "0021_widen_panel_health_failure",
+      "breakpoints": true
     }
   ]
 }
