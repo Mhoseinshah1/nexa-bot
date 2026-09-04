@@ -7,11 +7,21 @@ import type { ServiceId } from './ids.js';
  * capabilities as data. Capabilities are never inferred from a version string,
  * and no code outside the adapter registry branches on provider type.
  *
- * The evidence says the differences are of kind, not degree: 3X-UI carries a
- * single opaque token where Marzban has a username and password, and requires a
- * separately configured subscription-link domain because its sub URL is not
- * derived from the panel address. A manual-sale provider has no backend at all.
- * An interface validated against one implementation is not an interface.
+ * The differences are of kind, not degree, and they are now verified rather
+ * than assumed. These are separate products with separate APIs; nothing below
+ * is shared between them beyond this interface.
+ *
+ *   - **Marzban** authenticates with a username and password, which it
+ *     exchanges through its own API for an ephemeral Bearer token. Nexa stores
+ *     the pair and never the token: the token lives for one probe.
+ *   - **Sanaei / 3X-UI v3.7.0** accepts EITHER a scoped Bearer API token or a
+ *     browser-style session obtained by logging in — and that login is bound to
+ *     a CSRF token minted in the same session, so it is a sequence rather than
+ *     a request. It also needs a separately configured subscription-link
+ *     domain, because its sub URL is not derived from the panel address.
+ *
+ * A manual-sale provider has no backend at all. An interface validated against
+ * one implementation is not an interface.
  *
  * Phase 0 shipped the vocabulary; Phase 3 populates the descriptors and
  * implements the CONNECTION half. The service half — creating users, reading
@@ -40,7 +50,27 @@ export const PROVIDER_CAPABILITIES = [
 ] as const;
 export type ProviderCapability = (typeof PROVIDER_CAPABILITIES)[number];
 
-export const CREDENTIAL_SHAPES = ['USERNAME_PASSWORD', 'OPAQUE_TOKEN', 'NONE'] as const;
+/**
+ * What a provider needs in order to authenticate.
+ *
+ * `TOKEN_OR_USERNAME_PASSWORD` is not a convenience: 3X-UI v3.7.0 accepts a
+ * scoped Bearer API token AND a browser-style session login, and both
+ * authenticate the same `/panel/api` surface. A provider that genuinely has two
+ * modes must say so, because the alternative is a descriptor that names one and
+ * an adapter that quietly tries the other.
+ *
+ * The SELECTION between them is made once, by the credential resolver, and the
+ * adapter is handed an already-narrowed `OPAQUE_TOKEN` or `USERNAME_PASSWORD`.
+ * That is what makes "a configured API token is never silently replaced by the
+ * password" a property of the resolver rather than a rule every adapter has to
+ * remember.
+ */
+export const CREDENTIAL_SHAPES = [
+  'USERNAME_PASSWORD',
+  'OPAQUE_TOKEN',
+  'TOKEN_OR_USERNAME_PASSWORD',
+  'NONE',
+] as const;
 export type CredentialShape = (typeof CREDENTIAL_SHAPES)[number];
 
 /**
@@ -72,6 +102,31 @@ export interface ProviderDescriptor {
   readonly key: ProviderType;
   readonly canonicalName: string;
   readonly credentialShape: CredentialShape;
+  /**
+   * The operations THIS RELEASE can actually execute for this provider.
+   *
+   * Not a feature matrix, and not a statement about what the panel supports.
+   * `supportsCapability` answers from this array and the providers endpoint
+   * publishes it verbatim, so every entry is a promise the product makes to an
+   * operator — and one it must be able to keep by calling code that exists.
+   *
+   * The field carried two meanings for a release, and that is what forced this
+   * comment: one provider listed what its adapter did, another listed what its
+   * panel could do in a later phase, and the same field on the same endpoint
+   * meant different things depending on which row you read. Phase 3 connection
+   * adapters therefore expose exactly `HEALTH_CHECK`.
+   *
+   * **Widening this list is a code and test change, never a declaration.** A
+   * capability appears here in the same commit as the operation behind it:
+   * implemented, wired into the application, and tested for that provider. The
+   * catalogue is then fail-closed by construction — an operation that is not
+   * listed cannot be offered, which is the correct failure when the
+   * alternative is offering one nothing can perform.
+   *
+   * If a later phase genuinely needs "what could this panel do in principle" —
+   * to plan a migration, or to warn before a downgrade — that is a SEPARATE
+   * concept with its own name. This field is not to be overloaded again.
+   */
   readonly capabilities: readonly ProviderCapability[];
   /**
    * Fields that must be configured before this provider can build a config at
@@ -129,6 +184,9 @@ export interface CreateProviderUserInput {
  * and each maps to exactly one operator remedy:
  *
  *   `AUTHENTICATION_FAILED`  the credentials were rejected — replace them
+ *   `AUTHENTICATION_REQUIRES_INTERACTION`
+ *                            the credentials are not rejected and cannot be
+ *                            used unattended — configure an API token
  *   `UNREACHABLE`            DNS, connection refused, network down — check the host
  *   `TIMEOUT`                it answered too slowly, or not at all in time
  *   `TLS_FAILED`             certificate or handshake — check the certificate
@@ -139,6 +197,19 @@ export interface CreateProviderUserInput {
  */
 export const PROVIDER_FAILURE_KINDS = [
   'AUTHENTICATION_FAILED',
+  /**
+   * The panel wants a second factor this installation deliberately cannot
+   * supply.
+   *
+   * Distinct from `AUTHENTICATION_FAILED` because the remedy is different and
+   * the wrong remedy is harmful. "The credentials were rejected" sends an
+   * operator to retype a password that is very probably correct, and 3X-UI
+   * v3.7.0 blocks an IP-and-username pair after enough failed attempts — so
+   * conflating the two turns a configuration gap into a lockout. What this
+   * says instead is: this panel requires a one-time code, Nexa does not store
+   * or generate one, configure an API token for unattended access.
+   */
+  'AUTHENTICATION_REQUIRES_INTERACTION',
   'UNREACHABLE',
   'TIMEOUT',
   'TLS_FAILED',
@@ -158,6 +229,9 @@ export type ProviderFailureKind = (typeof PROVIDER_FAILURE_KINDS)[number];
  */
 export const PROVIDER_FAILURE_RETRYABLE: Readonly<Record<ProviderFailureKind, boolean>> = {
   AUTHENTICATION_FAILED: false,
+  // Retrying cannot conjure a second factor, and each attempt counts against
+  // the panel's own login limiter.
+  AUTHENTICATION_REQUIRES_INTERACTION: false,
   UNREACHABLE: true,
   TIMEOUT: true,
   TLS_FAILED: false,
@@ -235,6 +309,23 @@ export type ProviderHttpResult =
       readonly headers: Readonly<Record<string, string>>;
       /** Bounded by the client. An adapter never sees more than the cap. */
       readonly bodyText: string;
+      /**
+       * `Set-Cookie` values, one entry per header, exactly as sent.
+       *
+       * Separate from `headers` because that map is `Record<string, string>`
+       * and `Set-Cookie` is the one header that legitimately repeats. Joining
+       * repeated values with a comma — which is what flattening does — is
+       * ambiguous for cookies specifically, since an `Expires` attribute
+       * contains a comma of its own, so a joined string cannot be split back
+       * into the cookies that were actually set.
+       *
+       * Exposed because a session-authenticating provider cannot work without
+       * it, and the alternative was an adapter opening its own socket. Reading
+       * a header is not a widening of what an adapter may CONTACT: the client
+       * still decides the destination, and nothing here lets a cookie reach an
+       * origin the client did not already allow.
+       */
+      readonly setCookie: readonly string[];
     }
   | { readonly ok: false; readonly failure: ProviderFailureKind; readonly status: number | null };
 
@@ -320,77 +411,60 @@ export function supportsCapability(
  * discarded, so there is no third credential to rotate and nothing to leak from
  * a database dump.
  *
- * `DELIVER_CONFIG_FILE` is declared because Marzban-compatible panels serve
- * per-user configuration files; the flow that delivers them is Phase 4, and
- * declaring the capability now is what lets Phase 4 add it without touching
- * this contract.
+ * **Capabilities are exactly `HEALTH_CHECK`**, because that is what this
+ * release can execute for Marzban: the adapter implements
+ * `ProviderConnectionAdapter` and nothing else. It previously declared the
+ * fourteen operations a Marzban-compatible panel serves — creating users,
+ * reading usage, delivering configuration files — on the reasoning that
+ * declaring them now would let Phase 4 add the flows without touching this
+ * contract. That reasoning is rejected: the endpoint publishing this array is
+ * how the product tells an operator what it can do, so the array was
+ * advertising operations no code could perform. Each returns in the commit
+ * that implements it.
  */
 const MARZBAN: ProviderDescriptor = {
   key: 'marzban',
   canonicalName: 'Marzban',
   credentialShape: 'USERNAME_PASSWORD',
-  capabilities: [
-    'CREATE_USER',
-    'RENEW_USER',
-    'DELETE_USER',
-    'DISABLE_USER',
-    'ENABLE_USER',
-    'READ_USAGE',
-    'RESET_USAGE',
-    'ADD_VOLUME',
-    'ADD_TIME',
-    'ROTATE_SUBSCRIPTION_LINK',
-    'DELIVER_SUBSCRIPTION_LINK',
-    'DELIVER_RAW_CONFIGS',
-    'DELIVER_CONFIG_FILE',
-    'LIMIT_DEVICES',
-    'HEALTH_CHECK',
-  ],
+  capabilities: ['HEALTH_CHECK'],
   requiredActivationFields: [],
 };
 
 /**
  * Sanaei / 3X-UI.
  *
- * A session cookie from a form login rather than a bearer token, and a
- * subscription-link domain that must be configured separately because the panel
- * does not derive it from its own address.
+ * TWO authentication modes, and that is a fact from the source rather than an
+ * accommodation: MHSanaei/3x-ui v3.7.0 (`f727d04f6522bb94a8fb52e8352fdcafb51c11e1`)
+ * authenticates `/panel/api/*` with EITHER a scoped Bearer API token or a
+ * browser-style session cookie obtained by logging in. `checkAPIAuth` in
+ * `internal/web/controller/api.go` accepts both, so a descriptor naming only
+ * one would be describing a panel that does not exist.
  *
- * The adapter is Phase 3B. The descriptor is declared here because
- * `PROVIDER_TYPES` and the CHECK constraint are one contract change, and
- * splitting an enum across two releases means a migration to widen a constraint
- * for a value the code already knew about.
+ * Phase 3B resolves them in a fixed order — a configured API token is used as
+ * a token and is never silently replaced by the password — and the resolver,
+ * not the adapter, is where that happens.
  *
- * `USERNAME_PASSWORD` is 3X-UI's own documented login and NOT a finding from
- * the research corpus, which is explicit that this is unknown: `UNK-XUI-010`
- * records that the API surface and what the legacy bot's single `توکن` actually
- * authenticated against were never observable. The legacy bot collected one
- * opaque field and stored it in its password column with the username left null
- * (WEB-BR-007) — a UI-layer shape, not a protocol fact. Phase 3B validates this
- * against a deterministic fake server; `UNK-XUI-010` stays open until a real
- * panel says otherwise, and the descriptor is the one place to change if it
- * does.
+ * `UNK-XUI-010` is CLOSED by this, and it is worth saying how, because the
+ * corpus could not close it: the research recorded that the legacy bot
+ * collected one opaque `توکن` field and stored it in its password column with
+ * the username left null (WEB-BR-007), which is a UI-layer shape and not a
+ * protocol fact. The upstream source settles it, and the deterministic fake
+ * server in this repository reproduces the wire contract it establishes.
+ *
+ * The subscription-link domain still has to be configured separately, because
+ * the panel does not derive it from its own address. That is Phase 4's
+ * business; it is declared here so the seam stays visible.
+ *
+ * **Capabilities are exactly `HEALTH_CHECK`**, on the same rule as every other
+ * provider: this release implements authentication, connection testing and a
+ * read-only health probe for 3X-UI, and declaring more would advertise
+ * operations no code can perform.
  */
 const SANAEI: ProviderDescriptor = {
   key: 'sanaei',
   canonicalName: 'Sanaei (3X-UI)',
-  credentialShape: 'USERNAME_PASSWORD',
-  capabilities: [
-    'CREATE_USER',
-    'RENEW_USER',
-    'DELETE_USER',
-    'DISABLE_USER',
-    'ENABLE_USER',
-    'READ_USAGE',
-    'RESET_USAGE',
-    'ADD_VOLUME',
-    'ADD_TIME',
-    'DELIVER_SUBSCRIPTION_LINK',
-    'DELIVER_RAW_CONFIGS',
-    'LIMIT_DEVICES',
-    'INACTIVE_ACCOUNT_INBOUND',
-    'HEALTH_CHECK',
-  ],
+  credentialShape: 'TOKEN_OR_USERNAME_PASSWORD',
+  capabilities: ['HEALTH_CHECK'],
   requiredActivationFields: ['subscriptionDomain'],
 };
 

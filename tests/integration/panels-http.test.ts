@@ -146,18 +146,82 @@ describe('panel HTTP surface', () => {
     expect(response.statusCode).toBe(200);
 
     const body = providerListResponseSchema.parse(response.json());
-    // ONLY what this release has an adapter for. `sanaei` is in the frozen
-    // descriptor catalogue and its adapter is Phase 3B, so advertising it
-    // offered a configuration that every create rejects — and the previous
-    // version of this test asserted both keys, which is how the endpoint and
-    // its test agreed with each other and disagreed with the product.
-    expect(body.providers.map((provider) => provider.key)).toEqual(['marzban']);
-    expect(body.providers.some((provider) => provider.key === 'sanaei')).toBe(false);
+    // ONLY what this release has an ADAPTER for, which is the whole point of
+    // the endpoint reading the registry rather than the descriptor catalogue:
+    // for one release `sanaei` was in the catalogue with no adapter, and
+    // advertising it would have offered a configuration every create rejects.
+    // Phase 3B implemented it, so it is listed now — and it is listed because
+    // the adapter exists, not because the name does.
+    expect(body.providers.map((provider) => provider.key).sort()).toEqual(['marzban', 'sanaei']);
     // A catalogue of code: every tenant sees the same list, and it describes
     // what an adapter declares rather than what a panel row happens to say.
     const marzban = body.providers.find((provider) => provider.key === 'marzban');
     expect(marzban?.credentialShape).toBe('USERNAME_PASSWORD');
-    expect(marzban?.capabilities.length).toBeGreaterThan(0);
+    // EXACT, not "more than zero". A length assertion passes whatever the list
+    // contains, which is how a catalogue advertising fourteen unimplemented
+    // operations stayed green for a release.
+    expect(marzban?.capabilities).toEqual(['HEALTH_CHECK']);
+  });
+
+  it('publishes for EVERY provider only what this release can execute', () => {
+    // The catalogue is where a capability becomes a public claim. Written over
+    // the whole response rather than per provider, so a provider added later
+    // cannot advertise an unimplemented operation without failing here.
+    return get(PANEL_ROUTES.providers, ownerCookie).then((response) => {
+      const body = providerListResponseSchema.parse(response.json());
+      expect(body.providers.length).toBeGreaterThan(0);
+      for (const provider of body.providers) {
+        expect(provider.capabilities, provider.key).toEqual(['HEALTH_CHECK']);
+      }
+    });
+  });
+
+  it('gives a Marzban panel summary the same truthful capability set', async () => {
+    // The per-panel view is a second code path onto the same descriptor, and a
+    // summary that disagreed with the catalogue would be the split brain this
+    // codebase exists to avoid.
+    const created = await createPanel(ownerCookie, {
+      name: 'Marzban surface',
+      credentials: { username: USERNAME, password: PASSWORD },
+    });
+    expect(created.statusCode).toBe(201);
+    const body = panelResponseSchema.parse(created.json());
+    expect(body.panel.capabilities).toEqual(['HEALTH_CHECK']);
+    expect(body.panel.capabilities).not.toContain('CREATE_USER');
+  });
+
+  it('publishes for Sanaei only the capability this release implements', () => {
+    // The named case, kept beside the generic one above: a regression that
+    // somehow left other providers correct would still name Sanaei here.
+    // This endpoint is where a capability becomes a public claim: whatever is
+    // listed here is what the product tells an operator it can do. Phase 3B
+    // implements authentication, connection testing and a read-only health
+    // probe for 3X-UI, so anything else would be an advertisement with no
+    // implementation behind it.
+    return get(PANEL_ROUTES.providers, ownerCookie).then((response) => {
+      const body = providerListResponseSchema.parse(response.json());
+      const sanaei = body.providers.find((provider) => provider.key === 'sanaei');
+      expect(sanaei?.capabilities).toEqual(['HEALTH_CHECK']);
+      for (const unimplemented of ['CREATE_USER', 'RENEW_USER', 'READ_USAGE', 'ADD_VOLUME']) {
+        expect(sanaei?.capabilities, unimplemented).not.toContain(unimplemented);
+      }
+    });
+  });
+
+  it('gives a Sanaei panel summary the same truthful capability set', async () => {
+    // The per-panel view reads the same descriptor as the catalogue. Asserted
+    // separately because they are two code paths, and a panel summary that
+    // disagreed with the catalogue would be the split brain this codebase
+    // exists to avoid.
+    const created = await createPanel(ownerCookie, {
+      name: 'Sanaei surface',
+      providerType: 'sanaei',
+      credentials: { apiToken: 'a-token-for-the-surface-test' },
+    });
+    expect(created.statusCode).toBe(201);
+    const body = panelResponseSchema.parse(created.json());
+    expect(body.panel.capabilities).toEqual(['HEALTH_CHECK']);
+    expect(body.panel.capabilities).not.toContain('CREATE_USER');
   });
 
   it('creates a panel and returns credential STATE, never a value', async () => {

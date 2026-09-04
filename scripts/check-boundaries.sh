@@ -398,6 +398,32 @@ else
   pass "every declared error code has a producer or a stated reservation"
 fi
 
+# --- A provider adapter reaches the network only through the client it is given
+# An adapter is HANDED a `ProviderHttpClient` bound to one panel's base URL, one
+# timeout, one response cap and the installation's URL policy. Everything that
+# makes an outbound call safe here — the pinned address, the refusal to follow a
+# redirect, TLS verification, the private CA, the size cap — lives in
+# SafeHttpClient and nowhere else, so an adapter that opened its own socket
+# would not be "duplicating" those rules, it would be skipping them.
+#
+# The type already makes this hard: an adapter cannot construct a client and
+# cannot widen one. This check covers the other route, which is an adapter
+# importing a network library directly and never mentioning the client at all.
+# `scan_source` drops comment lines, so a doc comment naming `fetch(` — the
+# adapters explain WHY they do not use it — does not trip the check.
+ADAPTER_DIR=apps/api/src/modules/platform/providers
+if [ -d "$ADAPTER_DIR" ]; then
+  RAW_NETWORK=$(scan_source \
+    "(from ['\"](node:)?(http|https|net|tls|undici|axios|got|node-fetch)['\"]|\brequire\(['\"](node:)?(http|https|net|tls|undici|axios)['\"]\)|\bfetch\(|new XMLHttpRequest)" \
+    "$ADAPTER_DIR")
+  if [ -n "$RAW_NETWORK" ]; then
+    fail "A provider adapter reaches the network directly" "$RAW_NETWORK" \
+         "Adapters send through the ProviderHttpClient they are handed. SafeHttpClient owns DNS pinning, the URL policy, redirects, TLS and the size cap."
+  else
+    pass "provider adapters reach the network only through the client they are given"
+  fi
+fi
+
 echo
 if [ "$FAILED" -ne 0 ]; then
   echo "Boundary checks failed."

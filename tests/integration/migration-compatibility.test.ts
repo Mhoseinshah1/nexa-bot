@@ -153,7 +153,44 @@ describe('migration compatibility across the rollback window', () => {
          FROM notifications n WHERE n.id = $1`,
       [notificationId],
     );
-    return { tenantId, notificationId, owed: Number(spend.rows[0].owed) };
+    // A panel and its health, with a failure kind the PREVIOUS release writes.
+    //
+    // Only once `panels` exists. The boundary this file replays from predates
+    // the panel tables entirely, so there is nothing to write in the BEFORE
+    // run — and nothing to prove there either. The AFTER run is the one that
+    // matters: it is the schema an operator is rolled back onto.
+    //
+    // Here because a CHECK built from a contract enum is redefined whenever
+    // that enum grows, and a redefinition is the one shape that can silently
+    // NARROW: the constraint is dropped and re-added, and nothing structural
+    // says the new list is a superset. This write is what makes the widening
+    // behavioural rather than assumed — if a future migration re-adds this
+    // constraint without a value the previous release still writes, this row
+    // stops inserting and the rollback window is proven broken here rather
+    // than on somebody's installation.
+    const present = await client.query(`SELECT to_regclass('public.panels') AS t`);
+    let failure: string | null = null;
+    if (present.rows[0].t !== null) {
+      const panel = await client.query(
+        `INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+         VALUES (gen_random_uuid(), $1, $2, 'marzban', 'https://panel.example.test', 'ACTIVE')
+         RETURNING id`,
+        [tenantId, `compat-panel-${suffix}`],
+      );
+      const panelId = String(panel.rows[0].id);
+      await client.query(
+        `INSERT INTO panel_health
+           (panel_id, tenant_id, state, checked_at, latency_ms, failure, status_code)
+         VALUES ($1, $2, 'AUTH_FAILED', now(), 12, 'AUTHENTICATION_FAILED', 401)`,
+        [panelId, tenantId],
+      );
+      const health = await client.query(`SELECT failure FROM panel_health WHERE panel_id = $1`, [
+        panelId,
+      ]);
+      failure = String(health.rows[0].failure);
+    }
+
+    return { tenantId, notificationId, owed: Number(spend.rows[0].owed), failure };
   };
 
   it('the previous release works against its own schema', async () => {
@@ -172,6 +209,8 @@ describe('migration compatibility across the rollback window', () => {
     // The same answer as before the migration. A schema that changed what the
     // previous release computes is a schema it cannot be rolled back onto.
     expect(after.owed).toBe(1);
+    // And the widened CHECK still accepts what the previous release writes.
+    expect(after.failure).toBe('AUTHENTICATION_FAILED');
   });
 
   it('the incoming migrations only ADD; they narrow nothing the previous release writes', async () => {
@@ -194,7 +233,6 @@ describe('migration compatibility across the rollback window', () => {
         'DROP COLUMN',
         'DROP TABLE',
         'SET NOT NULL',
-        'DROP CONSTRAINT',
         'DROP DEFAULT',
         'RENAME COLUMN',
         'RENAME TO',
@@ -204,6 +242,27 @@ describe('migration compatibility across the rollback window', () => {
           sql,
           `${entry.tag} contains ${forbidden}, which the previous release may still need`,
         ).not.toContain(forbidden);
+      }
+
+      // `DROP CONSTRAINT` is handled separately, because two different things
+      // wear it. REMOVING a constraint the previous release relies on is
+      // exactly what this test forbids. REDEFINING one — dropping it and
+      // re-adding it under the same name in the same migration — is the only
+      // way PostgreSQL can widen a CHECK, and a CHECK generated from a
+      // contract enum has to widen whenever that enum grows. 0021 does this
+      // for `panel_health_failure_check`.
+      //
+      // So the structural rule is: every dropped constraint must be re-added
+      // by the same file. That still catches a bare removal, and it does not
+      // by itself prove the redefinition is a WIDENING — which is why the
+      // replay above now writes a `panel_health` row carrying a failure kind
+      // the previous release produces. A re-add that narrowed would fail there.
+      const dropped = [...sql.matchAll(/DROP CONSTRAINT\s+"?([A-Z0-9_]+)"?/g)].map((m) => m[1]);
+      for (const name of dropped) {
+        expect(
+          sql,
+          `${entry.tag} drops constraint ${name} without re-adding it, so the previous release loses it`,
+        ).toMatch(new RegExp(`ADD CONSTRAINT\\s+"?${name}"?`));
       }
     }
   });

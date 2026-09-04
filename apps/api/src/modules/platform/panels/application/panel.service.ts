@@ -986,6 +986,27 @@ function toProviderCredentials(
   if (shape === 'OPAQUE_TOKEN') {
     return stored.apiToken !== null ? { shape: 'OPAQUE_TOKEN', token: stored.apiToken } : null;
   }
+  if (shape === 'TOKEN_OR_USERNAME_PASSWORD') {
+    // A provider that genuinely accepts either — 3X-UI v3.7.0 authenticates
+    // its API with a scoped Bearer token OR a session login. The order is a
+    // decision, not a preference:
+    //
+    // A configured API token WINS, and a rejected one is never retried as a
+    // username and password. An operator who configured token-only access,
+    // possibly a least-privilege monitor token, must see that token auth is
+    // broken rather than have Nexa quietly authenticate with the more powerful
+    // credential they deliberately did not point at this job. Falling back
+    // would also mean a token typo silently escalating every future probe.
+    //
+    // Narrowing HERE rather than in the adapter is what makes that structural:
+    // the adapter is handed one shape and cannot see the other, so no adapter
+    // can implement the fallback even by accident. A deliberate fallback, if
+    // one is ever wanted, is a product policy and a change to this function.
+    if (stored.apiToken !== null) return { shape: 'OPAQUE_TOKEN', token: stored.apiToken };
+    return stored.username !== null && stored.password !== null
+      ? { shape: 'USERNAME_PASSWORD', username: stored.username, password: stored.password }
+      : null;
+  }
   return { shape: 'NONE' };
 }
 
@@ -1016,7 +1037,15 @@ export function toHealthRecord(
     };
   }
   return {
-    state: outcome.failure === 'AUTHENTICATION_FAILED' ? 'AUTH_FAILED' : 'UNREACHABLE',
+    // Both authentication kinds are AUTH_FAILED health: the panel answered and
+    // did not authenticate. The FAILURE column carries which, so an operator
+    // sees "replace the credentials" and "this panel wants a second factor,
+    // configure an API token" as the different jobs they are.
+    state:
+      outcome.failure === 'AUTHENTICATION_FAILED' ||
+      outcome.failure === 'AUTHENTICATION_REQUIRES_INTERACTION'
+        ? 'AUTH_FAILED'
+        : 'UNREACHABLE',
     checkedAt: context.checkedAt,
     latencyMs: context.latencyMs,
     failure: outcome.failure,
