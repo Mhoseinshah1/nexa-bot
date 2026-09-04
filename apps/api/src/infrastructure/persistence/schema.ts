@@ -1133,6 +1133,19 @@ export const panels = pgTable(
     check('panels_provider_type_check', enumCheck('provider_type', PROVIDER_TYPES)),
     /** An archived panel has a time; a live one does not. Neither state can lie. */
     check('panels_archived_at_check', sql`(status = 'ARCHIVED') = (archived_at IS NOT NULL)`),
+    /**
+     * Redundant against the primary key, and the target of a composite
+     * reference rather than a lookup path.
+     *
+     * `panel_credentials` and `panel_health` carry a denormalised `tenant_id`,
+     * and two separate foreign keys let a child row name panel A while
+     * claiming tenant B — the database accepted exactly that. The rewrap
+     * rebuilds a credential's Secret Envelope v2 context from the CHILD row's
+     * tenant, so such a row would re-encrypt the secret under a context its
+     * owner cannot reproduce, and the credential would be unreadable for good.
+     * A composite foreign key needs something unique to point at; this is it.
+     */
+    unique('panels_tenant_id_key').on(table.tenantId, table.id),
   ],
 );
 
@@ -1178,6 +1191,20 @@ export const panelCredentials = pgTable(
   },
   (table) => [
     index('panel_credentials_tenant_idx').on(table.tenantId),
+    /**
+     * The pair, not the two halves.
+     *
+     * `panel_id` and `tenant_id` each had their own foreign key, which
+     * constrained them individually and said nothing about them agreeing. A
+     * row naming another tenant's panel satisfied both and violated the
+     * invariant every query in the repository relies on.
+     */
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'panel_credentials_tenant_panel_fk',
+    }),
+
     check(
       'panel_credentials_username_check',
       sql`(username_ciphertext IS NULL) = (username_key_id IS NULL)
@@ -1242,6 +1269,20 @@ export const panelHealth = pgTable(
   },
   (table) => [
     index('panel_health_tenant_idx').on(table.tenantId),
+    /**
+     * The pair, not the two halves.
+     *
+     * `panel_id` and `tenant_id` each had their own foreign key, which
+     * constrained them individually and said nothing about them agreeing. A
+     * row naming another tenant's panel satisfied both and violated the
+     * invariant every query in the repository relies on.
+     */
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'panel_health_tenant_panel_fk',
+    }),
+
     check('panel_health_state_check', enumCheck('state', PANEL_HEALTH_STATES)),
     check('panel_health_failure_check', nullableEnumCheck('failure', PROVIDER_FAILURE_KINDS)),
     /** A failing state names its failure; a succeeding one does not. */

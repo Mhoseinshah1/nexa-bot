@@ -170,6 +170,89 @@ describe('the database rejects cross-tenant relationships', () => {
     ).rejects.toThrow();
   });
 
+  // ---------------------------------------------------------------------------
+  // Panels and their child rows (migration 0018)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * `panel_credentials` and `panel_health` carry a denormalised `tenant_id`
+   * beside their `panel_id`. Until 0018 each had its own foreign key, which
+   * constrained the two columns individually and said nothing about them
+   * agreeing — so a row could name panel A while claiming tenant B, and every
+   * insert below SUCCEEDED.
+   *
+   * That is worse here than for the identity tables above. The secret rewrap
+   * rebuilds a credential's Secret Envelope v2 context from the CHILD row's
+   * tenant, so a mis-tenanted row would re-encrypt the secret under a context
+   * its owner cannot reproduce, and the credential would be unreadable for
+   * good. A composite foreign key is what makes the pair the unit.
+   */
+  async function panelOf(tenantId: string, name: string): Promise<string> {
+    const id = ctx.container.ids.uuid();
+    await raw(
+      `INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+       VALUES ('${id}', '${tenantId}', '${name}', 'marzban', 'https://p.example.test', 'ACTIVE')`,
+    );
+    return id;
+  }
+
+  it('refuses a panel_credentials row naming another tenant’s panel', async () => {
+    const panel = await panelOf(tenantA.tenantId, 'cred-cross');
+
+    await expect(
+      raw(
+        `INSERT INTO panel_credentials (panel_id, tenant_id, password_ciphertext, password_key_id, password_set_at)
+         VALUES ('${panel}', '${tenantB.tenantId}', 'v2.x', 'k1', now())`,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('refuses a panel_health row naming another tenant’s panel', async () => {
+    const panel = await panelOf(tenantA.tenantId, 'health-cross');
+
+    await expect(
+      raw(
+        `INSERT INTO panel_health (panel_id, tenant_id, state, checked_at, latency_ms)
+         VALUES ('${panel}', '${tenantB.tenantId}', 'HEALTHY', now(), 5)`,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('refuses MOVING an existing credential row to another tenant', async () => {
+    // The insert is not the only way in. A row that was written correctly and
+    // then re-tenanted by an UPDATE reaches the same place.
+    const panel = await panelOf(tenantA.tenantId, 'cred-moved');
+    await raw(
+      `INSERT INTO panel_credentials (panel_id, tenant_id, password_ciphertext, password_key_id, password_set_at)
+       VALUES ('${panel}', '${tenantA.tenantId}', 'v2.x', 'k1', now())`,
+    );
+
+    await expect(
+      raw(
+        `UPDATE panel_credentials SET tenant_id = '${tenantB.tenantId}' WHERE panel_id = '${panel}'`,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('accepts panel child rows when both sides belong to the tenant', async () => {
+    // The constraint must reject the wrong thing without rejecting the right
+    // one, which is the ordinary case every installation is made of.
+    const panel = await panelOf(tenantA.tenantId, 'child-ok');
+
+    await expect(
+      raw(
+        `INSERT INTO panel_credentials (panel_id, tenant_id, password_ciphertext, password_key_id, password_set_at)
+         VALUES ('${panel}', '${tenantA.tenantId}', 'v2.x', 'k1', now())`,
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      raw(
+        `INSERT INTO panel_health (panel_id, tenant_id, state, checked_at, latency_ms)
+         VALUES ('${panel}', '${tenantA.tenantId}', 'HEALTHY', now(), 5)`,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it('refuses an admin whose tenant does not exist at all', async () => {
     await expect(
       raw(
