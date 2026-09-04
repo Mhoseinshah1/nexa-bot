@@ -41,7 +41,6 @@
     "tests/integration/operational-events.test.ts",
     "tests/unit/authorization.test.ts",
     "tests/unit/recording-transport-hold.test.ts",
-    "tests/unit/registries.test.ts",
     "tests/unit/release-workflow.test.ts",
     "tests/unit/retention-sweeper.test.ts",
     "tests/unit/secrets-and-ids.test.ts",

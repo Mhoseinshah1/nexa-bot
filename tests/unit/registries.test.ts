@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { PROVIDER_CAPABILITIES, PROVIDER_TYPES, type ProviderCapability } from '@nexa/contracts';
+import {
+  PROVIDER_CAPABILITIES,
+  PROVIDER_TYPES,
+  type ProviderCapability,
+  type ProviderType,
+} from '@nexa/contracts';
 import {
   IMPLEMENTED_PROVIDER_TYPES,
   providerAdapter,
 } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
+import type { ZeroMeaning } from '@nexa/contracts';
 import {
   FEATURE_FLAGS,
   SETTINGS,
@@ -15,6 +21,18 @@ import {
   type FeatureFlagKey,
   type SettingKey,
 } from '@nexa/contracts';
+
+/**
+ * Whether a zero meaning is UNLIMITED, asked of the whole vocabulary.
+ *
+ * A parameter rather than an inline `===`, because TypeScript narrows
+ * `setting.zeroMeaning` to the members today's registry happens to declare —
+ * no setting says UNLIMITED yet — and then reports the comparison as
+ * unreachable. That would be an argument for deleting a guard which exists
+ * precisely for the setting nobody has added, so the check is asked of
+ * `ZeroMeaning` instead, where every member is live.
+ */
+const meansUnlimited = (meaning: ZeroMeaning): boolean => meaning === 'UNLIMITED';
 
 describe('the settings registry', () => {
   it('parses every declared default with its own schema', () => {
@@ -62,19 +80,19 @@ describe('the settings registry', () => {
     // UNLIMITED — a statement about the NUMBER zero — pass because its schema
     // happens to accept an empty string.
     for (const setting of SETTINGS) {
-      if (setting.zeroMeaning === 'NOT_APPLICABLE') continue;
+      const zeroMeaning = setting.zeroMeaning;
+      if (zeroMeaning === 'NOT_APPLICABLE') continue;
 
       const parses = (value: unknown) => setting.schema.safeParse(value).success;
-      const accepted =
-        setting.zeroMeaning === 'UNLIMITED'
-          ? // "Zero means no limit" is a claim about the number.
-            parses(0)
-          : // DISABLES and LITERAL are claims about the key's empty state,
-            // which is `0`, `''` or absent depending on what the value is.
-            parses(0) || parses('') || parses(null);
+      const accepted = meansUnlimited(zeroMeaning)
+        ? // "Zero means no limit" is a claim about the number.
+          parses(0)
+        : // DISABLES and LITERAL are claims about the key's empty state,
+          // which is `0`, `''` or absent depending on what the value is.
+          parses(0) || parses('') || parses(null);
       expect(
         accepted,
-        `${setting.key} declares ${setting.zeroMeaning} for a zero state its schema rejects`,
+        `${setting.key} declares ${zeroMeaning} for a zero state its schema rejects`,
       ).toBe(true);
     }
   });
@@ -233,24 +251,42 @@ describe('the provider registry', () => {
    * that survives the next phase.
    */
   it('lets no provider advertise an operation this release cannot execute', () => {
-    // Every adapter in this release implements the connection half only:
-    // `ProviderConnectionAdapter`, whose whole surface is `probe`. The
-    // capability that corresponds to `probe` is HEALTH_CHECK, so that is the
-    // complete set any provider may declare right now.
+    // PER PROVIDER, and exhaustive over `ProviderType` — not one shared list.
     //
-    // When a service operation lands, its capability joins this list in the
-    // same commit — and this test is the thing that makes that a deliberate
-    // edit rather than a declaration somebody made in a descriptor.
-    const EXECUTABLE_NOW: readonly ProviderCapability[] = ['HEALTH_CHECK'];
+    // Both entries read `['HEALTH_CHECK']` today, which is exactly why the
+    // shape matters: a single global set would say "every provider has the
+    // same capabilities", and that is a claim about the future that is already
+    // false in principle. Marzban and 3X-UI are separate products with
+    // separate APIs, and Phase 4 will implement an operation for one of them
+    // before the other — `{ marzban: ['HEALTH_CHECK', 'CREATE_USER'], sanaei:
+    // ['HEALTH_CHECK'] }` has to be expressible without touching Sanaei's
+    // entry, and with a global set it would not be.
+    //
+    // `Record<ProviderType, …>` rather than a partial map, so a provider added
+    // to the contract without a decision about what it can execute is a
+    // compile error here rather than a silent inheritance of somebody else's
+    // list.
+    //
+    // A capability joins an entry in the same commit as the operation behind
+    // it. This test is what makes that a deliberate edit rather than a
+    // declaration somebody made in a descriptor.
+    const EXECUTABLE_NOW: Record<ProviderType, readonly ProviderCapability[]> = {
+      marzban: ['HEALTH_CHECK'],
+      sanaei: ['HEALTH_CHECK'],
+    };
 
     for (const type of IMPLEMENTED_PROVIDER_TYPES) {
       const adapter = providerAdapter(type);
-      expect([...adapter.descriptor.capabilities].sort(), type).toEqual([...EXECUTABLE_NOW].sort());
+      const executable = EXECUTABLE_NOW[type];
+      expect([...adapter.descriptor.capabilities].sort(), type).toEqual([...executable].sort());
 
-      // And through `supports()`, which is what callers actually ask.
+      // And through `supports()`, which is what callers actually ask. Asserted
+      // over the WHOLE vocabulary so a capability this provider must not claim
+      // is checked explicitly rather than by omission.
       for (const capability of PROVIDER_CAPABILITIES) {
-        const executable = EXECUTABLE_NOW.includes(capability);
-        expect(adapter.supports(capability), `${type}.supports(${capability})`).toBe(executable);
+        expect(adapter.supports(capability), `${type}.supports(${capability})`).toBe(
+          executable.includes(capability),
+        );
       }
     }
   });
@@ -260,7 +296,7 @@ describe('the provider registry', () => {
     // editing a descriptor: no adapter in this release implements the service
     // surface at all, so there is nothing a capability could have described.
     for (const type of IMPLEMENTED_PROVIDER_TYPES) {
-      const adapter = providerAdapter(type) as Partial<Record<string, unknown>>;
+      const adapter = providerAdapter(type) as unknown as Partial<Record<string, unknown>>;
       expect(typeof adapter['createUser'], `${type}.createUser`).toBe('undefined');
       expect(typeof adapter['readUsage'], `${type}.readUsage`).toBe('undefined');
     }

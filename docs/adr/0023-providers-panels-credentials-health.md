@@ -50,9 +50,16 @@ Either alone leaves a row that names an adapter nothing can build.
 The registry distinguishes two refusals because they are different operator
 problems. A string that is not a provider type is refused by the request schema
 with `providerType` named. A type the contracts declare and _this release_ has
-no adapter for — `sanaei`, until 3C — is refused as
-`PROVIDER_TYPE_UNSUPPORTED`, at create time rather than at the first probe. A
-panel that cannot be operated should not become a row.
+no adapter for is refused as `PROVIDER_TYPE_UNSUPPORTED`, at create time rather
+than at the first probe. A panel that cannot be operated should not become a
+row.
+
+`sanaei` was that case when this ADR was written: Phase 3A shipped the type,
+the CHECK constraint and the descriptor as one contract change, and deliberately
+let the registry fail closed for a release rather than advertise a provider
+nothing could operate. Phase 3B implements and registers it, so the second
+refusal currently has no member to exercise it — the arm stays because the next
+provider passes through the same state.
 
 ### Capabilities are declared, never persisted
 
@@ -462,9 +469,10 @@ they still had it.
 
 - Adding a provider is: a contract enum entry, a descriptor, an adapter, a
   registry line. No migration, no panel-model change.
-- `sanaei` is declared and unimplemented, so creating one is refused with a
-  precise code until 3C. That is deliberate and visible rather than a panel that
-  half-works.
+- A declared type with no adapter is refused with a precise code at create
+  time. That is deliberate and visible rather than a panel that half-works.
+  `sanaei` was the example through Phase 3A and is implemented as of Phase 3B;
+  the refusal remains for whatever type is next in that position.
 - Capabilities cannot be filtered on in SQL. If a later phase needs "every panel
   that supports X", that is a new decision with a new freshness rule.
 - Health carries no history. "When did this panel start failing" is not
