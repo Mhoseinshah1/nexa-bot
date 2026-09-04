@@ -157,10 +157,42 @@ describe('panel HTTP surface', () => {
     // what an adapter declares rather than what a panel row happens to say.
     const marzban = body.providers.find((provider) => provider.key === 'marzban');
     expect(marzban?.credentialShape).toBe('USERNAME_PASSWORD');
-    expect(marzban?.capabilities.length).toBeGreaterThan(0);
+    // EXACT, not "more than zero". A length assertion passes whatever the list
+    // contains, which is how a catalogue advertising fourteen unimplemented
+    // operations stayed green for a release.
+    expect(marzban?.capabilities).toEqual(['HEALTH_CHECK']);
+  });
+
+  it('publishes for EVERY provider only what this release can execute', () => {
+    // The catalogue is where a capability becomes a public claim. Written over
+    // the whole response rather than per provider, so a provider added later
+    // cannot advertise an unimplemented operation without failing here.
+    return get(PANEL_ROUTES.providers, ownerCookie).then((response) => {
+      const body = providerListResponseSchema.parse(response.json());
+      expect(body.providers.length).toBeGreaterThan(0);
+      for (const provider of body.providers) {
+        expect(provider.capabilities, provider.key).toEqual(['HEALTH_CHECK']);
+      }
+    });
+  });
+
+  it('gives a Marzban panel summary the same truthful capability set', async () => {
+    // The per-panel view is a second code path onto the same descriptor, and a
+    // summary that disagreed with the catalogue would be the split brain this
+    // codebase exists to avoid.
+    const created = await createPanel(ownerCookie, {
+      name: 'Marzban surface',
+      credentials: { username: USERNAME, password: PASSWORD },
+    });
+    expect(created.statusCode).toBe(201);
+    const body = panelResponseSchema.parse(created.json());
+    expect(body.panel.capabilities).toEqual(['HEALTH_CHECK']);
+    expect(body.panel.capabilities).not.toContain('CREATE_USER');
   });
 
   it('publishes for Sanaei only the capability this release implements', () => {
+    // The named case, kept beside the generic one above: a regression that
+    // somehow left other providers correct would still name Sanaei here.
     // This endpoint is where a capability becomes a public claim: whatever is
     // listed here is what the product tells an operator it can do. Phase 3B
     // implements authentication, connection testing and a read-only health

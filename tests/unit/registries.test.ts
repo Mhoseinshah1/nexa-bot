@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PROVIDER_TYPES } from '@nexa/contracts';
+import { PROVIDER_CAPABILITIES, PROVIDER_TYPES, type ProviderCapability } from '@nexa/contracts';
 import {
   IMPLEMENTED_PROVIDER_TYPES,
   providerAdapter,
@@ -215,5 +215,54 @@ describe('the provider registry', () => {
     // advertising one, so this states the current position: every declared
     // type is implemented.
     expect([...PROVIDER_TYPES].sort()).toEqual([...IMPLEMENTED_PROVIDER_TYPES].sort());
+  });
+
+  /**
+   * The capability invariant, written generically ON PURPOSE.
+   *
+   * `capabilities` means "the operations this release can execute for this
+   * provider", and for one release it did not: Sanaei listed what its adapter
+   * did while Marzban listed what its panel could do in a later phase, so the
+   * same field on the same endpoint meant two different things. Per-provider
+   * assertions would have caught neither, because each provider's own test
+   * agreed with its own descriptor.
+   *
+   * So this iterates the registry rather than naming providers. A THIRD
+   * provider added with an aspirational list fails here without anyone
+   * remembering to write a test for it, which is the only version of this rule
+   * that survives the next phase.
+   */
+  it('lets no provider advertise an operation this release cannot execute', () => {
+    // Every adapter in this release implements the connection half only:
+    // `ProviderConnectionAdapter`, whose whole surface is `probe`. The
+    // capability that corresponds to `probe` is HEALTH_CHECK, so that is the
+    // complete set any provider may declare right now.
+    //
+    // When a service operation lands, its capability joins this list in the
+    // same commit — and this test is the thing that makes that a deliberate
+    // edit rather than a declaration somebody made in a descriptor.
+    const EXECUTABLE_NOW: readonly ProviderCapability[] = ['HEALTH_CHECK'];
+
+    for (const type of IMPLEMENTED_PROVIDER_TYPES) {
+      const adapter = providerAdapter(type);
+      expect([...adapter.descriptor.capabilities].sort(), type).toEqual([...EXECUTABLE_NOW].sort());
+
+      // And through `supports()`, which is what callers actually ask.
+      for (const capability of PROVIDER_CAPABILITIES) {
+        const executable = EXECUTABLE_NOW.includes(capability);
+        expect(adapter.supports(capability), `${type}.supports(${capability})`).toBe(executable);
+      }
+    }
+  });
+
+  it('offers a service operation through no adapter yet', () => {
+    // The other half of the same rule, stated where it cannot be satisfied by
+    // editing a descriptor: no adapter in this release implements the service
+    // surface at all, so there is nothing a capability could have described.
+    for (const type of IMPLEMENTED_PROVIDER_TYPES) {
+      const adapter = providerAdapter(type) as Partial<Record<string, unknown>>;
+      expect(typeof adapter['createUser'], `${type}.createUser`).toBe('undefined');
+      expect(typeof adapter['readUsage'], `${type}.readUsage`).toBe('undefined');
+    }
   });
 });

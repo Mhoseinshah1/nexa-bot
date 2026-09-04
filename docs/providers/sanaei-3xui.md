@@ -26,21 +26,15 @@ The **connection half** only: authenticate, and read what the panel says about
 itself. Creating clients, mutating inbounds, resetting traffic, delivering
 subscriptions and scheduling background health are all later phases.
 
-**The declared capability set is therefore exactly `HEALTH_CHECK`.** It briefly
-listed the fourteen operations 3X-UI supports in principle, which was wrong in a
-way that mattered: `supports()` answers from that array and the providers
-endpoint publishes it verbatim, so the release was telling operators it could
-create a 3X-UI user. Each entry returns when the operation behind it is
-implemented and tested, in the phase that implements it.
-
-> **Known inconsistency, deliberately not fixed here.** Marzban still declares
-> fourteen capabilities while implementing only the same connection half. That
-> makes the two descriptors mean different things — Sanaei's lists what the
-> adapter does, Marzban's lists what the panel could do — and the one that is
-> wrong is Marzban's. It is left alone because correcting another provider's
-> published surface is not this narrow fix's business, and doing it silently
-> would be worse than saying so. It should be corrected before any release
-> claims capability-driven behaviour.
+**The declared capability set is therefore exactly `HEALTH_CHECK`** — and so is
+Marzban's. `ProviderDescriptor.capabilities` means "the operations this release
+can execute for this provider", never a feature matrix of what the panel could
+do one day: `supports()` answers from that array and the providers endpoint
+publishes it verbatim, so an entry there is a promise the product makes to an
+operator. Both descriptors briefly listed fourteen operations no code could
+perform. Each returns in the same commit as the operation behind it —
+implemented, wired in, and tested for that provider — which a registry-wide
+invariant now enforces for every provider, including ones added later.
 
 ## Authentication
 
