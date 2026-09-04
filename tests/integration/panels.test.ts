@@ -165,9 +165,9 @@ describe('panels', () => {
 
       // And in a list, which is a different query with the same projection.
       const listed = await ctx.container.panels.list(tenantA, adminActorFor(owner));
-      expect(listed.find((v) => v.panel.id === view.panel.id)?.credentials[timestamp]).toBeInstanceOf(
-        Date,
-      );
+      expect(
+        listed.find((v) => v.panel.id === view.panel.id)?.credentials[timestamp],
+      ).toBeInstanceOf(Date);
     });
   }
 
@@ -863,9 +863,8 @@ describe('panels', () => {
       providerVersion: null,
     });
 
-    const health = (
-      await ctx.container.panels.get(tenantA, adminActorFor(owner), view.panel.id)
-    ).health;
+    const health = (await ctx.container.panels.get(tenantA, adminActorFor(owner), view.panel.id))
+      .health;
     expect(JSON.stringify(health)).not.toContain(PASSWORD);
 
     const entries = await ctx.container.database.db
@@ -895,10 +894,10 @@ describe('panels', () => {
    * what makes the three transplant tests above mean anything.
    */
   function readCredentials(panelId: string, scope: typeof tenantA) {
-    return new DrizzlePanelCredentialStore(
-      ctx.container.database.db,
-      ctx.container.cipher,
-    ).read(scope, panelId);
+    return new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher).read(
+      scope,
+      panelId,
+    );
   }
 
   /**
@@ -968,13 +967,19 @@ describe('panel credential rewrap', () => {
   });
 
   const withKeyring = (keys: Record<string, string>, active: string) => {
-    (ctx.container as { cipher: unknown }).cipher = new AesGcmSecretCipher(ring(keys, active), true);
+    (ctx.container as { cipher: unknown }).cipher = new AesGcmSecretCipher(
+      ring(keys, active),
+      true,
+    );
   };
 
   beforeEach(async () => {
     ctx ??= await createTestContext({ PANEL_HTTP_ALLOW_LOOPBACK: 'true' });
     await ctx.reset();
-    owner = await createAdmin(ctx.container, tenantA, { username: 'owner_rw', roleKeys: ['owner'] });
+    owner = await createAdmin(ctx.container, tenantA, {
+      username: 'owner_rw',
+      roleKeys: ['owner'],
+    });
   });
 
   afterAll(async () => {
@@ -1053,7 +1058,11 @@ describe('panel credential rewrap', () => {
       idempotencyKey: 'rewrap-key-0002',
     });
     withKeyring({ old: KEY_OLD }, 'old');
-    await writeCredentials(view.panel.id, { username: undefined, password: PASSWORD, apiToken: undefined });
+    await writeCredentials(view.panel.id, {
+      username: undefined,
+      password: PASSWORD,
+      apiToken: undefined,
+    });
 
     withKeyring({ old: KEY_OLD, new: KEY_NEW }, 'new');
     const byPurpose = new Map(SECRET_COLUMNS.map((column) => [column.purpose, column]));

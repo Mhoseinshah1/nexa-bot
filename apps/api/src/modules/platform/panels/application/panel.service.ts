@@ -115,21 +115,23 @@ function hashRequest(value: unknown): string {
  * VALUES are not, because one of these bodies carries a password.
  */
 function parseCommand<T>(
-  schema: { safeParse: (value: unknown) => { success: boolean; data?: T; error?: { issues: readonly { path: readonly PropertyKey[]; message: string }[] } } },
+  schema: {
+    safeParse: (value: unknown) => {
+      success: boolean;
+      data?: T;
+      error?: { issues: readonly { path: readonly PropertyKey[]; message: string }[] };
+    };
+  },
   body: unknown,
 ): T {
   const result = schema.safeParse(body);
   if (!result.success || result.data === undefined) {
-    throw errors.validation(
-      PANEL_ERROR_CODES.PANEL_REQUEST_INVALID,
-      'The request is not valid.',
-      {
-        issues: (result.error?.issues ?? []).map((issue) => ({
-          path: issue.path.map(String).join('.'),
-          message: issue.message,
-        })),
-      },
-    );
+    throw errors.validation(PANEL_ERROR_CODES.PANEL_REQUEST_INVALID, 'The request is not valid.', {
+      issues: (result.error?.issues ?? []).map((issue) => ({
+        path: issue.path.map(String).join('.'),
+        message: issue.message,
+      })),
+    });
   }
   return result.data;
 }

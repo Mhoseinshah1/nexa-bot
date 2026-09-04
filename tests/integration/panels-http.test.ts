@@ -182,9 +182,11 @@ describe('panel HTTP surface', () => {
 
   it('never returns a credential on any read path', async () => {
     const created = panelResponseSchema.parse(
-      (await createPanel(ownerCookie, {
-        credentials: { username: USERNAME, password: PASSWORD, apiToken: 'tok-http-9182' },
-      })).json(),
+      (
+        await createPanel(ownerCookie, {
+          credentials: { username: USERNAME, password: PASSWORD, apiToken: 'tok-http-9182' },
+        })
+      ).json(),
     );
     const id = created.panel.id;
 

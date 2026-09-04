@@ -306,7 +306,7 @@ export const configSchema = z
         code: 'custom',
         path: ['PANEL_HTTP_ALLOW_LOOPBACK'],
         message:
-          'PANEL_HTTP_ALLOW_LOOPBACK is permitted only outside production. In production the API\'s ' +
+          "PANEL_HTTP_ALLOW_LOOPBACK is permitted only outside production. In production the API's " +
           'loopback interface is the API itself, so a panel URL pointing there reaches this ' +
           "installation's own internals rather than a panel.",
       });
