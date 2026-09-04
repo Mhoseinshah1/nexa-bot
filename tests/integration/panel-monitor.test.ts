@@ -21,6 +21,7 @@ import { DrizzlePanelCredentialStore } from '../../apps/api/src/modules/platform
 import { providerAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
 import type { MonitorCadence } from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
+import type { PanelMonitorRepository } from '../../apps/api/src/modules/platform/panels/application/ports';
 import {
   adminActorFor,
   createAdmin,
@@ -140,11 +141,21 @@ describe('the panel health monitor', () => {
       concurrency?: number;
       budgetReserve?: number;
       probe?: Partial<ProbeCoreDeps>;
+      /**
+       * A stand-in for the discovery query.
+       *
+       * Used only where the point is what the monitor does with a candidate
+       * the real query would no longer return — the window between the query
+       * and the probe. Everywhere else the real repository runs, because
+       * discovery IS half of the behaviour under test.
+       */
+      discovery?: PanelMonitorRepository;
     } = {},
   ): PanelMonitorService {
     return new PanelMonitorService(
       {
-        discovery: new DrizzlePanelMonitorRepository(ctx.container.database.db),
+        discovery:
+          options.discovery ?? new DrizzlePanelMonitorRepository(ctx.container.database.db),
         probe: probeDeps(options.probe ?? {}),
         guard: ctx.container.guard,
         audit: ctx.container.audit,
@@ -280,28 +291,52 @@ describe('the panel health monitor', () => {
   });
 
   it('refuses a panel disabled between discovery and the probe', async () => {
-    // The race the second check exists for. Discovery filters ACTIVE, and a
-    // panel can be disabled in the window between the query and the probe —
-    // so the probe core checks again, against the row it just read.
+    // The race the second status check exists for, and it must be driven
+    // through the MONITOR rather than through the probe core directly — a test
+    // that passes `probeableStatuses` itself pins the test's own choice, not
+    // the monitor's, and would go on passing if the monitor started accepting
+    // DISABLED panels.
+    //
+    // So discovery is stubbed with the answer it gave a moment ago: a panel
+    // that WAS active when the query ran and has since been disabled.
     const panelId = await createPanel(ownerA, tenantA, 'raced');
-    const deps = probeDeps();
-    const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
-    const due = await discovery.dueForMonitoring(now, 50);
-    expect(due).toHaveLength(1);
-
     await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
       status: 'DISABLED',
       idempotencyKey: key(),
     });
 
-    const { attemptProbe } =
-      await import('../../apps/api/src/modules/platform/panels/application/probe-core');
-    const view = await deps.repository.find(tenantA, panelId);
-    const attempt = await attemptProbe(deps, tenantA, view!, {
-      probeableStatuses: ['ACTIVE'],
-      budgetReserve: 0,
+    const m = monitor({
+      discovery: {
+        dueForMonitoring: async () => [
+          { tenantId: tenantA.tenantId, panelId, reason: 'INTERVAL_ELAPSED' as const },
+        ],
+      },
     });
-    expect(attempt.probed).toBe(false);
+    const result = await m.tick();
+
+    expect(result.considered).toBe(1);
+    expect(result.probed).toBe(0);
+    expect(result.refused).toBe(1);
+    expect(probes).toHaveLength(0);
+    expect(await healthOf(panelId)).toBeUndefined();
+  });
+
+  it('refuses an archived panel handed to it by a stale discovery too', async () => {
+    const panelId = await createPanel(ownerA, tenantA, 'raced-archive');
+    await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
+      status: 'ARCHIVED',
+      idempotencyKey: key(),
+    });
+
+    const result = await monitor({
+      discovery: {
+        dueForMonitoring: async () => [
+          { tenantId: tenantA.tenantId, panelId, reason: 'NEVER_CHECKED' as const },
+        ],
+      },
+    }).tick();
+
+    expect(result.probed).toBe(0);
     expect(probes).toHaveLength(0);
   });
 
