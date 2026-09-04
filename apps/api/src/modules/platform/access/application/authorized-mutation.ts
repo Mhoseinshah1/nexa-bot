@@ -84,26 +84,52 @@ export async function runAuthorizedMutation<T>(
       return fn(tx);
     });
   } catch (error) {
-    // This permission's denial, not any denial. `PERMISSION_DENIED` is also
-    // how a missing tenant context surfaces, and recording that as
-    // "deniedPermission: settings.edit" would put a false statement in the
-    // audit log — the one place that must not contain one.
-    if (
-      isNexaError(error) &&
-      error.kind === 'PERMISSION_DENIED' &&
-      error.details['permission'] === permission
-    ) {
-      await deps.opsLog.record(scope, deps.guard.denialEvent(actor, permission));
-      await deps.audit.record(scope, actor, {
-        action: denial.action,
-        entityType: denial.entityType,
-        entityId: denial.entityId,
-        before: null,
-        after: { deniedPermission: permission, reason: error.code },
-        result: 'DENIED',
-      });
-    }
+    await recordMutationDenial(deps, scope, actor, permission, denial, error);
     throw error;
+  }
+}
+
+/**
+ * Records a refusal, if that is what this error is.
+ *
+ * Extracted so that a check made BEFORE the transaction leaves the same trace
+ * as one made inside it. Some callers must check early because the work they
+ * would otherwise do first has a side effect — a panel connection test contacts
+ * the operator's panel — and a permission checked after the side effect is not
+ * a permission check. Without this, that early refusal wrote no audit row at
+ * all, and a denied credential rotation left nothing behind.
+ *
+ * Called from exactly one place per attempt, so a denial produces one row: an
+ * early refusal never reaches the transaction, and a refusal inside the
+ * transaction means the early check passed.
+ *
+ * This permission's denial, not any denial. `PERMISSION_DENIED` is also how a
+ * missing tenant context surfaces, and recording that as
+ * "deniedPermission: settings.edit" would put a false statement in the audit
+ * log — the one place that must not contain one.
+ */
+export async function recordMutationDenial(
+  deps: Pick<AuthorizedMutationDeps, 'opsLog' | 'audit' | 'guard'>,
+  scope: ScopeContext,
+  actor: ActorContext,
+  permission: PermissionKey,
+  denial: MutationDenial,
+  error: unknown,
+): Promise<void> {
+  if (
+    isNexaError(error) &&
+    error.kind === 'PERMISSION_DENIED' &&
+    error.details['permission'] === permission
+  ) {
+    await deps.opsLog.record(scope, deps.guard.denialEvent(actor, permission));
+    await deps.audit.record(scope, actor, {
+      action: denial.action,
+      entityType: denial.entityType,
+      entityId: denial.entityId,
+      before: null,
+      after: { deniedPermission: permission, reason: error.code },
+      result: 'DENIED',
+    });
   }
 }
 

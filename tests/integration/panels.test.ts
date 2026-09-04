@@ -536,6 +536,38 @@ describe('panels', () => {
     });
   });
 
+  it('records exactly one DENIED audit row for a refused write', async () => {
+    const { view } = await create(owner, tenantA, { credentials: { password: PASSWORD } });
+
+    await expect(
+      ctx.container.panels.setCredentials(tenantA, adminActorFor(technical), view.panel.id, {
+        credentials: { password: 'not-allowed-to-do-this' },
+        idempotencyKey: key(),
+      }),
+    ).rejects.toMatchObject({ code: 'platform.permission_denied' });
+
+    const denied = await ctx.container.database.db
+      .select()
+      .from(auditLogs)
+      .where(eq(auditLogs.result, 'DENIED'));
+
+    // Exactly one. The permission is checked twice on a write — once before the
+    // transaction, because the replay path and the connection test both act
+    // before one opens, and once inside it, which is the authority. Only the
+    // check that actually refuses records, so two checks still mean one row.
+    //
+    // This test exists because the early check was added without it and ate
+    // the audit trail: a denied credential rotation left nothing behind at all,
+    // which is the opposite of what a CRITICAL permission is for.
+    expect(denied).toHaveLength(1);
+    expect(denied[0]?.action).toBe('panel.credentials.replace');
+    expect(denied[0]?.entityId).toBe(view.panel.id);
+    expect((denied[0]?.after as { deniedPermission: string }).deniedPermission).toBe(
+      'panels.credentials.rotate',
+    );
+    expect(JSON.stringify(denied)).not.toContain('not-allowed-to-do-this');
+  });
+
   it('lets a viewer read but not write', async () => {
     const { view } = await create(owner, tenantA);
     const actor = adminActorFor(operator);

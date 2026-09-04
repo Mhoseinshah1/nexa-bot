@@ -26,7 +26,10 @@ import {
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
-import { runAuthorizedMutation } from '../../access/application/authorized-mutation.js';
+import {
+  recordMutationDenial,
+  runAuthorizedMutation,
+} from '../../access/application/authorized-mutation.js';
 import type { SessionRepository } from '../../identity/application/ports.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
@@ -172,6 +175,35 @@ export class PanelService {
     return scope;
   }
 
+  /**
+   * Checks a permission BEFORE the transaction, and records the refusal.
+   *
+   * A plain `guard.check` here would refuse correctly and leave no audit row:
+   * the DENIED row is written by `runAuthorizedMutation`'s catch, and an early
+   * refusal never reaches it. A denied credential rotation would then leave
+   * nothing behind at all, which is the opposite of what a CRITICAL permission
+   * is for.
+   *
+   * The early check is not redundant with the one inside the transaction. It
+   * governs two things that one cannot: the REPLAY path, which returns a live
+   * panel view without ever opening a transaction, and the connection test,
+   * which contacts the operator's panel before the transaction begins — a
+   * permission checked after the side effect is not a permission check.
+   */
+  private async authorize(
+    scope: ScopeContext,
+    actor: ActorContext,
+    permission: typeof PANELS_EDIT | typeof PANELS_CREDENTIALS_ROTATE,
+    denial: { action: string; entityType: string; entityId: string | null },
+  ): Promise<void> {
+    try {
+      await this.deps.guard.check(scope, actor, permission);
+    } catch (error) {
+      await recordMutationDenial(this.mutationDeps(), scope, actor, permission, denial, error);
+      throw error;
+    }
+  }
+
   async list(scope: ScopeContext, actor: ActorContext): Promise<PanelView[]> {
     const tenant = this.tenant(scope);
     await this.deps.guard.check(scope, actor, PANELS_VIEW);
@@ -263,15 +295,11 @@ export class PanelService {
     this.deps.adapters(providerType);
     const baseUrl = this.validateUrl(command.baseUrl);
 
-    // Checked HERE, before the idempotency store is consulted.
-    //
-    // `runAuthorizedMutation` re-checks inside the transaction and is the
-    // authority; this is the check that governs the REPLAY path, which never
-    // reaches it. A replay returns a live panel view, so an admin whose
-    // `panels.edit` was revoked could otherwise replay a key they used while
-    // they still had it and read the panel back. Phase 2's replays rebuild
-    // their answer from the stored snapshot and do not have this shape.
-    await this.deps.guard.check(scope, actor, PANELS_EDIT);
+    await this.authorize(scope, actor, PANELS_EDIT, {
+      action: 'panel.create',
+      entityType: 'Panel',
+      entityId: null,
+    });
 
     // The credentials are NOT in the hash. Two creates with the same key and
     // different passwords must not be treated as different requests — that
@@ -367,8 +395,11 @@ export class PanelService {
     const tenant = this.tenant(scope);
     const command: UpdatePanelCommand = parseCommand(updatePanelRequestSchema, input);
     const baseUrl = command.baseUrl === undefined ? undefined : this.validateUrl(command.baseUrl);
-    // Before the idempotency store; see the note in `create`.
-    await this.deps.guard.check(scope, actor, PANELS_EDIT);
+    await this.authorize(scope, actor, PANELS_EDIT, {
+      action: 'panel.update',
+      entityType: 'Panel',
+      entityId: panelId,
+    });
     const requestHash = hashRequest({ panelId, name: command.name, baseUrl });
     const existing = await this.deps.idempotency.find<{ panelId: string }>(
       scope,
@@ -458,8 +489,11 @@ export class PanelService {
       apiToken: parsed.credentials.apiToken,
     };
     const idempotencyKey = parsed.idempotencyKey;
-    // Before the idempotency store; see the note in `create`.
-    await this.deps.guard.check(scope, actor, PANELS_CREDENTIALS_ROTATE);
+    await this.authorize(scope, actor, PANELS_CREDENTIALS_ROTATE, {
+      action: 'panel.credentials.replace',
+      entityType: 'Panel',
+      entityId: panelId,
+    });
     // The KINDS being written, never the values. A request hash computed over
     // a password would put a value derived from it in the idempotency table,
     // and would make an operator who retyped the same password look like a
@@ -531,8 +565,11 @@ export class PanelService {
     const parsed = parseCommand(setPanelStatusRequestSchema, input);
     const status: PanelStatus = parsed.status;
     const idempotencyKey = parsed.idempotencyKey;
-    // Before the idempotency store; see the note in `create`.
-    await this.deps.guard.check(scope, actor, PANELS_EDIT);
+    await this.authorize(scope, actor, PANELS_EDIT, {
+      action: 'panel.status',
+      entityType: 'Panel',
+      entityId: panelId,
+    });
     const requestHash = hashRequest({ panelId, status });
     const existing = await this.deps.idempotency.find<{ panelId: string }>(
       scope,
@@ -602,7 +639,11 @@ export class PanelService {
   ): Promise<{ view: PanelView; probed: boolean }> {
     const tenant = this.tenant(scope);
     const idempotencyKey = parseCommand(testPanelRequestSchema, input).idempotencyKey;
-    await this.deps.guard.check(scope, actor, PANELS_EDIT);
+    await this.authorize(scope, actor, PANELS_EDIT, {
+      action: 'panel.test',
+      entityType: 'Panel',
+      entityId: panelId,
+    });
 
     const requestHash = hashRequest({ panelId, operation: 'test' });
     const existing = await this.deps.idempotency.find<{ panelId: string }>(
