@@ -492,23 +492,45 @@ EOF
   # parse through the application's own schema. Substituted with a Python
   # replace rather than `sed`, so a generated value containing a slash or an
   # ampersand cannot corrupt the output or inject a second assignment.
-  python3 -c '
+  #
+  # The substitutions arrive on STDIN, and that is the security property, not a
+  # style choice. They used to be positional arguments — which put the KEK and
+  # both database passwords into a process's argv, where `ps` shows them to
+  # every user on the machine for as long as the interpreter runs. This file
+  # already says so, forty lines further down, about the owner password: "argv
+  # is readable by every user on the machine via `ps`, and an environment
+  # variable would be readable through `docker inspect`". The rule was written
+  # and then broken three lines from where it was written.
+  #
+  # `printf` is a shell BUILTIN, so the values never become a process's
+  # arguments on this side either — there is no `/usr/bin/printf` to inspect.
+  # NUL-separated because a token or a value containing a newline would
+  # otherwise re-frame the list; nothing generated here contains one, and a
+  # framing that depends on that staying true is a framing that will eventually
+  # be wrong.
+  printf '%s\0' \
+    "__POSTGRES_PASSWORD__=${pg_password}" \
+    "__REDIS_PASSWORD__=${redis_password}" \
+    "__SECRETS_KEK__=${kek}" \
+    "__SECRETS_ACTIVE_KEY_ID__=${kek_id}" \
+    "__DOMAIN__=${DOMAIN}" \
+    "__EDGE_SUBNET__=${NEXA_EDGE_SUBNET:-172.29.0.0/24}" |
+    python3 -c '
 import sys
 source, target = sys.argv[1], sys.argv[2]
-replacements = dict(pair.split("=", 1) for pair in sys.argv[3:])
+replacements = {}
+for pair in sys.stdin.buffer.read().decode("utf-8").split("\0"):
+    if pair == "":
+        continue
+    token, value = pair.split("=", 1)
+    replacements[token] = value
 with open(source, "r", encoding="utf-8") as handle:
     text = handle.read()
 for token, value in replacements.items():
     text = text.replace(token, value)
 with open(target, "w", encoding="utf-8") as handle:
     handle.write(text)
-' "${NEXA_DEPLOY_DIR}/nexa.env.template" "${app_env}.partial" \
-    "__POSTGRES_PASSWORD__=${pg_password}" \
-    "__REDIS_PASSWORD__=${redis_password}" \
-    "__SECRETS_KEK__=${kek}" \
-    "__SECRETS_ACTIVE_KEY_ID__=${kek_id}" \
-    "__DOMAIN__=${DOMAIN}" \
-    "__EDGE_SUBNET__=${NEXA_EDGE_SUBNET:-172.29.0.0/24}"
+' "${NEXA_DEPLOY_DIR}/nexa.env.template" "${app_env}.partial"
 
   # Same rule for the substituted template: it is complete before it is named.
   chmod 0600 "${app_env}.partial"

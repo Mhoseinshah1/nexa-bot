@@ -471,6 +471,96 @@ fake_set stale_run 1
 assert_ok 'a leftover run container was mistaken for the api' nexa_wait_ready 5
 fake_set stale_run 0
 
+test_case 'the installer never puts a secret into a process argument list'
+# S3. `generate_secrets` substituted the template by passing the KEK and both
+# database passwords as POSITIONAL ARGUMENTS to python3 — visible in `ps` to
+# every user on the machine for as long as the interpreter ran. The installer
+# says so itself, forty lines further down, about the owner password: "argv is
+# readable by every user on the machine via `ps`". The rule was written and
+# then broken three lines from where it was written.
+#
+# This drives the REAL `generate_secrets` with a python3 that records the argv
+# it was handed and then execs the real interpreter, so the substitution still
+# happens and the file it produces is the real one.
+argv_log="${NEXA_ROOT}/python3-argv.log"
+: >"$argv_log"
+fake_bin="${NEXA_ROOT}/argvspy"
+mkdir -p "$fake_bin"
+real_python3="$(command -v python3)"
+cat >"${fake_bin}/python3" <<FAKE
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >>"${argv_log}"
+exec "${real_python3}" "\$@"
+FAKE
+chmod 0755 "${fake_bin}/python3"
+
+# A FRESH config directory, and that is load-bearing rather than tidy:
+# `generate_secrets` is idempotent by design and returns without doing anything
+# when the three files are already complete — which they are in this harness by
+# the time this test runs. Pointed at the shared directory it generates
+# nothing, invokes no interpreter, and the assertions below then pass against
+# an empty log. The positive control catches that; this avoids it.
+s3_config="${NEXA_ROOT}/etc/nexa-argv"
+rm -rf "$s3_config"
+install -d -m 0700 "$s3_config"
+
+# A CHILD PROCESS, not a subshell: the environment this needs — a PATH with the
+# spy in front and a config directory of its own — must not leak back into the
+# rest of the suite, and a real installer run is its own process anyway.
+#
+# The installer is SOURCED there and one function called, never executed: a
+# real run would install Docker on this machine.
+install -m 0644 "${REPO}/deploy/nexa.env.template" "${NEXA_DEPLOY_DIR}/nexa.env.template"
+# SC2031: the prefix is scoped to this one command ON PURPOSE — the spy must
+# not be on the PATH of anything else in this suite, and the config directory
+# must not leak either. "Might be lost" is the property being asked for.
+# shellcheck disable=SC2031
+PATH="${fake_bin}:${PATH}" NEXA_CONFIG_DIR="$s3_config" bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  generate_secrets >/dev/null 2>&1
+' _ "${REPO}/deploy/install.sh" || fail_test 'generate_secrets did not complete'
+
+# THE POSITIVE CONTROL, and it is not decoration: without it this whole test
+# passes when python3 is never invoked at all, which is exactly the shape of
+# check this repository has been bitten by before.
+assert_ok 'the argv spy was never invoked; the rest of this test proves nothing' \
+  test -s "$argv_log"
+assert_contains 'the spy did not see the template substitution' \
+  "$(cat "$argv_log")" 'nexa.env.template'
+
+# Read the generated values back and require that NONE of them appear in the
+# recorded arguments. The values themselves are never printed: a failure names
+# the key, never what it holds.
+#
+# The KEK is NOT stored under its own key. `SECRETS_KEYS` holds `<id>:<kek>`,
+# because one key encrypts and all of them decrypt — so the value to look for
+# is the part after the first colon. Reading a `SECRETS_KEK` that this format
+# does not have yields the empty string, and `grep -F ''` matches every line:
+# the first version of this check reported the KEK leaking out of a log that
+# did not contain it. The emptiness guard below is what turns that into a loud
+# failure instead of a confident wrong answer, in either direction.
+s3_pg_password="$(nexa_env_value "${s3_config}/postgres.env" POSTGRES_PASSWORD)"
+s3_redis_password="$(nexa_env_value "${s3_config}/redis.env" REDIS_PASSWORD)"
+s3_keyring="$(nexa_env_value "${s3_config}/nexa.env" SECRETS_KEYS)"
+s3_kek="${s3_keyring#*:}"
+
+for secret_key in POSTGRES_PASSWORD REDIS_PASSWORD SECRETS_KEK; do
+  case "$secret_key" in
+    POSTGRES_PASSWORD) secret_value="$s3_pg_password" ;;
+    REDIS_PASSWORD) secret_value="$s3_redis_password" ;;
+    *) secret_value="$s3_kek" ;;
+  esac
+  # Length, not merely non-emptiness: a one-character needle would match almost
+  # any log and prove nothing. Everything generated here is far longer.
+  if [ "${#secret_value}" -lt 16 ]; then
+    fail_test "generate_secrets produced no usable ${secret_key}; this check would be vacuous"
+  fi
+  if grep -qF -- "$secret_value" "$argv_log"; then
+    fail_test "${secret_key} appeared in a process argument list"
+  fi
+done
+printf '  %s\n' 'no generated secret reaches a process argument list'
+
 test_case 'the installer refuses to be used as an updater'
 # It takes no backup, never writes `previous`, and repoints deploy.env at the
 # new image before anything is pulled, migrated or started — so a failed
