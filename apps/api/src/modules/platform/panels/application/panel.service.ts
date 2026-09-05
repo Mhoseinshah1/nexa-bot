@@ -869,6 +869,12 @@ export class PanelService {
           tx,
         );
 
+        // What the row holds now that the write has been decided, read in the
+        // same transaction. Only needed on the discarded path, where `before`
+        // is by definition stale — see the audit's `after` below.
+        const current =
+          outcome === 'APPLIED' ? null : await this.deps.repository.find(tenant, panelId, tx);
+
         // A manual test is a real probe with a real answer, so it moves the
         // background schedule too. Without this the monitor would re-dial a
         // panel the operator just tested — and against a rejected credential it
@@ -921,12 +927,22 @@ export class PanelService {
               outcome === 'APPLIED'
                 ? { state: health.state, failure: health.failure, latencyMs: health.latencyMs }
                 : {
-                    // The state the row actually holds, and the measurement
-                    // that lost, named as having lost. `result` stays SUCCESS
-                    // because the operator's command did succeed — the probe
-                    // ran and answered; it is the STORED state this row must
-                    // not misreport.
-                    state: before.health?.state ?? null,
+                    // The state the row ACTUALLY holds, re-read inside this
+                    // transaction, and the measurement that lost, named as
+                    // having lost.
+                    //
+                    // Not `before.health`: the race is precisely that `before`
+                    // is out of date. A manual probe captures AUTH_FAILED, a
+                    // newer probe stores HEALTHY, the manual one returns
+                    // UNREACHABLE and is discarded — reporting `before` would
+                    // put AUTH_FAILED in the audit trail as the current state
+                    // when the database says HEALTHY, which is a different
+                    // wrong answer from the one this branch was added to fix.
+                    //
+                    // `result` stays SUCCESS because the operator's command did
+                    // succeed: the probe ran and answered. It is the STORED
+                    // state this row must not misreport.
+                    state: current?.health?.state ?? null,
                     discarded: {
                       state: health.state,
                       failure: health.failure,

@@ -159,6 +159,23 @@ export class PanelMonitorService {
    */
   private lastProgressAt: number | null = null;
 
+  /**
+   * Whether the scheduler rows have been reconciled since this process started.
+   *
+   * Reconciliation repairs panels a rollback-era release created without a
+   * schedule row (see `reconcileSchedules`). It was a fire-and-forget call in
+   * `start()`, and that was not enough: a transient failure was logged and
+   * swallowed, ordinary discovery then succeeded against the schedule rows that
+   * DO exist, the monitor reported progress, and the orphan stayed invisible
+   * until somebody restarted the process.
+   *
+   * So it is part of the liveness model instead. Until one reconciliation has
+   * succeeded the monitor does not claim to be scheduling correctly, and every
+   * tick retries — no restart required. Afterwards it is not run again, so the
+   * anti-join is paid once per process rather than every thirty seconds.
+   */
+  private reconciled = false;
+
   constructor(
     private readonly deps: PanelMonitorDeps,
     private readonly intervalMs: number,
@@ -167,23 +184,7 @@ export class PanelMonitorService {
   start(): void {
     if (this.timer !== null) return;
     this.stopping = false;
-    // Repair any panel a rollback-era release created without a schedule row.
-    // Startup is when that sequence ends, and the work is one indexed anti-join.
-    // Failure here must not stop the loop: a monitor that will not start is
-    // worse than one that has not yet repaired an orphan.
-    void this.deps.discovery
-      .reconcileSchedules(this.deps.clock.now())
-      .then((created) => {
-        if (created > 0) {
-          this.deps.logger.warn(
-            { created },
-            'panel monitor created missing scheduler rows at startup',
-          );
-        }
-      })
-      .catch((error: unknown) => {
-        this.deps.logger.error({ err: error }, 'panel monitor could not reconcile schedules');
-      });
+    this.reconciled = false;
     // The first tick runs immediately rather than one interval later. A monitor
     // that restarts more often than its interval — a crash loop, a day of
     // deploys — would otherwise never probe anything at all.
@@ -197,6 +198,7 @@ export class PanelMonitorService {
     // A draining monitor is not a live one. `main.monitor.ts` stops the
     // heartbeat first for the same reason.
     this.lastProgressAt = null;
+    this.reconciled = false;
     if (this.timer !== null) {
       clearInterval(this.timer);
       this.timer = null;
@@ -225,6 +227,15 @@ export class PanelMonitorService {
    *     stale within three intervals.
    */
   iterationIsFresh(now: number): boolean {
+    // A monitor that has not reconciled does not know its own work list.
+    //
+    // Defence in depth rather than the enforcing rule: reconciliation runs at
+    // the HEAD of the sweep, so a failure propagates out of `tick` before any
+    // progress is recorded and the null check below already refuses. Mutating
+    // this line alone therefore changes nothing today — it is here so that a
+    // later edit which moves the reconcile after the first `noteProgress` does
+    // not silently restore the defect. The tested rule is the ordering.
+    if (!this.reconciled) return false;
     if (this.lastProgressAt === null) return false;
     return now - this.lastProgressAt <= this.intervalMs * 3;
   }
@@ -268,6 +279,18 @@ export class PanelMonitorService {
 
     // Phase one: take a turn for the least-recently-served due tenants. One
     // bounded statement over a table with one row per tenant.
+    // Before the first scheduling pass, and retried on every tick until it
+    // works. A throw here propagates to `tick`, which records NO progress —
+    // which is the point: a monitor that cannot establish its work list must
+    // not report itself healthy while quietly ignoring part of it.
+    if (!this.reconciled) {
+      const created = await this.deps.discovery.reconcileSchedules(now);
+      this.reconciled = true;
+      if (created > 0) {
+        this.deps.logger.warn({ created }, 'panel monitor created missing scheduler rows');
+      }
+    }
+
     const tenantIds = await this.deps.discovery.claimTenants(now, this.deps.tenantsPerTick);
     if (tenantIds.length === 0) {
       // Discovery SUCCEEDED with nothing to do. That is progress: an

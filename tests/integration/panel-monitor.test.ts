@@ -614,6 +614,81 @@ describe('the panel health monitor', () => {
     });
   });
 
+  describe('a manual probe whose result was discarded', () => {
+    it('audits the health the database actually holds, never the stale before', async () => {
+      // The exact race, driven end to end. `before` is AUTH_FAILED when the
+      // manual probe starts; a newer probe stores HEALTHY while it is in
+      // flight; the manual probe returns UNREACHABLE and the write is refused.
+      // Reporting `before` would put AUTH_FAILED in the audit trail as the
+      // current state when the row says HEALTHY — a different wrong answer
+      // from the one this branch exists to prevent.
+      const panelId = await createPanel(ownerA, tenantA, 'discarded-manual');
+      outcome = REJECTED;
+      await tick();
+      expect((await healthOf(panelId))?.state).toBe('AUTH_FAILED');
+
+      let release!: () => void;
+      let dialled!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const inFlight = new Promise<void>((resolve) => {
+        dialled = resolve;
+      });
+
+      const early = new Date(now.getTime() + 60_000);
+      const late = new Date(now.getTime() + 120_000);
+
+      // The operator's slow manual test, stamped `early`.
+      const manual = service({
+        clock: { now: () => early },
+        adapters: (type: ProviderType) => ({
+          ...providerAdapter(type),
+          probe: async () => {
+            dialled();
+            await held;
+            return TIMED_OUT;
+          },
+        }),
+      }).testConnection(tenantA, adminActorFor(ownerA), panelId, { idempotencyKey: key() });
+      await inFlight;
+
+      // A newer probe of the same configuration stores HEALTHY first.
+      const fast = monitor({
+        probe: {
+          clock: { now: () => late },
+          adapters: (type: ProviderType) => ({
+            ...providerAdapter(type),
+            probe: async () => HEALTHY,
+          }),
+        },
+        discovery: {
+          claimTenants: async () => [tenantA.tenantId],
+          dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
+          refreshTenantBounds: async () => {},
+          reconcileSchedules: async () => 0,
+        },
+      });
+      await fast.tick();
+      expect((await healthOf(panelId))?.state).toBe('HEALTHY');
+
+      release();
+      await manual;
+
+      // The row is untouched by the discarded measurement...
+      expect((await healthOf(panelId))?.state).toBe('HEALTHY');
+      // ...and the audit says so, naming what was thrown away.
+      const [audit] = await ctx.container.database.db
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.action, 'panel.test'));
+      const after = audit!.after as { state: string | null; discarded?: { state: string } };
+      expect(after.state).toBe('HEALTHY');
+      expect(after.state).not.toBe('AUTH_FAILED');
+      expect(after.discarded?.state).toBe('UNREACHABLE');
+    });
+  });
+
   describe('panel writes', () => {
     it('treats an edit with no editable field as a no-op', async () => {
       // The frozen request schema permits a body carrying only an idempotency
@@ -663,6 +738,66 @@ describe('the panel health monitor', () => {
   });
 
   describe('a panel created while the release was rolled back', () => {
+    it('does not claim healthy scheduling until reconciliation has succeeded', async () => {
+      // Reconciliation was fire-and-forget in `start()`: a transient failure
+      // was logged and swallowed, ordinary discovery then succeeded against the
+      // schedule rows that DO exist, the monitor reported progress, and the
+      // orphan stayed invisible until somebody restarted the process.
+      const orphan = await createPanel(ownerA, tenantA, 'orphan-under-failure');
+      await ctx.container.database.db.execute(
+        sql`DELETE FROM panel_monitor_schedule WHERE panel_id = ${orphan}`,
+      );
+
+      const real = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      let failures = 2;
+      const m = monitor({
+        discovery: {
+          claimTenants: real.claimTenants.bind(real),
+          dueForTenants: real.dueForTenants.bind(real),
+          refreshTenantBounds: real.refreshTenantBounds.bind(real),
+          reconcileSchedules: async (at: Date) => {
+            if (failures > 0) {
+              failures -= 1;
+              throw new Error('reconciliation is transiently unavailable');
+            }
+            return real.reconcileSchedules(at);
+          },
+        },
+      });
+
+      // The process stays alive, and does NOT claim to be scheduling correctly.
+      await m.tick();
+      expect(m.iterationIsFresh(now.getTime())).toBe(false);
+      await m.tick();
+      expect(m.iterationIsFresh(now.getTime())).toBe(false);
+      expect(await scheduleOf(orphan)).toBeUndefined();
+
+      // No restart: the next tick reconciles, and the orphan is probed.
+      const recovered = await m.tick();
+      expect(m.iterationIsFresh(now.getTime())).toBe(true);
+      expect(recovered.probed).toBeGreaterThanOrEqual(1);
+      expect((await healthOf(orphan))?.state).toBe('HEALTHY');
+    });
+
+    it('is safe when two replicas reconcile at once', async () => {
+      const orphan = await createPanel(ownerA, tenantA, 'orphan-two-replicas');
+      await ctx.container.database.db.execute(
+        sql`DELETE FROM panel_monitor_schedule WHERE panel_id = ${orphan}`,
+      );
+      const repo = () => new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      const [a, b] = await Promise.all([
+        repo().reconcileSchedules(now),
+        repo().reconcileSchedules(now),
+      ]);
+      // Exactly one of them created it, and neither failed.
+      expect(a + b).toBe(1);
+      const rows = await ctx.container.database.db
+        .select()
+        .from(panelMonitorSchedule)
+        .where(eq(panelMonitorSchedule.panelId, orphan));
+      expect(rows).toHaveLength(1);
+    });
+
     it('is reconciled and monitored after rolling forward', async () => {
       // `botctl rollback` deliberately never restores the database, so a failed
       // update can leave 0022 applied under a Phase 3B image. That image knows
@@ -676,14 +811,13 @@ describe('the panel health monitor', () => {
         sql`DELETE FROM panel_monitor_schedule WHERE panel_id = ${panelId}`,
       );
       expect(await scheduleOf(panelId)).toBeUndefined();
-      expect((await tick()).considered).toBe(0);
+      // Discovery alone cannot see it — the scan reads only the schedule.
+      const real = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      expect(await real.dueForTenants([tenantA.tenantId], now, 50, 50)).toHaveLength(0);
 
-      // Rolling forward starts the monitor, which repairs it.
-      const created = await new DrizzlePanelMonitorRepository(
-        ctx.container.database.db,
-      ).reconcileSchedules(now);
-      expect(created).toBe(1);
-
+      // Rolling forward starts the monitor, whose first sweep reconciles before
+      // it schedules anything — so the orphan is adopted and probed at once,
+      // with no operator action and no second deploy.
       expect((await tick()).probed).toBe(1);
       expect((await healthOf(panelId))?.state).toBe('HEALTHY');
     });
