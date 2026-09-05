@@ -1,4 +1,5 @@
 import type {
+  MonitorDeferralReason,
   PanelHealthState,
   PanelStatus,
   ProviderFailureKind,
@@ -43,21 +44,34 @@ export interface PanelHealthRecord {
   readonly statusCode: number | null;
   readonly providerVersion: string | null;
   readonly lastHealthyAt: Date | null;
-  /**
-   * Probes that have failed in a row, ending with this one. Zero on success.
-   *
-   * The backoff input. A counter and not a history: it says how long this has
-   * been going on, and nothing about what the earlier failures were.
-   */
+}
+
+/**
+ * What a probe result did to the stored health row.
+ *
+ * `STALE_IGNORED` is not an error and not a no-op the caller may ignore. A
+ * probe runs outside the transaction that stores it, so a slow one can finish
+ * after a faster later one — an operator's manual test overtaking a background
+ * probe still on the wire. The storage refuses to move `checked_at` backwards,
+ * and the CALLER has to know that happened: announcing a transition to
+ * `AUTH_FAILED` that was never stored would tell an operator their panel is
+ * broken while the row in front of them says `HEALTHY`.
+ */
+export type HealthWriteOutcome = 'APPLIED' | 'STALE_IGNORED';
+
+/**
+ * The monitor's bookkeeping for one panel. Never health, never a secret.
+ *
+ * Separate from `PanelHealthRecord` because they answer different questions and
+ * have different writers. Health is the last thing a provider said. This is
+ * when the loop may look again and why it last stepped back — including for
+ * panels no provider has ever answered for, which is precisely the case a
+ * schedule kept on the health row could not represent.
+ */
+export interface PanelScheduleRecord {
+  readonly nextEligibleAt: Date;
   readonly consecutiveFailures: number;
-  /**
-   * The earliest the background monitor may probe this panel again.
-   *
-   * Written by every probe, the operator's included — a manual test is a real
-   * probe with a real answer, and a monitor that re-dialled the panel a second
-   * later would be asking a question that was just answered.
-   */
-  readonly nextProbeAt: Date;
+  readonly deferredReason: MonitorDeferralReason | null;
 }
 
 /** A panel with everything a surface may see about it. */
@@ -161,10 +175,67 @@ export interface PanelRepository {
     exceptPanelId: string | null,
     tx?: TransactionScope,
   ): Promise<boolean>;
+  /**
+   * Stores a probe result, and says whether it was actually applied.
+   *
+   * Refuses to move `checked_at` backwards, so a slow probe finishing after a
+   * faster later one is discarded rather than replacing a fresh verdict with a
+   * stale one. The return value is not decoration: the caller announces
+   * transitions, and announcing one for a result the database threw away would
+   * tell an operator something the row in front of them contradicts.
+   */
   recordHealth(
     scope: TenantContext,
     panelId: string,
     health: PanelHealthRecord,
+    tx: TransactionScope,
+  ): Promise<HealthWriteOutcome>;
+  /** The monitor's bookkeeping for one panel, or null if it has no schedule row. */
+  readSchedule(
+    scope: TenantContext,
+    panelId: string,
+    tx?: TransactionScope,
+  ): Promise<PanelScheduleRecord | null>;
+  /**
+   * Moves a panel's next eligible moment, and the tenant's lower bound with it.
+   *
+   * One call for every reason the loop steps away from a panel: a probe that
+   * produced health, a deferral that did not, and an operator edit that makes
+   * it due at once. `deferredReason` is null exactly when a probe happened.
+   *
+   * The tenant's rotation row is updated in the same statement, downward only
+   * (`LEAST`), which is what keeps the fairness bound a lower bound and never a
+   * missed tenant.
+   */
+  scheduleNext(
+    scope: TenantContext,
+    panelId: string,
+    next: {
+      readonly nextEligibleAt: Date;
+      readonly consecutiveFailures: number;
+      readonly deferredReason: MonitorDeferralReason | null;
+      readonly at: Date;
+    },
+    tx: TransactionScope,
+  ): Promise<void>;
+  /**
+   * Makes a panel eligible immediately, or never.
+   *
+   * `'ELIGIBLE_NOW'` is what an operator edit earns — a replaced credential, a
+   * corrected address, a re-enabled panel — so a fix is measured now rather
+   * than after a backoff the fix invalidated. `'SUSPENDED'` is what leaving
+   * `ACTIVE` earns, and it is the discovery query's real status filter: a
+   * `DISABLED` panel is not skipped by the scan, it is outside the range the
+   * scan reads.
+   *
+   * Called inside the transaction that changes the panel, so the schedule can
+   * never disagree with the row it describes.
+   */
+  setScheduleEligibility(
+    scope: TenantContext,
+    panelId: string,
+    eligibility: 'ELIGIBLE_NOW' | 'SUSPENDED',
+    at: Date,
     tx: TransactionScope,
   ): Promise<void>;
   /**
@@ -234,72 +305,75 @@ export interface PanelRepository {
   ): Promise<{ permitted: true; remaining: number } | { permitted: false; retryAfterMs: number }>;
 }
 
-/**
- * Why a panel came up for a background probe. Reported, never branched on for
- * whether to probe — being in the result set IS the decision.
- */
-export const MONITOR_DUE_REASONS = [
-  /** No health row: this panel has never been probed. */
-  'NEVER_CHECKED',
-  /** Its address, status or a credential changed after the last probe. */
-  'CONFIGURATION_CHANGED',
-  /** Its scheduled next probe time has arrived. */
-  'INTERVAL_ELAPSED',
-] as const;
-export type MonitorDueReason = (typeof MONITOR_DUE_REASONS)[number];
-
 /** One panel the monitor may consider, named with the tenant that owns it. */
 export interface DuePanel {
   readonly tenantId: string;
   readonly panelId: string;
-  readonly reason: MonitorDueReason;
 }
 
 /**
  * Finding the panels a background probe is due for, across every tenant.
  *
  * A SEPARATE port from `PanelRepository`, and the only deliberately
- * cross-tenant read in this module. That separation is the whole point. Every
- * method on `PanelRepository` takes a `TenantContext` and filters on it, and
- * making one of them optional-tenant would put a cross-tenant read one
- * forgotten argument away from every call site that lists panels.
+ * cross-tenant read in this module. Every method on that repository takes a
+ * `TenantContext` and filters on it; making one of them optional-tenant would
+ * put a cross-tenant read one forgotten argument away from every call site that
+ * lists panels.
  *
- * What this port returns is a pair of identifiers and a reason — no name, no
- * address, no credential, no health. The monitor takes the `tenantId` from each
- * row, builds a `TenantContext` from it, and does everything else through the
- * ordinary tenant-scoped repository. So the cross-tenant surface is exactly one
- * query returning exactly two ids, and nothing downstream of it is cross-tenant
- * at all.
+ * What it returns is a pair of identifiers. No name, no address, no credential,
+ * no health. The monitor takes each `tenantId`, builds a `TenantContext` from
+ * it, and does everything else through the ordinary tenant-scoped repository —
+ * so the cross-tenant surface is two queries returning two columns, and nothing
+ * downstream of them is cross-tenant at all.
+ *
+ * **Why two calls and not one.** The work a tick does must be bounded by the
+ * batch size, not by how many panels are due on the installation. The first
+ * Phase 3C design ranked every due panel with a window function and then took
+ * fifty; on a hundred thousand due panels that is a hundred thousand rows
+ * ranked and sorted, every thirty seconds, to probe fifty. Claiming the tenants
+ * first turns the second query into one bounded index range scan PER CLAIMED
+ * TENANT, and the per-tenant share is computed from how many were actually
+ * claimed — so a single-tenant installation still gets the whole batch, and a
+ * hundred-tenant one still gets fairness.
  */
 export interface PanelMonitorRepository {
   /**
-   * The next `limit` panels due for a background probe, most overdue first,
-   * fairly distributed across tenants.
+   * Takes a turn for up to `limit` tenants that have at least one eligible
+   * panel, least recently served first.
    *
-   * Bounded, ordered and index-supported, because the alternative — select the
-   * panels and filter them in JavaScript — is an unbounded read of every panel
-   * on the installation on every tick, and it gets slower exactly as an
-   * installation grows.
+   * Atomic and exclusive: the claim moves `last_served_at` under
+   * `FOR UPDATE SKIP LOCKED`, so two monitor replicas take DISJOINT tenant sets
+   * instead of both working the same one. That is what makes fairness a
+   * property of the installation rather than of one process.
    *
-   * ONLY `ACTIVE` panels. `DISABLED` means the operator said stop using this
-   * for now and `ARCHIVED` means finished; neither is a panel to go on dialling
-   * unattended. The filter is in the SQL and in the partial index the SQL uses,
-   * so a `DISABLED` panel is not merely skipped — it is not in the index the
-   * query reads.
-   *
-   * Fairness is a per-tenant `row_number()`, not `ORDER BY due_at LIMIT n`.
-   * With the latter, one tenant holding a hundred overdue panels takes every
-   * slot in every cycle and no other tenant is ever probed. With the former,
-   * every tenant's most overdue panel is considered before any tenant's
-   * second.
-   *
-   * There is no cursor parameter and that is deliberate: a probe advances the
-   * panel's `next_probe_at`, so the schedule column IS the cursor. A panel that
-   * was just probed drops out of the result set on its own, and the next tick
-   * starts from a genuinely different head rather than paging over a set that
-   * is moving underneath it.
+   * Every claimed tenant's turn is spent whether or not it turns out to have
+   * work — the bound is a lower bound, so a claim that finds nothing is the
+   * price of never missing a tenant, and `refreshTenantBounds` repairs it.
    */
-  dueForMonitoring(now: Date, limit: number): Promise<DuePanel[]>;
+  claimTenants(now: Date, limit: number): Promise<string[]>;
+  /**
+   * The eligible panels of already-claimed tenants: at most `perTenant` each,
+   * at most `batchSize` in total, earliest first.
+   *
+   * One index range scan per tenant, each stopped by `perTenant`. Nothing here
+   * reads a row it does not return.
+   */
+  dueForTenants(
+    tenantIds: readonly string[],
+    now: Date,
+    perTenant: number,
+    batchSize: number,
+  ): Promise<DuePanel[]>;
+  /**
+   * Recomputes the claimed tenants' lower bounds from their own schedules.
+   *
+   * The self-healing half of keeping the bound cheap. Writes move it down with
+   * a `LEAST` and never up, so it drifts earlier than the truth; this puts it
+   * back, one index-ordered lookup per tenant. Without it a tenant whose panels
+   * are all far in the future would be claimed on every tick for ever, spending
+   * a fairness slot to discover it has nothing to do.
+   */
+  refreshTenantBounds(tenantIds: readonly string[]): Promise<void>;
 }
 
 /** The tenant-wide bound on real outbound probes: a bucket's size and refill. */

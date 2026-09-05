@@ -1,5 +1,5 @@
 {
-  "id": "43b66ffe-0545-4ee1-8a34-caf4afe7d0fc",
+  "id": "936adcca-0915-47d1-9c79-b3827ec65499",
   "prevId": "8e366ebb-90db-4503-8c00-a9acc4228660",
   "version": "7",
   "dialect": "postgresql",
@@ -2334,20 +2334,6 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
-        },
-        "consecutive_failures": {
-          "name": "consecutive_failures",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "next_probe_at": {
-          "name": "next_probe_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
         }
       },
       "indexes": {
@@ -2356,21 +2342,6 @@
           "columns": [
             {
               "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "panel_health_next_probe_idx": {
-          "name": "panel_health_next_probe_idx",
-          "columns": [
-            {
-              "expression": "next_probe_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -2442,6 +2413,198 @@
           "value": "(state IN ('HEALTHY', 'DEGRADED')) = (failure IS NULL)"
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.panel_monitor_schedule": {
+      "name": "panel_monitor_schedule",
+      "schema": "",
+      "columns": {
+        "panel_id": {
+          "name": "panel_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "next_eligible_at": {
+          "name": "next_eligible_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consecutive_failures": {
+          "name": "consecutive_failures",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "deferred_reason": {
+          "name": "deferred_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "panel_monitor_schedule_due_idx": {
+          "name": "panel_monitor_schedule_due_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "next_eligible_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "panel_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "panel_monitor_schedule_panel_id_panels_id_fk": {
+          "name": "panel_monitor_schedule_panel_id_panels_id_fk",
+          "tableFrom": "panel_monitor_schedule",
+          "tableTo": "panels",
+          "columnsFrom": [
+            "panel_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "panel_monitor_schedule_tenant_id_tenants_id_fk": {
+          "name": "panel_monitor_schedule_tenant_id_tenants_id_fk",
+          "tableFrom": "panel_monitor_schedule",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "panel_monitor_schedule_tenant_panel_fk": {
+          "name": "panel_monitor_schedule_tenant_panel_fk",
+          "tableFrom": "panel_monitor_schedule",
+          "tableTo": "panels",
+          "columnsFrom": [
+            "tenant_id",
+            "panel_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "panel_monitor_schedule_deferred_reason_check": {
+          "name": "panel_monitor_schedule_deferred_reason_check",
+          "value": "deferred_reason IS NULL OR deferred_reason IN ('CREDENTIALS_MISSING', 'TARGET_BLOCKED', 'STATUS_NOT_PROBEABLE', 'COOLDOWN', 'BUDGET_EXHAUSTED', 'NOT_AUTHORIZED')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.panel_monitor_tenants": {
+      "name": "panel_monitor_tenants",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "next_eligible_at": {
+          "name": "next_eligible_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_served_at": {
+          "name": "last_served_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "panel_monitor_tenants_rotation_idx": {
+          "name": "panel_monitor_tenants_rotation_idx",
+          "columns": [
+            {
+              "expression": "next_eligible_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "last_served_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "panel_monitor_tenants_tenant_id_tenants_id_fk": {
+          "name": "panel_monitor_tenants_tenant_id_tenants_id_fk",
+          "tableFrom": "panel_monitor_tenants",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.panel_probe_budgets": {
@@ -2669,28 +2832,6 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "panels_monitor_active_idx": {
-          "name": "panels_monitor_active_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "status = 'ACTIVE'",
           "concurrently": false,
           "method": "btree",
           "with": {}

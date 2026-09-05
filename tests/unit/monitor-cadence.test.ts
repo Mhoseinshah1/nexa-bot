@@ -7,7 +7,13 @@ import {
 import type { ProviderFailureKind } from '@nexa/contracts';
 import {
   MONITOR_MAX_BACKOFF_STEPS,
-  MONITOR_MAX_HEALTHY_INTERVAL_MS,
+  maxHealthyIntervalMs,
+  healthyCadenceFitsFreshness,
+  effectivePreviousFailures,
+  deferralIntervalMs,
+  MONITOR_NONRETRYABLE_FLOOR_MS,
+  MONITOR_STABLE_DEFERRAL_MS,
+  MONITOR_TRANSIENT_DEFERRAL_MS,
   MONITOR_MAX_INTERVAL_MS,
   MONITOR_SPREAD_FRACTION,
   backoffMultiplier,
@@ -16,7 +22,6 @@ import {
   stableSpreadMs,
   type MonitorCadence,
 } from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
-import { configSchema } from '../../apps/api/src/infrastructure/config/config.schema';
 
 /**
  * The cadence policy: when the background monitor may probe a panel again.
@@ -47,7 +52,7 @@ function schedule(failure: ProviderFailureKind | null, previousConsecutiveFailur
 
 /** The delay a schedule implies, spread included. */
 function delayOf(failure: ProviderFailureKind | null, previous = 0): number {
-  return schedule(failure, previous).nextProbeAt.getTime() - AT.getTime();
+  return schedule(failure, previous).nextEligibleAt.getTime() - AT.getTime();
 }
 
 describe('the monitor cadence', () => {
@@ -119,7 +124,7 @@ describe('the monitor cadence', () => {
       failure: 'AUTHENTICATION_FAILED',
       previousConsecutiveFailures: 99,
     });
-    const delay = result.nextProbeAt.getTime() - AT.getTime();
+    const delay = result.nextEligibleAt.getTime() - AT.getTime();
     expect(delay).toBeLessThanOrEqual(
       MONITOR_MAX_INTERVAL_MS + MONITOR_MAX_INTERVAL_MS * MONITOR_SPREAD_FRACTION,
     );
@@ -131,9 +136,9 @@ describe('the monitor cadence', () => {
     // Random jitter regenerated per process gives a fleet that re-clusters on
     // every deploy: probed once at boot, due again together one interval later.
     // A spread keyed on the panel id survives restarts, replicas and rollbacks.
-    const first = schedule(null).nextProbeAt.getTime();
+    const first = schedule(null).nextEligibleAt.getTime();
     for (let i = 0; i < 20; i += 1) {
-      expect(schedule(null).nextProbeAt.getTime()).toBe(first);
+      expect(schedule(null).nextEligibleAt.getTime()).toBe(first);
     }
   });
 
@@ -159,30 +164,30 @@ describe('the monitor cadence', () => {
     expect(stableSpreadMs('', 1_000)).toBeGreaterThanOrEqual(0);
   });
 
-  it('keeps a healthy panel fresh at the configured ceiling', () => {
+  it('keeps a healthy panel fresh, tick delay included', () => {
     // The invariant that ties the cadence to the surface. `stale` is
-    // `now - checkedAt > PANEL_HEALTH_FRESH_FOR_MS`; a healthy cadence at or
-    // above that window would put every panel past it in every cycle, and the
-    // staleness flag would mean "the monitor is slow" rather than "this answer
-    // is old". The spread is INSIDE the bound, so this holds for the last panel
-    // in the fleet and not just the average one.
-    // The bound itself: interval plus spread must fit inside the window.
-    expect(MONITOR_MAX_HEALTHY_INTERVAL_MS * (1 + MONITOR_SPREAD_FRACTION)).toBeLessThanOrEqual(
-      PANEL_HEALTH_FRESH_FOR_MS,
-    );
+    // `now - checkedAt > PANEL_HEALTH_FRESH_FOR_MS`, and worst-case refresh is
+    // the interval PLUS the deterministic spread PLUS however long a panel that
+    // has just become eligible waits for a tick to pick it up.
+    //
+    // The first version of this bound forgot the last term, so a twelve-minute
+    // cadence with a ten-minute tick was accepted and every panel spent part of
+    // every cycle displayed as stale — which makes the staleness flag mean "the
+    // monitor is slow" rather than "this answer is old".
+    const tick = 30_000;
+    const ceiling = maxHealthyIntervalMs(tick);
+    expect(healthyCadenceFitsFreshness(ceiling, tick)).toBe(true);
+    expect(healthyCadenceFitsFreshness(ceiling + 60_000, tick)).toBe(false);
 
-    // And the schema REFUSES anything above it, so no deployment can configure
-    // its way past the invariant. This is the half that fails if somebody
-    // raises the configured maximum without revisiting the freshness window.
-    const ceiling = configSchema.shape.PANEL_MONITOR_HEALTHY_INTERVAL_MS;
-    expect(() => ceiling.parse(String(MONITOR_MAX_HEALTHY_INTERVAL_MS + 1))).toThrow();
-    // The configured ceiling is stricter still, and the default is inside it.
-    expect(ceiling.parse(undefined)).toBeLessThanOrEqual(MONITOR_MAX_HEALTHY_INTERVAL_MS);
+    // A long tick shrinks what a healthy interval may be, which is the whole
+    // reason this cannot live on either field alone.
+    expect(maxHealthyIntervalMs(10 * 60 * 1000)).toBeLessThan(maxHealthyIntervalMs(30_000));
+    expect(healthyCadenceFitsFreshness(12 * 60 * 1000, 30_000)).toBe(true);
+    expect(healthyCadenceFitsFreshness(12 * 60 * 1000, 10 * 60 * 1000)).toBe(false);
 
-    const atCeiling: MonitorCadence = {
-      ...CADENCE,
-      healthyIntervalMs: MONITOR_MAX_HEALTHY_INTERVAL_MS,
-    };
+    // And the worst panel in a fleet at the ceiling still lands inside the
+    // window once its own spread is added.
+    const atCeiling: MonitorCadence = { ...CADENCE, healthyIntervalMs: ceiling };
     const worst = Math.max(
       ...['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((id) => {
         const result = scheduleAfterProbe(atCeiling, id, {
@@ -190,9 +195,69 @@ describe('the monitor cadence', () => {
           failure: null,
           previousConsecutiveFailures: 0,
         });
-        return result.nextProbeAt.getTime() - AT.getTime();
+        return result.nextEligibleAt.getTime() - AT.getTime();
       }),
     );
-    expect(worst).toBeLessThan(PANEL_HEALTH_FRESH_FOR_MS);
+    expect(worst + tick).toBeLessThan(PANEL_HEALTH_FRESH_FOR_MS);
+  });
+
+  it('will not retry a rejected credential inside the lockout floor', () => {
+    // The floor is a floor, not a default. A cadence object built directly —
+    // by a test, a future caller, a configuration route that has not been
+    // written yet — cannot get under it, because the policy clamps as well as
+    // the schema refusing.
+    const reckless: MonitorCadence = { ...CADENCE, nonRetryableIntervalMs: 60_000 };
+    expect(baseIntervalMs(reckless, 'AUTHENTICATION_FAILED')).toBe(MONITOR_NONRETRYABLE_FLOOR_MS);
+    expect(baseIntervalMs(reckless, 'TLS_FAILED')).toBe(MONITOR_NONRETRYABLE_FLOOR_MS);
+    // A retryable failure is unaffected: those are the ones that fix
+    // themselves, and slowing them down would only make outages look longer.
+    expect(baseIntervalMs(reckless, 'TIMEOUT')).toBe(CADENCE.retryableIntervalMs);
+
+    const result = scheduleAfterProbe(reckless, PANEL, {
+      checkedAt: AT,
+      failure: 'AUTHENTICATION_FAILED',
+      previousConsecutiveFailures: 0,
+    });
+    expect(result.nextEligibleAt.getTime() - AT.getTime()).toBeGreaterThanOrEqual(
+      MONITOR_NONRETRYABLE_FLOOR_MS,
+    );
+  });
+
+  it('believes the failure counter only while health still says failure', () => {
+    // The rollback-and-forward rule. The counter lives in the scheduler's own
+    // table, which an older release does not know about: roll back, let that
+    // release complete a successful manual probe — it writes the health row and
+    // leaves the counter behind — then roll forward, and the next failure would
+    // inherit a streak from before a success that has since been recorded.
+    expect(effectivePreviousFailures('UNREACHABLE', 4)).toBe(4);
+    expect(effectivePreviousFailures('AUTH_FAILED', 4)).toBe(4);
+    // Health says it worked. The counter is stale bookkeeping and is discarded.
+    expect(effectivePreviousFailures('HEALTHY', 4)).toBe(0);
+    expect(effectivePreviousFailures('DEGRADED', 4)).toBe(0);
+    // No health at all is no evidence of a streak.
+    expect(effectivePreviousFailures(null, 4)).toBe(0);
+    // A negative counter cannot be produced by this codebase; if one ever were,
+    // it must not shorten an interval.
+    expect(effectivePreviousFailures('UNREACHABLE', -3)).toBe(0);
+  });
+
+  it('defers a stable refusal far longer than a transient one', () => {
+    // A panel with no credential and a panel whose tenant is briefly out of
+    // budget are not the same problem. The first cannot change until an
+    // operator changes it — and every such change makes the panel eligible
+    // immediately — so retrying it on a short cadence is a busy loop that
+    // spends the tenant's fairness slot to learn nothing.
+    for (const stable of [
+      'CREDENTIALS_MISSING',
+      'TARGET_BLOCKED',
+      'STATUS_NOT_PROBEABLE',
+      'NOT_AUTHORIZED',
+    ] as const) {
+      expect(deferralIntervalMs(stable), stable).toBe(MONITOR_STABLE_DEFERRAL_MS);
+    }
+    for (const transient of ['COOLDOWN', 'BUDGET_EXHAUSTED'] as const) {
+      expect(deferralIntervalMs(transient), transient).toBe(MONITOR_TRANSIENT_DEFERRAL_MS);
+    }
+    expect(MONITOR_STABLE_DEFERRAL_MS).toBeGreaterThan(MONITOR_TRANSIENT_DEFERRAL_MS * 10);
   });
 });

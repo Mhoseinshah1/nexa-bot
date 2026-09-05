@@ -19,8 +19,9 @@ import {
 } from '../../../../infrastructure/net/url-policy.js';
 
 import type { SafeHttpClient } from '../../../../infrastructure/net/safe-http.js';
-import { scheduleAfterProbe, type MonitorCadence } from '../domain/monitor-cadence.js';
+import type { MonitorCadence } from '../domain/monitor-cadence.js';
 import type {
+  HealthWriteOutcome,
   PanelCredentialStore,
   PanelHealthRecord,
   PanelRepository,
@@ -215,11 +216,9 @@ export async function attemptProbe(
     probed: true,
     configuration,
     health: toHealthRecord(outcome, {
-      panelId,
-      cadence: deps.cadence,
       checkedAt: finishedAt,
       latencyMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
-      previous: before.health,
+      previousLastHealthyAt: before.health?.lastHealthyAt ?? null,
     }),
   };
 }
@@ -240,7 +239,7 @@ export async function persistProbeResult(
   configuration: string,
   health: PanelHealthRecord,
   tx: TransactionScope,
-): Promise<PanelView> {
+): Promise<{ view: PanelView; outcome: HealthWriteOutcome }> {
   const current = await deps.repository.find(tenant, panelId, tx);
   if (current === null) {
     throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
@@ -251,8 +250,12 @@ export async function persistProbeResult(
       'This panel changed while the connection test was running. Run the test again.',
     );
   }
-  await deps.repository.recordHealth(tenant, panelId, health, tx);
-  return current;
+  // The outcome travels back to the caller because the caller announces
+  // transitions. The configuration recheck above catches a panel that CHANGED
+  // during the probe; this catches a probe that was simply overtaken by a
+  // newer one of the same configuration, which the recheck cannot see.
+  const outcome = await deps.repository.recordHealth(tenant, panelId, health, tx);
+  return { view: current, outcome };
 }
 
 /** Thrown inside the permission transaction to roll it back; never escapes this module. */
@@ -357,20 +360,11 @@ export function toProviderCredentials(
 export function toHealthRecord(
   outcome: ProviderProbeOutcome,
   context: {
-    panelId: string;
-    cadence: MonitorCadence;
     checkedAt: Date;
     latencyMs: number;
-    previous: Pick<PanelHealthRecord, 'lastHealthyAt' | 'consecutiveFailures'> | null;
+    previousLastHealthyAt: Date | null;
   },
 ): PanelHealthRecord {
-  const failure = outcome.ok ? null : outcome.failure;
-  const schedule = scheduleAfterProbe(context.cadence, context.panelId, {
-    checkedAt: context.checkedAt,
-    failure,
-    previousConsecutiveFailures: context.previous?.consecutiveFailures ?? 0,
-  });
-
   if (outcome.ok) {
     const state: PanelHealthState = outcome.degraded ? 'DEGRADED' : 'HEALTHY';
     return {
@@ -384,8 +378,6 @@ export function toHealthRecord(
       // worked — an operator watching `lastHealthyAt` freeze while the panel is
       // plainly responding would be reading a broken clock.
       lastHealthyAt: context.checkedAt,
-      consecutiveFailures: schedule.consecutiveFailures,
-      nextProbeAt: schedule.nextProbeAt,
     };
   }
   return {
@@ -403,8 +395,6 @@ export function toHealthRecord(
     failure: outcome.failure,
     statusCode: outcome.status,
     providerVersion: null,
-    lastHealthyAt: context.previous?.lastHealthyAt ?? null,
-    consecutiveFailures: schedule.consecutiveFailures,
-    nextProbeAt: schedule.nextProbeAt,
+    lastHealthyAt: context.previousLastHealthyAt ?? null,
   };
 }

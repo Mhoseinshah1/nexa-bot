@@ -46,7 +46,11 @@ import type {
   PanelView,
 } from './ports.js';
 import { attemptProbe, persistProbeResult, type ProbeCoreDeps } from './probe-core.js';
-import type { MonitorCadence } from '../domain/monitor-cadence.js';
+import {
+  effectivePreviousFailures,
+  scheduleAfterProbe,
+  type MonitorCadence,
+} from '../domain/monitor-cadence.js';
 
 const PANELS_VIEW = 'panels.view' as const;
 const PANELS_EDIT = 'panels.edit' as const;
@@ -400,6 +404,11 @@ export class PanelService {
           { id: panelId, name: command.name, providerType, baseUrl, at: now },
           tx,
         );
+        // The schedule row is born with the panel and in the same transaction.
+        // A panel with no schedule row is a panel the monitor cannot see, and
+        // "create the row lazily when the monitor first meets it" is how a
+        // panel goes unmonitored until somebody notices.
+        await this.deps.repository.setScheduleEligibility(tenant, panelId, 'ELIGIBLE_NOW', now, tx);
         if (command.credentials !== undefined) {
           await this.deps.credentials.write(tenant, panelId, command.credentials, now, tx);
         }
@@ -505,6 +514,11 @@ export class PanelService {
         if (updated === null) {
           throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
         }
+        // An edit makes the panel due immediately. Whatever the monitor had
+        // decided was about a configuration that no longer exists — and an
+        // operator who has just corrected an address should not wait out a
+        // backoff the correction invalidated.
+        await this.deps.repository.setScheduleEligibility(tenant, panelId, 'ELIGIBLE_NOW', now, tx);
         await this.deps.audit.record(
           scope,
           actor,
@@ -589,6 +603,11 @@ export class PanelService {
           );
         }
         await this.deps.credentials.write(tenant, panelId, write, now, tx);
+        // Same rule as an edit, and this is the case that matters most: an
+        // operator replacing a rejected password wants to know whether it
+        // worked, not to wait out the long non-retryable backoff the rejection
+        // earned. It also clears a `CREDENTIALS_MISSING` deferral.
+        await this.deps.repository.setScheduleEligibility(tenant, panelId, 'ELIGIBLE_NOW', now, tx);
         await this.deps.audit.record(
           scope,
           actor,
@@ -659,6 +678,18 @@ export class PanelService {
         if (updated === null) {
           throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
         }
+        // This is the monitor's status filter, and it is why the discovery scan
+        // needs no status predicate to be correct: a panel that is not ACTIVE
+        // becomes eligible at `'infinity'`, in the same transaction as the
+        // status change, so it is not skipped by the scan — it is outside the
+        // range the scan reads. Re-enabling makes it due at once.
+        await this.deps.repository.setScheduleEligibility(
+          tenant,
+          panelId,
+          status === 'ACTIVE' ? 'ELIGIBLE_NOW' : 'SUSPENDED',
+          now,
+          tx,
+        );
         await this.deps.audit.record(
           scope,
           actor,
@@ -808,7 +839,45 @@ export class PanelService {
       PANELS_EDIT,
       { action: 'panel.test', entityType: 'Panel', entityId: panelId },
       async (tx) => {
-        await persistProbeResult(this.deps, tenant, panelId, attempt.configuration, health, tx);
+        const { outcome } = await persistProbeResult(
+          this.deps,
+          tenant,
+          panelId,
+          attempt.configuration,
+          health,
+          tx,
+        );
+
+        // A manual test is a real probe with a real answer, so it moves the
+        // background schedule too. Without this the monitor would re-dial a
+        // panel the operator just tested — and against a rejected credential it
+        // would be spending the operator's lockout budget to ask a question
+        // that was answered a second ago.
+        //
+        // Skipped when the write was refused as stale: a result the database
+        // discarded must not decide when the next probe happens either.
+        if (outcome === 'APPLIED') {
+          const stored = await this.deps.repository.readSchedule(tenant, panelId, tx);
+          const schedule = scheduleAfterProbe(this.deps.cadence, panelId, {
+            checkedAt: health.checkedAt,
+            failure: health.failure,
+            previousConsecutiveFailures: effectivePreviousFailures(
+              before.health?.state ?? null,
+              stored?.consecutiveFailures ?? 0,
+            ),
+          });
+          await this.deps.repository.scheduleNext(
+            tenant,
+            panelId,
+            {
+              nextEligibleAt: schedule.nextEligibleAt,
+              consecutiveFailures: schedule.consecutiveFailures,
+              deferredReason: null,
+              at: health.checkedAt,
+            },
+            tx,
+          );
+        }
         await this.deps.audit.record(
           scope,
           actor,

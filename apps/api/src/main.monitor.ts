@@ -44,16 +44,22 @@ async function main(): Promise<void> {
    * The signal the container's health check reads, and it proves three things.
    *
    * The process is alive (the heartbeat timer fires), the database is reachable
-   * (a real round trip, not a cached answer), and the monitoring loop has
-   * COMPLETED an iteration recently. The third is the one a naive heartbeat
-   * omits, and it is the one that matters: a process whose timer still fires
-   * while every tick throws is not monitoring anything, and a file touched
-   * regardless would report it healthy for ever.
+   * (a real round trip, not a cached answer), and the monitoring loop has made
+   * PROGRESS recently. The third is the one a naive heartbeat omits and the one
+   * that matters: a process whose timer still fires while every discovery query
+   * throws is not monitoring anything, and a file touched regardless would
+   * report it healthy for ever.
+   *
+   * Progress, deliberately, and not "a tick finished". A bounded batch of slow
+   * providers can outlast several intervals and a monitor working through it is
+   * not broken — so a finished panel counts, and a wedged sweep does not. There
+   * is no startup grace: before the first successful discovery the monitor has
+   * never done its job, so it is not healthy and readiness does not pass. An
+   * installation whose scheduler is broken must fail its release rather than
+   * report ready for the first few minutes and then quietly stop.
    *
    * `startHeartbeat` writes the file only when `check` returns true, so a
-   * monitor whose loop has died goes stale rather than lying — and
-   * `iterationIsFresh` is keyed on tick COMPLETION, so a tick wedged on a
-   * hanging query does not keep the file fresh either.
+   * monitor whose loop has died goes stale rather than lying.
    */
   const heartbeat = startHeartbeat({
     path: config.PANEL_MONITOR_HEARTBEAT_PATH,

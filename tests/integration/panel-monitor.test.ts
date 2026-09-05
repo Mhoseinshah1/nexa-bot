@@ -1,11 +1,15 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { and, eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
+import { errors } from '@nexa/contracts';
 import type { ProviderProbeOutcome, ProviderType, TenantContext } from '@nexa/contracts';
 import {
   auditLogs,
   operationalEvents,
   panelHealth,
-  panels,
+  panelMonitorSchedule,
+  panelMonitorTenants,
+  panelProbeBudgets,
+  panelProbeClaims,
 } from '../../apps/api/src/infrastructure/persistence/schema';
 import { PanelService } from '../../apps/api/src/modules/platform/panels/application/panel.service';
 import {
@@ -20,7 +24,12 @@ import {
 import { DrizzlePanelCredentialStore } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-credentials';
 import { providerAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
-import type { MonitorCadence } from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
+import {
+  MONITOR_NONRETRYABLE_FLOOR_MS,
+  MONITOR_STABLE_DEFERRAL_MS,
+  SCHEDULE_SUSPENDED_AT,
+  type MonitorCadence,
+} from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
 import type { PanelMonitorRepository } from '../../apps/api/src/modules/platform/panels/application/ports';
 import {
   adminActorFor,
@@ -63,6 +72,12 @@ const REJECTED: ProviderProbeOutcome = {
   status: 401,
 };
 const TIMED_OUT: ProviderProbeOutcome = { ok: false, failure: 'TIMEOUT', status: null };
+/** The panel wants a second factor. A different remedy from a wrong password. */
+const NEEDS_INTERACTION: ProviderProbeOutcome = {
+  ok: false,
+  failure: 'AUTHENTICATION_REQUIRES_INTERACTION',
+  status: 200,
+};
 
 let sequence = 0;
 const key = (): string => `01920000-0000-7000-8000-${String(++sequence).padStart(12, '0')}`;
@@ -138,6 +153,7 @@ describe('the panel health monitor', () => {
   function monitor(
     options: {
       batchSize?: number;
+      tenantsPerTick?: number;
       concurrency?: number;
       budgetReserve?: number;
       probe?: Partial<ProbeCoreDeps>;
@@ -166,6 +182,7 @@ describe('the panel health monitor', () => {
         ids: ctx.container.ids,
         logger: ctx.container.logger,
         batchSize: options.batchSize ?? 50,
+        tenantsPerTick: options.tenantsPerTick ?? 10,
         concurrency: options.concurrency ?? 4,
         budgetReserve: options.budgetReserve ?? 0,
       },
@@ -227,919 +244,1175 @@ describe('the panel health monitor', () => {
         .where(eq(operationalEvents.tenantId, tenantId))
     ).sort((a, b) => a.code.localeCompare(b.code));
 
-  // -------------------------------------------------------------------------
-  // Which panels are monitored
-  // -------------------------------------------------------------------------
-
-  it('probes an ACTIVE panel that has never been checked', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'never-checked');
-    const result = await monitor().tick();
-
-    expect(result.considered).toBe(1);
-    expect(result.probed).toBe(1);
-    expect(probes).toHaveLength(1);
-    const health = await healthOf(panelId);
-    expect(health?.state).toBe('HEALTHY');
-    // Absence of a row IS `UNCHECKED`, so a first probe is the row's first
-    // appearance rather than an update of a fabricated one.
-    expect(health?.checkedAt.getTime()).toBe(now.getTime());
-  });
-
-  it('never probes a DISABLED panel', async () => {
-    // Non-negotiable. `DISABLED` is the operator saying stop using this for
-    // now; unattended dialling is exactly what that forbids.
-    const panelId = await createPanel(ownerA, tenantA, 'disabled');
-    await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
-      status: 'DISABLED',
-      idempotencyKey: key(),
-    });
-
-    const result = await monitor().tick();
-    expect(result.considered).toBe(0);
-    expect(probes).toHaveLength(0);
-    expect(await healthOf(panelId)).toBeUndefined();
-  });
-
-  it('never probes an ARCHIVED panel', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'archived');
-    await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
-      status: 'ARCHIVED',
-      idempotencyKey: key(),
-    });
-
-    const result = await monitor().tick();
-    expect(result.considered).toBe(0);
-    expect(probes).toHaveLength(0);
-  });
-
-  it('stops probing a panel the moment it is disabled', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'to-disable');
-    await monitor().tick();
-    expect(probes).toHaveLength(1);
-
-    await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
-      status: 'DISABLED',
-      idempotencyKey: key(),
-    });
-    // A status change is a configuration change, so this panel would be due at
-    // once were it still ACTIVE. It is not probed, which is the point: the
-    // freshly-due path does not bypass the status rule.
-    now = new Date(now.getTime() + 1_000);
-    const result = await monitor().tick();
-    expect(result.considered).toBe(0);
-    expect(probes).toHaveLength(1);
-  });
-
-  it('refuses a panel disabled between discovery and the probe', async () => {
-    // The race the second status check exists for, and it must be driven
-    // through the MONITOR rather than through the probe core directly — a test
-    // that passes `probeableStatuses` itself pins the test's own choice, not
-    // the monitor's, and would go on passing if the monitor started accepting
-    // DISABLED panels.
-    //
-    // So discovery is stubbed with the answer it gave a moment ago: a panel
-    // that WAS active when the query ran and has since been disabled.
-    const panelId = await createPanel(ownerA, tenantA, 'raced');
-    await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
-      status: 'DISABLED',
-      idempotencyKey: key(),
-    });
-
-    const m = monitor({
-      discovery: {
-        dueForMonitoring: async () => [
-          { tenantId: tenantA.tenantId, panelId, reason: 'INTERVAL_ELAPSED' as const },
-        ],
-      },
-    });
-    const result = await m.tick();
-
-    expect(result.considered).toBe(1);
-    expect(result.probed).toBe(0);
-    expect(result.refused).toBe(1);
-    expect(probes).toHaveLength(0);
-    expect(await healthOf(panelId)).toBeUndefined();
-  });
-
-  it('refuses an archived panel handed to it by a stale discovery too', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'raced-archive');
-    await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
-      status: 'ARCHIVED',
-      idempotencyKey: key(),
-    });
-
-    const result = await monitor({
-      discovery: {
-        dueForMonitoring: async () => [
-          { tenantId: tenantA.tenantId, panelId, reason: 'NEVER_CHECKED' as const },
-        ],
-      },
-    }).tick();
-
-    expect(result.probed).toBe(0);
-    expect(probes).toHaveLength(0);
-  });
-
-  // -------------------------------------------------------------------------
-  // Cadence
-  // -------------------------------------------------------------------------
-
-  it('does not re-probe a healthy panel before its interval', async () => {
-    await createPanel(ownerA, tenantA, 'healthy-cadence');
-    await monitor().tick();
-    expect(probes).toHaveLength(1);
-
-    now = new Date(now.getTime() + CADENCE.healthyIntervalMs - 1);
-    expect((await monitor().tick()).considered).toBe(0);
-    expect(probes).toHaveLength(1);
-
-    // Past the interval AND past the largest spread it can add.
-    now = new Date(now.getTime() + CADENCE.healthyIntervalMs);
-    expect((await monitor().tick()).probed).toBe(1);
-    expect(probes).toHaveLength(2);
-  });
-
-  it('re-probes a retryable failure sooner than a healthy panel', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'timeout');
-    outcome = TIMED_OUT;
-    await monitor().tick();
-
-    const health = await healthOf(panelId);
-    expect(health?.failure).toBe('TIMEOUT');
-    expect(health?.consecutiveFailures).toBe(1);
-    const wait = (health?.nextProbeAt.getTime() ?? 0) - now.getTime();
-    expect(wait).toBeGreaterThanOrEqual(CADENCE.retryableIntervalMs);
-    expect(wait).toBeLessThan(CADENCE.healthyIntervalMs);
-  });
-
-  it('backs a rejected credential off far beyond the healthy cadence', async () => {
-    // The lockout rule, at the storage level. 3X-UI v3.7.0 locks an
-    // IP-and-username pair after enough failed logins, so a monitor that
-    // resubmitted a rejected password every ten minutes would lock the
-    // operator out of their own panel on Nexa's behalf.
-    const panelId = await createPanel(ownerA, tenantA, 'rejected');
-    outcome = REJECTED;
-    await monitor().tick();
-
-    const first = await healthOf(panelId);
-    expect(first?.state).toBe('AUTH_FAILED');
-    expect(first?.consecutiveFailures).toBe(1);
-    expect((first?.nextProbeAt.getTime() ?? 0) - now.getTime()).toBeGreaterThanOrEqual(
-      CADENCE.nonRetryableIntervalMs,
-    );
-
-    // Nothing happens on the healthy cadence, however many ticks run.
-    now = new Date(now.getTime() + CADENCE.healthyIntervalMs * 3);
-    for (let i = 0; i < 5; i += 1) await monitor().tick();
-    expect(probes).toHaveLength(1);
-  });
-
-  it('doubles the backoff for a failure that keeps failing, to a bound', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'streak');
-    outcome = TIMED_OUT;
-
-    const waits: number[] = [];
-    for (let i = 0; i < 6; i += 1) {
-      const before = await healthOf(panelId);
-      now = new Date(Math.max(now.getTime() + 1, before?.nextProbeAt.getTime() ?? now.getTime()));
-      const result = await monitor().tick();
-      expect(result.probed).toBe(1);
-      const after = await healthOf(panelId);
-      expect(after?.consecutiveFailures).toBe(i + 1);
-      waits.push((after?.nextProbeAt.getTime() ?? 0) - now.getTime());
-    }
-
-    // Growing, then flat. Never unbounded: a panel an operator repaired must
-    // not be abandoned to a backoff measured in months.
-    expect(waits[1]).toBeGreaterThan(waits[0]!);
-    expect(waits[2]).toBeGreaterThan(waits[1]!);
-    expect(waits[4]).toBe(waits[3]);
-    expect(waits[5]).toBe(waits[4]);
-  });
-
-  it('resets the streak on the first success', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'recovering');
-    outcome = TIMED_OUT;
-    await monitor().tick();
-    now = new Date((await healthOf(panelId))!.nextProbeAt.getTime());
-    await monitor().tick();
-    expect((await healthOf(panelId))?.consecutiveFailures).toBe(2);
-
-    outcome = HEALTHY;
-    now = new Date((await healthOf(panelId))!.nextProbeAt.getTime());
-    await monitor().tick();
-    const healed = await healthOf(panelId);
-    expect(healed?.consecutiveFailures).toBe(0);
-    expect(healed?.state).toBe('HEALTHY');
-    expect((healed?.nextProbeAt.getTime() ?? 0) - now.getTime()).toBeGreaterThanOrEqual(
-      CADENCE.healthyIntervalMs,
-    );
-  });
-
-  it('makes a panel due at once when its address changes, without erasing its health', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'reconfigured');
-    outcome = REJECTED;
-    await monitor().tick();
-    const before = await healthOf(panelId);
-    expect(before?.state).toBe('AUTH_FAILED');
-
-    now = new Date(now.getTime() + 1_000);
-    await service().update(tenantA, adminActorFor(ownerA), panelId, {
-      baseUrl: 'https://panel-moved.example.test',
-      idempotencyKey: key(),
-    });
-
-    // Well inside the non-retryable backoff, and due anyway.
-    const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
-    const due = await discovery.dueForMonitoring(now, 50);
-    expect(due).toEqual([{ tenantId: tenantA.tenantId, panelId, reason: 'CONFIGURATION_CHANGED' }]);
-
-    // And the previous answer is still on the row while it is due. Erasing it
-    // to force a re-check would throw away `lastHealthyAt` and the state an
-    // operator is reading, to say something the timestamps already say.
-    const still = await healthOf(panelId);
-    expect(still?.state).toBe('AUTH_FAILED');
-    expect(still?.checkedAt.getTime()).toBe(before?.checkedAt.getTime());
-  });
-
-  it('makes a panel due at once when a credential is replaced', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'recredentialed');
-    outcome = REJECTED;
-    await monitor().tick();
-
-    now = new Date(now.getTime() + 1_000);
-    await service().setCredentials(tenantA, adminActorFor(ownerA), panelId, {
-      credentials: { password: 'a-corrected-password-9Q' },
-      idempotencyKey: key(),
-    });
-
-    const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
-    const due = await discovery.dueForMonitoring(now, 50);
-    expect(due.map((d) => d.reason)).toEqual(['CONFIGURATION_CHANGED']);
-  });
-
-  it("lets an operator's manual test satisfy the monitor's schedule", async () => {
-    // A manual test is a real probe with a real answer. A monitor that
-    // re-dialled the panel a second later would be asking a question that was
-    // just answered — and against a rejected credential, asking it again.
-    const panelId = await createPanel(ownerA, tenantA, 'manually-tested');
-    await service().testConnection(tenantA, adminActorFor(ownerA), panelId, {
-      idempotencyKey: key(),
-    });
-    expect(probes).toHaveLength(1);
-
-    now = new Date(now.getTime() + 1_000);
-    expect((await monitor().tick()).considered).toBe(0);
-    expect(probes).toHaveLength(1);
-  });
-
-  // -------------------------------------------------------------------------
-  // Discovery: bounds, ordering and fairness
-  // -------------------------------------------------------------------------
-
-  it('returns no more than the batch size', async () => {
-    for (let i = 0; i < 7; i += 1) await createPanel(ownerA, tenantA, `bounded-${i}`);
-    const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
-    expect(await discovery.dueForMonitoring(now, 3)).toHaveLength(3);
-    expect(await discovery.dueForMonitoring(now, 7)).toHaveLength(7);
-  });
-
-  it('interleaves tenants rather than letting one occupy every cycle', async () => {
-    // The fairness property, and it is why discovery ranks per tenant instead
-    // of ordering by due time and taking the first N. Tenant A has five
-    // overdue panels and tenant B has one; a batch of two must still consider
-    // tenant B.
-    for (let i = 0; i < 5; i += 1) await createPanel(ownerA, tenantA, `crowded-${i}`);
-    await createPanel(ownerB, tenantB, 'lonely');
-
-    const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
-    const due = await discovery.dueForMonitoring(now, 2);
-    expect(due).toHaveLength(2);
-    expect(new Set(due.map((d) => d.tenantId))).toEqual(
-      new Set([tenantA.tenantId, tenantB.tenantId]),
-    );
-  });
-
-  it('is deterministic: the same state gives the same order', async () => {
-    for (let i = 0; i < 6; i += 1) await createPanel(ownerA, tenantA, `ordered-${i}`);
-    await createPanel(ownerB, tenantB, 'ordered-b');
-    const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
-    const first = await discovery.dueForMonitoring(now, 4);
-    for (let i = 0; i < 5; i += 1) {
-      expect(await discovery.dueForMonitoring(now, 4)).toEqual(first);
-    }
-  });
-
-  it('names why each panel is due', async () => {
-    const fresh = await createPanel(ownerA, tenantA, 'fresh');
-    const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
-    expect((await discovery.dueForMonitoring(now, 50))[0]).toEqual({
-      tenantId: tenantA.tenantId,
-      panelId: fresh,
-      reason: 'NEVER_CHECKED',
-    });
-
-    await monitor().tick();
-    now = new Date(now.getTime() + CADENCE.healthyIntervalMs * 2);
-    expect((await discovery.dueForMonitoring(now, 50))[0]?.reason).toBe('INTERVAL_ELAPSED');
-  });
-
-  it('spreads panels probed in one tick across the following window', async () => {
-    // The anti-herd property, and it is DETERMINISTIC rather than random:
-    // random jitter regenerated on every process restart gives a fleet that
-    // re-clusters after each deploy.
-    for (let i = 0; i < 12; i += 1) await createPanel(ownerA, tenantA, `herd-${i}`);
-    await monitor().tick();
-
-    const rows = await ctx.container.database.db
-      .select({ nextProbeAt: panelHealth.nextProbeAt })
-      .from(panelHealth);
-    const offsets = new Set(rows.map((r) => r.nextProbeAt.getTime()));
-    expect(rows).toHaveLength(12);
-    // All probed in the same tick, at the same clock instant, and NOT all due
-    // together afterwards.
-    expect(offsets.size).toBeGreaterThan(6);
-  });
-
-  // -------------------------------------------------------------------------
-  // Multi-instance correctness
-  // -------------------------------------------------------------------------
-
-  it('makes one outbound call when two monitors reach the same panel', async () => {
-    // Two monitor replicas is what a rolling update is, briefly. Neither
-    // decides: they both ask the database, and its conditional write grants
-    // one. A process-local set of in-flight panels would be wrong the moment
-    // there are two processes.
-    await createPanel(ownerA, tenantA, 'contended');
-    const a = monitor({ probe: { probeCooldownMs: 60_000 } });
-    const b = monitor({ probe: { probeCooldownMs: 60_000 } });
-
-    const [first, second] = await Promise.all([a.tick(), b.tick()]);
-    expect(probes).toHaveLength(1);
-    expect(first.probed + second.probed).toBe(1);
-    expect(first.refused + second.refused).toBe(1);
-  });
-
-  it('does not overlap its own ticks', async () => {
-    await createPanel(ownerA, tenantA, 'slow');
-    const m = monitor();
-    const [a, b] = await Promise.all([m.tick(), m.tick()]);
-    // The second call finds a tick already running and IS that pass.
-    expect(a.considered + b.considered).toBe(1);
-  });
-
-  // -------------------------------------------------------------------------
-  // Capacity: the monitor must not lock an operator out
-  // -------------------------------------------------------------------------
-
-  it('leaves an operator capacity the background loop cannot take', async () => {
-    // The floor, at the only level where it means anything: one bucket, one
-    // global bound, and a reserve the background lane must leave behind. A
-    // second bucket for the monitor would raise the tenant's total outbound
-    // rate, which is the thing the bound exists to cap.
-    const budget = { capacity: 4, refillPerMs: 0 };
-    for (let i = 0; i < 6; i += 1) await createPanel(ownerA, tenantA, `hungry-${i}`);
-
-    const m = monitor({
-      budgetReserve: 2,
-      probe: { probeBudget: budget, probeCooldownMs: 0 },
-    });
-    const result = await m.tick();
-
-    // Two spent by the monitor, two left standing: the reserve held.
-    expect(result.probed).toBe(2);
-    expect(result.refused).toBe(4);
-
-    // And an operator can still test a panel, which is the whole point.
-    const panelId = await createPanel(ownerA, tenantA, 'operator-turn');
-    const { probed } = await service({ probeBudget: budget, probeCooldownMs: 0 }).testConnection(
-      tenantA,
-      adminActorFor(ownerA),
-      panelId,
-      { idempotencyKey: key() },
-    );
-    expect(probed).toBe(true);
-  });
-
-  it("does not spend another tenant's capacity", async () => {
-    const budget = { capacity: 2, refillPerMs: 0 };
-    for (let i = 0; i < 4; i += 1) await createPanel(ownerA, tenantA, `a-${i}`);
-    await createPanel(ownerB, tenantB, 'b-0');
-
-    const result = await monitor({ probe: { probeBudget: budget } }).tick();
-    // Tenant A's bucket is spent; tenant B's is its own.
-    expect(result.probed).toBe(3);
-    const bRows = await ctx.container.database.db
-      .select({ id: panelHealth.panelId })
-      .from(panelHealth)
-      .where(eq(panelHealth.tenantId, tenantB.tenantId));
-    expect(bRows).toHaveLength(1);
-  });
-
-  // -------------------------------------------------------------------------
-  // What a probe is allowed to change
-  // -------------------------------------------------------------------------
-
-  it('changes health and nothing else', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'unchanged');
-    const [before] = await ctx.container.database.db
+  const scheduleOf = async (panelId: string) => {
+    const [row] = await ctx.container.database.db
       .select()
-      .from(panels)
-      .where(eq(panels.id, panelId));
-    outcome = REJECTED;
-    await monitor().tick();
+      .from(panelMonitorSchedule)
+      .where(eq(panelMonitorSchedule.panelId, panelId));
+    return row;
+  };
 
-    const [after] = await ctx.container.database.db
+  const rotationOf = async (tenantId: string) => {
+    const [row] = await ctx.container.database.db
       .select()
-      .from(panels)
-      .where(eq(panels.id, panelId));
-    expect(after).toEqual(before);
-    // A failing probe does not disable the panel, and does not touch its
-    // address or its credentials.
-    expect(after?.status).toBe('ACTIVE');
-  });
+      .from(panelMonitorTenants)
+      .where(eq(panelMonitorTenants.tenantId, tenantId));
+    return row;
+  };
 
-  it('stores no credential, cookie or provider text in the health row', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'no-leak');
-    outcome = REJECTED;
-    await monitor().tick();
-    const health = await healthOf(panelId);
-    const serialized = JSON.stringify(health);
-    expect(serialized).not.toContain(PASSWORD);
-    expect(serialized).not.toContain(USERNAME);
-    // The failure column is a normalized kind, never a message.
-    expect(health?.failure).toBe('AUTHENTICATION_FAILED');
-    expect(Object.keys(health ?? {})).not.toContain('detail');
-  });
+  /** Runs one tick and reports what it did, for readability at the call sites. */
+  const tick = async (m = monitor()) => m.tick();
 
-  it('carries lastHealthyAt across a failure', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'was-healthy');
-    await monitor().tick();
-    const healthy = await healthOf(panelId);
-    expect(healthy?.lastHealthyAt?.getTime()).toBe(now.getTime());
+  // ===========================================================================
+  // 1-4. Authorization happens BEFORE any side effect
+  // ===========================================================================
 
-    outcome = TIMED_OUT;
-    now = new Date(healthy!.nextProbeAt.getTime());
-    await monitor().tick();
-    const failed = await healthOf(panelId);
-    expect(failed?.state).toBe('UNREACHABLE');
-    // "Unreachable, last worked four minutes ago" and "unreachable, last
-    // worked in March" are the same state and completely different problems.
-    expect(failed?.lastHealthyAt?.getTime()).toBe(healthy?.lastHealthyAt?.getTime());
-  });
-
-  it('keeps exactly one health row per panel however many times it is probed', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'one-row');
-    for (let i = 0; i < 4; i += 1) {
-      await monitor().tick();
-      now = new Date((await healthOf(panelId))!.nextProbeAt.getTime());
-    }
-    const rows = await ctx.container.database.db
-      .select({ n: sql<number>`count(*)::int` })
-      .from(panelHealth)
-      .where(eq(panelHealth.panelId, panelId));
-    expect(rows[0]?.n).toBe(1);
-    expect(probes.length).toBeGreaterThan(1);
-  });
-
-  it('discards a result that describes a configuration the operator has replaced', async () => {
-    // The config-race guard. A probe runs outside the transaction that stores
-    // it, so the panel can be edited while the answer is in flight — and health
-    // is what an operator trusts when deciding whether their fix worked.
-    // Writing the OLD configuration's verdict against the new one is the bug.
-    const panelId = await createPanel(ownerA, tenantA, 'raced-config');
-    let released: (() => void) | null = null;
-    const inFlight = new Promise<void>((resolve) => {
-      released = resolve;
-    });
-
-    const m = monitor({
-      probe: {
-        adapters: (type: ProviderType) => ({
-          ...providerAdapter(type),
-          probe: async (target) => {
-            probes.push(target.baseUrl);
-            await inFlight;
-            return REJECTED;
+  describe('authorization before side effects', () => {
+    /**
+     * A guard that refuses `maintenance.run`, wired the same way the real one
+     * is so the denial travels the real path.
+     *
+     * The test that matters is not "it returns false" — it is that NOTHING
+     * happened: no credential decrypted, no claim taken, no budget spent, no
+     * socket opened. A permission checked after any of those has prevented
+     * nothing, and the first version of this service checked it in the
+     * transaction that stored the RESULT.
+     */
+    function denyingMonitor(counters: { credentialReads: number }): {
+      service: PanelMonitorService;
+      probeDeps: ProbeCoreDeps;
+    } {
+      const deps = probeDeps();
+      const watched: ProbeCoreDeps = {
+        ...deps,
+        credentials: {
+          read: async (...args) => {
+            counters.credentialReads += 1;
+            return deps.credentials.read(...args);
           },
-        }),
-      },
-    });
-    const tick = m.tick();
-    // Let the probe start, then move the panel underneath it.
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    now = new Date(now.getTime() + 1_000);
-    await service().update(tenantA, adminActorFor(ownerA), panelId, {
-      baseUrl: 'https://panel-elsewhere.example.test',
-      idempotencyKey: key(),
-    });
-    released!();
-
-    const result = await tick;
-    expect(probes).toHaveLength(1);
-    // The conflict is one panel's failure, isolated like any other.
-    expect(result.failed).toBe(1);
-    // And nothing was stored: the answer described an address that is no
-    // longer this panel's.
-    expect(await healthOf(panelId)).toBeUndefined();
-  });
-
-  it('does not let a slow result overwrite a newer one', async () => {
-    // Stale-result protection, at the storage level. Probes finish out of
-    // order — an operator's manual test can overtake a background probe still
-    // on the wire — and the older answer must not move `checked_at` backwards.
-    const panelId = await createPanel(ownerA, tenantA, 'out-of-order');
-    await monitor().tick();
-    const fresh = await healthOf(panelId);
-    expect(fresh?.state).toBe('HEALTHY');
-
-    // A result stamped EARLIER than the row, written afterwards.
-    const repository = new DrizzlePanelRepository(ctx.container.database.db);
-    await ctx.container.uow.run(tenantA, (tx) =>
-      repository.recordHealth(
-        tenantA,
-        panelId,
+          write: deps.credentials.write.bind(deps.credentials),
+        },
+      };
+      const service = new PanelMonitorService(
         {
-          state: 'AUTH_FAILED',
-          checkedAt: new Date(fresh!.checkedAt.getTime() - 60_000),
-          latencyMs: 1,
-          failure: 'AUTHENTICATION_FAILED',
-          statusCode: 401,
-          providerVersion: null,
-          lastHealthyAt: null,
-          consecutiveFailures: 1,
-          nextProbeAt: new Date(fresh!.checkedAt.getTime()),
+          discovery: new DrizzlePanelMonitorRepository(ctx.container.database.db),
+          probe: watched,
+          // A guard that denies everything, standing in for a job whose
+          // permission has been narrowed or revoked.
+          guard: {
+            check: async () => {
+              throw errors.permissionDenied(
+                'access.permission_denied',
+                'This job may not run maintenance for this tenant.',
+                { permission: 'maintenance.run' },
+              );
+            },
+            denialEvent: ctx.container.guard.denialEvent.bind(ctx.container.guard),
+          } as unknown as typeof ctx.container.guard,
+          audit: ctx.container.audit,
+          opsLog: ctx.container.opsLog,
+          sessions: ctx.container.sessions,
+          uow: ctx.container.uow,
+          clock,
+          ids: ctx.container.ids,
+          logger: ctx.container.logger,
+          batchSize: 50,
+          tenantsPerTick: 10,
+          concurrency: 4,
+          budgetReserve: 0,
         },
-        tx,
-      ),
-    );
-
-    const after = await healthOf(panelId);
-    expect(after?.state).toBe('HEALTHY');
-    expect(after?.checkedAt.getTime()).toBe(fresh?.checkedAt.getTime());
-  });
-
-  it('refuses a panel whose address the policy now rejects, before any call', async () => {
-    // The policy is applied to the STORED address on every probe, not only when
-    // it was written: an installation's denied subnets can change underneath a
-    // panel that was legal when it was created.
-    const panelId = await createPanel(
-      ownerA,
-      tenantA,
-      'now-blocked',
-      'https://127.0.0.1:9443/panel',
-    );
-    const m = monitor({ probe: { urlPolicy: { allowLoopback: false } } });
-    const result = await m.tick();
-
-    expect(result.refused).toBe(1);
-    // The refusal costs nothing: no socket, and no health row inventing a
-    // verdict about a panel nothing contacted.
-    expect(probes).toHaveLength(0);
-    expect(await healthOf(panelId)).toBeUndefined();
-  });
-
-  it('does not contact a panel with no usable credentials', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'no-credentials');
-    await service().setCredentials(tenantA, adminActorFor(ownerA), panelId, {
-      credentials: { password: null },
-      idempotencyKey: key(),
-    });
-
-    const result = await monitor().tick();
-    expect(result.refused).toBe(1);
-    // Sending an empty password to find out would be one more failed login on
-    // the operator's own panel.
-    expect(probes).toHaveLength(0);
-    expect(await healthOf(panelId)).toBeUndefined();
-  });
-
-  it('writes no health for a probe the budget refused', async () => {
-    // The tenant's whole capacity is one token, and the operator spends it —
-    // so the monitor's probe is refused by the bound rather than by anything
-    // about the panel. A refusal must leave no trace: no socket, and no health
-    // row inventing a verdict about a panel nothing contacted.
-    const budget = { capacity: 1, refillPerMs: 0 };
-    const spender = await createPanel(ownerA, tenantA, 'budget-spender');
-    await service({ probeBudget: budget, probeCooldownMs: 0 }).testConnection(
-      tenantA,
-      adminActorFor(ownerA),
-      spender,
-      { idempotencyKey: key() },
-    );
-    expect(probes).toHaveLength(1);
-
-    const target = await createPanel(ownerA, tenantA, 'budget-refused');
-    const result = await monitor({
-      budgetReserve: 0,
-      probe: { probeBudget: budget },
-    }).tick();
-
-    expect(result.probed).toBe(0);
-    expect(result.refused).toBeGreaterThan(0);
-    expect(result.failed).toBe(0);
-    expect(probes).toHaveLength(1);
-    expect(await healthOf(target)).toBeUndefined();
-  });
-
-  it('refuses the monitor rather than writing a negative budget', async () => {
-    // A reserve at or above capacity is a configuration mistake, and the two
-    // branches of the budget statement must not disagree about it: a tenant
-    // with no row takes the INSERT branch, which spends from a full bucket. If
-    // that branch ignored an impossible floor, the first probe would succeed
-    // and every one after it would be refused — indistinguishable from a
-    // broken monitor. The floor is clamped inside the repository, so the
-    // insert stays consistent with the update.
-    await createPanel(ownerA, tenantA, 'impossible-reserve');
-    const result = await monitor({
-      budgetReserve: 500,
-      probe: { probeBudget: { capacity: 2, refillPerMs: 0 } },
-    }).tick();
-    // One token is always reachable from a full bucket; nothing throws.
-    expect(result.failed).toBe(0);
-    expect(result.probed + result.refused).toBe(1);
-    const rows = await ctx.container.database.db
-      .select({ tokens: sql<number>`tokens` })
-      .from(sql`panel_probe_budgets`);
-    for (const row of rows) expect(Number(row.tokens)).toBeGreaterThanOrEqual(0);
-  });
-
-  it('keeps no more probes in flight than its concurrency allows', async () => {
-    for (let i = 0; i < 8; i += 1) await createPanel(ownerA, tenantA, `parallel-${i}`);
-    let inFlight = 0;
-    let peak = 0;
-    const m = monitor({
-      concurrency: 3,
-      probe: {
-        adapters: (type: ProviderType) => ({
-          ...providerAdapter(type),
-          probe: async (target) => {
-            probes.push(target.baseUrl);
-            inFlight += 1;
-            peak = Math.max(peak, inFlight);
-            await new Promise((resolve) => setTimeout(resolve, 15));
-            inFlight -= 1;
-            return HEALTHY;
-          },
-        }),
-      },
-    });
-    const result = await m.tick();
-    expect(result.probed).toBe(8);
-    // A `Promise.all` over the candidate set would open one socket and take one
-    // pool connection per panel — a batch-size change away from exhausting both.
-    expect(peak).toBeLessThanOrEqual(3);
-  });
-
-  it('monitors a token-authenticated provider through the same core', async () => {
-    // The monitor never asks which provider a panel is. Credential resolution
-    // happens once, in the shared core, from the descriptor's declared shape —
-    // so a provider whose credential is an opaque token needs no monitor
-    // change at all.
-    const { view } = await service().create(tenantA, adminActorFor(ownerA), {
-      name: 'sanaei-panel',
-      providerType: 'sanaei',
-      baseUrl: 'https://xui.example.test/mypath',
-      credentials: { apiToken: 'monitor-token-4Q' },
-      idempotencyKey: key(),
-    });
-
-    const result = await monitor().tick();
-    expect(result.probed).toBe(1);
-    expect((await healthOf(view.panel.id))?.state).toBe('HEALTHY');
-  });
-
-  // -------------------------------------------------------------------------
-  // Actor, authorization and audit
-  // -------------------------------------------------------------------------
-
-  it('acts as SYSTEM_JOB with a stable job identity', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'audited');
-    outcome = REJECTED;
-    await monitor().tick();
-
-    const rows = await ctx.container.database.db
-      .select()
-      .from(auditLogs)
-      .where(and(eq(auditLogs.entityId, panelId), eq(auditLogs.action, 'panel.monitor.probe')));
-    expect(rows).toHaveLength(1);
-    // Never a fabricated administrator. A job is a job, and it holds a job's
-    // permission rather than borrowing an operator's.
-    expect(rows[0]?.actorType).toBe('SYSTEM_JOB');
-    expect(rows[0]?.actorId).toBe(PANEL_MONITOR_JOB_ID);
-  });
-
-  it('writes an audit row on a transition and not on a steady state', async () => {
-    // A row per tick would be a health-history table wearing the audit log's
-    // name — six per panel per hour, for ever, in a table that refuses DELETE.
-    const panelId = await createPanel(ownerA, tenantA, 'steady');
-    await monitor().tick();
-    now = new Date((await healthOf(panelId))!.nextProbeAt.getTime());
-    await monitor().tick();
-    now = new Date((await healthOf(panelId))!.nextProbeAt.getTime());
-    await monitor().tick();
-    expect(probes).toHaveLength(3);
-
-    const rows = await ctx.container.database.db
-      .select()
-      .from(auditLogs)
-      .where(eq(auditLogs.action, 'panel.monitor.probe'));
-    // Three healthy probes from UNCHECKED: the first is not a transition into
-    // a reportable condition, and neither are the two after it.
-    expect(rows).toHaveLength(0);
-  });
-
-  // -------------------------------------------------------------------------
-  // Operational events
-  // -------------------------------------------------------------------------
-
-  it('announces a failure once, however long it lasts', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'flapping');
-    outcome = TIMED_OUT;
-    for (let i = 0; i < 4; i += 1) {
-      await monitor().tick();
-      now = new Date((await healthOf(panelId))!.nextProbeAt.getTime());
+        30_000,
+      );
+      return { service, probeDeps: watched };
     }
-    expect(probes).toHaveLength(4);
 
-    const events = await eventCodes(tenantA.tenantId);
-    expect(events.map((e) => e.code)).toEqual(['panel.health.failed']);
-    // One row, whose counter says how often. The legacy log group posted the
-    // same expired-certificate error 60 times in a day because nothing could
-    // tell the occurrences apart.
-    expect(events[0]?.count).toBe(1);
-  });
+    it('makes no network call, spends no claim and no budget when denied', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'denied');
+      const counters = { credentialReads: 0 };
+      const { service: denied } = denyingMonitor(counters);
 
-  it('says nothing at all while a panel stays healthy', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'quiet');
-    for (let i = 0; i < 3; i += 1) {
-      await monitor().tick();
-      now = new Date((await healthOf(panelId))!.nextProbeAt.getTime());
-    }
-    expect(await eventCodes(tenantA.tenantId)).toEqual([]);
-  });
+      const result = await denied.tick();
 
-  it('announces recovery, and only after a failure', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'recovers');
-    outcome = TIMED_OUT;
-    await monitor().tick();
-    now = new Date((await healthOf(panelId))!.nextProbeAt.getTime());
-    outcome = HEALTHY;
-    await monitor().tick();
-
-    const events = await eventCodes(tenantA.tenantId);
-    expect(events.map((e) => e.code)).toEqual(['panel.health.failed', 'panel.health.recovered']);
-  });
-
-  it('distinguishes degraded from failed', async () => {
-    const panelId = await createPanel(ownerA, tenantA, 'degrades');
-    outcome = DEGRADED;
-    await monitor().tick();
-    expect((await healthOf(panelId))?.state).toBe('DEGRADED');
-    expect((await eventCodes(tenantA.tenantId)).map((e) => e.code)).toEqual([
-      'panel.health.degraded',
-    ]);
-  });
-
-  it('keeps one tenant events out of another', async () => {
-    await createPanel(ownerA, tenantA, 'a-fails');
-    await createPanel(ownerB, tenantB, 'b-fine');
-    outcome = TIMED_OUT;
-    await monitor().tick();
-
-    expect((await eventCodes(tenantA.tenantId)).map((e) => e.code)).toEqual([
-      'panel.health.failed',
-    ]);
-    expect((await eventCodes(tenantB.tenantId)).map((e) => e.code)).toEqual([
-      'panel.health.failed',
-    ]);
-    // Two tenants, two rows — not one row visible to both.
-    const all = await ctx.container.database.db.select().from(operationalEvents);
-    expect(all).toHaveLength(2);
-    expect(new Set(all.map((e) => e.tenantId)).size).toBe(2);
-  });
-
-  // -------------------------------------------------------------------------
-  // Failure isolation and liveness
-  // -------------------------------------------------------------------------
-
-  it('keeps going when one panel throws', async () => {
-    const good = await createPanel(ownerA, tenantA, 'good');
-    const bad = await createPanel(ownerA, tenantA, 'bad');
-    const m = monitor({
-      concurrency: 1,
-      probe: {
-        adapters: (type: ProviderType) => ({
-          ...providerAdapter(type),
-          probe: async (target) => {
-            probes.push(target.baseUrl);
-            throw new Error('the adapter exploded');
-          },
-        }),
-      },
+      expect(result.deferred).toBe(1);
+      expect(result.probed).toBe(0);
+      // 1-4, in order: no credential decrypted, no outbound call, no claim, no
+      // budget.
+      expect(counters.credentialReads).toBe(0);
+      expect(probes).toHaveLength(0);
+      const claims = await ctx.container.database.db.select().from(panelProbeClaims);
+      expect(claims).toHaveLength(0);
+      const budgets = await ctx.container.database.db.select().from(panelProbeBudgets);
+      expect(budgets).toHaveLength(0);
+      // And no health invented for a panel nothing contacted.
+      expect(await healthOf(panelId)).toBeUndefined();
     });
-    // Both panels are attempted; neither stops the sweep.
-    const result = await m.tick();
-    expect(result.considered).toBe(2);
-    expect(result.failed).toBe(2);
-    expect(await healthOf(good)).toBeUndefined();
-    expect(await healthOf(bad)).toBeUndefined();
+
+    it('records the denial and defers the panel', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'denied-audited');
+      const counters = { credentialReads: 0 };
+      await denyingMonitor(counters).service.tick();
+
+      // The same trail a refused operator leaves.
+      const audits = await ctx.container.database.db
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.action, 'panel.monitor.probe'));
+      expect(audits).toHaveLength(1);
+      expect(audits[0]?.result).toBe('DENIED');
+      expect(audits[0]?.actorType).toBe('SYSTEM_JOB');
+
+      // And the panel steps back rather than being retried every tick.
+      const schedule = await scheduleOf(panelId);
+      expect(schedule?.deferredReason).toBe('NOT_AUTHORIZED');
+      expect(schedule?.nextEligibleAt.getTime()).toBeGreaterThan(now.getTime());
+    });
   });
 
-  it('reports its loop as stale until a tick completes, and fresh after one', async () => {
-    const m = monitor();
-    // The heartbeat's second question. A process whose timer fires while every
-    // tick throws is not monitoring anything.
-    expect(m.iterationIsFresh(now.getTime())).toBe(false);
-    await m.tick();
-    expect(m.iterationIsFresh(now.getTime())).toBe(true);
-    // And it goes stale again if ticks stop.
-    expect(m.iterationIsFresh(now.getTime() + 30_000 * 4)).toBe(false);
-  });
+  // ===========================================================================
+  // 5-16. Discovery: what is due, bounded, deterministic and fair
+  // ===========================================================================
 
-  it('is fresh from the moment it starts, and stale if it never completes a tick', async () => {
-    // The boot grace, and it is a real deployment defect this pins. The
-    // heartbeat is armed BEFORE the loop runs — it has to be, because it is
-    // what proves the database is reachable — so its first beat lands before
-    // any tick has completed. Without a grace the file does not exist for a
-    // whole heartbeat interval, and a healthy monitor reports `health:
-    // starting` while api and worker are already healthy: `botctl status`,
-    // whose probe is deliberately five seconds, then calls the installation
-    // not ready.
-    const broken = new PanelMonitorService(
-      {
+  describe('discovery', () => {
+    it('probes an ACTIVE panel that has never been checked', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'never-checked');
+      const result = await tick();
+
+      expect(result.considered).toBe(1);
+      expect(result.probed).toBe(1);
+      expect(probes).toHaveLength(1);
+      const health = await healthOf(panelId);
+      expect(health?.state).toBe('HEALTHY');
+      expect(health?.checkedAt.getTime()).toBe(now.getTime());
+    });
+
+    it('does not re-probe a fresh panel', async () => {
+      await createPanel(ownerA, tenantA, 'fresh');
+      await tick();
+      expect(probes).toHaveLength(1);
+
+      now = new Date(now.getTime() + CADENCE.healthyIntervalMs - 1);
+      expect((await tick()).probed).toBe(0);
+      expect(probes).toHaveLength(1);
+    });
+
+    it('probes it again once the interval has elapsed', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'due-again');
+      await tick();
+      now = new Date((await scheduleOf(panelId))!.nextEligibleAt.getTime());
+      expect((await tick()).probed).toBe(1);
+      expect(probes).toHaveLength(2);
+    });
+
+    it('never probes a DISABLED panel', async () => {
+      // Non-negotiable. `DISABLED` is the operator saying stop using this for
+      // now; unattended dialling is exactly what that forbids.
+      const panelId = await createPanel(ownerA, tenantA, 'disabled');
+      await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
+        status: 'DISABLED',
+        idempotencyKey: key(),
+      });
+
+      // The schedule is the status filter: the panel is not skipped by the
+      // scan, it is outside the range the scan reads.
+      expect((await scheduleOf(panelId))?.nextEligibleAt.getTime()).toBe(
+        SCHEDULE_SUSPENDED_AT.getTime(),
+      );
+
+      const result = await tick();
+      expect(result.considered).toBe(0);
+      expect(probes).toHaveLength(0);
+      expect(await healthOf(panelId)).toBeUndefined();
+    });
+
+    it('never probes an ARCHIVED panel', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'archived');
+      await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
+        status: 'ARCHIVED',
+        idempotencyKey: key(),
+      });
+      expect((await tick()).considered).toBe(0);
+      expect(probes).toHaveLength(0);
+    });
+
+    it('resumes a re-enabled panel immediately', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'resumed');
+      await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
+        status: 'DISABLED',
+        idempotencyKey: key(),
+      });
+      await tick();
+      expect(probes).toHaveLength(0);
+
+      now = new Date(now.getTime() + 1_000);
+      await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
+        status: 'ACTIVE',
+        idempotencyKey: key(),
+      });
+      expect((await tick()).probed).toBe(1);
+    });
+
+    it('refuses a panel disabled between discovery and the probe', async () => {
+      // The race the second status check exists for, driven through the
+      // MONITOR: a test that passes `probeableStatuses` itself pins the test's
+      // own choice, not the monitor's, and would go on passing if the monitor
+      // started accepting DISABLED panels.
+      const panelId = await createPanel(ownerA, tenantA, 'raced');
+      await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
+        status: 'DISABLED',
+        idempotencyKey: key(),
+      });
+
+      const m = monitor({
         discovery: {
-          dueForMonitoring: async () => {
-            throw new Error('the database is gone');
-          },
+          claimTenants: async () => [tenantA.tenantId],
+          dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
+          refreshTenantBounds: async () => {},
         },
-        probe: probeDeps(),
-        guard: ctx.container.guard,
-        audit: ctx.container.audit,
-        opsLog: ctx.container.opsLog,
-        sessions: ctx.container.sessions,
-        uow: ctx.container.uow,
-        clock,
-        ids: ctx.container.ids,
-        logger: ctx.container.logger,
-        batchSize: 50,
-        concurrency: 4,
-        budgetReserve: 0,
-      },
-      30_000,
-    );
-    // Before starting: no grace at all.
-    expect(broken.iterationIsFresh(now.getTime())).toBe(false);
+      });
+      const result = await m.tick();
 
-    broken.start();
-    try {
-      // Started, and its ticks throw — but it is young, so it is healthy.
-      expect(broken.iterationIsFresh(now.getTime())).toBe(true);
-      expect(broken.iterationIsFresh(now.getTime() + 30_000 * 3)).toBe(true);
-      // Three intervals later with no tick completed, it is not starting up.
-      expect(broken.iterationIsFresh(now.getTime() + 30_000 * 3 + 1)).toBe(false);
-    } finally {
-      await broken.stop();
-    }
-    // And a stopped loop has no grace: a draining monitor is not alive.
-    expect(broken.iterationIsFresh(now.getTime())).toBe(false);
+      expect(result.considered).toBe(1);
+      expect(result.probed).toBe(0);
+      expect(probes).toHaveLength(0);
+      expect(await healthOf(panelId)).toBeUndefined();
+      // And it repairs the schedule it found disagreeing with the panel.
+      expect((await scheduleOf(panelId))?.deferredReason).toBe('STATUS_NOT_PROBEABLE');
+    });
+
+    it('makes a panel due at once when its address changes', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'readdressed');
+      outcome = REJECTED;
+      await tick();
+      const before = await healthOf(panelId);
+      expect(before?.state).toBe('AUTH_FAILED');
+      // Well inside the long non-retryable backoff.
+      expect((await scheduleOf(panelId))!.nextEligibleAt.getTime()).toBeGreaterThan(
+        now.getTime() + 20 * 60 * 1000,
+      );
+
+      now = new Date(now.getTime() + 1_000);
+      await service().update(tenantA, adminActorFor(ownerA), panelId, {
+        baseUrl: 'https://panel-moved.example.test',
+        idempotencyKey: key(),
+      });
+
+      expect((await scheduleOf(panelId))!.nextEligibleAt.getTime()).toBe(now.getTime());
+      // And the previous answer is still on the row. Erasing it to force a
+      // re-check would throw away `lastHealthyAt` and the state an operator is
+      // reading, to say something the schedule already says.
+      const still = await healthOf(panelId);
+      expect(still?.state).toBe('AUTH_FAILED');
+      expect(still?.checkedAt.getTime()).toBe(before?.checkedAt.getTime());
+    });
+
+    it('makes a panel due at once when a credential is replaced', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'recredentialed');
+      outcome = REJECTED;
+      await tick();
+
+      now = new Date(now.getTime() + 1_000);
+      await service().setCredentials(tenantA, adminActorFor(ownerA), panelId, {
+        credentials: { password: 'a-corrected-password-9Q' },
+        idempotencyKey: key(),
+      });
+
+      const schedule = await scheduleOf(panelId);
+      expect(schedule!.nextEligibleAt.getTime()).toBe(now.getTime());
+      // The backoff streak went with it: it was evidence about a credential
+      // that no longer exists.
+      expect(schedule!.consecutiveFailures).toBe(0);
+    });
+
+    it("lets an operator's manual test satisfy the monitor's schedule", async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'manually-tested');
+      await service().testConnection(tenantA, adminActorFor(ownerA), panelId, {
+        idempotencyKey: key(),
+      });
+      expect(probes).toHaveLength(1);
+
+      now = new Date(now.getTime() + 1_000);
+      expect((await tick()).probed).toBe(0);
+      expect(probes).toHaveLength(1);
+    });
+
+    it('returns no more than the batch size', async () => {
+      for (let i = 0; i < 7; i += 1) await createPanel(ownerA, tenantA, `bounded-${i}`);
+      const result = await tick(monitor({ batchSize: 3 }));
+      expect(result.considered).toBe(3);
+    });
+
+    it('is deterministic: the same state gives the same candidates', async () => {
+      for (let i = 0; i < 6; i += 1) await createPanel(ownerA, tenantA, `ordered-${i}`);
+      const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      const first = await discovery.dueForTenants([tenantA.tenantId], now, 4, 4);
+      for (let i = 0; i < 5; i += 1) {
+        expect(await discovery.dueForTenants([tenantA.tenantId], now, 4, 4)).toEqual(first);
+      }
+    });
+
+    it('interleaves two tenants rather than letting one occupy every cycle', async () => {
+      for (let i = 0; i < 5; i += 1) await createPanel(ownerA, tenantA, `crowded-${i}`);
+      await createPanel(ownerB, tenantB, 'lonely');
+
+      const result = await tick(monitor({ batchSize: 2, tenantsPerTick: 2 }));
+      expect(result.tenants).toBe(2);
+      const probedTenants = await ctx.container.database.db.select().from(panelHealth);
+      expect(new Set(probedTenants.map((r) => r.tenantId)).size).toBe(2);
+    });
   });
 
-  it('does not report a completed tick when discovery itself fails', async () => {
-    const m = new PanelMonitorService(
-      {
+  // ===========================================================================
+  // 17-20. Preflight refusals defer; they never invent health
+  // ===========================================================================
+
+  describe('preflight refusals', () => {
+    it('does not hot-loop a panel with no usable credential', async () => {
+      // The starvation bug this replaces: with the schedule kept on the health
+      // row, a panel that could never be probed had no row, was rediscovered on
+      // every tick for ever, and spent its tenant's slot to learn nothing.
+      const panelId = await createPanel(ownerA, tenantA, 'no-credentials');
+      await service().setCredentials(tenantA, adminActorFor(ownerA), panelId, {
+        credentials: { password: null },
+        idempotencyKey: key(),
+      });
+
+      const result = await tick();
+      expect(result.deferred).toBe(1);
+      expect(probes).toHaveLength(0);
+      // No provider was contacted, so nothing is claimed about the provider.
+      expect(await healthOf(panelId)).toBeUndefined();
+
+      const schedule = await scheduleOf(panelId);
+      expect(schedule?.deferredReason).toBe('CREDENTIALS_MISSING');
+      expect(schedule!.nextEligibleAt.getTime()).toBe(now.getTime() + MONITOR_STABLE_DEFERRAL_MS);
+
+      // And it is genuinely out of the way on the next tick.
+      now = new Date(now.getTime() + 60_000);
+      expect((await tick()).considered).toBe(0);
+    });
+
+    it('does not hot-loop a panel whose address the policy refuses', async () => {
+      const panelId = await createPanel(
+        ownerA,
+        tenantA,
+        'now-blocked',
+        'https://127.0.0.1:9443/panel',
+      );
+      const m = monitor({ probe: { urlPolicy: { allowLoopback: false } } });
+      const result = await m.tick();
+
+      expect(result.deferred).toBe(1);
+      expect(probes).toHaveLength(0);
+      expect(await healthOf(panelId)).toBeUndefined();
+      expect((await scheduleOf(panelId))?.deferredReason).toBe('TARGET_BLOCKED');
+    });
+
+    it('lets a corrected credential make a deferred panel eligible at once', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'fixable');
+      await service().setCredentials(tenantA, adminActorFor(ownerA), panelId, {
+        credentials: { password: null },
+        idempotencyKey: key(),
+      });
+      await tick();
+      expect((await scheduleOf(panelId))?.deferredReason).toBe('CREDENTIALS_MISSING');
+
+      now = new Date(now.getTime() + 1_000);
+      await service().setCredentials(tenantA, adminActorFor(ownerA), panelId, {
+        credentials: { password: 'a-real-password-Q7' },
+        idempotencyKey: key(),
+      });
+      const schedule = await scheduleOf(panelId);
+      expect(schedule?.deferredReason).toBeNull();
+      expect(schedule!.nextEligibleAt.getTime()).toBe(now.getTime());
+      expect((await tick()).probed).toBe(1);
+    });
+
+    it('does not let one unusable panel occupy its tenant slot every tick', async () => {
+      // The starvation shape, end to end: an old credential-less panel and a
+      // later working one, in one tenant, with room for one panel per tick.
+      const broken = await createPanel(ownerA, tenantA, 'broken-old');
+      await service().setCredentials(tenantA, adminActorFor(ownerA), broken, {
+        credentials: { password: null },
+        idempotencyKey: key(),
+      });
+      now = new Date(now.getTime() + 1_000);
+      const working = await createPanel(ownerA, tenantA, 'working-new');
+
+      // First tick: the broken panel is oldest, gets the slot, and defers.
+      const first = await tick(monitor({ batchSize: 1 }));
+      expect(first.deferred).toBe(1);
+      expect(probes).toHaveLength(0);
+
+      // Second tick: the broken panel is out of the way, so the working one is
+      // reached. Under the old model it never would have been.
+      now = new Date(now.getTime() + 1_000);
+      const second = await tick(monitor({ batchSize: 1 }));
+      expect(second.probed).toBe(1);
+      expect((await healthOf(working))?.state).toBe('HEALTHY');
+    });
+  });
+
+  // ===========================================================================
+  // 21-28. Concurrency, claims, budget and manual headroom
+  // ===========================================================================
+
+  describe('concurrency and capacity', () => {
+    it('makes one outbound call when two monitors reach the same panel', async () => {
+      // Two monitor replicas is what a rolling update is, briefly. Neither
+      // decides: they both ask the database, and its conditional write grants
+      // one. `claimTenants` is exclusive, so the two also take disjoint
+      // tenants — this drives them at ONE tenant deliberately, to exercise the
+      // per-panel claim rather than the rotation.
+      await createPanel(ownerA, tenantA, 'contended');
+      const a = monitor({ probe: { probeCooldownMs: 60_000 } });
+      const b = monitor({ probe: { probeCooldownMs: 60_000 } });
+
+      const [first, second] = await Promise.all([
+        a.tick(),
+        new Promise<Awaited<ReturnType<typeof b.tick>>>((resolve) => {
+          setTimeout(() => void b.tick().then(resolve), 5);
+        }),
+      ]);
+      expect(probes).toHaveLength(1);
+      expect(first.probed + second.probed).toBe(1);
+    });
+
+    it('gives two replicas disjoint tenants', async () => {
+      await createPanel(ownerA, tenantA, 'a');
+      await createPanel(ownerB, tenantB, 'b');
+      const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      const [first, second] = await Promise.all([
+        discovery.claimTenants(now, 1),
+        discovery.claimTenants(now, 1),
+      ]);
+      // `FOR UPDATE SKIP LOCKED`: one takes a tenant, the other takes the
+      // other or nothing — never the same one twice.
+      const all = [...first, ...second];
+      expect(new Set(all).size).toBe(all.length);
+    });
+
+    it('does not overlap its own ticks', async () => {
+      await createPanel(ownerA, tenantA, 'slow');
+      const m = monitor();
+      const [a, b] = await Promise.all([m.tick(), m.tick()]);
+      expect(a.considered + b.considered).toBe(1);
+    });
+
+    it('keeps no more probes in flight than its concurrency allows', async () => {
+      for (let i = 0; i < 8; i += 1) await createPanel(ownerA, tenantA, `parallel-${i}`);
+      let inFlight = 0;
+      let peak = 0;
+      const m = monitor({
+        concurrency: 3,
+        probe: {
+          adapters: (type: ProviderType) => ({
+            ...providerAdapter(type),
+            probe: async (target) => {
+              probes.push(target.baseUrl);
+              inFlight += 1;
+              peak = Math.max(peak, inFlight);
+              await new Promise((resolve) => setTimeout(resolve, 15));
+              inFlight -= 1;
+              return HEALTHY;
+            },
+          }),
+        },
+      });
+      const result = await m.tick();
+      expect(result.probed).toBe(8);
+      // A `Promise.all` over the candidate set would open one socket and take
+      // one pool connection per panel.
+      expect(peak).toBeLessThanOrEqual(3);
+    });
+
+    it('leaves an operator the last token at capacity 1', async () => {
+      // The invariant, at the capacity where it matters most. The old clamp
+      // reduced a positive reserve to `capacity - 1`, which at capacity 1 is
+      // zero — the protection switched off exactly where it was needed.
+      const budget = { capacity: 1, refillPerMs: 0 };
+      await createPanel(ownerA, tenantA, 'tiny-budget');
+
+      const result = await tick(monitor({ budgetReserve: 1, probe: { probeBudget: budget } }));
+      expect(result.probed).toBe(0);
+      expect(probes).toHaveLength(0);
+
+      // And the operator still has their probe.
+      const operatorPanel = await createPanel(ownerA, tenantA, 'operator-turn');
+      const { probed } = await service({ probeBudget: budget }).testConnection(
+        tenantA,
+        adminActorFor(ownerA),
+        operatorPanel,
+        { idempotencyKey: key() },
+      );
+      expect(probed).toBe(true);
+    });
+
+    it('leaves an operator headroom at capacity 2', async () => {
+      const budget = { capacity: 2, refillPerMs: 0 };
+      for (let i = 0; i < 4; i += 1) await createPanel(ownerA, tenantA, `two-${i}`);
+
+      const result = await tick(monitor({ budgetReserve: 1, probe: { probeBudget: budget } }));
+      // One for the monitor, one held back.
+      expect(result.probed).toBe(1);
+
+      const operatorPanel = await createPanel(ownerA, tenantA, 'operator-two');
+      const { probed } = await service({ probeBudget: budget }).testConnection(
+        tenantA,
+        adminActorFor(ownerA),
+        operatorPanel,
+        { idempotencyKey: key() },
+      );
+      expect(probed).toBe(true);
+    });
+
+    it('holds the reserve at a normal capacity', async () => {
+      const budget = { capacity: 4, refillPerMs: 0 };
+      for (let i = 0; i < 6; i += 1) await createPanel(ownerA, tenantA, `hungry-${i}`);
+
+      const result = await tick(monitor({ budgetReserve: 2, probe: { probeBudget: budget } }));
+      expect(result.probed).toBe(2);
+
+      const operatorPanel = await createPanel(ownerA, tenantA, 'operator-normal');
+      const { probed } = await service({ probeBudget: budget }).testConnection(
+        tenantA,
+        adminActorFor(ownerA),
+        operatorPanel,
+        { idempotencyKey: key() },
+      );
+      expect(probed).toBe(true);
+    });
+
+    it('holds the reserve across racing replicas', async () => {
+      const budget = { capacity: 3, refillPerMs: 0 };
+      for (let i = 0; i < 6; i += 1) await createPanel(ownerA, tenantA, `raced-${i}`);
+
+      // Two monitors working the same tenant at once. The floor is inside the
+      // conditional write, so it holds however they interleave.
+      await Promise.all([
+        tick(monitor({ budgetReserve: 2, probe: { probeBudget: budget } })),
+        tick(monitor({ budgetReserve: 2, probe: { probeBudget: budget } })),
+      ]);
+      expect(probes.length).toBeLessThanOrEqual(1);
+
+      const operatorPanel = await createPanel(ownerA, tenantA, 'operator-raced');
+      const { probed } = await service({ probeBudget: budget }).testConnection(
+        tenantA,
+        adminActorFor(ownerA),
+        operatorPanel,
+        { idempotencyKey: key() },
+      );
+      expect(probed).toBe(true);
+    });
+
+    it("does not spend another tenant's capacity", async () => {
+      const budget = { capacity: 2, refillPerMs: 0 };
+      for (let i = 0; i < 4; i += 1) await createPanel(ownerA, tenantA, `a-${i}`);
+      await createPanel(ownerB, tenantB, 'b-0');
+
+      await tick(monitor({ budgetReserve: 1, probe: { probeBudget: budget } }));
+      const bRows = await ctx.container.database.db
+        .select()
+        .from(panelHealth)
+        .where(eq(panelHealth.tenantId, tenantB.tenantId));
+      expect(bRows).toHaveLength(1);
+    });
+  });
+
+  // ===========================================================================
+  // 29-35. Cadence, backoff and rollback compatibility
+  // ===========================================================================
+
+  describe('cadence', () => {
+    it('re-probes a retryable failure sooner than a healthy panel', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'timeout');
+      outcome = TIMED_OUT;
+      await tick();
+
+      const schedule = await scheduleOf(panelId);
+      expect(schedule!.consecutiveFailures).toBe(1);
+      const wait = schedule!.nextEligibleAt.getTime() - now.getTime();
+      expect(wait).toBeGreaterThanOrEqual(CADENCE.retryableIntervalMs);
+      expect(wait).toBeLessThan(CADENCE.healthyIntervalMs);
+    });
+
+    it('backs a rejected credential off far beyond the healthy cadence', async () => {
+      // The lockout rule at the storage level. 3X-UI v3.7.0 locks an
+      // IP-and-username pair after enough failed logins, so a monitor that
+      // resubmitted a rejected password every ten minutes would lock the
+      // operator out of their own panel on Nexa's behalf.
+      const panelId = await createPanel(ownerA, tenantA, 'rejected');
+      outcome = REJECTED;
+      await tick();
+
+      const schedule = await scheduleOf(panelId);
+      expect(schedule!.consecutiveFailures).toBe(1);
+      expect(schedule!.nextEligibleAt.getTime() - now.getTime()).toBeGreaterThanOrEqual(
+        MONITOR_NONRETRYABLE_FLOOR_MS,
+      );
+
+      now = new Date(now.getTime() + CADENCE.healthyIntervalMs * 3);
+      for (let i = 0; i < 5; i += 1) await tick();
+      expect(probes).toHaveLength(1);
+    });
+
+    it('doubles the backoff and then stops doubling', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'streak');
+      outcome = TIMED_OUT;
+
+      const waits: number[] = [];
+      for (let i = 0; i < 6; i += 1) {
+        now = new Date(
+          Math.max(now.getTime() + 1, (await scheduleOf(panelId))!.nextEligibleAt.getTime()),
+        );
+        expect((await tick()).probed).toBe(1);
+        const schedule = await scheduleOf(panelId);
+        expect(schedule!.consecutiveFailures).toBe(i + 1);
+        waits.push(schedule!.nextEligibleAt.getTime() - now.getTime());
+      }
+      expect(waits[1]).toBeGreaterThan(waits[0]!);
+      expect(waits[2]).toBeGreaterThan(waits[1]!);
+      // Bounded: a panel an operator repaired must not be abandoned to a
+      // backoff measured in months.
+      expect(waits[4]).toBe(waits[3]);
+      expect(waits[5]).toBe(waits[4]);
+    });
+
+    it('resets the streak on the first success', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'recovering');
+      outcome = TIMED_OUT;
+      await tick();
+      now = new Date((await scheduleOf(panelId))!.nextEligibleAt.getTime());
+      await tick();
+      expect((await scheduleOf(panelId))!.consecutiveFailures).toBe(2);
+
+      outcome = HEALTHY;
+      now = new Date((await scheduleOf(panelId))!.nextEligibleAt.getTime());
+      await tick();
+      const healed = await scheduleOf(panelId);
+      expect(healed!.consecutiveFailures).toBe(0);
+      expect(healed!.nextEligibleAt.getTime() - now.getTime()).toBeGreaterThanOrEqual(
+        CADENCE.healthyIntervalMs,
+      );
+    });
+
+    it('does not inherit a stale streak an older release left behind', async () => {
+      // The rollback-and-forward case, emulated exactly: the new release builds
+      // a streak, an OLD release completes a successful manual probe — writing
+      // only the health row, because it does not know the scheduler table — and
+      // then the new release probes again and fails.
+      const panelId = await createPanel(ownerA, tenantA, 'rolled-back');
+      outcome = TIMED_OUT;
+      for (let i = 0; i < 4; i += 1) {
+        now = new Date(
+          Math.max(now.getTime() + 1, (await scheduleOf(panelId))!.nextEligibleAt.getTime()),
+        );
+        await tick();
+      }
+      expect((await scheduleOf(panelId))!.consecutiveFailures).toBe(4);
+      const backedOff = (await scheduleOf(panelId))!.nextEligibleAt.getTime() - now.getTime();
+
+      // The old binary: health only, scheduler table untouched.
+      now = new Date(now.getTime() + 60_000);
+      await ctx.container.database.db
+        .update(panelHealth)
+        .set({
+          state: 'HEALTHY',
+          checkedAt: now,
+          failure: null,
+          statusCode: null,
+          latencyMs: 5,
+          lastHealthyAt: now,
+        })
+        .where(eq(panelHealth.panelId, panelId));
+      expect((await scheduleOf(panelId))!.consecutiveFailures).toBe(4);
+
+      // Forward again. The next failure starts a NEW streak, because the stored
+      // health says the panel worked since — truth beats bookkeeping.
+      now = new Date(now.getTime() + 60_000);
+      await ctx.container.database.db
+        .update(panelMonitorSchedule)
+        .set({ nextEligibleAt: now })
+        .where(eq(panelMonitorSchedule.panelId, panelId));
+      outcome = TIMED_OUT;
+      await tick();
+
+      const after = await scheduleOf(panelId);
+      expect(after!.consecutiveFailures).toBe(1);
+      expect(after!.nextEligibleAt.getTime() - now.getTime()).toBeLessThan(backedOff);
+    });
+  });
+
+  // ===========================================================================
+  // 36-38. Races: configuration changed, stale writes, phantom events
+  // ===========================================================================
+
+  describe('races', () => {
+    it('discards a result that describes a configuration the operator replaced', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'raced-config');
+      const gate: { started?: () => void; release?: () => void } = {};
+      const inFlight = new Promise<void>((resolve) => {
+        gate.release = resolve;
+      });
+      const probeStarted = new Promise<void>((resolve) => {
+        gate.started = resolve;
+      });
+
+      const m = monitor({
+        probe: {
+          adapters: (type: ProviderType) => ({
+            ...providerAdapter(type),
+            probe: async (target) => {
+              probes.push(target.baseUrl);
+              gate.started?.();
+              await inFlight;
+              return REJECTED;
+            },
+          }),
+        },
+      });
+      const running = m.tick();
+      // Wait for the probe to have actually started, rather than guessing with
+      // a timer — a timer makes this test pass or fail on machine speed.
+      await probeStarted;
+      now = new Date(now.getTime() + 1_000);
+      await service().update(tenantA, adminActorFor(ownerA), panelId, {
+        baseUrl: 'https://panel-elsewhere.example.test',
+        idempotencyKey: key(),
+      });
+      gate.release?.();
+
+      const result = await running;
+      expect(probes).toHaveLength(1);
+      expect(result.failed).toBe(1);
+      // Nothing stored: the answer described an address that is no longer this
+      // panel's.
+      expect(await healthOf(panelId)).toBeUndefined();
+    });
+
+    it('does not let a slow result overwrite a newer one', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'out-of-order');
+      await tick();
+      const fresh = await healthOf(panelId);
+      expect(fresh?.state).toBe('HEALTHY');
+
+      const repository = new DrizzlePanelRepository(ctx.container.database.db);
+      const outcomeOfWrite = await ctx.container.uow.run(tenantA, (tx) =>
+        repository.recordHealth(
+          tenantA,
+          panelId,
+          {
+            state: 'AUTH_FAILED',
+            checkedAt: new Date(fresh!.checkedAt.getTime() - 60_000),
+            latencyMs: 1,
+            failure: 'AUTHENTICATION_FAILED',
+            statusCode: 401,
+            providerVersion: null,
+            lastHealthyAt: null,
+          },
+          tx,
+        ),
+      );
+
+      expect(outcomeOfWrite).toBe('STALE_IGNORED');
+      const after = await healthOf(panelId);
+      expect(after?.state).toBe('HEALTHY');
+      expect(after?.checkedAt.getTime()).toBe(fresh?.checkedAt.getTime());
+    });
+
+    it('announces nothing for a result the storage discarded', async () => {
+      // The phantom-event race. A slow AUTH_FAILED probe finishes after a newer
+      // HEALTHY one of the SAME configuration: the storage refuses the stale
+      // write, and announcing its transition anyway would tell an operator
+      // their panel is broken while the row in front of them says healthy.
+      const panelId = await createPanel(ownerA, tenantA, 'phantom');
+      await tick();
+      expect((await healthOf(panelId))?.state).toBe('HEALTHY');
+
+      // A probe stamped EARLIER than the stored row, driven through the whole
+      // monitor path so the announcement logic runs.
+      const stale = new Date(now.getTime() - 60_000);
+      const m = monitor({
+        probe: {
+          clock: { now: () => stale },
+          probeCooldownMs: 0,
+          adapters: (type: ProviderType) => ({
+            ...providerAdapter(type),
+            probe: async (target) => {
+              probes.push(target.baseUrl);
+              return REJECTED;
+            },
+          }),
+        },
         discovery: {
-          dueForMonitoring: async () => {
-            throw new Error('the database is gone');
-          },
+          claimTenants: async () => [tenantA.tenantId],
+          dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
+          refreshTenantBounds: async () => {},
         },
-        probe: probeDeps(),
-        guard: ctx.container.guard,
-        audit: ctx.container.audit,
-        opsLog: ctx.container.opsLog,
-        sessions: ctx.container.sessions,
-        uow: ctx.container.uow,
-        clock,
-        ids: ctx.container.ids,
-        logger: ctx.container.logger,
-        batchSize: 50,
-        concurrency: 4,
-        budgetReserve: 0,
-      },
-      30_000,
-    );
-    await m.tick();
-    // A tick that could not run is not a tick that ran. Reporting it fresh
-    // would keep the container healthy while it monitored nothing.
-    expect(m.iterationIsFresh(now.getTime())).toBe(false);
+      });
+      await m.tick();
+
+      expect((await healthOf(panelId))?.state).toBe('HEALTHY');
+      expect(await eventCodes(tenantA.tenantId)).toEqual([]);
+      const audits = await ctx.container.database.db
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.action, 'panel.monitor.probe'));
+      expect(audits).toHaveLength(0);
+    });
   });
 
-  it('stops cleanly and probes nothing afterwards', async () => {
-    await createPanel(ownerA, tenantA, 'shutdown');
-    const m = monitor();
-    await m.stop();
-    // start() is what schedules work; a stopped monitor that was never started
-    // must not have left a timer behind either.
-    expect(probes).toHaveLength(0);
+  // ===========================================================================
+  // 39-44. Transitions: exact conditions, no spam, obsolete conditions resolved
+  // ===========================================================================
+
+  describe('transition events', () => {
+    /** Drives one probe with a given outcome, at a time the schedule allows. */
+    async function probeWith(panelId: string, next: ProviderProbeOutcome): Promise<void> {
+      outcome = next;
+      const schedule = await scheduleOf(panelId);
+      if (schedule) {
+        now = new Date(Math.max(now.getTime() + 1, schedule.nextEligibleAt.getTime()));
+      }
+      const result = await tick();
+      expect(result.probed).toBe(1);
+    }
+
+    /**
+     * The panel PROBLEMS an operator would still see as unresolved.
+     *
+     * Severity-filtered on purpose: `panel.health.recovered` is an INFO record
+     * that something got better, not a condition, so it is never resolved and
+     * counting it would make "nothing is wrong" impossible to express.
+     */
+    const openConditions = async (tenantId: string) =>
+      (
+        await ctx.container.database.db
+          .select({
+            code: operationalEvents.code,
+            severity: operationalEvents.severity,
+            resolvedAt: operationalEvents.resolvedAt,
+          })
+          .from(operationalEvents)
+          .where(eq(operationalEvents.tenantId, tenantId))
+      )
+        .filter((row) => row.resolvedAt === null && row.severity !== 'INFO')
+        .map((row) => row.code)
+        .sort();
+
+    it('announces HEALTHY to UNREACHABLE', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'to-unreachable');
+      await probeWith(panelId, HEALTHY);
+      expect(await eventCodes(tenantA.tenantId)).toEqual([]);
+      await probeWith(panelId, TIMED_OUT);
+      expect(await openConditions(tenantA.tenantId)).toEqual(['panel.health.unreachable']);
+    });
+
+    it('announces UNREACHABLE to AUTH_FAILED as a change of remedy', async () => {
+      // The transition the old broad "FAILED" class swallowed entirely. "Look
+      // at the host" and "look at the credential" are not two shades of one
+      // problem, and an operator told nothing would keep looking at a network
+      // that is fine.
+      const panelId = await createPanel(ownerA, tenantA, 'unreachable-then-auth');
+      await probeWith(panelId, TIMED_OUT);
+      expect(await openConditions(tenantA.tenantId)).toEqual(['panel.health.unreachable']);
+
+      await probeWith(panelId, REJECTED);
+      // The new condition is open and the old one is RESOLVED, not left
+      // standing beside it.
+      expect(await openConditions(tenantA.tenantId)).toEqual(['panel.health.auth_failed']);
+    });
+
+    it('announces AUTH_FAILED to UNREACHABLE', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'auth-then-unreachable');
+      await probeWith(panelId, REJECTED);
+      await probeWith(panelId, TIMED_OUT);
+      expect(await openConditions(tenantA.tenantId)).toEqual(['panel.health.unreachable']);
+    });
+
+    it('announces DEGRADED to AUTH_FAILED', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'degraded-then-auth');
+      await probeWith(panelId, DEGRADED);
+      expect(await openConditions(tenantA.tenantId)).toEqual(['panel.health.degraded']);
+      await probeWith(panelId, REJECTED);
+      expect(await openConditions(tenantA.tenantId)).toEqual(['panel.health.auth_failed']);
+    });
+
+    it('distinguishes a second factor from a rejected password', async () => {
+      // Same health state, different operator job: one is "replace the
+      // credentials", the other is "this panel wants a code Nexa cannot
+      // produce, configure an API token".
+      const panelId = await createPanel(ownerA, tenantA, 'needs-2fa');
+      await probeWith(panelId, REJECTED);
+      await probeWith(panelId, NEEDS_INTERACTION);
+      expect(await openConditions(tenantA.tenantId)).toEqual([
+        'panel.health.auth_interaction_required',
+      ]);
+    });
+
+    it('announces recovery and closes the open condition', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'recovers');
+      await probeWith(panelId, TIMED_OUT);
+      await probeWith(panelId, HEALTHY);
+      expect(await openConditions(tenantA.tenantId)).toEqual([]);
+      expect((await eventCodes(tenantA.tenantId)).map((e) => e.code)).toContain(
+        'panel.health.recovered',
+      );
+    });
+
+    it('says nothing while a panel stays healthy', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'quiet');
+      for (let i = 0; i < 3; i += 1) await probeWith(panelId, HEALTHY);
+      expect(await eventCodes(tenantA.tenantId)).toEqual([]);
+    });
+
+    it('does not repeat an unchanged condition', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'flapping');
+      for (let i = 0; i < 4; i += 1) await probeWith(panelId, TIMED_OUT);
+      const events = await eventCodes(tenantA.tenantId);
+      expect(events.map((e) => e.code)).toEqual(['panel.health.unreachable']);
+      // One row, whose counter says how often — not four rows.
+      expect(events[0]?.count).toBe(1);
+    });
+
+    it('keeps at most one panel-health condition open per panel', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'never-two-open');
+      for (const next of [TIMED_OUT, REJECTED, DEGRADED, NEEDS_INTERACTION, HEALTHY, TIMED_OUT]) {
+        await probeWith(panelId, next);
+        expect((await openConditions(tenantA.tenantId)).length).toBeLessThanOrEqual(1);
+      }
+    });
+
+    it('writes an audit row on a transition and not on a steady state', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'steady');
+      for (let i = 0; i < 3; i += 1) await probeWith(panelId, HEALTHY);
+      const rows = await ctx.container.database.db
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.action, 'panel.monitor.probe'));
+      expect(rows).toHaveLength(0);
+
+      await probeWith(panelId, TIMED_OUT);
+      const after = await ctx.container.database.db
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.action, 'panel.monitor.probe'));
+      expect(after).toHaveLength(1);
+      expect(after[0]?.actorType).toBe('SYSTEM_JOB');
+      expect(after[0]?.actorId).toBe(PANEL_MONITOR_JOB_ID);
+    });
+
+    it('keeps one tenant events out of another', async () => {
+      await createPanel(ownerA, tenantA, 'a-fails');
+      await createPanel(ownerB, tenantB, 'b-fails');
+      outcome = TIMED_OUT;
+      await tick();
+
+      const all = await ctx.container.database.db.select().from(operationalEvents);
+      expect(all).toHaveLength(2);
+      expect(new Set(all.map((e) => e.tenantId)).size).toBe(2);
+    });
+
+    it('puts no credential or provider text in an event or an audit row', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'no-leak');
+      outcome = REJECTED;
+      await tick();
+
+      const events = await ctx.container.database.db.select().from(operationalEvents);
+      const audits = await ctx.container.database.db.select().from(auditLogs);
+      const serialized = JSON.stringify({ events, audits, health: await healthOf(panelId) });
+      expect(serialized).not.toContain(PASSWORD);
+      expect(serialized).not.toContain(USERNAME);
+    });
+  });
+
+  // ===========================================================================
+  // 45-51. Process health: truthful, progress-based, no startup grace
+  // ===========================================================================
+
+  describe('process health', () => {
+    /** A monitor whose discovery always throws, wired to the real everything else. */
+    function brokenDiscovery(): PanelMonitorService {
+      return monitor({
+        discovery: {
+          claimTenants: async () => {
+            throw new Error('the scheduler query is broken');
+          },
+          dueForTenants: async () => [],
+          refreshTenantBounds: async () => {},
+        },
+      });
+    }
+
+    it('is not healthy before its first successful discovery', async () => {
+      // No startup grace, deliberately. A monitor that has never succeeded has
+      // never done its job, and reporting it healthy for the first few minutes
+      // is how a release whose scheduler is broken gets accepted.
+      const m = monitor();
+      expect(m.iterationIsFresh(now.getTime())).toBe(false);
+    });
+
+    it('stays unhealthy for ever when discovery always throws', async () => {
+      // `SELECT 1` would succeed here — the database is fine. What is broken is
+      // the scheduler, and the heartbeat has to be able to tell those apart.
+      const m = brokenDiscovery();
+      for (let i = 0; i < 5; i += 1) {
+        await m.tick();
+        expect(m.iterationIsFresh(now.getTime())).toBe(false);
+        now = new Date(now.getTime() + 30_000);
+      }
+    });
+
+    it('is healthy after a successful discovery that found nothing', async () => {
+      // An installation with no due panels is a working installation.
+      const m = monitor();
+      const result = await m.tick();
+      expect(result.considered).toBe(0);
+      expect(m.iterationIsFresh(now.getTime())).toBe(true);
+    });
+
+    it('stays healthy through a slow but progressing batch', async () => {
+      // A bounded batch of slow providers can outlast several intervals. A
+      // monitor working through it is not broken, so each finished panel counts
+      // as progress — the alternative is a false negative that restarts a
+      // healthy container mid-sweep.
+      for (let i = 0; i < 4; i += 1) await createPanel(ownerA, tenantA, `slow-${i}`);
+      let finished = 0;
+      const m = monitor({
+        concurrency: 1,
+        probe: {
+          adapters: (type: ProviderType) => ({
+            ...providerAdapter(type),
+            probe: async (target) => {
+              probes.push(target.baseUrl);
+              // Each probe takes longer than the whole freshness window would
+              // allow if only completed TICKS counted.
+              now = new Date(now.getTime() + 30_000 * 4);
+              finished += 1;
+              return HEALTHY;
+            },
+          }),
+        },
+      });
+      const running = m.tick();
+      await running;
+      expect(finished).toBe(4);
+      // Still fresh at the end, because progress kept being made.
+      expect(m.iterationIsFresh(now.getTime())).toBe(true);
+    });
+
+    it('goes stale when the loop stops getting anywhere', async () => {
+      const m = monitor();
+      await m.tick();
+      expect(m.iterationIsFresh(now.getTime())).toBe(true);
+      // Three intervals of silence and it is not alive any more.
+      expect(m.iterationIsFresh(now.getTime() + 30_000 * 3)).toBe(true);
+      expect(m.iterationIsFresh(now.getTime() + 30_000 * 3 + 1)).toBe(false);
+    });
+
+    it('stops cleanly and reports itself not alive afterwards', async () => {
+      await createPanel(ownerA, tenantA, 'shutdown');
+      const m = monitor();
+      await m.tick();
+      expect(m.iterationIsFresh(now.getTime())).toBe(true);
+      await m.stop();
+      // A draining monitor must not be reported as alive.
+      expect(m.iterationIsFresh(now.getTime())).toBe(false);
+    });
+  });
+
+  // ===========================================================================
+  // 54-61. Both providers, through the same core, with no branching
+  // ===========================================================================
+
+  describe('providers', () => {
+    async function createSanaei(name: string, credentials: Record<string, string>) {
+      const { view } = await service().create(tenantA, adminActorFor(ownerA), {
+        name,
+        providerType: 'sanaei',
+        baseUrl: 'https://xui.example.test/mypath',
+        credentials,
+        idempotencyKey: key(),
+      });
+      return view.panel.id;
+    }
+
+    it('monitors a Marzban panel that answers', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'marzban-ok');
+      expect((await tick()).probed).toBe(1);
+      expect((await healthOf(panelId))?.state).toBe('HEALTHY');
+    });
+
+    it('records a Marzban authentication failure as AUTH_FAILED', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'marzban-auth');
+      outcome = REJECTED;
+      await tick();
+      const health = await healthOf(panelId);
+      expect(health?.state).toBe('AUTH_FAILED');
+      expect(health?.failure).toBe('AUTHENTICATION_FAILED');
+    });
+
+    it('records a Marzban unreachable host as UNREACHABLE', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'marzban-down');
+      outcome = { ok: false, failure: 'UNREACHABLE', status: null };
+      await tick();
+      expect((await healthOf(panelId))?.state).toBe('UNREACHABLE');
+    });
+
+    it('monitors a Sanaei panel authenticated by Bearer token', async () => {
+      // Credential resolution happens once, in the shared core, from the
+      // descriptor's declared shape — so a provider whose credential is an
+      // opaque token needs no monitor change at all.
+      const panelId = await createSanaei('sanaei-token', { apiToken: 'monitor-token-4Q' });
+      expect((await tick()).probed).toBe(1);
+      expect((await healthOf(panelId))?.state).toBe('HEALTHY');
+    });
+
+    it('monitors a Sanaei panel authenticated by session login', async () => {
+      const panelId = await createSanaei('sanaei-session', {
+        username: USERNAME,
+        password: PASSWORD,
+      });
+      expect((await tick()).probed).toBe(1);
+      expect((await healthOf(panelId))?.state).toBe('HEALTHY');
+    });
+
+    it('records a Sanaei authentication failure', async () => {
+      const panelId = await createSanaei('sanaei-auth', { apiToken: 'wrong-token' });
+      outcome = REJECTED;
+      await tick();
+      expect((await healthOf(panelId))?.state).toBe('AUTH_FAILED');
+    });
+
+    it('reports a Sanaei panel wanting a second factor as its own condition', async () => {
+      // Nexa stores no TOTP seed and generates no code. The remedy is an API
+      // token, and the failure kind — and the event — say so rather than
+      // sending an operator to retype a password that is probably correct.
+      const panelId = await createSanaei('sanaei-2fa', {
+        username: USERNAME,
+        password: PASSWORD,
+      });
+      outcome = NEEDS_INTERACTION;
+      await tick();
+      const health = await healthOf(panelId);
+      expect(health?.state).toBe('AUTH_FAILED');
+      expect(health?.failure).toBe('AUTHENTICATION_REQUIRES_INTERACTION');
+      expect((await eventCodes(tenantA.tenantId)).map((e) => e.code)).toEqual([
+        'panel.health.auth_interaction_required',
+      ]);
+    });
+
+    it('stores no credential, cookie or provider text in any monitor state', async () => {
+      const panelId = await createSanaei('sanaei-secrets', { apiToken: 'tok-secret-zz9' });
+      outcome = REJECTED;
+      await tick();
+      const serialized = JSON.stringify({
+        health: await healthOf(panelId),
+        schedule: await scheduleOf(panelId),
+        rotation: await rotationOf(tenantA.tenantId),
+      });
+      expect(serialized).not.toContain('tok-secret-zz9');
+      expect(serialized).not.toContain(PASSWORD);
+      expect(serialized).not.toContain(USERNAME);
+    });
   });
 });

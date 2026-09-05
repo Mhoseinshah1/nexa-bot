@@ -435,17 +435,26 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   /**
    * How much of a tenant's bucket the monitor must leave for its operator.
    *
-   * Capped at `capacity - 1` so the reserve can never be the whole bucket: at
-   * ninety percent of a small capacity the floor would round up to the capacity
-   * itself and the monitor would be refused for ever, which is a configuration
-   * mistake that would look exactly like a broken monitor.
+   * Rounded UP, and never down to zero. A percentage of a small capacity floors
+   * to nothing — forty percent of two is zero — and a zero reserve is the
+   * invariant switched off exactly where it matters most: on a tenant with two
+   * tokens, background monitoring would take both and an operator diagnosing an
+   * outage would find no capacity to test their own panel with.
+   *
+   * The consequence at capacity 1 is deliberate and is the right way round:
+   * the reserve is 1, the monitor is refused every time, and the single token
+   * belongs to the operator. Monitoring is a convenience; being locked out of
+   * your own panel is not.
    */
-  const monitorBudgetReserve = Math.min(
-    Math.max(0, config.PANEL_PROBE_TENANT_LIMIT - 1),
-    Math.floor(
-      (config.PANEL_PROBE_TENANT_LIMIT * config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT) / 100,
-    ),
-  );
+  const monitorBudgetReserve =
+    config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT === 0
+      ? 0
+      : Math.max(
+          1,
+          Math.ceil(
+            (config.PANEL_PROBE_TENANT_LIMIT * config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT) / 100,
+          ),
+        );
 
   const panelMonitor = new PanelMonitorService(
     {
@@ -460,6 +469,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       ids,
       logger,
       batchSize: config.PANEL_MONITOR_BATCH_SIZE,
+      tenantsPerTick: config.PANEL_MONITOR_TENANTS_PER_TICK,
       concurrency: config.PANEL_MONITOR_CONCURRENCY,
       budgetReserve: monitorBudgetReserve,
     },

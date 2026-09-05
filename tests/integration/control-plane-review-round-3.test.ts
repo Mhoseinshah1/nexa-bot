@@ -280,6 +280,49 @@ describe('control plane, third review round', () => {
       const events = await ctx.container.opsLogService.list(tenantA, owner, {});
       expect(events.map((event) => event.code)).toContain('settings.stored_value_invalid');
     });
+
+    it("repairing one setting does not resolve another setting's complaint", async () => {
+      // The recovery event resolves by `(scope, code)`, and the failure event
+      // dedupes per SETTING — so without naming which subject it is recovering,
+      // repairing one key marked every other key's open complaint resolved.
+      // An operator's unresolved list emptied itself of problems nobody had
+      // fixed, which is the exact failure the recovery mechanism exists to
+      // prevent in the other direction.
+      const other = 'ops.notifications.max_per_minute';
+      await setSetting(3, null);
+      await corrupt();
+      await ctx.container.database.withClient((client) =>
+        client.query(
+          `INSERT INTO setting_values (id, tenant_id, setting_key, value, version, updated_at)
+             VALUES (gen_random_uuid(), $1, $2, '"not-a-number"'::jsonb, 1, now())
+             ON CONFLICT (tenant_id, setting_key)
+             DO UPDATE SET value = '"not-a-number"'::jsonb`,
+          [SEED_IDS.tenantA, other],
+        ),
+      );
+      // Both complaints are now open.
+      await ctx.container.settingsService.get(tenantA, owner, 'ops.notifications.max_attempts');
+      await ctx.container.settingsService.get(tenantA, owner, other);
+      const openBefore = (await ctx.container.opsLogService.list(tenantA, owner, {})).filter(
+        (event) => event.code === 'settings.stored_value_invalid' && event.resolvedAt === null,
+      );
+      expect(openBefore).toHaveLength(2);
+
+      // Repair ONE of them.
+      const read = await ctx.container.settingsService.get(
+        tenantA,
+        owner,
+        'ops.notifications.max_attempts',
+      );
+      await setSetting(4, read.version);
+
+      const openAfter = (await ctx.container.opsLogService.list(tenantA, owner, {})).filter(
+        (event) => event.code === 'settings.stored_value_invalid' && event.resolvedAt === null,
+      );
+      // The other setting is still broken and still says so.
+      expect(openAfter).toHaveLength(1);
+      expect(openAfter[0]?.context).toMatchObject({ key: other });
+    });
   });
 
   // -------------------------------------------------------------------------

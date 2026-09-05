@@ -29,6 +29,7 @@ import {
   NOTIFICATION_TRANSPORTS,
   OPERATIONAL_SEVERITIES,
   PANEL_HEALTH_STATES,
+  MONITOR_DEFERRAL_REASONS,
   PANEL_STATUSES,
   PERMISSION_OVERRIDE_EFFECTS,
   PROVIDER_FAILURE_KINDS,
@@ -1120,22 +1121,6 @@ export const panels = pgTable(
   (table) => [
     index('panels_tenant_status_idx').on(table.tenantId, table.status),
     /**
-     * The monitor's driving scan: every ACTIVE panel on the installation.
-     *
-     * Partial on purpose. `panels_tenant_status_idx` leads with `tenant_id`,
-     * which is right for every operator read and useless to a monitor that
-     * asks the question across tenants. This one is small — only the panels
-     * that are actually monitored are in it — and carries `tenant_id` so the
-     * tenant-fair window function can group without going back to the heap.
-     *
-     * `DISABLED` and `ARCHIVED` panels are not in the index at all, which is
-     * the same rule the monitor enforces, expressed where the planner can use
-     * it.
-     */
-    index('panels_monitor_active_idx')
-      .on(table.tenantId, table.id)
-      .where(sql`status = 'ACTIVE'`),
-    /**
      * Unique among a tenant's LIVE panels only.
      *
      * Archiving releases the name, which is the behaviour an operator expects:
@@ -1283,50 +1268,9 @@ export const panelHealth = pgTable(
      * state and completely different problems.
      */
     lastHealthyAt: timestamptz('last_healthy_at'),
-    /**
-     * How many probes in a row have failed, ending with this one.
-     *
-     * Zero on any success. It exists so the background monitor can back off a
-     * panel that keeps failing instead of asking again at the same rate — a
-     * deterministic rejection retried on a schedule is a credential-stuffing
-     * loop pointed at the operator's own panel.
-     *
-     * A counter, NOT a history. The row still describes one probe: the latest
-     * one. Nothing here can reconstruct what the previous failures were, and
-     * nothing is appended.
-     */
-    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
-    /**
-     * The earliest moment the background monitor may probe this panel again.
-     *
-     * Stored rather than computed in the discovery query, for two reasons that
-     * both matter. It is indexable — a cadence expressed as a CASE over state,
-     * failure kind and three configured intervals cannot be — and it keeps the
-     * cadence policy in one testable function instead of duplicated between
-     * TypeScript and SQL.
-     *
-     * The cost is stated plainly: changing a cadence interval takes effect for
-     * each panel at its next probe, not immediately. That is bounded by one
-     * cycle per panel and is the deliberate trade.
-     *
-     * `DEFAULT now()` rather than nullable, so a row written by a release that
-     * predates this column — a rollback, then a roll forward — reads as due
-     * rather than as never due. Due is absorbed by the batch bound, the
-     * concurrency bound and the tenant budget; never-due would be a monitor
-     * that silently stops.
-     */
-    nextProbeAt: timestamptz('next_probe_at').notNull().defaultNow(),
   },
   (table) => [
     index('panel_health_tenant_idx').on(table.tenantId),
-    /**
-     * The monitor's driving index: the due panels, most overdue first.
-     *
-     * Discovery asks one question — "which panels are due now" — across every
-     * tenant, and without this it is a sequential scan of every health row on
-     * the installation on every tick.
-     */
-    index('panel_health_next_probe_idx').on(table.nextProbeAt),
     /**
      * The pair, not the two halves.
      *
@@ -1420,6 +1364,152 @@ export const panelProbeBudgets = pgTable(
   () => [check('panel_probe_budgets_tokens_check', sql`tokens >= 0`)],
 );
 
+/**
+ * When the background monitor may next consider a panel, and why not sooner.
+ *
+ * SCHEDULING state, deliberately separate from `panel_health`. Health is the
+ * latest thing a provider actually said; this is the loop's own bookkeeping,
+ * and conflating them cost us twice in the first Phase 3C design. A scheduler
+ * column on the health row meant a panel with no health row had no schedule
+ * either, so a panel that could never be probed — no credential, a refused
+ * address — was rediscovered on every tick for ever and occupied its tenant's
+ * slot while doing nothing. And it meant the only way to defer such a panel was
+ * to invent a health row saying something no provider had said.
+ *
+ * Nothing here is a secret and nothing here is provider output. A row is three
+ * timestamps, a counter and an enum naming why the loop stepped back. There is
+ * no column a credential, a cookie, a CSRF token or a response body could go
+ * into.
+ *
+ * One row per panel, created with the panel and kept in step with it by the
+ * same transactions that write the panel: creating, updating, re-crediting or
+ * re-enabling a panel makes it eligible at once, and disabling or archiving one
+ * makes it eligible never (`'infinity'`). That is what keeps the discovery scan
+ * honest — a `DISABLED` panel is not skipped by the query, it is not in the
+ * range the query reads.
+ */
+export const panelMonitorSchedule = pgTable(
+  'panel_monitor_schedule',
+  {
+    panelId: uuid('panel_id')
+      .primaryKey()
+      .references(() => panels.id),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /**
+     * The earliest moment the monitor may consider this panel.
+     *
+     * `'infinity'` for a panel that is not ACTIVE. A finite time in the past
+     * means due now. Every cadence, backoff and deferral decision lands here,
+     * so the discovery query is one range scan and never a CASE over policy.
+     */
+    nextEligibleAt: timestamptz('next_eligible_at').notNull(),
+    /**
+     * Consecutive FAILED probes, for backoff. Scheduler state, not health.
+     *
+     * Read together with the health row and discarded when that row does not
+     * describe a failure — an older release that predates this table can
+     * complete a successful manual probe, write only the health row, and leave
+     * this counter behind; inheriting it would back a working panel off as if
+     * it had been failing all along.
+     */
+    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+    /**
+     * Why the loop last stepped back, when it did so without probing.
+     *
+     * Operational, and an enum rather than free text: a panel with no
+     * credential and a panel whose address the policy refuses are different
+     * operator jobs, and neither is a statement about what the provider said.
+     */
+    deferredReason: text('deferred_reason'),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    /**
+     * The discovery scan, and the reason it is bounded.
+     *
+     * `(tenant_id, next_eligible_at, panel_id)` is read as a range: for ONE
+     * tenant, the earliest eligible panels, `LIMIT n`. The planner walks n
+     * index entries and stops. The previous design ranked every due panel on
+     * the installation with a window function and then took fifty of them,
+     * which is work proportional to the backlog on every tick.
+     *
+     * `panel_id` is in the index for the tiebreaker, and it is not decoration.
+     * The scan orders by `(next_eligible_at, panel_id)` so the order is total
+     * and stable; without the second column the index supplies only the first
+     * key and PostgreSQL must sort every row that TIES on it before it can take
+     * five. Ties are not hypothetical — a migration backfill and a mass
+     * re-enable both make a tenant's whole fleet eligible at the same instant —
+     * and the plan regression test measured exactly that: five hundred rows
+     * read to return five. With the tiebreaker in the index there is no sort at
+     * all.
+     */
+    index('panel_monitor_schedule_due_idx').on(table.tenantId, table.nextEligibleAt, table.panelId),
+    /**
+     * The pair, not the two halves — the same rule `panel_health` follows. Two
+     * separate foreign keys would let a row name panel A while claiming tenant
+     * B, and this row decides which tenant's fairness slot a panel occupies.
+     */
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'panel_monitor_schedule_tenant_panel_fk',
+    }),
+    check(
+      'panel_monitor_schedule_deferred_reason_check',
+      nullableEnumCheck('deferred_reason', MONITOR_DEFERRAL_REASONS),
+    ),
+  ],
+);
+
+/**
+ * One row per tenant: when this tenant last had a turn, and the earliest its
+ * panels might be eligible.
+ *
+ * The fairness mechanism, and it is a table rather than a cursor in a process
+ * because a cursor in a process is wrong the moment there are two processes —
+ * and there being two, briefly, is what a rolling update is.
+ *
+ * A tick claims the least-recently-served due tenants with
+ * `FOR UPDATE SKIP LOCKED`, so two monitor replicas take DISJOINT tenant sets
+ * rather than racing over one. Every claimed tenant's `last_served_at` moves,
+ * which is what bounds the wait: with `t` tenants claimed per tick and `d` due
+ * tenants, no tenant waits longer than `ceil(d / t)` ticks. That bound holds
+ * whatever the backlog inside any one tenant is, which is the property that a
+ * global "oldest first" ordering cannot offer at all.
+ *
+ * `next_eligible_at` here is a LOWER BOUND on the tenant's earliest eligible
+ * panel, never an exact minimum. Keeping it exact would mean recomputing a MIN
+ * on every schedule write; keeping it a lower bound means one cheap
+ * `LEAST(...)` on the write path, and a claim that finds nothing due repairs
+ * the bound from the index it just read. Stale-low costs one wasted claim;
+ * stale-high would lose a tenant, so the direction is chosen deliberately.
+ */
+export const panelMonitorTenants = pgTable(
+  'panel_monitor_tenants',
+  {
+    tenantId: uuid('tenant_id')
+      .primaryKey()
+      .references(() => tenants.id),
+    /** A lower bound on this tenant's earliest eligible panel. Never later than the truth. */
+    nextEligibleAt: timestamptz('next_eligible_at').notNull(),
+    /** When this tenant last had a turn. The rotation order. */
+    lastServedAt: timestamptz('last_served_at').notNull(),
+  },
+  (table) => [
+    /**
+     * The claim: due tenants, least recently served first.
+     *
+     * One row per TENANT, so this scan is bounded by how many tenants an
+     * installation has — tens, on the deployment model this repository
+     * produces — and not by how many panels are due, which is the number that
+     * grows.
+     */
+    index('panel_monitor_tenants_rotation_idx').on(table.nextEligibleAt, table.lastServedAt),
+  ],
+);
+
 export const schema = {
   tenants,
   botInstances,
@@ -1448,6 +1538,8 @@ export const schema = {
   panelHealth,
   panelProbeClaims,
   panelProbeBudgets,
+  panelMonitorSchedule,
+  panelMonitorTenants,
 };
 
 /** Tables the database itself refuses to UPDATE or DELETE. */

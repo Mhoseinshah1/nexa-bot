@@ -1,23 +1,34 @@
 import {
   systemJobActor,
+  isNexaError,
   type ActorContext,
   type AuditWriter,
   type Clock,
   type IdGenerator,
   type Logger,
+  type MonitorDeferralReason,
   type OperationalEventInput,
   type OperationalEventRecorder,
   type PanelHealthState,
+  type ProviderFailureKind,
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
 import { newCorrelationId } from '../../../../infrastructure/logging/logger.js';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
-import { runAuthorizedMutation } from '../../access/application/authorized-mutation.js';
+import {
+  recordMutationDenial,
+  runAuthorizedMutation,
+} from '../../access/application/authorized-mutation.js';
 import type { SessionRepository } from '../../identity/application/ports.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { attemptProbe, persistProbeResult, type ProbeCoreDeps } from './probe-core.js';
-import type { DuePanel, PanelMonitorRepository, PanelView } from './ports.js';
+import {
+  deferralIntervalMs,
+  effectivePreviousFailures,
+  scheduleAfterProbe,
+} from '../domain/monitor-cadence.js';
+import type { DuePanel, PanelHealthRecord, PanelMonitorRepository, PanelView } from './ports.js';
 
 /**
  * The permission the monitor acts under.
@@ -53,8 +64,17 @@ export interface PanelMonitorDeps {
   readonly clock: Clock;
   readonly ids: IdGenerator;
   readonly logger: Logger;
-  /** Panels considered in one tick. The discovery query is LIMITed by it. */
+  /** Panels considered in one tick, across all tenants. */
   readonly batchSize: number;
+  /**
+   * Tenants given a turn in one tick.
+   *
+   * The fairness dial. With `d` tenants due and `t` claimed per tick, no tenant
+   * waits longer than `ceil(d / t)` ticks — a bound that holds however deep any
+   * one tenant's backlog is, which is exactly what a global "oldest first"
+   * ordering cannot offer.
+   */
+  readonly tenantsPerTick: number;
   /** Probes in flight at once. Bounds outbound sockets and pool checkouts. */
   readonly concurrency: number;
   /**
@@ -67,81 +87,72 @@ export interface PanelMonitorDeps {
 }
 
 export interface MonitorTickResult {
+  readonly tenants: number;
   readonly considered: number;
   readonly probed: number;
-  readonly refused: number;
+  readonly deferred: number;
   readonly failed: number;
 }
 
-/** What an operator is told about, and nothing more often than a change. */
-type HealthClass = 'OK' | 'DEGRADED' | 'FAILED';
-
-function classOf(state: PanelHealthState | null): HealthClass | null {
-  if (state === null) return null;
-  if (state === 'HEALTHY') return 'OK';
-  if (state === 'DEGRADED') return 'DEGRADED';
-  return 'FAILED';
-}
+const EMPTY_TICK: MonitorTickResult = {
+  tenants: 0,
+  considered: 0,
+  probed: 0,
+  deferred: 0,
+  failed: 0,
+};
 
 /**
  * Probing panels on a schedule, in the `monitor` process.
  *
- * Three properties are worth stating before the code, because each is a
- * decision that a simpler loop would silently get wrong.
+ * Four properties are worth stating before the code, because each is a decision
+ * a simpler loop gets wrong in a way that looks fine in testing.
  *
- * **It probes ACTIVE panels only.** `DISABLED` is the operator saying stop
- * using this for now and `ARCHIVED` means finished. Unattended dialling of
- * either is exactly what those states forbid, so the rule is enforced twice —
- * in the discovery query's predicate (which is also the partial index's) and
- * again in the probe core, so a panel disabled between the two is still
- * refused.
+ * **Authorization comes before any side effect.** The job's permission is
+ * checked before a credential is decrypted, before a claim or a budget token is
+ * spent, and before a socket is opened. A permission checked after the network
+ * call is not authorization, it is a log entry — and the earlier version of this
+ * file checked it in the transaction that STORED the result, by which time the
+ * operator's panel had already been dialled with their password.
+ *
+ * **It probes ACTIVE panels only.** `DISABLED` is the operator saying stop using
+ * this for now and `ARCHIVED` means finished. The rule is enforced in the
+ * schedule — a panel that is not ACTIVE is eligible at `'infinity'`, written in
+ * the same transaction as the status change — and again in the probe core
+ * against the row it just read, so a panel disabled between the two is refused.
  *
  * **It never decides for itself whether a probe may happen.** The per-panel
- * claim and the tenant budget are conditional writes in PostgreSQL. Two monitor
- * replicas reaching the same panel in the same second do not coordinate; they
- * both ask, and the database grants one. There is no process-local set of
- * in-flight panels, because a process-local anything is wrong the moment there
- * are two processes — and there being two, briefly, is what a rolling update
- * is.
+ * claim, the tenant budget and the tenant rotation are conditional writes in
+ * PostgreSQL. Two monitor replicas do not coordinate; they both ask, and the
+ * database grants one. There is no process-local set of in-flight panels,
+ * because a process-local anything is wrong the moment there are two processes
+ * — and there being two, briefly, is what a rolling update is.
  *
- * **It does not hammer credentials.** A rejected login is not retried on the
- * healthy cadence: `PROVIDER_FAILURE_RETRYABLE` says an authentication failure
- * cannot be fixed by asking again, so it earns the long interval, and the
- * interval doubles with each consecutive failure to a bound. An operator who
- * fixes the credential does not wait that out — replacing one changes the
- * panel's configuration, which makes it due immediately.
+ * **A refusal still moves the schedule.** A panel with no credential produces no
+ * probe and no health, but it must not be rediscovered every thirty seconds for
+ * ever: it would spend its tenant's fairness slot to learn nothing, and starve
+ * the panels a probe could actually help. Every refusal defers, and every
+ * operator fix un-defers.
  */
 export class PanelMonitorService {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private stopping = false;
   /**
-   * When the last tick RAN TO COMPLETION.
+   * When the loop last made real progress, and null until it has made any.
    *
-   * Read by the heartbeat, and it is the completion that matters. A timestamp
-   * written when a tick starts would keep reporting a healthy monitor while
-   * every tick hung on the same query — the exact failure the heartbeat exists
-   * to expose.
+   * "Progress" is deliberately not "a tick finished". A bounded batch of slow
+   * providers can legitimately outlast several intervals, and a monitor working
+   * through it is not a broken one — so the timestamp moves when discovery
+   * succeeds AND every time a panel in the batch is finished with. What it does
+   * NOT do is move because the process is alive, or because the database
+   * answered `SELECT 1`, or because the loop started recently.
+   *
+   * Null until the first successful discovery is the load-bearing half: an
+   * installation whose discovery query always throws must never report ready,
+   * and a startup grace would report exactly that for its first few minutes.
    */
-  private lastCompletedTickAt: number | null = null;
-  /**
-   * When `start()` was called, or null if this loop was never started.
-   *
-   * The grace the container health check needs at boot. The heartbeat is armed
-   * before the loop runs — it has to be, because it is what proves the database
-   * is reachable — so its FIRST beat lands before any tick has completed. Without
-   * a grace that beat writes nothing, the file does not exist for a whole
-   * heartbeat interval, and the container's first check fails on a monitor that
-   * is perfectly healthy and merely young. That is exactly what a real
-   * deployment saw: api and worker healthy at thirteen seconds, monitor still
-   * `health: starting`, and `botctl status` — whose probe is deliberately five
-   * seconds — reporting the installation not ready.
-   *
-   * It is a grace, not an exemption. Once the window passes, a loop that has
-   * never completed a tick is reported dead, which is the whole point of asking
-   * about iterations rather than about the process.
-   */
-  private startedAt: number | null = null;
+  private lastProgressAt: number | null = null;
 
   constructor(
     private readonly deps: PanelMonitorDeps,
@@ -151,7 +162,6 @@ export class PanelMonitorService {
   start(): void {
     if (this.timer !== null) return;
     this.stopping = false;
-    this.startedAt = this.deps.clock.now().getTime();
     // The first tick runs immediately rather than one interval later. A monitor
     // that restarts more often than its interval — a crash loop, a day of
     // deploys — would otherwise never probe anything at all.
@@ -162,58 +172,60 @@ export class PanelMonitorService {
 
   async stop(): Promise<void> {
     this.stopping = true;
-    // A stopped loop has no grace: a draining monitor must not be reported as
-    // alive, and `main.monitor.ts` stops the heartbeat first for the same
-    // reason.
-    this.startedAt = null;
+    // A draining monitor is not a live one. `main.monitor.ts` stops the
+    // heartbeat first for the same reason.
+    this.lastProgressAt = null;
     if (this.timer !== null) {
       clearInterval(this.timer);
       this.timer = null;
     }
     // Let an in-flight tick finish. Its probes have already spent claims and
-    // budget; abandoning them would leave results unwritten and the panels
-    // claimed.
+    // budget; abandoning them would leave results unwritten and panels claimed.
     while (this.running) await new Promise((resolve) => setTimeout(resolve, 10));
   }
 
   /**
-   * Whether a tick has completed recently enough to call this loop alive.
+   * Whether the loop has made progress recently enough to call it alive.
    *
-   * The heartbeat's second question, after "is the database reachable". A
-   * process whose timer still fires but whose ticks all throw is not monitoring
-   * anything, and a heartbeat that only proved the process existed would report
-   * it healthy for ever.
+   * The heartbeat's second question, after "is the database reachable", and the
+   * one that distinguishes a monitor from a process. Three failure modes have
+   * to come out differently:
    *
-   * Three intervals of slack: one tick may legitimately overrun into the next,
-   * and a container must not be restarted for being briefly busy.
+   *   - discovery always throws — never any progress, never healthy, and
+   *     readiness never passes. There is no grace: a monitor that has never
+   *     succeeded has never done its job, and a release that ships one must not
+   *     be accepted.
+   *   - nothing is due — discovery SUCCEEDED, which is progress. Healthy.
+   *   - a bounded batch of slow panels is still running — each finished panel
+   *     is progress, so a sweep that outlasts several intervals stays healthy
+   *     while it is actually getting somewhere.
+   *   - the loop stops getting anywhere — no progress, and the heartbeat goes
+   *     stale within three intervals.
    */
   iterationIsFresh(now: number): boolean {
-    const window = this.intervalMs * 3;
-    if (this.lastCompletedTickAt !== null) return now - this.lastCompletedTickAt <= window;
-    // Never completed one. Healthy only while still inside the first window
-    // after `start()` — a loop that has been up for three intervals without
-    // finishing a tick is not starting up, it is broken. A monitor that was
-    // never started at all has no grace and is not fresh.
-    return this.startedAt !== null && now - this.startedAt <= window;
+    if (this.lastProgressAt === null) return false;
+    return now - this.lastProgressAt <= this.intervalMs * 3;
+  }
+
+  /** Records that the loop got somewhere. See `lastProgressAt`. */
+  private noteProgress(): void {
+    this.lastProgressAt = this.deps.clock.now().getTime();
   }
 
   /** One pass. Exposed so a test can run it without waiting for the timer. */
   async tick(): Promise<MonitorTickResult> {
-    // Overlapping ticks would re-discover the same panels and contend for the
-    // same claims. A tick that is still running IS the current pass.
-    if (this.running) return { considered: 0, probed: 0, refused: 0, failed: 0 };
+    // Overlapping ticks would re-claim the same tenants and contend for the
+    // same panels. A tick that is still running IS the current pass.
+    if (this.running) return EMPTY_TICK;
     this.running = true;
     try {
-      const result = await this.sweep();
-      this.lastCompletedTickAt = this.deps.clock.now().getTime();
-      return result;
+      return await this.sweep();
     } catch (error) {
       // Discovery itself failed — the database is unreachable, or the query is
-      // wrong. The tick does NOT count as completed, so the heartbeat goes
-      // stale and the container is reported unhealthy rather than quietly
-      // monitoring nothing.
+      // wrong. NO progress is recorded, so the heartbeat goes stale and the
+      // container is reported unhealthy rather than quietly monitoring nothing.
       this.deps.logger.error({ err: error }, 'panel monitor tick failed');
-      return { considered: 0, probed: 0, refused: 0, failed: 0 };
+      return EMPTY_TICK;
     } finally {
       this.running = false;
     }
@@ -221,14 +233,44 @@ export class PanelMonitorService {
 
   private async sweep(): Promise<MonitorTickResult> {
     const now = this.deps.clock.now();
-    const due = await this.deps.discovery.dueForMonitoring(now, this.deps.batchSize);
-    if (due.length === 0) return { considered: 0, probed: 0, refused: 0, failed: 0 };
+
+    // Phase one: take a turn for the least-recently-served due tenants. One
+    // bounded statement over a table with one row per tenant.
+    const tenantIds = await this.deps.discovery.claimTenants(now, this.deps.tenantsPerTick);
+    // Discovery SUCCEEDED. That is progress even with nothing to do — an
+    // installation with no due panels is a working installation, and a monitor
+    // that reported itself dead for being idle would fail every release.
+    this.noteProgress();
+    if (tenantIds.length === 0) return EMPTY_TICK;
+
+    // The per-tenant share is computed from how many tenants were ACTUALLY
+    // claimed, which is what lets one dial serve both shapes: a single-tenant
+    // installation gets the whole batch, and a fifty-tenant one gets fairness.
+    const perTenant = Math.max(1, Math.ceil(this.deps.batchSize / tenantIds.length));
+
+    // Phase two: one bounded index range scan per claimed tenant.
+    const due = await this.deps.discovery.dueForTenants(
+      tenantIds,
+      now,
+      perTenant,
+      this.deps.batchSize,
+    );
+
+    // Put the claimed tenants' lower bounds back where their schedules say.
+    // Without this a tenant whose panels are all far in the future is claimed
+    // on every tick for ever, spending a fairness slot to rediscover that.
+    await this.deps.discovery.refreshTenantBounds(tenantIds);
+    this.noteProgress();
+
+    if (due.length === 0) {
+      return { ...EMPTY_TICK, tenants: tenantIds.length };
+    }
 
     const correlationId = newCorrelationId(this.deps.ids.uuid());
     const actor = systemJobActor(PANEL_MONITOR_JOB_ID, correlationId);
 
     let probed = 0;
-    let refused = 0;
+    let deferred = 0;
     let failed = 0;
 
     // A fixed pool of workers pulling from a shared cursor, NOT
@@ -247,18 +289,22 @@ export class PanelMonitorService {
         try {
           const outcome = await this.probeOne(candidate, actor);
           if (outcome === 'PROBED') probed += 1;
-          else refused += 1;
+          else deferred += 1;
         } catch (error) {
-          // One panel's failure is one panel's failure. An unreachable panel,
-          // a provider that returns nonsense, a conflict because somebody
-          // edited the panel mid-probe — none of them may stop the sweep, or a
-          // single broken panel would stop every other panel being monitored.
+          // One panel's failure is one panel's failure. An unreachable panel, a
+          // provider that returns nonsense, a conflict because somebody edited
+          // the panel mid-probe — none of them may stop the sweep, or a single
+          // broken panel would stop every other panel being monitored.
           failed += 1;
           this.deps.logger.error(
             { err: error, panelId: candidate.panelId, tenantId: candidate.tenantId },
             'panel monitor probe failed',
           );
         }
+        // Finishing with a panel — probed, deferred or failed — is progress. It
+        // is what keeps a long sweep of slow providers healthy while it is
+        // still getting somewhere, and what lets a sweep that WEDGES go stale.
+        this.noteProgress();
       }
     };
 
@@ -267,13 +313,13 @@ export class PanelMonitorService {
     );
 
     this.deps.logger.debug(
-      { considered: due.length, probed, refused, failed },
+      { tenants: tenantIds.length, considered: due.length, probed, deferred, failed },
       'panel monitor tick complete',
     );
-    return { considered: due.length, probed, refused, failed };
+    return { tenants: tenantIds.length, considered: due.length, probed, deferred, failed };
   }
 
-  private async probeOne(candidate: DuePanel, actor: ActorContext): Promise<'PROBED' | 'REFUSED'> {
+  private async probeOne(candidate: DuePanel, actor: ActorContext): Promise<'PROBED' | 'DEFERRED'> {
     // The panel's OWN tenant, taken from the discovery row. This is the point at
     // which cross-tenant work stops: discovery returned a tenant id and a panel
     // id, and from here everything runs inside that tenant's scope through the
@@ -284,34 +330,132 @@ export class PanelMonitorService {
       botInstanceId: null,
     };
 
+    // --- Authorization, BEFORE anything with a side effect ------------------
+    //
+    // Not a formality and not in the wrong place by a few lines. Everything
+    // below this call decrypts a credential, spends a claim, spends a tenant's
+    // outbound budget and dials somebody else's machine. A permission checked
+    // after any of that has not prevented anything.
+    //
+    // The denial is recorded through the same helper the transactional path
+    // uses, so a refused job leaves the same audit trail as a refused operator.
+    if (!(await this.authorize(tenant, actor, candidate.panelId))) {
+      await this.defer(tenant, candidate.panelId, 'NOT_AUTHORIZED');
+      return 'DEFERRED';
+    }
+
     const before = await this.deps.probe.repository.find(tenant, candidate.panelId);
-    // Deleted, or archived and re-scoped, between discovery and now. Nothing to
-    // do and nothing to report: the next tick will not see it either.
-    if (before === null) return 'REFUSED';
+    // Deleted between discovery and now. Nothing to do and nothing to defer —
+    // there is no row to defer.
+    if (before === null) return 'DEFERRED';
 
     const attempt = await attemptProbe(this.deps.probe, tenant, before, {
-      // ACTIVE only. Non-negotiable, and enforced here as well as in the query.
+      // ACTIVE only. Non-negotiable, and enforced here as well as in the
+      // schedule the query reads.
       probeableStatuses: ['ACTIVE'],
       budgetReserve: this.deps.budgetReserve,
     });
+
     if (!attempt.probed) {
+      // A refusal is a scheduling fact, never a health fact. Nothing about the
+      // provider was learned, so nothing about the provider is written — and
+      // the panel steps back so it does not occupy its tenant's slot on every
+      // tick for ever.
+      const reason = deferralReasonOf(attempt.refusal.kind);
+      await this.defer(tenant, candidate.panelId, reason);
       this.deps.logger.debug(
-        { panelId: candidate.panelId, refusal: attempt.refusal.kind },
-        'panel monitor probe refused',
+        { panelId: candidate.panelId, reason },
+        'panel monitor deferred a panel without probing it',
       );
-      return 'REFUSED';
+      return 'DEFERRED';
     }
 
-    const health = attempt.health;
-    const from = classOf(before.health?.state ?? null);
-    const to = classOf(health.state);
-    // A change of class, and one exception: the FIRST successful check of a
-    // panel that has never been probed is not a recovery. Nothing was wrong,
-    // so there is nothing to announce — and announcing it would mean every
-    // installation greeted its own first monitor tick with one "recovered"
-    // event per panel.
-    const transition = from === to || (from === null && to === 'OK') ? null : to;
+    await this.persist(tenant, actor, candidate, before, attempt.configuration, attempt.health);
+    return 'PROBED';
+  }
 
+  /**
+   * The job's permission, checked on its own before any side effect.
+   *
+   * Runs in its own short transaction because that is where `PermissionGuard`
+   * expects to be, and returns a boolean rather than throwing: a tenant this
+   * job may not act for is an ordinary answer for a loop that walks every
+   * tenant, not an exception that should abort the sweep.
+   */
+  private async authorize(
+    tenant: TenantContext,
+    actor: ActorContext,
+    panelId: string,
+  ): Promise<boolean> {
+    const denial = {
+      action: 'panel.monitor.probe',
+      entityType: 'Panel',
+      entityId: panelId,
+    };
+    try {
+      await this.deps.uow.run(tenant, (tx) =>
+        this.deps.guard.check(tenant, actor, MAINTENANCE_RUN, tx),
+      );
+      return true;
+    } catch (error) {
+      if (isNexaError(error) && error.kind === 'PERMISSION_DENIED') {
+        // The same trail a refused operator leaves. `recordMutationDenial`
+        // writes the denial event and the DENIED audit row, on the pool,
+        // outside any transaction.
+        await recordMutationDenial(
+          { opsLog: this.deps.opsLog, audit: this.deps.audit, guard: this.deps.guard },
+          tenant,
+          actor,
+          MAINTENANCE_RUN,
+          denial,
+          error,
+        );
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /** Steps a panel back without inventing anything about the provider. */
+  private async defer(
+    tenant: TenantContext,
+    panelId: string,
+    reason: MonitorDeferralReason,
+  ): Promise<void> {
+    const at = this.deps.clock.now();
+    await this.deps.uow.run(tenant, (tx) =>
+      this.deps.probe.repository.scheduleNext(
+        tenant,
+        panelId,
+        {
+          nextEligibleAt: new Date(at.getTime() + deferralIntervalMs(reason)),
+          // A deferral is not a failed probe. The backoff streak describes what
+          // the provider said, and the provider said nothing.
+          consecutiveFailures: 0,
+          deferredReason: reason,
+          at,
+        },
+        tx,
+      ),
+    );
+  }
+
+  /**
+   * Stores the result, moves the schedule, and announces a real transition.
+   *
+   * One transaction. The schedule moves whether or not the health write landed,
+   * because a probe DID happen and re-probing this panel immediately would be
+   * asking a question that was just answered.
+   */
+  private async persist(
+    tenant: TenantContext,
+    actor: ActorContext,
+    candidate: DuePanel,
+    before: PanelView,
+    configuration: string,
+    health: PanelHealthRecord,
+  ): Promise<void> {
+    const at = this.deps.clock.now();
     await runAuthorizedMutation(
       {
         uow: this.deps.uow,
@@ -323,30 +467,57 @@ export class PanelMonitorService {
       },
       tenant,
       actor,
+      // Re-checked inside the transaction that commits, which is what
+      // `runAuthorizedMutation` is for: the pre-network check above prevented
+      // the side effect, and this one stops a job whose permission was revoked
+      // mid-probe from committing anything.
       MAINTENANCE_RUN,
       { action: 'panel.monitor.probe', entityType: 'Panel', entityId: candidate.panelId },
       async (tx) => {
         // A probe result changes health and NOTHING else. No status, no
-        // credential, no address: `persistProbeResult` writes one row, and the
-        // recheck it does first refuses an answer that describes a
-        // configuration the operator has since replaced.
-        await persistProbeResult(
+        // credential, no address.
+        const { outcome } = await persistProbeResult(
           this.deps.probe,
           tenant,
           candidate.panelId,
-          attempt.configuration,
+          configuration,
           health,
           tx,
         );
 
-        // Audited and announced on a TRANSITION, not on every probe.
+        // The streak the NEXT probe builds on, read from stored health rather
+        // than from the counter alone — see `effectivePreviousFailures`.
+        const stored = await this.deps.probe.repository.readSchedule(tenant, candidate.panelId, tx);
+        const previousStreak = effectivePreviousFailures(
+          before.health?.state ?? null,
+          stored?.consecutiveFailures ?? 0,
+        );
+        const schedule = scheduleAfterProbe(this.deps.probe.cadence, candidate.panelId, {
+          checkedAt: health.checkedAt,
+          failure: health.failure,
+          previousConsecutiveFailures: previousStreak,
+        });
+        await this.deps.probe.repository.scheduleNext(
+          tenant,
+          candidate.panelId,
+          {
+            nextEligibleAt: schedule.nextEligibleAt,
+            consecutiveFailures: schedule.consecutiveFailures,
+            deferredReason: null,
+            at,
+          },
+          tx,
+        );
+
+        // Only a result the database ACCEPTED may be announced.
         //
-        // A row per tick would be a health history table wearing the audit
-        // log's name: six rows per panel per hour, for ever, in a table that
-        // refuses DELETE. What an operator needs from a monitor is when
-        // something changed, and the latest health row already answers "what is
-        // it now". A steady state writes nothing.
-        if (transition === null) return;
+        // A slow probe finishing after a faster later one is discarded by the
+        // storage, and announcing its transition anyway would tell an operator
+        // their panel is failing while the row in front of them says healthy.
+        if (outcome !== 'APPLIED') return;
+
+        const event = transitionOf(before.health ?? null, health);
+        if (event === null) return;
 
         await this.deps.audit.record(
           tenant,
@@ -355,7 +526,10 @@ export class PanelMonitorService {
             action: 'panel.monitor.probe',
             entityType: 'Panel',
             entityId: candidate.panelId,
-            before: { state: before.health?.state ?? null },
+            before: {
+              state: before.health?.state ?? null,
+              failure: before.health?.failure ?? null,
+            },
             // The normalized outcome and nothing else. No provider message, no
             // header, no body.
             after: { state: health.state, failure: health.failure, latencyMs: health.latencyMs },
@@ -363,77 +537,178 @@ export class PanelMonitorService {
           },
           tx,
         );
-        await this.deps.opsLog.record(
-          tenant,
-          transitionEvent(before, health, transition, candidate),
-          tx,
-        );
+        await this.deps.opsLog.record(tenant, buildEvent(before, event), tx);
       },
     );
+  }
+}
 
-    return 'PROBED';
+/** Which scheduling reason a probe-core refusal earns. */
+function deferralReasonOf(kind: string): MonitorDeferralReason {
+  switch (kind) {
+    case 'CREDENTIALS_MISSING':
+      return 'CREDENTIALS_MISSING';
+    case 'TARGET_BLOCKED':
+      return 'TARGET_BLOCKED';
+    case 'STATUS_NOT_PROBEABLE':
+      return 'STATUS_NOT_PROBEABLE';
+    case 'BUDGET_EXHAUSTED':
+      return 'BUDGET_EXHAUSTED';
+    default:
+      return 'COOLDOWN';
   }
 }
 
 /**
- * The operational event a health transition earns.
+ * The operator-facing CONDITION a health row represents.
  *
- * Deduplicated per panel and per condition, so a panel that fails, recovers and
- * fails again collapses onto one row with a counter rather than filling the
- * operations view — which is exactly what the legacy log group did, posting the
- * same expired-certificate error 60 times in a day because nothing could tell
- * the occurrences apart.
+ * Not a broad "failed / degraded / ok" class, and the difference matters. The
+ * first version collapsed `UNREACHABLE` and `AUTH_FAILED` into one class, so a
+ * panel that stopped being reachable and started rejecting the password
+ * announced nothing at all — and those are not two shades of the same problem,
+ * they are "look at the host" and "look at the credential".
+ *
+ * Within a state the failure KIND splits further wherever the operator's job
+ * changes: a certificate to fix is not a password to replace is not an address
+ * the installation refuses to call. Kinds whose remedy is the same share a
+ * condition, so a host that times out and then refuses the connection is one
+ * ongoing "not reachable" rather than two alarms.
+ */
+type Condition = {
+  readonly code: string;
+  readonly severity: 'ERROR' | 'WARN' | 'INFO';
+  readonly summary: string;
+};
+
+function conditionOf(
+  state: PanelHealthState,
+  failure: ProviderFailureKind | null,
+): Condition | null {
+  if (state === 'HEALTHY') return null;
+  if (state === 'DEGRADED') {
+    return {
+      code: 'panel.health.degraded',
+      severity: 'WARN',
+      summary: 'authenticated but could not report its own status',
+    };
+  }
+  switch (failure) {
+    case 'AUTHENTICATION_FAILED':
+      return {
+        code: 'panel.health.auth_failed',
+        severity: 'ERROR',
+        summary: 'rejected the stored credentials',
+      };
+    case 'AUTHENTICATION_REQUIRES_INTERACTION':
+      return {
+        code: 'panel.health.auth_interaction_required',
+        severity: 'ERROR',
+        summary: 'wants a second factor and cannot be used unattended',
+      };
+    case 'TLS_FAILED':
+      return {
+        code: 'panel.health.tls_failed',
+        severity: 'ERROR',
+        summary: 'presented a certificate this installation will not accept',
+      };
+    case 'BLOCKED_TARGET':
+      return {
+        code: 'panel.health.target_blocked',
+        severity: 'ERROR',
+        summary: 'resolves somewhere this installation refuses to call',
+      };
+    case 'MALFORMED_RESPONSE':
+    case 'PROVIDER_ERROR':
+    case 'UNSUPPORTED_CAPABILITY':
+      return {
+        code: 'panel.health.provider_error',
+        severity: 'ERROR',
+        summary: 'answered with something this provider does not produce',
+      };
+    default:
+      return {
+        code: 'panel.health.unreachable',
+        severity: 'ERROR',
+        summary: 'is not answering',
+      };
+  }
+}
+
+interface Transition {
+  readonly to: Condition | null;
+  readonly from: Condition | null;
+}
+
+/**
+ * What changed, if anything worth telling an operator.
+ *
+ * Null when the condition is unchanged — a panel that has been unreachable for
+ * an hour is one open condition, not one hundred and twenty events — and null
+ * for the FIRST successful check of a panel that has never been probed, because
+ * nothing was wrong and "recovered" would be a lie every installation heard
+ * once per panel on its first tick.
+ */
+function transitionOf(
+  before: { state: PanelHealthState; failure: ProviderFailureKind | null } | null,
+  after: { state: PanelHealthState; failure: ProviderFailureKind | null },
+): Transition | null {
+  const from = before === null ? null : conditionOf(before.state, before.failure);
+  const to = conditionOf(after.state, after.failure);
+  if (from?.code === to?.code) return null;
+  if (from === null && to === null) return null;
+  return { from, to };
+}
+
+/**
+ * The operational event a transition earns.
+ *
+ * Deduplicated per PANEL, so every panel-health condition of one panel shares a
+ * scope and a recovery resolves exactly the condition that was open. Moving
+ * between conditions resolves the one being left, which is what keeps at most
+ * one panel-health condition open per panel — a panel that went unreachable and
+ * then started failing authentication must not leave "unreachable" standing,
+ * because an operator would go on looking at a network that is fine.
  *
  * The context carries identifiers and the normalized outcome. Never a
  * credential, never a cookie, never a CSRF token, never a provider's own
  * message: the probe outcome type has no field one could be put in, and this
- * builder only reads that type and the panel's own row.
+ * builder reads only that type and the panel's own row.
  */
-function transitionEvent(
-  before: PanelView,
-  health: { state: PanelHealthState; failure: string | null },
-  to: HealthClass,
-  candidate: DuePanel,
-): OperationalEventInput {
-  const context = {
-    panelId: candidate.panelId,
-    panelName: before.panel.name,
-    providerType: before.panel.providerType,
-    state: health.state,
-    failure: health.failure,
-    dueReason: candidate.reason,
-  };
-  if (to === 'FAILED') {
+function buildEvent(before: PanelView, transition: Transition): OperationalEventInput {
+  const name = before.panel.name;
+  const panelId = before.panel.id;
+  const context = { panelId, panelName: name, providerType: before.panel.providerType };
+  // One dedupe row per PANEL AND CONDITION. Deduplication is keyed on
+  // `(scope, dedupeKey)` and never rewrites a row's code, so sharing one key
+  // across conditions would have the second condition reuse the first's row —
+  // and then resolve itself, because the row still carried the code the
+  // recovery was closing. A panel that went unreachable and then started
+  // failing authentication announced nothing at all.
+  const keyFor = (code: string): string => `${code}:${panelId}`;
+  // Whichever condition is being left, closed by name. `recoversDedupeKey` is
+  // what keeps that to THIS panel: without it, one panel recovering would
+  // resolve every other panel's open row of the same code.
+  const closing =
+    transition.from === null
+      ? {}
+      : { recoversCode: transition.from.code, recoversDedupeKey: keyFor(transition.from.code) };
+
+  if (transition.to === null) {
     return {
-      code: 'panel.health.failed',
-      severity: 'ERROR',
-      message: `Panel "${before.panel.name}" is not answering health checks.`,
-      dedupeKey: `panel.health.failed:${candidate.panelId}`,
-      context,
-    };
-  }
-  if (to === 'DEGRADED') {
-    return {
-      code: 'panel.health.degraded',
-      severity: 'WARN',
-      message: `Panel "${before.panel.name}" authenticated but could not report its own status.`,
-      dedupeKey: `panel.health.degraded:${candidate.panelId}`,
+      code: 'panel.health.recovered',
+      severity: 'INFO',
+      message: `Panel "${name}" is answering health checks again.`,
+      dedupeKey: keyFor('panel.health.recovered'),
+      ...closing,
       context,
     };
   }
   return {
-    code: 'panel.health.recovered',
-    severity: 'INFO',
-    message: `Panel "${before.panel.name}" is answering health checks again.`,
-    dedupeKey: `panel.health.recovered:${candidate.panelId}`,
-    // Resolves whichever condition was open. A panel that went DEGRADED and
-    // then FAILED has both rows; naming the one it came from leaves the other
-    // open, which is honest — it did not recover from a condition it was not
-    // in when it recovered.
-    recoversCode:
-      classOf(before.health?.state ?? null) === 'DEGRADED'
-        ? 'panel.health.degraded'
-        : 'panel.health.failed',
+    code: transition.to.code,
+    severity: transition.to.severity,
+    message: `Panel "${name}" ${transition.to.summary}.`,
+    dedupeKey: keyFor(transition.to.code),
+    ...closing,
     context,
   };
 }

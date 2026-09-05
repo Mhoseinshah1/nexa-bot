@@ -310,4 +310,73 @@ describe('deployment topology and trusted proxies', () => {
     const config = loadConfig({ ...valid, TRUSTED_PROXY_IPS: '127.0.0.1, ::1, 10.0.0.0/8' });
     expect(config.TRUSTED_PROXY_IPS).toEqual(['127.0.0.1', '::1', '10.0.0.0/8']);
   });
+
+  describe('background monitoring safety', () => {
+    // Both of these are cross-field rules, and both are refusals rather than
+    // clamps. A configuration that would defeat the reason a protection exists
+    // should stop the process at boot, where somebody is reading the message.
+
+    it('refuses a cadence that would let healthy panels go stale', () => {
+      // Twelve minutes is fine at a thirty-second tick. The SAME twelve minutes
+      // with a ten-minute tick is not, because worst-case refresh is the
+      // interval plus the spread plus one tick of scheduling delay — which is
+      // exactly why neither field alone can express the rule.
+      expect(
+        loadConfig({
+          ...valid,
+          PANEL_MONITOR_HEALTHY_INTERVAL_MS: String(12 * 60 * 1000),
+          PANEL_MONITOR_TICK_MS: '30000',
+        }).PANEL_MONITOR_HEALTHY_INTERVAL_MS,
+      ).toBe(12 * 60 * 1000);
+
+      expect(() =>
+        loadConfig({
+          ...valid,
+          PANEL_MONITOR_HEALTHY_INTERVAL_MS: String(12 * 60 * 1000),
+          PANEL_MONITOR_TICK_MS: String(10 * 60 * 1000),
+        }),
+      ).toThrowError(/would let a healthy panel's health go stale/);
+    });
+
+    it('accepts a long tick with a cadence that leaves room for it', () => {
+      const config = loadConfig({
+        ...valid,
+        PANEL_MONITOR_HEALTHY_INTERVAL_MS: String(4 * 60 * 1000),
+        PANEL_MONITOR_TICK_MS: String(10 * 60 * 1000),
+      });
+      expect(config.PANEL_MONITOR_TICK_MS).toBe(10 * 60 * 1000);
+    });
+
+    it('refuses a retry interval short enough to hammer a rejected credential', () => {
+      // A minute-scale first retry that doubles still spends four or five
+      // attempts against the operator's own panel before it slows down, and
+      // both providers this release speaks to lock an account for fewer.
+      expect(() =>
+        loadConfig({ ...valid, PANEL_MONITOR_NONRETRYABLE_INTERVAL_MS: '60000' }),
+      ).toThrowError(/PANEL_MONITOR_NONRETRYABLE_INTERVAL_MS/);
+      expect(
+        loadConfig({ ...valid, PANEL_MONITOR_NONRETRYABLE_INTERVAL_MS: String(30 * 60 * 1000) })
+          .PANEL_MONITOR_NONRETRYABLE_INTERVAL_MS,
+      ).toBe(30 * 60 * 1000);
+    });
+
+    it('refuses a zero background reserve while monitoring is enabled', () => {
+      // The invariant is that an operator always outranks the background loop
+      // for a tenant's last outbound probe. A zero reserve is that invariant
+      // switched off, so it is refused rather than quietly rounded.
+      expect(() =>
+        loadConfig({ ...valid, PANEL_MONITOR_BUDGET_RESERVE_PERCENT: '0' }),
+      ).toThrowError(/PANEL_MONITOR_BUDGET_RESERVE_PERCENT=0/);
+
+      // With monitoring off there is no background lane to reserve against, so
+      // the same value is fine.
+      expect(
+        loadConfig({
+          ...valid,
+          PANEL_MONITOR_ENABLED: 'false',
+          PANEL_MONITOR_BUDGET_RESERVE_PERCENT: '0',
+        }).PANEL_MONITOR_BUDGET_RESERVE_PERCENT,
+      ).toBe(0);
+    });
+  });
 });

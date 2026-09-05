@@ -1,16 +1,20 @@
-import { and, asc, eq, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, ne, sql, type SQL } from 'drizzle-orm';
 import { errors, PANEL_ERROR_CODES } from '@nexa/contracts';
 import type {
+  MonitorDeferralReason,
   PanelHealthState,
   PanelStatus,
   ProviderFailureKind,
   ProviderType,
   TenantContext,
 } from '@nexa/contracts';
+import { SCHEDULE_SUSPENDED_AT } from '../domain/monitor-cadence.js';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   panelCredentials,
   panelHealth,
+  panelMonitorSchedule,
+  panelMonitorTenants,
   panelProbeBudgets,
   panelProbeClaims,
   panels,
@@ -20,11 +24,12 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type {
   CreatePanelInput,
   DuePanel,
-  MonitorDueReason,
+  HealthWriteOutcome,
   PanelHealthRecord,
   PanelMonitorRepository,
   PanelRecord,
   PanelRepository,
+  PanelScheduleRecord,
   PanelView,
   ProbeBudget,
   UpdatePanelInput,
@@ -223,35 +228,22 @@ export class DrizzlePanelRepository implements PanelRepository {
     panelId: string,
     health: PanelHealthRecord,
     tx: TransactionScope,
-  ): Promise<void> {
-    await tx.tx
+  ): Promise<HealthWriteOutcome> {
+    const columns = {
+      state: health.state,
+      checkedAt: health.checkedAt,
+      latencyMs: health.latencyMs,
+      failure: health.failure,
+      statusCode: health.statusCode,
+      providerVersion: health.providerVersion,
+      lastHealthyAt: health.lastHealthyAt,
+    };
+    const written = await tx.tx
       .insert(panelHealth)
-      .values({
-        panelId,
-        tenantId: scope.tenantId,
-        state: health.state,
-        checkedAt: health.checkedAt,
-        latencyMs: health.latencyMs,
-        failure: health.failure,
-        statusCode: health.statusCode,
-        providerVersion: health.providerVersion,
-        lastHealthyAt: health.lastHealthyAt,
-        consecutiveFailures: health.consecutiveFailures,
-        nextProbeAt: health.nextProbeAt,
-      })
+      .values({ panelId, tenantId: scope.tenantId, ...columns })
       .onConflictDoUpdate({
         target: panelHealth.panelId,
-        set: {
-          state: health.state,
-          checkedAt: health.checkedAt,
-          latencyMs: health.latencyMs,
-          failure: health.failure,
-          statusCode: health.statusCode,
-          providerVersion: health.providerVersion,
-          lastHealthyAt: health.lastHealthyAt,
-          consecutiveFailures: health.consecutiveFailures,
-          nextProbeAt: health.nextProbeAt,
-        },
+        set: columns,
         // Two conditions, and the second is the interesting one.
         //
         // The tenant predicate is belt and braces on a conflict path: the row
@@ -266,15 +258,150 @@ export class DrizzlePanelRepository implements PanelRepository {
         // whose claims fell either side of a configuration change. Writing the
         // older answer last would move `checked_at` BACKWARDS and replace a
         // fresh verdict with a stale one, which is precisely the thing an
-        // operator reads to decide whether their fix worked. The older result
-        // is discarded instead: a no-op update, not an error, because nothing
-        // is wrong — it simply is not the latest answer any more.
+        // operator reads to decide whether their fix worked.
         //
         // `<=` rather than `<`, so a result written twice at the same instant
         // — an idempotent retry — still lands.
         setWhere: sql`
           ${panelHealth.tenantId} = ${scope.tenantId}
           AND ${panelHealth.checkedAt} <= ${health.checkedAt}`,
+      })
+      // RETURNING is how the CALLER learns which happened. A refused write
+      // returns no row, and the caller must not announce a transition to a
+      // state the database declined to store.
+      .returning({ panelId: panelHealth.panelId });
+    return written.length > 0 ? 'APPLIED' : 'STALE_IGNORED';
+  }
+
+  async readSchedule(
+    scope: TenantContext,
+    panelId: string,
+    tx?: TransactionScope,
+  ): Promise<PanelScheduleRecord | null> {
+    const [row] = await executorOf(this.db, tx)
+      .select({
+        nextEligibleAt: panelMonitorSchedule.nextEligibleAt,
+        consecutiveFailures: panelMonitorSchedule.consecutiveFailures,
+        deferredReason: panelMonitorSchedule.deferredReason,
+      })
+      .from(panelMonitorSchedule)
+      .where(
+        and(
+          eq(panelMonitorSchedule.panelId, panelId),
+          eq(panelMonitorSchedule.tenantId, scope.tenantId),
+        ),
+      )
+      .limit(1);
+    if (row === undefined) return null;
+    return {
+      nextEligibleAt: row.nextEligibleAt,
+      consecutiveFailures: row.consecutiveFailures,
+      deferredReason: row.deferredReason as MonitorDeferralReason | null,
+    };
+  }
+
+  async scheduleNext(
+    scope: TenantContext,
+    panelId: string,
+    next: {
+      readonly nextEligibleAt: Date;
+      readonly consecutiveFailures: number;
+      readonly deferredReason: MonitorDeferralReason | null;
+      readonly at: Date;
+    },
+    tx: TransactionScope,
+  ): Promise<void> {
+    await this.writeSchedule(
+      scope,
+      panelId,
+      {
+        nextEligibleAt: next.nextEligibleAt,
+        consecutiveFailures: next.consecutiveFailures,
+        deferredReason: next.deferredReason,
+        at: next.at,
+      },
+      tx,
+    );
+  }
+
+  async setScheduleEligibility(
+    scope: TenantContext,
+    panelId: string,
+    eligibility: 'ELIGIBLE_NOW' | 'SUSPENDED',
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<void> {
+    await this.writeSchedule(
+      scope,
+      panelId,
+      {
+        nextEligibleAt: eligibility === 'SUSPENDED' ? SCHEDULE_SUSPENDED_AT : at,
+        // An operator edit clears the backoff as well as the deferral. The
+        // streak was evidence about a configuration that no longer exists.
+        consecutiveFailures: 0,
+        deferredReason: eligibility === 'SUSPENDED' ? 'STATUS_NOT_PROBEABLE' : null,
+        at,
+      },
+      tx,
+    );
+  }
+
+  /**
+   * The one place a schedule row is written, and the tenant's bound with it.
+   *
+   * Two statements in the caller's transaction, and the second is what makes
+   * fairness work: the tenant's `next_eligible_at` is a LOWER BOUND, moved down
+   * with `LEAST` and never up. A panel becoming eligible sooner must pull its
+   * tenant's bound forward or the tenant is simply never claimed; a panel
+   * becoming eligible later must NOT push it back, because some other panel of
+   * the same tenant may still be due.
+   */
+  private async writeSchedule(
+    scope: TenantContext,
+    panelId: string,
+    next: {
+      readonly nextEligibleAt: Date;
+      readonly consecutiveFailures: number;
+      readonly deferredReason: MonitorDeferralReason | null;
+      readonly at: Date;
+    },
+    tx: TransactionScope,
+  ): Promise<void> {
+    await tx.tx
+      .insert(panelMonitorSchedule)
+      .values({
+        panelId,
+        tenantId: scope.tenantId,
+        nextEligibleAt: next.nextEligibleAt,
+        consecutiveFailures: next.consecutiveFailures,
+        deferredReason: next.deferredReason,
+        updatedAt: next.at,
+      })
+      .onConflictDoUpdate({
+        target: panelMonitorSchedule.panelId,
+        set: {
+          nextEligibleAt: next.nextEligibleAt,
+          consecutiveFailures: next.consecutiveFailures,
+          deferredReason: next.deferredReason,
+          updatedAt: next.at,
+        },
+        setWhere: sql`${panelMonitorSchedule.tenantId} = ${scope.tenantId}`,
+      });
+
+    await tx.tx
+      .insert(panelMonitorTenants)
+      .values({
+        tenantId: scope.tenantId,
+        nextEligibleAt: next.nextEligibleAt,
+        // A tenant that has never been served sorts first, which is what a
+        // newly provisioned tenant deserves.
+        lastServedAt: new Date(0),
+      })
+      .onConflictDoUpdate({
+        target: panelMonitorTenants.tenantId,
+        set: {
+          nextEligibleAt: sql`LEAST(${panelMonitorTenants.nextEligibleAt}, ${next.nextEligibleAt})`,
+        },
       });
   }
 
@@ -355,15 +482,21 @@ export class DrizzlePanelRepository implements PanelRepository {
     reserve = 0,
   ): Promise<{ permitted: true; remaining: number } | { permitted: false; retryAfterMs: number }> {
     const { capacity, refillPerMs } = bucket;
-    // Clamped HERE rather than trusted from the caller, because the two branches
-    // below would otherwise disagree. A tenant with no row takes the insert
-    // branch, which spends one token from a full bucket without consulting the
-    // floor — correct only while the floor is reachable from a full bucket. A
-    // reserve at or above capacity would make the very first probe succeed and
-    // every one after it refuse, which is a configuration mistake that looks
-    // exactly like a broken monitor. The container caps it too; this is the half
-    // that cannot be got wrong by a new caller.
-    const floor = Math.max(0, Math.min(reserve, capacity - 1));
+    // The floor, and the direction it is clamped in is the safety property.
+    //
+    // A caller with `reserve > 0` is the background monitor, and the invariant
+    // is that an operator always outranks it for a tenant's LAST token. So a
+    // positive reserve is never rounded down to zero: at capacity 1 the floor
+    // stays 1, the monitor can never take the only token, and the operator
+    // keeps their "Test connection". The previous version clamped to
+    // `capacity - 1`, which at capacity 1 is zero — precisely the case where
+    // the protection matters most, switched off.
+    //
+    // The cost is stated plainly: on a tenant whose capacity is smaller than
+    // the reserve, background monitoring simply does not run. That is the right
+    // way round. Monitoring is a convenience; an operator locked out of their
+    // own panel while diagnosing an outage is not.
+    const floor = reserve <= 0 ? 0 : Math.max(1, Math.min(reserve, capacity));
     // Tokens as of `at`: what was there, plus what accrued since, capped.
     const accrued = sql`LEAST(
       ${capacity}::double precision,
@@ -371,11 +504,22 @@ export class DrizzlePanelRepository implements PanelRepository {
         + GREATEST(0, EXTRACT(EPOCH FROM (${at}::timestamptz - ${panelProbeBudgets.refilledAt})) * 1000)
           * ${refillPerMs}::double precision
     )`;
+    // A tenant with no row has a full bucket. The insert IS the take, so it has
+    // to answer the same question the update branch does: does spending one
+    // leave the floor behind? At capacity 1 with a floor of 1 the answer is no,
+    // and the monitor is refused before the row is ever created — which is what
+    // stops the very first background probe from taking the token an operator
+    // is entitled to.
+    if (capacity < 1 + floor) {
+      // Not "try again later" but "not until this tenant's capacity is
+      // configured higher". Reported as a full refill of the bucket, which is
+      // finite and the soonest anything could change — an infinity here would
+      // poison every caller that turns this into a delay or a retry-after
+      // header.
+      return { permitted: false, retryAfterMs: Math.ceil(capacity / refillPerMs) };
+    }
     const taken = await tx.tx
       .insert(panelProbeBudgets)
-      // A tenant with no row has a full bucket, so the floor is satisfied
-      // whenever the capacity itself clears it. `onConflictDoNothing` is not
-      // an option here: the insert IS the take.
       .values({ tenantId: scope.tenantId, tokens: capacity - 1, refilledAt: at })
       .onConflictDoUpdate({
         target: panelProbeBudgets.tenantId,
@@ -408,6 +552,57 @@ export class DrizzlePanelRepository implements PanelRepository {
 }
 
 /**
+ * A claimed tenant list as a parameterised `VALUES` list.
+ *
+ * Every id is a BOUND parameter, never text spliced into the statement. These
+ * ids come from the database a moment earlier and are UUIDs, but "the input is
+ * already trusted" is the reasoning that puts an injection in a codebase, and a
+ * list built by concatenation is one refactor away from taking its ids from
+ * somewhere else.
+ *
+ * `VALUES` rather than `unnest(... ::uuid[])` for a plainer reason: drizzle's
+ * `sql` template expands a JavaScript array into one placeholder PER ELEMENT,
+ * so an array handed to `unnest` never arrives as an array at all — the query
+ * ran, matched nothing, and the monitor quietly discovered no panels.
+ */
+function tenantList(tenantIds: readonly string[]): SQL {
+  return sql.join(
+    tenantIds.map((id) => sql`(${id}::uuid)`),
+    sql`, `,
+  );
+}
+
+/**
+ * The due-panel scan, as a statement rather than a call.
+ *
+ * Exported so the plan regression test can run `EXPLAIN (ANALYZE, BUFFERS)`
+ * over EXACTLY what production runs. A test that retyped the SQL would go on
+ * asserting a bounded plan for a query the repository no longer issues, which
+ * is the failure mode that makes plan tests worthless.
+ */
+export function dueForTenantsQuery(
+  tenantIds: readonly string[],
+  now: Date,
+  perTenant: number,
+  batchSize: number,
+): SQL {
+  return sql`
+      SELECT c.tenant_id, c.panel_id
+        FROM (VALUES ${tenantList(tenantIds)}) AS r(tenant_id)
+       CROSS JOIN LATERAL (
+              SELECT s.tenant_id, s.panel_id, s.next_eligible_at
+                FROM ${panelMonitorSchedule} AS s
+               WHERE s.tenant_id = r.tenant_id
+                 AND s.next_eligible_at <= ${now}
+               ORDER BY s.next_eligible_at ASC, s.panel_id ASC
+               LIMIT ${perTenant}
+            ) AS c
+       ORDER BY c.next_eligible_at ASC, c.panel_id ASC
+       LIMIT ${batchSize}
+    `;
+}
+
+/**
  * Discovery, and the only cross-tenant read in the panels module.
  *
  * A separate class from `DrizzlePanelRepository` because it implements a
@@ -415,96 +610,115 @@ export class DrizzlePanelRepository implements PanelRepository {
  * deliberately does not. Keeping them apart means the cross-tenant query cannot
  * be reached from a tenant-scoped call site by passing one argument fewer.
  *
- * What it returns is two identifiers and a reason. No name, no address, no
- * credential, no health — the monitor takes the tenant id and does everything
- * else through the tenant-scoped repository, so the blast radius of this class
- * is a list of ids.
+ * Every statement here is bounded by the number of TENANTS claimed or by the
+ * per-tenant share, and never by how many panels are due. That is the whole
+ * design: the previous version ranked the entire due population with a window
+ * function and then took fifty rows, so a hundred thousand overdue panels meant
+ * a hundred thousand rows ranked and sorted every thirty seconds to probe
+ * fifty of them.
  */
 export class DrizzlePanelMonitorRepository implements PanelMonitorRepository {
   constructor(private readonly db: Database) {}
 
-  async dueForMonitoring(now: Date, limit: number): Promise<DuePanel[]> {
+  async claimTenants(now: Date, limit: number): Promise<string[]> {
+    if (limit <= 0) return [];
     /**
-     * Whether the panel or its credentials changed after the last probe.
+     * One statement: choose the turn and take it.
      *
-     * The stored answer describes a configuration that no longer exists, so it
-     * is not an answer about this panel any more. An operator who has just
-     * corrected an address or replaced a password should not wait out a
-     * backoff to learn whether the fix worked.
+     * `FOR UPDATE SKIP LOCKED` on the inner select is what makes two monitor
+     * replicas take disjoint tenants instead of both working the tenant at the
+     * front of the queue. The `UPDATE` moving `last_served_at` is the turn
+     * being spent, and it commits with the claim — so a replica that dies
+     * mid-tick has still spent the turn, which is the safe direction: a tenant
+     * waits one extra round rather than being served twice while another waits
+     * for ever.
      *
-     * Written as a comparison against the stored `checked_at` rather than by
-     * clearing the health row: erasing the previous result to force a re-probe
-     * would throw away `last_healthy_at` and the state an operator is looking
-     * at, to communicate something the timestamps already say.
-     *
-     * `-infinity` for an absent credential timestamp, so `GREATEST` over three
-     * columns of which two are null is the one that is set, and not null.
+     * Bounded by the number of tenants, which on this deployment model is tens.
+     * It is emphatically NOT bounded by the number of due panels, and that is
+     * the property the whole two-phase shape exists to buy.
      */
-    const reconfigured = sql`(
-      ${panels.updatedAt} > ${panelHealth.checkedAt}
-      OR GREATEST(
-           COALESCE(${panelCredentials.usernameSetAt}, '-infinity'::timestamptz),
-           COALESCE(${panelCredentials.passwordSetAt}, '-infinity'::timestamptz),
-           COALESCE(${panelCredentials.apiTokenSetAt}, '-infinity'::timestamptz)
-         ) > ${panelHealth.checkedAt}
-    )`;
-
-    const result = await this.db.execute<{
-      tenant_id: string;
-      panel_id: string;
-      reason: string;
-    }>(sql`
-      WITH due AS (
-        SELECT
-          ${panels.tenantId} AS tenant_id,
-          ${panels.id} AS panel_id,
-          -- A panel that has never been probed sorts by when it was created,
-          -- so the queue is deterministic for them too rather than depending
-          -- on whatever order the scan happened to produce.
-          COALESCE(${panelHealth.nextProbeAt}, ${panels.createdAt}) AS due_at,
-          CASE
-            WHEN ${panelHealth.panelId} IS NULL THEN 'NEVER_CHECKED'
-            WHEN ${reconfigured} THEN 'CONFIGURATION_CHANGED'
-            ELSE 'INTERVAL_ELAPSED'
-          END AS reason
-        FROM ${panels}
-        LEFT JOIN ${panelHealth} ON ${panelHealth.panelId} = ${panels.id}
-        LEFT JOIN ${panelCredentials} ON ${panelCredentials.panelId} = ${panels.id}
-        -- ACTIVE only, and this predicate is also the partial index's
-        -- predicate. A DISABLED or ARCHIVED panel is not skipped downstream;
-        -- it is not in the index this query reads.
-        WHERE ${panels.status} = 'ACTIVE'
-          AND (
-            ${panelHealth.panelId} IS NULL
-            OR ${panelHealth.nextProbeAt} <= ${now}
-            OR ${reconfigured}
-          )
-      ),
-      ranked AS (
-        SELECT
-          due.*,
-          -- Tenant fairness. Rank 1 is every tenant's most overdue panel, rank
-          -- 2 their second, and the outer ORDER BY takes all the rank 1s
-          -- before any rank 2. An ORDER BY due_at LIMIT n instead would let
-          -- one tenant with a hundred overdue panels fill every cycle for
-          -- ever. panel_id breaks the tie so the order is total and stable.
-          row_number() OVER (
-            PARTITION BY due.tenant_id
-            ORDER BY due.due_at ASC, due.panel_id ASC
-          ) AS rn
-        FROM due
-      )
-      SELECT tenant_id, panel_id, reason
-      FROM ranked
-      ORDER BY rn ASC, due_at ASC, panel_id ASC
-      LIMIT ${limit}
+    const claimed = await this.db.execute<{ tenant_id: string }>(sql`
+      UPDATE ${panelMonitorTenants} AS t
+         SET last_served_at = ${now}
+       WHERE t.tenant_id IN (
+             SELECT r.tenant_id
+               FROM ${panelMonitorTenants} AS r
+              WHERE r.next_eligible_at <= ${now}
+              ORDER BY r.last_served_at ASC, r.tenant_id ASC
+              LIMIT ${limit}
+                FOR UPDATE SKIP LOCKED
+           )
+      RETURNING t.tenant_id
     `);
-    return result.rows.map((row) => ({
-      tenantId: row.tenant_id,
-      panelId: row.panel_id,
-      // Narrowed from the CASE above, which produces exactly these three.
-      reason: row.reason as MonitorDueReason,
-    }));
+    return claimed.rows.map((row) => row.tenant_id);
+  }
+
+  async dueForTenants(
+    tenantIds: readonly string[],
+    now: Date,
+    perTenant: number,
+    batchSize: number,
+  ): Promise<DuePanel[]> {
+    if (tenantIds.length === 0 || perTenant <= 0 || batchSize <= 0) return [];
+    /**
+     * One bounded index range scan per claimed tenant.
+     *
+     * `LATERAL` with a `LIMIT` inside is the shape that matters: for each
+     * tenant the planner walks `panel_monitor_schedule_due_idx` forward from
+     * the start of that tenant's range and stops after `perTenant` entries. No
+     * sort of the due population, no window function, and nothing read that is
+     * not returned.
+     *
+     * There is deliberately NO join to `panels` here, and that is a correction
+     * rather than an omission. A `status = 'ACTIVE'` predicate looked like
+     * cheap defence in depth, and measurement said otherwise: with a join in
+     * the LATERAL the planner is free to fetch every one of the tenant's
+     * eligible rows, join them, and only then sort and limit — which it does
+     * exactly when many rows share a timestamp, and which the plan regression
+     * test caught reading five hundred rows to return five.
+     *
+     * The status filter is the schedule itself. A panel that is not ACTIVE is
+     * eligible in year 9999, written in the same transaction as the status
+     * change, so a `DISABLED` panel is not skipped by this scan — it is outside
+     * the range the scan reads. The probe core then checks the status again
+     * against the row it actually reads, which covers the window between this
+     * query and the probe. Two enforcement points, neither of which costs the
+     * bound.
+     */
+    const result = await this.db.execute<{ tenant_id: string; panel_id: string }>(
+      dueForTenantsQuery(tenantIds, now, perTenant, batchSize),
+    );
+    return result.rows.map((row) => ({ tenantId: row.tenant_id, panelId: row.panel_id }));
+  }
+
+  async refreshTenantBounds(tenantIds: readonly string[]): Promise<void> {
+    if (tenantIds.length === 0) return;
+    /**
+     * Put each claimed tenant's lower bound back where its own schedule says.
+     *
+     * One index-ordered `LIMIT 1` per tenant — the cheapest possible read of a
+     * minimum. Suspended-forever when the tenant has no schedule rows at all, so a
+     * tenant with no panels stops being claimed rather than being claimed for
+     * ever to rediscover that.
+     *
+     * Deliberately unconditional rather than "only when the tenant came back
+     * short". A tenant that filled its share may still have had its bound
+     * dragged earlier by an unrelated write, and recomputing costs one index
+     * probe.
+     */
+    await this.db.execute(sql`
+      UPDATE ${panelMonitorTenants} AS t
+         SET next_eligible_at = COALESCE(m.next_eligible_at, ${SCHEDULE_SUSPENDED_AT})
+        FROM (VALUES ${tenantList(tenantIds)}) AS c(tenant_id)
+        LEFT JOIN LATERAL (
+             SELECT s.next_eligible_at
+               FROM ${panelMonitorSchedule} AS s
+              WHERE s.tenant_id = c.tenant_id
+              ORDER BY s.next_eligible_at ASC
+              LIMIT 1
+           ) AS m ON TRUE
+       WHERE t.tenant_id = c.tenant_id
+    `);
   }
 }
 
@@ -580,8 +794,6 @@ function toView(row: Row): PanelView {
             statusCode: row.health.statusCode,
             providerVersion: row.health.providerVersion,
             lastHealthyAt: row.health.lastHealthyAt,
-            consecutiveFailures: row.health.consecutiveFailures,
-            nextProbeAt: row.health.nextProbeAt,
           },
   };
 }
