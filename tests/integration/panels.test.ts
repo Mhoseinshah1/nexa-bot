@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, sql, type SQL } from 'drizzle-orm';
 import {
   auditLogs,
   panelCredentials,
@@ -1413,34 +1413,104 @@ describe('the panel list is a bounded, stable traversal', () => {
 
   it('reads only the page it returns, not the whole collection', async () => {
     // The finding was that one request materialises every live panel with both
-    // child rows joined. A page-shaped RESULT does not prove a page-shaped
-    // QUERY — slicing in JavaScript would give the same answer while the
-    // database still read everything — so this asserts the plan.
-    for (let i = 0; i < 60; i += 1) {
-      await make(owner, tenantA, `plan-${String(i).padStart(3, '0')}`);
-    }
-    const explained = await ctx.container.database.db.execute<{
-      'QUERY PLAN': [{ Plan: Record<string, unknown> }];
-    }>(sql`
-      EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
-      SELECT p.id FROM panels AS p
-       WHERE p.tenant_id = ${tenantA.tenantId}::uuid AND p.status <> 'ARCHIVED'
-       ORDER BY p.name ASC, p.id ASC
-       LIMIT 11
-    `);
-    let read = 0;
-    const walkPlan = (node: Record<string, unknown>): void => {
-      if (node['Relation Name'] === 'panels') read += Number(node['Actual Rows'] ?? 0);
-      for (const child of (node['Plans'] as Record<string, unknown>[] | undefined) ?? []) {
-        walkPlan(child);
-      }
+    // child rows joined. Three things this has to prove, and the first version
+    // proved none of them:
+    //
+    //   - the ACTUAL query. It asserted a hand-written `SELECT p.id FROM
+    //     panels` while production also joined credentials and health, so a
+    //     green plan described a statement nobody issues. It now runs the
+    //     exported `pageKeysQuery` the repository itself calls.
+    //   - at a size where the planner's choice is the interesting one. Sixty
+    //     rows is small enough that a sequential scan is genuinely cheaper and
+    //     the planner is right to take it — which is why this passed locally
+    //     and failed on CI reading all sixty.
+    //   - the CHILD joins too, which are the expensive half.
+    const bulk = 4_000;
+    await ctx.container.database.withClient(async (client) => {
+      await client.query(
+        `INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+         SELECT gen_random_uuid(), $1::uuid, 'bulk-' || lpad(g::text, 7, '0'),
+                'marzban', 'https://panel.example.test', 'ACTIVE'
+           FROM generate_series(1, $2::int) AS g`,
+        [tenantA.tenantId, bulk],
+      );
+      await client.query('ANALYZE panels');
+    });
+
+    const rowsRead = async (statement: SQL, relation: string): Promise<number> => {
+      const explained = await ctx.container.database.db.execute<{
+        'QUERY PLAN': [{ Plan: Record<string, unknown> }];
+      }>(sql`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${statement}`);
+      let read = 0;
+      const walkPlan = (node: Record<string, unknown>): void => {
+        if (node['Relation Name'] === relation) read += Number(node['Actual Rows'] ?? 0);
+        for (const child of (node['Plans'] as Record<string, unknown>[] | undefined) ?? []) {
+          walkPlan(child);
+        }
+      };
+      walkPlan(explained.rows[0]!['QUERY PLAN'][0]!.Plan);
+      return read;
     };
-    walkPlan(explained.rows[0]!['QUERY PLAN'][0]!.Plan);
-    // Sixty panels exist; the page reads twelve — the eleven it asked for plus
-    // the one row an index scan reads past its limit to know it has finished.
-    // Not sixty, which is what materialising the collection would cost.
-    expect(read).toBeLessThanOrEqual(12);
-    expect(read).toBeLessThan(60);
+
+    // Stage one: the page keys, the statement the repository issues.
+    const first = DrizzlePanelRepository.pageKeysQuery(tenantA, {
+      includeArchived: false,
+      limit: 50,
+      cursor: null,
+    });
+    const firstRead = await rowsRead(first, 'panels');
+    expect(firstRead).toBeLessThanOrEqual(51);
+
+    // And it does not grow with the collection: continue deep into it.
+    const deep = DrizzlePanelRepository.pageKeysQuery(tenantA, {
+      includeArchived: false,
+      limit: 50,
+      cursor: { name: 'bulk-0003000', id: '00000000-0000-0000-0000-000000000000' },
+    });
+    expect(await rowsRead(deep, 'panels')).toBeLessThanOrEqual(51);
+
+    // Stage two: the child joins, explained as the REPOSITORY issues them —
+    // `.toSQL()` on the exported builder, not a retyped facsimile. Removing the
+    // page bound from that query is invisible to a result-shaped assertion,
+    // because the extra rows are simply ignored when the page is assembled.
+    const page = await new DrizzlePanelRepository(ctx.container.database.db).list(tenantA, {
+      includeArchived: false,
+      limit: 50,
+    });
+    expect(page.panels).toHaveLength(50);
+    expect(page.nextCursor).not.toBeNull();
+
+    const built = DrizzlePanelRepository.pageRowsQuery(
+      ctx.container.database.db,
+      tenantA,
+      page.panels.map((view) => view.panel.id),
+    ).toSQL();
+    const childRows = await ctx.container.database.withClient(async (client) => {
+      const explained = await client.query<{ 'QUERY PLAN': [{ Plan: Record<string, unknown> }] }>(
+        `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${built.sql}`,
+        built.params as unknown[],
+      );
+      const counts: Record<string, number> = {};
+      const walkPlan = (node: Record<string, unknown>): void => {
+        const relation = node['Relation Name'];
+        if (typeof relation === 'string') {
+          counts[relation] = (counts[relation] ?? 0) + Number(node['Actual Rows'] ?? 0);
+        }
+        for (const child of (node['Plans'] as Record<string, unknown>[] | undefined) ?? []) {
+          walkPlan(child);
+        }
+      };
+      walkPlan(explained.rows[0]!['QUERY PLAN'][0]!.Plan);
+      return counts;
+    });
+    // Every relation the join touches is bounded by the page, not the fleet.
+    expect(childRows['panels'] ?? 0).toBeLessThanOrEqual(50);
+    expect(childRows['panel_credentials'] ?? 0).toBeLessThanOrEqual(50);
+    expect(childRows['panel_health'] ?? 0).toBeLessThanOrEqual(50);
+
+    // Anti-vacuity: the collection really is large, so "50" is a bound and not
+    // the whole table.
+    expect(bulk).toBeGreaterThan(1_000);
   });
 
   it('never returns another tenant a page of its panels', async () => {

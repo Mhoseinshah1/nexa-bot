@@ -1,0 +1,1 @@
+CREATE INDEX "panels_tenant_page_idx" ON "panels" USING btree ("tenant_id","name","id") WHERE status <> 'ARCHIVED';

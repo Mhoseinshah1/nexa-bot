@@ -1,4 +1,4 @@
-import { and, asc, eq, ne, sql, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
 import { errors, PANEL_ERROR_CODES, PANEL_PAGE_DEFAULT } from '@nexa/contracts';
 import type {
   MonitorDeferralReason,
@@ -90,70 +90,118 @@ export class DrizzlePanelRepository implements PanelRepository {
   constructor(private readonly db: Database) {}
 
   /**
-   * One page of panels, newest cursor last.
+   * The page KEYS, and nothing else.
+   *
+   * Exported so the plan regression runs the statement the repository issues
+   * rather than a hand-written facsimile of it. A test that retypes the query
+   * goes on proving a plan for code that no longer exists — which is exactly
+   * what happened here: the first version of that test asserted a simplified
+   * `SELECT p.id FROM panels` while production also joined credentials and
+   * health, so a green plan said nothing about the real request.
+   *
+   * `(tenant_id, name, id) WHERE status <> 'ARCHIVED'` serves it as an index
+   * only scan with the keyset continuation inside the Index Cond.
+   */
+  static pageKeysQuery(
+    scope: TenantContext,
+    options: { includeArchived: boolean; limit: number; cursor: PanelCursor | null },
+  ): SQL {
+    const live = options.includeArchived ? sql`TRUE` : sql`${panels.status} <> 'ARCHIVED'`;
+    const after =
+      options.cursor === null
+        ? sql`TRUE`
+        : sql`(${panels.name}, ${panels.id}) > (${options.cursor.name}, ${options.cursor.id}::uuid)`;
+    return sql`
+      SELECT ${panels.id} AS id, ${panels.name} AS name
+        FROM ${panels}
+       WHERE ${panels.tenantId} = ${scope.tenantId} AND ${live} AND ${after}
+       ORDER BY ${panels.name} ASC, ${panels.id} ASC
+       LIMIT ${options.limit + 1}
+    `;
+  }
+
+  /**
+   * The page's ROWS, for ids the key query already bounded.
+   *
+   * Exported for the same reason as `pageKeysQuery`: the plan regression has to
+   * explain the statement this code issues, and a retyped join in a test proves
+   * a plan for a query nobody runs. The `IN` list is the page, so the expensive
+   * half — the credential and health joins — is bounded by page size and not by
+   * the collection.
+   */
+  static pageRowsQuery(executor: Executor, scope: TenantContext, ids: readonly string[]) {
+    return (
+      executor
+        .select({
+          panel: panels,
+          // FLAT, not a nested group. See `toView` for why.
+          usernameSetAt: panelCredentials.usernameSetAt,
+          passwordSetAt: panelCredentials.passwordSetAt,
+          apiTokenSetAt: panelCredentials.apiTokenSetAt,
+          health: panelHealth,
+        })
+        .from(panels)
+        // The credential row is joined for its TIMESTAMPS only. The ciphertext
+        // columns are not in the projection, so a list response cannot carry one
+        // even if a future author adds a field to the view type.
+        .leftJoin(panelCredentials, eq(panelCredentials.panelId, panels.id))
+        .leftJoin(panelHealth, eq(panelHealth.panelId, panels.id))
+        .where(and(eq(panels.tenantId, scope.tenantId), inArray(panels.id, [...ids])))
+    );
+  }
+
+  /**
+   * One page of panels.
+   *
+   * TWO bounded statements, not one. The keys come first — an index-only walk
+   * of `(name, id)` that reads one row past the page to know whether a next
+   * cursor exists — and only then are the credential and health rows fetched,
+   * for those ids alone. The single joined query it replaced materialised every
+   * live panel of the tenant with both child rows attached before any limit
+   * applied, so the expensive part of the work was the part that scaled.
    *
    * Keyset rather than OFFSET: an offset re-reads and discards everything
-   * before it, so page 200 costs two hundred pages of work, and a panel
-   * inserted or renamed mid-traversal shifts every later page — a caller
-   * walking the collection would silently skip or repeat rows. The key is
-   * `(name, id)`, which is total: names are not unique among live panels of a
-   * tenant only in the sense that an archived one may share a name, so the id
-   * breaks every remaining tie and the traversal has a deterministic order.
-   *
-   * One row is read past the page to decide whether a next cursor exists,
-   * rather than issuing a second count.
+   * before it, and a panel inserted or renamed mid-traversal shifts every later
+   * page, so a caller walking the collection silently skips and repeats rows.
    */
   async list(
     scope: TenantContext,
     options: { includeArchived: boolean; limit?: number; cursor?: PanelCursor | null },
     tx?: TransactionScope,
   ): Promise<{ panels: PanelView[]; nextCursor: PanelCursor | null }> {
+    const executor = executorOf(this.db, tx);
     const limit = options.limit ?? PANEL_PAGE_DEFAULT;
-    const after = options.cursor ?? null;
-    const rows = await executorOf(this.db, tx)
-      .select({
-        panel: panels,
-        // FLAT, not a nested group. See `toView` for why.
-        usernameSetAt: panelCredentials.usernameSetAt,
-        passwordSetAt: panelCredentials.passwordSetAt,
-        apiTokenSetAt: panelCredentials.apiTokenSetAt,
-        health: panelHealth,
-      })
-      .from(panels)
-      // The credential row is joined for its TIMESTAMPS only. The ciphertext
-      // columns are not in the projection, so a list response cannot carry one
-      // even if a future author adds a field to the view type.
-      .leftJoin(panelCredentials, eq(panelCredentials.panelId, panels.id))
-      .leftJoin(panelHealth, eq(panelHealth.panelId, panels.id))
-      .where(
-        and(
-          eq(panels.tenantId, scope.tenantId),
-          options.includeArchived ? undefined : ne(panels.status, 'ARCHIVED'),
-          // The keyset predicate, as a row comparison so the index can serve
-          // it: everything ordered after the cursor's own position.
-          after === null
-            ? undefined
-            : sql`(${panels.name}, ${panels.id}) > (${after.name}, ${after.id}::uuid)`,
-        ),
-      )
-      // Both keys, matching the keyset predicate above. Only the PREDICATE is
-      // falsifiable by test: dropping `panels.id` from this ORDER BY leaves a
-      // walk that still happens to work, because Postgres returns ties in a
-      // stable physical order for this plan. That is a coincidence of the plan
-      // and not a guarantee the SQL standard makes, so the key stays total
-      // here as well — recorded as inconclusive rather than dressed up as a
-      // caught mutation.
-      .orderBy(asc(panels.name), asc(panels.id))
-      .limit(limit + 1);
+    const keys = await executor.execute<{ id: string; name: string }>(
+      DrizzlePanelRepository.pageKeysQuery(scope, {
+        includeArchived: options.includeArchived,
+        limit,
+        cursor: options.cursor ?? null,
+      }),
+    );
 
-    const page = rows.slice(0, limit);
+    const page = keys.rows.slice(0, limit);
+    if (page.length === 0) return { panels: [], nextCursor: null };
+
+    const rows = await DrizzlePanelRepository.pageRowsQuery(
+      executor,
+      scope,
+      page.map((row) => row.id),
+    );
+
+    // The keys decided the order; this restores it. An `IN` returns rows in
+    // whatever order the plan produces, so sorting here rather than trusting it
+    // is what keeps the traversal deterministic across pages.
+    const byId = new Map(rows.map((row) => [row.panel.id, row]));
+    const ordered = page.flatMap((key) => {
+      const row = byId.get(key.id);
+      return row === undefined ? [] : [toView(row)];
+    });
+
     const last = page[page.length - 1];
     return {
-      panels: page.map((row) => toView(row)),
+      panels: ordered,
       nextCursor:
-        rows.length > limit && last !== undefined
-          ? { name: last.panel.name, id: last.panel.id }
-          : null,
+        keys.rows.length > limit && last !== undefined ? { name: last.name, id: last.id } : null,
     };
   }
 

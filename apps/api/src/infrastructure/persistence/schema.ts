@@ -1131,6 +1131,26 @@ export const panels = pgTable(
     uniqueIndex('panels_tenant_name_live_key')
       .on(table.tenantId, table.name)
       .where(sql`status <> 'ARCHIVED'`),
+    /**
+     * The list's page-key traversal: `(tenant, name, id)` over live panels.
+     *
+     * The unique index above nearly covers it and is NOT enough. It stops at
+     * `(tenant_id, name)`, so the total `(name, id)` order needs a sort on top
+     * and the keyset comparison becomes a filter rather than a seek; and with
+     * the id absent the scan cannot be index-only, so every page pays a heap
+     * fetch per row to read a column it already needs for the cursor.
+     *
+     * Measured rather than assumed, on twenty thousand panels: with the unique
+     * index alone the plan is an Index Scan plus an Incremental Sort; with this
+     * one it is an Index Only Scan whose Index Cond carries the
+     * `ROW(name, id) > ROW(...)` continuation.
+     *
+     * Same partial predicate, because the list a caller pages through is the
+     * live one.
+     */
+    index('panels_tenant_page_idx')
+      .on(table.tenantId, table.name, table.id)
+      .where(sql`status <> 'ARCHIVED'`),
     check('panels_status_check', enumCheck('status', PANEL_STATUSES)),
     check('panels_provider_type_check', enumCheck('provider_type', PROVIDER_TYPES)),
     /** An archived panel has a time; a live one does not. Neither state can lie. */

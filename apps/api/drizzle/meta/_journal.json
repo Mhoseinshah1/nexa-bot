@@ -169,6 +169,13 @@
       "when": 1788600712875,
       "tag": "0023_widen_monitor_deferral_reasons",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788631883384,
+      "tag": "0024_panels_pagination_index",
+      "breakpoints": true
     }
   ]
 }
