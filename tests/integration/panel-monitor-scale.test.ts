@@ -4,7 +4,17 @@ import {
   DrizzlePanelMonitorRepository,
   dueForTenantsQuery,
 } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel.repository';
-import { sustainableFreshPanels } from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
+import {
+  effectiveFreshPanelUpperBound,
+  schedulerFreshPanelUpperBound,
+  tenantBudgetFreshPanelUpperBound,
+} from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
+import { PanelMonitorService } from '../../apps/api/src/modules/platform/panels/application/panel-monitor.service';
+import { DrizzlePanelRepository } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel.repository';
+import { providerAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
+import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
+import { DrizzlePanelCredentialStore } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-credentials';
+import type { TenantContext } from '@nexa/contracts';
 import { createTestContext, SEED_IDS, type TestContext } from './harness';
 
 /**
@@ -46,6 +56,7 @@ describe('the panel monitor scheduler at scale', () => {
   let ctx: TestContext;
   const now = new Date('2026-06-01T00:00:00.000Z');
   let tenantIds: string[] = [];
+  let measuredPanelIds: string[] = [];
 
   beforeAll(async () => {
     ctx = await createTestContext();
@@ -92,11 +103,115 @@ describe('the panel monitor scheduler at scale', () => {
       );
       await client.query('ANALYZE panels, panel_monitor_schedule, panel_monitor_tenants');
     });
-  }, 120_000);
+
+    // Only the FIRST tenant gets credentials, and only because the throughput
+    // measurement below needs probes that reach the budget: a panel with no
+    // usable credential is refused before a token is spent, which would measure
+    // the refusal path rather than the bucket. Every other test here is about
+    // the query plan and does not care.
+    const store = new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher);
+    const measured = await ctx.container.database.db.execute<{ id: string }>(
+      sql`SELECT id FROM panels WHERE tenant_id = ${tenantIds[0]!}::uuid`,
+    );
+    measuredPanelIds = measured.rows.map((row) => row.id);
+    const measuredScope = {
+      tenantId: tenantIds[0]! as TenantContext['tenantId'],
+      botInstanceId: null,
+    };
+    await ctx.container.uow.run(measuredScope, async (tx) => {
+      for (const id of measuredPanelIds) {
+        await store.write(
+          measuredScope,
+          id,
+          {
+            username: 'scale-admin',
+            password: 'scale-password-do-not-leak',
+            apiToken: undefined,
+          },
+          now,
+          tx,
+        );
+      }
+    });
+  }, 180_000);
 
   afterAll(async () => {
     await ctx?.close();
   });
+
+  /**
+   * The real monitor, pinned to one tenant, with a real probe budget.
+   *
+   * Everything below the discovery stub is production code: the due scan, the
+   * per-panel claim, `takeProbeBudget`, the probe core and the health write.
+   * Only the tenant claim is fixed, so the measurement is about one tenant's
+   * throughput rather than the rotation across forty.
+   */
+  function monitorFor(
+    tenantId: string,
+    options: {
+      probeBudget: { capacity: number; refillPerMs: number };
+      clockRef: () => Date;
+      discovery: DrizzlePanelMonitorRepository;
+    },
+  ): PanelMonitorService {
+    const clock = { now: () => options.clockRef() };
+    return new PanelMonitorService(
+      {
+        discovery: {
+          claimTenants: async () => [tenantId],
+          dueForTenants: options.discovery.dueForTenants.bind(options.discovery),
+          refreshTenantBounds: options.discovery.refreshTenantBounds.bind(options.discovery),
+          reconcileSchedules: async () => 0,
+          overCapacityTenants: async () => [],
+        },
+        probe: {
+          repository: new DrizzlePanelRepository(ctx.container.database.db),
+          credentials: new DrizzlePanelCredentialStore(
+            ctx.container.database.db,
+            ctx.container.cipher,
+          ),
+          uow: ctx.container.uow,
+          clock,
+          http: new SafeHttpClient({
+            allowLoopback: true,
+            totalTimeoutMs: 1_000,
+            maxResponseBytes: 1_024,
+            maxRetries: 0,
+          }),
+          urlPolicy: { allowLoopback: true },
+          adapters: (type) => ({
+            ...providerAdapter(type),
+            // Instant, so any shortfall measured below is the BUDGET and not
+            // the network — the most favourable latency an installation could
+            // possibly have.
+            probe: async () => ({ ok: true, providerVersion: '1.0.0', degraded: false }),
+          }),
+          probeCooldownMs: 0,
+          probeBudget: options.probeBudget,
+          cadence: {
+            healthyIntervalMs: 10 * 60 * 1000,
+            retryableIntervalMs: 2 * 60 * 1000,
+            nonRetryableIntervalMs: 60 * 60 * 1000,
+          },
+        },
+        guard: ctx.container.guard,
+        audit: ctx.container.audit,
+        opsLog: ctx.container.opsLog,
+        sessions: ctx.container.sessions,
+        uow: ctx.container.uow,
+        clock,
+        ids: ctx.container.ids,
+        logger: ctx.container.logger,
+        batchSize: 50,
+        tenantsPerTick: 1,
+        concurrency: 4,
+        budgetReserve: 0,
+        freshPanelUpperBound: 60,
+      },
+      30_000,
+    );
+  }
 
   it('built the fixture it claims to have built', async () => {
     // A plan assertion over an empty table proves nothing, so the size is
@@ -253,27 +368,99 @@ describe('the panel monitor scheduler at scale', () => {
   });
 
   describe('the freshness promise is a throughput promise too', () => {
-    it('reports the tenants whose population its bucket cannot keep fresh', async () => {
-      // Codex's reproduction, made deterministic. The cadence check at boot
-      // proves a PROBED panel is refreshed in time; it cannot prove every panel
-      // gets probed, which the tenant's bucket decides. With the shipped
-      // defaults — 30 tokens per 5 minutes, a 10-minute healthy interval — the
-      // sustainable population is 60 panels per tenant, so a tenant with 500
-      // healthy panels cannot have them all fresh at any moment however the
-      // batch size, tick and concurrency are tuned: there are only six tokens a
-      // minute to spend.
-      const sustainable = sustainableFreshPanels(30, 300_000, 10 * 60 * 1000);
-      expect(sustainable).toBe(60);
+    it('cannot keep a 500-panel tenant fresh on the shipped budget, measured', async () => {
+      // Codex's reproduction, run rather than argued. The real monitor, the
+      // real probe budget and the real due scan, over ten simulated minutes of
+      // an instant-answering provider — the most favourable latency there is,
+      // so any shortfall is the BUDGET and not the network.
+      const LIMIT = 30;
+      const WINDOW = 300_000;
+      const INTERVAL = 10 * 60 * 1000;
+      const budgetBound = tenantBudgetFreshPanelUpperBound(LIMIT, WINDOW, INTERVAL);
+      expect(budgetBound).toBe(60);
+
+      const tenant = tenantIds[0]!;
+      const real = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      let clock = new Date(now.getTime());
+
+      const m = monitorFor(tenant, {
+        probeBudget: { capacity: LIMIT, refillPerMs: LIMIT / WINDOW },
+        clockRef: () => clock,
+        discovery: real,
+      });
+
+      // Twenty ticks of thirty seconds: one whole healthy interval.
+      for (let tick = 0; tick < INTERVAL / 30_000; tick += 1) {
+        await m.tick();
+        clock = new Date(clock.getTime() + 30_000);
+      }
+
+      // Measured on the artifact the promise is about: how many of this
+      // tenant's panels have a health row at all after one full interval.
+      const stored = await ctx.container.database.db.execute<{ n: number }>(sql`
+        SELECT count(*)::int AS n
+          FROM panel_health h
+          JOIN panels p ON p.id = h.panel_id
+         WHERE p.tenant_id = ${tenant}::uuid
+      `);
+      const refreshed = stored.rows[0]?.n ?? 0;
+
+      // Anti-vacuity: the loop really probed, so "fewer than 500" is a
+      // measurement and not an empty set.
+      expect(refreshed).toBeGreaterThan(0);
+      // The bucket starts full and refills at six a minute, so ten minutes buys
+      // about 30 + 60 probes. Nowhere near 500 — this tenant cannot have all
+      // its health rows fresh at any moment, whatever the batch size is.
+      expect(refreshed).toBeLessThan(PANELS_PER_TENANT);
+      expect(refreshed).toBeLessThanOrEqual(LIMIT + (INTERVAL / WINDOW) * LIMIT);
+      // And the shortfall is an order of magnitude, not a rounding error.
+      expect(refreshed * 4).toBeLessThan(PANELS_PER_TENANT);
+    });
+
+    it('reports the tenants a configuration cannot keep fresh', async () => {
+      const bound = effectiveFreshPanelUpperBound({
+        tenantLimit: 30,
+        windowMs: 300_000,
+        batchSize: 50,
+        tickMs: 30_000,
+        healthyIntervalMs: 10 * 60 * 1000,
+      });
+      expect(bound).toBe(60);
 
       const repo = new DrizzlePanelMonitorRepository(ctx.container.database.db);
-      const over = await repo.overCapacityTenants(sustainable);
-      // The fixture builds 40 tenants of 500 ACTIVE panels each.
+      const over = await repo.overCapacityTenants(bound);
       expect(over.length).toBeGreaterThan(0);
-      for (const tenant of over) expect(tenant.panels).toBeGreaterThan(sustainable);
+      for (const tenant of over) expect(tenant.panels).toBeGreaterThan(bound);
 
-      // And the bound is not a fixed number: a bigger bucket supports more.
-      expect(sustainableFreshPanels(300, 300_000, 10 * 60 * 1000)).toBe(600);
+      // A bucket large enough for this population clears the report.
       expect(await repo.overCapacityTenants(600)).toHaveLength(0);
+    });
+
+    it('reports the SCHEDULER bound when the batch is the bottleneck', async () => {
+      // A very large bucket cannot help if the loop can only start one probe a
+      // minute. The effective bound must follow the smaller constraint, and the
+      // over-capacity report must use it — otherwise an installation with a
+      // generous budget and a starved scheduler is told everything is fine.
+      const budgetBound = tenantBudgetFreshPanelUpperBound(3_000, 300_000, 10 * 60 * 1000);
+      const schedulerBound = schedulerFreshPanelUpperBound(1, 60_000, 10 * 60 * 1000);
+      expect(budgetBound).toBe(6_000);
+      expect(schedulerBound).toBe(10);
+
+      const effective = effectiveFreshPanelUpperBound({
+        tenantLimit: 3_000,
+        windowMs: 300_000,
+        batchSize: 1,
+        tickMs: 60_000,
+        healthyIntervalMs: 10 * 60 * 1000,
+      });
+      expect(effective).toBe(schedulerBound);
+      expect(effective).toBeLessThan(budgetBound);
+
+      const repo = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      // Under the budget bound alone the fleet looks supportable; under the
+      // effective bound every tenant is over.
+      expect(await repo.overCapacityTenants(budgetBound)).toHaveLength(0);
+      expect(await repo.overCapacityTenants(effective)).toHaveLength(TENANTS);
     });
   });
 });

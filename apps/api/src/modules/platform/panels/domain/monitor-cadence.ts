@@ -78,39 +78,95 @@ export const MONITOR_SPREAD_FRACTION = 0.1;
  * fleet rather than the average one.
  */
 /**
- * How many panels ONE tenant can keep inside the freshness window.
+ * The most panels one tenant's PROBE BUDGET could keep inside the freshness
+ * window. An upper bound from one constraint, not the supported population.
  *
- * The freshness promise has two independent bounds and only one of them was
- * ever checked. `healthyCadenceFitsFreshness` proves the CADENCE fits: a panel
- * that is probed on schedule is refreshed before it goes stale. It says
- * nothing about whether every panel can be probed on schedule, and that is a
- * throughput question answered by the tenant's probe bucket.
- *
- * Background probes spend the same bucket as an operator's manual tests — one
- * bucket per tenant is the whole point of the bound — so the sustainable
- * background rate is the bucket's REFILL rate. The reserve floor holds tokens
- * back for the operator; it does not change the long-run rate, only the
- * standing stock. To keep `n` panels fresh at interval `i` the loop must
- * complete `n / i` probes per unit time, so:
- *
- *     n <= refill rate x healthy interval
+ * Background probes spend the same per-tenant bucket as an operator's manual
+ * tests — one bucket per tenant is the whole point of the bound — so the
+ * long-run background rate cannot exceed the bucket's REFILL rate. The reserve
+ * floor holds tokens back for the operator; it does not change that rate, only
+ * the standing stock. To keep `n` panels fresh at interval `i` the loop must
+ * complete `n / i` probes per unit time, so `n <= refill x i`.
  *
  * With the shipped defaults — 30 tokens per 5 minutes, a 10-minute interval —
- * that is 60 panels per tenant. A tenant with 500 healthy panels cannot have
- * them all fresh at any moment, however the batch size, tick and concurrency
- * are tuned: those decide how quickly the loop can spend tokens, and there are
- * only six a minute to spend.
+ * that is 60. Two caveats that make this a CEILING and not a promise:
  *
- * Raising it is a deliberate act with a cost measured on somebody else's
- * server: `PANEL_PROBE_TENANT_LIMIT` is an outbound rate against a customer's
- * panels, so this function reports the bound rather than widening it.
+ *   - It assumes the background lane has the whole refill rate. Manual "Test
+ *     connection" probes come out of the same bucket, so sustained manual
+ *     traffic lowers what is left for the monitor, one probe for one probe.
+ *   - It is one of several bounds. The scheduler can impose a LOWER one; see
+ *     `schedulerFreshPanelUpperBound` and `effectiveFreshPanelUpperBound`.
  */
-export function sustainableFreshPanels(
+export function tenantBudgetFreshPanelUpperBound(
   tenantLimit: number,
   windowMs: number,
   healthyIntervalMs: number,
 ): number {
   return Math.floor((tenantLimit / windowMs) * healthyIntervalMs);
+}
+
+/**
+ * The most panels the SCHEDULER could start on within one freshness window.
+ *
+ * A tick discovers at most `batchSize` candidates, and a tenant claimed alone
+ * gets the whole batch, so across one healthy interval the loop can begin at
+ * most `batchSize x (interval / tick)` probes for that tenant. Ample at the
+ * shipped defaults — 50 x 20 = 1000, far above the budget's 60 — but a small
+ * batch or a slow tick makes this the binding constraint instead, and then the
+ * budget ceiling is unreachable however large the bucket is.
+ *
+ * An upper bound on STARTS, not completions: see the note on latency in
+ * `effectiveFreshPanelUpperBound`.
+ */
+export function schedulerFreshPanelUpperBound(
+  batchSize: number,
+  tickMs: number,
+  healthyIntervalMs: number,
+): number {
+  return Math.floor(batchSize * (healthyIntervalMs / tickMs));
+}
+
+/**
+ * The most panels one tenant can keep fresh under EVERY statically knowable
+ * bound: the smaller of the budget ceiling and the scheduler ceiling.
+ *
+ * Deliberately not called the sustainable population, because a third
+ * constraint is not statically knowable. Throughput also depends on how long a
+ * probe takes, and that is a round trip to somebody else's server: a fleet that
+ * answers in 40ms and one that answers in 9s have the same configuration and
+ * very different capacity. `worstCaseLatencyFreshPanelUpperBound` gives the
+ * floor of that range — what holds when every probe runs to the HTTP timeout —
+ * and the truth for a real installation sits between the two and has to be
+ * measured, not asserted.
+ */
+export function effectiveFreshPanelUpperBound(bounds: {
+  readonly tenantLimit: number;
+  readonly windowMs: number;
+  readonly batchSize: number;
+  readonly tickMs: number;
+  readonly healthyIntervalMs: number;
+}): number {
+  return Math.min(
+    tenantBudgetFreshPanelUpperBound(bounds.tenantLimit, bounds.windowMs, bounds.healthyIntervalMs),
+    schedulerFreshPanelUpperBound(bounds.batchSize, bounds.tickMs, bounds.healthyIntervalMs),
+  );
+}
+
+/**
+ * What concurrency can carry when every probe is as slow as it may be.
+ *
+ * The pessimistic end of the latency range: `concurrency` probes in flight,
+ * each taking the full `PANEL_HTTP_TIMEOUT_MS`. Reported separately from the
+ * bounds above because it is a worst case rather than a limit — a healthy fleet
+ * is far above it — and quoting it as the capacity would be as wrong in one
+ * direction as ignoring latency is in the other.
+ */
+export function worstCaseLatencyFreshPanelUpperBound(
+  concurrency: number,
+  httpTimeoutMs: number,
+  healthyIntervalMs: number,
+): number {
+  return Math.floor(concurrency * (healthyIntervalMs / httpTimeoutMs));
 }
 
 export function maxHealthyIntervalMs(tickMs: number): number {

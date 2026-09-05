@@ -250,34 +250,55 @@ worker.
 ## What one installation can keep fresh
 
 Panel health carries a freshness window (`PANEL_HEALTH_FRESH_FOR_MS`, fifteen
-minutes), and meeting it takes two separate things. The cadence has to fit
-inside the window — refused at boot if it does not — and the tenant's probe
-budget has to be able to complete that many probes per interval. Only the first
-was ever checked, so an installation could validate every setting and still
-report most of its panels stale.
+minutes), and meeting it takes more than a cadence that fits. The cadence check
+at boot proves a panel that IS probed is refreshed in time; it says nothing
+about whether every panel gets probed. That is throughput, and it has several
+separate ceilings.
 
-Background probes spend the same per-tenant bucket as an operator's manual
-tests; one bucket per tenant is the whole point of the bound. So the sustainable
-population is the bucket's refill rate times the healthy interval:
+**The tenant budget ceiling.** Background probes spend the same per-tenant
+bucket as an operator's manual tests, so the long-run background rate cannot
+exceed the bucket's refill rate:
 
-    panels per tenant  =  (PANEL_PROBE_TENANT_LIMIT / PANEL_PROBE_TENANT_WINDOW_MS)
-                          x PANEL_MONITOR_HEALTHY_INTERVAL_MS
+    (PANEL_PROBE_TENANT_LIMIT / PANEL_PROBE_TENANT_WINDOW_MS)
+      x PANEL_MONITOR_HEALTHY_INTERVAL_MS
 
-With the shipped defaults — 30 tokens per 5 minutes, a 10-minute interval —
-that is **60 panels per tenant**. Batch size, tick interval and concurrency
-decide how quickly the loop can spend tokens; they cannot create more. A tenant
-with five hundred panels on the default budget will have most of its health
-rows stale at any moment, and no amount of tuning those three settings changes
-it.
+Defaults: 30 tokens per 5 minutes over a 10-minute interval = **60 panels**.
 
-The monitor says so rather than promising otherwise. At startup it counts each
-tenant's ACTIVE panels and logs a warning naming any tenant above the bound,
-with the number its configuration actually supports.
+**The scheduler ceiling.** A tick discovers at most `PANEL_MONITOR_BATCH_SIZE`
+candidates, so across one interval the loop can START at most
 
-Raising it is a deliberate act whose cost lands on somebody else's server:
-`PANEL_PROBE_TENANT_LIMIT` is an outbound rate against a customer's panels, and
-`docs/vps-acceptance.md` is where a real figure for a real installation
-belongs. The monitor will not widen it on the installation's behalf.
+    PANEL_MONITOR_BATCH_SIZE x (PANEL_MONITOR_HEALTHY_INTERVAL_MS / PANEL_MONITOR_TICK_MS)
+
+Defaults: 50 x 20 = 1000. Ample — but a small batch or a slow tick makes this
+the binding constraint instead, and then the bucket ceiling is unreachable
+however large the bucket is.
+
+**The effective bound is the smaller of the two.** That is the number the
+monitor reports against. Neither ceiling can raise the other.
+
+Two things this bound is NOT:
+
+- It is not a guarantee. Throughput also depends on how long a probe takes, and
+  that is a round trip to somebody else's server: a fleet answering in 40ms and
+  one answering in 9s have identical configuration and very different capacity.
+  The pessimistic end — `PANEL_MONITOR_CONCURRENCY` probes in flight, each
+  running to `PANEL_HTTP_TIMEOUT_MS` — is 4 x (10min / 10s) = 240 panels at the
+  defaults. The truth for a real installation lies between that and the bound
+  above, and has to be measured on the installation, not asserted here.
+- It does not assume an idle operator. Manual "Test connection" probes come out
+  of the same bucket, one for one, so sustained manual traffic lowers what is
+  left for the monitor.
+
+A tenant ABOVE the effective bound certainly cannot be kept fresh, which is what
+makes it worth reporting: at startup the monitor counts each tenant's ACTIVE
+panels and logs a warning naming any tenant over it. A tenant below it is not
+thereby guaranteed.
+
+Raising the bound is a deliberate act whose cost lands on somebody else's
+server: `PANEL_PROBE_TENANT_LIMIT` is an outbound rate against a customer's
+panels. `docs/vps-acceptance.md` is where a measured figure for a real
+installation belongs. The monitor will not widen it on the installation's
+behalf.
 
 ## Backups
 

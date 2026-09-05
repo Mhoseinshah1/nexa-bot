@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { isNexaError } from '@nexa/contracts';
 import { loadConfig } from '../../apps/api/src/infrastructure/config/load-config';
-import { sustainableFreshPanels } from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
+import {
+  effectiveFreshPanelUpperBound,
+  schedulerFreshPanelUpperBound,
+  tenantBudgetFreshPanelUpperBound,
+  worstCaseLatencyFreshPanelUpperBound,
+} from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
 
 const KEK = Buffer.alloc(32, 7).toString('base64');
 
@@ -448,14 +453,53 @@ describe('the reserve must leave the monitor a token it can reach', () => {
   });
 });
 
-describe('the supported panel population is derived, not asserted', () => {
-  it('is the bucket refill rate times the healthy interval', () => {
-    // Defaults: 30 tokens per 5 minutes is six a minute; ten minutes of those
-    // is sixty panels per tenant.
-    expect(sustainableFreshPanels(30, 300_000, 10 * 60 * 1000)).toBe(60);
-    // Ten times the bucket supports ten times the population.
-    expect(sustainableFreshPanels(300, 300_000, 10 * 60 * 1000)).toBe(600);
-    // A shorter interval means more probes per panel, so fewer panels.
-    expect(sustainableFreshPanels(30, 300_000, 5 * 60 * 1000)).toBe(30);
+describe('the fresh-panel bound is the smallest of several, not one number', () => {
+  it('derives the tenant budget ceiling from the refill rate', () => {
+    // 30 tokens per 5 minutes is six a minute; ten minutes of those is sixty.
+    expect(tenantBudgetFreshPanelUpperBound(30, 300_000, 10 * 60 * 1000)).toBe(60);
+    expect(tenantBudgetFreshPanelUpperBound(300, 300_000, 10 * 60 * 1000)).toBe(600);
+    // A shorter interval needs more probes per panel, so it supports fewer.
+    expect(tenantBudgetFreshPanelUpperBound(30, 300_000, 5 * 60 * 1000)).toBe(30);
+  });
+
+  it('derives the scheduler ceiling from the batch and the tick', () => {
+    // 50 candidates every 30s is 1000 starts across a 10-minute interval.
+    expect(schedulerFreshPanelUpperBound(50, 30_000, 10 * 60 * 1000)).toBe(1000);
+    expect(schedulerFreshPanelUpperBound(1, 60_000, 10 * 60 * 1000)).toBe(10);
+  });
+
+  it('takes the smaller of the two, whichever it is', () => {
+    // At the shipped defaults the BUDGET binds: 60 against the scheduler's 1000.
+    expect(
+      effectiveFreshPanelUpperBound({
+        tenantLimit: 30,
+        windowMs: 300_000,
+        batchSize: 50,
+        tickMs: 30_000,
+        healthyIntervalMs: 10 * 60 * 1000,
+      }),
+    ).toBe(60);
+
+    // A large bucket does not help when the scheduler cannot start the probes.
+    // This is the case the first version of this model got wrong by asserting
+    // that batch size and tick "cannot change it": they cannot RAISE the
+    // budget ceiling, but they impose one of their own.
+    expect(
+      effectiveFreshPanelUpperBound({
+        tenantLimit: 3_000,
+        windowMs: 300_000,
+        batchSize: 1,
+        tickMs: 60_000,
+        healthyIntervalMs: 10 * 60 * 1000,
+      }),
+    ).toBe(10);
+    expect(tenantBudgetFreshPanelUpperBound(3_000, 300_000, 10 * 60 * 1000)).toBe(6_000);
+  });
+
+  it('reports the worst-case latency figure separately, as a worst case', () => {
+    // Four in flight, each running to a 10s timeout, across ten minutes.
+    expect(worstCaseLatencyFreshPanelUpperBound(4, 10_000, 10 * 60 * 1000)).toBe(240);
+    // Not folded into the effective bound: it is the pessimistic end of a range
+    // whose real value is a round trip to somebody else's server.
   });
 });

@@ -156,7 +156,7 @@ describe('the panel health monitor', () => {
       tenantsPerTick?: number;
       concurrency?: number;
       budgetReserve?: number;
-      sustainableFreshPanels?: number;
+      freshPanelUpperBound?: number;
       probe?: Partial<ProbeCoreDeps>;
       /**
        * A stand-in for the discovery query.
@@ -186,7 +186,7 @@ describe('the panel health monitor', () => {
         tenantsPerTick: options.tenantsPerTick ?? 10,
         concurrency: options.concurrency ?? 4,
         budgetReserve: options.budgetReserve ?? 0,
-        sustainableFreshPanels: options.sustainableFreshPanels ?? 60,
+        freshPanelUpperBound: options.freshPanelUpperBound ?? 60,
       },
       30_000,
     );
@@ -322,7 +322,7 @@ describe('the panel health monitor', () => {
           tenantsPerTick: 10,
           concurrency: 4,
           budgetReserve: 0,
-          sustainableFreshPanels: 60,
+          freshPanelUpperBound: 60,
         },
         30_000,
       );

@@ -90,14 +90,16 @@ export interface PanelMonitorDeps {
    */
   readonly budgetReserve: number;
   /**
-   * How many panels ONE tenant can keep inside the freshness window.
+   * An UPPER BOUND on how many panels one tenant can keep inside the freshness
+   * window — the smaller of the probe budget's ceiling and the scheduler's.
    *
-   * Computed once by the composition root from the probe budget and the healthy
-   * interval — see `sustainableFreshPanels`. Passed in rather than recomputed
-   * here, so the number an operator is warned about is the number their
-   * configuration actually implies.
+   * Computed once by the composition root; see `effectiveFreshPanelUpperBound`.
+   * A bound rather than a capacity: probe latency is a round trip to somebody
+   * else's server and cannot be known here, and manual tests spend the same
+   * bucket. A tenant ABOVE this number certainly cannot be kept fresh, which is
+   * what makes it worth reporting; one below it is not thereby guaranteed.
    */
-  readonly sustainableFreshPanels: number;
+  readonly freshPanelUpperBound: number;
 }
 
 export interface MonitorTickResult {
@@ -302,7 +304,7 @@ export class PanelMonitorService {
       // tenant. Reporting the shortfall is the honest alternative to widening
       // an outbound rate against somebody else's server on the installation's
       // behalf.
-      const over = await this.deps.discovery.overCapacityTenants(this.deps.sustainableFreshPanels);
+      const over = await this.deps.discovery.overCapacityTenants(this.deps.freshPanelUpperBound);
       this.reconciled = true;
       if (created > 0) {
         this.deps.logger.warn({ created }, 'panel monitor created missing scheduler rows');
@@ -312,11 +314,14 @@ export class PanelMonitorService {
           {
             tenantId: tenant.tenantId,
             panels: tenant.panels,
-            sustainable: this.deps.sustainableFreshPanels,
+            upperBound: this.deps.freshPanelUpperBound,
           },
-          'tenant has more active panels than its probe budget can keep fresh; ' +
-            'health for this tenant will read stale for some panels until ' +
-            'PANEL_PROBE_TENANT_LIMIT or PANEL_PROBE_TENANT_WINDOW_MS is raised',
+          'tenant has more active panels than this configuration can keep fresh; ' +
+            'some health rows will read stale. The bound is the smaller of the ' +
+            'probe budget ceiling (PANEL_PROBE_TENANT_LIMIT / ' +
+            'PANEL_PROBE_TENANT_WINDOW_MS) and the scheduler ceiling ' +
+            '(PANEL_MONITOR_BATCH_SIZE / PANEL_MONITOR_TICK_MS), and sustained ' +
+            'manual probes lower it further because they spend the same bucket',
         );
       }
     }
