@@ -407,6 +407,21 @@ export const configSchema = z
     /** Panels considered in one tick. The query is LIMITed by this. */
     PANEL_MONITOR_BATCH_SIZE: z.coerce.number().int().min(1).max(1_000).default(50),
     /**
+     * How often the monitor re-assesses what this installation can keep fresh.
+     *
+     * Two aggregates over `panels`, so not every tick — and not once at startup
+     * either, because the population an operator GROWS into is exactly the one
+     * that matters and a boot-time-only check would never see it. Ten minutes
+     * is slow enough to be free and quick enough that an operator who doubles
+     * their fleet hears about it in the same sitting.
+     */
+    PANEL_MONITOR_CAPACITY_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(60_000)
+      .max(24 * 60 * 60 * 1000)
+      .default(10 * 60 * 1000),
+    /**
      * Tenants given a turn in one tick — the fairness dial.
      *
      * With `d` tenants due and this many claimed per tick, no tenant waits

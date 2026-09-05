@@ -2,10 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { isNexaError } from '@nexa/contracts';
 import { loadConfig } from '../../apps/api/src/infrastructure/config/load-config';
 import {
-  effectiveFreshPanelUpperBound,
   schedulerFreshPanelUpperBound,
+  slowProbeLatencyModelFigure,
   tenantBudgetFreshPanelUpperBound,
-  worstCaseLatencyFreshPanelUpperBound,
 } from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
 
 const KEK = Buffer.alloc(32, 7).toString('base64');
@@ -453,8 +452,8 @@ describe('the reserve must leave the monitor a token it can reach', () => {
   });
 });
 
-describe('the fresh-panel bound is the smallest of several, not one number', () => {
-  it('derives the tenant budget ceiling from the refill rate', () => {
+describe('the fresh-panel bounds are separate, and neither is a promise', () => {
+  it('derives the PER-TENANT budget ceiling from the refill rate', () => {
     // 30 tokens per 5 minutes is six a minute; ten minutes of those is sixty.
     expect(tenantBudgetFreshPanelUpperBound(30, 300_000, 10 * 60 * 1000)).toBe(60);
     expect(tenantBudgetFreshPanelUpperBound(300, 300_000, 10 * 60 * 1000)).toBe(600);
@@ -462,44 +461,32 @@ describe('the fresh-panel bound is the smallest of several, not one number', () 
     expect(tenantBudgetFreshPanelUpperBound(30, 300_000, 5 * 60 * 1000)).toBe(30);
   });
 
-  it('derives the scheduler ceiling from the batch and the tick', () => {
-    // 50 candidates every 30s is 1000 starts across a 10-minute interval.
+  it('derives the INSTALLATION-WIDE scheduler ceiling from the batch and tick', () => {
+    // 50 candidates every 30s is 1000 starts across a 10-minute interval — for
+    // the whole installation, not for each tenant. Dividing it by a tenant
+    // count would invent a per-tenant guarantee the fairness rotation does not
+    // make: the share any tenant gets depends on who else is due.
     expect(schedulerFreshPanelUpperBound(50, 30_000, 10 * 60 * 1000)).toBe(1000);
     expect(schedulerFreshPanelUpperBound(1, 60_000, 10 * 60 * 1000)).toBe(10);
   });
 
-  it('takes the smaller of the two, whichever it is', () => {
-    // At the shipped defaults the BUDGET binds: 60 against the scheduler's 1000.
-    expect(
-      effectiveFreshPanelUpperBound({
-        tenantLimit: 30,
-        windowMs: 300_000,
-        batchSize: 50,
-        tickMs: 30_000,
-        healthyIntervalMs: 10 * 60 * 1000,
-      }),
-    ).toBe(60);
-
-    // A large bucket does not help when the scheduler cannot start the probes.
-    // This is the case the first version of this model got wrong by asserting
-    // that batch size and tick "cannot change it": they cannot RAISE the
-    // budget ceiling, but they impose one of their own.
-    expect(
-      effectiveFreshPanelUpperBound({
-        tenantLimit: 3_000,
-        windowMs: 300_000,
-        batchSize: 1,
-        tickMs: 60_000,
-        healthyIntervalMs: 10 * 60 * 1000,
-      }),
-    ).toBe(10);
-    expect(tenantBudgetFreshPanelUpperBound(3_000, 300_000, 10 * 60 * 1000)).toBe(6_000);
+  it('does not let a per-tenant check answer an installation-wide question', () => {
+    // Codex's example: a hundred tenants of twenty panels each. Every tenant is
+    // comfortably under its own budget ceiling...
+    const budgetBound = tenantBudgetFreshPanelUpperBound(30, 300_000, 10 * 60 * 1000);
+    expect(20).toBeLessThan(budgetBound);
+    // ...and the installation asks the scheduler for two thousand starts per
+    // interval when it can manage a thousand. Two different questions, and only
+    // the second one catches this.
+    const schedulerBound = schedulerFreshPanelUpperBound(50, 30_000, 10 * 60 * 1000);
+    expect(100 * 20).toBeGreaterThan(schedulerBound);
   });
 
-  it('reports the worst-case latency figure separately, as a worst case', () => {
-    // Four in flight, each running to a 10s timeout, across ten minutes.
-    expect(worstCaseLatencyFreshPanelUpperBound(4, 10_000, 10 * 60 * 1000)).toBe(240);
-    // Not folded into the effective bound: it is the pessimistic end of a range
-    // whose real value is a round trip to somebody else's server.
+  it('labels the latency figure as a model, not a completion count', () => {
+    // Four in flight, each running to a 10s timeout, across ten minutes. The
+    // real loop does not overlap ticks and spends time on discovery, claims,
+    // budget and writes, so its actual throughput is lower — this exists to
+    // make the point that latency matters, not to put an SLA on it.
+    expect(slowProbeLatencyModelFigure(4, 10_000, 10 * 60 * 1000)).toBe(240);
   });
 });

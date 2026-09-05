@@ -106,17 +106,22 @@ export function tenantBudgetFreshPanelUpperBound(
 }
 
 /**
- * The most panels the SCHEDULER could start on within one freshness window.
+ * The most panels the scheduler could start on within one freshness window,
+ * ACROSS THE WHOLE INSTALLATION.
  *
- * A tick discovers at most `batchSize` candidates, and a tenant claimed alone
- * gets the whole batch, so across one healthy interval the loop can begin at
- * most `batchSize x (interval / tick)` probes for that tenant. Ample at the
- * shipped defaults — 50 x 20 = 1000, far above the budget's 60 — but a small
- * batch or a slow tick makes this the binding constraint instead, and then the
- * budget ceiling is unreachable however large the bucket is.
+ * A tick discovers at most `batchSize` candidates in total — the batch is a
+ * global cap, shared out among the tenants claimed that tick — so across one
+ * healthy interval the loop can begin at most `batchSize x (interval / tick)`
+ * probes for everybody put together. Defaults: 50 x 20 = 1000.
  *
- * An upper bound on STARTS, not completions: see the note on latency in
- * `effectiveFreshPanelUpperBound`.
+ * NOT a per-tenant figure, and treating it as one hides a whole class of
+ * overload: a hundred tenants of twenty panels each is under every per-tenant
+ * bound and two thousand panels the scheduler cannot start inside an interval.
+ * What share of it any one tenant gets is decided by the fairness rotation
+ * against the tenants due at that moment, so it changes minute to minute and
+ * is deliberately not modelled here as a constant.
+ *
+ * An upper bound on STARTS, not completions — see the latency note below.
  */
 export function schedulerFreshPanelUpperBound(
   batchSize: number,
@@ -127,41 +132,21 @@ export function schedulerFreshPanelUpperBound(
 }
 
 /**
- * The most panels one tenant can keep fresh under EVERY statically knowable
- * bound: the smaller of the budget ceiling and the scheduler ceiling.
+ * A MODELLING figure for how much slow-probe latency costs. Not a capacity, not
+ * a completion count, and never an SLA.
  *
- * Deliberately not called the sustainable population, because a third
- * constraint is not statically knowable. Throughput also depends on how long a
- * probe takes, and that is a round trip to somebody else's server: a fleet that
- * answers in 40ms and one that answers in 9s have the same configuration and
- * very different capacity. `worstCaseLatencyFreshPanelUpperBound` gives the
- * floor of that range — what holds when every probe runs to the HTTP timeout —
- * and the truth for a real installation sits between the two and has to be
- * measured, not asserted.
- */
-export function effectiveFreshPanelUpperBound(bounds: {
-  readonly tenantLimit: number;
-  readonly windowMs: number;
-  readonly batchSize: number;
-  readonly tickMs: number;
-  readonly healthyIntervalMs: number;
-}): number {
-  return Math.min(
-    tenantBudgetFreshPanelUpperBound(bounds.tenantLimit, bounds.windowMs, bounds.healthyIntervalMs),
-    schedulerFreshPanelUpperBound(bounds.batchSize, bounds.tickMs, bounds.healthyIntervalMs),
-  );
-}
-
-/**
- * What concurrency can carry when every probe is as slow as it may be.
+ * `concurrency x (interval / timeout)` is what a spherical monitor in a vacuum
+ * would manage with every probe running to the HTTP timeout. The real loop does
+ * not overlap its ticks, works in batch waves, and spends time on discovery,
+ * claims, budget and writes between probes, so its actual completion count is
+ * lower and depends on things this function cannot see.
  *
- * The pessimistic end of the latency range: `concurrency` probes in flight,
- * each taking the full `PANEL_HTTP_TIMEOUT_MS`. Reported separately from the
- * bounds above because it is a worst case rather than a limit — a healthy fleet
- * is far above it — and quoting it as the capacity would be as wrong in one
- * direction as ignoring latency is in the other.
+ * It exists to make the POINT that latency matters — a fleet answering in 40ms
+ * and one answering in 9s have identical configuration and very different
+ * capacity — not to put a number on it. Nothing in the product consumes it, and
+ * nothing should start.
  */
-export function worstCaseLatencyFreshPanelUpperBound(
+export function slowProbeLatencyModelFigure(
   concurrency: number,
   httpTimeoutMs: number,
   healthyIntervalMs: number,

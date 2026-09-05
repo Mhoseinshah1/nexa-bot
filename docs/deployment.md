@@ -252,49 +252,61 @@ worker.
 Panel health carries a freshness window (`PANEL_HEALTH_FRESH_FOR_MS`, fifteen
 minutes), and meeting it takes more than a cadence that fits. The cadence check
 at boot proves a panel that IS probed is refreshed in time; it says nothing
-about whether every panel gets probed. That is throughput, and it has several
-separate ceilings.
+about whether every panel gets probed. That is throughput, and it has two
+ceilings that live at different levels.
 
-**The tenant budget ceiling.** Background probes spend the same per-tenant
-bucket as an operator's manual tests, so the long-run background rate cannot
-exceed the bucket's refill rate:
+**Per tenant — the probe bucket.** Background probes spend the same bucket as an
+operator's manual tests, so the long-run background rate cannot exceed its
+refill rate:
 
     (PANEL_PROBE_TENANT_LIMIT / PANEL_PROBE_TENANT_WINDOW_MS)
       x PANEL_MONITOR_HEALTHY_INTERVAL_MS
 
-Defaults: 30 tokens per 5 minutes over a 10-minute interval = **60 panels**.
+Defaults: 30 tokens per 5 minutes over a 10-minute interval = **60 panels per
+tenant**.
 
-**The scheduler ceiling.** A tick discovers at most `PANEL_MONITOR_BATCH_SIZE`
-candidates, so across one interval the loop can START at most
+**Installation-wide — the scheduler.** A tick discovers at most
+`PANEL_MONITOR_BATCH_SIZE` candidates IN TOTAL, shared out among the tenants
+claimed that tick, so across one interval the loop can start at most
 
     PANEL_MONITOR_BATCH_SIZE x (PANEL_MONITOR_HEALTHY_INTERVAL_MS / PANEL_MONITOR_TICK_MS)
 
-Defaults: 50 x 20 = 1000. Ample — but a small batch or a slow tick makes this
-the binding constraint instead, and then the bucket ceiling is unreachable
-however large the bucket is.
+Defaults: 50 x 20 = **1000 panels for the whole installation**.
 
-**The effective bound is the smaller of the two.** That is the number the
-monitor reports against. Neither ceiling can raise the other.
+These are different questions and the second is not a per-tenant number. A
+hundred tenants of twenty panels each is comfortably inside every per-tenant
+bound and asks the scheduler for two thousand starts an interval when it can
+manage a thousand — an overload no per-tenant check can see. What share of the
+global ceiling any one tenant gets is decided by the fairness rotation against
+whoever is due at that moment, so it changes minute to minute and is
+deliberately not modelled as a constant.
 
-Two things this bound is NOT:
+Neither number is a guarantee:
 
-- It is not a guarantee. Throughput also depends on how long a probe takes, and
-  that is a round trip to somebody else's server: a fleet answering in 40ms and
-  one answering in 9s have identical configuration and very different capacity.
-  The pessimistic end — `PANEL_MONITOR_CONCURRENCY` probes in flight, each
-  running to `PANEL_HTTP_TIMEOUT_MS` — is 4 x (10min / 10s) = 240 panels at the
-  defaults. The truth for a real installation lies between that and the bound
-  above, and has to be measured on the installation, not asserted here.
-- It does not assume an idle operator. Manual "Test connection" probes come out
-  of the same bucket, one for one, so sustained manual traffic lowers what is
+- **Latency is not modelled.** Throughput also depends on how long a probe
+  takes, and that is a round trip to somebody else's server: a fleet answering
+  in 40ms and one answering in 9s have identical configuration and very
+  different capacity. `slowProbeLatencyModelFigure` exists to make that point
+  and is explicitly not a completion count — the real loop does not overlap
+  ticks and spends time on discovery, claims, budget and writes between probes.
+- **The operator is not assumed idle.** Manual "Test connection" probes come out
+  of the same bucket one for one, so sustained manual traffic lowers what is
   left for the monitor.
 
-A tenant ABOVE the effective bound certainly cannot be kept fresh, which is what
-makes it worth reporting: at startup the monitor counts each tenant's ACTIVE
-panels and logs a warning naming any tenant over it. A tenant below it is not
-thereby guaranteed.
+A population ABOVE either bound certainly cannot be kept fresh, which is what
+makes it worth reporting; one below is not thereby guaranteed. The monitor
+re-assesses on `PANEL_MONITOR_CAPACITY_INTERVAL_MS` (ten minutes by default) —
+not once at startup, because the population an operator grows into is exactly
+the one that matters — and records operational conditions rather than log
+lines, so repeated unchanged overload collapses onto one row with an occurrence
+count and the condition resolves when the population comes back under:
 
-Raising the bound is a deliberate act whose cost lands on somebody else's
+| condition                                   | scope                        |
+| ------------------------------------------- | ---------------------------- |
+| `panel.monitor.tenant_budget_exceeded`      | the tenant                   |
+| `panel.monitor.scheduler_capacity_exceeded` | the installation (no tenant) |
+
+Raising either bound is a deliberate act whose cost lands on somebody else's
 server: `PANEL_PROBE_TENANT_LIMIT` is an outbound rate against a customer's
 panels. `docs/vps-acceptance.md` is where a measured figure for a real
 installation belongs. The monitor will not widen it on the installation's

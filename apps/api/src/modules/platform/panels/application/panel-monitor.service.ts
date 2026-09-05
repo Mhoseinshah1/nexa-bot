@@ -1,5 +1,6 @@
 import {
   systemJobActor,
+  systemContext,
   isNexaError,
   type ActorContext,
   type AuditWriter,
@@ -56,6 +57,15 @@ const MAINTENANCE_RUN = 'maintenance.run' as const;
  * correlation id is per tick, which is the part that should vary: it is what
  * ties one sweep's rows together.
  */
+export /** Operational conditions this loop reports about its own capacity. */
+const TENANT_BUDGET_CONDITION = 'panel.monitor.tenant_budget_exceeded';
+const TENANT_BUDGET_RESOLVED = 'panel.monitor.tenant_budget_ok';
+const SCHEDULER_CONDITION = 'panel.monitor.scheduler_capacity_exceeded';
+const SCHEDULER_RESOLVED = 'panel.monitor.scheduler_capacity_ok';
+
+/** The installation's own scope: this condition belongs to no single tenant. */
+const SYSTEM_SCOPE = systemContext('panel monitor capacity assessment');
+
 export const PANEL_MONITOR_JOB_ID = 'panel-health-monitor';
 
 export interface PanelMonitorDeps {
@@ -99,7 +109,18 @@ export interface PanelMonitorDeps {
    * bucket. A tenant ABOVE this number certainly cannot be kept fresh, which is
    * what makes it worth reporting; one below it is not thereby guaranteed.
    */
-  readonly freshPanelUpperBound: number;
+  readonly tenantBudgetUpperBound: number;
+  /**
+   * The INSTALLATION-wide ceiling on probes the scheduler can start per window.
+   *
+   * Global, not per tenant: the batch is a global cap shared among the tenants
+   * claimed that tick. What share any one tenant gets is decided by the
+   * fairness rotation against whoever is due, so it is not a constant and is
+   * deliberately not modelled as one.
+   */
+  readonly schedulerUpperBound: number;
+  /** How often to re-assess. Aggregates over `panels`, so not every tick. */
+  readonly capacityAssessmentIntervalMs: number;
 }
 
 export interface MonitorTickResult {
@@ -186,6 +207,15 @@ export class PanelMonitorService {
    * anti-join is paid once per process rather than every thirty seconds.
    */
   private reconciled = false;
+
+  /** When capacity was last assessed. See `assessCapacity`. */
+  private lastCapacityAssessmentAt: number | null = null;
+
+  /** Tenants this process has an open budget condition for. */
+  private tenantsOverBudget: ReadonlySet<string> = new Set();
+
+  /** Whether this process has an open installation-wide scheduler condition. */
+  private installationOverScheduler = false;
 
   constructor(
     private readonly deps: PanelMonitorDeps,
@@ -296,35 +326,13 @@ export class PanelMonitorService {
     // not report itself healthy while quietly ignoring part of it.
     if (!this.reconciled) {
       const created = await this.deps.discovery.reconcileSchedules(now);
-      // What this installation can actually keep fresh, said out loud once.
-      //
-      // The cadence check at boot proves a probed panel is refreshed in time.
-      // It cannot prove every panel gets probed, which the tenant's bucket
-      // decides — and with the shipped defaults that is sixty panels per
-      // tenant. Reporting the shortfall is the honest alternative to widening
-      // an outbound rate against somebody else's server on the installation's
-      // behalf.
-      const over = await this.deps.discovery.overCapacityTenants(this.deps.freshPanelUpperBound);
       this.reconciled = true;
       if (created > 0) {
         this.deps.logger.warn({ created }, 'panel monitor created missing scheduler rows');
       }
-      for (const tenant of over) {
-        this.deps.logger.warn(
-          {
-            tenantId: tenant.tenantId,
-            panels: tenant.panels,
-            upperBound: this.deps.freshPanelUpperBound,
-          },
-          'tenant has more active panels than this configuration can keep fresh; ' +
-            'some health rows will read stale. The bound is the smaller of the ' +
-            'probe budget ceiling (PANEL_PROBE_TENANT_LIMIT / ' +
-            'PANEL_PROBE_TENANT_WINDOW_MS) and the scheduler ceiling ' +
-            '(PANEL_MONITOR_BATCH_SIZE / PANEL_MONITOR_TICK_MS), and sustained ' +
-            'manual probes lower it further because they spend the same bucket',
-        );
-      }
     }
+
+    await this.assessCapacity(now);
 
     const tenantIds = await this.deps.discovery.claimTenants(now, this.deps.tenantsPerTick);
     if (tenantIds.length === 0) {
@@ -527,6 +535,120 @@ export class PanelMonitorService {
   }
 
   /** Steps a panel back without inventing anything about the provider. */
+  /**
+   * Says out loud what this installation cannot keep fresh, on a slow timer.
+   *
+   * Two DIFFERENT questions, and conflating them hides real overload:
+   *
+   *   - Per tenant, the probe bucket. A tenant with more ACTIVE panels than
+   *     `refill x interval` cannot have them all fresh however the scheduler is
+   *     tuned, because there are only so many tokens a minute.
+   *   - For the INSTALLATION, the scheduler. The batch is a global cap shared
+   *     among the tenants claimed that tick, so a hundred tenants of twenty
+   *     panels each is under every per-tenant bound and two thousand panels the
+   *     loop cannot start inside one interval.
+   *
+   * Not on every tick: these are aggregates over the whole `panels` table, and
+   * running them every thirty seconds to answer a question that changes when
+   * somebody adds a panel would be its own capacity problem. Not once at
+   * startup either — the population an operator grows into is exactly the one
+   * that matters, and a process that assessed only at boot would never see it.
+   * So: on a slow interval, and the conditions resolve when the population
+   * comes back under.
+   *
+   * Recorded as operational conditions rather than log lines so they dedupe,
+   * carry an occurrence count and can be resolved — repeated unchanged overload
+   * updates one row rather than writing a new one every assessment.
+   */
+  private async assessCapacity(now: Date): Promise<void> {
+    if (
+      this.lastCapacityAssessmentAt !== null &&
+      now.getTime() - this.lastCapacityAssessmentAt < this.deps.capacityAssessmentIntervalMs
+    ) {
+      return;
+    }
+    this.lastCapacityAssessmentAt = now.getTime();
+
+    const over = await this.deps.discovery.overBudgetTenants(this.deps.tenantBudgetUpperBound);
+    const overNow = new Set(over.map((row: { tenantId: string }) => row.tenantId));
+
+    for (const row of over) {
+      const tenant: TenantContext = {
+        tenantId: row.tenantId as TenantContext['tenantId'],
+        botInstanceId: null,
+      };
+      await this.deps.uow.run(tenant, (tx) =>
+        this.deps.opsLog.record(
+          tenant,
+          {
+            code: TENANT_BUDGET_CONDITION,
+            severity: 'WARN',
+            message: `has ${row.panels} active panels, more than the ${this.deps.tenantBudgetUpperBound} its probe budget can keep fresh`,
+            dedupeKey: TENANT_BUDGET_CONDITION,
+            context: { panels: row.panels, upperBound: this.deps.tenantBudgetUpperBound },
+          },
+          tx,
+        ),
+      );
+    }
+
+    // Only tenants THIS process reported are resolved by it. A tenant whose
+    // condition another replica opened is resolved by that replica's own
+    // assessment, which reaches the same conclusion from the same rows.
+    for (const tenantId of this.tenantsOverBudget) {
+      if (overNow.has(tenantId)) continue;
+      const tenant: TenantContext = {
+        tenantId: tenantId as TenantContext['tenantId'],
+        botInstanceId: null,
+      };
+      await this.deps.uow.run(tenant, (tx) =>
+        this.deps.opsLog.record(
+          tenant,
+          {
+            code: TENANT_BUDGET_RESOLVED,
+            severity: 'INFO',
+            message: 'active panel population is back within what its probe budget can keep fresh',
+            dedupeKey: TENANT_BUDGET_RESOLVED,
+            recoversCode: TENANT_BUDGET_CONDITION,
+            recoversDedupeKey: TENANT_BUDGET_CONDITION,
+          },
+          tx,
+        ),
+      );
+    }
+    this.tenantsOverBudget = overNow;
+
+    const total = await this.deps.discovery.activePanelCount();
+    const overGlobal = total > this.deps.schedulerUpperBound;
+    if (overGlobal || this.installationOverScheduler) {
+      // SYSTEM scope: this is the installation's condition, not any tenant's,
+      // and `scopeTenantId` writes a null tenant for it.
+      await this.deps.uow.run(SYSTEM_SCOPE, (tx) =>
+        this.deps.opsLog.record(
+          SYSTEM_SCOPE,
+          overGlobal
+            ? {
+                code: SCHEDULER_CONDITION,
+                severity: 'WARN',
+                message: `the installation has ${total} active panels, more than the ${this.deps.schedulerUpperBound} this scheduler can start within one freshness window`,
+                dedupeKey: SCHEDULER_CONDITION,
+                context: { panels: total, upperBound: this.deps.schedulerUpperBound },
+              }
+            : {
+                code: SCHEDULER_RESOLVED,
+                severity: 'INFO',
+                message: 'active panel population is back within what the scheduler can start',
+                dedupeKey: SCHEDULER_RESOLVED,
+                recoversCode: SCHEDULER_CONDITION,
+                recoversDedupeKey: SCHEDULER_CONDITION,
+              },
+          tx,
+        ),
+      );
+    }
+    this.installationOverScheduler = overGlobal;
+  }
+
   /**
    * Backs a candidate off after an unhandled failure, without claiming to know why.
    *

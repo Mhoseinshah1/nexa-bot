@@ -5,6 +5,7 @@ import type { ProviderProbeOutcome, ProviderType, TenantContext } from '@nexa/co
 import {
   auditLogs,
   operationalEvents,
+  panels,
   panelHealth,
   panelMonitorSchedule,
   panelMonitorTenants,
@@ -156,7 +157,9 @@ describe('the panel health monitor', () => {
       tenantsPerTick?: number;
       concurrency?: number;
       budgetReserve?: number;
-      freshPanelUpperBound?: number;
+      tenantBudgetUpperBound?: number;
+      schedulerUpperBound?: number;
+      capacityAssessmentIntervalMs?: number;
       probe?: Partial<ProbeCoreDeps>;
       /**
        * A stand-in for the discovery query.
@@ -186,7 +189,9 @@ describe('the panel health monitor', () => {
         tenantsPerTick: options.tenantsPerTick ?? 10,
         concurrency: options.concurrency ?? 4,
         budgetReserve: options.budgetReserve ?? 0,
-        freshPanelUpperBound: options.freshPanelUpperBound ?? 60,
+        tenantBudgetUpperBound: options.tenantBudgetUpperBound ?? 60,
+        schedulerUpperBound: options.schedulerUpperBound ?? 1_000,
+        capacityAssessmentIntervalMs: options.capacityAssessmentIntervalMs ?? 10 * 60 * 1000,
       },
       30_000,
     );
@@ -322,7 +327,9 @@ describe('the panel health monitor', () => {
           tenantsPerTick: 10,
           concurrency: 4,
           budgetReserve: 0,
-          freshPanelUpperBound: 60,
+          tenantBudgetUpperBound: 60,
+          schedulerUpperBound: 1_000,
+          capacityAssessmentIntervalMs: 10 * 60 * 1000,
         },
         30_000,
       );
@@ -471,7 +478,8 @@ describe('the panel health monitor', () => {
           dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
           refreshTenantBounds: async () => {},
           reconcileSchedules: async () => 0,
-          overCapacityTenants: async () => [],
+          overBudgetTenants: async () => [],
+          activePanelCount: async () => 0,
         },
       });
       const result = await m.tick();
@@ -671,7 +679,8 @@ describe('the panel health monitor', () => {
           dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
           refreshTenantBounds: async () => {},
           reconcileSchedules: async () => 0,
-          overCapacityTenants: async () => [],
+          overBudgetTenants: async () => [],
+          activePanelCount: async () => 0,
         },
       });
       await fast.tick();
@@ -742,6 +751,104 @@ describe('the panel health monitor', () => {
     });
   });
 
+  describe('capacity is re-assessed while the process runs', () => {
+    const opsFor = async (code: string) =>
+      ctx.container.database.db
+        .select()
+        .from(operationalEvents)
+        .where(eq(operationalEvents.code, code));
+
+    it('opens a condition when the population grows past the bound, and closes it again', async () => {
+      // Assessed on a slow timer rather than once at startup: the population an
+      // operator GROWS into is exactly the one that matters, and a process that
+      // checked only at boot would never see it. No restart anywhere below.
+      const real = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      const m = monitor({
+        tenantBudgetUpperBound: 2,
+        capacityAssessmentIntervalMs: 60_000,
+        discovery: {
+          claimTenants: async () => [],
+          dueForTenants: async () => [],
+          refreshTenantBounds: async () => {},
+          reconcileSchedules: async () => 0,
+          overBudgetTenants: real.overBudgetTenants.bind(real),
+          activePanelCount: real.activePanelCount.bind(real),
+        },
+      });
+
+      // A. below capacity — nothing reported.
+      await createPanel(ownerA, tenantA, 'cap-1');
+      await m.tick();
+      expect(await opsFor('panel.monitor.tenant_budget_exceeded')).toHaveLength(0);
+
+      // B. the operator grows the fleet past the bound, same process.
+      await createPanel(ownerA, tenantA, 'cap-2');
+      await createPanel(ownerA, tenantA, 'cap-3');
+      now = new Date(now.getTime() + 60_000);
+      await m.tick();
+
+      // C. the condition is observable.
+      const opened = await opsFor('panel.monitor.tenant_budget_exceeded');
+      expect(opened).toHaveLength(1);
+      expect(opened[0]!.resolvedAt).toBeNull();
+
+      // F. repeated unchanged overload does not spam: the same condition
+      // collapses onto one row with an occurrence count.
+      now = new Date(now.getTime() + 60_000);
+      await m.tick();
+      const repeated = await opsFor('panel.monitor.tenant_budget_exceeded');
+      expect(repeated).toHaveLength(1);
+      expect(repeated[0]!.occurrenceCount).toBeGreaterThan(opened[0]!.occurrenceCount);
+
+      // D. the population falls back under the bound.
+      const live = await ctx.container.database.db
+        .select({ id: panels.id })
+        .from(panels)
+        .where(eq(panels.tenantId, tenantA.tenantId));
+      for (const row of live.slice(0, 2)) {
+        await service().setStatus(tenantA, adminActorFor(ownerA), row.id, {
+          status: 'ARCHIVED',
+          idempotencyKey: key(),
+        });
+      }
+      now = new Date(now.getTime() + 60_000);
+      await m.tick();
+
+      // E. the condition resolves.
+      const resolved = await opsFor('panel.monitor.tenant_budget_exceeded');
+      expect(resolved[0]!.resolvedAt).not.toBeNull();
+    });
+
+    it('reports the installation-wide scheduler bound separately from any tenant', async () => {
+      const real = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      const m = monitor({
+        // Every tenant comfortably inside its own budget ceiling...
+        tenantBudgetUpperBound: 1_000,
+        // ...and the installation past what the scheduler can start.
+        schedulerUpperBound: 1,
+        capacityAssessmentIntervalMs: 0,
+        discovery: {
+          claimTenants: async () => [],
+          dueForTenants: async () => [],
+          refreshTenantBounds: async () => {},
+          reconcileSchedules: async () => 0,
+          overBudgetTenants: real.overBudgetTenants.bind(real),
+          activePanelCount: real.activePanelCount.bind(real),
+        },
+      });
+      await createPanel(ownerA, tenantA, 'global-1');
+      await createPanel(ownerA, tenantA, 'global-2');
+      await m.tick();
+
+      // The per-tenant dimension is silent; the installation's is not.
+      expect(await opsFor('panel.monitor.tenant_budget_exceeded')).toHaveLength(0);
+      const global = await opsFor('panel.monitor.scheduler_capacity_exceeded');
+      expect(global).toHaveLength(1);
+      // It belongs to the installation, not to a tenant.
+      expect(global[0]!.tenantId).toBeNull();
+    });
+  });
+
   describe('a panel created while the release was rolled back', () => {
     it('does not claim healthy scheduling until reconciliation has succeeded', async () => {
       // Reconciliation was fire-and-forget in `start()`: a transient failure
@@ -767,7 +874,8 @@ describe('the panel health monitor', () => {
             }
             return real.reconcileSchedules(at);
           },
-          overCapacityTenants: real.overCapacityTenants.bind(real),
+          overBudgetTenants: real.overBudgetTenants.bind(real),
+          activePanelCount: real.activePanelCount.bind(real),
         },
       });
 
@@ -859,7 +967,8 @@ describe('the panel health monitor', () => {
           dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
           refreshTenantBounds: async () => {},
           reconcileSchedules: async () => 0,
-          overCapacityTenants: async () => [],
+          overBudgetTenants: async () => [],
+          activePanelCount: async () => 0,
         },
         probe: {
           credentials: {
@@ -940,7 +1049,8 @@ describe('the panel health monitor', () => {
           dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
           refreshTenantBounds: async () => {},
           reconcileSchedules: async () => 0,
-          overCapacityTenants: async () => [],
+          overBudgetTenants: async () => [],
+          activePanelCount: async () => 0,
         },
       });
       expect((await stale.tick()).deferred).toBe(1);
@@ -1430,7 +1540,8 @@ describe('the panel health monitor', () => {
         dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
         refreshTenantBounds: async () => {},
         reconcileSchedules: async () => 0,
-        overCapacityTenants: async () => [],
+        overBudgetTenants: async () => [],
+        activePanelCount: async () => 0,
       };
       let dialled!: () => void;
       let release!: () => void;
@@ -1676,7 +1787,8 @@ describe('the panel health monitor', () => {
           dueForTenants: async () => [],
           refreshTenantBounds: async () => {},
           reconcileSchedules: async () => 0,
-          overCapacityTenants: async () => [],
+          overBudgetTenants: async () => [],
+          activePanelCount: async () => 0,
         },
       });
     }
@@ -1704,7 +1816,8 @@ describe('the panel health monitor', () => {
           },
           refreshTenantBounds: async () => {},
           reconcileSchedules: async () => 0,
-          overCapacityTenants: async () => [],
+          overBudgetTenants: async () => [],
+          activePanelCount: async () => 0,
         },
       });
       for (let i = 0; i < 5; i += 1) {
@@ -1735,7 +1848,8 @@ describe('the panel health monitor', () => {
           dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
           refreshTenantBounds: async () => {},
           reconcileSchedules: async () => 0,
-          overCapacityTenants: async () => [],
+          overBudgetTenants: async () => [],
+          activePanelCount: async () => 0,
         },
         probe: {
           adapters: (type: ProviderType) => ({

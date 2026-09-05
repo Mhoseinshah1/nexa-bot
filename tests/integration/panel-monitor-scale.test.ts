@@ -5,7 +5,6 @@ import {
   dueForTenantsQuery,
 } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel.repository';
 import {
-  effectiveFreshPanelUpperBound,
   schedulerFreshPanelUpperBound,
   tenantBudgetFreshPanelUpperBound,
 } from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
@@ -163,7 +162,8 @@ describe('the panel monitor scheduler at scale', () => {
           dueForTenants: options.discovery.dueForTenants.bind(options.discovery),
           refreshTenantBounds: options.discovery.refreshTenantBounds.bind(options.discovery),
           reconcileSchedules: async () => 0,
-          overCapacityTenants: async () => [],
+          overBudgetTenants: async () => [],
+          activePanelCount: async () => 0,
         },
         probe: {
           repository: new DrizzlePanelRepository(ctx.container.database.db),
@@ -207,7 +207,9 @@ describe('the panel monitor scheduler at scale', () => {
         tenantsPerTick: 1,
         concurrency: 4,
         budgetReserve: 0,
-        freshPanelUpperBound: 60,
+        tenantBudgetUpperBound: 60,
+        schedulerUpperBound: 1_000,
+        capacityAssessmentIntervalMs: 10 * 60 * 1000,
       },
       30_000,
     );
@@ -417,50 +419,52 @@ describe('the panel monitor scheduler at scale', () => {
       expect(refreshed * 4).toBeLessThan(PANELS_PER_TENANT);
     });
 
-    it('reports the tenants a configuration cannot keep fresh', async () => {
-      const bound = effectiveFreshPanelUpperBound({
-        tenantLimit: 30,
-        windowMs: 300_000,
-        batchSize: 50,
-        tickMs: 30_000,
-        healthyIntervalMs: 10 * 60 * 1000,
-      });
-      expect(bound).toBe(60);
+    it('reports a tenant over its own BUDGET ceiling', async () => {
+      const budgetBound = tenantBudgetFreshPanelUpperBound(30, 300_000, 10 * 60 * 1000);
+      expect(budgetBound).toBe(60);
 
       const repo = new DrizzlePanelMonitorRepository(ctx.container.database.db);
-      const over = await repo.overCapacityTenants(bound);
+      const over = await repo.overBudgetTenants(budgetBound);
       expect(over.length).toBeGreaterThan(0);
-      for (const tenant of over) expect(tenant.panels).toBeGreaterThan(bound);
+      for (const tenant of over) expect(tenant.panels).toBeGreaterThan(budgetBound);
 
-      // A bucket large enough for this population clears the report.
-      expect(await repo.overCapacityTenants(600)).toHaveLength(0);
+      // A bucket large enough for this population clears the per-tenant report.
+      expect(await repo.overBudgetTenants(600)).toHaveLength(0);
     });
 
-    it('reports the SCHEDULER bound when the batch is the bottleneck', async () => {
-      // A very large bucket cannot help if the loop can only start one probe a
-      // minute. The effective bound must follow the smaller constraint, and the
-      // over-capacity report must use it — otherwise an installation with a
-      // generous budget and a starved scheduler is told everything is fine.
-      const budgetBound = tenantBudgetFreshPanelUpperBound(3_000, 300_000, 10 * 60 * 1000);
-      const schedulerBound = schedulerFreshPanelUpperBound(1, 60_000, 10 * 60 * 1000);
-      expect(budgetBound).toBe(6_000);
-      expect(schedulerBound).toBe(10);
-
-      const effective = effectiveFreshPanelUpperBound({
-        tenantLimit: 3_000,
-        windowMs: 300_000,
-        batchSize: 1,
-        tickMs: 60_000,
-        healthyIntervalMs: 10 * 60 * 1000,
-      });
-      expect(effective).toBe(schedulerBound);
-      expect(effective).toBeLessThan(budgetBound);
+    it('sees an installation-wide overload that every per-tenant check passes', async () => {
+      // The gap a per-tenant scheduler bound hides. The batch is a GLOBAL cap
+      // shared among the tenants claimed each tick, so an installation can be
+      // made entirely of tenants that are individually fine and still ask the
+      // loop to start more probes per interval than it possibly can.
+      //
+      // Built to be unambiguous: every tenant well under its budget ceiling,
+      // the total well over the scheduler's.
+      const budgetBound = tenantBudgetFreshPanelUpperBound(30, 300_000, 10 * 60 * 1000);
+      const schedulerBound = schedulerFreshPanelUpperBound(50, 30_000, 10 * 60 * 1000);
+      expect(budgetBound).toBe(60);
+      expect(schedulerBound).toBe(1_000);
 
       const repo = new DrizzlePanelMonitorRepository(ctx.container.database.db);
-      // Under the budget bound alone the fleet looks supportable; under the
-      // effective bound every tenant is over.
-      expect(await repo.overCapacityTenants(budgetBound)).toHaveLength(0);
-      expect(await repo.overCapacityTenants(effective)).toHaveLength(TENANTS);
+      const perTenant = await ctx.container.database.db.execute<{ n: number }>(sql`
+        SELECT max(c)::int AS n FROM (
+          SELECT count(*) AS c FROM panels WHERE status = 'ACTIVE' GROUP BY tenant_id
+        ) AS t
+      `);
+      const total = await repo.activePanelCount();
+
+      // This fixture is 40 x 500, so it is over on both dimensions; the point
+      // being asserted is that the two are measured SEPARATELY and that the
+      // installation total is a real, larger number.
+      expect(total).toBe(TOTAL);
+      expect(total).toBeGreaterThan(schedulerBound);
+      expect(perTenant.rows[0]?.n).toBe(PANELS_PER_TENANT);
+
+      // And the shape Codex's example describes: raise the per-tenant bound
+      // above every tenant's population and the per-tenant report goes quiet,
+      // while the installation is still far past what the scheduler can start.
+      expect(await repo.overBudgetTenants(PANELS_PER_TENANT)).toHaveLength(0);
+      expect(total).toBeGreaterThan(schedulerBound);
     });
   });
 });

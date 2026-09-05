@@ -392,8 +392,16 @@ export interface PanelMonitorRepository {
    * sequence ends.
    */
   reconcileSchedules(now: Date): Promise<number>;
+  /** The installation's total ACTIVE panel population, for the global scheduler bound. */
+  activePanelCount(): Promise<number>;
   /**
-   * Tenants whose ACTIVE panel population exceeds what their bucket can keep fresh.
+   * Tenants whose ACTIVE panel population exceeds their own BUDGET ceiling.
+   *
+   * Per-tenant, and only the budget dimension. The scheduler ceiling is
+   * installation-global and is assessed against the total, not against each
+   * tenant — applying it per tenant is how a hundred tenants of twenty panels
+   * each pass every check while the loop cannot start their two thousand
+   * panels inside one interval.
    *
    * The freshness window is a promise with two bounds: the cadence must fit
    * inside it (checked at boot) and the tenant's probe bucket must be able to
@@ -405,9 +413,7 @@ export interface PanelMonitorRepository {
    * per tick — the supported population changes when panels are added, not
    * every thirty seconds.
    */
-  overCapacityTenants(
-    sustainablePerTenant: number,
-  ): Promise<{ tenantId: string; panels: number }[]>;
+  overBudgetTenants(sustainablePerTenant: number): Promise<{ tenantId: string; panels: number }[]>;
 }
 
 /** The tenant-wide bound on real outbound probes: a bucket's size and refill. */

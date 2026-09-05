@@ -20,7 +20,10 @@ import {
   DrizzlePanelMonitorRepository,
   DrizzlePanelRepository,
 } from './modules/platform/panels/infrastructure/drizzle-panel.repository.js';
-import { effectiveFreshPanelUpperBound } from './modules/platform/panels/domain/monitor-cadence.js';
+import {
+  schedulerFreshPanelUpperBound,
+  tenantBudgetFreshPanelUpperBound,
+} from './modules/platform/panels/domain/monitor-cadence.js';
 import type { MonitorCadence } from './modules/platform/panels/domain/monitor-cadence.js';
 import { DrizzlePanelCredentialStore } from './modules/platform/panels/infrastructure/drizzle-panel-credentials.js';
 import { PanelService } from './modules/platform/panels/application/panel.service.js';
@@ -480,13 +483,17 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       tenantsPerTick: config.PANEL_MONITOR_TENANTS_PER_TICK,
       concurrency: config.PANEL_MONITOR_CONCURRENCY,
       budgetReserve: monitorBudgetReserve,
-      freshPanelUpperBound: effectiveFreshPanelUpperBound({
-        tenantLimit: config.PANEL_PROBE_TENANT_LIMIT,
-        windowMs: config.PANEL_PROBE_TENANT_WINDOW_MS,
-        batchSize: config.PANEL_MONITOR_BATCH_SIZE,
-        tickMs: config.PANEL_MONITOR_TICK_MS,
-        healthyIntervalMs: config.PANEL_MONITOR_HEALTHY_INTERVAL_MS,
-      }),
+      tenantBudgetUpperBound: tenantBudgetFreshPanelUpperBound(
+        config.PANEL_PROBE_TENANT_LIMIT,
+        config.PANEL_PROBE_TENANT_WINDOW_MS,
+        config.PANEL_MONITOR_HEALTHY_INTERVAL_MS,
+      ),
+      schedulerUpperBound: schedulerFreshPanelUpperBound(
+        config.PANEL_MONITOR_BATCH_SIZE,
+        config.PANEL_MONITOR_TICK_MS,
+        config.PANEL_MONITOR_HEALTHY_INTERVAL_MS,
+      ),
+      capacityAssessmentIntervalMs: config.PANEL_MONITOR_CAPACITY_INTERVAL_MS,
     },
     config.PANEL_MONITOR_TICK_MS,
   );
