@@ -485,6 +485,16 @@ export class PanelMonitorService {
           tx,
         );
 
+        // Only a result the database ACCEPTED may change anything downstream.
+        //
+        // A slow probe finishing after a faster later one describes a moment
+        // that has already been superseded. Its health write was refused; its
+        // schedule must be refused with it, or an AUTH_FAILED that lost the row
+        // would still push the panel out by the non-retryable interval while
+        // the row in front of the operator says healthy. And announcing its
+        // transition would tell them their panel is broken while it is not.
+        if (outcome !== 'APPLIED') return;
+
         // The streak the NEXT probe builds on, read from stored health rather
         // than from the counter alone — see `effectivePreviousFailures`.
         const stored = await this.deps.probe.repository.readSchedule(tenant, candidate.panelId, tx);
@@ -508,13 +518,6 @@ export class PanelMonitorService {
           },
           tx,
         );
-
-        // Only a result the database ACCEPTED may be announced.
-        //
-        // A slow probe finishing after a faster later one is discarded by the
-        // storage, and announcing its transition anyway would tell an operator
-        // their panel is failing while the row in front of them says healthy.
-        if (outcome !== 'APPLIED') return;
 
         const event = transitionOf(before.health ?? null, health);
         if (event === null) return;

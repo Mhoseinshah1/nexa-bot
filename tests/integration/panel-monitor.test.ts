@@ -1020,38 +1020,86 @@ describe('the panel health monitor', () => {
     });
 
     it('announces nothing for a result the storage discarded', async () => {
-      // The phantom-event race. A slow AUTH_FAILED probe finishes after a newer
-      // HEALTHY one of the SAME configuration: the storage refuses the stale
-      // write, and announcing its transition anyway would tell an operator
-      // their panel is broken while the row in front of them says healthy.
+      // The phantom-event race, run as a real interleaving rather than a
+      // back-dated clock.
+      //
+      // A probe simply stamped in the past never reaches the announcement at
+      // all: the per-panel claim refuses it first, so a test written that way
+      // passes whether or not this rule exists. It did, and it did.
+      //
+      // What actually happens: one monitor claims a panel and dials, the
+      // provider is slow, a second monitor's cooldown expires, it dials the
+      // same panel and stores HEALTHY first, and the first probe finally
+      // returns AUTH_FAILED describing a moment that has been superseded. The
+      // storage refuses the older write; announcing its transition anyway would
+      // tell an operator their panel is broken while the row in front of them
+      // says healthy, and rescheduling from it would push the healthy panel out
+      // by the non-retryable interval.
       const panelId = await createPanel(ownerA, tenantA, 'phantom');
       await tick();
       expect((await healthOf(panelId))?.state).toBe('HEALTHY');
 
-      // A probe stamped EARLIER than the stored row, driven through the whole
-      // monitor path so the announcement logic runs.
-      const stale = new Date(now.getTime() - 60_000);
-      const m = monitor({
+      const discovery: PanelMonitorRepository = {
+        claimTenants: async () => [tenantA.tenantId],
+        dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
+        refreshTenantBounds: async () => {},
+      };
+      let dialled!: () => void;
+      let release!: () => void;
+      const inFlight = new Promise<void>((resolve) => {
+        dialled = resolve;
+      });
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+
+      const early = new Date(now.getTime() + 60_000);
+      const late = new Date(now.getTime() + 120_000);
+
+      const slow = monitor({
+        discovery,
         probe: {
-          clock: { now: () => stale },
-          probeCooldownMs: 0,
+          clock: { now: () => early },
           adapters: (type: ProviderType) => ({
             ...providerAdapter(type),
             probe: async (target) => {
               probes.push(target.baseUrl);
+              dialled();
+              await held;
               return REJECTED;
             },
           }),
         },
-        discovery: {
-          claimTenants: async () => [tenantA.tenantId],
-          dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
-          refreshTenantBounds: async () => {},
+      });
+      const slowTick = slow.tick();
+      await inFlight;
+
+      const fast = monitor({
+        discovery,
+        probe: {
+          clock: { now: () => late },
+          adapters: (type: ProviderType) => ({
+            ...providerAdapter(type),
+            probe: async (target) => {
+              probes.push(target.baseUrl);
+              return HEALTHY;
+            },
+          }),
         },
       });
-      await m.tick();
-
+      await fast.tick();
       expect((await healthOf(panelId))?.state).toBe('HEALTHY');
+      const scheduled = await scheduleOf(panelId);
+
+      release();
+      await slowTick;
+
+      // Both panels were really dialled — the race happened rather than being
+      // refused before it started.
+      expect(probes).toHaveLength(3);
+      // The older result lost the row, the schedule AND the announcement.
+      expect((await healthOf(panelId))?.state).toBe('HEALTHY');
+      expect((await scheduleOf(panelId))?.nextEligibleAt).toEqual(scheduled?.nextEligibleAt);
       expect(await eventCodes(tenantA.tenantId)).toEqual([]);
       const audits = await ctx.container.database.db
         .select()

@@ -224,11 +224,15 @@ application containers healthy. The API's check is its own `/health/ready`.
 Neither the worker nor the monitor serves HTTP, so each writes a heartbeat file
 its container check reads — the worker's every ten seconds and only after a
 round trip to the database succeeds; the monitor's under the same rule plus one
-more, that a monitoring iteration has COMPLETED recently. A process whose timer
+more, that its scheduling loop has made PROGRESS recently. A process whose timer
 still fires while every tick throws is not monitoring anything, and a heartbeat
-that only proved the process existed would report it healthy for ever. A
-deliberately disabled monitor (`PANEL_MONITOR_ENABLED=false`) stays healthy: it
-is a process doing nothing on purpose, not a broken one.
+that only proved the process existed would report it healthy for ever — so
+there is no startup grace either: before the first successful discovery the
+monitor is not healthy, because it has not yet done the thing it exists to do.
+Progress is marked as each panel in a sweep is finished with rather than only at
+the end of one, so a bounded batch of slow provider calls stays healthy while it
+works. A deliberately disabled monitor (`PANEL_MONITOR_ENABLED=false`) stays
+healthy: it is a process doing nothing on purpose, not a broken one.
 
 Any of the three in a crash loop, alive with a blocked event loop, or alive and
 cut off from PostgreSQL goes unhealthy within a check or two, and a release in
