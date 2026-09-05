@@ -18,6 +18,7 @@ import {
   panelProbeBudgets,
   panelProbeClaims,
   panels,
+  tenants,
 } from '../../../../infrastructure/persistence/schema.js';
 import { isUniqueViolation } from '../../../../infrastructure/persistence/sqlstate.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -795,6 +796,22 @@ export class DrizzlePanelMonitorRepository implements PanelMonitorRepository {
      * Bounded by the number of tenants, which on this deployment model is tens.
      * It is emphatically NOT bounded by the number of due panels, and that is
      * the property the whole two-phase shape exists to buy.
+     *
+     * A tenant that is not ACTIVE takes no turn. Its panels may be perfectly
+     * ACTIVE — `status` on a panel says what the OPERATOR wants monitored,
+     * and `status` on the tenant says whether this installation is serving
+     * that tenant at all — so without this predicate stopping a tenant leaves
+     * an unattended process dialling their machines every cadence, for ever,
+     * with nothing in any surface saying so. The outbox relay and the
+     * notification dispatcher both already refuse a non-ACTIVE tenant; the
+     * monitor was the one place that did not.
+     *
+     * The join is here rather than in `dueForTenants` because this statement
+     * is bounded by the number of TENANTS and that one is the bounded scan
+     * over a tenant's schedule: a join inside that LATERAL frees the planner
+     * to read the whole eligible set before limiting it, which the plan
+     * regression caught reading five hundred rows to return five. Same reason
+     * the panel status filter lives in the schedule rather than in a join.
      */
     const claimed = await this.db.execute<{ tenant_id: string }>(sql`
       UPDATE ${panelMonitorTenants} AS t
@@ -802,10 +819,12 @@ export class DrizzlePanelMonitorRepository implements PanelMonitorRepository {
        WHERE t.tenant_id IN (
              SELECT r.tenant_id
                FROM ${panelMonitorTenants} AS r
+               JOIN ${tenants} AS n ON n.id = r.tenant_id
               WHERE r.next_eligible_at <= ${now}
+                AND n.status = 'ACTIVE'
               ORDER BY r.last_served_at ASC, r.tenant_id ASC
               LIMIT ${limit}
-                FOR UPDATE SKIP LOCKED
+                FOR UPDATE OF r SKIP LOCKED
            )
       RETURNING t.tenant_id
     `);

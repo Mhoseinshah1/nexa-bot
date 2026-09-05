@@ -11,6 +11,7 @@ import {
   panelMonitorTenants,
   panelProbeBudgets,
   panelProbeClaims,
+  tenants,
 } from '../../apps/api/src/infrastructure/persistence/schema';
 import { PanelService } from '../../apps/api/src/modules/platform/panels/application/panel.service';
 import {
@@ -571,6 +572,46 @@ describe('the panel health monitor', () => {
       expect(result.tenants).toBe(2);
       const probedTenants = await ctx.container.database.db.select().from(panelHealth);
       expect(new Set(probedTenants.map((r) => r.tenantId)).size).toBe(2);
+    });
+
+    it('gives no turn to a tenant this installation has stopped serving', async () => {
+      await createPanel(ownerA, tenantA, 'a');
+      await createPanel(ownerB, tenantB, 'b');
+      // The panel is ACTIVE and the TENANT is not. Those two statuses answer
+      // different questions: the panel's says what the operator wants
+      // monitored, the tenant's says whether this installation serves that
+      // tenant at all. Without the second one an unattended process keeps
+      // dialling a stopped tenant's machines every cadence, for ever, and no
+      // surface says so.
+      await ctx.container.database.db
+        .update(tenants)
+        .set({ status: 'STOPPED' })
+        .where(eq(tenants.id, tenantB.tenantId));
+
+      const result = await tick(monitor({ tenantsPerTick: 10 }));
+      expect(result.tenants).toBe(1);
+      const probed = await ctx.container.database.db.select().from(panelHealth);
+      expect(probed.map((row) => row.tenantId)).toEqual([tenantA.tenantId]);
+
+      // And the claim itself refuses it, not merely the tick around it: this
+      // is the statement that spends the turn.
+      const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      expect(await discovery.claimTenants(clock.now(), 10)).toEqual([tenantA.tenantId]);
+    });
+
+    it('serves a stopped tenant again once it is active', async () => {
+      await createPanel(ownerB, tenantB, 'b');
+      await ctx.container.database.db
+        .update(tenants)
+        .set({ status: 'STOPPED' })
+        .where(eq(tenants.id, tenantB.tenantId));
+      expect((await tick(monitor())).tenants).toBe(0);
+
+      await ctx.container.database.db
+        .update(tenants)
+        .set({ status: 'ACTIVE' })
+        .where(eq(tenants.id, tenantB.tenantId));
+      expect((await tick(monitor())).probed).toBe(1);
     });
   });
 
