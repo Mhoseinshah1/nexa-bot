@@ -258,9 +258,27 @@ export class SafeHttpClient {
     }
 
     let target: URL;
+    let base: URL;
     try {
+      base = new URL(baseUrl);
       target = new URL(request.path, baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`);
     } catch {
+      return { ok: false, failure: 'BLOCKED_TARGET', status: null };
+    }
+
+    // And the ORIGIN is asserted, rather than inferred from the prefix test
+    // above having refused everything that could change it.
+    //
+    // It could not. WHATWG URL treats a backslash as a slash for special
+    // schemes, so `\\evil.com/x`, `\/evil.com` and `/\evil.com` all resolve
+    // to another host while matching neither `^scheme:` nor a leading `//`.
+    // Nothing reaches this with a path built from provider data today — both
+    // adapters use module constants — but `forBase`'s whole contract is
+    // "cannot address another host", and a contract enforced by a prefix test
+    // over a parser with its own opinions is a contract enforced by luck. The
+    // credential travels with the request: a Bearer token, a session cookie, or
+    // the operator's panel password.
+    if (target.origin !== base.origin) {
       return { ok: false, failure: 'BLOCKED_TARGET', status: null };
     }
 

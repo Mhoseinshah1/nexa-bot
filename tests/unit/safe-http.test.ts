@@ -125,6 +125,32 @@ describe('the outbound client — what an adapter cannot do', () => {
     }
   });
 
+  it('refuses a path that leaves the base origin by any spelling', async () => {
+    // The absolute-URL test above passes with the prefix check alone, which is
+    // why it did not protect this. WHATWG URL treats a backslash as a slash for
+    // special schemes, so each of these resolves to another host while matching
+    // neither `^scheme:` nor a leading `//`. `forBase`'s contract is that an
+    // adapter cannot address another host, and the credential travels with the
+    // request.
+    //
+    // The escape targets are deliberately LOOPBACK, which this client's policy
+    // allows. Pointing them at a public host would let the address policy
+    // refuse them and the test would pass with the origin assertion deleted —
+    // which is exactly what the first version of it did.
+    const elsewhere = `127.0.0.1:${Number(new URL(base).port) + 1}`;
+    for (const path of [
+      `\\\\${elsewhere}/x`,
+      `\\/${elsewhere}`,
+      `/\\${elsewhere}`,
+      `\\\\${elsewhere}\\api\\admin\\token`,
+    ]) {
+      const result = await client().send(base, { method: 'GET', path });
+      expect(result.ok, path).toBe(false);
+      if (result.ok) continue;
+      expect(result.failure, path).toBe('BLOCKED_TARGET');
+    }
+  });
+
   it('refuses a base the policy would refuse', async () => {
     const result = await client().send('http://169.254.169.254', { method: 'GET', path: '/' });
     expect(result.ok).toBe(false);
