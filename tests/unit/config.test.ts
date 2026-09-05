@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { isNexaError } from '@nexa/contracts';
 import { loadConfig } from '../../apps/api/src/infrastructure/config/load-config';
+import { sustainableFreshPanels } from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
 
 const KEK = Buffer.alloc(32, 7).toString('base64');
 
@@ -405,5 +406,56 @@ describe('the monitor cannot claim more tenants than a tick can serve', () => {
       PANEL_MONITOR_BATCH_SIZE: '10',
     });
     expect(config.PANEL_MONITOR_TENANTS_PER_TICK).toBe(10);
+  });
+});
+
+describe('the reserve must leave the monitor a token it can reach', () => {
+  it('refuses a bucket that reserves everything for manual tests', () => {
+    // The floor rounds UP so a positive reserve is never silently zero — that
+    // keeps an operator's last manual probe available at small capacities. The
+    // other side was unchecked: at a limit of 1 the floor is the whole bucket,
+    // so every background attempt is refused AFTER claiming its panel and no
+    // panel of that tenant is ever monitored, while the process reports itself
+    // perfectly healthy.
+    expect(() =>
+      loadConfig({
+        ...valid,
+        PANEL_MONITOR_ENABLED: 'true',
+        PANEL_PROBE_TENANT_LIMIT: '1',
+        PANEL_MONITOR_BUDGET_RESERVE_PERCENT: '40',
+      }),
+    ).toThrow(/PANEL_PROBE_TENANT_LIMIT/);
+  });
+
+  it('accepts a bucket of two, where each lane gets one', () => {
+    const config = loadConfig({
+      ...valid,
+      PANEL_MONITOR_ENABLED: 'true',
+      PANEL_PROBE_TENANT_LIMIT: '2',
+      PANEL_MONITOR_BUDGET_RESERVE_PERCENT: '40',
+    });
+    expect(config.PANEL_PROBE_TENANT_LIMIT).toBe(2);
+  });
+
+  it('allows a capacity of one when monitoring is deliberately off', () => {
+    // The contradiction is between the two lanes, not in the number itself.
+    const config = loadConfig({
+      ...valid,
+      PANEL_MONITOR_ENABLED: 'false',
+      PANEL_PROBE_TENANT_LIMIT: '1',
+    });
+    expect(config.PANEL_PROBE_TENANT_LIMIT).toBe(1);
+  });
+});
+
+describe('the supported panel population is derived, not asserted', () => {
+  it('is the bucket refill rate times the healthy interval', () => {
+    // Defaults: 30 tokens per 5 minutes is six a minute; ten minutes of those
+    // is sixty panels per tenant.
+    expect(sustainableFreshPanels(30, 300_000, 10 * 60 * 1000)).toBe(60);
+    // Ten times the bucket supports ten times the population.
+    expect(sustainableFreshPanels(300, 300_000, 10 * 60 * 1000)).toBe(600);
+    // A shorter interval means more probes per panel, so fewer panels.
+    expect(sustainableFreshPanels(30, 300_000, 5 * 60 * 1000)).toBe(30);
   });
 });

@@ -20,6 +20,7 @@ import {
   DrizzlePanelMonitorRepository,
   DrizzlePanelRepository,
 } from './modules/platform/panels/infrastructure/drizzle-panel.repository.js';
+import { sustainableFreshPanels } from './modules/platform/panels/domain/monitor-cadence.js';
 import type { MonitorCadence } from './modules/platform/panels/domain/monitor-cadence.js';
 import { DrizzlePanelCredentialStore } from './modules/platform/panels/infrastructure/drizzle-panel-credentials.js';
 import { PanelService } from './modules/platform/panels/application/panel.service.js';
@@ -479,6 +480,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       tenantsPerTick: config.PANEL_MONITOR_TENANTS_PER_TICK,
       concurrency: config.PANEL_MONITOR_CONCURRENCY,
       budgetReserve: monitorBudgetReserve,
+      sustainableFreshPanels: sustainableFreshPanels(
+        config.PANEL_PROBE_TENANT_LIMIT,
+        config.PANEL_PROBE_TENANT_WINDOW_MS,
+        config.PANEL_MONITOR_HEALTHY_INTERVAL_MS,
+      ),
     },
     config.PANEL_MONITOR_TICK_MS,
   );

@@ -392,6 +392,22 @@ export interface PanelMonitorRepository {
    * sequence ends.
    */
   reconcileSchedules(now: Date): Promise<number>;
+  /**
+   * Tenants whose ACTIVE panel population exceeds what their bucket can keep fresh.
+   *
+   * The freshness window is a promise with two bounds: the cadence must fit
+   * inside it (checked at boot) and the tenant's probe bucket must be able to
+   * complete that many probes per interval (this). Only the first was ever
+   * checked, so an installation with hundreds of panels under one tenant
+   * reported most of them stale while every configuration validated.
+   *
+   * One grouped aggregate over ACTIVE panels, run once at startup rather than
+   * per tick — the supported population changes when panels are added, not
+   * every thirty seconds.
+   */
+  overCapacityTenants(
+    sustainablePerTenant: number,
+  ): Promise<{ tenantId: string; panels: number }[]>;
 }
 
 /** The tenant-wide bound on real outbound probes: a bucket's size and refill. */

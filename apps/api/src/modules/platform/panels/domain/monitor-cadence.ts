@@ -77,6 +77,42 @@ export const MONITOR_SPREAD_FRACTION = 0.1;
  * The spread is inside the bound, so this holds for the LAST panel in the
  * fleet rather than the average one.
  */
+/**
+ * How many panels ONE tenant can keep inside the freshness window.
+ *
+ * The freshness promise has two independent bounds and only one of them was
+ * ever checked. `healthyCadenceFitsFreshness` proves the CADENCE fits: a panel
+ * that is probed on schedule is refreshed before it goes stale. It says
+ * nothing about whether every panel can be probed on schedule, and that is a
+ * throughput question answered by the tenant's probe bucket.
+ *
+ * Background probes spend the same bucket as an operator's manual tests — one
+ * bucket per tenant is the whole point of the bound — so the sustainable
+ * background rate is the bucket's REFILL rate. The reserve floor holds tokens
+ * back for the operator; it does not change the long-run rate, only the
+ * standing stock. To keep `n` panels fresh at interval `i` the loop must
+ * complete `n / i` probes per unit time, so:
+ *
+ *     n <= refill rate x healthy interval
+ *
+ * With the shipped defaults — 30 tokens per 5 minutes, a 10-minute interval —
+ * that is 60 panels per tenant. A tenant with 500 healthy panels cannot have
+ * them all fresh at any moment, however the batch size, tick and concurrency
+ * are tuned: those decide how quickly the loop can spend tokens, and there are
+ * only six a minute to spend.
+ *
+ * Raising it is a deliberate act with a cost measured on somebody else's
+ * server: `PANEL_PROBE_TENANT_LIMIT` is an outbound rate against a customer's
+ * panels, so this function reports the bound rather than widening it.
+ */
+export function sustainableFreshPanels(
+  tenantLimit: number,
+  windowMs: number,
+  healthyIntervalMs: number,
+): number {
+  return Math.floor((tenantLimit / windowMs) * healthyIntervalMs);
+}
+
 export function maxHealthyIntervalMs(tickMs: number): number {
   return Math.floor((PANEL_HEALTH_FRESH_FOR_MS - tickMs) / (1 + MONITOR_SPREAD_FRACTION));
 }

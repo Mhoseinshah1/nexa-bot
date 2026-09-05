@@ -4,6 +4,7 @@ import {
   DrizzlePanelMonitorRepository,
   dueForTenantsQuery,
 } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel.repository';
+import { sustainableFreshPanels } from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
 import { createTestContext, SEED_IDS, type TestContext } from './harness';
 
 /**
@@ -249,5 +250,30 @@ describe('the panel monitor scheduler at scale', () => {
       }
     }
     expect(servedAtRound).not.toBeNull();
+  });
+
+  describe('the freshness promise is a throughput promise too', () => {
+    it('reports the tenants whose population its bucket cannot keep fresh', async () => {
+      // Codex's reproduction, made deterministic. The cadence check at boot
+      // proves a PROBED panel is refreshed in time; it cannot prove every panel
+      // gets probed, which the tenant's bucket decides. With the shipped
+      // defaults — 30 tokens per 5 minutes, a 10-minute healthy interval — the
+      // sustainable population is 60 panels per tenant, so a tenant with 500
+      // healthy panels cannot have them all fresh at any moment however the
+      // batch size, tick and concurrency are tuned: there are only six tokens a
+      // minute to spend.
+      const sustainable = sustainableFreshPanels(30, 300_000, 10 * 60 * 1000);
+      expect(sustainable).toBe(60);
+
+      const repo = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      const over = await repo.overCapacityTenants(sustainable);
+      // The fixture builds 40 tenants of 500 ACTIVE panels each.
+      expect(over.length).toBeGreaterThan(0);
+      for (const tenant of over) expect(tenant.panels).toBeGreaterThan(sustainable);
+
+      // And the bound is not a fixed number: a bigger bucket supports more.
+      expect(sustainableFreshPanels(300, 300_000, 10 * 60 * 1000)).toBe(600);
+      expect(await repo.overCapacityTenants(600)).toHaveLength(0);
+    });
   });
 });

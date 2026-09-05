@@ -156,6 +156,7 @@ describe('the panel health monitor', () => {
       tenantsPerTick?: number;
       concurrency?: number;
       budgetReserve?: number;
+      sustainableFreshPanels?: number;
       probe?: Partial<ProbeCoreDeps>;
       /**
        * A stand-in for the discovery query.
@@ -185,6 +186,7 @@ describe('the panel health monitor', () => {
         tenantsPerTick: options.tenantsPerTick ?? 10,
         concurrency: options.concurrency ?? 4,
         budgetReserve: options.budgetReserve ?? 0,
+        sustainableFreshPanels: options.sustainableFreshPanels ?? 60,
       },
       30_000,
     );
@@ -320,6 +322,7 @@ describe('the panel health monitor', () => {
           tenantsPerTick: 10,
           concurrency: 4,
           budgetReserve: 0,
+          sustainableFreshPanels: 60,
         },
         30_000,
       );
@@ -468,6 +471,7 @@ describe('the panel health monitor', () => {
           dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
           refreshTenantBounds: async () => {},
           reconcileSchedules: async () => 0,
+          overCapacityTenants: async () => [],
         },
       });
       const result = await m.tick();
@@ -667,6 +671,7 @@ describe('the panel health monitor', () => {
           dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
           refreshTenantBounds: async () => {},
           reconcileSchedules: async () => 0,
+          overCapacityTenants: async () => [],
         },
       });
       await fast.tick();
@@ -762,6 +767,7 @@ describe('the panel health monitor', () => {
             }
             return real.reconcileSchedules(at);
           },
+          overCapacityTenants: real.overCapacityTenants.bind(real),
         },
       });
 
@@ -853,6 +859,7 @@ describe('the panel health monitor', () => {
           dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
           refreshTenantBounds: async () => {},
           reconcileSchedules: async () => 0,
+          overCapacityTenants: async () => [],
         },
         probe: {
           credentials: {
@@ -933,6 +940,7 @@ describe('the panel health monitor', () => {
           dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
           refreshTenantBounds: async () => {},
           reconcileSchedules: async () => 0,
+          overCapacityTenants: async () => [],
         },
       });
       expect((await stale.tick()).deferred).toBe(1);
@@ -1422,6 +1430,7 @@ describe('the panel health monitor', () => {
         dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
         refreshTenantBounds: async () => {},
         reconcileSchedules: async () => 0,
+        overCapacityTenants: async () => [],
       };
       let dialled!: () => void;
       let release!: () => void;
@@ -1667,6 +1676,7 @@ describe('the panel health monitor', () => {
           dueForTenants: async () => [],
           refreshTenantBounds: async () => {},
           reconcileSchedules: async () => 0,
+          overCapacityTenants: async () => [],
         },
       });
     }
@@ -1694,6 +1704,7 @@ describe('the panel health monitor', () => {
           },
           refreshTenantBounds: async () => {},
           reconcileSchedules: async () => 0,
+          overCapacityTenants: async () => [],
         },
       });
       for (let i = 0; i < 5; i += 1) {
@@ -1724,6 +1735,7 @@ describe('the panel health monitor', () => {
           dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
           refreshTenantBounds: async () => {},
           reconcileSchedules: async () => 0,
+          overCapacityTenants: async () => [],
         },
         probe: {
           adapters: (type: ProviderType) => ({

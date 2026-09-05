@@ -800,6 +800,20 @@ export class DrizzlePanelMonitorRepository implements PanelMonitorRepository {
     return inserted.rows.length;
   }
 
+  async overCapacityTenants(
+    sustainablePerTenant: number,
+  ): Promise<{ tenantId: string; panels: number }[]> {
+    const result = await this.db.execute<{ tenant_id: string; panels: string }>(sql`
+      SELECT tenant_id, count(*)::text AS panels
+        FROM ${panels}
+       WHERE status = 'ACTIVE'
+       GROUP BY tenant_id
+      HAVING count(*) > ${sustainablePerTenant}
+       ORDER BY count(*) DESC
+    `);
+    return result.rows.map((row) => ({ tenantId: row.tenant_id, panels: Number(row.panels) }));
+  }
+
   async refreshTenantBounds(tenantIds: readonly string[]): Promise<void> {
     if (tenantIds.length === 0) return;
     /**

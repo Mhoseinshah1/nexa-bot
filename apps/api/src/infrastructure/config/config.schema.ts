@@ -587,6 +587,52 @@ export const configSchema = z
       // A zero reserve is that invariant switched off, and it is refused rather
       // than rounded up so nobody discovers later that monitoring quietly took
       // the manual lane's headroom.
+      // 3. The reserve must leave the monitor a token it can actually reach.
+      //
+      // The floor rounds UP so a positive reserve is never silently zero — the
+      // protection that keeps an operator's last manual probe available at
+      // small capacities. The other side of it was unchecked: at
+      // PANEL_PROBE_TENANT_LIMIT=1 with any positive percentage the floor is
+      // the whole bucket, so every background attempt is refused AFTER it has
+      // claimed the panel, and no panel of that tenant is ever monitored while
+      // the process reports itself perfectly healthy. Both safety properties
+      // are real; a bucket too small to hold both is a contradiction, and the
+      // operator is told so rather than given a monitor that cannot monitor.
+      const reserveFloor =
+        config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT === 0
+          ? 0
+          : Math.max(
+              1,
+              Math.ceil(
+                (config.PANEL_PROBE_TENANT_LIMIT * config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT) /
+                  100,
+              ),
+            );
+      if (config.PANEL_PROBE_TENANT_LIMIT - reserveFloor < 1) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['PANEL_PROBE_TENANT_LIMIT'],
+          message:
+            `PANEL_PROBE_TENANT_LIMIT=${config.PANEL_PROBE_TENANT_LIMIT} with ` +
+            `PANEL_MONITOR_BUDGET_RESERVE_PERCENT=${config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT} ` +
+            `reserves all ${reserveFloor} token(s) for manual tests, leaving the monitor none. ` +
+            `Every background probe would be refused after claiming its panel, so no panel of ` +
+            `that tenant is ever monitored while the process reports itself healthy. Raise ` +
+            `PANEL_PROBE_TENANT_LIMIT to at least ${reserveFloor + 1}, or set ` +
+            `PANEL_MONITOR_ENABLED=false if this installation is deliberately not monitoring.`,
+        });
+      }
+
+      // 4. The freshness promise is a THROUGHPUT promise too.
+      //
+      // `healthyCadenceFitsFreshness` above proves the cadence fits. It says
+      // nothing about whether every panel can be probed on that cadence, which
+      // the tenant's bucket decides — see `sustainableFreshPanels`. Reported
+      // rather than refused: the supported population is a property of the
+      // installation, not a mistake in it, and an operator with twenty panels
+      // should not be stopped from booting by a bound they are nowhere near.
+      // The monitor reports the tenants that exceed it at startup.
+
       if (config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT === 0) {
         ctx.addIssue({
           code: 'custom',

@@ -89,6 +89,15 @@ export interface PanelMonitorDeps {
    * capacity, so the reserve is the same number in every process.
    */
   readonly budgetReserve: number;
+  /**
+   * How many panels ONE tenant can keep inside the freshness window.
+   *
+   * Computed once by the composition root from the probe budget and the healthy
+   * interval — see `sustainableFreshPanels`. Passed in rather than recomputed
+   * here, so the number an operator is warned about is the number their
+   * configuration actually implies.
+   */
+  readonly sustainableFreshPanels: number;
 }
 
 export interface MonitorTickResult {
@@ -285,9 +294,30 @@ export class PanelMonitorService {
     // not report itself healthy while quietly ignoring part of it.
     if (!this.reconciled) {
       const created = await this.deps.discovery.reconcileSchedules(now);
+      // What this installation can actually keep fresh, said out loud once.
+      //
+      // The cadence check at boot proves a probed panel is refreshed in time.
+      // It cannot prove every panel gets probed, which the tenant's bucket
+      // decides — and with the shipped defaults that is sixty panels per
+      // tenant. Reporting the shortfall is the honest alternative to widening
+      // an outbound rate against somebody else's server on the installation's
+      // behalf.
+      const over = await this.deps.discovery.overCapacityTenants(this.deps.sustainableFreshPanels);
       this.reconciled = true;
       if (created > 0) {
         this.deps.logger.warn({ created }, 'panel monitor created missing scheduler rows');
+      }
+      for (const tenant of over) {
+        this.deps.logger.warn(
+          {
+            tenantId: tenant.tenantId,
+            panels: tenant.panels,
+            sustainable: this.deps.sustainableFreshPanels,
+          },
+          'tenant has more active panels than its probe budget can keep fresh; ' +
+            'health for this tenant will read stale for some panels until ' +
+            'PANEL_PROBE_TENANT_LIMIT or PANEL_PROBE_TENANT_WINDOW_MS is raised',
+        );
       }
     }
 

@@ -247,6 +247,38 @@ every rollback to it — after the assets had already moved. The relaxation is
 exactly one service wide; a monitor-less topology still requires its API and its
 worker.
 
+## What one installation can keep fresh
+
+Panel health carries a freshness window (`PANEL_HEALTH_FRESH_FOR_MS`, fifteen
+minutes), and meeting it takes two separate things. The cadence has to fit
+inside the window — refused at boot if it does not — and the tenant's probe
+budget has to be able to complete that many probes per interval. Only the first
+was ever checked, so an installation could validate every setting and still
+report most of its panels stale.
+
+Background probes spend the same per-tenant bucket as an operator's manual
+tests; one bucket per tenant is the whole point of the bound. So the sustainable
+population is the bucket's refill rate times the healthy interval:
+
+    panels per tenant  =  (PANEL_PROBE_TENANT_LIMIT / PANEL_PROBE_TENANT_WINDOW_MS)
+                          x PANEL_MONITOR_HEALTHY_INTERVAL_MS
+
+With the shipped defaults — 30 tokens per 5 minutes, a 10-minute interval —
+that is **60 panels per tenant**. Batch size, tick interval and concurrency
+decide how quickly the loop can spend tokens; they cannot create more. A tenant
+with five hundred panels on the default budget will have most of its health
+rows stale at any moment, and no amount of tuning those three settings changes
+it.
+
+The monitor says so rather than promising otherwise. At startup it counts each
+tenant's ACTIVE panels and logs a warning naming any tenant above the bound,
+with the number its configuration actually supports.
+
+Raising it is a deliberate act whose cost lands on somebody else's server:
+`PANEL_PROBE_TENANT_LIMIT` is an outbound rate against a customer's panels, and
+`docs/vps-acceptance.md` is where a real figure for a real installation
+belongs. The monitor will not widen it on the installation's behalf.
+
 ## Backups
 
 `botctl backup` runs `pg_dump` inside the database container and writes
