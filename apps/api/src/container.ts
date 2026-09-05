@@ -704,6 +704,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       repository: panelRepository,
       credentials: panelCredentials,
       guard,
+      // The same reader settings, templates, feature flags and the ping
+      // recorder are given. The panels module was the one write path that did
+      // not check whether its scope was still accepting work.
+      scopeActivity: tenants,
       audit,
       opsLog,
       sessions,

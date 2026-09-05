@@ -31,6 +31,7 @@ import {
 } from '../../access/application/authorized-mutation.js';
 import { rememberOnce } from '../../idempotency/application/remember-once.js';
 import type { SessionRepository } from '../../identity/application/ports.js';
+import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   checkUrl,
@@ -88,6 +89,22 @@ export interface PanelServiceDeps {
   readonly repository: PanelRepository;
   readonly credentials: PanelCredentialStore;
   readonly guard: PermissionGuard;
+  /**
+   * Whether this scope is still accepting work, read INSIDE the transaction.
+   *
+   * Settings, templates, feature flags and the ping recorder have all checked
+   * this since Phase 2; the panels module did not, and that made it the one
+   * place where a tenant an operator had STOPPED could still have panels
+   * created, edited, re-credentialled and re-statused — writing audit,
+   * idempotency and outbox rows for an installation somebody had already
+   * switched off, and arming a background monitor to dial the machines of a
+   * tenant this installation is no longer serving.
+   *
+   * A surface checks activity when the request arrives, which is a snapshot: a
+   * stop can commit in between, answer the operator, and the write still land.
+   * That is why this is read in the transaction and not in the controller.
+   */
+  readonly scopeActivity: ScopeActivityReader;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
   readonly sessions: SessionRepository;
@@ -402,6 +419,7 @@ export class PanelService {
       PANELS_EDIT,
       { action: 'panel.create', entityType: 'Panel', entityId: null },
       async (tx) => {
+        await this.requireActiveScope(scope, tx);
         if (await this.deps.repository.nameTaken(tenant, command.name, null, tx)) {
           throw errors.conflict(
             PANEL_ERROR_CODES.PANEL_NAME_TAKEN,
@@ -499,6 +517,7 @@ export class PanelService {
       PANELS_EDIT,
       { action: 'panel.update', entityType: 'Panel', entityId: panelId },
       async (tx) => {
+        await this.requireActiveScope(scope, tx);
         const before = await this.require(tenant, panelId, tx);
         if (before.panel.status === 'ARCHIVED') {
           throw errors.preconditionFailed(
@@ -625,6 +644,7 @@ export class PanelService {
       PANELS_CREDENTIALS_ROTATE,
       { action: 'panel.credentials.replace', entityType: 'Panel', entityId: panelId },
       async (tx) => {
+        await this.requireActiveScope(scope, tx);
         const before = await this.require(tenant, panelId, tx);
         if (before.panel.status === 'ARCHIVED') {
           throw errors.preconditionFailed(
@@ -703,6 +723,7 @@ export class PanelService {
       PANELS_EDIT,
       { action: 'panel.status', entityType: 'Panel', entityId: panelId },
       async (tx) => {
+        await this.requireActiveScope(scope, tx);
         const before = await this.require(tenant, panelId, tx);
         const updated = await this.deps.repository.setStatus(tenant, panelId, status, now, tx);
         if (updated === null) {
@@ -773,6 +794,22 @@ export class PanelService {
       entityType: 'Panel',
       entityId: panelId,
     });
+
+    // A stopped tenant's panels are not dialled, on either lane. The monitor
+    // refuses them in `claimTenants`; this is the operator's lane, and a probe
+    // it runs reaches somebody else's machine just as surely.
+    //
+    // Read WITHOUT a transaction because this path has none to join — the
+    // claim inside `probe-core` opens its own. So this is a snapshot, and the
+    // window is the same one the monitor documents: a tenant stopped after
+    // this check has this one probe complete. What it stops is the steady
+    // state, which is what matters.
+    if (!(await this.deps.scopeActivity.scopeIsActive(scope))) {
+      throw errors.notFound(
+        PLATFORM_ERROR_CODES.TENANT_NOT_FOUND,
+        'This scope is not accepting work.',
+      );
+    }
 
     const requestHash = hashRequest({ panelId, operation: 'test' });
     const existing = await this.deps.idempotency.find<{ panelId: string }>(
@@ -991,6 +1028,23 @@ export class PanelService {
       probeBudget: this.deps.probeBudget,
       cadence: this.deps.cadence,
     };
+  }
+
+  /**
+   * Refuse the write when this scope has stopped accepting work.
+   *
+   * Called INSIDE the mutation's transaction, before the first read that the
+   * write depends on, and it throws the same NOT_FOUND the control-plane
+   * services throw — a tenant an operator has stopped should look absent to a
+   * writer, not present-but-refusing, and the message says which it is without
+   * confirming the tenant to somebody who should not know it exists.
+   */
+  private async requireActiveScope(scope: ScopeContext, tx: TransactionScope): Promise<void> {
+    if (await this.deps.scopeActivity.scopeIsActive(scope, tx)) return;
+    throw errors.notFound(
+      PLATFORM_ERROR_CODES.TENANT_NOT_FOUND,
+      'This scope is not accepting work.',
+    );
   }
 
   private mutationDeps() {

@@ -205,6 +205,7 @@ describe('the panel health monitor', () => {
       repository: deps.repository,
       credentials: deps.credentials,
       guard: ctx.container.guard,
+      scopeActivity: ctx.container.tenants,
       audit: ctx.container.audit,
       opsLog: ctx.container.opsLog,
       sessions: ctx.container.sessions,

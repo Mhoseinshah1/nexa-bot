@@ -4,6 +4,7 @@ import {
   auditLogs,
   panelCredentials,
   panels,
+  tenants,
 } from '../../apps/api/src/infrastructure/persistence/schema';
 import {
   PANEL_PAGE_DEFAULT,
@@ -111,6 +112,108 @@ describe('panels', () => {
       idempotencyKey: key(),
       ...overrides,
     });
+
+  // -------------------------------------------------------------------------
+  // A scope that has stopped accepting work
+  // -------------------------------------------------------------------------
+
+  describe('a tenant this installation has stopped', () => {
+    // S2. Settings, templates, feature flags and the ping recorder have all
+    // checked scope activity INSIDE the write transaction since Phase 2. The
+    // panels module did not, which made it the one place where a tenant an
+    // operator had stopped could still have panels created, edited,
+    // re-credentialled and re-statused — writing audit, idempotency and outbox
+    // rows for an installation somebody had already switched off, and arming
+    // the background monitor to dial that tenant's machines.
+    const stop = async () => {
+      await ctx.container.database.db
+        .update(tenants)
+        .set({ status: 'STOPPED' })
+        .where(eq(tenants.id, tenantA.tenantId));
+    };
+
+    it('refuses to create a panel', async () => {
+      await stop();
+      await expect(create(owner, tenantA)).rejects.toMatchObject({
+        code: 'platform.tenant_not_found',
+      });
+      expect(await ctx.container.database.db.select().from(panels)).toHaveLength(0);
+    });
+
+    it('refuses to edit, re-credential or re-status an existing panel', async () => {
+      const { view } = await create(owner, tenantA, {
+        credentials: { username: USERNAME, password: PASSWORD },
+      });
+      const panelId = view.panel.id;
+      await stop();
+
+      await expect(
+        ctx.container.panels.update(tenantA, adminActorFor(owner), panelId, {
+          name: 'Renamed',
+          idempotencyKey: key(),
+        }),
+      ).rejects.toMatchObject({ code: 'platform.tenant_not_found' });
+
+      await expect(
+        ctx.container.panels.setCredentials(tenantA, adminActorFor(owner), panelId, {
+          credentials: { password: 'another-password' },
+          idempotencyKey: key(),
+        }),
+      ).rejects.toMatchObject({ code: 'platform.tenant_not_found' });
+
+      await expect(
+        ctx.container.panels.setStatus(tenantA, adminActorFor(owner), panelId, {
+          status: 'DISABLED',
+          idempotencyKey: key(),
+        }),
+      ).rejects.toMatchObject({ code: 'platform.tenant_not_found' });
+
+      // Nothing moved. A refusal that had already written its audit or
+      // idempotency row would be the defect wearing a different hat.
+      const [row] = await ctx.container.database.db.select().from(panels);
+      expect(row!.name).toBe('Frankfurt');
+      expect(row!.status).toBe('ACTIVE');
+    });
+
+    it('refuses an operator connection test, which dials somebody else’s machine', async () => {
+      const { view } = await create(owner, tenantA, {
+        credentials: { username: USERNAME, password: PASSWORD },
+      });
+      await stop();
+      await expect(
+        ctx.container.panels.testConnection(tenantA, adminActorFor(owner), view.panel.id, {
+          idempotencyKey: key(),
+        }),
+      ).rejects.toMatchObject({ code: 'platform.tenant_not_found' });
+    });
+
+    it('still lets an operator READ, which is how they diagnose the stop', async () => {
+      const { view } = await create(owner, tenantA);
+      await stop();
+
+      // Deliberately not symmetric with the writes above, and it matches what
+      // the four control-plane services do: they gate mutations and leave
+      // reads open. An operator who cannot list the panels of a tenant they
+      // have just stopped cannot see what they stopped.
+      const page = await ctx.container.panels.list(tenantA, adminActorFor(owner));
+      expect(page.panels.map((p) => p.panel.id)).toEqual([view.panel.id]);
+      const one = await ctx.container.panels.get(tenantA, adminActorFor(owner), view.panel.id);
+      expect(one.panel.id).toBe(view.panel.id);
+    });
+
+    it('serves the tenant again once it is active', async () => {
+      await stop();
+      await expect(create(owner, tenantA)).rejects.toMatchObject({
+        code: 'platform.tenant_not_found',
+      });
+      await ctx.container.database.db
+        .update(tenants)
+        .set({ status: 'ACTIVE' })
+        .where(eq(tenants.id, tenantA.tenantId));
+      const { view } = await create(owner, tenantA);
+      expect(view.panel.status).toBe('ACTIVE');
+    });
+  });
 
   // -------------------------------------------------------------------------
   // The ordinary path
@@ -1010,6 +1113,7 @@ describe('panels', () => {
       repository: new DrizzlePanelRepository(ctx.container.database.db),
       credentials: new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher),
       guard: ctx.container.guard,
+      scopeActivity: ctx.container.tenants,
       audit: ctx.container.audit,
       opsLog: ctx.container.opsLog,
       sessions: ctx.container.sessions,

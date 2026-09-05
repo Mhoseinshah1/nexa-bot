@@ -106,6 +106,7 @@ describe('the tenant-wide probe budget', () => {
         context.container.database.db,
         context.container.cipher,
       ),
+      scopeActivity: context.container.tenants,
       guard: context.container.guard,
       audit: context.container.audit,
       opsLog: context.container.opsLog,

@@ -335,6 +335,7 @@ describe('panel service under concurrency', () => {
       repository: new DrizzlePanelRepository(ctx.container.database.db),
       credentials: new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher),
       guard: ctx.container.guard,
+      scopeActivity: ctx.container.tenants,
       audit: ctx.container.audit,
       opsLog: ctx.container.opsLog,
       sessions: ctx.container.sessions,
