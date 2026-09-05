@@ -66,6 +66,25 @@ function executorOf(db: Database, tx?: TransactionScope): Executor {
   return tx?.tx ?? db;
 }
 
+/**
+ * Turns the live-name unique violation into the conflict the API documents.
+ *
+ * Every live-name write pre-checks with `nameTaken`, and a pre-check cannot
+ * prevent a race: two requests naming the same panel both pass it, one insert
+ * wins and the other took an unhandled 23505 out through the error filter as a
+ * 500. The index is the real rule; this is how the rule reaches the caller.
+ *
+ * Named constraint, not bare 23505: `panels` can grow another unique index, and
+ * mapping an unrelated violation to "name taken" would be a confident wrong
+ * answer instead of an honest error.
+ */
+function rethrowNameConflict(error: unknown, message: string): never {
+  if (isUniqueViolation(error, 'panels_tenant_name_live_key')) {
+    throw errors.conflict(PANEL_ERROR_CODES.PANEL_NAME_TAKEN, message);
+  }
+  throw error;
+}
+
 export class DrizzlePanelRepository implements PanelRepository {
   constructor(private readonly db: Database) {}
 
@@ -125,19 +144,27 @@ export class DrizzlePanelRepository implements PanelRepository {
     input: CreatePanelInput,
     tx: TransactionScope,
   ): Promise<PanelRecord> {
-    const [row] = await tx.tx
-      .insert(panels)
-      .values({
-        id: input.id,
-        tenantId: scope.tenantId,
-        name: input.name,
-        providerType: input.providerType,
-        baseUrl: input.baseUrl,
-        status: 'ACTIVE',
-        createdAt: input.at,
-        updatedAt: input.at,
-      })
-      .returning();
+    let row;
+    try {
+      [row] = await tx.tx
+        .insert(panels)
+        .values({
+          id: input.id,
+          tenantId: scope.tenantId,
+          name: input.name,
+          providerType: input.providerType,
+          baseUrl: input.baseUrl,
+          status: 'ACTIVE',
+          createdAt: input.at,
+          updatedAt: input.at,
+        })
+        .returning();
+    } catch (error) {
+      rethrowNameConflict(
+        error,
+        'Another panel of this tenant already uses that name. Choose a different one.',
+      );
+    }
     if (row === undefined) throw new Error('panel insert returned no row');
     return toRecord(row);
   }
@@ -153,11 +180,19 @@ export class DrizzlePanelRepository implements PanelRepository {
     if (input.name !== undefined) changes['name'] = input.name;
     if (input.baseUrl !== undefined) changes['baseUrl'] = input.baseUrl;
 
-    const [row] = await tx.tx
-      .update(panels)
-      .set(changes)
-      .where(and(eq(panels.id, panelId), eq(panels.tenantId, scope.tenantId)))
-      .returning();
+    let row;
+    try {
+      [row] = await tx.tx
+        .update(panels)
+        .set(changes)
+        .where(and(eq(panels.id, panelId), eq(panels.tenantId, scope.tenantId)))
+        .returning();
+    } catch (error) {
+      rethrowNameConflict(
+        error,
+        'Another panel of this tenant already uses that name. Choose a different one.',
+      );
+    }
     return row === undefined ? null : toRecord(row);
   }
 
@@ -725,6 +760,44 @@ export class DrizzlePanelMonitorRepository implements PanelMonitorRepository {
       dueForTenantsQuery(tenantIds, now, perTenant, batchSize),
     );
     return result.rows.map((row) => ({ tenantId: row.tenant_id, panelId: row.panel_id }));
+  }
+
+  /**
+   * Creates the scheduler rows for any panel that has none. See the port.
+   *
+   * Deliberately the same shape as migration 0022's backfill — a non-ACTIVE
+   * panel is created suspended, an ACTIVE one due now — because it is repairing
+   * exactly what that backfill would have created had it run later. The
+   * anti-join is one indexed pass over `panels`, run at startup rather than per
+   * tick.
+   */
+  async reconcileSchedules(now: Date): Promise<number> {
+    const inserted = await this.db.execute<{ panel_id: string }>(sql`
+      WITH created AS (
+        INSERT INTO ${panelMonitorSchedule}
+               (panel_id, tenant_id, next_eligible_at, consecutive_failures, deferred_reason, updated_at)
+        SELECT p.id, p.tenant_id,
+               CASE WHEN p.status = 'ACTIVE' THEN ${now}::timestamptz
+                    ELSE ${SCHEDULE_SUSPENDED_AT}::timestamptz END,
+               0,
+               CASE WHEN p.status = 'ACTIVE' THEN NULL ELSE 'STATUS_NOT_PROBEABLE' END,
+               ${now}
+          FROM ${panels} AS p
+         WHERE NOT EXISTS (
+                 SELECT 1 FROM ${panelMonitorSchedule} AS s WHERE s.panel_id = p.id
+               )
+        ON CONFLICT (panel_id) DO NOTHING
+        RETURNING panel_id, tenant_id, next_eligible_at
+      ), bounds AS (
+        INSERT INTO ${panelMonitorTenants} (tenant_id, next_eligible_at, last_served_at)
+        SELECT tenant_id, MIN(next_eligible_at), to_timestamp(0)
+          FROM created GROUP BY tenant_id
+        ON CONFLICT (tenant_id) DO UPDATE
+           SET next_eligible_at = LEAST(${panelMonitorTenants.nextEligibleAt}, EXCLUDED.next_eligible_at)
+      )
+      SELECT panel_id FROM created
+    `);
+    return inserted.rows.length;
   }
 
   async refreshTenantBounds(tenantIds: readonly string[]): Promise<void> {

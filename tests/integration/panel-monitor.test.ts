@@ -467,6 +467,7 @@ describe('the panel health monitor', () => {
           claimTenants: async () => [tenantA.tenantId],
           dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
           refreshTenantBounds: async () => {},
+          reconcileSchedules: async () => 0,
         },
       });
       const result = await m.tick();
@@ -613,6 +614,89 @@ describe('the panel health monitor', () => {
     });
   });
 
+  describe('panel writes', () => {
+    it('treats an edit with no editable field as a no-op', async () => {
+      // The frozen request schema permits a body carrying only an idempotency
+      // key. It used to advance `updated_at`, make the panel immediately
+      // probe-eligible and record a successful update, so repeated empty edits
+      // with fresh keys drove background probes at the caller's chosen rate and
+      // filled the audit trail with changes that never happened.
+      const panelId = await createPanel(ownerA, tenantA, 'no-op-edit');
+      await tick();
+      const before = (await scheduleOf(panelId))!;
+
+      await service().update(tenantA, adminActorFor(ownerA), panelId, {
+        idempotencyKey: key(),
+      });
+
+      const after = (await scheduleOf(panelId))!;
+      expect(after.nextEligibleAt.getTime()).toBe(before.nextEligibleAt.getTime());
+      const audits = await ctx.container.database.db
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.action, 'panel.update'));
+      expect(audits).toHaveLength(0);
+    });
+
+    it('maps a create-time name race to the documented conflict, not a 500', async () => {
+      // `nameTaken` is a pre-check and a pre-check cannot prevent a race: both
+      // requests pass it, one insert wins, and the other used to take an
+      // unhandled 23505 out through the error filter as an internal error.
+      const attempt = () =>
+        service().create(tenantA, adminActorFor(ownerA), {
+          name: 'the-contested-name',
+          providerType: 'marzban',
+          baseUrl: 'https://panel.example.test',
+          credentials: { username: USERNAME, password: PASSWORD },
+          idempotencyKey: key(),
+        });
+      const results = await Promise.allSettled([attempt(), attempt()]);
+      const rejected = results.filter((r) => r.status === 'rejected');
+      expect(rejected).toHaveLength(1);
+      const error = (rejected[0] as PromiseRejectedResult).reason as {
+        code?: string;
+        kind?: string;
+      };
+      expect(error.code).toBe('panel.name_taken');
+      expect(error.kind).toBe('CONFLICT');
+    });
+  });
+
+  describe('a panel created while the release was rolled back', () => {
+    it('is reconciled and monitored after rolling forward', async () => {
+      // `botctl rollback` deliberately never restores the database, so a failed
+      // update can leave 0022 applied under a Phase 3B image. That image knows
+      // nothing about `panel_monitor_schedule`, so a panel it creates has no
+      // row — and rolling forward does not re-run a migration already in the
+      // journal. The discovery scan reads only the schedule, so the panel was
+      // silently never monitored.
+      const panelId = await createPanel(ownerA, tenantA, 'made-while-rolled-back');
+      // Exactly what the older binary leaves behind: the panel, and no schedule.
+      await ctx.container.database.db.execute(
+        sql`DELETE FROM panel_monitor_schedule WHERE panel_id = ${panelId}`,
+      );
+      expect(await scheduleOf(panelId)).toBeUndefined();
+      expect((await tick()).considered).toBe(0);
+
+      // Rolling forward starts the monitor, which repairs it.
+      const created = await new DrizzlePanelMonitorRepository(
+        ctx.container.database.db,
+      ).reconcileSchedules(now);
+      expect(created).toBe(1);
+
+      expect((await tick()).probed).toBe(1);
+      expect((await healthOf(panelId))?.state).toBe('HEALTHY');
+    });
+
+    it('creates nothing when every panel already has a row', async () => {
+      await createPanel(ownerA, tenantA, 'already-scheduled');
+      const created = await new DrizzlePanelMonitorRepository(
+        ctx.container.database.db,
+      ).reconcileSchedules(now);
+      expect(created).toBe(0);
+    });
+  });
+
   describe('a refusal does not undo the fix for what it refused over', () => {
     it('does not defer a panel whose credential arrived while it was being refused', async () => {
       // The monitor reads no usable credential and decides to defer for the
@@ -634,6 +718,7 @@ describe('the panel health monitor', () => {
           claimTenants: async () => [tenantA.tenantId],
           dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
           refreshTenantBounds: async () => {},
+          reconcileSchedules: async () => 0,
         },
         probe: {
           credentials: {
@@ -713,6 +798,7 @@ describe('the panel health monitor', () => {
           claimTenants: async () => [tenantA.tenantId],
           dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
           refreshTenantBounds: async () => {},
+          reconcileSchedules: async () => 0,
         },
       });
       expect((await stale.tick()).deferred).toBe(1);
@@ -1201,6 +1287,7 @@ describe('the panel health monitor', () => {
         claimTenants: async () => [tenantA.tenantId],
         dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
         refreshTenantBounds: async () => {},
+        reconcileSchedules: async () => 0,
       };
       let dialled!: () => void;
       let release!: () => void;
@@ -1445,6 +1532,7 @@ describe('the panel health monitor', () => {
           },
           dueForTenants: async () => [],
           refreshTenantBounds: async () => {},
+          reconcileSchedules: async () => 0,
         },
       });
     }
@@ -1471,6 +1559,7 @@ describe('the panel health monitor', () => {
             throw new Error('due scan is broken');
           },
           refreshTenantBounds: async () => {},
+          reconcileSchedules: async () => 0,
         },
       });
       for (let i = 0; i < 5; i += 1) {
@@ -1500,6 +1589,7 @@ describe('the panel health monitor', () => {
           claimTenants: async () => [tenantA.tenantId],
           dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
           refreshTenantBounds: async () => {},
+          reconcileSchedules: async () => 0,
         },
         probe: {
           adapters: (type: ProviderType) => ({

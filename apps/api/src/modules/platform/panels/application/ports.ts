@@ -374,6 +374,24 @@ export interface PanelMonitorRepository {
    * a fairness slot to discover it has nothing to do.
    */
   refreshTenantBounds(tenantIds: readonly string[]): Promise<void>;
+  /**
+   * Creates the scheduler rows for any panel that has none.
+   *
+   * Migration 0022's backfill runs exactly once, and that is not enough. A
+   * failed update can apply 0022 and then roll the APPLICATION back without
+   * rolling the database back — which is the supported shape, because
+   * `botctl rollback` deliberately never restores the database. The older
+   * release knows nothing about `panel_monitor_schedule`, so any panel it
+   * creates has no row; rolling forward again does not re-run a migration
+   * already in the journal. The discovery scan reads only the schedule, so
+   * that panel is silently never monitored — until some later operator edit
+   * happens to write its row.
+   *
+   * Idempotent and safe to run from every replica: it inserts only what is
+   * missing. Run at startup, which is exactly when the rollback-and-forward
+   * sequence ends.
+   */
+  reconcileSchedules(now: Date): Promise<number>;
 }
 
 /** The tenant-wide bound on real outbound probes: a bucket's size and refill. */

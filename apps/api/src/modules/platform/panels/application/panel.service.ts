@@ -510,6 +510,27 @@ export class PanelService {
         if (command.name !== undefined) changes.name = command.name;
         if (baseUrl !== undefined) changes.baseUrl = baseUrl;
 
+        // An edit that changes nothing is a no-op, not a cheap way to force a
+        // probe. The frozen request schema permits a body carrying only an
+        // idempotency key, and this used to advance `updated_at`, make the
+        // panel immediately probe-eligible and record a successful update — so
+        // repeated empty edits with fresh keys drove background probes at the
+        // caller's chosen rate and filled the audit trail with changes that
+        // never happened. The request still succeeds and is still remembered;
+        // it simply does nothing, which is what it asked for.
+        if (Object.keys(changes).length === 0) {
+          await rememberOnce(
+            this.deps.idempotency,
+            scope,
+            actor.surface,
+            command.idempotencyKey,
+            requestHash,
+            { panelId },
+            tx,
+          );
+          return;
+        }
+
         const updated = await this.deps.repository.update(tenant, panelId, changes, now, tx);
         if (updated === null) {
           throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
@@ -889,7 +910,29 @@ export class PanelService {
             // The normalized outcome and nothing else. No provider message, no
             // header, no body — the probe result type has no field one could
             // be put in, which is what makes this hard to get wrong later.
-            after: { state: health.state, failure: health.failure, latencyMs: health.latencyMs },
+            //
+            // And what is recorded is what the DATABASE now holds, not what
+            // this probe measured. A slow manual test finishing after a newer
+            // probe of the same configuration has its health write discarded;
+            // recording the discarded state as the after-state left an
+            // authoritative audit row asserting a transition that never
+            // happened. A discarded result is audited as exactly that.
+            after:
+              outcome === 'APPLIED'
+                ? { state: health.state, failure: health.failure, latencyMs: health.latencyMs }
+                : {
+                    // The state the row actually holds, and the measurement
+                    // that lost, named as having lost. `result` stays SUCCESS
+                    // because the operator's command did succeed — the probe
+                    // ran and answered; it is the STORED state this row must
+                    // not misreport.
+                    state: before.health?.state ?? null,
+                    discarded: {
+                      state: health.state,
+                      failure: health.failure,
+                      latencyMs: health.latencyMs,
+                    },
+                  },
             result: 'SUCCESS',
           },
           tx,

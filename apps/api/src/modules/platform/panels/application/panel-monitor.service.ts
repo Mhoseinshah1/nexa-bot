@@ -167,6 +167,23 @@ export class PanelMonitorService {
   start(): void {
     if (this.timer !== null) return;
     this.stopping = false;
+    // Repair any panel a rollback-era release created without a schedule row.
+    // Startup is when that sequence ends, and the work is one indexed anti-join.
+    // Failure here must not stop the loop: a monitor that will not start is
+    // worse than one that has not yet repaired an orphan.
+    void this.deps.discovery
+      .reconcileSchedules(this.deps.clock.now())
+      .then((created) => {
+        if (created > 0) {
+          this.deps.logger.warn(
+            { created },
+            'panel monitor created missing scheduler rows at startup',
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        this.deps.logger.error({ err: error }, 'panel monitor could not reconcile schedules');
+      });
     // The first tick runs immediately rather than one interval later. A monitor
     // that restarts more often than its interval — a crash loop, a day of
     // deploys — would otherwise never probe anything at all.

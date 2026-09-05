@@ -533,6 +533,28 @@ export const configSchema = z
     // somebody is reading the message, and not be silently corrected into
     // something the operator did not ask for.
     if (config.PANEL_MONITOR_ENABLED) {
+      // 0. A claimed tenant must be able to receive at least one candidate.
+      //
+      // `claimTenants` advances `last_served_at` for every tenant it claims,
+      // and the due scan is then capped globally by the batch size. Claiming
+      // two hundred tenants for a batch of one marks two hundred tenants as
+      // served while one panel is probed, so the documented `ceil(d / t)`
+      // fairness bound — the one the rotation exists to provide — is simply
+      // false, and a two-hundred-tenant group needs about two hundred ticks
+      // rather than one. Refused rather than clamped: an operator who asked
+      // for both numbers should be told they contradict each other.
+      if (config.PANEL_MONITOR_TENANTS_PER_TICK > config.PANEL_MONITOR_BATCH_SIZE) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['PANEL_MONITOR_TENANTS_PER_TICK'],
+          message:
+            `PANEL_MONITOR_TENANTS_PER_TICK (${config.PANEL_MONITOR_TENANTS_PER_TICK}) exceeds ` +
+            `PANEL_MONITOR_BATCH_SIZE (${config.PANEL_MONITOR_BATCH_SIZE}). A tick cannot give ` +
+            `every claimed tenant a candidate, so claiming them spends their turn for nothing ` +
+            `and the ceil(due tenants / tenants per tick) fairness bound does not hold.`,
+        });
+      }
+
       // 1. A healthy panel must stay inside the freshness window.
       //
       // Worst case is the interval, plus the deterministic anti-herd spread,

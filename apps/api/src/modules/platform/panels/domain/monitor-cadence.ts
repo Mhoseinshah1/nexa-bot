@@ -134,10 +134,11 @@ export function deferralIntervalMs(reason: MonitorDeferralReason): number {
     case 'TARGET_BLOCKED':
     case 'STATUS_NOT_PROBEABLE':
     case 'NOT_AUTHORIZED':
-    // An envelope that will not decrypt this minute will not decrypt in the
-    // next one either. Stable, so a corrupt row costs its tenant one slot an
-    // hour rather than every slot of every tick.
     case 'INTERNAL_ERROR':
+      // `INTERNAL_ERROR` is stable for the same reason as the rest: an envelope
+      // that will not decrypt this minute will not decrypt in the next one
+      // either, so a corrupt row costs its tenant one slot an hour rather than
+      // every slot of every tick.
       return MONITOR_STABLE_DEFERRAL_MS;
   }
 }

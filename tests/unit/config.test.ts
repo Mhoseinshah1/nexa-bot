@@ -380,3 +380,30 @@ describe('deployment topology and trusted proxies', () => {
     });
   });
 });
+
+describe('the monitor cannot claim more tenants than a tick can serve', () => {
+  it('refuses a tenants-per-tick above the batch size', () => {
+    // `claimTenants` spends every claimed tenant's turn, and the due scan is
+    // capped globally by the batch. Two hundred tenants for a batch of one
+    // marks two hundred as served while one panel is probed, so the documented
+    // ceil(d / t) fairness bound is simply false.
+    expect(() =>
+      loadConfig({
+        ...valid,
+        PANEL_MONITOR_ENABLED: 'true',
+        PANEL_MONITOR_TENANTS_PER_TICK: '200',
+        PANEL_MONITOR_BATCH_SIZE: '1',
+      }),
+    ).toThrow(/PANEL_MONITOR_TENANTS_PER_TICK/);
+  });
+
+  it('accepts them equal, which is the tightest honest configuration', () => {
+    const config = loadConfig({
+      ...valid,
+      PANEL_MONITOR_ENABLED: 'true',
+      PANEL_MONITOR_TENANTS_PER_TICK: '10',
+      PANEL_MONITOR_BATCH_SIZE: '10',
+    });
+    expect(config.PANEL_MONITOR_TENANTS_PER_TICK).toBe(10);
+  });
+});
