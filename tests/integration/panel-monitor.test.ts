@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { errors } from '@nexa/contracts';
 import type { ProviderProbeOutcome, ProviderType, TenantContext } from '@nexa/contracts';
 import {
@@ -748,6 +748,94 @@ describe('the panel health monitor', () => {
       };
       expect(error.code).toBe('panel.name_taken');
       expect(error.kind).toBe('CONFLICT');
+    });
+  });
+
+  describe('every outage and recovery cycle is announced once', () => {
+    const rowFor = async (code: string, panelId: string) =>
+      (
+        await ctx.container.database.db
+          .select()
+          .from(operationalEvents)
+          .where(
+            and(
+              eq(operationalEvents.code, code),
+              eq(operationalEvents.dedupeKey, `${code}:${panelId}`),
+            ),
+          )
+      )[0];
+
+    it('announces the SECOND recovery, not just the first', async () => {
+      // Every recovery for a panel shares one dedupe key, and a row that is
+      // still open is only ever incremented — so the projector saw neither a
+      // new row nor a reopened one and said nothing. A panel that failed,
+      // recovered, failed and recovered again announced the first recovery and
+      // then went quiet for every one after it. The failure now closes the
+      // recovery row, because healthy is not itself a condition and there was
+      // otherwise nothing to close.
+      const panelId = await createPanel(ownerA, tenantA, 'flapping');
+      const step = async (result: ProviderProbeOutcome) => {
+        outcome = result;
+        now = new Date(now.getTime() + 20 * 60 * 1000);
+        await tick();
+      };
+
+      await step(HEALTHY); // first check: not a recovery, nothing was wrong
+      await step(TIMED_OUT); // outage 1
+      await step(HEALTHY); // recovery 1
+      const first = await rowFor('panel.health.recovered', panelId);
+      expect(first).toBeDefined();
+      expect(first!.resolvedAt).toBeNull();
+      expect(first!.occurrenceCount).toBe(1);
+
+      await step(TIMED_OUT); // outage 2 — must CLOSE the recovery row
+      const closed = await rowFor('panel.health.recovered', panelId);
+      expect(closed!.resolvedAt).not.toBeNull();
+
+      await step(HEALTHY); // recovery 2 — reopens it, so it is announced again
+      const second = await rowFor('panel.health.recovered', panelId);
+      expect(second!.resolvedAt).toBeNull();
+      expect(second!.occurrenceCount).toBe(2);
+    });
+
+    it('does the same for an authentication cycle', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'flapping-auth');
+      const step = async (result: ProviderProbeOutcome) => {
+        outcome = result;
+        now = new Date(now.getTime() + 90 * 60 * 1000);
+        await tick();
+      };
+
+      await step(HEALTHY);
+      await step(REJECTED);
+      await step(HEALTHY);
+      await step(REJECTED);
+      const closed = await rowFor('panel.health.recovered', panelId);
+      expect(closed!.resolvedAt).not.toBeNull();
+
+      await step(HEALTHY);
+      const second = await rowFor('panel.health.recovered', panelId);
+      expect(second!.resolvedAt).toBeNull();
+      expect(second!.occurrenceCount).toBe(2);
+    });
+
+    it('does not re-announce a condition that simply persists', async () => {
+      // The other half: no spam. A panel that stays broken produces no further
+      // event at all — the loop announces TRANSITIONS, so an unchanged state
+      // and failure is not one. Stronger than deduplication, which is why the
+      // occurrence count stays at one rather than climbing.
+      await createPanel(ownerA, tenantA, 'steadily-broken');
+      outcome = TIMED_OUT;
+      for (let i = 0; i < 3; i += 1) {
+        now = new Date(now.getTime() + 90 * 60 * 1000);
+        await tick();
+      }
+      const rows = await ctx.container.database.db
+        .select()
+        .from(operationalEvents)
+        .where(eq(operationalEvents.code, 'panel.health.unreachable'));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.occurrenceCount).toBe(1);
     });
   });
 

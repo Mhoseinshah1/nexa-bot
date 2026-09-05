@@ -58,6 +58,8 @@ const MAINTENANCE_RUN = 'maintenance.run' as const;
  * ties one sweep's rows together.
  */
 export /** Operational conditions this loop reports about its own capacity. */
+const RECOVERED_CODE = 'panel.health.recovered';
+
 const TENANT_BUDGET_CONDITION = 'panel.monitor.tenant_budget_exceeded';
 const TENANT_BUDGET_RESOLVED = 'panel.monitor.tenant_budget_ok';
 const SCHEDULER_CONDITION = 'panel.monitor.scheduler_capacity_exceeded';
@@ -100,14 +102,20 @@ export interface PanelMonitorDeps {
    */
   readonly budgetReserve: number;
   /**
-   * An UPPER BOUND on how many panels one tenant can keep inside the freshness
-   * window — the smaller of the probe budget's ceiling and the scheduler's.
+   * An upper bound on how many panels ONE TENANT's probe budget can keep inside
+   * the freshness window. Per-tenant, and only the budget dimension.
    *
-   * Computed once by the composition root; see `effectiveFreshPanelUpperBound`.
-   * A bound rather than a capacity: probe latency is a round trip to somebody
-   * else's server and cannot be known here, and manual tests spend the same
-   * bucket. A tenant ABOVE this number certainly cannot be kept fresh, which is
-   * what makes it worth reporting; one below it is not thereby guaranteed.
+   * Deliberately NOT combined with `schedulerUpperBound` below: that one is
+   * installation-global, and taking the smaller of the two produced a number
+   * that was neither. A tenant is measured against its own bucket; the
+   * installation is measured against the scheduler.
+   *
+   * Computed once by the composition root; see
+   * `tenantBudgetFreshPanelUpperBound`. A bound rather than a capacity: probe
+   * latency is a round trip to somebody else's server and cannot be known here,
+   * and manual tests spend the same bucket one for one. A tenant ABOVE this
+   * number certainly cannot be kept fresh, which is what makes it worth
+   * reporting; one below it is not thereby guaranteed.
    */
   readonly tenantBudgetUpperBound: number;
   /**
@@ -970,17 +978,28 @@ function buildEvent(before: PanelView, transition: Transition): OperationalEvent
   // Whichever condition is being left, closed by name. `recoversDedupeKey` is
   // what keeps that to THIS panel: without it, one panel recovering would
   // resolve every other panel's open row of the same code.
+  //
+  // Coming FROM healthy there is no condition to close — healthy is not a
+  // condition — so the failure closes the panel's RECOVERY row instead. That
+  // matters: every recovery for a panel shares one dedupe key, and a row that
+  // is still open is only ever incremented, so the projector sees neither a new
+  // row nor a reopened one and says nothing. Without this, a panel that failed,
+  // recovered, failed and recovered again announced the first recovery and
+  // then went quiet for every one after it.
   const closing =
     transition.from === null
-      ? {}
+      ? {
+          recoversCode: RECOVERED_CODE,
+          recoversDedupeKey: keyFor(RECOVERED_CODE),
+        }
       : { recoversCode: transition.from.code, recoversDedupeKey: keyFor(transition.from.code) };
 
   if (transition.to === null) {
     return {
-      code: 'panel.health.recovered',
+      code: RECOVERED_CODE,
       severity: 'INFO',
       message: `Panel "${name}" is answering health checks again.`,
-      dedupeKey: keyFor('panel.health.recovered'),
+      dedupeKey: keyFor(RECOVERED_CODE),
       ...closing,
       context,
     };
