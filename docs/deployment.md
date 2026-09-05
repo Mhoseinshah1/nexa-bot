@@ -11,11 +11,17 @@ reasoning behind these choices is in
 | Operating system | Ubuntu **22.04 LTS** or **24.04 LTS**  |
 | Architecture     | `x86_64` (amd64) or `aarch64` (arm64)  |
 | Disk             | at least 8 GB free on `/var`           |
-| Ports            | 80 and 443 reachable from the internet |
+| Ports            | 80 and 443/tcp, and 443/udp, free and reachable |
 | DNS              | a name already pointing at the host    |
 
 The installer checks every one of these before it changes anything, and stops
-with the specific problem if one fails.
+with the specific problem if one fails. The port check covers **443/udp** as
+well as TCP, because the edge publishes it for HTTP/3 and a service holding it
+would let Caddy fail to bind after the install had otherwise succeeded. A rerun
+on a host where Nexa's own edge already holds a port is not a conflict — but
+that is established by asking which process holds the SOCKET, not by observing
+that a container named `nexa-caddy` happens to be running, and a preflight that
+cannot establish the holder refuses.
 
 ## Architecture
 
@@ -458,6 +464,23 @@ A rollback does the same in reverse: it activates the previous release's
 recorded set before starting its image. The alternative — leaving the newer
 tooling to operate the older image — would be a compatibility contract, and
 nothing here proves one.
+
+A rollback that does not work out backs out in full, exactly as a failed update
+does: the current release's assets go back **and its containers are started
+again**, and the message says whether that worked. Restoring only the assets was
+not enough. On the readiness path `compose up -d` has already succeeded, so the
+containers are running the previous release — while the recorded release and
+`deploy.env` both still name the current one and agree with each other, which is
+what the divergence check compares. It saw nothing wrong, and `botctl status`
+named a release that was not running.
+
+Neither back-out can be aborted by its own failure. The two helpers involved
+report through `nexa_die`, which exits, so a restore that could not finish used
+to replace the message telling the operator which release had started; they are
+now called so that the caller survives them. For the same reason, recording the
+outgoing release's assets is best effort on a rollback: a rollback whose target
+is sound is never refused for the sake of its own undo, and the operator is
+warned instead.
 
 ### A set that was never recorded is recovered from the image, by digest
 
