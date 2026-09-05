@@ -82,11 +82,10 @@ describe('password rotation is compare-and-set', () => {
     // B reaches the point of having verified the old credential. The hasher is
     // stalled on B's SECOND verify call — the reuse check, which happens after
     // the current-password check has already succeeded.
-    const hasher = ctx.container.hasher as { verify: unknown };
-    const realVerify = hasher.verify.bind(ctx.container.hasher) as (
-      plaintext: string,
-      encoded: string,
-    ) => Promise<boolean>;
+    const hasher = ctx.container.hasher as unknown as {
+      verify: (plaintext: string, encoded: string) => Promise<boolean>;
+    };
+    const realVerify = hasher.verify.bind(ctx.container.hasher);
 
     let releaseB: () => void = () => undefined;
     const bHasVerified = new Promise<void>((resolve) => {
@@ -254,8 +253,10 @@ describe('rehash on login cannot revert a rotation', () => {
     expect(ctx.container.hasher.needsRehash(weak)).toBe(true);
 
     // Stall the login inside its rehash, after it has verified.
-    const hasher = ctx.container.hasher as { hash: unknown };
-    const realHash = hasher.hash.bind(ctx.container.hasher) as (p: string) => Promise<string>;
+    const hasher = ctx.container.hasher as unknown as {
+      hash: (plaintext: string) => Promise<string>;
+    };
+    const realHash = hasher.hash.bind(ctx.container.hasher);
 
     let releaseLogin: () => void = () => undefined;
     const loginIsHashing = new Promise<void>((resolve) => {
@@ -330,8 +331,10 @@ describe('administrator creation decides under the lock', () => {
 
   /** Holds a create request inside its password hash, after the cheap checks. */
   function stallInsideHash(): { reached: Promise<void>; release: () => void } {
-    const hasher = ctx.container.hasher as { hash: unknown };
-    const realHash = hasher.hash.bind(ctx.container.hasher) as (p: string) => Promise<string>;
+    const hasher = ctx.container.hasher as unknown as {
+      hash: (plaintext: string) => Promise<string>;
+    };
+    const realHash = hasher.hash.bind(ctx.container.hasher);
     let release: () => void = () => undefined;
     const reached = new Promise<void>((resolve) => {
       hasher.hash = async (plaintext: string) => {
@@ -583,14 +586,13 @@ describe('role changes decide under the lock', () => {
     // Hold B just after it takes the tenant lock, before it reads state, so A
     // must commit first. The lock itself is what serialises them; the stall
     // only makes the ordering deterministic.
-    const repo = ctx.container.admins as { lockTenantForAdminChange: unknown };
+    const repo = ctx.container.admins as unknown as {
+      lockTenantForAdminChange: (scope: unknown, tx: unknown) => Promise<unknown>;
+    };
     // Returns the tenant's status, read by the same statement that takes the
     // lock. The stalls below must PASS IT THROUGH: a stub that swallowed it
     // would make every mutation behind this see an inactive tenant.
-    const realLock = repo.lockTenantForAdminChange.bind(ctx.container.admins) as (
-      scope: unknown,
-      tx: unknown,
-    ) => Promise<unknown>;
+    const realLock = repo.lockTenantForAdminChange.bind(ctx.container.admins);
 
     let releaseB: () => void = () => undefined;
     const bHasLocked = new Promise<void>((resolve) => {
@@ -727,14 +729,13 @@ describe('actor authority is re-checked under the lock', () => {
    * commit a change to the ACTOR while the stale request waits.
    */
   function stallBeforeLock(): { reached: Promise<void>; release: () => void } {
-    const repo = ctx.container.admins as { lockTenantForAdminChange: unknown };
+    const repo = ctx.container.admins as unknown as {
+      lockTenantForAdminChange: (scope: unknown, tx: unknown) => Promise<unknown>;
+    };
     // Returns the tenant's status, read by the same statement that takes the
     // lock. The stalls below must PASS IT THROUGH: a stub that swallowed it
     // would make every mutation behind this see an inactive tenant.
-    const realLock = repo.lockTenantForAdminChange.bind(ctx.container.admins) as (
-      scope: unknown,
-      tx: unknown,
-    ) => Promise<unknown>;
+    const realLock = repo.lockTenantForAdminChange.bind(ctx.container.admins);
 
     let release: () => void = () => undefined;
     const reached = new Promise<void>((resolve) => {
@@ -994,13 +995,10 @@ describe('a denial under the lock does not wedge the connection pool', () => {
       // The outer check passes as the owner; the in-transaction check is
       // re-aimed at an actor with no authority, so the real guard denies while
       // the lock is held.
-      const guard = single.container.guard as { check: unknown };
-      const realCheck = guard.check.bind(single.container.guard) as (
-        s: unknown,
-        a: unknown,
-        p: string,
-        tx?: unknown,
-      ) => Promise<void>;
+      const guard = single.container.guard as unknown as {
+        check: (s: unknown, a: unknown, p: string, tx?: unknown) => Promise<void>;
+      };
+      const realCheck = guard.check.bind(single.container.guard);
       guard.check = async (sc: unknown, a: unknown, permission: string, tx?: unknown) =>
         tx === undefined
           ? realCheck(sc, a, permission, tx)

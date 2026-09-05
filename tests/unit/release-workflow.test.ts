@@ -158,7 +158,7 @@ describe('the release workflow', () => {
     // notices when one of them moves.
     const installer = readFileSync(join(__dirname, '../../deploy/install.sh'), 'utf8');
     const declared = /SUPPORTED_ARCH=\(([^)]*)\)/.exec(installer)?.[1] ?? '';
-    const accepted = [...declared.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    const accepted = [...declared.matchAll(/"([^"]+)"/g)].flatMap((m) => (m[1] ? [m[1]] : []));
     expect(accepted.length, 'the installer no longer declares SUPPORTED_ARCH').toBeGreaterThan(0);
 
     const dockerNames: Record<string, string> = { x86_64: 'amd64', aarch64: 'arm64' };

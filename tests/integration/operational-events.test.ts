@@ -7,7 +7,7 @@ import {
   tenantB,
   type TestContext,
 } from './harness';
-import type { ActorContext } from '@nexa/contracts';
+import type { ActorContext, CorrelationId } from '@nexa/contracts';
 
 /**
  * The operational-event recorder, against a real database.
@@ -200,10 +200,13 @@ describe('operational events', () => {
 
 function anonymousActor() {
   return {
-    type: 'ANONYMOUS' as const,
+    // `API`, not `ANONYMOUS`: there is no such actor type, and this file was
+    // outside the test typecheck so nothing said so. The test wants an actor
+    // with no admin identity, which is what `API` with a null id is.
+    type: 'API' as const,
     id: null,
     label: null,
     surface: 'WEB' as const,
-    correlationId: 'test-correlation' as never,
+    correlationId: 'test-correlation' as CorrelationId,
   };
 }

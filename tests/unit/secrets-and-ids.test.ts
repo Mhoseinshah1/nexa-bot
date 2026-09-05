@@ -25,6 +25,7 @@ const BOT_B = '0192f000-0000-7000-8000-0000000000b1';
 const ring = (entries: Record<string, string>): SecretKeyring => ({
   activeKeyId: Object.keys(entries)[0]!,
   keys: new Map(Object.entries(entries).map(([id, key]) => [id, Buffer.from(key, 'base64')])),
+  format: 'canonical',
 });
 
 const ctx = () => ({ purpose: 'bot_instance.token', tenantId: TENANT_A, entityId: BOT_A }) as const;
@@ -213,6 +214,7 @@ describe('the v1 envelope, still read', () => {
           ['key-1', Buffer.from(KEK_A, 'base64')],
           ['key-2', Buffer.from(KEK_B, 'base64')],
         ]),
+        format: 'canonical',
       },
       true,
     );
