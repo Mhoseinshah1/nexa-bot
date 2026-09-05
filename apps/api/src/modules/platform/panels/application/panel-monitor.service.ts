@@ -884,7 +884,7 @@ type Condition = {
   readonly summary: string;
 };
 
-function conditionOf(
+export function conditionOf(
   state: PanelHealthState,
   failure: ProviderFailureKind | null,
 ): Condition | null {
@@ -894,6 +894,18 @@ function conditionOf(
       code: 'panel.health.degraded',
       severity: 'WARN',
       summary: 'authenticated but could not report its own status',
+    };
+  }
+  if (failure === null) {
+    // Unreachable through the database: `panel_health_failure_presence_check`
+    // makes "not HEALTHY and not DEGRADED" and "carries a failure kind" the
+    // same condition. Written as its own branch anyway, because the old
+    // `default` swallowed it silently alongside the kinds it did not know —
+    // and because narrowing here is what lets the switch below be exhaustive.
+    return {
+      code: 'panel.health.unreachable',
+      severity: 'ERROR',
+      summary: 'is not answering',
     };
   }
   switch (failure) {
@@ -933,19 +945,50 @@ function conditionOf(
         summary: 'is refusing calls as too frequent; this installation is asking too often',
       };
     case 'MALFORMED_RESPONSE':
-    case 'PROVIDER_ERROR':
-    case 'UNSUPPORTED_CAPABILITY':
       return {
-        code: 'panel.health.provider_error',
+        code: 'panel.health.malformed_response',
         severity: 'ERROR',
         summary: 'answered with something this provider does not produce',
       };
-    default:
+    case 'PROVIDER_ERROR':
+      // NOT "something this provider does not produce". That sentence was
+      // written for a malformed body and then made to cover this kind as well,
+      // and it sends an operator to look for a broken integration when the
+      // panel has simply reported its own failure — a 500, a database it
+      // cannot reach, a service it cannot start. Nothing was malformed.
+      return {
+        code: 'panel.health.provider_error',
+        severity: 'ERROR',
+        summary: 'answered with a failure of its own',
+      };
+    case 'UNSUPPORTED_CAPABILITY':
+      return {
+        code: 'panel.health.unsupported_capability',
+        severity: 'ERROR',
+        summary: 'cannot do what this installation asked of it',
+      };
+    case 'UNREACHABLE':
+    case 'TIMEOUT':
+      // These two DO share a code, and that is a judgement rather than an
+      // oversight: the ops log dedupes and recovers by code, so sharing one is
+      // right exactly when the remedy is the same. "It did not answer" and "it
+      // answered too late" are both "look at the host and the network", and a
+      // panel that alternates between them is one fault, not two. Where the
+      // remedy differs — a rate limit, a rejected credential, a second factor
+      // — the code differs.
       return {
         code: 'panel.health.unreachable',
         severity: 'ERROR',
         summary: 'is not answering',
       };
+    default: {
+      // Exhaustive, with no catch-all. A `default` here used to answer "is not
+      // answering" for anything it did not recognise, so a failure kind added
+      // to the contract would have been announced as an outage it is not, in a
+      // condition whose recovery it would then wrongly close.
+      const unhandled: never = failure;
+      return unhandled;
+    }
   }
 }
 
