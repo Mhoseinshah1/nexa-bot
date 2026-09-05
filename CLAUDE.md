@@ -114,6 +114,11 @@ touch the database.
 - Domain events go to the outbox **inside the business transaction**.
 - Every write path takes a `ScopeContext` and an `ActorContext`; jobs act as
   `SYSTEM_JOB`. Deny by default.
+- Every write path also reads `ScopeActivityReader` **inside its transaction**,
+  and refuses a scope that has stopped accepting work. Not in the controller: a
+  surface checks activity when the request arrives, and a stop can commit in
+  between. Panels was the one module that skipped this, which let a tenant an
+  operator had stopped be given new panels and a background monitor.
 - Customer-facing text comes from a template key. No string literals in surfaces.
 - No fake authentication, no placeholder abstractions, no fabricated actors.
 
