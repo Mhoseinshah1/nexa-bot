@@ -1,6 +1,8 @@
-import { Body, Controller, Get, Inject, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Query, Inject, Param, Post, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
+import type { PanelCursor } from '../../modules/platform/panels/application/ports.js';
 import {
+  panelListQuerySchema,
   API_PREFIX,
   PANEL_HEALTH_FRESH_FOR_MS,
   PANEL_ROUTES,
@@ -35,6 +37,32 @@ import type { PanelView } from '../../modules/platform/panels/application/ports.
  * path from a stored credential to its output: the view type it receives has no
  * credential value on it, because the repository never selects one.
  */
+/**
+ * The cursor, opaque across the wire.
+ *
+ * Base64url of `(name, id)`. Opaque on purpose: a caller that parsed it would
+ * be depending on an ordering this API has not promised, and would break the
+ * day the list is ordered differently. A cursor that does not decode is treated
+ * as no cursor rather than an error — the worst it can do is restart the
+ * traversal, and refusing would turn a stale bookmark into a failed request.
+ */
+function encodeCursor(cursor: PanelCursor): string {
+  return Buffer.from(`${cursor.id}:${cursor.name}`, 'utf8').toString('base64url');
+}
+
+function decodeCursor(raw: string): PanelCursor | null {
+  try {
+    const decoded = Buffer.from(raw, 'base64url').toString('utf8');
+    const separator = decoded.indexOf(':');
+    if (separator === -1) return null;
+    const id = decoded.slice(0, separator);
+    const name = decoded.slice(separator + 1);
+    return id === '' ? null : { id, name };
+  } catch {
+    return null;
+  }
+}
+
 @Controller(`${API_PREFIX}`)
 export class PanelsController {
   constructor(@Inject(CONTAINER) private readonly container: Container) {}
@@ -64,10 +92,23 @@ export class PanelsController {
   }
 
   @Get(PANEL_ROUTES.list)
-  async list(@Req() request: FastifyRequest): Promise<PanelListResponse> {
+  async list(
+    @Req() request: FastifyRequest,
+    @Query() query: Record<string, string | undefined>,
+  ): Promise<PanelListResponse> {
     const { scope, actor } = await this.authenticate(request);
-    const views = await this.container.panels.list(scope, actor);
-    return { panels: views.map((view) => this.toSummary(view)) };
+    const page = panelListQuerySchema.parse({
+      ...(query.limit === undefined ? {} : { limit: query.limit }),
+      ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+    });
+    const { panels, nextCursor } = await this.container.panels.list(scope, actor, {
+      ...(page.limit === undefined ? {} : { limit: page.limit }),
+      ...(page.cursor === undefined ? {} : { cursor: decodeCursor(page.cursor) }),
+    });
+    return {
+      panels: panels.map((view) => this.toSummary(view)),
+      nextCursor: nextCursor === null ? null : encodeCursor(nextCursor),
+    };
   }
 
   @Get('panels/:id')

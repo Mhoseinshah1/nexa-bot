@@ -1,5 +1,5 @@
 import { and, asc, eq, ne, sql, type SQL } from 'drizzle-orm';
-import { errors, PANEL_ERROR_CODES } from '@nexa/contracts';
+import { errors, PANEL_ERROR_CODES, PANEL_PAGE_DEFAULT } from '@nexa/contracts';
 import type {
   MonitorDeferralReason,
   PanelHealthState,
@@ -33,6 +33,7 @@ import type {
   PanelView,
   ProbeBudget,
   UpdatePanelInput,
+  PanelCursor,
 } from '../application/ports.js';
 
 /**
@@ -88,11 +89,27 @@ function rethrowNameConflict(error: unknown, message: string): never {
 export class DrizzlePanelRepository implements PanelRepository {
   constructor(private readonly db: Database) {}
 
+  /**
+   * One page of panels, newest cursor last.
+   *
+   * Keyset rather than OFFSET: an offset re-reads and discards everything
+   * before it, so page 200 costs two hundred pages of work, and a panel
+   * inserted or renamed mid-traversal shifts every later page — a caller
+   * walking the collection would silently skip or repeat rows. The key is
+   * `(name, id)`, which is total: names are not unique among live panels of a
+   * tenant only in the sense that an archived one may share a name, so the id
+   * breaks every remaining tie and the traversal has a deterministic order.
+   *
+   * One row is read past the page to decide whether a next cursor exists,
+   * rather than issuing a second count.
+   */
   async list(
     scope: TenantContext,
-    options: { includeArchived: boolean },
+    options: { includeArchived: boolean; limit?: number; cursor?: PanelCursor | null },
     tx?: TransactionScope,
-  ): Promise<PanelView[]> {
+  ): Promise<{ panels: PanelView[]; nextCursor: PanelCursor | null }> {
+    const limit = options.limit ?? PANEL_PAGE_DEFAULT;
+    const after = options.cursor ?? null;
     const rows = await executorOf(this.db, tx)
       .select({
         panel: panels,
@@ -109,12 +126,35 @@ export class DrizzlePanelRepository implements PanelRepository {
       .leftJoin(panelCredentials, eq(panelCredentials.panelId, panels.id))
       .leftJoin(panelHealth, eq(panelHealth.panelId, panels.id))
       .where(
-        options.includeArchived
-          ? eq(panels.tenantId, scope.tenantId)
-          : and(eq(panels.tenantId, scope.tenantId), ne(panels.status, 'ARCHIVED')),
+        and(
+          eq(panels.tenantId, scope.tenantId),
+          options.includeArchived ? undefined : ne(panels.status, 'ARCHIVED'),
+          // The keyset predicate, as a row comparison so the index can serve
+          // it: everything ordered after the cursor's own position.
+          after === null
+            ? undefined
+            : sql`(${panels.name}, ${panels.id}) > (${after.name}, ${after.id}::uuid)`,
+        ),
       )
-      .orderBy(asc(panels.name));
-    return rows.map((row) => toView(row));
+      // Both keys, matching the keyset predicate above. Only the PREDICATE is
+      // falsifiable by test: dropping `panels.id` from this ORDER BY leaves a
+      // walk that still happens to work, because Postgres returns ties in a
+      // stable physical order for this plan. That is a coincidence of the plan
+      // and not a guarantee the SQL standard makes, so the key stays total
+      // here as well — recorded as inconclusive rather than dressed up as a
+      // caught mutation.
+      .orderBy(asc(panels.name), asc(panels.id))
+      .limit(limit + 1);
+
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
+    return {
+      panels: page.map((row) => toView(row)),
+      nextCursor:
+        rows.length > limit && last !== undefined
+          ? { name: last.panel.name, id: last.panel.id }
+          : null,
+    };
   }
 
   async find(

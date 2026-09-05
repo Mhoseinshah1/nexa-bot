@@ -119,6 +119,18 @@ export interface UpdatePanelInput {
  * to say so. A shape that could not tell those apart would have to pick one,
  * and either choice is a data-loss bug for the other case.
  */
+/**
+ * Where a page of panels ended: the ordering key, not an offset.
+ *
+ * `(name, id)` is the total order the list is scanned in. Encoded opaquely at
+ * the HTTP boundary so a caller cannot come to depend on an ordering the API
+ * has not promised.
+ */
+export interface PanelCursor {
+  readonly name: string;
+  readonly id: string;
+}
+
 export type CredentialWrite = string | null | undefined;
 
 export interface PanelCredentialWrite {
@@ -147,9 +159,9 @@ export interface PanelRepository {
    */
   list(
     scope: TenantContext,
-    options: { includeArchived: boolean },
+    options: { includeArchived: boolean; limit?: number; cursor?: PanelCursor | null },
     tx?: TransactionScope,
-  ): Promise<PanelView[]>;
+  ): Promise<{ panels: PanelView[]; nextCursor: PanelCursor | null }>;
   find(scope: TenantContext, panelId: string, tx?: TransactionScope): Promise<PanelView | null>;
   create(scope: TenantContext, input: CreatePanelInput, tx: TransactionScope): Promise<PanelRecord>;
   /** Returns null when no panel of this tenant has that id. */

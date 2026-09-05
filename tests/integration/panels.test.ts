@@ -5,7 +5,14 @@ import {
   panelCredentials,
   panels,
 } from '../../apps/api/src/infrastructure/persistence/schema';
-import type { ProviderProbeOutcome, ProviderType } from '@nexa/contracts';
+import {
+  PANEL_PAGE_DEFAULT,
+  PANEL_PAGE_MAX,
+  panelListQuerySchema,
+  type ActorContext,
+  type ProviderProbeOutcome,
+  type ProviderType,
+} from '@nexa/contracts';
 import { DrizzlePanelCredentialStore } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-credentials';
 import { PanelService } from '../../apps/api/src/modules/platform/panels/application/panel.service';
 import {
@@ -170,7 +177,7 @@ describe('panels', () => {
       // And in a list, which is a different query with the same projection.
       const listed = await ctx.container.panels.list(tenantA, adminActorFor(owner));
       expect(
-        listed.find((v) => v.panel.id === view.panel.id)?.credentials[timestamp],
+        listed.panels.find((v) => v.panel.id === view.panel.id)?.credentials[timestamp],
       ).toBeInstanceOf(Date);
     });
   }
@@ -470,8 +477,8 @@ describe('panels', () => {
     const listA = await ctx.container.panels.list(tenantA, adminActorFor(owner));
     const listB = await ctx.container.panels.list(tenantB, adminActorFor(ownerB));
 
-    expect(listA.map((view) => view.panel.name)).toEqual(['A only']);
-    expect(listB.map((view) => view.panel.name)).toEqual(['B only']);
+    expect(listA.panels.map((view) => view.panel.name)).toEqual(['A only']);
+    expect(listB.panels.map((view) => view.panel.name)).toEqual(['B only']);
   });
 
   it('refuses to update, re-credential, restatus or test another tenant panel', async () => {
@@ -694,7 +701,7 @@ describe('panels', () => {
       idempotencyKey: key(),
     });
 
-    expect(await ctx.container.panels.list(tenantA, actor)).toEqual([]);
+    expect((await ctx.container.panels.list(tenantA, actor)).panels).toEqual([]);
     // Still addressable by id: archiving hides it, it does not destroy the
     // record, and a later phase needs the row to explain a service that was
     // provisioned through it.
@@ -1307,5 +1314,164 @@ describe('panels — this installation’s own network', () => {
     for (const leak of [databaseHost, '10.77', 'subnet', 'postgres', 'redis', '5432', '6379']) {
       expect(text, `the refusal leaks ${leak}`).not.toContain(leak.toLowerCase());
     }
+  });
+});
+
+describe('the panel list is a bounded, stable traversal', () => {
+  let ctx: TestContext;
+  let owner: ActorContext;
+  let ownerB: ActorContext;
+
+  beforeEach(async () => {
+    ctx ??= await createTestContext();
+    await ctx.reset();
+    owner = adminActorFor(
+      await createAdmin(ctx.container, tenantA, { username: 'pager', roleKeys: ['owner'] }),
+    );
+    ownerB = adminActorFor(
+      await createAdmin(ctx.container, tenantB, { username: 'pager-b', roleKeys: ['owner'] }),
+    );
+  });
+
+  afterAll(async () => {
+    await ctx?.close();
+  });
+
+  let pageKeyCounter = 0;
+  const pageKey = () => `page-idem-${(pageKeyCounter += 1)}`;
+  const service = () => ctx.container.panels;
+
+  const make = async (actor: ActorContext, scope: typeof tenantA, name: string) =>
+    (
+      await service().create(scope, actor, {
+        name,
+        providerType: 'marzban',
+        baseUrl: 'https://panel.example.test',
+        credentials: { username: 'u'.repeat(6), password: 'p'.repeat(12) },
+        idempotencyKey: pageKey(),
+      })
+    ).view.panel.id;
+
+  const walk = async (actor: ActorContext, scope: typeof tenantA, limit: number) => {
+    const seen: string[] = [];
+    let cursor: { name: string; id: string } | null | undefined = undefined;
+    for (let guard = 0; guard < 100; guard += 1) {
+      const page = await service().list(scope, actor, {
+        limit,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      expect(page.panels.length).toBeLessThanOrEqual(limit);
+      seen.push(...page.panels.map((view) => view.panel.id));
+      if (page.nextCursor === null) return seen;
+      cursor = page.nextCursor;
+    }
+    throw new Error('traversal did not terminate');
+  };
+
+  it('walks the whole collection with no duplicates and no omissions', async () => {
+    const created: string[] = [];
+    for (let i = 0; i < 25; i += 1) {
+      created.push(await make(owner, tenantA, `panel-${String(i).padStart(3, '0')}`));
+    }
+    const seen = await walk(owner, tenantA, 7);
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(seen.slice().sort()).toEqual(created.slice().sort());
+  });
+
+  it('is stable when panels sort equally by name', async () => {
+    // Names are the ordering's first key, so a tie must be broken by something
+    // total or a keyset walk skips and repeats rows.
+    //
+    // Among LIVE panels a tie cannot happen: `panels_tenant_name_live_key`
+    // makes the name unique. Archiving releases the name, so the ties are in
+    // the archived-inclusive listing — which is why this drives the repository
+    // directly. Testing only the live path would leave the tiebreaker
+    // defensive and unproven, which is how it was when first written.
+    const repo = new DrizzlePanelRepository(ctx.container.database.db);
+    const created: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const id = await make(owner, tenantA, 'the-same-name');
+      created.push(id);
+      await service().setStatus(tenantA, owner, id, {
+        status: 'ARCHIVED',
+        idempotencyKey: pageKey(),
+      });
+    }
+
+    const seen: string[] = [];
+    let cursor: { name: string; id: string } | null = null;
+    for (let guard = 0; guard < 20; guard += 1) {
+      const page = await repo.list(tenantA, { includeArchived: true, limit: 2, cursor });
+      seen.push(...page.panels.map((view) => view.panel.id));
+      if (page.nextCursor === null) break;
+      cursor = page.nextCursor;
+    }
+    // Five rows sharing one name, walked two at a time: every one exactly once.
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(seen.slice().sort()).toEqual(created.slice().sort());
+  });
+
+  it('reads only the page it returns, not the whole collection', async () => {
+    // The finding was that one request materialises every live panel with both
+    // child rows joined. A page-shaped RESULT does not prove a page-shaped
+    // QUERY — slicing in JavaScript would give the same answer while the
+    // database still read everything — so this asserts the plan.
+    for (let i = 0; i < 60; i += 1) {
+      await make(owner, tenantA, `plan-${String(i).padStart(3, '0')}`);
+    }
+    const explained = await ctx.container.database.db.execute<{
+      'QUERY PLAN': [{ Plan: Record<string, unknown> }];
+    }>(sql`
+      EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+      SELECT p.id FROM panels AS p
+       WHERE p.tenant_id = ${tenantA.tenantId}::uuid AND p.status <> 'ARCHIVED'
+       ORDER BY p.name ASC, p.id ASC
+       LIMIT 11
+    `);
+    let read = 0;
+    const walkPlan = (node: Record<string, unknown>): void => {
+      if (node['Relation Name'] === 'panels') read += Number(node['Actual Rows'] ?? 0);
+      for (const child of (node['Plans'] as Record<string, unknown>[] | undefined) ?? []) {
+        walkPlan(child);
+      }
+    };
+    walkPlan(explained.rows[0]!['QUERY PLAN'][0]!.Plan);
+    // Sixty panels exist; the page reads twelve — the eleven it asked for plus
+    // the one row an index scan reads past its limit to know it has finished.
+    // Not sixty, which is what materialising the collection would cost.
+    expect(read).toBeLessThanOrEqual(12);
+    expect(read).toBeLessThan(60);
+  });
+
+  it('never returns another tenant a page of its panels', async () => {
+    await make(owner, tenantA, 'mine');
+    await make(ownerB, tenantB, 'theirs');
+    const mine = await walk(owner, tenantA, 1);
+    const theirs = await walk(ownerB, tenantB, 1);
+    expect(mine).toHaveLength(1);
+    expect(theirs).toHaveLength(1);
+    expect(mine[0]).not.toBe(theirs[0]);
+  });
+
+  it('keeps archived panels out of the pages, as the unpaginated list did', async () => {
+    const live = await make(owner, tenantA, 'still-here');
+    const gone = await make(owner, tenantA, 'archived-away');
+    await service().setStatus(tenantA, owner, gone, {
+      status: 'ARCHIVED',
+      idempotencyKey: pageKey(),
+    });
+    expect(await walk(owner, tenantA, 10)).toEqual([live]);
+  });
+
+  it('bounds the page even when the caller asks for everything', async () => {
+    for (let i = 0; i < 3; i += 1) await make(owner, tenantA, `bounded-${i}`);
+    const page = await service().list(tenantA, owner, {});
+    // The default applies when no limit is given; the schema refuses anything
+    // above PANEL_PAGE_MAX at the boundary.
+    expect(page.panels.length).toBeLessThanOrEqual(PANEL_PAGE_DEFAULT);
+    expect(panelListQuerySchema.safeParse({ limit: String(PANEL_PAGE_MAX + 1) }).success).toBe(
+      false,
+    );
+    expect(panelListQuerySchema.safeParse({ limit: '0' }).success).toBe(false);
   });
 });

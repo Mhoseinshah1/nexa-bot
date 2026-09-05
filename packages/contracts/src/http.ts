@@ -19,6 +19,7 @@ import {
   PANEL_BASE_URL_MAX_LENGTH,
   PANEL_HEALTH_VIEWS,
   PANEL_NAME_MAX_LENGTH,
+  PANEL_PAGE_MAX,
   PANEL_NAME_MIN_LENGTH,
   PANEL_STATUSES,
 } from './panels.js';
@@ -763,7 +764,28 @@ export const panelSummarySchema = z.object({
 });
 export type PanelSummaryResponse = z.infer<typeof panelSummarySchema>;
 
-export const panelListResponseSchema = z.object({ panels: z.array(panelSummarySchema) });
+/**
+ * A page of panels, and where the next one starts.
+ *
+ * The list used to return every live panel of the tenant with both child rows
+ * joined, so one request materialised the whole collection, sorted it, and
+ * serialised it on the event loop. At the stated target of tens of thousands of
+ * panels that is a request any administrator can repeat.
+ *
+ * `nextCursor` is null on the last page. It is opaque on purpose: it encodes
+ * `(name, id)`, and a caller that started parsing it would be depending on an
+ * ordering this API has not promised.
+ */
+export const panelListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(PANEL_PAGE_MAX).optional(),
+  cursor: z.string().max(512).optional(),
+});
+export type PanelListQuery = z.infer<typeof panelListQuerySchema>;
+
+export const panelListResponseSchema = z.object({
+  panels: z.array(panelSummarySchema),
+  nextCursor: z.string().nullable(),
+});
 export type PanelListResponse = z.infer<typeof panelListResponseSchema>;
 
 export const panelResponseSchema = z.object({ panel: panelSummarySchema });

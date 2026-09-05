@@ -44,6 +44,7 @@ import type {
   PanelRepository,
   ProbeBudget,
   PanelView,
+  PanelCursor,
 } from './ports.js';
 import { attemptProbe, persistProbeResult, type ProbeCoreDeps } from './probe-core.js';
 import {
@@ -239,10 +240,18 @@ export class PanelService {
     }
   }
 
-  async list(scope: ScopeContext, actor: ActorContext): Promise<PanelView[]> {
+  async list(
+    scope: ScopeContext,
+    actor: ActorContext,
+    page: { limit?: number; cursor?: PanelCursor | null } = {},
+  ): Promise<{ panels: PanelView[]; nextCursor: PanelCursor | null }> {
     const tenant = this.tenant(scope);
     await this.deps.guard.check(scope, actor, PANELS_VIEW);
-    return this.deps.repository.list(tenant, { includeArchived: false });
+    return this.deps.repository.list(tenant, {
+      includeArchived: false,
+      ...(page.limit === undefined ? {} : { limit: page.limit }),
+      ...(page.cursor === undefined ? {} : { cursor: page.cursor }),
+    });
   }
 
   async get(scope: ScopeContext, actor: ActorContext, panelId: string): Promise<PanelView> {

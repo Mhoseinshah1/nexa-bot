@@ -140,3 +140,13 @@ export type MonitorDeferralReason = (typeof MONITOR_DEFERRAL_REASONS)[number];
  * A stored `staleAt` would freeze one policy into every historical row.
  */
 export const PANEL_HEALTH_FRESH_FOR_MS = 15 * 60 * 1000;
+
+/**
+ * The largest page of panels one request may ask for, and the default.
+ *
+ * A bound rather than a suggestion: the response is built in memory and
+ * serialised on the event loop, so "how many" is a resource decision and not
+ * the caller's alone.
+ */
+export const PANEL_PAGE_MAX = 200;
+export const PANEL_PAGE_DEFAULT = 50;
