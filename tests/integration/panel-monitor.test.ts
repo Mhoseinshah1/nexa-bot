@@ -565,6 +565,87 @@ describe('the panel health monitor', () => {
   // 17-20. Preflight refusals defer; they never invent health
   // ===========================================================================
 
+  describe('the schedule is the status filter', () => {
+    it('does not re-arm a DISABLED panel when its credential is replaced', async () => {
+      // The discovery scan carries NO status predicate, deliberately: the
+      // schedule is the status filter, and a non-ACTIVE panel sits in year 9999
+      // where the scan does not read. `setStatus` honoured that; `update` and
+      // `setCredentials` wrote ELIGIBLE_NOW unconditionally — so an operator who
+      // disabled a panel because its password was rejected, and then rotated the
+      // password, put it straight back into the scan. It could never leave
+      // again: every tick refused it and re-deferred it to a FINITE hour later.
+      const panelId = await createPanel(ownerA, tenantA, 'switched-off');
+      await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
+        status: 'DISABLED',
+        idempotencyKey: key(),
+      });
+      expect((await scheduleOf(panelId))!.nextEligibleAt.getTime()).toBe(
+        SCHEDULE_SUSPENDED_AT.getTime(),
+      );
+
+      await service().setCredentials(tenantA, adminActorFor(ownerA), panelId, {
+        credentials: { password: 'a-corrected-password-9Q' },
+        idempotencyKey: key(),
+      });
+
+      // Still outside the scan's range, and still not discovered.
+      expect((await scheduleOf(panelId))!.nextEligibleAt.getTime()).toBe(
+        SCHEDULE_SUSPENDED_AT.getTime(),
+      );
+      expect((await tick()).considered).toBe(0);
+    });
+
+    it('re-arms a panel the operator switched back on', async () => {
+      // The other half of the same rule: suspension must not be a one-way door.
+      const panelId = await createPanel(ownerA, tenantA, 'switched-back-on');
+      await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
+        status: 'DISABLED',
+        idempotencyKey: key(),
+      });
+      await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
+        status: 'ACTIVE',
+        idempotencyKey: key(),
+      });
+      expect((await scheduleOf(panelId))!.nextEligibleAt.getTime()).not.toBe(
+        SCHEDULE_SUSPENDED_AT.getTime(),
+      );
+      expect((await tick()).probed).toBe(1);
+    });
+  });
+
+  describe('a deferral only ever pushes a panel further out', () => {
+    it('does not pull a rejected credential back to the cooldown', async () => {
+      // Two monitors overlap on every rolling update. The replica whose
+      // discovery list predates the other's probe is refused by the per-panel
+      // cooldown and tries to defer a panel the real probe just pushed an hour
+      // out. If the deferral wins, the panel whose password the provider
+      // rejected is dialled again in a minute instead of in thirty — which is
+      // the credential hammering the non-retryable floor exists to prevent.
+      const panelId = await createPanel(ownerA, tenantA, 'rejected');
+      outcome = REJECTED;
+      await tick();
+      const afterProbe = (await scheduleOf(panelId))!.nextEligibleAt;
+      expect(afterProbe.getTime()).toBeGreaterThan(now.getTime() + 25 * 60_000);
+      const streak = (await scheduleOf(panelId))!.consecutiveFailures;
+      expect(streak).toBe(1);
+
+      // The losing replica: same panel, still inside the cooldown.
+      const stale = monitor({
+        probe: { probeCooldownMs: 60_000 },
+        discovery: {
+          claimTenants: async () => [tenantA.tenantId],
+          dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
+          refreshTenantBounds: async () => {},
+        },
+      });
+      expect((await stale.tick()).deferred).toBe(1);
+
+      // The probe's backoff survived, and so did its streak.
+      expect((await scheduleOf(panelId))!.nextEligibleAt).toEqual(afterProbe);
+      expect((await scheduleOf(panelId))!.consecutiveFailures).toBe(streak);
+    });
+  });
+
   describe('preflight refusals', () => {
     it('does not hot-loop a panel with no usable credential', async () => {
       // The starvation bug this replaces: with the schedule kept on the health
@@ -1296,6 +1377,71 @@ describe('the panel health monitor', () => {
       // never done its job, and reporting it healthy for the first few minutes
       // is how a release whose scheduler is broken gets accepted.
       const m = monitor();
+      expect(m.iterationIsFresh(now.getTime())).toBe(false);
+    });
+
+    it('stays unhealthy when the DUE scan throws, not only the tenant claim', async () => {
+      // The heartbeat's claim is about discovery, and discovery is two
+      // statements. The mark used to be set the moment tenants were claimed,
+      // so a monitor whose due scan threw every time went on reporting itself
+      // healthy for ever while probing nothing — and `dueForTenants` is the
+      // fragile one: hand-written SQL whose plan depends on an index, and the
+      // statement a timeout finds first as the schedule grows.
+      const m = monitor({
+        discovery: {
+          claimTenants: async () => [tenantA.tenantId],
+          dueForTenants: async () => {
+            throw new Error('due scan is broken');
+          },
+          refreshTenantBounds: async () => {},
+        },
+      });
+      for (let i = 0; i < 5; i += 1) {
+        await m.tick();
+        expect(m.iterationIsFresh(now.getTime())).toBe(false);
+        now = new Date(now.getTime() + 30_000);
+      }
+    });
+
+    it('is not alive after stopping mid-sweep', async () => {
+      // A draining monitor is not a live one. The probes in flight when SIGTERM
+      // arrives each finish, and each of them used to record progress — so
+      // `stop()` cleared the mark and then waited for the very ticks that put
+      // it back, and the process reported itself alive after it had stopped
+      // taking work.
+      const panelId = await createPanel(ownerA, tenantA, 'draining');
+      let release!: () => void;
+      let dialled!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const inFlight = new Promise<void>((resolve) => {
+        dialled = resolve;
+      });
+      const m = monitor({
+        discovery: {
+          claimTenants: async () => [tenantA.tenantId],
+          dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
+          refreshTenantBounds: async () => {},
+        },
+        probe: {
+          adapters: (type: ProviderType) => ({
+            ...providerAdapter(type),
+            probe: async (target) => {
+              probes.push(target.baseUrl);
+              dialled();
+              await held;
+              return HEALTHY;
+            },
+          }),
+        },
+      });
+      const running = m.tick();
+      await inFlight;
+      const stopping = m.stop();
+      release();
+      await stopping;
+      await running;
       expect(m.iterationIsFresh(now.getTime())).toBe(false);
     });
 

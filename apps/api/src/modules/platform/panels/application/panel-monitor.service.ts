@@ -207,8 +207,18 @@ export class PanelMonitorService {
     return now - this.lastProgressAt <= this.intervalMs * 3;
   }
 
-  /** Records that the loop got somewhere. See `lastProgressAt`. */
+  /**
+   * Records that the loop got somewhere. See `lastProgressAt`.
+   *
+   * Silent once `stop()` has been called. A draining monitor is not a live one,
+   * and the probes already in flight when SIGTERM arrives each finish and each
+   * used to write a fresh mark — so `stop()` nulled the field and then waited
+   * for the very ticks that put it back. The property held only because
+   * `main.monitor.ts` happens to stop the heartbeat first, which is an ordering
+   * in another file standing in for the rule this one states.
+   */
   private noteProgress(): void {
+    if (this.stopping) return;
     this.lastProgressAt = this.deps.clock.now().getTime();
   }
 
@@ -237,11 +247,14 @@ export class PanelMonitorService {
     // Phase one: take a turn for the least-recently-served due tenants. One
     // bounded statement over a table with one row per tenant.
     const tenantIds = await this.deps.discovery.claimTenants(now, this.deps.tenantsPerTick);
-    // Discovery SUCCEEDED. That is progress even with nothing to do — an
-    // installation with no due panels is a working installation, and a monitor
-    // that reported itself dead for being idle would fail every release.
-    this.noteProgress();
-    if (tenantIds.length === 0) return EMPTY_TICK;
+    if (tenantIds.length === 0) {
+      // Discovery SUCCEEDED with nothing to do. That is progress: an
+      // installation with no due panels is a working installation, and a
+      // monitor that reported itself dead for being idle would fail every
+      // release.
+      this.noteProgress();
+      return EMPTY_TICK;
+    }
 
     // The per-tenant share is computed from how many tenants were ACTUALLY
     // claimed, which is what lets one dial serve both shapes: a single-tenant
@@ -256,10 +269,15 @@ export class PanelMonitorService {
       this.deps.batchSize,
     );
 
-    // Put the claimed tenants' lower bounds back where their schedules say.
-    // Without this a tenant whose panels are all far in the future is claimed
-    // on every tick for ever, spending a fairness slot to rediscover that.
-    await this.deps.discovery.refreshTenantBounds(tenantIds);
+    // Only NOW is discovery a success, and only now is it progress.
+    //
+    // The mark used to be set the moment tenants were claimed, which made the
+    // heartbeat's whole claim false for the more fragile of the two statements:
+    // `dueForTenants` is hand-written SQL whose plan depends on an index and
+    // which grows with the schedule, so it is the one a statement timeout finds
+    // first. A monitor whose every due scan threw would have gone on reporting
+    // itself healthy for ever, having claimed a tenant and probed nothing —
+    // exactly the "process still running" liveness the progress mark replaced.
     this.noteProgress();
 
     if (due.length === 0) {

@@ -321,6 +321,8 @@ export class DrizzlePanelRepository implements PanelRepository {
         at: next.at,
       },
       tx,
+      // A deferral (`deferredReason` set) is monotonic; a probe result is not.
+      next.deferredReason !== null,
     );
   }
 
@@ -356,6 +358,30 @@ export class DrizzlePanelRepository implements PanelRepository {
    * becoming eligible later must NOT push it back, because some other panel of
    * the same tenant may still be due.
    */
+  /**
+   * Moves a panel's schedule, and the tenant's lower bound with it.
+   *
+   * Two rules are enforced HERE rather than at the call sites, because a call
+   * site that forgets one produces a defect nothing else can see.
+   *
+   * The eligible moment is derived from the panel's own status, not from what
+   * the caller asked for. `setStatus` did ask correctly; `update` and
+   * `setCredentials` did not, and an operator who rotated the rejected password
+   * of a DISABLED panel re-armed it — after which the discovery scan, which
+   * carries no status predicate BECAUSE the schedule is the status filter,
+   * returned it once an hour for ever. Deriving it in the statement means no
+   * caller can arm a panel the operator switched off.
+   *
+   * `monotonic` writes are for a DEFERRAL, which may push a panel further out
+   * and must never pull it nearer. A refusal describes the loop's own state —
+   * a cooldown, an exhausted budget — and knows nothing about the provider. Two
+   * monitors overlap on every rolling update, so a replica whose discovery list
+   * predates the other's probe will be refused by the per-panel cooldown and
+   * try to defer a panel a real probe has just pushed an hour out. Without this
+   * the deferral wins, and the panel whose credential the provider rejected is
+   * dialled again in a minute instead of in thirty — which is the credential
+   * hammering the non-retryable floor exists to prevent.
+   */
   private async writeSchedule(
     scope: TenantContext,
     panelId: string,
@@ -366,43 +392,53 @@ export class DrizzlePanelRepository implements PanelRepository {
       readonly at: Date;
     },
     tx: TransactionScope,
+    monotonic = false,
   ): Promise<void> {
-    await tx.tx
-      .insert(panelMonitorSchedule)
-      .values({
-        panelId,
-        tenantId: scope.tenantId,
-        nextEligibleAt: next.nextEligibleAt,
-        consecutiveFailures: next.consecutiveFailures,
-        deferredReason: next.deferredReason,
-        updatedAt: next.at,
-      })
-      .onConflictDoUpdate({
-        target: panelMonitorSchedule.panelId,
-        set: {
-          nextEligibleAt: next.nextEligibleAt,
-          consecutiveFailures: next.consecutiveFailures,
-          deferredReason: next.deferredReason,
-          updatedAt: next.at,
-        },
-        setWhere: sql`${panelMonitorSchedule.tenantId} = ${scope.tenantId}`,
-      });
+    const proposed = sql`CASE WHEN p.status = 'ACTIVE' THEN ${next.nextEligibleAt}::timestamptz
+                              ELSE ${SCHEDULE_SUSPENDED_AT}::timestamptz END`;
+    const reason = sql`CASE WHEN p.status = 'ACTIVE' THEN ${next.deferredReason}::text
+                            ELSE 'STATUS_NOT_PROBEABLE'::text END`;
+    // A deferral may only push the moment later. Everything else — a probe that
+    // produced health, an operator edit, a status change — is authoritative.
+    const settled = monotonic
+      ? sql`GREATEST(${panelMonitorSchedule.nextEligibleAt}, EXCLUDED.next_eligible_at)`
+      : sql`EXCLUDED.next_eligible_at`;
+    // And it must not touch the streak. A deferral is not a failed probe — the
+    // backoff describes what the PROVIDER said, and on a deferral the provider
+    // was never asked. Writing zero here erased the streak of a genuinely
+    // failing panel, and `BUDGET_EXHAUSTED` is routine rather than rare: with
+    // the shipped defaults a tenant's reserve floor leaves well under half a
+    // full batch probeable, so the rest are deferred every window. The
+    // documented 1, 2, 4, 8 backoff then never left 1x, and a panel whose
+    // credential the provider had rejected was re-dialled at the floor for ever
+    // instead of backing off.
+    const streak = monotonic
+      ? sql`${panelMonitorSchedule.consecutiveFailures}`
+      : sql`EXCLUDED.consecutive_failures`;
 
-    await tx.tx
-      .insert(panelMonitorTenants)
-      .values({
-        tenantId: scope.tenantId,
-        nextEligibleAt: next.nextEligibleAt,
-        // A tenant that has never been served sorts first, which is what a
-        // newly provisioned tenant deserves.
-        lastServedAt: new Date(0),
-      })
-      .onConflictDoUpdate({
-        target: panelMonitorTenants.tenantId,
-        set: {
-          nextEligibleAt: sql`LEAST(${panelMonitorTenants.nextEligibleAt}, ${next.nextEligibleAt})`,
-        },
-      });
+    // One statement, so the tenant's bound is dragged down by a write that
+    // actually happened. Written separately, a schedule write refused by the
+    // tenant predicate still moved the rotation row.
+    await tx.tx.execute(sql`
+      WITH written AS (
+        INSERT INTO ${panelMonitorSchedule}
+               (panel_id, tenant_id, next_eligible_at, consecutive_failures, deferred_reason, updated_at)
+        SELECT p.id, p.tenant_id, ${proposed}, ${next.consecutiveFailures}, ${reason}, ${next.at}
+          FROM ${panels} AS p
+         WHERE p.id = ${panelId} AND p.tenant_id = ${scope.tenantId}
+        ON CONFLICT (panel_id) DO UPDATE
+           SET next_eligible_at    = ${settled},
+               consecutive_failures = ${streak},
+               deferred_reason      = EXCLUDED.deferred_reason,
+               updated_at           = EXCLUDED.updated_at
+         WHERE ${panelMonitorSchedule.tenantId} = ${scope.tenantId}
+        RETURNING tenant_id, next_eligible_at
+      )
+      INSERT INTO ${panelMonitorTenants} (tenant_id, next_eligible_at, last_served_at)
+      SELECT tenant_id, next_eligible_at, to_timestamp(0) FROM written
+      ON CONFLICT (tenant_id) DO UPDATE
+         SET next_eligible_at = LEAST(${panelMonitorTenants.nextEligibleAt}, EXCLUDED.next_eligible_at)
+    `);
   }
 
   /**
