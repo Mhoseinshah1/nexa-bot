@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -136,6 +136,32 @@ describe('the production compose topology', () => {
     // It has no network and no configuration: it copies a directory and stops.
     expect(assets).toMatch(/network_mode: none/);
     expect(assets).not.toMatch(/env_file/);
+  });
+
+  it('publishes the Web Admin bundle with the publisher, never by clearing the served root', () => {
+    const assets = serviceBlock(compose, 'web-assets');
+    // The shell one-shot this replaced emptied the directory Caddy was
+    // serving and then copied into it, so every request in the window got a
+    // 404 for index.html or an index.html naming assets that were not there
+    // yet — on every single update. The publisher writes a complete release
+    // off to one side and activates it with one rename(2).
+    expect(assets).toMatch(/command: \['node', '\/app\/deploy\/bin\/publish-web-assets\.mjs'\]/);
+    expect(assets, 'the asset job clears the directory Caddy is serving').not.toMatch(/rm -rf/);
+    expect(assets, 'the asset job copies over the served root').not.toMatch(/cp -r/);
+    // It still mounts the volume writable, and it is still the only thing
+    // that does.
+    expect(assets).toMatch(/- webassets:\/srv\/web$/m);
+    expect(serviceBlock(compose, 'caddy')).toMatch(/- webassets:\/srv\/web:ro/);
+  });
+
+  it('ships the publisher in the image beside the compose file that invokes it', () => {
+    // `botctl update` installs a release's compose file and its image
+    // together, so the two are always the same release's — an update and a
+    // rollback alike. A publisher that lived on the host instead would be one
+    // release's script operating another release's bundle.
+    const dockerfile = readFileSync(join(__dirname, '../../Dockerfile'), 'utf8');
+    expect(dockerfile).toMatch(/COPY --from=builder [^\n]*\/src\/deploy \.\/deploy/);
+    expect(existsSync(join(__dirname, '../../deploy/bin/publish-web-assets.mjs'))).toBe(true);
   });
 
   it('drops capabilities on every service, including the data ones', () => {
@@ -399,6 +425,26 @@ describe('the production Caddy routing', () => {
     // container — so the admin endpoint has no consumer in this deployment.
     expect(prod).toMatch(/^\s*admin off$/m);
     expect(ci).toMatch(/^\s*admin off$/m);
+  });
+
+  it('serves the entry document from the activated release and its assets from the pool', () => {
+    // Two roots, and the difference between them is the whole reason the
+    // publisher has a pool. `current` is a symlink swapped by one rename(2),
+    // so a request for index.html is served entirely out of one release. But
+    // loading the Web Admin is index.html AND the assets it names, and a
+    // browser that fetched the document a millisecond before a deployment
+    // asks for those assets a millisecond after it. Rooting /assets/* at the
+    // activated release makes those 404s. The pool holds the union over the
+    // retained releases, so both sides of a swap load.
+    expect(routes, 'the served root is not the activated release').not.toMatch(
+      /^\s*root \* \/srv\/web$/m,
+    );
+    const assetsAt = routes.indexOf('@assets path /assets/*');
+    const fallbackAt = routes.indexOf('try_files {path} /index.html');
+    expect(assetsAt).toBeGreaterThan(-1);
+    expect(assetsAt).toBeLessThan(fallbackAt);
+    expect(routes.slice(assetsAt, fallbackAt)).toMatch(/root \* \/srv\/web\/pool$/m);
+    expect(routes.slice(fallbackAt - 400, fallbackAt)).toMatch(/root \* \/srv\/web\/current$/m);
   });
 
   it('leaves HSTS to the production site block', () => {

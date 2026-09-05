@@ -631,7 +631,46 @@ reseed, not to reconcile.
 Every long-running service has `restart: unless-stopped`, so Docker brings the
 installation back after a host reboot with no operator action and no systemd
 unit. The one-shot that publishes the Web Admin bundle does **not** restart —
-the volume it wrote still holds the assets.
+the volume it wrote still holds the activated release.
+
+## The Web Admin bundle in the volume
+
+Caddy is reading the asset volume while the incoming release writes into it, so
+publishing is an activation rather than a copy. `deploy/bin/publish-web-assets.mjs`
+runs once per `up`, from the release's own image, and leaves the volume in this
+shape:
+
+```
+/srv/web/releases/<bundle-id>/     a complete published release
+/srv/web/current -> releases/<id>  what Caddy serves index.html from
+/srv/web/pool/assets/<file>        the union of the retained releases' assets
+```
+
+Three rules, and each closes a failure an operator would meet on a routine
+update:
+
+- **A release is written off to one side and activated by one `rename(2)`.**
+  The shell one-shot this replaced cleared the served directory and then copied
+  into it: every request in that window got a 404 for `index.html`, or an
+  `index.html` naming assets that were not there yet. Nothing is ever activated
+  half written, and a publication that fails leaves the previous release
+  activated and untouched.
+- **A release is named after its bundle's content.** Publishing the same bundle
+  twice copies nothing — and a rollback IS publishing the same bundle twice, so
+  `botctl rollback` re-activates a directory that is already on disk and
+  complete.
+- **`/assets/*` is served from the pool, not from the activated release.** A
+  browser that fetched `index.html` a millisecond before a swap asks for its
+  scripts a millisecond after it. The pool spans the retained releases, so both
+  sides of a swap load. Two deployments later the older release is pruned along
+  with its assets; `index.html` is `no-store`, so a reload resolves it.
+
+Rolling back to a release older than this layout is safe in both directions:
+that release's compose file and its publisher travel with its image, and its
+own one-shot rewrites the volume flat. The reverse — the update that introduces
+the layout — deliberately leaves the flat tree in place, because the Caddy
+still running at that moment is the outgoing release's and is still serving out
+of it. The publication after that removes it.
 
 ## Releases
 

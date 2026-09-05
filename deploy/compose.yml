@@ -203,6 +203,34 @@ services:
   # first-mount: that only happens when the volume is EMPTY, so after an update
   # the volume would keep serving the previous release's assets while the API
   # served the new one.
+  #
+  # It is a node script rather than two shell commands, and that is the whole
+  # point of it. The shell version was:
+  #
+  #     find /srv/web -mindepth 1 -maxdepth 1 -exec rm -rf {} +; cp -r /app/web/. /srv/web/
+  #
+  # — run against the directory the RUNNING Caddy was serving. Between the two
+  # commands that directory is empty and during the copy it is half written, so
+  # every request in the window gets a 404 for index.html or an index.html
+  # naming hashed assets that are not there yet. The window is small and it is
+  # on every single update.
+  #
+  # The publisher writes a complete release into `releases/<bundle-id>/` and
+  # then activates it with ONE rename(2) of the `current` symlink, which is why
+  # Caddy's SPA root names `/srv/web/current` rather than `/srv/web`. A request
+  # resolves that symlink when it opens the file, so the entry document is
+  # served entirely out of one release or entirely out of the other. Its
+  # `/assets/*` root names `/srv/web/pool`, which holds the union over the
+  # retained releases, so a document fetched a moment before a swap can still
+  # load the scripts it names. See the script's own header for the layout, the
+  # retention rule and the one case this does not cover
+  #
+  # `set -e` is not needed for the same reason a shell is not: node exits
+  # non-zero on a failure and Caddy depends on this service COMPLETING
+  # SUCCESSFULLY, so a failed publication stops the edge rather than starting
+  # it against a half-written tree. A failure also leaves the previously
+  # activated release activated — nothing is deleted before the new tree is
+  # complete.
   web-assets:
     image: ${NEXA_IMAGE:?NEXA_IMAGE must be an image digest reference}
     user: '0:0'
@@ -213,26 +241,20 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    # `cp -r`, NOT `cp -a`. `-a` preserves ownership, which means chown, which
-    # needs CAP_CHOWN — and every capability is dropped above. The first
-    # version used `-a` and this container exited 1 on every start, which the
-    # Ubuntu CI job caught and no local check could: nothing about the
-    # application looks different, the API even reports healthy, and only the
-    # edge has nothing to serve.
+    # The publisher ships in the image, beside the compose file that invokes
+    # it: `deploy/` is COPYed to /app/deploy in the runtime stage, and
+    # `botctl update` installs a release's compose file and its image together.
+    # So compose and publisher are always the same release's, in both
+    # directions — an update and a rollback alike.
     #
-    # Ownership is not worth a capability here. These are static files Caddy
-    # mounts read-only, and their names are content-hashed, so neither owner
-    # nor mtime carries meaning.
-    #
-    # `set -e` so a failure is loud. Without it the exit status is whatever the
-    # last command returned, and a failed clean-up followed by a successful
-    # copy would look like a success — or the reverse.
-    command:
-      [
-        'sh',
-        '-c',
-        'set -e; find /srv/web -mindepth 1 -maxdepth 1 -exec rm -rf {} +; cp -r /app/web/. /srv/web/',
-      ]
+    # No `cp -a` anywhere in it. `-a` preserves ownership, which means chown,
+    # which needs CAP_CHOWN, and every capability is dropped above. The first
+    # version of the shell one-shot used `-a` and exited 1 on every start,
+    # which the Ubuntu CI job caught and no local check could: nothing about
+    # the application looks different, the API even reports healthy, and only
+    # the edge has nothing to serve. Node's cpSync copies mode bits and not
+    # ownership, so the same constraint is met by construction.
+    command: ['node', '/app/deploy/bin/publish-web-assets.mjs']
     volumes:
       - webassets:/srv/web
 

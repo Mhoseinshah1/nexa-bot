@@ -59,6 +59,33 @@ compose() {
     "$@"
 }
 
+# The Web Admin as a browser gets it: the document, then every hashed asset the
+# document names. Both go through the edge, and they go through DIFFERENT roots
+# — the document from the activated release, the assets from the pool — which
+# is exactly the split that a publication can get wrong.
+#
+# Prints `bundle=<v1|v2> assets=<n>` and fails if any named asset is not
+# served, so a caller asserts on one line.
+served_bundle() {
+  local base="http://127.0.0.1:${HTTP_PORT}" document asset code count=0 bundle=v1
+  document="$(curl -fsS "${base}/" || true)"
+  case "$document" in
+    *'<div id="root">'*) : ;;
+    *) fail "the edge is not serving the Web Admin at all" ;;
+  esac
+  case "$document" in
+    *'smoke-v2.js'*) bundle=v2 ;;
+  esac
+  for asset in $(printf '%s' "$document" | grep -oE '/assets/[A-Za-z0-9._-]+' | sort -u); do
+    code="$(curl -s -o /dev/null -w '%{http_code}' "${base}${asset}")"
+    [ "$code" = "200" ] ||
+      fail "the document names ${asset} and the edge answered ${code} for it"
+    count=$((count + 1))
+  done
+  [ "$count" -gt 0 ] || fail "the served document names no hashed assets"
+  printf 'bundle=%s assets=%s\n' "$bundle" "$count"
+}
+
 cleanup() {
   compose down -v --remove-orphans >/dev/null 2>&1 || true
   docker rm -f nexa-smoke-registry >/dev/null 2>&1 || true
@@ -102,10 +129,21 @@ build_release v2.0.0
 # ship byte-identical ones, and the check would pass without the update having
 # moved anything. One appended comment is enough to tell them apart, and leaves
 # the script itself working.
+#
+# Its WEB BUNDLE has to differ for the same reason, and it is a separate mark:
+# the asset publisher names a release after the bundle's own content, so two
+# releases shipping byte-identical bundles publish to ONE release directory.
+# Every assertion below about which bundle the edge is serving would then hold
+# no matter what the publisher, the symlink or the rollback did.
 docker build -t "${IMAGE_REPO}:v2.0.0" -f - . >/dev/null <<DOCKERFILE || fail "marking v2.0.0's host assets failed"
 FROM ${IMAGE_REPO}:v2.0.0
 USER root
 RUN printf '%s\n' '# nexa-smoke: v2.0.0 host assets' >> /app/deploy/bin/botctl
+RUN set -e; \
+    mkdir -p /app/web/assets; \
+    printf '%s\n' 'globalThis.NEXA_SMOKE_BUNDLE = "v2.0.0";' > /app/web/assets/smoke-v2.js; \
+    sed -i 's|</head>|<script type="module" src="/assets/smoke-v2.js"></script></head>|' /app/web/index.html; \
+    grep -q 'smoke-v2.js' /app/web/index.html
 USER node
 DOCKERFILE
 docker push --quiet "${IMAGE_REPO}:v2.0.0" >/dev/null || fail "pushing the marked v2.0.0 failed"
@@ -252,6 +290,23 @@ until "$BOTCTL" status >/dev/null 2>&1; do
 done
 pass "installed and ready at v1.0.0"
 
+step "the edge serves v1.0.0's bundle, coherently"
+serving="$(served_bundle)"
+case "$serving" in
+  'bundle=v1 '*) : ;;
+  *) fail "a fresh install at v1.0.0 serves ${serving}" ;;
+esac
+pass "the edge serves v1.0.0's document and every asset it names (${serving})"
+
+# The assets v1.0.0's document names, captured NOW. They are re-fetched after
+# the update below: a browser that has the old document and has not asked for
+# its scripts yet is what every page load open at the moment of a deployment
+# looks like, and rooting /assets/* at the activated release turns all of them
+# into 404s.
+V1_ASSETS="$(curl -fsS "http://127.0.0.1:${HTTP_PORT}/" |
+  grep -oE '/assets/[A-Za-z0-9._-]+' | sort -u)"
+[ -n "$V1_ASSETS" ] || fail "v1.0.0's document names no hashed assets"
+
 # Something to notice if a rollback ever restored the database. A routine
 # rollback must leave this row exactly where it is.
 compose exec -T postgres psql -U nexa -d nexa -q -c \
@@ -317,6 +372,61 @@ pass "v2.0.0 is current, by digest, with v1.0.0 preserved as the rollback target
 pass "the host assets are v2.0.0's, and v1.0.0's were recorded"
 
 # ---------------------------------------------------------------------------
+step "the update published v2.0.0's bundle atomically"
+# ---------------------------------------------------------------------------
+# The publisher that shipped before this check emptied the directory Caddy was
+# serving and then copied into it, so every update had a window where the edge
+# answered 404 for index.html and then served an index.html naming assets that
+# were not there yet. Three things are asserted, and each fails differently:
+serving="$(served_bundle)"
+case "$serving" in
+  'bundle=v2 '*) : ;;
+  *) fail "after the update the edge still serves ${serving}" ;;
+esac
+pass "the edge serves v2.0.0's document and every asset it names (${serving})"
+
+#   1. `current` is a SYMLINK into releases/. A directory of the same name
+#      serves the same bytes and cannot be swapped atomically.
+activated="$(compose exec -T caddy readlink /srv/web/current 2>&1 || true)"
+case "$activated" in
+  releases/*) : ;;
+  *) fail "/srv/web/current is not a symlink into releases/ (got: ${activated})" ;;
+esac
+#   2. Both releases are on disk. The one just replaced is retained on purpose:
+#      a request that resolved `current` a moment before the swap may still be
+#      reading a file out of it, and a rollback re-activates it without copying.
+kept="$(compose exec -T caddy sh -c 'ls -1 /srv/web/releases | wc -l' 2>&1 || true)"
+[ "$(printf '%s' "$kept" | tr -d '[:space:]')" = "2" ] ||
+  fail "the volume holds ${kept} release directories after one update; it must hold two"
+#   3. The pool still carries v1.0.0's assets. This is the case the symlink
+#      alone does not cover: a browser that fetched v1.0.0's document a
+#      millisecond before the swap asks for its scripts a millisecond after it.
+#      Counted exactly against the union over the retained releases, not
+#      against a floor: a pool pruned back to the incoming release alone still
+#      holds more files than any threshold worth writing, and that is precisely
+#      the regression.
+counts="$(compose exec -T caddy sh -c \
+  'ls -1 /srv/web/pool/assets | wc -l;
+   find /srv/web/releases -mindepth 3 -path "*/assets/*" -type f | sed "s|.*/||" | sort -u | wc -l' \
+  2>&1 || true)"
+pooled="$(printf '%s\n' "$counts" | sed -n 1p | tr -d '[:space:]')"
+union="$(printf '%s\n' "$counts" | sed -n 2p | tr -d '[:space:]')"
+[ -n "$union" ] && [ "${union:-0}" -gt 0 ] 2>/dev/null ||
+  fail "could not count the retained releases' assets (got: ${counts})"
+[ "$pooled" = "$union" ] ||
+  fail "the pool holds ${pooled} assets and the retained releases own ${union}; it must hold their union"
+pass "current is a symlink, both releases are retained, and the pool spans them (${pooled} assets)"
+
+# The captured request, replayed after the swap. This is the assertion the
+# pool exists for, and the one a symlink swap alone does not satisfy.
+for asset in $V1_ASSETS; do
+  code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${HTTP_PORT}${asset}")"
+  [ "$code" = "200" ] ||
+    fail "${asset}, named by the document served before the update, answered ${code} after it"
+done
+pass "a document fetched before the update can still load every asset it names"
+
+# ---------------------------------------------------------------------------
 step "the upgraded installation refuses its own data network, from compose, not from nexa.env"
 # ---------------------------------------------------------------------------
 # Inside the RUNNING api container, with the environment compose actually
@@ -372,6 +482,13 @@ until "$BOTCTL" status >/dev/null 2>&1; do
 done
 pass "the failed release did not become current, and v2.0.0 came back"
 
+serving="$(served_bundle)"
+case "$serving" in
+  'bundle=v2 '*) : ;;
+  *) fail "after a failed update the edge serves ${serving}, not the release that came back" ;;
+esac
+pass "a failed update leaves v2.0.0's bundle activated and complete (${serving})"
+
 # ---------------------------------------------------------------------------
 step "a release whose monitor never becomes healthy must not become current"
 # ---------------------------------------------------------------------------
@@ -418,6 +535,21 @@ if grep -qF '# nexa-smoke: v2.0.0 host assets' "${NEXA_BIN_DIR}/botctl"; then
 fi
 pass "the rollback returned to v1.0.0 and left the database untouched"
 pass "the rollback returned the host assets to v1.0.0 too"
+
+serving="$(served_bundle)"
+case "$serving" in
+  'bundle=v1 '*) : ;;
+  *) fail "after the rollback the edge serves ${serving}" ;;
+esac
+# v1.0.0's release directory was never deleted by the update that replaced it,
+# so the rollback re-ACTIVATED it rather than copying it back — which is why
+# there is nothing here that could have been half restored.
+activated="$(compose exec -T caddy readlink /srv/web/current 2>&1 || true)"
+case "$activated" in
+  releases/*) : ;;
+  *) fail "/srv/web/current is not a symlink into releases/ after the rollback (got: ${activated})" ;;
+esac
+pass "the rollback serves v1.0.0's bundle, coherently (${serving})"
 
 # ---------------------------------------------------------------------------
 step "update again, to prove the installation is not stuck"

@@ -360,6 +360,34 @@ deep_code="$(curl -s -o /dev/null -w '%{http_code}' "${base}/settings")"
 [ "$deep_code" = "200" ] || fail "a deep link answered ${deep_code}; the SPA fallback is not working"
 pass "deep links fall back to the SPA"
 
+# Every hashed asset the document names, fetched through the edge. The
+# publisher activates a release by renaming a symlink and serves /assets/* from
+# a pool; a Caddy root that named the wrong path, or a publication that only
+# half happened, both show up here and nowhere else — the document itself is
+# served from a different root and would still be a 200.
+assets="$(printf '%s' "$index" | grep -oE '/assets/[A-Za-z0-9._-]+' | sort -u)"
+[ -n "$assets" ] || fail "the served document names no hashed assets; the bundle is not what shipped"
+for asset in $assets; do
+  asset_code="$(curl -s -o /dev/null -w '%{http_code}' "${base}${asset}")"
+  [ "$asset_code" = "200" ] ||
+    fail "${asset} answered ${asset_code}; the document names an asset the edge cannot serve"
+done
+pass "every asset the document names is served ($(printf '%s\n' "$assets" | wc -l) of them)"
+
+# The layout itself, inside the volume Caddy is reading. `current` being a
+# SYMLINK is what makes activation one rename(2); a directory of the same name
+# would serve the same bytes today and could not be swapped atomically
+# tomorrow, and no request-level check can tell the two apart.
+activated="$(compose exec -T caddy readlink /srv/web/current 2>&1 || true)"
+case "$activated" in
+  releases/*) : ;;
+  *) fail "/srv/web/current is not a symlink into releases/ (got: ${activated})" ;;
+esac
+pooled="$(compose exec -T caddy sh -c 'ls -1 /srv/web/pool/assets | wc -l' 2>&1 || true)"
+[ "$(printf '%s' "$pooled" | tr -d '[:space:]')" -gt 0 ] 2>/dev/null ||
+  fail "the asset pool is empty; /assets/* is rooted at it (got: ${pooled})"
+pass "the volume holds a current symlink into releases/ and a populated asset pool"
+
 # The Telegram webhook must reach the API, not the SPA.
 #
 # This is the failure that has no symptom. The controller lives at
