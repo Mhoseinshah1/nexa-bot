@@ -274,7 +274,7 @@ services:
           'CMD',
           'node',
           '-e',
-          "const fs=require('fs');try{const s=fs.readFileSync('/tmp/nexa-worker.heartbeat','utf8').trim();const at=Number(s);process.exit(s!==''&&Number.isFinite(at)&&Date.now()-at<=30000?0:1)}catch{process.exit(1)}",
+          "const fs=require('fs');const p=process.env.WORKER_HEARTBEAT_PATH||'/tmp/nexa-worker.heartbeat';try{const s=fs.readFileSync(p,'utf8').trim();const at=Number(s);process.exit(s!==''&&Number.isFinite(at)&&Date.now()-at<=30000?0:1)}catch{process.exit(1)}",
         ]
       interval: 10s
       timeout: 5s
@@ -305,7 +305,7 @@ services:
           'CMD',
           'node',
           '-e',
-          "const fs=require('fs');try{const s=fs.readFileSync('/tmp/nexa-monitor.heartbeat','utf8').trim();const at=Number(s);process.exit(s!==''&&Number.isFinite(at)&&Date.now()-at<=30000?0:1)}catch{process.exit(1)}",
+          "const fs=require('fs');const p=process.env.PANEL_MONITOR_HEARTBEAT_PATH||'/tmp/nexa-monitor.heartbeat';try{const s=fs.readFileSync(p,'utf8').trim();const at=Number(s);process.exit(s!==''&&Number.isFinite(at)&&Date.now()-at<=30000?0:1)}catch{process.exit(1)}",
         ]
       interval: 10s
       timeout: 5s

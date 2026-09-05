@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { errors } from '@nexa/contracts';
 import type { ProviderProbeOutcome, ProviderType, TenantContext } from '@nexa/contracts';
 import {
@@ -610,6 +610,83 @@ describe('the panel health monitor', () => {
         SCHEDULE_SUSPENDED_AT.getTime(),
       );
       expect((await tick()).probed).toBe(1);
+    });
+  });
+
+  describe('a refusal does not undo the fix for what it refused over', () => {
+    it('does not defer a panel whose credential arrived while it was being refused', async () => {
+      // The monitor reads no usable credential and decides to defer for the
+      // stable hour. In between, the operator sets the password — which commits
+      // ELIGIBLE_NOW. The refusal then landed last and postponed the corrected
+      // panel by an hour, with nothing on screen explaining why.
+      const panelId = await createPanel(ownerA, tenantA, 'mid-fix');
+      await service().setCredentials(tenantA, adminActorFor(ownerA), panelId, {
+        credentials: { password: null },
+        idempotencyKey: key(),
+      });
+      const observed = (await scheduleOf(panelId))!;
+      expect(observed.deferredReason).toBe(null);
+
+      // The refusal is derived here...
+      const base = probeDeps();
+      const m = monitor({
+        discovery: {
+          claimTenants: async () => [tenantA.tenantId],
+          dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
+          refreshTenantBounds: async () => {},
+        },
+        probe: {
+          credentials: {
+            read: async (...args) => {
+              // ...and the operator's fix commits before the deferral is written.
+              const value = await base.credentials.read(...args);
+              await service().setCredentials(tenantA, adminActorFor(ownerA), panelId, {
+                credentials: { password: 'a-corrected-password-9Q' },
+                idempotencyKey: key(),
+              });
+              return value;
+            },
+            write: base.credentials.write.bind(base.credentials),
+          },
+        },
+      });
+      await m.tick();
+
+      // The operator's panel is still due now, not in an hour.
+      const after = (await scheduleOf(panelId))!;
+      expect(after.deferredReason).toBe(null);
+      expect(after.nextEligibleAt.getTime()).toBeLessThanOrEqual(now.getTime());
+    });
+  });
+
+  describe('a candidate that throws', () => {
+    it('does not count as progress and does not hold the tenant slot for ever', async () => {
+      // A credential whose envelope will not parse, or one sealed under a key
+      // the installation no longer holds, throws before the refusal path and
+      // before the persist path. The row stayed due, so it was the earliest due
+      // row on the next tick and the one after that — with a per-tenant share
+      // of one it took the tenant's only slot for ever — and counting it as
+      // progress kept the container healthy while nothing was being monitored.
+      const broken = await createPanel(ownerA, tenantA, 'corrupt-envelope');
+      const healthy = await createPanel(ownerA, tenantA, 'still-fine');
+      await ctx.container.database.db.execute(
+        sql`UPDATE panel_credentials SET password_ciphertext = 'not-a-valid-envelope' WHERE panel_id = ${broken}`,
+      );
+
+      const m = monitor({ batchSize: 1, concurrency: 1 });
+      const first = await m.tick();
+      expect(first.failed).toBe(1);
+      // Not progress: the sweep finished no panel.
+      expect(m.iterationIsFresh(now.getTime())).toBe(false);
+      // And it stepped out of the way rather than staying the earliest row.
+      const deferredTo = (await scheduleOf(broken))!;
+      expect(deferredTo.deferredReason).toBe('INTERNAL_ERROR');
+      expect(deferredTo.nextEligibleAt.getTime()).toBeGreaterThan(now.getTime());
+
+      // The next tick reaches the panel behind it.
+      const second = await m.tick();
+      expect(second.probed).toBe(1);
+      expect((await healthOf(healthy))?.state).toBe('HEALTHY');
     });
   });
 

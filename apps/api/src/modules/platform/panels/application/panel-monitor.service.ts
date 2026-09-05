@@ -22,7 +22,12 @@ import {
 } from '../../access/application/authorized-mutation.js';
 import type { SessionRepository } from '../../identity/application/ports.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { attemptProbe, persistProbeResult, type ProbeCoreDeps } from './probe-core.js';
+import {
+  attemptProbe,
+  configurationOf,
+  persistProbeResult,
+  type ProbeCoreDeps,
+} from './probe-core.js';
 import {
   deferralIntervalMs,
   effectivePreviousFailures,
@@ -269,18 +274,18 @@ export class PanelMonitorService {
       this.deps.batchSize,
     );
 
-    // Only NOW is discovery a success, and only now is it progress.
+    // Discovery has now fully succeeded. That is progress ONLY when it found
+    // nothing to do; otherwise the progress has to come from the work itself.
     //
-    // The mark used to be set the moment tenants were claimed, which made the
-    // heartbeat's whole claim false for the more fragile of the two statements:
-    // `dueForTenants` is hand-written SQL whose plan depends on an index and
-    // which grows with the schedule, so it is the one a statement timeout finds
-    // first. A monitor whose every due scan threw would have gone on reporting
-    // itself healthy for ever, having claimed a tenant and probed nothing —
-    // exactly the "process still running" liveness the progress mark replaced.
-    this.noteProgress();
-
+    // Two ways this used to lie. The mark was set the moment tenants were
+    // claimed, so a monitor whose every DUE SCAN threw reported itself healthy
+    // for ever — and `dueForTenants` is the fragile one, hand-written SQL whose
+    // plan depends on an index and which grows with the schedule. And a sweep
+    // that discovered work and then failed every single candidate was still
+    // "fresh", because discovering the work counted as doing it. A monitor that
+    // finds a hundred due panels and cannot probe any of them is not healthy.
     if (due.length === 0) {
+      this.noteProgress();
       return { ...EMPTY_TICK, tenants: tenantIds.length };
     }
 
@@ -308,21 +313,33 @@ export class PanelMonitorService {
           const outcome = await this.probeOne(candidate, actor);
           if (outcome === 'PROBED') probed += 1;
           else deferred += 1;
+          // Finishing with a panel is progress. It is what keeps a long sweep
+          // of slow providers healthy while it is still getting somewhere, and
+          // what lets a sweep that WEDGES go stale.
+          this.noteProgress();
         } catch (error) {
           // One panel's failure is one panel's failure. An unreachable panel, a
           // provider that returns nonsense, a conflict because somebody edited
           // the panel mid-probe — none of them may stop the sweep, or a single
           // broken panel would stop every other panel being monitored.
+          //
+          // But it is NOT progress, and the schedule has to move anyway.
+          //
+          // A candidate that throws before `defer` or `persist` — a credential
+          // whose envelope is malformed, or one sealed under a key the
+          // installation no longer has — leaves its row due. It is then the
+          // earliest due row on the next tick, and the one after that. With a
+          // per-tenant share of one it takes the tenant's only slot for ever
+          // and no other panel of that tenant is monitored again; and while it
+          // did that, counting it as progress kept the container healthy, so
+          // nothing anywhere said the monitor had stopped working.
           failed += 1;
           this.deps.logger.error(
             { err: error, panelId: candidate.panelId, tenantId: candidate.tenantId },
             'panel monitor probe failed',
           );
+          await this.deferInternalError(candidate);
         }
-        // Finishing with a panel — probed, deferred or failed — is progress. It
-        // is what keeps a long sweep of slow providers healthy while it is
-        // still getting somewhere, and what lets a sweep that WEDGES go stale.
-        this.noteProgress();
       }
     };
 
@@ -380,7 +397,7 @@ export class PanelMonitorService {
       // the panel steps back so it does not occupy its tenant's slot on every
       // tick for ever.
       const reason = deferralReasonOf(attempt.refusal.kind);
-      await this.defer(tenant, candidate.panelId, reason);
+      await this.defer(tenant, candidate.panelId, reason, configurationOf(before));
       this.deps.logger.debug(
         { panelId: candidate.panelId, reason },
         'panel monitor deferred a panel without probing it',
@@ -435,14 +452,61 @@ export class PanelMonitorService {
   }
 
   /** Steps a panel back without inventing anything about the provider. */
+  /**
+   * Backs a candidate off after an unhandled failure, without claiming to know why.
+   *
+   * Deliberately NOT a health state: nothing was asked of the provider, so
+   * there is nothing to report about it. `INTERNAL_ERROR` is a scheduler
+   * reason like any other refusal, and the stable interval applies — an
+   * envelope that will not decrypt this minute will not decrypt in the next
+   * one either. A failure to write even this is swallowed: the sweep continues
+   * either way, and the alternative is one corrupt row stopping the loop.
+   */
+  private async deferInternalError(candidate: DuePanel): Promise<void> {
+    const tenant: TenantContext = {
+      tenantId: candidate.tenantId as TenantContext['tenantId'],
+      botInstanceId: null,
+    };
+    try {
+      await this.defer(tenant, candidate.panelId, 'INTERNAL_ERROR');
+    } catch (error) {
+      this.deps.logger.error(
+        { err: error, panelId: candidate.panelId, tenantId: candidate.tenantId },
+        'panel monitor could not defer a failed candidate',
+      );
+    }
+  }
+
+  /**
+   * Steps back from a panel the loop decided not to probe.
+   *
+   * `observed` is the configuration the refusal was derived from, and the
+   * deferral is applied only if it still holds. Without it a refusal raced the
+   * fix for the very thing it refused over: the monitor reads no credential,
+   * the operator sets a password — which commits `ELIGIBLE_NOW` — and this
+   * write lands afterwards and postpones the corrected panel by the stable
+   * hour. The operator sees a panel they have just fixed sitting untested, with
+   * nothing on screen explaining why.
+   *
+   * The re-read is inside the deferral's own transaction, so a write that
+   * committed before it is visible and a write that commits after it is
+   * authoritative anyway — an operator edit is not monotonic and wins on
+   * arrival. Passing `null` skips the check, for the refusals that are about
+   * the loop rather than the panel.
+   */
   private async defer(
     tenant: TenantContext,
     panelId: string,
     reason: MonitorDeferralReason,
+    observed: string | null = null,
   ): Promise<void> {
     const at = this.deps.clock.now();
-    await this.deps.uow.run(tenant, (tx) =>
-      this.deps.probe.repository.scheduleNext(
+    await this.deps.uow.run(tenant, async (tx) => {
+      if (observed !== null) {
+        const current = await this.deps.probe.repository.find(tenant, panelId, tx);
+        if (current === null || configurationOf(current) !== observed) return;
+      }
+      return this.deps.probe.repository.scheduleNext(
         tenant,
         panelId,
         {
@@ -454,8 +518,8 @@ export class PanelMonitorService {
           at,
         },
         tx,
-      ),
-    );
+      );
+    });
   }
 
   /**
