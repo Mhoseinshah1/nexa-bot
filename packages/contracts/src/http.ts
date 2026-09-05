@@ -568,6 +568,21 @@ export type NotificationResponse = z.infer<typeof notificationSchema>;
 export const notificationListResponseSchema = z.object({
   notifications: z.array(notificationSchema),
 });
+/**
+ * The bounded page size a notification list accepts.
+ *
+ * A schema rather than `Number(query.limit)` followed by a clamp. The clamp
+ * carried `NaN` straight through — `Math.min(Math.max(NaN, 1), 200)` is `NaN` —
+ * and into the SQL `LIMIT`, where it surfaced as an internal error rather than
+ * a bad request. Fractional, infinite, zero and negative spellings were
+ * silently rewritten rather than refused, so a caller could not tell a
+ * misspelled request from an honoured one.
+ */
+export const notificationListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(200).optional(),
+});
+export type NotificationListQuery = z.infer<typeof notificationListQuerySchema>;
+
 export type NotificationListResponse = z.infer<typeof notificationListResponseSchema>;
 
 export const deliveryAttemptSchema = z.object({

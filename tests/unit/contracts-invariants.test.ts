@@ -4,6 +4,7 @@ import {
   ERROR_KINDS,
   ERROR_KIND_HTTP_STATUS,
   errors,
+  notificationListQuerySchema,
   EVENT_PAYLOAD_SCHEMAS,
   EVENT_TYPES,
   isEventType,
@@ -142,5 +143,39 @@ describe('state machine validation', () => {
     for (const machine of STATE_MACHINES) {
       expect(validateStateMachine(machine)).toEqual([]);
     }
+  });
+});
+
+describe('the notification list page size is parsed, not clamped', () => {
+  // `Number(query.limit)` followed by `Math.min(Math.max(n, 1), 200)` carried
+  // NaN straight through — `Math.max(NaN, 1)` is NaN — into the SQL LIMIT,
+  // where it surfaced as an internal error rather than a bad request. Zero,
+  // negative, fractional and oversized values were silently rewritten rather
+  // than refused, so a caller could not tell a misspelled request from an
+  // honoured one.
+  it.each([
+    ['abc', 'not a number at all'],
+    ['NaN', 'the literal spelling of the value that used to get through'],
+    ['Infinity', 'infinite'],
+    ['-Infinity', 'infinite the other way'],
+    ['1.5', 'fractional'],
+    ['0', 'zero pages'],
+    ['-1', 'negative'],
+    ['201', 'past the bound'],
+    ['', 'empty'],
+  ])('refuses %s (%s)', (limit) => {
+    expect(notificationListQuerySchema.safeParse({ limit }).success).toBe(false);
+  });
+
+  it.each([['1'], ['50'], ['200']])('accepts %s', (limit) => {
+    const parsed = notificationListQuerySchema.safeParse({ limit });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.limit).toBe(Number(limit));
+  });
+
+  it('accepts an absent limit, leaving the default to the service', () => {
+    const parsed = notificationListQuerySchema.safeParse({});
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.limit).toBeUndefined();
   });
 });

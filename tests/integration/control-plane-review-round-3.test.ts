@@ -1333,4 +1333,26 @@ describe('control plane, Codex round', () => {
       expect(replay.intent.id).toBe(sent.intent.id);
     });
   });
+
+  describe('the notification detail endpoint', () => {
+    it('refuses a malformed id before it can reach a UUID column', async () => {
+      // An arbitrary string was compared against `notifications.id`; PostgreSQL
+      // rejected it with 22P02 and the error filter turned that into a 500, so
+      // a caller who mistyped an id was told the server was broken.
+      let thrown: unknown;
+      try {
+        await ctx.container.notifications.get(tenantA, owner, 'not-a-uuid');
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeDefined();
+      const failure = thrown as { kind?: string; code?: string };
+      // A named domain error, not a raw driver failure. Asserting only
+      // `kind !== 'INTERNAL'` would pass on the bare pg error, whose `kind` is
+      // undefined — which is how the first version of this test passed while
+      // the service still handed 'not-a-uuid' straight to PostgreSQL.
+      expect(failure.kind).toBe('NOT_FOUND');
+      expect(failure.code).toBe('control.notification_not_found');
+    });
+  });
 });
