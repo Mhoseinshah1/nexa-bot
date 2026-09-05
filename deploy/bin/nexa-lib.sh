@@ -309,7 +309,22 @@ nexa_pull_release() {
 # a stale answer that looks exactly like a fresh one until an operator acts on
 # it. API healthy plus worker healthy plus monitor dead is not a release that
 # works.
-NEXA_READY_SERVICES="api worker monitor"
+#
+# And the EDGE, which is the one an operator meets first. Caddy is the only
+# service that publishes a port, so a release whose api, worker and monitor are
+# all healthy behind an edge that never started is an installation nobody can
+# reach — reported ready, by a tool that never asked. It is not hypothetical:
+# Caddy depends on the Web Admin publisher COMPLETING SUCCESSFULLY, so a failed
+# asset publication stops the edge and leaves exactly that shape. Its container
+# check is a real signal rather than "is the process up": it fetches the SPA
+# root and /health/live through the same routes the public site imports, so it
+# fails when the bundle is missing and when the API handle order has broken.
+#
+# The intersection below is what makes adding it safe in both directions: a
+# release whose compose does not define `caddy` simply does not have it
+# required, which is the same rule that lets a rollback to a pre-monitor
+# release still become ready.
+NEXA_READY_SERVICES="api worker monitor caddy"
 
 # The required services that the ACTIVE compose file actually defines.
 #

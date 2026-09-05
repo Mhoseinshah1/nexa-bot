@@ -59,6 +59,23 @@ compose() {
     "$@"
 }
 
+# A request THROUGH the edge, from inside the edge container.
+#
+# Not the published port, and that is not a shortcut. `botctl` runs compose
+# with the release's own compose.yml and NOTHING else — no CI override — so the
+# moment an update or a rollback recreates the edge, the loopback port this
+# script published is gone. Every check here has to survive that, and the
+# address that does is the internal health site: plain HTTP on the container's
+# own loopback, defined by BOTH Caddyfiles, importing the same `nexa_routes`
+# snippet the public site does. So this exercises the real handle order, the
+# real SPA fallback, the real asset root and the real pool.
+edge_get() {
+  compose exec -T caddy wget -q -O - "http://127.0.0.1:8080$1"
+}
+edge_serves() {
+  compose exec -T caddy wget -q -O /dev/null "http://127.0.0.1:8080$1"
+}
+
 # The Web Admin as a browser gets it: the document, then every hashed asset the
 # document names. Both go through the edge, and they go through DIFFERENT roots
 # — the document from the activated release, the assets from the pool — which
@@ -67,8 +84,8 @@ compose() {
 # Prints `bundle=<v1|v2> assets=<n>` and fails if any named asset is not
 # served, so a caller asserts on one line.
 served_bundle() {
-  local base="http://127.0.0.1:${HTTP_PORT}" document asset code count=0 bundle=v1
-  document="$(curl -fsS "${base}/" || true)"
+  local document asset count=0 bundle=v1
+  document="$(edge_get / || true)"
   case "$document" in
     *'<div id="root">'*) : ;;
     *) fail "the edge is not serving the Web Admin at all" ;;
@@ -77,9 +94,8 @@ served_bundle() {
     *'smoke-v2.js'*) bundle=v2 ;;
   esac
   for asset in $(printf '%s' "$document" | grep -oE '/assets/[A-Za-z0-9._-]+' | sort -u); do
-    code="$(curl -s -o /dev/null -w '%{http_code}' "${base}${asset}")"
-    [ "$code" = "200" ] ||
-      fail "the document names ${asset} and the edge answered ${code} for it"
+    edge_serves "$asset" ||
+      fail "the document names ${asset} and the edge does not serve it"
     count=$((count + 1))
   done
   [ "$count" -gt 0 ] || fail "the served document names no hashed assets"
@@ -303,8 +319,7 @@ pass "the edge serves v1.0.0's document and every asset it names (${serving})"
 # its scripts yet is what every page load open at the moment of a deployment
 # looks like, and rooting /assets/* at the activated release turns all of them
 # into 404s.
-V1_ASSETS="$(curl -fsS "http://127.0.0.1:${HTTP_PORT}/" |
-  grep -oE '/assets/[A-Za-z0-9._-]+' | sort -u)"
+V1_ASSETS="$(edge_get / | grep -oE '/assets/[A-Za-z0-9._-]+' | sort -u)"
 [ -n "$V1_ASSETS" ] || fail "v1.0.0's document names no hashed assets"
 
 # Something to notice if a rollback ever restored the database. A routine
@@ -420,9 +435,8 @@ pass "current is a symlink, both releases are retained, and the pool spans them 
 # The captured request, replayed after the swap. This is the assertion the
 # pool exists for, and the one a symlink swap alone does not satisfy.
 for asset in $V1_ASSETS; do
-  code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${HTTP_PORT}${asset}")"
-  [ "$code" = "200" ] ||
-    fail "${asset}, named by the document served before the update, answered ${code} after it"
+  edge_serves "$asset" ||
+    fail "${asset}, named by the document served before the update, is not served after it"
 done
 pass "a document fetched before the update can still load every asset it names"
 

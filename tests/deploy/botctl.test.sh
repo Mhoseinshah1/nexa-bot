@@ -148,6 +148,22 @@ assert_ok 'the readiness parser could not be extracted' test -s "$parser"
 # what readiness demands with what the ACTIVE compose file defines — and the
 # parser reads it from the environment. Tests set `PARSER_REQUIRED` to model a
 # topology; the default is the current one.
+# What readiness requires today, stated ONCE and checked against the library.
+#
+# The blocks below narrow it deliberately to isolate one service at a time, so
+# they do not each carry a row for every other service. This guard is what
+# stops that from turning into a model of a topology that used to be current:
+# the edge joined readiness long after these fixtures were written, and without
+# it they would have gone on proving things about the old three-service shape.
+# When this fails, the answer is a block of cases for the new service, not a
+# new string here.
+library_ready_services="$(env -u NEXA_ROOT -u NEXA_STATE_DIR -u NEXA_LOCK_FILE \
+  bash -c '. "$1" >/dev/null 2>&1; printf "%s" "$NEXA_READY_SERVICES"' _ "$NEXA_LIB")"
+assert_equals 'readiness requires a service these fixtures do not model' \
+  'api worker monitor caddy' "$library_ready_services"
+
+# The three application roles. The edge has its own block at the end, where the
+# required list is the whole of the library's.
 PARSER_REQUIRED='api worker monitor'
 parser_says() {
   printf '%b' "$1" | NEXA_REQUIRED_SERVICES="$PARSER_REQUIRED" python3 "$parser"
@@ -232,8 +248,12 @@ parser_case 'C8: a healthy worker one-off beside a dead worker still fast-fails'
   exited "${RUN_HEALTHY}\n${WORKER_EXITED}\n${MONITOR_HEALTHY}"
 parser_case 'C8: a worker one-off reporting starting beside a healthy worker is healthy' \
   healthy "${RUN_HEALTHY}\n${WORKER_STARTING}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
-parser_case 'C8: a service that is neither api nor worker is ignored' \
-  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}\n{\"Service\":\"caddy\",\"State\":\"exited\"}"
+# `postgres`, not `caddy`. The edge became a REQUIRED service (D1), so using it
+# as the example of an ignored one would have read as a statement about the
+# edge that is no longer true — while still passing, because the required list
+# this block models does not name it.
+parser_case 'C8: a service outside the required list is ignored' \
+  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}\n{\"Service\":\"postgres\",\"State\":\"exited\"}"
 
 # --- 3C: the monitor is the third half of the application --------------------
 #
@@ -267,6 +287,42 @@ parser_case '3C: a topology without a monitor is ready on api + worker alone' \
 parser_case '3C: a topology without a monitor still requires its worker' \
   exited "${RUN_HEALTHY}\n${WORKER_EXITED}"
 PARSER_REQUIRED='api worker monitor'
+
+# --- D1: the edge is the service an operator meets first ---------------------
+#
+# Caddy is the only container that publishes a port. A release whose api,
+# worker and monitor are all healthy behind an edge that never started is an
+# installation nobody can reach, and readiness said READY — it never asked.
+#
+# Not hypothetical: the edge depends on the Web Admin publisher COMPLETING
+# SUCCESSFULLY, so a failed asset publication leaves exactly this shape, and
+# the failure has no other symptom. `botctl update` would have accepted it.
+CADDY_HEALTHY='{"Service":"caddy","State":"running","Health":"healthy"}'
+CADDY_STARTING='{"Service":"caddy","State":"running","Health":"starting"}'
+CADDY_UNHEALTHY='{"Service":"caddy","State":"running","Health":"unhealthy"}'
+CADDY_EXITED='{"Service":"caddy","State":"exited","Health":"unhealthy"}'
+CADDY_RESTARTING='{"Service":"caddy","State":"restarting"}'
+APP_HEALTHY="${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
+
+PARSER_REQUIRED='api worker monitor caddy'
+parser_case 'D1: the whole application healthy behind a STOPPED edge is not ready' \
+  exited "${APP_HEALTHY}\n${CADDY_EXITED}"
+parser_case 'D1: the whole application healthy behind a crash-looping edge is not ready' \
+  restarting "${APP_HEALTHY}\n${CADDY_RESTARTING}"
+parser_case 'D1: an unhealthy edge is not ready — the SPA root is part of that check' \
+  unhealthy "${APP_HEALTHY}\n${CADDY_UNHEALTHY}"
+parser_case 'D1: an edge still starting is not ready yet' \
+  starting "${APP_HEALTHY}\n${CADDY_STARTING}"
+parser_case 'D1: an edge that never appears at all is not ready' \
+  '' "${APP_HEALTHY}"
+parser_case 'D1: the whole topology healthy is ready' \
+  healthy "${APP_HEALTHY}\n${CADDY_HEALTHY}"
+# The rollback direction again, and the reason the list is an intersection: the
+# CI topology and any release whose compose does not define an edge must still
+# be able to become ready.
+PARSER_REQUIRED='api worker monitor'
+parser_case 'D1: a topology that defines no edge is ready without one' \
+  healthy "${APP_HEALTHY}"
 
 test_case 'the update lock does not live in a world-writable directory'
 # Read out of the library with a CLEAN environment, so this asserts the

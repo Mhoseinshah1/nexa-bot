@@ -190,6 +190,18 @@ export interface Container {
   shutdown(): Promise<void>;
 }
 
+/**
+ * Retries the panel HTTP client is allowed. Zero, and it is a NAMED zero.
+ *
+ * `SafeHttpClient` starts its deadline per attempt, so `maxRetries` multiplies
+ * the wall time a probe can occupy — and the per-panel claim window is floored
+ * on that wall time. Written as a literal in both places, raising one and not
+ * the other would let a second probe start while the first is still on the
+ * wire, which is precisely what the claim exists to prevent. One constant, two
+ * readers.
+ */
+const PANEL_HTTP_RETRIES = 0;
+
 export function createContainer(config: AppConfig, role: ProcessRole): Container {
   const logger = createLogger(config.LOG_LEVEL, role);
   const clock = new SystemClock();
@@ -400,7 +412,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // a shorter interval after a retryable failure, doubling to a bound — and a
     // client that retried underneath it would multiply the two, turning one
     // configured cadence into an unconfigured one.
-    maxRetries: 0,
+    maxRetries: PANEL_HTTP_RETRIES,
   });
 
   /**
@@ -431,11 +443,22 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     http: panelHttp,
     urlPolicy,
     adapters: providerAdapter,
-    // Floored at the HTTP budget. A cooldown shorter than a probe can run would
-    // let a second request start while the first is still on the wire, which is
-    // the case the window exists to prevent — and the two values are configured
-    // independently, so nothing else keeps them in a sane order.
-    probeCooldownMs: Math.max(config.PANEL_PROBE_COOLDOWN_MS, config.PANEL_HTTP_TIMEOUT_MS),
+    // Floored at the HTTP budget a probe can actually spend. A cooldown shorter
+    // than a probe can run would let a second request start while the first is
+    // still on the wire, which is the case the window exists to prevent — and
+    // the two values are configured independently, so nothing else keeps them
+    // in a sane order.
+    //
+    // `PANEL_HTTP_RETRIES` is in the arithmetic rather than assumed to be zero.
+    // `totalTimeoutMs` bounds ONE attempt — the deadline is started inside the
+    // retry loop — so a client allowed two retries can be on the wire for three
+    // times the budget, and a floor written as one budget would silently stop
+    // being a floor. It is the same constant the client is built with, so the
+    // two cannot drift.
+    probeCooldownMs: Math.max(
+      config.PANEL_PROBE_COOLDOWN_MS,
+      config.PANEL_HTTP_TIMEOUT_MS * (1 + PANEL_HTTP_RETRIES),
+    ),
     probeBudget: {
       capacity: config.PANEL_PROBE_TENANT_LIMIT,
       refillPerMs: config.PANEL_PROBE_TENANT_LIMIT / config.PANEL_PROBE_TENANT_WINDOW_MS,

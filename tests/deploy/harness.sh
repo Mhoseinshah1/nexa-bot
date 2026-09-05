@@ -556,6 +556,27 @@ case "${1:-}" in
               absent) ;;
               *) printf '{"Service":"monitor","State":"%s"}\n' "$_monitor_state" ;;
             esac
+            # And the EDGE, modelled the same way. It is the only container
+            # that publishes a port, so an installation whose api, worker and
+            # monitor are all healthy behind an edge that never started is one
+            # nobody can reach — and readiness used not to ask. The edge also
+            # depends on the Web Admin publisher completing successfully, so a
+            # failed asset publication produces exactly this shape and has no
+            # other symptom.
+            _caddy_state="$(read_state "caddy_state_${NEXA_IMAGE##*@}" "$(read_state caddy_state running)")"
+            case "$_caddy_state" in
+              running)
+                printf '{"Service":"caddy","State":"running","Health":"%s"}\n' \
+                  "$(read_state "caddy_health_${NEXA_IMAGE##*@}" "$(read_state caddy_health healthy)")"
+                ;;
+              exited | dead)
+                case "$*" in
+                  *--all*) printf '{"Service":"caddy","State":"%s"}\n' "$_caddy_state" ;;
+                esac
+                ;;
+              absent) ;;
+              *) printf '{"Service":"caddy","State":"%s"}\n' "$_caddy_state" ;;
+            esac
             ;;
           *)
             printf 'api running healthy\npostgres running healthy\nredis running healthy\n'

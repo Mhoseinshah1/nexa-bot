@@ -28,6 +28,7 @@ import {
   configurationOf,
   persistProbeResult,
   type ProbeCoreDeps,
+  type ProbeRefusal,
 } from './probe-core.js';
 import {
   deferralIntervalMs,
@@ -833,8 +834,17 @@ export class PanelMonitorService {
   }
 }
 
-/** Which scheduling reason a probe-core refusal earns. */
-function deferralReasonOf(kind: string): MonitorDeferralReason {
+/**
+ * Which scheduling reason a probe-core refusal earns.
+ *
+ * `ProbeRefusal['kind']`, not `string`, and the switch has no `default`. Typed
+ * as a string it compiled for every input and answered `COOLDOWN` for the ones
+ * it did not know — so a new refusal added to the probe core would have been
+ * scheduled as "we called this panel very recently", which is a lie about why
+ * nothing happened and picks the wrong interval to say it in. The exhaustive
+ * check below turns that into a compile error at the site that added the kind.
+ */
+function deferralReasonOf(kind: ProbeRefusal['kind']): MonitorDeferralReason {
   switch (kind) {
     case 'CREDENTIALS_MISSING':
       return 'CREDENTIALS_MISSING';
@@ -844,8 +854,12 @@ function deferralReasonOf(kind: string): MonitorDeferralReason {
       return 'STATUS_NOT_PROBEABLE';
     case 'BUDGET_EXHAUSTED':
       return 'BUDGET_EXHAUSTED';
-    default:
+    case 'COOLDOWN':
       return 'COOLDOWN';
+    default: {
+      const unhandled: never = kind;
+      return unhandled;
+    }
   }
 }
 
