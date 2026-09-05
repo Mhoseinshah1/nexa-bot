@@ -188,8 +188,8 @@ export class PanelMonitorService {
    * Whether the loop has made progress recently enough to call it alive.
    *
    * The heartbeat's second question, after "is the database reachable", and the
-   * one that distinguishes a monitor from a process. Three failure modes have
-   * to come out differently:
+   * one that distinguishes a monitor from a process. Four states have to come
+   * out differently:
    *
    *   - discovery always throws — never any progress, never healthy, and
    *     readiness never passes. There is no grace: a monitor that has never
