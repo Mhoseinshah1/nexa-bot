@@ -1471,11 +1471,27 @@ describe('the panel health monitor', () => {
       expect(starved).toBeLessThan(180);
     });
 
-    it('does not overlap its own ticks', async () => {
+    it('does not overlap its own ticks: the second call does no work at all', async () => {
       await createPanel(ownerA, tenantA, 'slow');
       const m = monitor();
-      const [a, b] = await Promise.all([m.tick(), m.tick()]);
-      expect(a.considered + b.considered).toBe(1);
+
+      // The FIRST call is the one that works, and that is not an accident of
+      // scheduling: `tick` sets `running` synchronously, before its first
+      // await, so by the time `Promise.all` calls the second one the guard is
+      // already up. Naming which invocation did the work is the whole point —
+      // the assertion this replaced was `a.considered + b.considered === 1`,
+      // and a sum of one is also what two racing half-passes produce.
+      const [first, second] = await Promise.all([m.tick(), m.tick()]);
+
+      expect(first).toEqual({ tenants: 1, considered: 1, probed: 1, deferred: 0, failed: 0 });
+      // Not "considered nothing": returned the empty result untouched, having
+      // claimed no tenant and spent no budget token.
+      expect(second).toEqual({ tenants: 0, considered: 0, probed: 0, deferred: 0, failed: 0 });
+
+      // And the panel was dialled once. A second claim that found the row
+      // already taken would also report `considered: 0` while having opened a
+      // socket on the way there.
+      expect(probes).toHaveLength(1);
     });
 
     it('keeps no more probes in flight than its concurrency allows', async () => {
