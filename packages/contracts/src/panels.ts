@@ -118,6 +118,17 @@ export const MONITOR_DEFERRAL_REASONS = [
   'COOLDOWN',
   'BUDGET_EXHAUSTED',
   'NOT_AUTHORIZED',
+  /**
+   * The loop failed before it could decide anything about the panel.
+   *
+   * A credential whose envelope will not parse, or one sealed under a key the
+   * installation no longer holds, throws before the refusal path and before the
+   * persist path — so the row stayed due, and was the earliest due row on the
+   * next tick, and the one after that. It is a SCHEDULER reason and never a
+   * health state: nothing was asked of the provider, so there is nothing to
+   * report about it.
+   */
+  'INTERNAL_ERROR',
 ] as const;
 export type MonitorDeferralReason = (typeof MONITOR_DEFERRAL_REASONS)[number];
 
