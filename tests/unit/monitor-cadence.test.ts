@@ -62,12 +62,29 @@ describe('the monitor cadence', () => {
     // taxonomy and never opened this file. Every kind is covered because the
     // list is the contract's own.
     for (const kind of PROVIDER_FAILURE_KINDS) {
-      const expected = PROVIDER_FAILURE_RETRYABLE[kind]
-        ? CADENCE.retryableIntervalMs
-        : CADENCE.nonRetryableIntervalMs;
+      // `RATE_LIMITED` is the one kind the policy names, and it is listed here
+      // rather than derived so that ADDING a second such exception has to be
+      // written down twice. It is retryable and still waits the long interval:
+      // the panel has just said this installation calls it too often.
+      const expected =
+        PROVIDER_FAILURE_RETRYABLE[kind] && kind !== 'RATE_LIMITED'
+          ? CADENCE.retryableIntervalMs
+          : CADENCE.nonRetryableIntervalMs;
       expect(baseIntervalMs(CADENCE, kind), kind).toBe(expected);
     }
     expect(baseIntervalMs(CADENCE, null)).toBe(CADENCE.healthyIntervalMs);
+  });
+
+  it('answers a rate limit by calling less often, not sooner', () => {
+    // The finding this exists for: a 429 folded into PROVIDER_ERROR was
+    // retryable, so the panel that had just said "too many requests" was
+    // re-dialled at the SHORTEST failure cadence the monitor has.
+    expect(delayOf('RATE_LIMITED', 0)).toBeGreaterThan(delayOf('PROVIDER_ERROR', 0));
+    expect(delayOf('RATE_LIMITED', 0)).toBeGreaterThan(delayOf('TIMEOUT', 0));
+    expect(delayOf('RATE_LIMITED', 0)).toBeGreaterThanOrEqual(CADENCE.nonRetryableIntervalMs);
+    // And the streak still doubles on top of it, so a panel that keeps saying
+    // so is called less and less.
+    expect(delayOf('RATE_LIMITED', 2)).toBeGreaterThan(delayOf('RATE_LIMITED', 0));
   });
 
   it('never retries an auth failure at the healthy cadence', () => {

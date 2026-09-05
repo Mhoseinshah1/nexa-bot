@@ -147,6 +147,20 @@ describe('the Sanaei adapter — Bearer API token', () => {
     expect(outcome).not.toMatchObject({ failure: 'AUTHENTICATION_FAILED' });
   });
 
+  it('5d. a rate limit is its own kind, not the panel being broken', async () => {
+    // 429 used to be PROVIDER_ERROR, which is retryable — so the monitor
+    // answered "you are calling me too often" with its SHORTEST failure
+    // cadence, and told the operator to go and look at a panel that is fine.
+    const server = await panel({ tokens: TOKENS, behaviour: 'status-429' });
+    const outcome = await probe(server, withToken(CANARY.token));
+    expect(outcome).toEqual({ ok: false, failure: 'RATE_LIMITED', status: 429 });
+    // Not a credential problem: rotating a working token on a panel with a
+    // login limiter is how a rate limit becomes a lockout.
+    expect(outcome).not.toMatchObject({ failure: 'AUTHENTICATION_FAILED' });
+    // And the panel's own body is not repeated to the operator.
+    expect(asText(outcome)).not.toContain('Too Many Requests');
+  });
+
   it('5c. a reachable panel at the WRONG configured base path is not a credential problem', async () => {
     // The same rule reached the way an operator actually reaches it: the panel
     // is served under one base path and configured under another, so every

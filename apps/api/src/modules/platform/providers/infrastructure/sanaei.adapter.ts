@@ -177,11 +177,20 @@ function fromTransport(result: Extract<ProviderHttpResult, { ok: false }>): Prov
  * It becomes `PROVIDER_ERROR`: the panel answered, so it is reachable, and the
  * problem is on its side. `MALFORMED_RESPONSE` would be the wrong half of the
  * taxonomy — nothing was malformed, a route was absent.
+ *
+ * **429 is not the panel's fault at all**, and it is the one status where the
+ * remedy is ours rather than the operator's: call it less often.
  */
 function fromApiStatus(status: number): ProviderProbeOutcome {
   if (status === 401 || status === 403) {
     return { ok: false, failure: 'AUTHENTICATION_FAILED', status };
   }
+  // 429 is the panel, or something in front of it, saying this installation is
+  // calling too often. As `PROVIDER_ERROR` it read as "the panel is broken" and
+  // earned the monitor's SHORTEST failure cadence — answering "too many
+  // requests" by asking again sooner than for any other fault. It is its own
+  // kind so the operator is told the true remedy and the cadence backs off.
+  if (status === 429) return { ok: false, failure: 'RATE_LIMITED', status };
   return { ok: false, failure: 'PROVIDER_ERROR', status };
 }
 

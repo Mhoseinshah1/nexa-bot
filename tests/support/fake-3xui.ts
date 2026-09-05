@@ -98,6 +98,14 @@ export type Behaviour =
   | 'twofactor-success-false'
   /** A valid session, and `panel/api/server/status` answers 404. */
   | 'status-404'
+  /**
+   * A valid session, and the panel answers 429 with a `Retry-After`.
+   *
+   * A reverse proxy or the panel's own limiter, saying this installation is
+   * calling too often. Nothing is wrong with the credential and nothing is
+   * wrong with the panel.
+   */
+  | 'status-429'
   /** csrf-token sets an unrelated cookie ALONGSIDE the session cookie. */
   | 'csrf-extra-cookie'
   /** csrf-token sets ONLY an unrelated cookie — no `3x-ui` at all. */
@@ -344,6 +352,9 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
         }
 
         switch (behaviour) {
+          case 'status-429':
+            response.writeHead(429, { 'content-type': 'text/html', 'retry-after': '120' });
+            return void response.end('<html><body>Too Many Requests</body></html>');
           case 'status-404':
             // Authenticated, and the route is not there: a moved base path, a
             // proxy, or an upstream that does not serve it. Answered as a real

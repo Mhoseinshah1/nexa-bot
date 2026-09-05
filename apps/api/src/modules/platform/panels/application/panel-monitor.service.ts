@@ -907,6 +907,17 @@ function conditionOf(
         severity: 'ERROR',
         summary: 'resolves somewhere this installation refuses to call',
       };
+    case 'RATE_LIMITED':
+      // A DIFFERENT condition code, not a nicer sentence under the same one.
+      // The ops log dedupes and recovers by code, so sharing `provider_error`
+      // would mean a panel that started rate limiting never announced it — it
+      // would increment a row already open for a fault with a different
+      // remedy, and the operator would go on reading "the panel is broken".
+      return {
+        code: 'panel.health.rate_limited',
+        severity: 'WARN',
+        summary: 'is refusing calls as too frequent; this installation is asking too often',
+      };
     case 'MALFORMED_RESPONSE':
     case 'PROVIDER_ERROR':
     case 'UNSUPPORTED_CAPABILITY':

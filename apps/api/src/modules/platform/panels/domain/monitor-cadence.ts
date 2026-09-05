@@ -279,13 +279,24 @@ export interface ProbeSchedule {
  * here. A new failure kind therefore cannot be silently monitored at the
  * aggressive cadence by an author who added it to the taxonomy and did not
  * think about this file: the contract's own table decides.
+ *
+ * `RATE_LIMITED` is the ONE named exception, and it is named rather than
+ * expressed as a retryability flag because it is genuinely both. Another call
+ * could succeed — the limit is temporary, so the contract calls it retryable —
+ * and yet the aggressive cadence is precisely the wrong answer: the panel has
+ * just said this installation is calling it too often, and answering that by
+ * calling back sooner than it would for any other failure is the behaviour a
+ * rate limiter exists to punish. So it waits the long interval, and the
+ * doubling backoff runs on top of that.
  */
 export function baseIntervalMs(
   cadence: MonitorCadence,
   failure: ProviderFailureKind | null,
 ): number {
   if (failure === null) return cadence.healthyIntervalMs;
-  if (PROVIDER_FAILURE_RETRYABLE[failure]) return cadence.retryableIntervalMs;
+  if (failure !== 'RATE_LIMITED' && PROVIDER_FAILURE_RETRYABLE[failure]) {
+    return cadence.retryableIntervalMs;
+  }
   // Clamped, not merely defaulted. The schema refuses a smaller configured
   // value; this refuses one that reached the policy by any other route.
   return Math.max(MONITOR_NONRETRYABLE_FLOOR_MS, cadence.nonRetryableIntervalMs);

@@ -74,6 +74,7 @@ const REJECTED: ProviderProbeOutcome = {
   status: 401,
 };
 const TIMED_OUT: ProviderProbeOutcome = { ok: false, failure: 'TIMEOUT', status: null };
+const RATE_LIMITED: ProviderProbeOutcome = { ok: false, failure: 'RATE_LIMITED', status: 429 };
 /** The panel wants a second factor. A different remedy from a wrong password. */
 const NEEDS_INTERACTION: ProviderProbeOutcome = {
   ok: false,
@@ -839,6 +840,38 @@ describe('the panel health monitor', () => {
       expect(second!.occurrenceCount).toBe(2);
     });
 
+    it('announces a rate limit as its own condition, not as the panel being broken', async () => {
+      // Folded into PROVIDER_ERROR, a panel that started rate limiting would
+      // have incremented a row already open under `panel.health.provider_error`
+      // — a code whose remedy is "go and look at the panel". The ops log
+      // dedupes and recovers BY CODE, so nothing would have been announced at
+      // all, and the operator would go on reading the wrong remedy.
+      const panelId = await createPanel(ownerA, tenantA, 'limited');
+      outcome = RATE_LIMITED;
+      now = new Date(now.getTime() + 20 * 60 * 1000);
+      await tick();
+
+      const [health] = await ctx.container.database.db
+        .select()
+        .from(panelHealth)
+        .where(eq(panelHealth.panelId, panelId));
+      expect(health?.failure).toBe('RATE_LIMITED');
+
+      const announced = await rowFor('panel.health.rate_limited', panelId);
+      expect(announced).toBeDefined();
+      expect(await rowFor('panel.health.provider_error', panelId)).toBeUndefined();
+
+      // And the panel is called LESS often for it, not more: a retryable kind
+      // would earn the shortest failure cadence the monitor has.
+      const [scheduled] = await ctx.container.database.db
+        .select()
+        .from(panelMonitorSchedule)
+        .where(eq(panelMonitorSchedule.panelId, panelId));
+      expect(scheduled!.nextEligibleAt.getTime() - now.getTime()).toBeGreaterThanOrEqual(
+        CADENCE.nonRetryableIntervalMs,
+      );
+    });
+
     it('does the same for an authentication cycle', async () => {
       const panelId = await createPanel(ownerA, tenantA, 'flapping-auth');
       const step = async (result: ProviderProbeOutcome) => {
@@ -1315,6 +1348,7 @@ describe('the panel health monitor', () => {
       const all = [...first, ...second];
       expect(new Set(all).size).toBe(all.length);
     });
+
 
     it('does not overlap its own ticks', async () => {
       await createPanel(ownerA, tenantA, 'slow');
