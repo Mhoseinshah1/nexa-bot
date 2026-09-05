@@ -9,6 +9,7 @@ import {
   type OperationalEventInput,
   type OperationalEventRecorder,
   type PermissionKey,
+  type RecordedOperationalEvent,
   type ScopeContext,
 } from '@nexa/contracts';
 import {
@@ -26,14 +27,33 @@ class GrantsNothingResolver implements PermissionResolver {
   async resolve(): Promise<ReadonlySet<PermissionKey>> {
     return new Set<PermissionKey>();
   }
+
+  async permissionsIfActive(): Promise<ReadonlySet<PermissionKey>> {
+    return new Set<PermissionKey>();
+  }
 }
 
 const CORRELATION = 'corr-authz' as CorrelationId;
+const FIXED_RECORDED_AT = new Date('2026-01-01T00:00:00.000Z');
 
 class RecordingOpsLog implements OperationalEventRecorder {
   readonly events: OperationalEventInput[] = [];
-  async record(_scope: ScopeContext, event: OperationalEventInput): Promise<void> {
+  async record(
+    _scope: ScopeContext,
+    event: OperationalEventInput,
+  ): Promise<RecordedOperationalEvent> {
     this.events.push(event);
+    return {
+      id: `recorded-${this.events.length}`,
+      code: event.code,
+      severity: event.severity,
+      message: event.message,
+      occurrenceCount: 1,
+      firstSeenAt: FIXED_RECORDED_AT,
+      lastSeenAt: FIXED_RECORDED_AT,
+      isNew: true,
+      reopened: false,
+    };
   }
 }
 
@@ -120,7 +140,8 @@ describe('deny by default', () => {
   it('consults the resolver for human actors', async () => {
     const opsLog = new RecordingOpsLog();
     const resolve = vi.fn(async () => new Set<PermissionKey>(['users.view']));
-    const g = new PermissionGuard({ resolve }, opsLog);
+    const permissionsIfActive = vi.fn(async () => new Set<PermissionKey>());
+    const g = new PermissionGuard({ resolve, permissionsIfActive }, opsLog);
 
     expect(await g.has(scope, webAdmin, 'users.view')).toBe(true);
     expect(await g.has(scope, webAdmin, 'refunds.issue')).toBe(false);
@@ -130,7 +151,8 @@ describe('deny by default', () => {
   it('does not consult the resolver for background work', async () => {
     const opsLog = new RecordingOpsLog();
     const resolve = vi.fn(async () => new Set<PermissionKey>());
-    const g = new PermissionGuard({ resolve }, opsLog);
+    const permissionsIfActive = vi.fn(async () => new Set<PermissionKey>());
+    const g = new PermissionGuard({ resolve, permissionsIfActive }, opsLog);
 
     await g.has(scope, systemJobActor('job', CORRELATION), 'maintenance.run');
     expect(resolve).not.toHaveBeenCalled();

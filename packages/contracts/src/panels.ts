@@ -86,6 +86,53 @@ export const PANEL_NAME_MAX_LENGTH = 120;
 export const PANEL_BASE_URL_MAX_LENGTH = 2048;
 
 /**
+ * Why the background monitor stepped back from a panel without probing it.
+ *
+ * Scheduling metadata, and deliberately NOT a health state. A panel with no
+ * credential has told us nothing about itself; writing `UNREACHABLE` for it
+ * would be Nexa inventing a provider answer, and an operator reading that would
+ * go looking at a network that is fine.
+ *
+ * It exists because "no probe happened" still has to change the schedule. The
+ * first Phase 3C design kept the next-probe time on the health row, so a panel
+ * that could never be probed had no row, was rediscovered every tick for ever,
+ * and occupied its tenant's fairness slot while doing nothing at all. Each of
+ * these defers the panel; none of them writes health.
+ *
+ *   `CREDENTIALS_MISSING`  nothing to authenticate with — set a credential
+ *   `TARGET_BLOCKED`       the address resolves somewhere this installation
+ *                          refuses to call — correct it, or the policy
+ *   `STATUS_NOT_PROBEABLE` no longer ACTIVE; the loop is not to touch it
+ *   `COOLDOWN`             a probe of this exact configuration just ran
+ *   `BUDGET_EXHAUSTED`     the tenant's outbound capacity is spent
+ *   `NOT_AUTHORIZED`       the job may not act for this tenant
+ *
+ * The last three are transient and earn a short deferral; the first three are
+ * stable and earn a long one, because retrying them on the healthy cadence is
+ * a busy loop that starves the panels a probe could actually help.
+ */
+export const MONITOR_DEFERRAL_REASONS = [
+  'CREDENTIALS_MISSING',
+  'TARGET_BLOCKED',
+  'STATUS_NOT_PROBEABLE',
+  'COOLDOWN',
+  'BUDGET_EXHAUSTED',
+  'NOT_AUTHORIZED',
+  /**
+   * The loop failed before it could decide anything about the panel.
+   *
+   * A credential whose envelope will not parse, or one sealed under a key the
+   * installation no longer holds, throws before the refusal path and before the
+   * persist path — so the row stayed due, and was the earliest due row on the
+   * next tick, and the one after that. It is a SCHEDULER reason and never a
+   * health state: nothing was asked of the provider, so there is nothing to
+   * report about it.
+   */
+  'INTERNAL_ERROR',
+] as const;
+export type MonitorDeferralReason = (typeof MONITOR_DEFERRAL_REASONS)[number];
+
+/**
  * How long a health result stays fresh, by default.
  *
  * Freshness is a presentation question — "is this answer still worth
@@ -93,3 +140,13 @@ export const PANEL_BASE_URL_MAX_LENGTH = 2048;
  * A stored `staleAt` would freeze one policy into every historical row.
  */
 export const PANEL_HEALTH_FRESH_FOR_MS = 15 * 60 * 1000;
+
+/**
+ * The largest page of panels one request may ask for, and the default.
+ *
+ * A bound rather than a suggestion: the response is built in memory and
+ * serialised on the event loop, so "how many" is a resource decision and not
+ * the caller's alone.
+ */
+export const PANEL_PAGE_MAX = 200;
+export const PANEL_PAGE_DEFAULT = 50;

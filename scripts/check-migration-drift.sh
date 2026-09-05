@@ -64,8 +64,29 @@ cleanup() {
 CLEANUP_FAILED=0
 trap cleanup EXIT
 
+# The generator's exit code decides whether this check ran at all.
+#
+# It used to be `|| true` with the output discarded, which made the check pass
+# whenever the tool FAILED: no `.sql` is written, so the before and after
+# checksums match, and it printed `ok schema and migrations agree`. A missing
+# config, an unparseable schema, an interactive rename prompt on a non-TTY or a
+# devDependency that did not install would all have reported agreement on a
+# schema nobody compared. This is the only drift gate in CI, and
+# `check-shell.sh` states the rule it was breaking: a check that silently
+# passes when its tool is missing is worse than no check at all.
+GENERATE_LOG="$(mktemp)"
+GENERATE_STATUS=0
 DATABASE_URL="${DATABASE_URL:-postgres://nexa:nexa@127.0.0.1:5432/nexa_dev}" \
-  pnpm exec drizzle-kit generate --name drift-check >/dev/null 2>&1 || true
+  pnpm exec drizzle-kit generate --name drift-check >"$GENERATE_LOG" 2>&1 || GENERATE_STATUS=$?
+
+if [ "$GENERATE_STATUS" -ne 0 ]; then
+  echo "FAIL  drizzle-kit generate could not run, so nothing was compared."
+  echo "      This check cannot report agreement it did not establish."
+  sed 's/^/      /' "$GENERATE_LOG" >&2
+  rm -f "$GENERATE_LOG"
+  exit 1
+fi
+rm -f "$GENERATE_LOG"
 
 AFTER=$(find drizzle -name '*.sql' | sort | xargs md5sum | md5sum)
 

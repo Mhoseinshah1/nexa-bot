@@ -147,6 +147,20 @@ describe('the Sanaei adapter — Bearer API token', () => {
     expect(outcome).not.toMatchObject({ failure: 'AUTHENTICATION_FAILED' });
   });
 
+  it('5d. a rate limit is its own kind, not the panel being broken', async () => {
+    // 429 used to be PROVIDER_ERROR, which is retryable — so the monitor
+    // answered "you are calling me too often" with its SHORTEST failure
+    // cadence, and told the operator to go and look at a panel that is fine.
+    const server = await panel({ tokens: TOKENS, behaviour: 'status-429' });
+    const outcome = await probe(server, withToken(CANARY.token));
+    expect(outcome).toEqual({ ok: false, failure: 'RATE_LIMITED', status: 429 });
+    // Not a credential problem: rotating a working token on a panel with a
+    // login limiter is how a rate limit becomes a lockout.
+    expect(outcome).not.toMatchObject({ failure: 'AUTHENTICATION_FAILED' });
+    // And the panel's own body is not repeated to the operator.
+    expect(asText(outcome)).not.toContain('Too Many Requests');
+  });
+
   it('5c. a reachable panel at the WRONG configured base path is not a credential problem', async () => {
     // The same rule reached the way an operator actually reaches it: the panel
     // is served under one base path and configured under another, so every
@@ -329,6 +343,45 @@ describe('the Sanaei adapter — session compatibility mode', () => {
     expect(server.requests.map((r) => r.path.replace(/^\//, ''))).toEqual(['csrf-token']);
     expect(asText(server.requests)).not.toContain(CANARY.password);
     expect(asText(server.requests)).not.toContain(CANARY.extraCookie);
+    expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+  });
+
+  it('16d. P7: refuses a csrf token too large to be one, submitting no credential', async () => {
+    // Bounded only by `maxResponseBytes` — half a megabyte at the shipped
+    // default — and then written into the headers of every request that
+    // follows, on every probe, for ever. Same structural claim first: the flow
+    // must STOP at the mint.
+    const server = await panel({ behaviour: 'csrf-enormous-token' });
+    const outcome = await probe(server, withPassword());
+
+    expect(server.requests.map((r) => r.path.replace(/^\//, ''))).toEqual(['csrf-token']);
+    expect(asText(server.requests)).not.toContain(CANARY.password);
+    expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+  });
+
+  it('16e. P7: refuses a csrf token carrying CRLF rather than throwing on it', async () => {
+    // Node rejects a header value containing a control character by THROWING,
+    // so a panel answering with one turned a probe into an exception the caller
+    // has to recover from. What actually happened is a panel that is not
+    // speaking this contract, and that has a name.
+    const server = await panel({ behaviour: 'csrf-token-with-crlf' });
+    const outcome = await probe(server, withPassword());
+
+    expect(server.requests.map((r) => r.path.replace(/^\//, ''))).toEqual(['csrf-token']);
+    expect(asText(server.requests)).not.toContain(CANARY.password);
+    expect(asText(server.requests)).not.toContain('X-Injected');
+    expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+  });
+
+  it('16f. P7: refuses a session cookie too large to be one, submitting no credential', async () => {
+    // The cookie is as provider-supplied as the token, and it is rotated by the
+    // login and 2FA responses as well as minted here, so the bound is applied
+    // where the value is read rather than only where it is first seen.
+    const server = await panel({ behaviour: 'csrf-enormous-cookie' });
+    const outcome = await probe(server, withPassword());
+
+    expect(server.requests.map((r) => r.path.replace(/^\//, ''))).toEqual(['csrf-token']);
+    expect(asText(server.requests)).not.toContain(CANARY.password);
     expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
   });
 

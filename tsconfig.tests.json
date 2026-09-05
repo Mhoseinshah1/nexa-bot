@@ -13,11 +13,10 @@
   // the one that needed checking. This way a new file is covered the moment it
   // exists, and the debt is an explicit list that only ever shrinks.
   //
-  // Every entry is a Phase 1 or Phase 2 test that predates this check. None is
-  // excluded because it is hard to fix; they are excluded because fixing
-  // seventeen unrelated files inside a provider change would bury the change,
-  // and each fix is a judgement about what that test meant to assert. Delete an
-  // entry, fix the file, keep the two together in one commit.
+  // The list held fifteen Phase 1 and Phase 2 tests that predated this check.
+  // They are all fixed and the entries are gone; what surfaced there was real —
+  // among them an assertion comparing a template key against a value outside
+  // its own union, which could never be true and had been passing vacuously.
   "compilerOptions": {
     "noEmit": true,
     "declaration": false,
@@ -29,21 +28,11 @@
     "types": ["node"]
   },
   "include": ["tests/**/*.ts"],
-  "exclude": [
-    "tests/integration/bootstrap-status.test.ts",
-    "tests/integration/codex-findings-round-2.test.ts",
-    "tests/integration/codex-findings.test.ts",
-    "tests/integration/control-plane-invariants.test.ts",
-    "tests/integration/control-plane-isolation.test.ts",
-    "tests/integration/identity-concurrency.test.ts",
-    "tests/integration/notification-claim-exclusivity.test.ts",
-    "tests/integration/notification-delivery.test.ts",
-    "tests/integration/operational-events.test.ts",
-    "tests/unit/authorization.test.ts",
-    "tests/unit/recording-transport-hold.test.ts",
-    "tests/unit/release-workflow.test.ts",
-    "tests/unit/retention-sweeper.test.ts",
-    "tests/unit/secrets-and-ids.test.ts",
-    "tests/unit/session-view.test.ts"
-  ]
+  // ONE entry, and it is not a gap: `session-view.test.ts` imports
+  // `apps/web/src/app.tsx`, so checking it needs `jsx` and the DOM lib, which
+  // the other ~55 test files must NOT have — a node test that names `document`
+  // should not compile. It is checked by `tsconfig.tests.web.json` instead, and
+  // `pnpm typecheck:tests` runs both. A new test that imports a `.tsx` fails
+  // here with TS6142, which is the signal to add it to the web config.
+  "exclude": ["tests/unit/session-view.test.ts"]
 }

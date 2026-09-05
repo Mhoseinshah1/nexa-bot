@@ -39,7 +39,7 @@ describe('bootstrap status', () => {
       calendar: 'jalali',
       currency: 'IRT',
     });
-    scope = { tenantId: tenant.tenantId, botInstanceId: null };
+    scope = { tenantId: tenant.tenantId as TenantContext['tenantId'], botInstanceId: null };
   });
 
   afterAll(async () => {

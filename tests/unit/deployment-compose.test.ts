@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -128,7 +128,13 @@ describe('the production compose topology', () => {
     expect(anchor, 'the application containers ask for a user').not.toMatch(/^\s+user:/m);
   });
 
-  it('runs exactly one container as root, and it is the asset copy', () => {
+  it('asks for root exactly once, and it is the asset copy', () => {
+    // The title used to say "runs exactly one container as root", and this
+    // check could not support it: it counts `user:` DECLARATIONS, and a
+    // service without one runs as whatever its own image's USER is — which
+    // this file does not control and this test cannot read. Caddy is the
+    // service that matters there, and what bounds it is not a user but a
+    // capability set, asserted below.
     const rootUsers = [...compose.matchAll(/^ {4}user: '0:0'/gm)];
     expect(rootUsers).toHaveLength(1);
     const assets = serviceBlock(compose, 'web-assets');
@@ -136,6 +142,50 @@ describe('the production compose topology', () => {
     // It has no network and no configuration: it copies a directory and stops.
     expect(assets).toMatch(/network_mode: none/);
     expect(assets).not.toMatch(/env_file/);
+
+    const caddy = serviceBlock(compose, 'caddy');
+    expect(caddy, 'caddy now declares a user; this test describes one that does not').not.toMatch(
+      /^\s+user:/m,
+    );
+    expect(caddy).toMatch(/cap_drop:\s*\n\s+- ALL/);
+    // Exactly one capability back, and it is the one binding 80 and 443 needs
+    // — which `cap_drop: ALL` takes away from root as well, so this is the
+    // whole of what the edge container may do beyond an unprivileged process.
+    // Comment lines are skipped rather than matched, so a second capability
+    // slipped in under a justification is still counted.
+    const capAdd = /^ {4}cap_add:\n((?:^ {6}(?:#.*|- \w+)\n)+)/m.exec(caddy);
+    expect(capAdd, 'caddy declares no cap_add').not.toBeNull();
+    const granted = capAdd![1]!
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('- '));
+    expect(granted).toEqual(['- NET_BIND_SERVICE']);
+  });
+
+  it('publishes the Web Admin bundle with the publisher, never by clearing the served root', () => {
+    const assets = serviceBlock(compose, 'web-assets');
+    // The shell one-shot this replaced emptied the directory Caddy was
+    // serving and then copied into it, so every request in the window got a
+    // 404 for index.html or an index.html naming assets that were not there
+    // yet — on every single update. The publisher writes a complete release
+    // off to one side and activates it with one rename(2).
+    expect(assets).toMatch(/command: \['node', '\/app\/deploy\/bin\/publish-web-assets\.mjs'\]/);
+    expect(assets, 'the asset job clears the directory Caddy is serving').not.toMatch(/rm -rf/);
+    expect(assets, 'the asset job copies over the served root').not.toMatch(/cp -r/);
+    // It still mounts the volume writable, and it is still the only thing
+    // that does.
+    expect(assets).toMatch(/- webassets:\/srv\/web$/m);
+    expect(serviceBlock(compose, 'caddy')).toMatch(/- webassets:\/srv\/web:ro/);
+  });
+
+  it('ships the publisher in the image beside the compose file that invokes it', () => {
+    // `botctl update` installs a release's compose file and its image
+    // together, so the two are always the same release's — an update and a
+    // rollback alike. A publisher that lived on the host instead would be one
+    // release's script operating another release's bundle.
+    const dockerfile = readFileSync(join(__dirname, '../../Dockerfile'), 'utf8');
+    expect(dockerfile).toMatch(/COPY --from=builder [^\n]*\/src\/deploy \.\/deploy/);
+    expect(existsSync(join(__dirname, '../../deploy/bin/publish-web-assets.mjs'))).toBe(true);
   });
 
   it('drops capabilities on every service, including the data ones', () => {
@@ -399,6 +449,73 @@ describe('the production Caddy routing', () => {
     // container — so the admin endpoint has no consumer in this deployment.
     expect(prod).toMatch(/^\s*admin off$/m);
     expect(ci).toMatch(/^\s*admin off$/m);
+  });
+
+  it('serves the entry document from the activated release and its assets from the pool', () => {
+    // Two roots, and the difference between them is the whole reason the
+    // publisher has a pool. `current` is a symlink swapped by one rename(2),
+    // so a request for index.html is served entirely out of one release. But
+    // loading the Web Admin is index.html AND the assets it names, and a
+    // browser that fetched the document a millisecond before a deployment
+    // asks for those assets a millisecond after it. Rooting /assets/* at the
+    // activated release makes those 404s. The pool holds the union over the
+    // retained releases, so both sides of a swap load.
+    expect(routes, 'the served root is not the activated release').not.toMatch(
+      /^\s*root \* \/srv\/web$/m,
+    );
+    const assetsAt = routes.indexOf('@assets path /assets/*');
+    const fallbackAt = routes.indexOf('try_files {path} /index.html');
+    expect(assetsAt).toBeGreaterThan(-1);
+    expect(assetsAt).toBeLessThan(fallbackAt);
+    expect(routes.slice(assetsAt, fallbackAt)).toMatch(/root \* \/srv\/web\/pool$/m);
+    expect(routes.slice(fallbackAt - 400, fallbackAt)).toMatch(/root \* \/srv\/web\/current$/m);
+  });
+
+  it('lets an operator follow the logs of every service the topology runs', () => {
+    // `botctl logs monitor` answered `unknown service "monitor"` for the whole
+    // of Phase 3C. The monitor is the process role with no request path, so
+    // its log is the only place its behaviour is visible — and the command an
+    // operator reaches for first refused it.
+    //
+    // Asserted as a CROSS-CHECK between the two files rather than as a list,
+    // because a list is what was already wrong: the next process role added to
+    // compose fails this until botctl knows about it.
+    const botctl = readFileSync(join(__dirname, '../../deploy/bin/botctl'), 'utf8');
+    const allowed = /^\s+(api \|[^)]*)\)$/m.exec(botctl)?.[1];
+    expect(allowed, 'the logs allow-list is no longer a case arm starting with api').toBeTruthy();
+    const known = new Set(allowed!.split('|').map((name) => name.trim()));
+
+    // Scoped to the `services:` section: the shared `x-app-common` anchor
+    // above it has keys at the same indent, and scanning the whole file made
+    // this demand that botctl follow the logs of `environment`.
+    const from = compose.indexOf('\nservices:\n');
+    const to = compose.indexOf('\nnetworks:\n');
+    expect(from, 'no services section').toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    const services = [...compose.slice(from, to).matchAll(/^ {2}([a-z][a-z0-9-]*):$/gm)].map(
+      (match) => match[1]!,
+    );
+    expect(services, 'the service scan found nothing').toContain('monitor');
+    for (const service of services) {
+      expect(known, `botctl logs does not know about ${service}`).toContain(service);
+    }
+  });
+
+  it('advertises the update command it actually implements', () => {
+    // The help said `botctl update [VERSION]  (default: latest release tag)`
+    // and the command refused to run without one. An operator following the
+    // help on a production box gets a usage error from the tool that printed
+    // it, which is the sort of thing that makes people stop trusting `--help`.
+    const botctl = readFileSync(join(__dirname, '../../deploy/bin/botctl'), 'utf8');
+    const requiresVersion = botctl.includes('usage: botctl update VERSION');
+    const help = /^ {2}botctl update .*$/m.exec(botctl)?.[0];
+    expect(help, 'the help no longer documents update').toBeTruthy();
+    if (requiresVersion) {
+      expect(help, 'the help offers an optional VERSION the command refuses').not.toMatch(
+        /\[VERSION\]/,
+      );
+      expect(help, 'the help promises a default the command does not have').not.toMatch(/default:/);
+    }
   });
 
   it('leaves HSTS to the production site block', () => {

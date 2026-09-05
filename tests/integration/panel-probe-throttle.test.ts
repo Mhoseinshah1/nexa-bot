@@ -93,6 +93,7 @@ describe('the panel connection-test throttle', () => {
       repository,
       credentials: new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher),
       guard: ctx.container.guard,
+      scopeActivity: ctx.container.tenants,
       audit: ctx.container.audit,
       opsLog: ctx.container.opsLog,
       sessions: ctx.container.sessions,
@@ -118,6 +119,11 @@ describe('the panel connection-test throttle', () => {
           return answer();
         },
       }),
+      cadence: {
+        healthyIntervalMs: 10 * 60 * 1000,
+        retryableIntervalMs: 2 * 60 * 1000,
+        nonRetryableIntervalMs: 60 * 60 * 1000,
+      },
     });
 
   const panelFor = async (admin: SeededAdmin, scope: typeof tenantA, name: string) => {
@@ -173,6 +179,9 @@ describe('the panel connection-test throttle', () => {
       create: real.create.bind(real),
       update: real.update.bind(real),
       setStatus: real.setStatus.bind(real),
+      readSchedule: real.readSchedule.bind(real),
+      scheduleNext: real.scheduleNext.bind(real),
+      setScheduleEligibility: real.setScheduleEligibility.bind(real),
       nameTaken: real.nameTaken.bind(real),
       recordHealth: real.recordHealth.bind(real),
       takeProbeBudget: real.takeProbeBudget.bind(real),

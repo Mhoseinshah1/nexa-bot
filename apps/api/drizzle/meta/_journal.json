@@ -155,6 +155,34 @@
       "when": 1788534205876,
       "tag": "0021_widen_panel_health_failure",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1788590044643,
+      "tag": "0022_panel_monitor_scheduler",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1788600712875,
+      "tag": "0023_widen_monitor_deferral_reasons",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788631883384,
+      "tag": "0024_panels_pagination_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1788635840843,
+      "tag": "0025_widen_provider_failure_kinds",
+      "breakpoints": true
     }
   ]
 }

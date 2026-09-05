@@ -293,8 +293,8 @@ describe('control-plane invariants', () => {
   describe('operational event resolution', () => {
     const insertEvent = (id: string, extra = '') => `
       INSERT INTO operational_events
-        (id, tenant_id, code, severity, message, dedupe_scope, occurrence_count, first_seen_at, last_seen_at${extra ? ', ' + extra.split('=')[0].trim() : ''})
-      VALUES ('${id}', '${A}', 'panel.unreachable', 'ERROR', 'down', '${A}|OPSLOG', 1, now(), now()${extra ? ', ' + extra.split('=')[1].trim() : ''})`;
+        (id, tenant_id, code, severity, message, dedupe_scope, occurrence_count, first_seen_at, last_seen_at${extra ? ', ' + extra.split('=')[0]!.trim() : ''})
+      VALUES ('${id}', '${A}', 'panel.unreachable', 'ERROR', 'down', '${A}|OPSLOG', 1, now(), now()${extra ? ', ' + extra.split('=')[1]!.trim() : ''})`;
 
     it('marks a row resolved without removing anything', async () => {
       const id = ctx.container.ids.uuid();

@@ -209,6 +209,23 @@ export interface OperationalEventInput {
   readonly correlationId?: CorrelationId;
   /** Set when this event records recovery from an earlier failure code. */
   readonly recoversCode?: string;
+  /**
+   * Which SUBJECT'S open condition this recovery closes.
+   *
+   * `recoversCode` alone resolves every open row of that code in the tenant,
+   * which is right for a condition there can only be one of — "this
+   * installation cannot reach Telegram" — and wrong for every condition that is
+   * ABOUT something. Deduplication is already per subject: the invalid-setting
+   * event keys on the setting, the panel-health event keys on the panel.
+   * Without this field, repairing one setting marked every other setting's open
+   * complaint resolved, and an operator's unresolved list quietly emptied
+   * itself of problems nobody had fixed.
+   *
+   * So a recovery about one subject names that subject's dedupe key, and
+   * resolves that row and no other. Omitted for genuinely installation-wide
+   * conditions, where the broad behaviour is the correct one.
+   */
+  readonly recoversDedupeKey?: string;
 }
 
 /**

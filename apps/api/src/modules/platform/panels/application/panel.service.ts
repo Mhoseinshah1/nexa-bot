@@ -16,11 +16,8 @@ import {
   type IdGenerator,
   type IdempotencyStore,
   type OperationalEventRecorder,
-  type PanelHealthState,
   type PanelStatus,
   type ProviderConnectionAdapter,
-  type ProviderCredentials,
-  type ProviderProbeOutcome,
   type ProviderType,
   type ScopeContext,
   type TenantContext,
@@ -34,6 +31,7 @@ import {
 } from '../../access/application/authorized-mutation.js';
 import { rememberOnce } from '../../idempotency/application/remember-once.js';
 import type { SessionRepository } from '../../identity/application/ports.js';
+import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   checkUrl,
@@ -44,11 +42,17 @@ import type { SafeHttpClient } from '../../../../infrastructure/net/safe-http.js
 import type {
   PanelCredentialStore,
   PanelCredentialWrite,
-  PanelHealthRecord,
   PanelRepository,
   ProbeBudget,
   PanelView,
+  PanelCursor,
 } from './ports.js';
+import { attemptProbe, persistProbeResult, type ProbeCoreDeps } from './probe-core.js';
+import {
+  effectivePreviousFailures,
+  scheduleAfterProbe,
+  type MonitorCadence,
+} from '../domain/monitor-cadence.js';
 
 const PANELS_VIEW = 'panels.view' as const;
 const PANELS_EDIT = 'panels.edit' as const;
@@ -85,6 +89,22 @@ export interface PanelServiceDeps {
   readonly repository: PanelRepository;
   readonly credentials: PanelCredentialStore;
   readonly guard: PermissionGuard;
+  /**
+   * Whether this scope is still accepting work, read INSIDE the transaction.
+   *
+   * Settings, templates, feature flags and the ping recorder have all checked
+   * this since Phase 2; the panels module did not, and that made it the one
+   * place where a tenant an operator had STOPPED could still have panels
+   * created, edited, re-credentialled and re-statused — writing audit,
+   * idempotency and outbox rows for an installation somebody had already
+   * switched off, and arming a background monitor to dial the machines of a
+   * tenant this installation is no longer serving.
+   *
+   * A surface checks activity when the request arrives, which is a snapshot: a
+   * stop can commit in between, answer the operator, and the write still land.
+   * That is why this is read in the transaction and not in the controller.
+   */
+  readonly scopeActivity: ScopeActivityReader;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
   readonly sessions: SessionRepository;
@@ -122,6 +142,16 @@ export interface PanelServiceDeps {
    * tenant has and every API process. See `PanelRepository.takeProbeBudget`.
    */
   readonly probeBudget: ProbeBudget;
+  /**
+   * The background monitor's cadence, which an operator's probe also writes.
+   *
+   * Here rather than only in the monitor because every probe stores when the
+   * panel is next due, and a manual test is a real probe. Without it a
+   * connection test would leave the schedule untouched and the monitor would
+   * re-dial a panel that had just answered — against a rejected credential,
+   * that is how a failed login becomes a lockout.
+   */
+  readonly cadence: MonitorCadence;
 }
 
 function hashRequest(value: unknown): string {
@@ -227,10 +257,18 @@ export class PanelService {
     }
   }
 
-  async list(scope: ScopeContext, actor: ActorContext): Promise<PanelView[]> {
+  async list(
+    scope: ScopeContext,
+    actor: ActorContext,
+    page: { limit?: number; cursor?: PanelCursor | null } = {},
+  ): Promise<{ panels: PanelView[]; nextCursor: PanelCursor | null }> {
     const tenant = this.tenant(scope);
     await this.deps.guard.check(scope, actor, PANELS_VIEW);
-    return this.deps.repository.list(tenant, { includeArchived: false });
+    return this.deps.repository.list(tenant, {
+      includeArchived: false,
+      ...(page.limit === undefined ? {} : { limit: page.limit }),
+      ...(page.cursor === undefined ? {} : { cursor: page.cursor }),
+    });
   }
 
   async get(scope: ScopeContext, actor: ActorContext, panelId: string): Promise<PanelView> {
@@ -381,6 +419,7 @@ export class PanelService {
       PANELS_EDIT,
       { action: 'panel.create', entityType: 'Panel', entityId: null },
       async (tx) => {
+        await this.requireActiveScope(scope, tx);
         if (await this.deps.repository.nameTaken(tenant, command.name, null, tx)) {
           throw errors.conflict(
             PANEL_ERROR_CODES.PANEL_NAME_TAKEN,
@@ -389,9 +428,14 @@ export class PanelService {
         }
         await this.deps.repository.create(
           tenant,
-          { id: panelId, name: command.name, providerType, baseUrl },
+          { id: panelId, name: command.name, providerType, baseUrl, at: now },
           tx,
         );
+        // The schedule row is born with the panel and in the same transaction.
+        // A panel with no schedule row is a panel the monitor cannot see, and
+        // "create the row lazily when the monitor first meets it" is how a
+        // panel goes unmonitored until somebody notices.
+        await this.deps.repository.setScheduleEligibility(tenant, panelId, 'ELIGIBLE_NOW', now, tx);
         if (command.credentials !== undefined) {
           await this.deps.credentials.write(tenant, panelId, command.credentials, now, tx);
         }
@@ -465,6 +509,7 @@ export class PanelService {
     );
     if (existing) return this.require(tenant, panelId);
 
+    const now = this.deps.clock.now();
     await runAuthorizedMutation(
       this.mutationDeps(),
       scope,
@@ -472,6 +517,7 @@ export class PanelService {
       PANELS_EDIT,
       { action: 'panel.update', entityType: 'Panel', entityId: panelId },
       async (tx) => {
+        await this.requireActiveScope(scope, tx);
         const before = await this.require(tenant, panelId, tx);
         if (before.panel.status === 'ARCHIVED') {
           throw errors.preconditionFailed(
@@ -492,10 +538,36 @@ export class PanelService {
         if (command.name !== undefined) changes.name = command.name;
         if (baseUrl !== undefined) changes.baseUrl = baseUrl;
 
-        const updated = await this.deps.repository.update(tenant, panelId, changes, tx);
+        // An edit that changes nothing is a no-op, not a cheap way to force a
+        // probe. The frozen request schema permits a body carrying only an
+        // idempotency key, and this used to advance `updated_at`, make the
+        // panel immediately probe-eligible and record a successful update — so
+        // repeated empty edits with fresh keys drove background probes at the
+        // caller's chosen rate and filled the audit trail with changes that
+        // never happened. The request still succeeds and is still remembered;
+        // it simply does nothing, which is what it asked for.
+        if (Object.keys(changes).length === 0) {
+          await rememberOnce(
+            this.deps.idempotency,
+            scope,
+            actor.surface,
+            command.idempotencyKey,
+            requestHash,
+            { panelId },
+            tx,
+          );
+          return;
+        }
+
+        const updated = await this.deps.repository.update(tenant, panelId, changes, now, tx);
         if (updated === null) {
           throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
         }
+        // An edit makes the panel due immediately. Whatever the monitor had
+        // decided was about a configuration that no longer exists — and an
+        // operator who has just corrected an address should not wait out a
+        // backoff the correction invalidated.
+        await this.deps.repository.setScheduleEligibility(tenant, panelId, 'ELIGIBLE_NOW', now, tx);
         await this.deps.audit.record(
           scope,
           actor,
@@ -572,6 +644,7 @@ export class PanelService {
       PANELS_CREDENTIALS_ROTATE,
       { action: 'panel.credentials.replace', entityType: 'Panel', entityId: panelId },
       async (tx) => {
+        await this.requireActiveScope(scope, tx);
         const before = await this.require(tenant, panelId, tx);
         if (before.panel.status === 'ARCHIVED') {
           throw errors.preconditionFailed(
@@ -580,6 +653,11 @@ export class PanelService {
           );
         }
         await this.deps.credentials.write(tenant, panelId, write, now, tx);
+        // Same rule as an edit, and this is the case that matters most: an
+        // operator replacing a rejected password wants to know whether it
+        // worked, not to wait out the long non-retryable backoff the rejection
+        // earned. It also clears a `CREDENTIALS_MISSING` deferral.
+        await this.deps.repository.setScheduleEligibility(tenant, panelId, 'ELIGIBLE_NOW', now, tx);
         await this.deps.audit.record(
           scope,
           actor,
@@ -645,11 +723,24 @@ export class PanelService {
       PANELS_EDIT,
       { action: 'panel.status', entityType: 'Panel', entityId: panelId },
       async (tx) => {
+        await this.requireActiveScope(scope, tx);
         const before = await this.require(tenant, panelId, tx);
         const updated = await this.deps.repository.setStatus(tenant, panelId, status, now, tx);
         if (updated === null) {
           throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
         }
+        // This is the monitor's status filter, and it is why the discovery scan
+        // needs no status predicate to be correct: a panel that is not ACTIVE
+        // becomes eligible at `'infinity'`, in the same transaction as the
+        // status change, so it is not skipped by the scan — it is outside the
+        // range the scan reads. Re-enabling makes it due at once.
+        await this.deps.repository.setScheduleEligibility(
+          tenant,
+          panelId,
+          status === 'ACTIVE' ? 'ELIGIBLE_NOW' : 'SUSPENDED',
+          now,
+          tx,
+        );
         await this.deps.audit.record(
           scope,
           actor,
@@ -704,6 +795,22 @@ export class PanelService {
       entityId: panelId,
     });
 
+    // A stopped tenant's panels are not dialled, on either lane. The monitor
+    // refuses them in `claimTenants`; this is the operator's lane, and a probe
+    // it runs reaches somebody else's machine just as surely.
+    //
+    // Read WITHOUT a transaction because this path has none to join — the
+    // claim inside `probe-core` opens its own. So this is a snapshot, and the
+    // window is the same one the monitor documents: a tenant stopped after
+    // this check has this one probe complete. What it stops is the steady
+    // state, which is what matters.
+    if (!(await this.deps.scopeActivity.scopeIsActive(scope))) {
+      throw errors.notFound(
+        PLATFORM_ERROR_CODES.TENANT_NOT_FOUND,
+        'This scope is not accepting work.',
+      );
+    }
+
     const requestHash = hashRequest({ panelId, operation: 'test' });
     const existing = await this.deps.idempotency.find<{ panelId: string }>(
       scope,
@@ -714,98 +821,75 @@ export class PanelService {
     if (existing) return { view: await this.require(tenant, panelId), probed: false };
 
     const before = await this.require(tenant, panelId);
-    if (before.panel.status === 'ARCHIVED') {
-      throw errors.preconditionFailed(
-        PANEL_ERROR_CODES.PANEL_ARCHIVED,
-        'This panel is archived. Restore it before testing it.',
-      );
-    }
 
-    const credentials = await this.deps.credentials.read(tenant, panelId);
-    const provider = this.deps.adapters(before.panel.providerType);
-    const target = toProviderCredentials(credentials, provider.descriptor.credentialShape);
-    if (target === null) {
-      throw errors.preconditionFailed(
-        PANEL_ERROR_CODES.PANEL_CREDENTIALS_MISSING,
-        'This panel has no credentials configured. Set them before testing the connection.',
-      );
-    }
-
-    // What this probe is ABOUT to test, captured before the network call. Every
-    // field a probe depends on is here: the address it dials and the three
-    // credential timestamps, which move whenever a credential is replaced or
-    // removed. `updatedAt` covers the address and the status.
-    const testing = configurationOf(before);
-
-    // The throttle, and it is a CLAIM rather than a timestamp comparison the
-    // service makes for itself. Two API containers share this panel and share
-    // nothing else, so the decision belongs in the database; and a claim taken
-    // before the network call, rather than a cooldown started after it, is what
-    // stops two simultaneous requests from both reaching the provider.
+    // The one implementation, shared with the background monitor. Everything
+    // that makes a probe safe — credential resolution, adapter selection, the
+    // address policy, the per-panel claim, the tenant budget, the
+    // normalization of the answer — happens in `probe-core`, so there is
+    // exactly one of each rule and both callers get every fix.
     //
-    // A claim under a different configuration never blocks: replacing a
-    // credential or an address is exactly when an operator needs an answer now,
-    // and the answer they get must not be one measured against what they just
-    // changed.
-    // The address is judged again, as written, before any capacity is spent.
-    // It was judged at create and at update, but the policy can have changed
-    // underneath a stored panel — an installation's data subnet, say — and a
-    // refusal that costs nothing is the right answer to that. Only a
-    // resolution-time refusal, which needs the network, counts as a probe.
-    const verdict = checkUrl(before.panel.baseUrl, this.deps.urlPolicy);
-    if (!verdict.allowed) {
-      throw errors.validation(
-        PANEL_ERROR_CODES.PANEL_TARGET_BLOCKED,
-        refusalMessage(verdict.refusal),
-      );
-    }
+    // What is left here is what an operator's probe genuinely adds: an
+    // idempotency key, an audit row, and a refusal turned into an HTTP-shaped
+    // error the Web Admin can render.
+    const attempt = await attemptProbe(this.probeDeps(), tenant, before, {
+      // A DISABLED panel is testable on request. An operator disables a panel
+      // precisely because something is wrong with it, and "you may not test
+      // this until you re-enable it" would make them re-enable a panel to find
+      // out whether they should. The monitor passes ACTIVE only.
+      probeableStatuses: ['ACTIVE', 'DISABLED'],
+      // No reserve: an operator may spend their tenant's capacity down to
+      // nothing. The reserve exists to keep the monitor from doing that TO
+      // them.
+      budgetReserve: 0,
+    });
 
-    // Two bounds, taken together in one SHORT transaction — no network inside
-    // it — and in this order:
-    //
-    //   1. the per-panel claim, which is configuration-aware: a corrected
-    //      address or credential may be retested at once;
-    //   2. the tenant-wide budget, which is configuration-BLIND: however many
-    //      times a panel is reconfigured, the tenant's real outbound probes
-    //      stay under one bound.
-    //
-    // A request the cooldown merely replays stops at step 1 and spends no
-    // budget. A request the budget refuses rolls the transaction back, so no
-    // claim is left recorded for a probe that never happened. Both together
-    // decide once, atomically, whether ONE outbound call may be made — and
-    // committing before the call is what stops two simultaneous requests
-    // from both making it.
-    const startedAt = this.deps.clock.now();
-    const permission = await this.deps.uow
-      .run(scope, async (tx) => {
-        const claimed = await this.deps.repository.claimProbe(
-          tenant,
-          panelId,
-          configurationFingerprint(before),
-          startedAt,
-          new Date(startedAt.getTime() - this.deps.probeCooldownMs),
-          tx,
+    if (!attempt.probed) {
+      const refusal = attempt.refusal;
+      if (refusal.kind === 'STATUS_NOT_PROBEABLE') {
+        // ARCHIVED is the only status this caller excluded.
+        throw errors.preconditionFailed(
+          PANEL_ERROR_CODES.PANEL_ARCHIVED,
+          'This panel is archived. Restore it before testing it.',
         );
-        if (!claimed) return { kind: 'cooldown' as const };
-        const budget = await this.deps.repository.takeProbeBudget(
-          tenant,
-          this.deps.probeBudget,
-          startedAt,
-          tx,
+      }
+      if (refusal.kind === 'CREDENTIALS_MISSING') {
+        throw errors.preconditionFailed(
+          PANEL_ERROR_CODES.PANEL_CREDENTIALS_MISSING,
+          'This panel has no credentials configured. Set them before testing the connection.',
         );
-        if (!budget.permitted) throw new ProbeBudgetExhausted(budget.retryAfterMs);
-        return { kind: 'permitted' as const };
-      })
-      .catch((error: unknown) => {
-        if (error instanceof ProbeBudgetExhausted) return { kind: 'limited' as const, error };
-        throw error;
-      });
-
-    if (permission.kind === 'cooldown') {
-      // No probe, no health write, no audit entry: nothing happened, and
-      // `probed: false` is how the caller is told so. The view carries whatever
-      // health is stored, which is what every other read of this panel returns
-      // — a result from the last probe that completed, with its own
+      }
+      if (refusal.kind === 'TARGET_BLOCKED') {
+        throw errors.validation(
+          PANEL_ERROR_CODES.PANEL_TARGET_BLOCKED,
+          refusalMessage(refusal.refusal),
+        );
+      }
+      if (refusal.kind === 'BUDGET_EXHAUSTED') {
+        const retryAfterSeconds = Math.max(1, Math.ceil(refusal.retryAfterMs / 1000));
+        // One deduplicated operational event per tenant, not one row per
+        // refused request: a limiter that is being leaned on would otherwise
+        // fill the operations view with the thing it is preventing.
+        await this.deps.opsLog.record(scope, {
+          code: 'panel.probe.limited',
+          severity: 'WARN',
+          message:
+            'Panel connection tests are being refused: this tenant has used its outbound-probe capacity.',
+          dedupeKey: 'panel.probe.limited',
+          context: { retryAfterSeconds },
+        });
+        // A RATE_LIMITED error carrying when to retry and nothing about any
+        // target, counter or network.
+        throw new NexaError({
+          kind: 'RATE_LIMITED',
+          code: PANEL_ERROR_CODES.PANEL_PROBE_LIMITED,
+          message: 'Too many connection tests for this tenant. Try again later.',
+          details: { retryAfterSeconds },
+        });
+      }
+      // Cooldown. No probe, no health write, no audit entry: nothing happened,
+      // and `probed: false` is how the caller is told so. The view carries
+      // whatever health is stored, which is what every other read of this panel
+      // returns — a result from the last probe that completed, with its own
       // `checkedAt`, and never a stale result presented as a fresh one.
       //
       // Not an error, deliberately. A cooldown that threw would make the
@@ -814,41 +898,7 @@ export class PanelService {
       return { view: before, probed: false };
     }
 
-    if (permission.kind === 'limited') {
-      const retryAfterSeconds = Math.max(1, Math.ceil(permission.error.retryAfterMs / 1000));
-      // One deduplicated operational event per tenant, not one row per
-      // refused request: a limiter that is being leaned on would otherwise
-      // fill the operations view with the thing it is preventing.
-      await this.deps.opsLog.record(scope, {
-        code: 'panel.probe.limited',
-        severity: 'WARN',
-        message:
-          'Panel connection tests are being refused: this tenant has used its outbound-probe capacity.',
-        dedupeKey: 'panel.probe.limited',
-        context: { retryAfterSeconds },
-      });
-      // A RATE_LIMITED error carrying when to retry and nothing about any
-      // target, counter or network.
-      throw new NexaError({
-        kind: 'RATE_LIMITED',
-        code: PANEL_ERROR_CODES.PANEL_PROBE_LIMITED,
-        message: 'Too many connection tests for this tenant. Try again later.',
-        details: { retryAfterSeconds },
-      });
-    }
-
-    const outcome = await provider.probe(
-      { baseUrl: before.panel.baseUrl, credentials: target },
-      this.deps.http.forBase(before.panel.baseUrl),
-    );
-    const finishedAt = this.deps.clock.now();
-
-    const health = toHealthRecord(outcome, {
-      checkedAt: finishedAt,
-      latencyMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
-      previousLastHealthyAt: before.health?.lastHealthyAt ?? null,
-    });
-
+    const health = attempt.health;
     await runAuthorizedMutation(
       this.mutationDeps(),
       scope,
@@ -856,19 +906,51 @@ export class PanelService {
       PANELS_EDIT,
       { action: 'panel.test', entityType: 'Panel', entityId: panelId },
       async (tx) => {
-        // Re-read INSIDE the transaction that would store the result. Anything
-        // that changed the panel or its credentials while the probe was in
-        // flight makes this answer describe a configuration that no longer
-        // exists, and health is what an operator trusts when deciding whether
-        // their fix worked.
-        const current = await this.require(tenant, panelId, tx);
-        if (configurationOf(current) !== testing) {
-          throw errors.conflict(
-            PANEL_ERROR_CODES.PANEL_CONFIGURATION_CHANGED,
-            'This panel changed while the connection test was running. Run the test again.',
+        const { outcome } = await persistProbeResult(
+          this.deps,
+          tenant,
+          panelId,
+          attempt.configuration,
+          health,
+          tx,
+        );
+
+        // What the row holds now that the write has been decided, read in the
+        // same transaction. Only needed on the discarded path, where `before`
+        // is by definition stale — see the audit's `after` below.
+        const current =
+          outcome === 'APPLIED' ? null : await this.deps.repository.find(tenant, panelId, tx);
+
+        // A manual test is a real probe with a real answer, so it moves the
+        // background schedule too. Without this the monitor would re-dial a
+        // panel the operator just tested — and against a rejected credential it
+        // would be spending the operator's lockout budget to ask a question
+        // that was answered a second ago.
+        //
+        // Skipped when the write was refused as stale: a result the database
+        // discarded must not decide when the next probe happens either.
+        if (outcome === 'APPLIED') {
+          const stored = await this.deps.repository.readSchedule(tenant, panelId, tx);
+          const schedule = scheduleAfterProbe(this.deps.cadence, panelId, {
+            checkedAt: health.checkedAt,
+            failure: health.failure,
+            previousConsecutiveFailures: effectivePreviousFailures(
+              before.health?.state ?? null,
+              stored?.consecutiveFailures ?? 0,
+            ),
+          });
+          await this.deps.repository.scheduleNext(
+            tenant,
+            panelId,
+            {
+              nextEligibleAt: schedule.nextEligibleAt,
+              consecutiveFailures: schedule.consecutiveFailures,
+              deferredReason: null,
+              at: health.checkedAt,
+            },
+            tx,
           );
         }
-        await this.deps.repository.recordHealth(tenant, panelId, health, tx);
         await this.deps.audit.record(
           scope,
           actor,
@@ -880,7 +962,39 @@ export class PanelService {
             // The normalized outcome and nothing else. No provider message, no
             // header, no body — the probe result type has no field one could
             // be put in, which is what makes this hard to get wrong later.
-            after: { state: health.state, failure: health.failure, latencyMs: health.latencyMs },
+            //
+            // And what is recorded is what the DATABASE now holds, not what
+            // this probe measured. A slow manual test finishing after a newer
+            // probe of the same configuration has its health write discarded;
+            // recording the discarded state as the after-state left an
+            // authoritative audit row asserting a transition that never
+            // happened. A discarded result is audited as exactly that.
+            after:
+              outcome === 'APPLIED'
+                ? { state: health.state, failure: health.failure, latencyMs: health.latencyMs }
+                : {
+                    // The state the row ACTUALLY holds, re-read inside this
+                    // transaction, and the measurement that lost, named as
+                    // having lost.
+                    //
+                    // Not `before.health`: the race is precisely that `before`
+                    // is out of date. A manual probe captures AUTH_FAILED, a
+                    // newer probe stores HEALTHY, the manual one returns
+                    // UNREACHABLE and is discarded — reporting `before` would
+                    // put AUTH_FAILED in the audit trail as the current state
+                    // when the database says HEALTHY, which is a different
+                    // wrong answer from the one this branch was added to fix.
+                    //
+                    // `result` stays SUCCESS because the operator's command did
+                    // succeed: the probe ran and answered. It is the STORED
+                    // state this row must not misreport.
+                    state: current?.health?.state ?? null,
+                    discarded: {
+                      state: health.state,
+                      failure: health.failure,
+                      latencyMs: health.latencyMs,
+                    },
+                  },
             result: 'SUCCESS',
           },
           tx,
@@ -900,6 +1014,39 @@ export class PanelService {
     return { view: await this.require(tenant, panelId), probed: true };
   }
 
+  /** The shared probe core's dependencies, all of which the service already holds. */
+  private probeDeps(): ProbeCoreDeps {
+    return {
+      repository: this.deps.repository,
+      credentials: this.deps.credentials,
+      uow: this.deps.uow,
+      clock: this.deps.clock,
+      http: this.deps.http,
+      urlPolicy: this.deps.urlPolicy,
+      adapters: this.deps.adapters,
+      probeCooldownMs: this.deps.probeCooldownMs,
+      probeBudget: this.deps.probeBudget,
+      cadence: this.deps.cadence,
+    };
+  }
+
+  /**
+   * Refuse the write when this scope has stopped accepting work.
+   *
+   * Called INSIDE the mutation's transaction, before the first read that the
+   * write depends on, and it throws the same NOT_FOUND the control-plane
+   * services throw — a tenant an operator has stopped should look absent to a
+   * writer, not present-but-refusing, and the message says which it is without
+   * confirming the tenant to somebody who should not know it exists.
+   */
+  private async requireActiveScope(scope: ScopeContext, tx: TransactionScope): Promise<void> {
+    if (await this.deps.scopeActivity.scopeIsActive(scope, tx)) return;
+    throw errors.notFound(
+      PLATFORM_ERROR_CODES.TENANT_NOT_FOUND,
+      'This scope is not accepting work.',
+    );
+  }
+
   private mutationDeps() {
     return {
       uow: this.deps.uow,
@@ -910,47 +1057,6 @@ export class PanelService {
       clock: this.deps.clock,
     };
   }
-}
-
-/** Thrown inside the permission transaction to roll it back; never escapes the service. */
-class ProbeBudgetExhausted extends Error {
-  constructor(readonly retryAfterMs: number) {
-    super('probe budget exhausted');
-  }
-}
-
-/**
- * Everything a probe's answer depends on, as one comparable value.
- *
- * A timestamp tuple rather than a stored version column: all four already move
- * for exactly the reasons that invalidate a probe, so there is nothing new to
- * maintain and no column that can be forgotten on a write path added later.
- * `updatedAt` moves for the address and the status; the three credential
- * timestamps move when a credential is replaced or removed.
- */
-function configurationOf(view: PanelView): string {
-  return [
-    view.panel.baseUrl,
-    view.panel.status,
-    view.panel.updatedAt.getTime(),
-    view.credentials.usernameSetAt?.getTime() ?? 0,
-    view.credentials.passwordSetAt?.getTime() ?? 0,
-    view.credentials.apiTokenSetAt?.getTime() ?? 0,
-  ].join('|');
-}
-
-/**
- * The same identity, as an opaque token safe to keep in a row.
- *
- * A digest, so a claim row holds nothing readable — not the panel's address,
- * not its status. There is no credential VALUE in the input to hash in the
- * first place: `configurationOf` reads the three set-at timestamps, which move
- * when a credential is replaced and say nothing about what it is. A design that
- * fingerprinted the credentials themselves would put a verifier for a panel
- * password in a table that is not the credential table.
- */
-function configurationFingerprint(view: PanelView): string {
-  return createHash('sha256').update(configurationOf(view)).digest('hex');
 }
 
 /** Which credential kinds a write mentions, optionally filtered. Never values. */
@@ -964,93 +1070,4 @@ function credentialKindsIn(
   if (predicate(write.password)) kinds.push('PASSWORD');
   if (predicate(write.apiToken)) kinds.push('API_TOKEN');
   return kinds;
-}
-
-/**
- * Stored credentials, as the shape this provider declares it needs.
- *
- * Returns null when the panel has nothing usable, so the caller refuses before
- * contacting anything. Sending an empty password to find out would be one more
- * failed login on the operator's own panel.
- */
-function toProviderCredentials(
-  stored: { username: string | null; password: string | null; apiToken: string | null } | null,
-  shape: string,
-): ProviderCredentials | null {
-  if (stored === null) return null;
-  if (shape === 'USERNAME_PASSWORD') {
-    return stored.username !== null && stored.password !== null
-      ? { shape: 'USERNAME_PASSWORD', username: stored.username, password: stored.password }
-      : null;
-  }
-  if (shape === 'OPAQUE_TOKEN') {
-    return stored.apiToken !== null ? { shape: 'OPAQUE_TOKEN', token: stored.apiToken } : null;
-  }
-  if (shape === 'TOKEN_OR_USERNAME_PASSWORD') {
-    // A provider that genuinely accepts either — 3X-UI v3.7.0 authenticates
-    // its API with a scoped Bearer token OR a session login. The order is a
-    // decision, not a preference:
-    //
-    // A configured API token WINS, and a rejected one is never retried as a
-    // username and password. An operator who configured token-only access,
-    // possibly a least-privilege monitor token, must see that token auth is
-    // broken rather than have Nexa quietly authenticate with the more powerful
-    // credential they deliberately did not point at this job. Falling back
-    // would also mean a token typo silently escalating every future probe.
-    //
-    // Narrowing HERE rather than in the adapter is what makes that structural:
-    // the adapter is handed one shape and cannot see the other, so no adapter
-    // can implement the fallback even by accident. A deliberate fallback, if
-    // one is ever wanted, is a product policy and a change to this function.
-    if (stored.apiToken !== null) return { shape: 'OPAQUE_TOKEN', token: stored.apiToken };
-    return stored.username !== null && stored.password !== null
-      ? { shape: 'USERNAME_PASSWORD', username: stored.username, password: stored.password }
-      : null;
-  }
-  return { shape: 'NONE' };
-}
-
-/**
- * A probe outcome as a stored health row.
- *
- * `lastHealthyAt` is carried forward across failures on purpose: "unreachable,
- * last worked four minutes ago" and "unreachable, last worked in March" are the
- * same state and completely different problems.
- */
-export function toHealthRecord(
-  outcome: ProviderProbeOutcome,
-  context: { checkedAt: Date; latencyMs: number; previousLastHealthyAt: Date | null },
-): PanelHealthRecord {
-  if (outcome.ok) {
-    const state: PanelHealthState = outcome.degraded ? 'DEGRADED' : 'HEALTHY';
-    return {
-      state,
-      checkedAt: context.checkedAt,
-      latencyMs: context.latencyMs,
-      failure: null,
-      statusCode: null,
-      providerVersion: outcome.providerVersion,
-      // A degraded panel authenticated, so it answered. It counts as having
-      // worked — an operator watching `lastHealthyAt` freeze while the panel
-      // is plainly responding would be reading a broken clock.
-      lastHealthyAt: context.checkedAt,
-    };
-  }
-  return {
-    // Both authentication kinds are AUTH_FAILED health: the panel answered and
-    // did not authenticate. The FAILURE column carries which, so an operator
-    // sees "replace the credentials" and "this panel wants a second factor,
-    // configure an API token" as the different jobs they are.
-    state:
-      outcome.failure === 'AUTHENTICATION_FAILED' ||
-      outcome.failure === 'AUTHENTICATION_REQUIRES_INTERACTION'
-        ? 'AUTH_FAILED'
-        : 'UNREACHABLE',
-    checkedAt: context.checkedAt,
-    latencyMs: context.latencyMs,
-    failure: outcome.failure,
-    statusCode: outcome.status,
-    providerVersion: null,
-    lastHealthyAt: context.previousLastHealthyAt,
-  };
 }

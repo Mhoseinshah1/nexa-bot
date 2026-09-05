@@ -1,0 +1,2 @@
+ALTER TABLE "panel_monitor_schedule" DROP CONSTRAINT "panel_monitor_schedule_deferred_reason_check";--> statement-breakpoint
+ALTER TABLE "panel_monitor_schedule" ADD CONSTRAINT "panel_monitor_schedule_deferred_reason_check" CHECK (deferred_reason IS NULL OR deferred_reason IN ('CREDENTIALS_MISSING', 'TARGET_BLOCKED', 'STATUS_NOT_PROBEABLE', 'COOLDOWN', 'BUDGET_EXHAUSTED', 'NOT_AUTHORIZED', 'INTERNAL_ERROR'));

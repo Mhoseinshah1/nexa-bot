@@ -58,13 +58,16 @@ const DESCRIPTOR: ProviderDescriptor = providerDescriptor('marzban') ?? {
  * A failed HTTP exchange, as a probe outcome.
  *
  * `401` and `403` become `AUTHENTICATION_FAILED` — the credentials were seen
- * and refused. Everything else 4xx or 5xx is the panel's own error: it
- * answered, so it is reachable, and the problem is on its side.
+ * and refused. `429` is neither: nothing is wrong with the credential and
+ * nothing is wrong with the panel — this installation is calling it too often,
+ * and the remedy is ours. Everything else 4xx or 5xx is the panel's own error:
+ * it answered, so it is reachable, and the problem is on its side.
  */
 function outcomeFromStatus(status: number): ProviderProbeOutcome {
   if (status === 401 || status === 403) {
     return { ok: false, failure: 'AUTHENTICATION_FAILED', status };
   }
+  if (status === 429) return { ok: false, failure: 'RATE_LIMITED', status };
   return { ok: false, failure: 'PROVIDER_ERROR', status };
 }
 

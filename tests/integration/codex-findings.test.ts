@@ -75,11 +75,10 @@ describe('a login cannot outlive the credential that authorised it', () => {
     });
 
     // Hold the login after it has verified, before it issues a session.
-    const hasher = ctx.container.hasher as { verify: unknown };
-    const realVerify = hasher.verify.bind(ctx.container.hasher) as (
-      plaintext: string,
-      encoded: string,
-    ) => Promise<boolean>;
+    const hasher = ctx.container.hasher as unknown as {
+      verify: (plaintext: string, encoded: string) => Promise<boolean>;
+    };
+    const realVerify = hasher.verify.bind(ctx.container.hasher);
     let releaseLogin: () => void = () => undefined;
     const loginHasVerified = new Promise<void>((resolve) => {
       hasher.verify = async (plaintext: string, encoded: string) => {

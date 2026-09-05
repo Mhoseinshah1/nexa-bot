@@ -1716,7 +1716,7 @@ describe('the outbox pauses for a tenant that is not active', () => {
         eventType: 'SystemPinged',
         aggregateType: 'System',
         aggregateId: ctx.container.ids.uuid(),
-        payload: { note: 'while active' },
+        payload: { source: 'test', note: 'while active' },
       });
     });
 
@@ -1998,7 +1998,7 @@ describe('readiness does not count deliberately paused work', () => {
         eventType: 'SystemPinged',
         aggregateType: 'System',
         aggregateId: ctx.container.ids.uuid(),
-        payload: { note: 'paused' },
+        payload: { source: 'test', note: 'paused' },
       });
     });
 
@@ -2160,7 +2160,7 @@ describe('the outbox re-checks the tenant at dispatch, not only at claim', () =>
         eventType: 'SystemPinged',
         aggregateType: 'System',
         aggregateId: ctx.container.ids.uuid(),
-        payload: { note: 'claimed then stopped' },
+        payload: { source: 'test', note: 'claimed then stopped' },
       });
     });
 

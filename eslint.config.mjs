@@ -192,10 +192,20 @@ export default tseslint.config(
   },
 
   // ---------------------------------------------------------------------------
-  // Tests and scripts relax the wall-clock and console rules.
+  // Tests, and the scripts that run outside the application, relax the
+  // wall-clock and console rules.
   // ---------------------------------------------------------------------------
   {
-    files: ['**/*.test.ts', '**/*.spec.ts', 'tests/**/*.ts', 'scripts/**/*.{ts,mjs}'],
+    files: [
+      '**/*.test.ts',
+      '**/*.spec.ts',
+      'tests/**/*.ts',
+      'scripts/**/*.{ts,mjs}',
+      // The operational scripts that ship IN the image, beside the compose
+      // file that invokes them. Same shape as scripts/: node globals, and a
+      // process that talks to an operator on stdout.
+      'deploy/bin/**/*.mjs',
+    ],
     languageOptions: {
       globals: {
         console: 'readonly',

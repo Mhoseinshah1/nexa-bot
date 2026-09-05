@@ -16,9 +16,19 @@ import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema
 import { readFileSync } from 'node:fs';
 import { panelUrlPolicy } from './infrastructure/net/installation-policy.js';
 import { SafeHttpClient } from './infrastructure/net/safe-http.js';
-import { DrizzlePanelRepository } from './modules/platform/panels/infrastructure/drizzle-panel.repository.js';
+import {
+  DrizzlePanelMonitorRepository,
+  DrizzlePanelRepository,
+} from './modules/platform/panels/infrastructure/drizzle-panel.repository.js';
+import {
+  schedulerFreshPanelUpperBound,
+  tenantBudgetFreshPanelUpperBound,
+} from './modules/platform/panels/domain/monitor-cadence.js';
+import type { MonitorCadence } from './modules/platform/panels/domain/monitor-cadence.js';
 import { DrizzlePanelCredentialStore } from './modules/platform/panels/infrastructure/drizzle-panel-credentials.js';
 import { PanelService } from './modules/platform/panels/application/panel.service.js';
+import { PanelMonitorService } from './modules/platform/panels/application/panel-monitor.service.js';
+import type { ProbeCoreDeps } from './modules/platform/panels/application/probe-core.js';
 import { providerAdapter } from './modules/platform/providers/infrastructure/adapter-registry.js';
 import { SystemClock } from './infrastructure/clock.js';
 import { Uuidv7IdGenerator } from './infrastructure/ids.js';
@@ -84,7 +94,17 @@ import type { NotificationTransport } from './modules/control/notifications/appl
  * than aspirational — nothing else in the codebase constructs an adapter.
  */
 
-export type ProcessRole = 'api' | 'worker';
+/**
+ * Which entrypoint of the SAME image this process is.
+ *
+ * Not three images and not a flag that turns a subsystem on inside another
+ * process: one module graph, three `main` files, and the container's `command`
+ * chooses. `monitor` earns its own role because unattended outbound calls to
+ * an operator's panels must not share an event loop with the webhook — a slow
+ * panel would then be a slow Telegram response — and must not be woken by a
+ * request at all.
+ */
+export type ProcessRole = 'api' | 'worker' | 'monitor';
 
 export interface Container {
   readonly config: AppConfig;
@@ -138,6 +158,14 @@ export interface Container {
 
   // Control plane — Phase 2
   readonly panels: PanelService;
+  /**
+   * The background health loop. Started only by the `monitor` entrypoint.
+   *
+   * Constructed in every role because the container is one graph, and started
+   * in exactly one: an interval inside the API process would put unattended
+   * outbound calls on the event loop that answers the Telegram webhook.
+   */
+  readonly panelMonitor: PanelMonitorService;
   readonly settingsService: SettingsService;
   readonly settingsResolver: SettingsResolver;
   readonly featureFlags: FeatureFlagsService;
@@ -160,6 +188,53 @@ export interface Container {
   readonly opsLogService: OpsLogService;
 
   shutdown(): Promise<void>;
+}
+
+/**
+ * Retries the panel HTTP client is allowed. Zero, and it is a NAMED zero.
+ *
+ * `SafeHttpClient` starts its deadline per attempt, so `maxRetries` multiplies
+ * the wall time a probe can occupy — and the per-panel claim window is floored
+ * on that wall time. Written as a literal in both places, raising one and not
+ * the other would let a second probe start while the first is still on the
+ * wire, which is precisely what the claim exists to prevent. One constant, two
+ * readers.
+ */
+const PANEL_HTTP_RETRIES = 0;
+
+/**
+ * How much of a tenant's bucket the monitor must leave for its operator.
+ *
+ * Rounded UP, and never down to zero. A percentage of a small capacity floors
+ * to nothing — forty percent of two is zero — and a zero reserve is the
+ * invariant switched off exactly where it matters most: on a tenant with two
+ * tokens, background monitoring would take both and an operator diagnosing an
+ * outage would find no capacity to test their own panel with.
+ *
+ * The consequence at capacity 1 is deliberate and is the right way round: the
+ * reserve is 1, the monitor is refused every time, and the single token belongs
+ * to the operator. Monitoring is a convenience; being locked out of your own
+ * panel is not.
+ *
+ * Zero percent means zero, and only zero percent does. It is the operator
+ * saying they do not want the reserve, which is not the same as a rounding
+ * accident producing none.
+ *
+ * `Math.max(1, ...)` is a floor for a capacity of ZERO, and nothing else:
+ * `Math.ceil` of any positive fraction is already at least one, so for every
+ * capacity the configuration permits the two are the same number. Mutation says
+ * so — removing it changes no answer any test can produce — and it is recorded
+ * as that rather than described as the rule. The rule is `ceil`.
+ *
+ * EXPORTED so it can be tested. It was an expression inside `createContainer`,
+ * where every rule above was stated in this comment and enforced by arithmetic
+ * that nothing named: the monitor suite passes `budgetReserve` as a literal, so
+ * replacing `ceil` with `floor`, or dropping the `max(1, ...)`, left the whole
+ * suite green.
+ */
+export function monitorBudgetReserveFor(capacity: number, percent: number): number {
+  if (percent === 0) return 0;
+  return Math.max(1, Math.ceil((capacity * percent) / 100));
 }
 
 export function createContainer(config: AppConfig, role: ProcessRole): Container {
@@ -278,11 +353,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   let installationTenantId: TenantId | null = null;
 
-  const relay = new OutboxRelay(database.db, [new PingLogConsumer(opsLog)], clock, logger, {
-    batchSize: config.OUTBOX_RELAY_BATCH_SIZE,
-    pollIntervalMs: config.OUTBOX_RELAY_POLL_INTERVAL_MS,
-    maxLagMs: config.OUTBOX_RELAY_MAX_LAG_MS,
-  });
+  const relay = new OutboxRelay(
+    database.db,
+    [new PingLogConsumer(opsLog)],
+    clock,
+    logger,
+    {
+      batchSize: config.OUTBOX_RELAY_BATCH_SIZE,
+      pollIntervalMs: config.OUTBOX_RELAY_POLL_INTERVAL_MS,
+      maxLagMs: config.OUTBOX_RELAY_MAX_LAG_MS,
+    },
+    database,
+  );
 
   // Comfortably past the longest window plus lockout the schema permits, so a
   // sweep can never remove a row something is still counting.
@@ -348,6 +430,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   // environment.
   const urlPolicy = panelUrlPolicy(config);
 
+  const panelRepository = new DrizzlePanelRepository(database.db);
+  const panelCredentials = new DrizzlePanelCredentialStore(database.db, cipher);
+
   const panelHttp = new SafeHttpClient({
     ...urlPolicy,
     // Read once, at construction. A per-request read would put a filesystem
@@ -358,11 +443,99 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       : { caCertificates: [readFileSync(config.PANEL_HTTP_CA_FILE, 'utf8')] }),
     totalTimeoutMs: config.PANEL_HTTP_TIMEOUT_MS,
     maxResponseBytes: config.PANEL_HTTP_MAX_RESPONSE_BYTES,
-    // No retry on an operator-triggered probe. Scheduled probing in 3C owns
-    // its own backoff; a client that retried underneath it would multiply the
-    // two.
-    maxRetries: 0,
+    // No retry, on either lane. The background monitor owns its own backoff —
+    // a shorter interval after a retryable failure, doubling to a bound — and a
+    // client that retried underneath it would multiply the two, turning one
+    // configured cadence into an unconfigured one.
+    maxRetries: PANEL_HTTP_RETRIES,
   });
+
+  /**
+   * The cadence every probe writes, whoever asked for it.
+   *
+   * Built once, here, and handed to both the panel service and the monitor, so
+   * an operator's connection test and a background probe schedule the panel
+   * the same way. Two constructions of this object would be two policies.
+   */
+  const monitorCadence: MonitorCadence = {
+    healthyIntervalMs: config.PANEL_MONITOR_HEALTHY_INTERVAL_MS,
+    retryableIntervalMs: config.PANEL_MONITOR_RETRYABLE_INTERVAL_MS,
+    nonRetryableIntervalMs: config.PANEL_MONITOR_NONRETRYABLE_INTERVAL_MS,
+  };
+
+  /**
+   * Everything a probe needs, built once and shared by both lanes.
+   *
+   * The operator's connection test and the background monitor are two callers
+   * of one implementation, so they are two references to one dependency set —
+   * not two constructions that could drift.
+   */
+  const probeCore: ProbeCoreDeps = {
+    repository: panelRepository,
+    credentials: panelCredentials,
+    uow,
+    clock,
+    http: panelHttp,
+    urlPolicy,
+    adapters: providerAdapter,
+    // Floored at the HTTP budget a probe can actually spend. A cooldown shorter
+    // than a probe can run would let a second request start while the first is
+    // still on the wire, which is the case the window exists to prevent — and
+    // the two values are configured independently, so nothing else keeps them
+    // in a sane order.
+    //
+    // `PANEL_HTTP_RETRIES` is in the arithmetic rather than assumed to be zero.
+    // `totalTimeoutMs` bounds ONE attempt — the deadline is started inside the
+    // retry loop — so a client allowed two retries can be on the wire for three
+    // times the budget, and a floor written as one budget would silently stop
+    // being a floor. It is the same constant the client is built with, so the
+    // two cannot drift.
+    probeCooldownMs: Math.max(
+      config.PANEL_PROBE_COOLDOWN_MS,
+      config.PANEL_HTTP_TIMEOUT_MS * (1 + PANEL_HTTP_RETRIES),
+    ),
+    probeBudget: {
+      capacity: config.PANEL_PROBE_TENANT_LIMIT,
+      refillPerMs: config.PANEL_PROBE_TENANT_LIMIT / config.PANEL_PROBE_TENANT_WINDOW_MS,
+    },
+    cadence: monitorCadence,
+  };
+
+  const monitorBudgetReserve = monitorBudgetReserveFor(
+    config.PANEL_PROBE_TENANT_LIMIT,
+    config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT,
+  );
+
+  const panelMonitor = new PanelMonitorService(
+    {
+      discovery: new DrizzlePanelMonitorRepository(database.db),
+      probe: probeCore,
+      guard,
+      audit,
+      opsLog,
+      sessions,
+      uow,
+      clock,
+      ids,
+      logger,
+      batchSize: config.PANEL_MONITOR_BATCH_SIZE,
+      tenantsPerTick: config.PANEL_MONITOR_TENANTS_PER_TICK,
+      concurrency: config.PANEL_MONITOR_CONCURRENCY,
+      budgetReserve: monitorBudgetReserve,
+      tenantBudgetUpperBound: tenantBudgetFreshPanelUpperBound(
+        config.PANEL_PROBE_TENANT_LIMIT,
+        config.PANEL_PROBE_TENANT_WINDOW_MS,
+        config.PANEL_MONITOR_HEALTHY_INTERVAL_MS,
+      ),
+      schedulerUpperBound: schedulerFreshPanelUpperBound(
+        config.PANEL_MONITOR_BATCH_SIZE,
+        config.PANEL_MONITOR_TICK_MS,
+        config.PANEL_MONITOR_HEALTHY_INTERVAL_MS,
+      ),
+      capacityAssessmentIntervalMs: config.PANEL_MONITOR_CAPACITY_INTERVAL_MS,
+    },
+    config.PANEL_MONITOR_TICK_MS,
+  );
 
   const settingsService = new SettingsService(
     guard,
@@ -544,9 +717,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
     recordPing,
     panels: new PanelService({
-      repository: new DrizzlePanelRepository(database.db),
-      credentials: new DrizzlePanelCredentialStore(database.db, cipher),
+      repository: panelRepository,
+      credentials: panelCredentials,
       guard,
+      // The same reader settings, templates, feature flags and the ping
+      // recorder are given. The panels module was the one write path that did
+      // not check whether its scope was still accepting work.
+      scopeActivity: tenants,
       audit,
       opsLog,
       sessions,
@@ -554,18 +731,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       idempotency,
       clock,
       ids,
-      http: panelHttp,
-      urlPolicy,
-      // Floored at the HTTP budget. A cooldown shorter than a probe can run
-      // would let a second request start while the first is still on the wire,
-      // which is the case the window exists to prevent — and the two values are
-      // configured independently, so nothing else keeps them in a sane order.
-      probeCooldownMs: Math.max(config.PANEL_PROBE_COOLDOWN_MS, config.PANEL_HTTP_TIMEOUT_MS),
-      probeBudget: {
-        capacity: config.PANEL_PROBE_TENANT_LIMIT,
-        refillPerMs: config.PANEL_PROBE_TENANT_LIMIT / config.PANEL_PROBE_TENANT_WINDOW_MS,
-      },
-      adapters: providerAdapter,
+      http: probeCore.http,
+      urlPolicy: probeCore.urlPolicy,
+      probeCooldownMs: probeCore.probeCooldownMs,
+      probeBudget: probeCore.probeBudget,
+      adapters: probeCore.adapters,
+      cadence: probeCore.cadence,
     }),
     settingsService,
     settingsResolver,
@@ -579,8 +750,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     notificationDispatcher,
     notificationTransport,
     opsLogService,
+    panelMonitor,
     async shutdown() {
       await relay.stop();
+      await panelMonitor.stop();
       await notificationDispatcher.stop();
       await throttleSweeper.stop();
       await sessionSweeper.stop();

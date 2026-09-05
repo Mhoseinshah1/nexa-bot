@@ -117,17 +117,9 @@ export class ReadinessProbe {
     }
   }
 
-  /** A checkout whose every statement PostgreSQL will cancel at the probe's deadline. */
-  private bounded<T>(
-    deadlineAt: number,
-    fn: Parameters<Container['database']['withClient']>[0],
-  ): Promise<T> {
-    return this.container.database.withClient(fn, { deadlineAt }) as Promise<T>;
-  }
-
   private checkDatabase(): Promise<DependencyStatus> {
     return this.timed('postgres', async (deadlineAt) => {
-      await this.bounded(deadlineAt, (client) => client.query('SELECT 1'));
+      await this.container.database.ping(deadlineAt);
       return { ok: true };
     });
   }
@@ -158,20 +150,8 @@ export class ReadinessProbe {
   private checkMigrations(): Promise<DependencyStatus> {
     return this.timed('migrations', async (deadlineAt) => {
       this.expected ??= expectedMigrations(migrationsFolder());
-      const result = await this.bounded<{ rows: { hash: string; created_at: string }[] }>(
-        deadlineAt,
-        (client) =>
-          client.query<{ hash: string; created_at: string }>(
-            `SELECT hash, created_at::text AS created_at
-               FROM drizzle.__drizzle_migrations
-              ORDER BY created_at ASC`,
-          ),
-      );
-      const applied = result.rows.map((row) => ({
-        hash: row.hash,
-        createdAt: Number(row.created_at),
-      }));
-      const verdict = compareMigrations(applied, this.expected);
+      const applied = await this.container.database.appliedMigrations(deadlineAt);
+      const verdict = compareMigrations([...applied], this.expected);
       switch (verdict.state) {
         case 'current':
           return { ok: true, detail: `${verdict.applied} applied` };
@@ -198,10 +178,7 @@ export class ReadinessProbe {
       // On a bounded checkout too. This is the one probe that reads an
       // application table, and a slow table scan here is exactly the query
       // that used to outlive the probe.
-      const lag = await this.container.database.withExecutor(
-        (executor) => this.container.relay.lagMs(executor),
-        { deadlineAt },
-      );
+      const lag = await this.container.relay.lagMsWithin(deadlineAt);
       const healthy = lag <= this.container.config.OUTBOX_RELAY_MAX_LAG_MS;
       return { ok: healthy, detail: `oldest unpublished ${lag}ms` };
     });

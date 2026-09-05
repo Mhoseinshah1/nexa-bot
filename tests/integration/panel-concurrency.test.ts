@@ -335,6 +335,7 @@ describe('panel service under concurrency', () => {
       repository: new DrizzlePanelRepository(ctx.container.database.db),
       credentials: new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher),
       guard: ctx.container.guard,
+      scopeActivity: ctx.container.tenants,
       audit: ctx.container.audit,
       opsLog: ctx.container.opsLog,
       sessions: ctx.container.sessions,
@@ -359,6 +360,11 @@ describe('panel service under concurrency', () => {
       // hit the tenant-wide bound. Its own suite pins it low.
       probeBudget: { capacity: 10_000, refillPerMs: 1 },
       adapters: (type: ProviderType) => ({ ...providerAdapter(type), probe }),
+      cadence: {
+        healthyIntervalMs: 10 * 60 * 1000,
+        retryableIntervalMs: 2 * 60 * 1000,
+        nonRetryableIntervalMs: 60 * 60 * 1000,
+      },
     });
   }
 });

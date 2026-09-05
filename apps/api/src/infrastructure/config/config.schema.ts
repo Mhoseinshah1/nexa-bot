@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { parseKeyring, type SecretKeyring } from '../crypto/keyring.js';
 import { isValidTrustedEntry } from '../trusted-proxy.js';
+import {
+  healthyCadenceFitsFreshness,
+  maxHealthyIntervalMs,
+  MONITOR_NONRETRYABLE_FLOOR_MS,
+} from '../../modules/platform/panels/domain/monitor-cadence.js';
 
 /**
  * Environment configuration.
@@ -320,6 +325,135 @@ export const configSchema = z
       .min(1_000)
       .max(24 * 60 * 60 * 1000)
       .default(300_000),
+    /**
+     * Background panel health monitoring.
+     *
+     * Five knobs, not twenty: whether the loop runs, how often it wakes, and
+     * the three cadences that follow from what the last probe found. Batch
+     * size and concurrency bound the work; everything else is derived.
+     */
+    PANEL_MONITOR_ENABLED: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((value) => value === 'true'),
+    /**
+     * How often the loop wakes to look for work.
+     *
+     * Not the probe cadence — a tick that finds nothing due does nothing. It
+     * bounds how late a due panel can be, and it is the interval the heartbeat
+     * is judged against.
+     */
+    PANEL_MONITOR_TICK_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(10 * 60 * 1000)
+      .default(30_000),
+    /**
+     * How long a HEALTHY result is allowed to stand before a re-probe.
+     *
+     * Ten minutes against a `PANEL_HEALTH_FRESH_FOR_MS` of fifteen: the
+     * refresh lands comfortably before the result an operator reads goes
+     * stale, with room for a missed tick.
+     *
+     * The per-field ceiling here is only half the bound. Worst-case refresh is
+     * the interval PLUS the anti-herd spread PLUS however long a due panel
+     * waits for a tick to pick it up, and the last term is another field — so
+     * the real check is a cross-field one at the bottom of this schema. A
+     * twelve-minute cadence is fine with a thirty-second tick and refused with
+     * a ten-minute one, and no single field can express that.
+     */
+    PANEL_MONITOR_HEALTHY_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(30_000)
+      .max(12 * 60 * 1000)
+      .default(10 * 60 * 1000),
+    /**
+     * After a RETRYABLE failure — a timeout, an unreachable host, a provider
+     * error. Trying again soon is the point: these are the failures that fix
+     * themselves.
+     */
+    PANEL_MONITOR_RETRYABLE_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(10_000)
+      .max(60 * 60 * 1000)
+      .default(2 * 60 * 1000),
+    /**
+     * After a NON-RETRYABLE failure — rejected credentials, a panel wanting a
+     * second factor, a refused target, a malformed answer.
+     *
+     * Long, and that is the safety property rather than a tuning choice. A
+     * stable bad credential retried on a short cadence is a credential-stuffing
+     * loop pointed at the operator's own panel, and both providers this release
+     * speaks to lock an account for exactly that. An operator who fixes the
+     * credential does not wait this out: replacing one changes the panel's
+     * configuration, which makes it due immediately.
+     */
+    PANEL_MONITOR_NONRETRYABLE_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      // Thirty minutes, not one. A minute-scale first retry that doubles is
+      // still an automated login hammer: it spends four or five attempts
+      // against the operator's own panel before it slows down, and both
+      // providers this release speaks to lock an account for fewer than that.
+      // `MONITOR_NONRETRYABLE_FLOOR_MS` clamps the policy as well, so a caller
+      // that builds a cadence object without going through this schema cannot
+      // get under it either.
+      .min(MONITOR_NONRETRYABLE_FLOOR_MS)
+      .max(24 * 60 * 60 * 1000)
+      .default(60 * 60 * 1000),
+    /** Panels considered in one tick. The query is LIMITed by this. */
+    PANEL_MONITOR_BATCH_SIZE: z.coerce.number().int().min(1).max(1_000).default(50),
+    /**
+     * How often the monitor re-assesses what this installation can keep fresh.
+     *
+     * Two aggregates over `panels`, so not every tick — and not once at startup
+     * either, because the population an operator GROWS into is exactly the one
+     * that matters and a boot-time-only check would never see it. Ten minutes
+     * is slow enough to be free and quick enough that an operator who doubles
+     * their fleet hears about it in the same sitting.
+     */
+    PANEL_MONITOR_CAPACITY_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(60_000)
+      .max(24 * 60 * 60 * 1000)
+      .default(10 * 60 * 1000),
+    /**
+     * Tenants given a turn in one tick — the fairness dial.
+     *
+     * With `d` tenants due and this many claimed per tick, no tenant waits
+     * longer than `ceil(d / t)` ticks, whatever the backlog inside any one of
+     * them. The per-tenant share of the batch is derived from how many were
+     * actually claimed, so a single-tenant installation still gets the whole
+     * batch and a fifty-tenant one still gets fairness.
+     */
+    PANEL_MONITOR_TENANTS_PER_TICK: z.coerce.number().int().min(1).max(200).default(10),
+    /** Probes in flight at once. Bounds outbound sockets and pool checkouts. */
+    PANEL_MONITOR_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(4),
+    /**
+     * The share of a tenant's probe budget the background loop may not touch,
+     * as a percentage held back for operators.
+     *
+     * Background monitoring is bounded by the same tenant bucket as everything
+     * else — there is no second budget and no side door. What this adds is a
+     * FLOOR: the monitor's take is refused while fewer than this share of the
+     * capacity remains, so an operator pressing "Test connection" still finds
+     * capacity on a tenant whose panels are all failing and retrying. Enforced
+     * inside the same atomic statement that takes the token, so it holds across
+     * however many monitor replicas are running.
+     *
+     * Zero is refused while monitoring is enabled. The invariant this protects
+     * — an operator always outranks the background loop for the last token —
+     * is not something a configuration should be able to switch off by
+     * accident, and a percentage that rounds to nothing is exactly how it would
+     * be switched off by accident. The cross-field check below enforces it.
+     */
+    PANEL_MONITOR_BUDGET_RESERVE_PERCENT: z.coerce.number().int().min(0).max(90).default(40),
+    /** Where the monitor writes its heartbeat, and how often. */
+    PANEL_MONITOR_HEARTBEAT_PATH: z.string().trim().min(1).default('/tmp/nexa-monitor.heartbeat'),
     /** Response bytes kept from a panel. Reading stops the moment it is passed. */
     PANEL_HTTP_MAX_RESPONSE_BYTES: z.coerce
       .number()
@@ -406,6 +540,126 @@ export const configSchema = z
     // Parsed by the same function the container resolves with, so what an
     // operator is told at boot and what the process actually loads cannot
     // drift into two nearly-identical implementations.
+    // --- Background monitoring: the cross-field safety rules ----------------
+    //
+    // Both of these protect an invariant a single field cannot express, and
+    // both are refusals rather than clamps. A configuration that would defeat
+    // the reason a protection exists should stop the process at boot, where
+    // somebody is reading the message, and not be silently corrected into
+    // something the operator did not ask for.
+    if (config.PANEL_MONITOR_ENABLED) {
+      // 0. A claimed tenant must be able to receive at least one candidate.
+      //
+      // `claimTenants` advances `last_served_at` for every tenant it claims,
+      // and the due scan is then capped globally by the batch size. Claiming
+      // two hundred tenants for a batch of one marks two hundred tenants as
+      // served while one panel is probed, so the documented `ceil(d / t)`
+      // fairness bound — the one the rotation exists to provide — is simply
+      // false, and a two-hundred-tenant group needs about two hundred ticks
+      // rather than one. Refused rather than clamped: an operator who asked
+      // for both numbers should be told they contradict each other.
+      if (config.PANEL_MONITOR_TENANTS_PER_TICK > config.PANEL_MONITOR_BATCH_SIZE) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['PANEL_MONITOR_TENANTS_PER_TICK'],
+          message:
+            `PANEL_MONITOR_TENANTS_PER_TICK (${config.PANEL_MONITOR_TENANTS_PER_TICK}) exceeds ` +
+            `PANEL_MONITOR_BATCH_SIZE (${config.PANEL_MONITOR_BATCH_SIZE}). A tick cannot give ` +
+            `every claimed tenant a candidate, so claiming them spends their turn for nothing ` +
+            `and the ceil(due tenants / tenants per tick) fairness bound does not hold.`,
+        });
+      }
+
+      // 1. A healthy panel must stay inside the freshness window.
+      //
+      // Worst case is the interval, plus the deterministic anti-herd spread,
+      // plus however long a panel that has just become eligible waits for a
+      // tick to pick it up. Twelve minutes is fine at a thirty-second tick and
+      // wrong at a ten-minute one, which is exactly why this cannot live on
+      // either field alone.
+      if (
+        !healthyCadenceFitsFreshness(
+          config.PANEL_MONITOR_HEALTHY_INTERVAL_MS,
+          config.PANEL_MONITOR_TICK_MS,
+        )
+      ) {
+        const ceiling = maxHealthyIntervalMs(config.PANEL_MONITOR_TICK_MS);
+        ctx.addIssue({
+          code: 'custom',
+          path: ['PANEL_MONITOR_HEALTHY_INTERVAL_MS'],
+          message:
+            `PANEL_MONITOR_HEALTHY_INTERVAL_MS=${config.PANEL_MONITOR_HEALTHY_INTERVAL_MS} with ` +
+            `PANEL_MONITOR_TICK_MS=${config.PANEL_MONITOR_TICK_MS} would let a healthy panel's ` +
+            'health go stale before it is refreshed: the worst case is the interval, plus a tenth ' +
+            'of it for the anti-herd spread, plus one tick of scheduling delay, and that must stay ' +
+            `under PANEL_HEALTH_FRESH_FOR_MS. At this tick the interval must be at most ${ceiling}, ` +
+            'or lower the tick.',
+        });
+      }
+      // 2. An operator must always outrank the background loop for the last
+      //    token of a tenant's outbound-probe budget.
+      //
+      // A zero reserve is that invariant switched off, and it is refused rather
+      // than rounded up so nobody discovers later that monitoring quietly took
+      // the manual lane's headroom.
+      // 3. The reserve must leave the monitor a token it can actually reach.
+      //
+      // The floor rounds UP so a positive reserve is never silently zero — the
+      // protection that keeps an operator's last manual probe available at
+      // small capacities. The other side of it was unchecked: at
+      // PANEL_PROBE_TENANT_LIMIT=1 with any positive percentage the floor is
+      // the whole bucket, so every background attempt is refused AFTER it has
+      // claimed the panel, and no panel of that tenant is ever monitored while
+      // the process reports itself perfectly healthy. Both safety properties
+      // are real; a bucket too small to hold both is a contradiction, and the
+      // operator is told so rather than given a monitor that cannot monitor.
+      const reserveFloor =
+        config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT === 0
+          ? 0
+          : Math.max(
+              1,
+              Math.ceil(
+                (config.PANEL_PROBE_TENANT_LIMIT * config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT) /
+                  100,
+              ),
+            );
+      if (config.PANEL_PROBE_TENANT_LIMIT - reserveFloor < 1) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['PANEL_PROBE_TENANT_LIMIT'],
+          message:
+            `PANEL_PROBE_TENANT_LIMIT=${config.PANEL_PROBE_TENANT_LIMIT} with ` +
+            `PANEL_MONITOR_BUDGET_RESERVE_PERCENT=${config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT} ` +
+            `reserves all ${reserveFloor} token(s) for manual tests, leaving the monitor none. ` +
+            `Every background probe would be refused after claiming its panel, so no panel of ` +
+            `that tenant is ever monitored while the process reports itself healthy. Raise ` +
+            `PANEL_PROBE_TENANT_LIMIT to at least ${reserveFloor + 1}, or set ` +
+            `PANEL_MONITOR_ENABLED=false if this installation is deliberately not monitoring.`,
+        });
+      }
+
+      // 4. The freshness promise is a THROUGHPUT promise too.
+      //
+      // `healthyCadenceFitsFreshness` above proves the cadence fits. It says
+      // nothing about whether every panel can be probed on that cadence, which
+      // the tenant's bucket decides — see `sustainableFreshPanels`. Reported
+      // rather than refused: the supported population is a property of the
+      // installation, not a mistake in it, and an operator with twenty panels
+      // should not be stopped from booting by a bound they are nowhere near.
+      // The monitor reports the tenants that exceed it at startup.
+
+      if (config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT === 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['PANEL_MONITOR_BUDGET_RESERVE_PERCENT'],
+          message:
+            'PANEL_MONITOR_BUDGET_RESERVE_PERCENT=0 while PANEL_MONITOR_ENABLED=true would let ' +
+            "background monitoring spend a tenant's last outbound probe, locking an operator out " +
+            'of their own "Test connection". Set a positive percentage, or disable monitoring.',
+        });
+      }
+    }
+
     const keyring = parseKeyring(config);
     if (!keyring.ok) {
       for (const problem of keyring.problems) {

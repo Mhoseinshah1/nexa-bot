@@ -106,6 +106,7 @@ describe('the tenant-wide probe budget', () => {
         context.container.database.db,
         context.container.cipher,
       ),
+      scopeActivity: context.container.tenants,
       guard: context.container.guard,
       audit: context.container.audit,
       opsLog: context.container.opsLog,
@@ -130,6 +131,11 @@ describe('the tenant-wide probe budget', () => {
           return answer();
         },
       }),
+      cadence: {
+        healthyIntervalMs: 10 * 60 * 1000,
+        retryableIntervalMs: 2 * 60 * 1000,
+        nonRetryableIntervalMs: 60 * 60 * 1000,
+      },
     });
 
   const panelFor = async (

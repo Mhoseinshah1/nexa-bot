@@ -144,7 +144,30 @@ open(sys.argv[2], "w", encoding="utf-8").write(source[start:end])
 EXTRACT
 assert_ok 'the readiness parser could not be extracted' test -s "$parser"
 
-parser_says() { printf '%b' "$1" | python3 "$parser"; }
+# The required list is data the library resolves per wait — the intersection of
+# what readiness demands with what the ACTIVE compose file defines — and the
+# parser reads it from the environment. Tests set `PARSER_REQUIRED` to model a
+# topology; the default is the current one.
+# What readiness requires today, stated ONCE and checked against the library.
+#
+# The blocks below narrow it deliberately to isolate one service at a time, so
+# they do not each carry a row for every other service. This guard is what
+# stops that from turning into a model of a topology that used to be current:
+# the edge joined readiness long after these fixtures were written, and without
+# it they would have gone on proving things about the old three-service shape.
+# When this fails, the answer is a block of cases for the new service, not a
+# new string here.
+library_ready_services="$(env -u NEXA_ROOT -u NEXA_STATE_DIR -u NEXA_LOCK_FILE \
+  bash -c '. "$1" >/dev/null 2>&1; printf "%s" "$NEXA_READY_SERVICES"' _ "$NEXA_LIB")"
+assert_equals 'readiness requires a service these fixtures do not model' \
+  'api worker monitor caddy' "$library_ready_services"
+
+# The three application roles. The edge has its own block at the end, where the
+# required list is the whole of the library's.
+PARSER_REQUIRED='api worker monitor'
+parser_says() {
+  printf '%b' "$1" | NEXA_REQUIRED_SERVICES="$PARSER_REQUIRED" python3 "$parser"
+}
 parser_case() {
   local description="$1" expected="$2" shape="$3"
   assert_equals "$description" "$expected" "$(parser_says "$shape")"
@@ -169,13 +192,22 @@ WORKER_STARTING='{"Service":"worker","State":"running","Health":"starting"}'
 WORKER_UNHEALTHY='{"Service":"worker","State":"running","Health":"unhealthy"}'
 WORKER_EXITED='{"Service":"worker","State":"exited","Health":"unhealthy"}'
 WORKER_RESTARTING='{"Service":"worker","State":"restarting"}'
+# The monitor is required too, and for a reason the worker's does not cover:
+# panel health is written by that process and nowhere else, so an installation
+# whose monitor is dead shows every panel's health frozen at its last value —
+# a stale answer indistinguishable from a fresh one.
+MONITOR_HEALTHY='{"Service":"monitor","State":"running","Health":"healthy"}'
+MONITOR_STARTING='{"Service":"monitor","State":"running","Health":"starting"}'
+MONITOR_UNHEALTHY='{"Service":"monitor","State":"running","Health":"unhealthy"}'
+MONITOR_EXITED='{"Service":"monitor","State":"exited","Health":"unhealthy"}'
+MONITOR_RESTARTING='{"Service":"monitor","State":"restarting"}'
 
 parser_case 'a running one-off ahead of the healthy api hides it' \
-  healthy "${RUN_STARTING}\n${RUN_HEALTHY}\n${WORKER_HEALTHY}"
+  healthy "${RUN_STARTING}\n${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
 parser_case 'order decides the answer' \
-  healthy "${RUN_HEALTHY}\n${RUN_STARTING}\n${WORKER_HEALTHY}"
+  healthy "${RUN_HEALTHY}\n${RUN_STARTING}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
 parser_case 'an unhealthy api beside a starting one is not healthy' \
-  unhealthy "${RUN_UNHEALTHY}\n${WORKER_HEALTHY}"
+  unhealthy "${RUN_UNHEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
 parser_case 'a corpse beside an api that is still created fast-fails it' \
   created "${DEAD_STARTING}\n{\"Service\":\"api\",\"State\":\"created\"}\n${WORKER_HEALTHY}"
 parser_case 'an api that only exited is not waited out' exited "${DEAD_STARTING}\n${WORKER_HEALTHY}"
@@ -193,19 +225,49 @@ parser_case 'an entry with no State does not suppress the fast-fail' \
 parser_case 'a State-less entry after a corpse is not read as life' \
   exited "${DEAD_STARTING}\n${NO_STATE}\n${WORKER_HEALTHY}"
 
+# --- D8: a running one-off must not hide a dead service container ------------
+#
+# The state-first rule fixed one direction of this — a health-carrying corpse
+# no longer hides a healthy container — and left the other. A `compose run`
+# container whose client was killed keeps RUNNING and carries the same Service
+# and the same healthcheck, so it answered "starting" while the real api next
+# to it had exited, and the fast-fail never fired: the update waited out the
+# whole readiness timeout before backing out.
+#
+# Compose distinguishes them by NAME: a service container is
+# <project>-<service>-<index>, a one-off is <project>-<service>-run-<id>. The
+# fixtures above carry no Name at all, which is deliberate — the rule must
+# degrade to the previous behaviour rather than change an answer it cannot
+# justify, and every case above is still asserted unchanged.
+ONEOFF_RUNNING='{"Name":"nexa-api-run-a1b2c3","Service":"api","State":"running","Health":"starting"}'
+ONEOFF_DEAD='{"Name":"nexa-api-run-d4e5f6","Service":"api","State":"exited","Health":"starting"}'
+SVC_API_DEAD='{"Name":"nexa-api-1","Service":"api","State":"exited","Health":"starting"}'
+SVC_API_HEALTHY='{"Name":"nexa-api-2","Service":"api","State":"running","Health":"healthy"}'
+
+parser_case 'D8: a running one-off does not hide an api that has died' \
+  exited "${ONEOFF_RUNNING}\n${SVC_API_DEAD}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
+parser_case 'D8: and not when it is listed after the corpse either' \
+  exited "${SVC_API_DEAD}\n${ONEOFF_RUNNING}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
+# The two directions the rule must NOT fire in, or it would back out releases
+# that are working.
+parser_case 'D8: a one-off corpse does not fast-fail a healthy api' \
+  healthy "${ONEOFF_DEAD}\n${SVC_API_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
+parser_case 'D8: a replaced container beside its replacement is not a failure' \
+  healthy "${SVC_API_DEAD}\n${SVC_API_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
+
 # --- C8: the worker is half of the application -------------------------------
 parser_case 'C8: api healthy + worker healthy is ready' \
-  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}"
+  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
 parser_case 'C8: api healthy + worker STOPPED is not ready, and fast-fails' \
-  exited "${RUN_HEALTHY}\n${WORKER_EXITED}"
+  exited "${RUN_HEALTHY}\n${WORKER_EXITED}\n${MONITOR_HEALTHY}"
 parser_case 'C8: api healthy + worker in a crash loop is not ready' \
-  restarting "${RUN_HEALTHY}\n${WORKER_RESTARTING}"
+  restarting "${RUN_HEALTHY}\n${WORKER_RESTARTING}\n${MONITOR_HEALTHY}"
 parser_case 'C8: api healthy + worker unhealthy is not ready' \
-  unhealthy "${RUN_HEALTHY}\n${WORKER_UNHEALTHY}"
+  unhealthy "${RUN_HEALTHY}\n${WORKER_UNHEALTHY}\n${MONITOR_HEALTHY}"
 parser_case 'C8: api healthy + worker still starting is not ready yet' \
-  starting "${RUN_HEALTHY}\n${WORKER_STARTING}"
+  starting "${RUN_HEALTHY}\n${WORKER_STARTING}\n${MONITOR_HEALTHY}"
 parser_case 'C8: worker healthy + api unhealthy is not ready' \
-  unhealthy "${RUN_UNHEALTHY}\n${WORKER_HEALTHY}"
+  unhealthy "${RUN_UNHEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
 parser_case 'C8: worker healthy + api dead fast-fails' \
   dead "{\"Service\":\"api\",\"State\":\"dead\"}\n${WORKER_HEALTHY}"
 parser_case 'C8: an api alone — the old accepted shape — is not ready' \
@@ -213,11 +275,84 @@ parser_case 'C8: an api alone — the old accepted shape — is not ready' \
 parser_case 'C8: a worker alone is not ready either' \
   '' "${WORKER_HEALTHY}\n"
 parser_case 'C8: a healthy worker one-off beside a dead worker still fast-fails' \
-  exited "${RUN_HEALTHY}\n${WORKER_EXITED}"
+  exited "${RUN_HEALTHY}\n${WORKER_EXITED}\n${MONITOR_HEALTHY}"
 parser_case 'C8: a worker one-off reporting starting beside a healthy worker is healthy' \
-  healthy "${RUN_HEALTHY}\n${WORKER_STARTING}\n${WORKER_HEALTHY}"
-parser_case 'C8: a service that is neither api nor worker is ignored' \
-  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n{\"Service\":\"caddy\",\"State\":\"exited\"}"
+  healthy "${RUN_HEALTHY}\n${WORKER_STARTING}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
+# `postgres`, not `caddy`. The edge became a REQUIRED service (D1), so using it
+# as the example of an ignored one would have read as a statement about the
+# edge that is no longer true — while still passing, because the required list
+# this block models does not name it.
+parser_case 'C8: a service outside the required list is ignored' \
+  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}\n{\"Service\":\"postgres\",\"State\":\"exited\"}"
+
+# --- 3C: the monitor is the third half of the application --------------------
+#
+# Panel health has exactly one writer. A release whose api and worker are both
+# healthy while its monitor is dead serves every request correctly and stops
+# telling the truth about panels — health stays frozen at whatever it was, with
+# nothing in the response to say so. So it is required, and each row below
+# isolates the monitor: everything else is healthy.
+parser_case '3C: api + worker healthy but the monitor STOPPED is not ready, and fast-fails' \
+  exited "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_EXITED}"
+parser_case '3C: api + worker healthy but the monitor crash-loops is not ready' \
+  restarting "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_RESTARTING}"
+parser_case '3C: api + worker healthy but the monitor unhealthy is not ready' \
+  unhealthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_UNHEALTHY}"
+parser_case '3C: api + worker healthy but the monitor still starting is not ready yet' \
+  starting "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_STARTING}"
+parser_case '3C: the previously accepted api + worker shape is no longer ready' \
+  '' "${RUN_HEALTHY}\n${WORKER_HEALTHY}"
+parser_case '3C: a monitor one-off reporting starting beside a healthy monitor is healthy' \
+  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_STARTING}\n${MONITOR_HEALTHY}"
+
+# The rollback direction, and it is the reason the required list is resolved
+# from the compose file rather than hardcoded. Host assets are
+# release-versioned: a rollback activates the TARGET release's compose.yml and
+# then waits for readiness while this library is still the one in memory. A
+# release that predates the monitor defines no such service, and demanding one
+# would time out every rollback to it — after the assets had already moved.
+PARSER_REQUIRED='api worker'
+parser_case '3C: a topology without a monitor is ready on api + worker alone' \
+  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}"
+parser_case '3C: a topology without a monitor still requires its worker' \
+  exited "${RUN_HEALTHY}\n${WORKER_EXITED}"
+PARSER_REQUIRED='api worker monitor'
+
+# --- D1: the edge is the service an operator meets first ---------------------
+#
+# Caddy is the only container that publishes a port. A release whose api,
+# worker and monitor are all healthy behind an edge that never started is an
+# installation nobody can reach, and readiness said READY — it never asked.
+#
+# Not hypothetical: the edge depends on the Web Admin publisher COMPLETING
+# SUCCESSFULLY, so a failed asset publication leaves exactly this shape, and
+# the failure has no other symptom. `botctl update` would have accepted it.
+CADDY_HEALTHY='{"Service":"caddy","State":"running","Health":"healthy"}'
+CADDY_STARTING='{"Service":"caddy","State":"running","Health":"starting"}'
+CADDY_UNHEALTHY='{"Service":"caddy","State":"running","Health":"unhealthy"}'
+CADDY_EXITED='{"Service":"caddy","State":"exited","Health":"unhealthy"}'
+CADDY_RESTARTING='{"Service":"caddy","State":"restarting"}'
+APP_HEALTHY="${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
+
+PARSER_REQUIRED='api worker monitor caddy'
+parser_case 'D1: the whole application healthy behind a STOPPED edge is not ready' \
+  exited "${APP_HEALTHY}\n${CADDY_EXITED}"
+parser_case 'D1: the whole application healthy behind a crash-looping edge is not ready' \
+  restarting "${APP_HEALTHY}\n${CADDY_RESTARTING}"
+parser_case 'D1: an unhealthy edge is not ready — the SPA root is part of that check' \
+  unhealthy "${APP_HEALTHY}\n${CADDY_UNHEALTHY}"
+parser_case 'D1: an edge still starting is not ready yet' \
+  starting "${APP_HEALTHY}\n${CADDY_STARTING}"
+parser_case 'D1: an edge that never appears at all is not ready' \
+  '' "${APP_HEALTHY}"
+parser_case 'D1: the whole topology healthy is ready' \
+  healthy "${APP_HEALTHY}\n${CADDY_HEALTHY}"
+# The rollback direction again, and the reason the list is an intersection: the
+# CI topology and any release whose compose does not define an edge must still
+# be able to become ready.
+PARSER_REQUIRED='api worker monitor'
+parser_case 'D1: a topology that defines no edge is ready without one' \
+  healthy "${APP_HEALTHY}"
 
 test_case 'the update lock does not live in a world-writable directory'
 # Read out of the library with a CLEAN environment, so this asserts the
@@ -366,6 +501,96 @@ fake_set stale_run 1
 assert_ok 'a leftover run container was mistaken for the api' nexa_wait_ready 5
 fake_set stale_run 0
 
+test_case 'the installer never puts a secret into a process argument list'
+# S3. `generate_secrets` substituted the template by passing the KEK and both
+# database passwords as POSITIONAL ARGUMENTS to python3 — visible in `ps` to
+# every user on the machine for as long as the interpreter ran. The installer
+# says so itself, forty lines further down, about the owner password: "argv is
+# readable by every user on the machine via `ps`". The rule was written and
+# then broken three lines from where it was written.
+#
+# This drives the REAL `generate_secrets` with a python3 that records the argv
+# it was handed and then execs the real interpreter, so the substitution still
+# happens and the file it produces is the real one.
+argv_log="${NEXA_ROOT}/python3-argv.log"
+: >"$argv_log"
+fake_bin="${NEXA_ROOT}/argvspy"
+mkdir -p "$fake_bin"
+real_python3="$(command -v python3)"
+cat >"${fake_bin}/python3" <<FAKE
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >>"${argv_log}"
+exec "${real_python3}" "\$@"
+FAKE
+chmod 0755 "${fake_bin}/python3"
+
+# A FRESH config directory, and that is load-bearing rather than tidy:
+# `generate_secrets` is idempotent by design and returns without doing anything
+# when the three files are already complete — which they are in this harness by
+# the time this test runs. Pointed at the shared directory it generates
+# nothing, invokes no interpreter, and the assertions below then pass against
+# an empty log. The positive control catches that; this avoids it.
+s3_config="${NEXA_ROOT}/etc/nexa-argv"
+rm -rf "$s3_config"
+install -d -m 0700 "$s3_config"
+
+# A CHILD PROCESS, not a subshell: the environment this needs — a PATH with the
+# spy in front and a config directory of its own — must not leak back into the
+# rest of the suite, and a real installer run is its own process anyway.
+#
+# The installer is SOURCED there and one function called, never executed: a
+# real run would install Docker on this machine.
+install -m 0644 "${REPO}/deploy/nexa.env.template" "${NEXA_DEPLOY_DIR}/nexa.env.template"
+# SC2031: the prefix is scoped to this one command ON PURPOSE — the spy must
+# not be on the PATH of anything else in this suite, and the config directory
+# must not leak either. "Might be lost" is the property being asked for.
+# shellcheck disable=SC2031
+PATH="${fake_bin}:${PATH}" NEXA_CONFIG_DIR="$s3_config" bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  generate_secrets >/dev/null 2>&1
+' _ "${REPO}/deploy/install.sh" || fail_test 'generate_secrets did not complete'
+
+# THE POSITIVE CONTROL, and it is not decoration: without it this whole test
+# passes when python3 is never invoked at all, which is exactly the shape of
+# check this repository has been bitten by before.
+assert_ok 'the argv spy was never invoked; the rest of this test proves nothing' \
+  test -s "$argv_log"
+assert_contains 'the spy did not see the template substitution' \
+  "$(cat "$argv_log")" 'nexa.env.template'
+
+# Read the generated values back and require that NONE of them appear in the
+# recorded arguments. The values themselves are never printed: a failure names
+# the key, never what it holds.
+#
+# The KEK is NOT stored under its own key. `SECRETS_KEYS` holds `<id>:<kek>`,
+# because one key encrypts and all of them decrypt — so the value to look for
+# is the part after the first colon. Reading a `SECRETS_KEK` that this format
+# does not have yields the empty string, and `grep -F ''` matches every line:
+# the first version of this check reported the KEK leaking out of a log that
+# did not contain it. The emptiness guard below is what turns that into a loud
+# failure instead of a confident wrong answer, in either direction.
+s3_pg_password="$(nexa_env_value "${s3_config}/postgres.env" POSTGRES_PASSWORD)"
+s3_redis_password="$(nexa_env_value "${s3_config}/redis.env" REDIS_PASSWORD)"
+s3_keyring="$(nexa_env_value "${s3_config}/nexa.env" SECRETS_KEYS)"
+s3_kek="${s3_keyring#*:}"
+
+for secret_key in POSTGRES_PASSWORD REDIS_PASSWORD SECRETS_KEK; do
+  case "$secret_key" in
+    POSTGRES_PASSWORD) secret_value="$s3_pg_password" ;;
+    REDIS_PASSWORD) secret_value="$s3_redis_password" ;;
+    *) secret_value="$s3_kek" ;;
+  esac
+  # Length, not merely non-emptiness: a one-character needle would match almost
+  # any log and prove nothing. Everything generated here is far longer.
+  if [ "${#secret_value}" -lt 16 ]; then
+    fail_test "generate_secrets produced no usable ${secret_key}; this check would be vacuous"
+  fi
+  if grep -qF -- "$secret_value" "$argv_log"; then
+    fail_test "${secret_key} appeared in a process argument list"
+  fi
+done
+printf '  %s\n' 'no generated secret reaches a process argument list'
+
 test_case 'the installer refuses to be used as an updater'
 # It takes no backup, never writes `previous`, and repoints deploy.env at the
 # new image before anything is pulled, migrated or started — so a failed
@@ -419,6 +644,114 @@ test_case 'a rerun of the same version and the same digest is still accepted'
 installer_output="$(digest_probe _ "$DIGEST_A" || true)"
 assert_not_contains 'an unchanged digest was refused' \
   "$installer_output" 'that tag has been moved'
+
+test_case 'D12: the port preflight sees UDP, and only waives the port it actually holds'
+# Two defects in one check. `ss -Hltn` is a TCP-LISTEN filter, so the 443/udp
+# that compose.yml publishes for HTTP/3 was never looked at — a service holding
+# it passed preflight and then made Caddy fail to bind. And the escape hatch
+# counted containers named `nexa-caddy*` in `docker ps` and waived the conflict
+# on any match, so a nexa-caddy that was up but bound to nothing waved an
+# unrelated server through.
+#
+# Driven through the REAL `nexa_port_is_ours` against stub `ss` and `docker` on
+# PATH, so what is exercised is the shipped predicate rather than a copy of it.
+d12_bin="${NEXA_ROOT}/d12-bin"
+D12_ANSWERS="${NEXA_ROOT}/d12-answers"
+export D12_ANSWERS
+mkdir -p "$d12_bin" "$D12_ANSWERS"
+
+# The stubs answer from files this test writes, one per proto/port. An absent
+# file is an unused port, which is what `ss` reports by saying nothing.
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'case "$1" in *u*) proto=udp ;; *) proto=tcp ;; esac\n'
+  printf 'port="${2##*:}"\n'
+  printf 'answer="${D12_ANSWERS}/${proto}-${port}"\n'
+  printf '[ -r "$answer" ] && cat "$answer"\n'
+  printf 'exit 0\n'
+} >"${d12_bin}/ss"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf '[ "$1" = ps ] || exit 0\n'
+  printf '[ -r "${D12_ANSWERS}/containers" ] && cat "${D12_ANSWERS}/containers"\n'
+  printf 'exit 0\n'
+} >"${d12_bin}/docker"
+chmod 0755 "${d12_bin}/ss" "${d12_bin}/docker"
+
+# The predicate, called exactly as preflight calls it, in a child process so
+# the stubbed PATH cannot leak into the rest of the suite.
+d12_is_ours() {
+  # shellcheck disable=SC2031
+  # PATH is prefixed FOR THIS COMMAND only, which is the point: the stubs must
+  # be visible to the child that sources the library and to nothing else in the
+  # suite. SC2031's "the change might be lost" is the intended behaviour here.
+  PATH="${d12_bin}:${PATH}" bash -c '
+    . "$1" >/dev/null 2>&1
+    nexa_port_is_ours "$2" "$3"' _ "${REPO}/deploy/bin/nexa-lib.sh" "$1" "$2" >/dev/null 2>&1
+}
+
+: >"${D12_ANSWERS}/containers"
+rm -f "${D12_ANSWERS}/tcp-443" "${D12_ANSWERS}/udp-443"
+# 1. Nothing holds the port. The caller only asks once `ss` has already found a
+#    listener, so "no holder" is the cannot-establish answer, and a preflight
+#    that cannot establish must refuse.
+assert_fails 'an unheld port was claimed as ours' d12_is_ours 443 tcp
+
+# 2. An unrelated server holds 443/tcp while a nexa-caddy container is up. The
+#    old check waived exactly this.
+printf 'LISTEN 0 511 *:443 *:* users:(("nginx",pid=91,fd=7))\n' >"${D12_ANSWERS}/tcp-443"
+printf 'nexa-caddy\n' >"${D12_ANSWERS}/containers"
+assert_fails 'an unrelated nginx was waived because a nexa-caddy was running' \
+  d12_is_ours 443 tcp
+
+# 3. Our own edge holds it, and a nexa-caddy is up: an idempotent rerun.
+printf 'LISTEN 0 4096 *:443 *:* users:(("docker-proxy",pid=77,fd=4))\n' >"${D12_ANSWERS}/tcp-443"
+assert_ok 'our own edge was reported as a conflict' d12_is_ours 443 tcp
+
+# 4. Docker-proxy holds it but no Nexa edge is running: another stack's.
+: >"${D12_ANSWERS}/containers"
+assert_fails 'another stack does not own our ports' d12_is_ours 443 tcp
+
+# 5. UDP at all. With the old TCP-only filter this port was invisible.
+printf 'nexa-caddy\n' >"${D12_ANSWERS}/containers"
+printf 'UNCONN 0 0 *:443 *:* users:(("systemd-resolve",pid=42,fd=12))\n' >"${D12_ANSWERS}/udp-443"
+assert_fails 'a foreign holder of 443/udp was accepted as ours' d12_is_ours 443 udp
+printf 'UNCONN 0 0 *:443 *:* users:(("docker-proxy",pid=77,fd=9))\n' >"${D12_ANSWERS}/udp-443"
+assert_ok 'our own 443/udp was reported as a conflict' d12_is_ours 443 udp
+
+# And preflight must actually ask, or the predicate above is unreachable.
+installer_ports="$(sed -n '/--- Ports ---/,/ports 80 and 443 are free/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the port preflight never enumerates the udp proto' "$installer_ports" 'for proto in tcp udp'
+assert_contains 'the port preflight does not ask whose the socket is' \
+  "$installer_ports" 'nexa_port_is_ours'
+assert_not_contains 'the port preflight still waives on a container name alone' \
+  "$installer_ports" 'grep -c'
+unset D12_ANSWERS
+
+test_case 'D3: the installer refuses a moved tag BEFORE it replaces the host tooling'
+# `install_assets` overwrites compose.yml, the Caddyfile, nexa-lib.sh and
+# botctl — the installed release's TOOLING. It ran before the digest was even
+# resolved, so a rerun of a version whose tag had moved was refused exactly as
+# designed and stopped with the host already carrying this checkout's tooling
+# over the release that is actually running. A refusal that says nothing was
+# changed has to be true when it says it.
+#
+# Asserted on the ORDER of the calls in `main`, because that is the rule: the
+# suite cannot run the installer for real, and a test that called the two
+# functions itself would assert its own ordering rather than the installer's.
+installer_main="$(sed -n '/^main() {/,/^}/p' "${REPO}/deploy/install.sh")"
+assets_at="$(printf '%s\n' "$installer_main" | grep -n '^ *install_assets$' | sed -n '1s/:.*//p')"
+refusal_at="$(printf '%s\n' "$installer_main" | grep -n 'refuse_digest_change "\$digest"' | sed -n '1s/:.*//p')"
+secrets_at="$(printf '%s\n' "$installer_main" | grep -n '^ *generate_secrets$' | sed -n '1s/:.*//p')"
+assert_ok 'main does not call install_assets' test -n "$assets_at"
+assert_ok 'main does not call refuse_digest_change' test -n "$refusal_at"
+assert_ok 'main does not call generate_secrets' test -n "$secrets_at"
+assert_ok 'the host tooling is replaced before the moved-tag refusal' \
+  test "${refusal_at:-9999}" -lt "${assets_at:-0}"
+# And the other bound: `generate_secrets` substitutes into the nexa.env.template
+# that `install_assets` puts there, so it cannot move above it.
+assert_ok 'the secrets are generated before the template they substitute into is installed' \
+  test "${assets_at:-9999}" -lt "${secrets_at:-0}"
 
 test_case 'the installer actually calls the moved-tag refusal'
 # The rule above is only reachable if the installer calls it, and the probe
@@ -1606,6 +1939,104 @@ assert_fails 'a rollback that could not start reported success' test "$BOTCTL_ST
 assert_equals "a failed rollback left the previous release's botctl installed" 'B' "$(installed_label)"
 rm -f "${FAKE_DIR}/up_exit_${DIGEST_A}"
 
+test_case 'D2: a rollback that starts but is not ready puts the current release back'
+# The readiness path is where the old code left the installation describing
+# itself incorrectly. `up -d` has already SUCCEEDED by then, so the containers
+# are running the previous release — while `nexa_commit_release` is never
+# reached, so the recorded release and deploy.env both still say the current
+# one and AGREE with each other. `nexa_check_divergence` compares exactly those
+# two, so it saw nothing wrong, and every later `botctl status` named a release
+# that was not what was running.
+#
+# Restoring the assets was not enough. The containers have to come back too,
+# which is what an UPDATE's back-out has always done.
+fake_set "api_health_${DIGEST_A}" starting
+reset_docker_log
+run_botctl rollback
+assert_fails 'a rollback that never became ready reported success' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'the failed rollback moved the current release' 'vB' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_equals "the failed rollback left the previous release's botctl installed" 'B' "$(installed_label)"
+assert_contains 'the operator was not told the current release came back' \
+  "$BOTCTL_OUTPUT" 'is running again'
+# The containers were actually brought back, not merely described as back: the
+# LAST `up` in the log is the one without the previous image's digest.
+last_up="$(docker_log | grep 'up -d' | tail -1)"
+assert_ok 'nothing was started after the failed rollback' test -n "$last_up"
+assert_not_contains 'the last thing started was still the rollback target' \
+  "$last_up" "$DIGEST_A"
+fake_set "api_health_${DIGEST_A}" healthy
+
+test_case 'D6: a restore that cannot finish does not replace the diagnosis'
+# `nexa_activate_release_assets` reports its failures through `nexa_die`, which
+# EXITS. Called directly in a back-out path, a restore that could not finish
+# terminated botctl before the `nexa_die` that tells the operator which release
+# started — so the operator read an internal message about a staged file
+# instead of what had happened to their installation.
+fake_set "up_exit_${DIGEST_A}" 1
+current_digest_dir="$(assets_dir_for "$DIGEST_B")"
+# The restore must REACH the activation and fail INSIDE it. Removing the staged
+# directory would not do: `restore_current_assets` checks `nexa_assets_staged`
+# first and returns without calling activation at all, so the failure under test
+# would never happen. The set is left in place and one file in it is emptied,
+# which is what activation refuses ("staged X is missing or empty") — through
+# `nexa_die`, which is the exit this guards against.
+: >"${current_digest_dir}/bin/botctl"
+run_botctl rollback
+run_botctl_status_after_d6="$BOTCTL_STATUS"
+d6_output="$BOTCTL_OUTPUT"
+rm -rf "$current_digest_dir"
+rm -f "${FAKE_DIR}/up_exit_${DIGEST_A}"
+assert_fails 'a rollback that could not start reported success' \
+  test "$run_botctl_status_after_d6" -eq 0
+assert_contains 'the failure of the back-out replaced the diagnosis' \
+  "$d6_output" 'did not start'
+# And the back-out's own failure is still reported — silenced would be as bad
+# as fatal.
+assert_contains 'the failed restore was not reported at all' \
+  "$d6_output" "could not restore"
+# Put the current release's set back for the cases that follow.
+run_botctl update vB >/dev/null 2>&1 || true
+
+test_case 'D9: recording the outgoing assets reports and RETURNS, and never exits'
+# `nexa_capture_live_assets` reported every internal failure through `nexa_die`,
+# which exits the process. Its rollback caller invokes it as
+# `... || nexa_capture_live_assets ... || nexa_warn`, whose comment says "a
+# rollback whose target is sound must not be refused for the sake of its own
+# undo" — an intent the `||` could never carry out, because there was nothing
+# left to run. Same shape as the `cmd_backup` hazard this file documents.
+#
+# The contract, tested directly: the caller must still be alive afterwards. A
+# non-zero status alone cannot tell "returned 1" from "exited 1", so the probe
+# prints a marker AFTER the call and the marker is the assertion.
+capture_survives="$(bash -c '
+  . "$1" >/dev/null 2>&1
+  nexa_capture_live_assets "not-a-digest" v1.0.0 >/dev/null 2>&1
+  printf "SURVIVED:%s\n" "$?"' _ "${REPO}/deploy/bin/nexa-lib.sh" 2>/dev/null || true)"
+assert_contains 'a failure to record the outgoing assets killed its caller' \
+  "$capture_survives" 'SURVIVED:'
+assert_not_contains 'a failure to record the outgoing assets was reported as success' \
+  "$capture_survives" 'SURVIVED:0'
+
+test_case 'D9: a rollback whose target is sound is not refused for the sake of its own undo'
+# End to end. The CURRENT release's recorded set is removed and its recovery
+# from its own image refused, and one of the live files it would otherwise be
+# captured from is gone — so its assets cannot be recorded by any route. The
+# rollback TARGET is untouched and entirely sound throughout, and must proceed.
+mv "$current_digest_dir" "${current_digest_dir}.hidden"
+fake_set "assets_missing_${DIGEST_B}" 1
+mv "${NEXA_DEPLOY_DIR}/caddy/routes.caddy" "${NEXA_ROOT}/routes.caddy.hidden"
+run_botctl rollback
+mv "${NEXA_ROOT}/routes.caddy.hidden" "${NEXA_DEPLOY_DIR}/caddy/routes.caddy" 2>/dev/null || true
+rm -f "${FAKE_DIR}/assets_missing_${DIGEST_B}"
+assert_equals 'a sound rollback was refused because its undo could not be recorded' \
+  0 "$BOTCTL_STATUS"
+assert_equals 'the sound rollback did not become current' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_contains 'the operator was not warned that the undo cannot be recorded' \
+  "$BOTCTL_OUTPUT" 'could not be recorded'
+rm -rf "${current_digest_dir}.hidden"
+# Put the installation back on vB for the cases that follow.
+run_botctl update vB >/dev/null 2>&1 || true
+
 test_case "rollback refuses when the previous release's assets were never recorded"
 # An installation that predates this mechanism: its pointers were written by a
 # botctl that staged nothing. Rolling the IMAGE back there would leave the
@@ -1971,6 +2402,90 @@ assert_fails 'a rollback whose worker died reported success' test "$BOTCTL_STATU
 assert_equals 'a failed rollback moved the current pointer' 'vB' "$(cat "${NEXA_STATE_DIR}/current")"
 assert_equals "a failed rollback left the previous release's tooling" 'B' "$(installed_label)"
 rm -f "${FAKE_DIR}/worker_state_${DIGEST_A}"
+
+teardown_root
+
+# =============================================================================
+# 3C — the monitor is required, and a topology without one still rolls back
+# =============================================================================
+setup_root
+setup_fake_docker
+seed_release 'vA' "$DIGEST_A"
+write_live_assets A
+stage_release_assets "$DIGEST_A" A
+seed_image_assets "$DIGEST_B" B
+fake_set resolve_digest "$DIGEST_B"
+
+test_case '3C: a target whose monitor stays exited is backed out'
+# The failure this catches has no other symptom. Every request is served
+# correctly by a release with a dead monitor; what stops is panel health being
+# written, so an operator reads a health that is frozen at whatever it was and
+# has no way to tell.
+fake_set "monitor_state_${DIGEST_B}" exited
+NEXA_READY_TIMEOUT=60 run_botctl update vB
+assert_fails 'a target with a dead monitor became current' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'a dead monitor advanced the current release' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_equals 'deploy.env was repointed at a release whose monitor died' \
+  "registry.test/nexa@${DIGEST_A}" "$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_IMAGE)"
+rm -f "${FAKE_DIR}/monitor_state_${DIGEST_B}"
+
+test_case '3C: a monitor that never becomes healthy is not accepted'
+fake_set "monitor_health_${DIGEST_B}" starting
+NEXA_READY_TIMEOUT=6 run_botctl update vB
+assert_fails 'an unhealthy monitor was accepted as ready' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'an unhealthy monitor advanced the current release' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+rm -f "${FAKE_DIR}/monitor_health_${DIGEST_B}"
+
+test_case '3C: api and worker healthy do not excuse a crash-looping monitor'
+fake_set "monitor_state_${DIGEST_B}" restarting
+NEXA_READY_TIMEOUT=6 run_botctl update vB
+assert_fails 'a crash-looping monitor was accepted as ready' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'a crash-looping monitor advanced the current release' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+rm -f "${FAKE_DIR}/monitor_state_${DIGEST_B}"
+
+test_case '3C: all three healthy is ready, and the update completes'
+run_botctl update vB
+assert_equals 'a healthy api, worker and monitor were not accepted' 0 "$BOTCTL_STATUS"
+assert_equals 'the update did not advance' 'vB' "$(cat "${NEXA_STATE_DIR}/current")"
+
+test_case '3C: status reports NOT READY when only the monitor is down'
+fake_set monitor_state exited
+run_botctl status
+assert_contains 'a dead monitor was reported as ready' "$BOTCTL_OUTPUT" 'NOT READY'
+assert_fails 'status exited zero with a dead monitor' test "$BOTCTL_STATUS" -eq 0
+fake_set monitor_state running
+run_botctl status
+assert_contains 'a healthy monitor was not reported as ready' "$BOTCTL_OUTPUT" 'readiness: ready'
+
+test_case '3C: a rollback to a release with no monitor service is still valid'
+# The compatibility requirement, and the reason readiness intersects what it
+# requires with what the ACTIVE compose file defines rather than hardcoding
+# three services.
+#
+# Host assets are release-versioned. A rollback activates the target release's
+# compose.yml and then waits for readiness while THIS library is still the one
+# in memory. vA predates the monitor, so its topology has no such service and
+# its containers never report one. A hardcoded requirement would wait out the
+# whole timeout and report a rollback failure — after the assets had already
+# moved, which is the worst moment to be wrong.
+fake_set compose_services 'api worker postgres redis caddy'
+fake_set monitor_state absent
+NEXA_READY_TIMEOUT=30 run_botctl rollback
+assert_equals 'a rollback to a monitor-less topology was refused' 0 "$BOTCTL_STATUS"
+assert_equals 'the rollback did not move the current pointer' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+
+test_case '3C: a monitor-less topology still requires its api and worker'
+# The relaxation is exactly one service wide. Dropping the monitor from the
+# topology must not drop the two that were always required — otherwise the
+# intersection would be a way to make any release ready by shipping a compose
+# file that defines nothing.
+fake_set worker_state exited
+NEXA_READY_TIMEOUT=6 run_botctl status
+assert_contains 'a monitor-less topology with a dead worker was reported ready' \
+  "$BOTCTL_OUTPUT" 'NOT READY'
+fake_set worker_state running
+fake_set compose_services 'api worker monitor postgres redis caddy'
+fake_set monitor_state running
 
 teardown_root
 

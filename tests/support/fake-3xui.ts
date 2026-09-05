@@ -98,10 +98,24 @@ export type Behaviour =
   | 'twofactor-success-false'
   /** A valid session, and `panel/api/server/status` answers 404. */
   | 'status-404'
+  /**
+   * A valid session, and the panel answers 429 with a `Retry-After`.
+   *
+   * A reverse proxy or the panel's own limiter, saying this installation is
+   * calling too often. Nothing is wrong with the credential and nothing is
+   * wrong with the panel.
+   */
+  | 'status-429'
   /** csrf-token sets an unrelated cookie ALONGSIDE the session cookie. */
   | 'csrf-extra-cookie'
   /** csrf-token sets ONLY an unrelated cookie — no `3x-ui` at all. */
-  | 'csrf-no-session-cookie';
+  | 'csrf-no-session-cookie'
+  /** csrf-token mints a token far larger than any real one. */
+  | 'csrf-enormous-token'
+  /** csrf-token mints a token carrying CRLF, which Node refuses in a header. */
+  | 'csrf-token-with-crlf'
+  /** The session cookie's value is far larger than any real one. */
+  | 'csrf-enormous-cookie';
 
 export interface Fake3xUi {
   readonly baseUrl: string;
@@ -212,6 +226,41 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
         // proxy, a WAF, an analytics tag — can set one, and replaying it back
         // on a credential-bearing request is not part of the v3.7.0 contract.
         const extra = `attacker-extra-cookie=${CANARY.extraCookie}; Path=/`;
+        if (behaviour === 'csrf-enormous-token') {
+          // Bounded only by maxResponseBytes before this was refused, and then
+          // written into the headers of every following request.
+          // Eight kilobytes: over the adapter's bound by eight times, and well
+          // under the client's `maxResponseBytes`, so what refuses it is the
+          // rule under test rather than the response-size limit. A token sized
+          // past BOTH would be refused either way and would prove nothing.
+          json(200, envelope(true, 'x'.repeat(8_192)), { 'set-cookie': session });
+          return;
+        }
+        if (behaviour === 'csrf-token-with-crlf') {
+          // A header value Node rejects outright. Without a check this threw
+          // out of the adapter instead of being reported as what it is.
+          json(200, envelope(true, 'tok\r\nX-Injected: yes'), { 'set-cookie': session });
+          return;
+        }
+        if (behaviour === 'csrf-enormous-cookie') {
+          // The cookie is as provider-supplied as the token, and is rotated by
+          // the login and 2FA responses as well as minted here.
+          //
+          // Oversized rather than CRLF-carrying, and that is a limit of the
+          // fixture rather than of the rule: Node's own HTTP server refuses to
+          // emit a header value containing a control character, so a CRLF
+          // cookie cannot be produced from here at all. A Go panel can send
+          // one, which is why the adapter checks the character set as well as
+          // the length; the character-set half is exercised through the CSRF
+          // token, which travels in the JSON body and reaches the same guard.
+          json(200, envelope(true, csrf), {
+            // Four kilobytes: comfortably over the adapter's bound and
+            // comfortably under Node's 16 KiB header limit, so what refuses it
+            // is the rule under test and not the HTTP parser.
+            'set-cookie': `3x-ui=${'c'.repeat(4_000)}; Path=${basePath}; HttpOnly`,
+          });
+          return;
+        }
         if (behaviour === 'csrf-no-session-cookie') {
           // No `3x-ui` at all: not this contract.
           response.writeHead(200, { 'content-type': 'application/json', 'set-cookie': extra });
@@ -344,6 +393,9 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
         }
 
         switch (behaviour) {
+          case 'status-429':
+            response.writeHead(429, { 'content-type': 'text/html', 'retry-after': '120' });
+            return void response.end('<html><body>Too Many Requests</body></html>');
           case 'status-404':
             // Authenticated, and the route is not there: a moved base path, a
             // proxy, or an upstream that does not serve it. Answered as a real

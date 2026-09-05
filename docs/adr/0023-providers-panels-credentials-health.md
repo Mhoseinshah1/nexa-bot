@@ -528,3 +528,247 @@ they still had it.
 - **A boundary check now enforces the transport rule.** A provider adapter that
   imports a network client directly fails the build; the guard skips comments,
   so the adapters can keep explaining why they do not.
+
+## Amendments — Phase 3C (background health orchestration)
+
+Phase 3A made a panel's health a thing an operator could ask for. Phase 3C makes
+it a thing the installation keeps up to date without being asked. The decisions
+below are amendments to this ADR rather than a new one, because every one of
+them is a constraint on the same probe.
+
+- **A dedicated `monitor` process role, from the same image.** Three
+  entrypoints over one module graph — `main.ts`, `main.worker.ts`,
+  `main.monitor.ts` — and the container's `command` chooses. Not an interval
+  inside the API: a probe is an outbound call to somebody else's machine with a
+  timeout measured in seconds, and a fleet of slow panels on the event loop that
+  answers the Telegram webhook is slow Telegram replies and pool checkouts held
+  by nobody's request. Not folded into the worker either: the worker's jobs are
+  internal, and a monitor wedged on a hanging panel would delay notification
+  delivery. There is deliberately no second image — a second image is a second
+  thing to build, publish, pin by digest and roll back.
+
+- **One probe implementation, two callers.** `probe-core.ts` owns credential
+  resolution, adapter selection, the address policy applied to the stored URL,
+  the per-panel claim, the tenant budget, the outbound call and the
+  normalization of what came back. `PanelService.testConnection` and
+  `PanelMonitorService` are wrappers that add what genuinely differs:
+  authorization, idempotency, auditing, and what to do with a refusal. A copy in
+  the monitor would start identical and diverge at the first fix applied to one
+  side — and the side that silently kept the old behaviour would be the
+  unattended one that dials panels on a timer.
+
+- **What a caller may probe is a parameter, not a branch on who is asking.**
+  `probeableStatuses` is `['ACTIVE', 'DISABLED']` for an operator and
+  `['ACTIVE']` for the monitor. `DISABLED` means the operator said stop using
+  this for now, and unattended dialling is exactly what that forbids; an
+  operator asking explicitly is a different question. The rule is enforced twice
+  — in the discovery query's predicate, which is also the partial index's, and
+  again in the core against the row it just read — so a panel disabled between
+  the two is refused rather than depending on the query having been recent.
+
+- **Discovery is two bounded index range scans, not one ranking.**
+  `PanelMonitorRepository` is a separate port from `PanelRepository` and is the
+  only deliberately cross-tenant read in the module; it returns a tenant id and
+  a panel id, and nothing else. The monitor builds a `TenantContext` from each
+  row and does everything downstream through the ordinary tenant-filtered
+  repository, so the cross-tenant surface is exactly two identifiers.
+
+  The first version of this ranked the due population with `row_number() OVER
+(PARTITION BY tenant_id …)` and took the top of the result. That returns a
+  bounded number of rows while doing work proportional to every due panel: the
+  window has to be computed over all of them before the first row can be
+  discarded. `LIMIT 50` in the SQL is not a bound on the database's work, and
+  reading fifty rows back in a test does not measure one.
+
+  What replaced it is a claim of at most `PANEL_MONITOR_TENANTS_PER_TICK`
+  tenants from `panel_monitor_tenants` (`FOR UPDATE SKIP LOCKED`, ordered by
+  `last_served_at`), and then one `LATERAL` per claimed tenant against
+  `panel_monitor_schedule (tenant_id, next_eligible_at, panel_id)` with `LIMIT
+ceil(batch / claimed)`. Every branch is an index range scan that stops at its
+  limit, so a tick reads `tenants × perTenant` schedule rows whether ten panels
+  are due or twenty thousand. `tests/integration/panel-monitor-scale.test.ts`
+  asserts that against `EXPLAIN (ANALYZE, BUFFERS)` over a 40 × 500 fixture,
+  running the exported `dueForTenantsQuery` so the measurement cannot drift from
+  the statement the monitor issues.
+
+  Two design choices came out of that measurement rather than out of reasoning
+  about it. The `LATERAL` deliberately does **not** join `panels` to filter on
+  status — with the join the planner abandoned the bounded path and read five
+  hundred rows to return five — so the schedule itself carries the status
+  filter, and the core re-checks the row it read. And `panel_id` is the third
+  index column: without it Postgres sorted the whole tie group whenever many
+  rows shared a timestamp, which is exactly the shape the backfill produces.
+
+- **Fairness is a persisted rotation, not a process's memory.**
+  `panel_monitor_tenants.last_served_at` is bumped inside the claim, so the next
+  tick — in this process or in the other replica — starts from whoever has
+  waited longest. The bound is explicit: with `d` due tenants and `t` claimed
+  per tick, no tenant waits more than `ceil(d / t)` ticks, and a tenant with a
+  thousand overdue panels takes exactly its `perTenant` share of a tick and then
+  goes to the back of the rotation. Ordering by eligibility instead would let
+  the deepest backlog hold the front of the queue for ever; ordering in memory
+  would be wrong the moment a rolling update runs two monitors.
+
+  Each tenant row carries a lower bound on its panels' due times, and it only
+  ever moves down through `LEAST`. A bound that is stale-low costs one wasted
+  claim; a bound that is stale-high loses a tenant, so the asymmetry is
+  deliberate. `refreshTenantBounds` repairs it with one index-ordered `LIMIT 1`
+  per claimed tenant.
+
+- **A non-probeable panel leaves the scan's range, rather than being skipped
+  inside it.** Suspending a panel writes `next_eligible_at` to a far-future
+  sentinel in the same transaction as the status change, so it is outside the
+  range the index scan reads at all. A predicate would still have to read it.
+  The sentinel is a concrete year-9999 timestamp: `'infinity'` comes back from
+  node-postgres as the JavaScript _number_ `Infinity` rather than a `Date`, and
+  the maximum JS date serialises to year 275760, which Postgres refuses.
+
+- **Scheduling state is not health state.** `panel_health` answers "what did
+  the provider last say"; `panel_monitor_schedule` answers "when should this
+  loop look again". They were one table to begin with, and that is what made a
+  preflight refusal unrepresentable: a panel with no usable credential makes no
+  network call, so it has no provider truth to store, so it had nowhere to
+  record that it had been looked at — and was rediscovered every thirty seconds
+  for ever, holding a scheduler slot each time. Separating them lets the loop
+  defer a stable refusal for an hour without inventing a health state the
+  provider never reported. The schedule row holds only operational metadata:
+  the tenant, the panel, the next eligible time, the consecutive-failure count,
+  and the refusal that deferred it. No credential, token, cookie or provider
+  body has any business there, and none is written.
+
+  The schedule is stored rather than derived because that is what makes the due
+  predicate an index range scan; a `CASE` over state, failure kind and three
+  configured intervals is not. Every probe writes it — the operator's manual
+  test included, because a manual test is a real probe and a monitor that
+  re-dialled a second later would be asking a question that was just answered.
+  The cost is stated rather than hidden: changing a cadence interval takes
+  effect for each panel at its next probe, bounded by one cycle.
+
+- **A deferral is prompt to undo.** `COOLDOWN` and `BUDGET_EXHAUSTED` are
+  transient and defer by a minute; `CREDENTIALS_MISSING` and `TARGET_BLOCKED`
+  are stable and defer by an hour. Either way the deferral is not a sentence:
+  writing a credential, editing an address or re-enabling a panel makes the row
+  eligible again in the same transaction, so an operator who fixes the thing
+  does not wait out a backoff they cannot see.
+
+- **Retryability is read from the contract, never restated.** `baseIntervalMs`
+  consults `PROVIDER_FAILURE_RETRYABLE`, so a failure kind added to the taxonomy
+  cannot be monitored at the aggressive cadence by an author who never opened
+  the cadence file. `AUTHENTICATION_FAILED`,
+  `AUTHENTICATION_REQUIRES_INTERACTION`, `BLOCKED_TARGET`, `TLS_FAILED`,
+  `MALFORMED_RESPONSE` and `UNSUPPORTED_CAPABILITY` therefore take the long
+  interval, doubling with each consecutive failure. The backoff is bounded at
+  four doublings and a day: unbounded doubling reaches "next year" in a
+  fortnight, so a panel an operator repaired would stay unmonitored. A repaired
+  panel does not wait it out anyway — replacing a credential or an address
+  changes the configuration, which makes it due at once.
+
+- **Spreading is deterministic, keyed on the panel id.** Random jitter
+  regenerated per process gives a fleet that re-clusters after every deploy:
+  probed once at boot, due again together one interval later. An FNV-1a hash of
+  the panel id survives restarts, replicas and rollbacks, because none of those
+  change the id. The spread is inside the freshness bound, so the configured
+  healthy ceiling holds for the last panel in the fleet and not the average one.
+
+- **The monitor lane is a FLOOR on the existing bucket, not a second budget.**
+  `takeProbeBudget` gained a `reserve` the caller must leave behind: zero for an
+  operator, positive for the monitor. A second bucket would raise a tenant's
+  total outbound rate, which is the thing the bound exists to cap. The floor is
+  evaluated inside the same conditional write that takes the token, which is
+  what makes it hold across monitor replicas — two monitors racing on the floor
+  serialise on the tenant's row exactly as they do on the token.
+
+- **Nothing is decided in a process.** Two monitors reaching one panel in the
+  same second do not coordinate; they both ask, and the per-panel claim grants
+  one. A process-local set of in-flight panels would be wrong the moment there
+  are two processes, and there being two, briefly, is what a rolling update is.
+
+- **Audited and announced on a transition, not on every probe.** A row per tick
+  would be a health-history table wearing the audit log's name — six per panel
+  per hour, for ever, in a table that refuses `DELETE`. Events are deduplicated
+  per panel and per condition, and a panel's FIRST successful check is not a
+  recovery: nothing was wrong, and announcing it would greet every
+  installation's first tick with one event per panel.
+
+- **The monitor acts as `SYSTEM_JOB` holding `maintenance.run`, and the check
+  precedes every side effect.** Checked through the guard like anybody else's
+  permission. Deliberately not `panels.edit`: the way to make a job pass an
+  operator's check is to fabricate an operator, and a `WEB_ADMIN` actor with no
+  administrator behind it is the fake actor this codebase refuses.
+
+  The first version checked it in the right place and at the wrong time —
+  `runAuthorizedMutation` wrapped the _write_, so a denied monitor had already
+  decrypted a credential, taken a per-panel claim, spent a tenant's probe token
+  and dialled somebody else's server before the guard said no. A permission
+  checked after the side effect is not authorization; it is a record of one.
+  The order is now resolve, authorize, and only then credential, claim, budget
+  and socket, and the denied path is asserted to make zero outbound calls, take
+  no claim, spend no budget and write no health — while still recording the
+  denial.
+
+- **Liveness is progress, not uptime.** The monitor reports healthy when its
+  heartbeat is current, the database answers, and discovery has actually made
+  recent progress — never because the process started or because `SELECT 1`
+  works. Before the first successful discovery it is deliberately not healthy:
+  a startup grace that reports healthy while discovery is throwing is a lie
+  told exactly when it matters. The opposite false negative is avoided by
+  moving the progress mark on each panel a sweep finishes with rather than only
+  at the end of one, so a bounded batch of slow provider calls stays healthy
+  while it works and goes stale only when it stops.
+
+- **The manual reserve rounds up and cannot be clamped away.** The background
+  lane leaves a floor behind in the tenant's bucket, and a positive reserve
+  rounds up to at least one token. Percentage arithmetic that floors is unsafe
+  at the capacities small installations actually run: at capacity one, ten
+  percent is zero, and the monitor takes the operator's only token on a timer.
+  The floor is never clamped downwards to fit — at capacity one the monitor
+  simply gets nothing, which is the correct answer. Setting the reserve to zero
+  while monitoring is enabled is rejected by configuration validation rather
+  than quietly making the protection optional.
+
+- **A cadence cannot be configured out of its own guarantees.** Two floors are
+  enforced at the schema, not left to the operator. A non-retryable interval
+  below thirty minutes is refused: doubling from one minute is still an
+  automated login hammer against a credential the provider has already
+  rejected. And the worst-case refresh — the healthy interval, plus the maximum
+  deterministic spread, plus a whole scheduler tick — must stay inside
+  `PANEL_HEALTH_FRESH_FOR_MS`, so no accepted configuration can let a panel be
+  called fresh while nothing is refreshing it.
+
+- **A discarded write announces nothing.** `recordHealth` returns `APPLIED` or
+  `STALE_IGNORED` from the conditional upsert itself, and only `APPLIED`
+  produces a transition audit entry or an operational event. Two probes of one
+  panel can overlap — a slow `AUTH_FAILED` and a fast `HEALTHY` that stores
+  first — and the older result must lose the row _and_ the announcement. A
+  no-op write that still announces is a phantom transition: the operator is
+  paged about a state the database never held.
+
+- **The failure counter is believed only while the health it counts still
+  says failure.** A release that stores the streak in the schedule can be
+  rolled back to one that does not, which will keep probing and updating
+  health through its own columns; rolled forward, the schedule's counter is
+  whatever it was days ago. So the counter is read through the _current_ stored
+  state: a streak survives only while health is still `UNREACHABLE` or
+  `AUTH_FAILED`, and any success in between resets it. The old binary is not
+  required to know the new schema — the new one is required not to trust it.
+
+- **Different remedies stay different conditions.** A broad "failed" class
+  would collapse `UNREACHABLE` and `AUTH_FAILED` into one event, and those are
+  not one problem: the first is a host or a network, the second is a password,
+  a token or a second factor. Conditions are keyed on the state and, within a
+  state, on the failure kind where the remedy materially differs — so
+  `UNREACHABLE → AUTH_FAILED` is announced as a change of remedy rather than
+  swallowed as "still failing". Repeating the same condition is still
+  deduplicated, and a condition that stops being true is resolved rather than
+  left open beside its replacement.
+
+- **Readiness requires the monitor, and asks the compose file which services
+  exist.** Panel health has exactly one writer, so a release whose API and
+  worker are healthy while its monitor is dead serves every request correctly
+  and stops telling the truth about panels. `nexa_wait_ready` therefore requires
+  `api worker monitor` — intersected with what the ACTIVE compose file defines.
+  That intersection is not a softening: host assets are release-versioned, so a
+  rollback activates the target release's `compose.yml` and then waits while the
+  new library is still in memory. A release that predates the monitor has no
+  such service, and a hardcoded requirement would time out every rollback to it
+  — after the assets had already moved.

@@ -251,19 +251,36 @@ preflight() {
   # the writer ahead of it can die of SIGPIPE, and the pipeline returns 141 —
   # so the test reports "nothing listening" precisely when something is. On a
   # port preflight that is the wrong answer in the dangerous direction.
-  local port listeners names
+  # UDP is checked as well as TCP, and only on 443: `compose.yml` publishes
+  # `443:443/udp` for HTTP/3, so a service holding 443/udp is a real conflict
+  # that Caddy would fail to bind — and `ss -Hltn` is TCP-listen only, so it
+  # saw none of them. Port 80 is TCP alone; nothing here binds 80/udp.
+  local port listeners proto flags
   for port in 80 443; do
-    listeners="$(ss -Hltn "sport = :${port}" 2>/dev/null || true)"
-    if [ -n "$listeners" ]; then
+    for proto in tcp udp; do
+      [ "$proto" = tcp ] || [ "$port" = 443 ] || continue
+      # `-l` is a TCP-listen filter and means nothing for UDP; a bound UDP
+      # socket is simply present, so the sockets are enumerated without it.
+      [ "$proto" = tcp ] && flags='-Hltn' || flags='-Huan'
+      listeners="$(ss "$flags" "sport = :${port}" 2>/dev/null || true)"
+      [ -n "$listeners" ] || continue
+
       # Our own Caddy holding the port on a rerun is expected, not a conflict.
-      # `grep -c` reads to the end of its input, so nothing upstream is ever
-      # killed mid-write; `grep -q` would not.
-      names="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c '^nexa-caddy' || true)"
-      [ "${names:-0}" -eq 0 ] || continue
-      nexa_die "something is already listening on port ${port}. Nexa's edge needs 80 (ACME and the redirect) and 443. Stop the other service, or install Nexa on a host that is not already serving HTTP."
-    fi
+      #
+      # Established by asking WHICH process holds this socket, not by asking
+      # whether a container of that name happens to be running. The old check
+      # counted `nexa-caddy*` in `docker ps` and waived the conflict on any
+      # match — so a nexa-caddy that was up but bound to nothing waved through
+      # an unrelated nginx on the same port, and the installer proceeded to an
+      # edge that could never start. `ss -p` names the process; Caddy in this
+      # topology is what publishes these ports, and docker-proxy or the
+      # container's own caddy is what appears.
+      if ! nexa_port_is_ours "$port" "$proto"; then
+        nexa_die "something is already listening on ${port}/${proto}, and it is not Nexa's edge. Nexa needs 80 (ACME and the redirect) and 443 on both TCP and UDP (HTTP/3). Stop the other service, or install Nexa on a host that is not already serving HTTP."
+      fi
+    done
   done
-  nexa_ok "ports 80 and 443 are free"
+  nexa_ok "ports 80 and 443 are free, on TCP and on UDP"
 
   # --- The owner's password source ---
   if [ "$SKIP_OWNER" = "no" ] && [ -n "$OWNER_PASSWORD_FILE" ]; then
@@ -492,23 +509,45 @@ EOF
   # parse through the application's own schema. Substituted with a Python
   # replace rather than `sed`, so a generated value containing a slash or an
   # ampersand cannot corrupt the output or inject a second assignment.
-  python3 -c '
+  #
+  # The substitutions arrive on STDIN, and that is the security property, not a
+  # style choice. They used to be positional arguments — which put the KEK and
+  # both database passwords into a process's argv, where `ps` shows them to
+  # every user on the machine for as long as the interpreter runs. This file
+  # already says so, forty lines further down, about the owner password: "argv
+  # is readable by every user on the machine via `ps`, and an environment
+  # variable would be readable through `docker inspect`". The rule was written
+  # and then broken three lines from where it was written.
+  #
+  # `printf` is a shell BUILTIN, so the values never become a process's
+  # arguments on this side either — there is no `/usr/bin/printf` to inspect.
+  # NUL-separated because a token or a value containing a newline would
+  # otherwise re-frame the list; nothing generated here contains one, and a
+  # framing that depends on that staying true is a framing that will eventually
+  # be wrong.
+  printf '%s\0' \
+    "__POSTGRES_PASSWORD__=${pg_password}" \
+    "__REDIS_PASSWORD__=${redis_password}" \
+    "__SECRETS_KEK__=${kek}" \
+    "__SECRETS_ACTIVE_KEY_ID__=${kek_id}" \
+    "__DOMAIN__=${DOMAIN}" \
+    "__EDGE_SUBNET__=${NEXA_EDGE_SUBNET:-172.29.0.0/24}" |
+    python3 -c '
 import sys
 source, target = sys.argv[1], sys.argv[2]
-replacements = dict(pair.split("=", 1) for pair in sys.argv[3:])
+replacements = {}
+for pair in sys.stdin.buffer.read().decode("utf-8").split("\0"):
+    if pair == "":
+        continue
+    token, value = pair.split("=", 1)
+    replacements[token] = value
 with open(source, "r", encoding="utf-8") as handle:
     text = handle.read()
 for token, value in replacements.items():
     text = text.replace(token, value)
 with open(target, "w", encoding="utf-8") as handle:
     handle.write(text)
-' "${NEXA_DEPLOY_DIR}/nexa.env.template" "${app_env}.partial" \
-    "__POSTGRES_PASSWORD__=${pg_password}" \
-    "__REDIS_PASSWORD__=${redis_password}" \
-    "__SECRETS_KEK__=${kek}" \
-    "__SECRETS_ACTIVE_KEY_ID__=${kek_id}" \
-    "__DOMAIN__=${DOMAIN}" \
-    "__EDGE_SUBNET__=${NEXA_EDGE_SUBNET:-172.29.0.0/24}"
+' "${NEXA_DEPLOY_DIR}/nexa.env.template" "${app_env}.partial"
 
   # Same rule for the substituted template: it is complete before it is named.
   chmod 0600 "${app_env}.partial"
@@ -738,7 +777,6 @@ main() {
   # installer racing an update would interleave migrations.
   nexa_acquire_lock 0
 
-  install_assets
   check_registry
 
   nexa_step "resolving ${VERSION} to an immutable digest"
@@ -748,6 +786,19 @@ main() {
   image="${NEXA_IMAGE_REPO}@${digest}"
   refuse_digest_change "$digest"
   nexa_ok "${VERSION} is ${digest}"
+
+  # AFTER the refusal, and that ordering is the whole point of the refusal.
+  #
+  # This overwrites the host's compose.yml, Caddyfile, nexa-lib.sh and botctl —
+  # the installed release's TOOLING. It used to run before the digest was even
+  # resolved, so a rerun of a version whose tag had been moved was refused by
+  # `refuse_digest_change` as designed, and stopped with the host already
+  # carrying this checkout's tooling over the release that is actually running.
+  # A refusal that says "nothing was changed" has to be true when it says it.
+  #
+  # It stays before `generate_secrets`, which substitutes into the
+  # `nexa.env.template` installed here.
+  install_assets
 
   generate_secrets
   write_deploy_env "$image"

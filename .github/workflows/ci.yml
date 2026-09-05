@@ -173,6 +173,7 @@ jobs:
         run: |
           test -f apps/api/dist/main.js
           test -f apps/api/dist/main.worker.js
+          test -f apps/api/dist/main.monitor.js
           test -f apps/web/dist/index.html
           node --input-type=module -e "
             // bootstrap.js reaches the whole api graph; container.js reaches the

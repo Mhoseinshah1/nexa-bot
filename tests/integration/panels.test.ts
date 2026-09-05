@@ -1,11 +1,19 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, sql, type SQL } from 'drizzle-orm';
 import {
   auditLogs,
   panelCredentials,
   panels,
+  tenants,
 } from '../../apps/api/src/infrastructure/persistence/schema';
-import type { ProviderProbeOutcome, ProviderType } from '@nexa/contracts';
+import {
+  PANEL_PAGE_DEFAULT,
+  PANEL_PAGE_MAX,
+  panelListQuerySchema,
+  type ActorContext,
+  type ProviderProbeOutcome,
+  type ProviderType,
+} from '@nexa/contracts';
 import { DrizzlePanelCredentialStore } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-credentials';
 import { PanelService } from '../../apps/api/src/modules/platform/panels/application/panel.service';
 import {
@@ -106,6 +114,108 @@ describe('panels', () => {
     });
 
   // -------------------------------------------------------------------------
+  // A scope that has stopped accepting work
+  // -------------------------------------------------------------------------
+
+  describe('a tenant this installation has stopped', () => {
+    // S2. Settings, templates, feature flags and the ping recorder have all
+    // checked scope activity INSIDE the write transaction since Phase 2. The
+    // panels module did not, which made it the one place where a tenant an
+    // operator had stopped could still have panels created, edited,
+    // re-credentialled and re-statused — writing audit, idempotency and outbox
+    // rows for an installation somebody had already switched off, and arming
+    // the background monitor to dial that tenant's machines.
+    const stop = async () => {
+      await ctx.container.database.db
+        .update(tenants)
+        .set({ status: 'STOPPED' })
+        .where(eq(tenants.id, tenantA.tenantId));
+    };
+
+    it('refuses to create a panel', async () => {
+      await stop();
+      await expect(create(owner, tenantA)).rejects.toMatchObject({
+        code: 'platform.tenant_not_found',
+      });
+      expect(await ctx.container.database.db.select().from(panels)).toHaveLength(0);
+    });
+
+    it('refuses to edit, re-credential or re-status an existing panel', async () => {
+      const { view } = await create(owner, tenantA, {
+        credentials: { username: USERNAME, password: PASSWORD },
+      });
+      const panelId = view.panel.id;
+      await stop();
+
+      await expect(
+        ctx.container.panels.update(tenantA, adminActorFor(owner), panelId, {
+          name: 'Renamed',
+          idempotencyKey: key(),
+        }),
+      ).rejects.toMatchObject({ code: 'platform.tenant_not_found' });
+
+      await expect(
+        ctx.container.panels.setCredentials(tenantA, adminActorFor(owner), panelId, {
+          credentials: { password: 'another-password' },
+          idempotencyKey: key(),
+        }),
+      ).rejects.toMatchObject({ code: 'platform.tenant_not_found' });
+
+      await expect(
+        ctx.container.panels.setStatus(tenantA, adminActorFor(owner), panelId, {
+          status: 'DISABLED',
+          idempotencyKey: key(),
+        }),
+      ).rejects.toMatchObject({ code: 'platform.tenant_not_found' });
+
+      // Nothing moved. A refusal that had already written its audit or
+      // idempotency row would be the defect wearing a different hat.
+      const [row] = await ctx.container.database.db.select().from(panels);
+      expect(row!.name).toBe('Frankfurt');
+      expect(row!.status).toBe('ACTIVE');
+    });
+
+    it('refuses an operator connection test, which dials somebody else’s machine', async () => {
+      const { view } = await create(owner, tenantA, {
+        credentials: { username: USERNAME, password: PASSWORD },
+      });
+      await stop();
+      await expect(
+        ctx.container.panels.testConnection(tenantA, adminActorFor(owner), view.panel.id, {
+          idempotencyKey: key(),
+        }),
+      ).rejects.toMatchObject({ code: 'platform.tenant_not_found' });
+    });
+
+    it('still lets an operator READ, which is how they diagnose the stop', async () => {
+      const { view } = await create(owner, tenantA);
+      await stop();
+
+      // Deliberately not symmetric with the writes above, and it matches what
+      // the four control-plane services do: they gate mutations and leave
+      // reads open. An operator who cannot list the panels of a tenant they
+      // have just stopped cannot see what they stopped.
+      const page = await ctx.container.panels.list(tenantA, adminActorFor(owner));
+      expect(page.panels.map((p) => p.panel.id)).toEqual([view.panel.id]);
+      const one = await ctx.container.panels.get(tenantA, adminActorFor(owner), view.panel.id);
+      expect(one.panel.id).toBe(view.panel.id);
+    });
+
+    it('serves the tenant again once it is active', async () => {
+      await stop();
+      await expect(create(owner, tenantA)).rejects.toMatchObject({
+        code: 'platform.tenant_not_found',
+      });
+      await ctx.container.database.db
+        .update(tenants)
+        .set({ status: 'ACTIVE' })
+        .where(eq(tenants.id, tenantA.tenantId));
+      const { view } = await create(owner, tenantA);
+      expect(view.panel.status).toBe('ACTIVE');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // The ordinary path
   // -------------------------------------------------------------------------
 
@@ -170,7 +280,7 @@ describe('panels', () => {
       // And in a list, which is a different query with the same projection.
       const listed = await ctx.container.panels.list(tenantA, adminActorFor(owner));
       expect(
-        listed.find((v) => v.panel.id === view.panel.id)?.credentials[timestamp],
+        listed.panels.find((v) => v.panel.id === view.panel.id)?.credentials[timestamp],
       ).toBeInstanceOf(Date);
     });
   }
@@ -470,8 +580,8 @@ describe('panels', () => {
     const listA = await ctx.container.panels.list(tenantA, adminActorFor(owner));
     const listB = await ctx.container.panels.list(tenantB, adminActorFor(ownerB));
 
-    expect(listA.map((view) => view.panel.name)).toEqual(['A only']);
-    expect(listB.map((view) => view.panel.name)).toEqual(['B only']);
+    expect(listA.panels.map((view) => view.panel.name)).toEqual(['A only']);
+    expect(listB.panels.map((view) => view.panel.name)).toEqual(['B only']);
   });
 
   it('refuses to update, re-credential, restatus or test another tenant panel', async () => {
@@ -694,7 +804,7 @@ describe('panels', () => {
       idempotencyKey: key(),
     });
 
-    expect(await ctx.container.panels.list(tenantA, actor)).toEqual([]);
+    expect((await ctx.container.panels.list(tenantA, actor)).panels).toEqual([]);
     // Still addressable by id: archiving hides it, it does not destroy the
     // record, and a later phase needs the row to explain a service that was
     // provisioned through it.
@@ -1003,6 +1113,7 @@ describe('panels', () => {
       repository: new DrizzlePanelRepository(ctx.container.database.db),
       credentials: new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher),
       guard: ctx.container.guard,
+      scopeActivity: ctx.container.tenants,
       audit: ctx.container.audit,
       opsLog: ctx.container.opsLog,
       sessions: ctx.container.sessions,
@@ -1027,6 +1138,13 @@ describe('panels', () => {
       // hit the tenant-wide bound. Its own suite pins it low.
       probeBudget: { capacity: 10_000, refillPerMs: 1 },
       adapters: (type: ProviderType) => ({ ...providerAdapter(type), probe: async () => outcome }),
+      // Every probe writes the panel's next background probe time, so the
+      // service needs a cadence even where these tests never read one.
+      cadence: {
+        healthyIntervalMs: 10 * 60 * 1000,
+        retryableIntervalMs: 2 * 60 * 1000,
+        nonRetryableIntervalMs: 60 * 60 * 1000,
+      },
     });
     return scripted.testConnection(tenantA, adminActorFor(owner), panelId, {
       idempotencyKey: key(),
@@ -1300,5 +1418,234 @@ describe('panels — this installation’s own network', () => {
     for (const leak of [databaseHost, '10.77', 'subnet', 'postgres', 'redis', '5432', '6379']) {
       expect(text, `the refusal leaks ${leak}`).not.toContain(leak.toLowerCase());
     }
+  });
+});
+
+describe('the panel list is a bounded, stable traversal', () => {
+  let ctx: TestContext;
+  let owner: ActorContext;
+  let ownerB: ActorContext;
+
+  beforeEach(async () => {
+    ctx ??= await createTestContext();
+    await ctx.reset();
+    owner = adminActorFor(
+      await createAdmin(ctx.container, tenantA, { username: 'pager', roleKeys: ['owner'] }),
+    );
+    ownerB = adminActorFor(
+      await createAdmin(ctx.container, tenantB, { username: 'pager-b', roleKeys: ['owner'] }),
+    );
+  });
+
+  afterAll(async () => {
+    await ctx?.close();
+  });
+
+  let pageKeyCounter = 0;
+  const pageKey = () => `page-idem-${(pageKeyCounter += 1)}`;
+  const service = () => ctx.container.panels;
+
+  const make = async (actor: ActorContext, scope: typeof tenantA, name: string) =>
+    (
+      await service().create(scope, actor, {
+        name,
+        providerType: 'marzban',
+        baseUrl: 'https://panel.example.test',
+        credentials: { username: 'u'.repeat(6), password: 'p'.repeat(12) },
+        idempotencyKey: pageKey(),
+      })
+    ).view.panel.id;
+
+  const walk = async (actor: ActorContext, scope: typeof tenantA, limit: number) => {
+    const seen: string[] = [];
+    let cursor: { name: string; id: string } | null | undefined = undefined;
+    for (let guard = 0; guard < 100; guard += 1) {
+      const page = await service().list(scope, actor, {
+        limit,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      expect(page.panels.length).toBeLessThanOrEqual(limit);
+      seen.push(...page.panels.map((view) => view.panel.id));
+      if (page.nextCursor === null) return seen;
+      cursor = page.nextCursor;
+    }
+    throw new Error('traversal did not terminate');
+  };
+
+  it('walks the whole collection with no duplicates and no omissions', async () => {
+    const created: string[] = [];
+    for (let i = 0; i < 25; i += 1) {
+      created.push(await make(owner, tenantA, `panel-${String(i).padStart(3, '0')}`));
+    }
+    const seen = await walk(owner, tenantA, 7);
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(seen.slice().sort()).toEqual(created.slice().sort());
+  });
+
+  it('is stable when panels sort equally by name', async () => {
+    // Names are the ordering's first key, so a tie must be broken by something
+    // total or a keyset walk skips and repeats rows.
+    //
+    // Among LIVE panels a tie cannot happen: `panels_tenant_name_live_key`
+    // makes the name unique. Archiving releases the name, so the ties are in
+    // the archived-inclusive listing — which is why this drives the repository
+    // directly. Testing only the live path would leave the tiebreaker
+    // defensive and unproven, which is how it was when first written.
+    const repo = new DrizzlePanelRepository(ctx.container.database.db);
+    const created: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const id = await make(owner, tenantA, 'the-same-name');
+      created.push(id);
+      await service().setStatus(tenantA, owner, id, {
+        status: 'ARCHIVED',
+        idempotencyKey: pageKey(),
+      });
+    }
+
+    const seen: string[] = [];
+    let cursor: { name: string; id: string } | null = null;
+    for (let guard = 0; guard < 20; guard += 1) {
+      const page = await repo.list(tenantA, { includeArchived: true, limit: 2, cursor });
+      seen.push(...page.panels.map((view) => view.panel.id));
+      if (page.nextCursor === null) break;
+      cursor = page.nextCursor;
+    }
+    // Five rows sharing one name, walked two at a time: every one exactly once.
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(seen.slice().sort()).toEqual(created.slice().sort());
+  });
+
+  it('reads only the page it returns, not the whole collection', async () => {
+    // The finding was that one request materialises every live panel with both
+    // child rows joined. Three things this has to prove, and the first version
+    // proved none of them:
+    //
+    //   - the ACTUAL query. It asserted a hand-written `SELECT p.id FROM
+    //     panels` while production also joined credentials and health, so a
+    //     green plan described a statement nobody issues. It now runs the
+    //     exported `pageKeysQuery` the repository itself calls.
+    //   - at a size where the planner's choice is the interesting one. Sixty
+    //     rows is small enough that a sequential scan is genuinely cheaper and
+    //     the planner is right to take it — which is why this passed locally
+    //     and failed on CI reading all sixty.
+    //   - the CHILD joins too, which are the expensive half.
+    const bulk = 4_000;
+    await ctx.container.database.withClient(async (client) => {
+      await client.query(
+        `INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+         SELECT gen_random_uuid(), $1::uuid, 'bulk-' || lpad(g::text, 7, '0'),
+                'marzban', 'https://panel.example.test', 'ACTIVE'
+           FROM generate_series(1, $2::int) AS g`,
+        [tenantA.tenantId, bulk],
+      );
+      await client.query('ANALYZE panels');
+    });
+
+    const rowsRead = async (statement: SQL, relation: string): Promise<number> => {
+      const explained = await ctx.container.database.db.execute<{
+        'QUERY PLAN': [{ Plan: Record<string, unknown> }];
+      }>(sql`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${statement}`);
+      let read = 0;
+      const walkPlan = (node: Record<string, unknown>): void => {
+        if (node['Relation Name'] === relation) read += Number(node['Actual Rows'] ?? 0);
+        for (const child of (node['Plans'] as Record<string, unknown>[] | undefined) ?? []) {
+          walkPlan(child);
+        }
+      };
+      walkPlan(explained.rows[0]!['QUERY PLAN'][0]!.Plan);
+      return read;
+    };
+
+    // Stage one: the page keys, the statement the repository issues.
+    const first = DrizzlePanelRepository.pageKeysQuery(tenantA, {
+      includeArchived: false,
+      limit: 50,
+      cursor: null,
+    });
+    const firstRead = await rowsRead(first, 'panels');
+    expect(firstRead).toBeLessThanOrEqual(51);
+
+    // And it does not grow with the collection: continue deep into it.
+    const deep = DrizzlePanelRepository.pageKeysQuery(tenantA, {
+      includeArchived: false,
+      limit: 50,
+      cursor: { name: 'bulk-0003000', id: '00000000-0000-0000-0000-000000000000' },
+    });
+    expect(await rowsRead(deep, 'panels')).toBeLessThanOrEqual(51);
+
+    // Stage two: the child joins, explained as the REPOSITORY issues them —
+    // `.toSQL()` on the exported builder, not a retyped facsimile. Removing the
+    // page bound from that query is invisible to a result-shaped assertion,
+    // because the extra rows are simply ignored when the page is assembled.
+    const page = await new DrizzlePanelRepository(ctx.container.database.db).list(tenantA, {
+      includeArchived: false,
+      limit: 50,
+    });
+    expect(page.panels).toHaveLength(50);
+    expect(page.nextCursor).not.toBeNull();
+
+    const built = DrizzlePanelRepository.pageRowsQuery(
+      ctx.container.database.db,
+      tenantA,
+      page.panels.map((view) => view.panel.id),
+    ).toSQL();
+    const childRows = await ctx.container.database.withClient(async (client) => {
+      const explained = await client.query<{ 'QUERY PLAN': [{ Plan: Record<string, unknown> }] }>(
+        `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${built.sql}`,
+        built.params as unknown[],
+      );
+      const counts: Record<string, number> = {};
+      const walkPlan = (node: Record<string, unknown>): void => {
+        const relation = node['Relation Name'];
+        if (typeof relation === 'string') {
+          counts[relation] = (counts[relation] ?? 0) + Number(node['Actual Rows'] ?? 0);
+        }
+        for (const child of (node['Plans'] as Record<string, unknown>[] | undefined) ?? []) {
+          walkPlan(child);
+        }
+      };
+      walkPlan(explained.rows[0]!['QUERY PLAN'][0]!.Plan);
+      return counts;
+    });
+    // Every relation the join touches is bounded by the page, not the fleet.
+    expect(childRows['panels'] ?? 0).toBeLessThanOrEqual(50);
+    expect(childRows['panel_credentials'] ?? 0).toBeLessThanOrEqual(50);
+    expect(childRows['panel_health'] ?? 0).toBeLessThanOrEqual(50);
+
+    // Anti-vacuity: the collection really is large, so "50" is a bound and not
+    // the whole table.
+    expect(bulk).toBeGreaterThan(1_000);
+  });
+
+  it('never returns another tenant a page of its panels', async () => {
+    await make(owner, tenantA, 'mine');
+    await make(ownerB, tenantB, 'theirs');
+    const mine = await walk(owner, tenantA, 1);
+    const theirs = await walk(ownerB, tenantB, 1);
+    expect(mine).toHaveLength(1);
+    expect(theirs).toHaveLength(1);
+    expect(mine[0]).not.toBe(theirs[0]);
+  });
+
+  it('keeps archived panels out of the pages, as the unpaginated list did', async () => {
+    const live = await make(owner, tenantA, 'still-here');
+    const gone = await make(owner, tenantA, 'archived-away');
+    await service().setStatus(tenantA, owner, gone, {
+      status: 'ARCHIVED',
+      idempotencyKey: pageKey(),
+    });
+    expect(await walk(owner, tenantA, 10)).toEqual([live]);
+  });
+
+  it('bounds the page even when the caller asks for everything', async () => {
+    for (let i = 0; i < 3; i += 1) await make(owner, tenantA, `bounded-${i}`);
+    const page = await service().list(tenantA, owner, {});
+    // The default applies when no limit is given; the schema refuses anything
+    // above PANEL_PAGE_MAX at the boundary.
+    expect(page.panels.length).toBeLessThanOrEqual(PANEL_PAGE_DEFAULT);
+    expect(panelListQuerySchema.safeParse({ limit: String(PANEL_PAGE_MAX + 1) }).success).toBe(
+      false,
+    );
+    expect(panelListQuerySchema.safeParse({ limit: '0' }).success).toBe(false);
   });
 });

@@ -126,7 +126,13 @@ $MAPS"
   fi
   pass "the Web Admin build published no source maps"
 else
-  pass "no Web Admin build to check (run pnpm build first to include it)"
+  # Not a skip. A production `.map` publishes the original TypeScript of the
+  # surface that administers the installation, and this is the only check that
+  # refuses one — so a renamed Vite `outDir` would retire the rule silently
+  # while still printing a green line. The four entrypoints above already fail
+  # rather than skip, for the same reason.
+  fail "apps/web/dist is missing, so no source-map check ran" \
+       "Run 'pnpm build' first. If the Vite outDir moved, update this path"
 fi
 
 printf '\nThe maintenance commands run from a production runtime.\n'

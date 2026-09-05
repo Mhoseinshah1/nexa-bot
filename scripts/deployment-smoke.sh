@@ -167,7 +167,7 @@ for line in text.splitlines():
         service = line.strip().rstrip(":")
     if "published:" in line and service:
         published.setdefault(service, []).append(line.strip())
-for name in ("postgres", "redis", "api", "worker"):
+for name in ("postgres", "redis", "api", "worker", "monitor"):
     if published.get(name):
         problems.append(f"{name} publishes a host port: {published[name]}")
 if not published.get("caddy"):
@@ -278,6 +278,39 @@ print("healthy" if "healthy" in [e.get("Health") or "" for e in running] else ""
 done
 pass "the API is ready"
 
+# The worker AND the monitor, not the API alone.
+#
+# Both write a heartbeat file that their container healthcheck reads, and the
+# monitor's proves more than existence: it is written only when a round trip to
+# PostgreSQL succeeds AND the monitoring loop has completed an iteration. A
+# monitor that comes up healthy here is the whole Phase 3C pipeline working end
+# to end in a real container — config parsed, container built, discovery query
+# planned and executed, heartbeat written — which no unit test can assert.
+#
+# This is also the signal `botctl` waits on, so a failure here is a release
+# that `nexa_wait_ready` would refuse.
+for service in worker monitor; do
+  waited=0
+  until [ "$(compose ps --format json "$service" 2>/dev/null | SERVICE="$service" python3 -c '
+import json, os, sys
+raw = sys.stdin.read().strip()
+entries = []
+try:
+    parsed = json.loads(raw)
+    entries = parsed if isinstance(parsed, list) else [parsed]
+except Exception:
+    entries = [json.loads(line) for line in raw.splitlines() if line.strip()]
+name = os.environ["SERVICE"]
+running = [e for e in entries if e.get("Service") == name and e.get("State") == "running"]
+print("healthy" if "healthy" in [e.get("Health") or "" for e in running] else "")
+' 2>/dev/null)" = "healthy" ]; do
+    [ "$waited" -lt 180 ] || fail "the ${service} never became healthy"
+    sleep 3
+    waited=$((waited + 3))
+  done
+  pass "the ${service} is healthy"
+done
+
 # ---------------------------------------------------------------------------
 step "5. the database and Redis are not reachable from the host"
 # ---------------------------------------------------------------------------
@@ -327,6 +360,34 @@ deep_code="$(curl -s -o /dev/null -w '%{http_code}' "${base}/settings")"
 [ "$deep_code" = "200" ] || fail "a deep link answered ${deep_code}; the SPA fallback is not working"
 pass "deep links fall back to the SPA"
 
+# Every hashed asset the document names, fetched through the edge. The
+# publisher activates a release by renaming a symlink and serves /assets/* from
+# a pool; a Caddy root that named the wrong path, or a publication that only
+# half happened, both show up here and nowhere else — the document itself is
+# served from a different root and would still be a 200.
+assets="$(printf '%s' "$index" | grep -oE '/assets/[A-Za-z0-9._-]+' | sort -u)"
+[ -n "$assets" ] || fail "the served document names no hashed assets; the bundle is not what shipped"
+for asset in $assets; do
+  asset_code="$(curl -s -o /dev/null -w '%{http_code}' "${base}${asset}")"
+  [ "$asset_code" = "200" ] ||
+    fail "${asset} answered ${asset_code}; the document names an asset the edge cannot serve"
+done
+pass "every asset the document names is served ($(printf '%s\n' "$assets" | wc -l) of them)"
+
+# The layout itself, inside the volume Caddy is reading. `current` being a
+# SYMLINK is what makes activation one rename(2); a directory of the same name
+# would serve the same bytes today and could not be swapped atomically
+# tomorrow, and no request-level check can tell the two apart.
+activated="$(compose exec -T caddy readlink /srv/web/current 2>&1 || true)"
+case "$activated" in
+  releases/*) : ;;
+  *) fail "/srv/web/current is not a symlink into releases/ (got: ${activated})" ;;
+esac
+pooled="$(compose exec -T caddy sh -c 'ls -1 /srv/web/pool/assets | wc -l' 2>&1 || true)"
+[ "$(printf '%s' "$pooled" | tr -d '[:space:]')" -gt 0 ] 2>/dev/null ||
+  fail "the asset pool is empty; /assets/* is rooted at it (got: ${pooled})"
+pass "the volume holds a current symlink into releases/ and a populated asset pool"
+
 # The Telegram webhook must reach the API, not the SPA.
 #
 # This is the failure that has no symptom. The controller lives at
@@ -366,11 +427,19 @@ pass "a malformed webhook id is answered by the API"
 
 # The API prefix must reach the API, not the SPA. A 401 is the API answering;
 # HTML would mean the fallback swallowed it.
+#
+# The STATUS is asserted, not merely the absence of HTML. Reading only the body
+# meant every non-HTML outcome passed — a reset connection, an empty 502, a
+# Caddy error page that is not `<!doctype html>` — so a reverse-proxy upstream
+# pointed at a dead port would have printed this line green.
+api_status="$(curl -s -o /dev/null -w '%{http_code}' "${base}/api/admin/v1/settings" || true)"
 api_body="$(curl -s "${base}/api/admin/v1/settings" || true)"
 case "$(printf '%s' "$api_body" | tr '[:upper:]' '[:lower:]')" in
   *'<!doctype html'*) fail "an API request was answered with the SPA; the handle order is wrong" ;;
 esac
-pass "API requests reach the API, not the SPA"
+[ "$api_status" = "401" ] ||
+  fail "an API request answered ${api_status}, not the 401 that says the API itself replied"
+pass "API requests reach the API, not the SPA (401)"
 
 # ---------------------------------------------------------------------------
 step "7. backup"
