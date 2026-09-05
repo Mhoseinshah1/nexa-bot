@@ -202,6 +202,41 @@ export interface Container {
  */
 const PANEL_HTTP_RETRIES = 0;
 
+/**
+ * How much of a tenant's bucket the monitor must leave for its operator.
+ *
+ * Rounded UP, and never down to zero. A percentage of a small capacity floors
+ * to nothing — forty percent of two is zero — and a zero reserve is the
+ * invariant switched off exactly where it matters most: on a tenant with two
+ * tokens, background monitoring would take both and an operator diagnosing an
+ * outage would find no capacity to test their own panel with.
+ *
+ * The consequence at capacity 1 is deliberate and is the right way round: the
+ * reserve is 1, the monitor is refused every time, and the single token belongs
+ * to the operator. Monitoring is a convenience; being locked out of your own
+ * panel is not.
+ *
+ * Zero percent means zero, and only zero percent does. It is the operator
+ * saying they do not want the reserve, which is not the same as a rounding
+ * accident producing none.
+ *
+ * `Math.max(1, ...)` is a floor for a capacity of ZERO, and nothing else:
+ * `Math.ceil` of any positive fraction is already at least one, so for every
+ * capacity the configuration permits the two are the same number. Mutation says
+ * so — removing it changes no answer any test can produce — and it is recorded
+ * as that rather than described as the rule. The rule is `ceil`.
+ *
+ * EXPORTED so it can be tested. It was an expression inside `createContainer`,
+ * where every rule above was stated in this comment and enforced by arithmetic
+ * that nothing named: the monitor suite passes `budgetReserve` as a literal, so
+ * replacing `ceil` with `floor`, or dropping the `max(1, ...)`, left the whole
+ * suite green.
+ */
+export function monitorBudgetReserveFor(capacity: number, percent: number): number {
+  if (percent === 0) return 0;
+  return Math.max(1, Math.ceil((capacity * percent) / 100));
+}
+
 export function createContainer(config: AppConfig, role: ProcessRole): Container {
   const logger = createLogger(config.LOG_LEVEL, role);
   const clock = new SystemClock();
@@ -466,29 +501,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     cadence: monitorCadence,
   };
 
-  /**
-   * How much of a tenant's bucket the monitor must leave for its operator.
-   *
-   * Rounded UP, and never down to zero. A percentage of a small capacity floors
-   * to nothing — forty percent of two is zero — and a zero reserve is the
-   * invariant switched off exactly where it matters most: on a tenant with two
-   * tokens, background monitoring would take both and an operator diagnosing an
-   * outage would find no capacity to test their own panel with.
-   *
-   * The consequence at capacity 1 is deliberate and is the right way round:
-   * the reserve is 1, the monitor is refused every time, and the single token
-   * belongs to the operator. Monitoring is a convenience; being locked out of
-   * your own panel is not.
-   */
-  const monitorBudgetReserve =
-    config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT === 0
-      ? 0
-      : Math.max(
-          1,
-          Math.ceil(
-            (config.PANEL_PROBE_TENANT_LIMIT * config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT) / 100,
-          ),
-        );
+  const monitorBudgetReserve = monitorBudgetReserveFor(
+    config.PANEL_PROBE_TENANT_LIMIT,
+    config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT,
+  );
 
   const panelMonitor = new PanelMonitorService(
     {

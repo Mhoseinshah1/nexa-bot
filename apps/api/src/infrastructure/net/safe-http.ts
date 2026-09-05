@@ -4,6 +4,7 @@ import { rootCertificates } from 'node:tls';
 import { request as httpRequest, type ClientRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { LookupAddress } from 'node:dns';
+import { PROVIDER_FAILURE_RETRYABLE } from '@nexa/contracts';
 import type {
   ProviderFailureKind,
   ProviderHttpClient,
@@ -95,11 +96,22 @@ export const DEFAULT_SAFE_HTTP: Omit<SafeHttpOptions, 'allowLoopback'> = {
   maxRetries: 0,
 };
 
-/** Failures where another attempt could plausibly land differently. */
-const TRANSIENT: ReadonlySet<ProviderFailureKind> = new Set<ProviderFailureKind>([
-  'UNREACHABLE',
-  'TIMEOUT',
-]);
+/**
+ * Failures where another attempt could plausibly land differently.
+ *
+ * READ FROM THE CONTRACT, never restated. This was a local set of two kinds,
+ * and `PROVIDER_FAILURE_RETRYABLE` already disagreed with it about two more —
+ * `RATE_LIMITED`, added on this branch, and `PROVIDER_ERROR`. Nothing failed,
+ * because the shipped `maxRetries` is 0 and the loop below never reaches a
+ * second attempt: a divergence from a frozen specification, held dormant by a
+ * constant. The next person to raise that constant would have inherited it.
+ *
+ * A kind added to the contract is now covered here the moment it is added,
+ * which is the property a restatement cannot have.
+ */
+function isTransient(failure: ProviderFailureKind): boolean {
+  return PROVIDER_FAILURE_RETRYABLE[failure];
+}
 
 /**
  * A Node error code, as one of our kinds.
@@ -296,7 +308,7 @@ export class SafeHttpClient {
       if (outcome.ok) return outcome;
       failure = outcome.failure;
       status = outcome.status;
-      if (!TRANSIENT.has(outcome.failure)) break;
+      if (!isTransient(outcome.failure)) break;
     }
     return { ok: false, failure, status };
   }

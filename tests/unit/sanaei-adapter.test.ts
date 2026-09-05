@@ -346,6 +346,45 @@ describe('the Sanaei adapter — session compatibility mode', () => {
     expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
   });
 
+  it('16d. P7: refuses a csrf token too large to be one, submitting no credential', async () => {
+    // Bounded only by `maxResponseBytes` — half a megabyte at the shipped
+    // default — and then written into the headers of every request that
+    // follows, on every probe, for ever. Same structural claim first: the flow
+    // must STOP at the mint.
+    const server = await panel({ behaviour: 'csrf-enormous-token' });
+    const outcome = await probe(server, withPassword());
+
+    expect(server.requests.map((r) => r.path.replace(/^\//, ''))).toEqual(['csrf-token']);
+    expect(asText(server.requests)).not.toContain(CANARY.password);
+    expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+  });
+
+  it('16e. P7: refuses a csrf token carrying CRLF rather than throwing on it', async () => {
+    // Node rejects a header value containing a control character by THROWING,
+    // so a panel answering with one turned a probe into an exception the caller
+    // has to recover from. What actually happened is a panel that is not
+    // speaking this contract, and that has a name.
+    const server = await panel({ behaviour: 'csrf-token-with-crlf' });
+    const outcome = await probe(server, withPassword());
+
+    expect(server.requests.map((r) => r.path.replace(/^\//, ''))).toEqual(['csrf-token']);
+    expect(asText(server.requests)).not.toContain(CANARY.password);
+    expect(asText(server.requests)).not.toContain('X-Injected');
+    expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+  });
+
+  it('16f. P7: refuses a session cookie too large to be one, submitting no credential', async () => {
+    // The cookie is as provider-supplied as the token, and it is rotated by the
+    // login and 2FA responses as well as minted here, so the bound is applied
+    // where the value is read rather than only where it is first seen.
+    const server = await panel({ behaviour: 'csrf-enormous-cookie' });
+    const outcome = await probe(server, withPassword());
+
+    expect(server.requests.map((r) => r.path.replace(/^\//, ''))).toEqual(['csrf-token']);
+    expect(asText(server.requests)).not.toContain(CANARY.password);
+    expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+  });
+
   it('16. never sends a twoFactorCode field', async () => {
     const server = await panel();
     await probe(server, withPassword());

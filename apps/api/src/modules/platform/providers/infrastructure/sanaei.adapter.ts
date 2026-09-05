@@ -201,6 +201,35 @@ function fromApiStatus(status: number): ProviderProbeOutcome {
 const SESSION_COOKIE = '3x-ui';
 
 /**
+ * The longest a session cookie value or a CSRF token may be before this adapter
+ * stops believing it is one.
+ *
+ * v3.7.0 mints a 32-character token and a session id of similar order; a
+ * kilobyte is generous by three decimal orders and still bounded. Without a
+ * bound the only limit was `maxResponseBytes` — half a megabyte by default —
+ * and both values are written straight into the headers of the two or three
+ * requests that follow, on every probe, for ever.
+ *
+ * The character set matters more than the length. A value carrying CR or LF
+ * makes Node reject the header and THROW, so a panel answering with one turned
+ * a probe into an exception the caller has to recover from rather than into the
+ * `MALFORMED_RESPONSE` that describes exactly what happened. A panel that
+ * answers with something outside this shape is not speaking the v3.7.0
+ * contract, which is a compatibility answer, not an error.
+ */
+const MAX_CREDENTIAL_TOKEN_BYTES = 1024;
+
+/** Whether a provider-supplied string is safe to put in a header, and small. */
+function usableHeaderValue(value: string): boolean {
+  if (value.length === 0 || value.length > MAX_CREDENTIAL_TOKEN_BYTES) return false;
+  // Node's own rule for a header value: no control characters at all. Written
+  // as an allow-list of the printable range plus tab, because an exclusion list
+  // of the characters that happen to matter today is the kind that gets a new
+  // exception added to it later.
+  return /^[\t\x20-\x7e\u0080-\u00ff]+$/.test(value);
+}
+
+/**
  * The session cookie's new value, if this response set one.
  *
  * Deliberately not a cookie jar. Carrying every `Set-Cookie` a panel happens to
@@ -227,7 +256,11 @@ function sessionCookieFrom(setCookie: readonly string[]): string | null {
     if (equals <= 0) continue;
     if (pair.slice(0, equals).trim() !== SESSION_COOKIE) continue;
     const value = pair.slice(equals + 1).trim();
-    if (value.length > 0) return value;
+    // Bounded and header-safe here too, not only at the first mint: the login
+    // and 2FA responses each rotate this value, and a replacement is adopted
+    // for the requests that follow. A rotation is exactly as provider-supplied
+    // as the original.
+    if (usableHeaderValue(value)) return value;
   }
   return null;
 }
@@ -287,13 +320,18 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
     }
     const csrfToken = minted.obj;
     let session = sessionCookieFrom(csrf.setCookie);
-    if (session === null || csrfToken.length === 0) {
+    if (session === null || !usableHeaderValue(csrfToken) || !usableHeaderValue(session)) {
       // v3.7.0 binds the token to the session it was minted in. Without the
       // `3x-ui` cookie there is no session to bind to, so a login would be
       // refused for a reason that has nothing to do with the operator's
       // credentials — and a panel that set some OTHER cookie instead is not
       // speaking this contract, which is a compatibility answer rather than an
       // invitation to submit a password and find out.
+      //
+      // The same answer covers a token or a cookie this adapter will not put in
+      // a header: too long, or carrying a control character. Reported as the
+      // compatibility failure it is, rather than sent onward to make Node throw
+      // on the next request.
       return { ok: false, failure: 'MALFORMED_RESPONSE', status: csrf.status };
     }
     const authHeaders = (): Record<string, string> => ({
