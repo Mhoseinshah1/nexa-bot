@@ -437,6 +437,29 @@ except json.JSONDecodeError:
 def verdict(service):
     mine = [entry for entry in entries if entry.get("Service") == service]
     running = [entry for entry in mine if entry.get("State") == "running"]
+    # A one-off that is still RUNNING must not hide a real container that has
+    # DIED. The state-first rule above fixed the corpse-hides-a-healthy-one
+    # direction and left this one: a `compose run` container whose client was
+    # killed keeps running and carries the same Service, so the branch below
+    # answered running/starting while the api next to it was exited, and the
+    # fast-fail this whole function exists for never fired. The update then
+    # waited out the full readiness timeout before backing out.
+    #
+    # Terminal WINS over a running one-off, and only over a one-off: a genuine
+    # replacement, where the outgoing container is exited and the incoming one
+    # is running, is a normal moment in `up -d` and is not a failure. So the
+    # distinction is between entries with a Name that compose gave a service
+    # container and entries it gave a one-off, which differ in shape: a service
+    # container is <project>-<service>-<index>, a one-off is <project>-<service>-run-<id>.
+    def is_one_off(entry):
+        return "-run-" in (entry.get("Name") or "")
+    dead = [e for e in mine if (e.get("State") or "") in ("exited", "dead") and not is_one_off(e)]
+    # `running` must be non-empty: with nothing running at all, the branch
+    # below already decides correctly, and firing here would read a corpse
+    # beside a container that is merely `created` as a death — backing out a
+    # release that was only slow, after the migration had already run.
+    if dead and running and all(is_one_off(e) for e in running):
+        return dead[0].get("State") or ""
     if running:
         # The BEST health among the running entries, not the first one that
         # has a health at all. A `compose run` container whose client was
@@ -978,21 +1001,80 @@ EOF
 # without reinstalling: staging.1 through staging.4 never staged anything, so
 # the first update captures whatever those installs put on disk as the current
 # release's set.
+#
+# Whether the process holding <port>/<proto> is this installation's own edge.
+#
+# The question the port preflight actually needs, and it is about the SOCKET,
+# not about the container list. The check this replaced counted containers
+# named `nexa-caddy*` in `docker ps` and waived the conflict on any match — so
+# a nexa-caddy that was up but bound to nothing waved an unrelated nginx
+# through, and the installer proceeded to build an edge that could never bind.
+#
+# `ss -p` names the process behind each socket. In this topology a published
+# port is held by `docker-proxy` (userland proxy) or, with it disabled, by the
+# container's own `caddy`; both are accepted, and only when a Nexa Caddy
+# container is actually running, so an unrelated docker-proxy for somebody
+# else's stack is still a conflict.
+#
+# Returns 1 — a conflict — whenever the holder cannot be established. A
+# preflight that cannot tell must refuse: passing on ignorance is the wrong
+# answer in the dangerous direction, which is the same rule the surrounding
+# checks follow.
+nexa_port_is_ours() {
+  local port="$1" proto="$2" flags sockets
+  [ "$proto" = tcp ] && flags='-Hltnp' || flags='-Huanp'
+  # Read into a variable rather than piping into a matcher: under `pipefail` a
+  # matcher that exits early can kill the writer and turn "something is here"
+  # into a success.
+  sockets="$(ss "$flags" "sport = :${port}" 2>/dev/null || true)"
+  [ -n "$sockets" ] || return 1
+  case "$sockets" in
+    *docker-proxy* | *caddy*) ;;
+    *) return 1 ;;
+  esac
+  # And a Nexa edge must actually be running, so another stack's docker-proxy
+  # is not read as ours. `grep -c` reads to the end of its input, so nothing
+  # upstream is killed mid-write; `grep -q` would not.
+  local running
+  running="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c '^nexa-caddy' || true)"
+  [ "${running:-0}" -gt 0 ]
+}
+
+# Every failure is REPORTED AND RETURNED, never `nexa_die`. The caller decides
+# what a failure to record means, and the two callers mean opposite things by
+# it: an update refuses to replace the live assets while the outgoing set
+# cannot be recorded, because it would then have nothing to put back, whereas a
+# rollback whose target is sound must not be refused for the sake of its own
+# undo, and says so in a warning. `nexa_die` exits the process, so it made the
+# rollback caller's `|| nexa_warn` unreachable and turned every one of these
+# into an abort — the same shape as the `cmd_backup` hazard documented in
+# `botctl`, where a helper that reports through `nexa_die` cannot be given a
+# fallback by the caller.
 nexa_capture_live_assets() {
   local digest="$1" version="${2:-}"
   local final
-  final="$(nexa_assets_path "$digest")" || nexa_die "internal error: capturing host assets needs a digest."
+  if ! final="$(nexa_assets_path "$digest")"; then
+    nexa_warn "internal error: capturing host assets needs a digest."
+    return 1
+  fi
   nexa_assets_staged "$digest" && return 0
 
   local partial="${final}.partial"
   rm -rf "$partial"
-  mkdir -p "$partial/bin" "$partial/caddy" || nexa_die "cannot create ${partial}."
+  if ! mkdir -p "$partial/bin" "$partial/caddy"; then
+    nexa_warn "cannot create ${partial}, so the live host assets cannot be recorded."
+    return 1
+  fi
 
   local source destination mode
   while IFS='|' read -r source destination mode; do
     [ -n "$source" ] || continue
     if [ -r "$destination" ]; then
-      cp -p "$destination" "${partial}/${source}" || nexa_die "cannot copy ${destination}."
+      if ! cp -p "$destination" "${partial}/${source}"; then
+        rm -rf "$partial"
+        nexa_warn "cannot copy ${destination}, so the live host assets cannot be recorded."
+        return 1
+      fi
     else
       # An asset the current installation does not have. Recorded as absent
       # rather than invented, so a rollback does not install a file this
@@ -1007,8 +1089,10 @@ EOF
   printf '%s\n' "${version:-unknown}" >"${partial}/release"
 
   rm -rf "$final"
-  mv -f "$partial" "$final" ||
-    nexa_die "cannot record the host assets for ${digest}."
+  if ! mv -f "$partial" "$final"; then
+    nexa_warn "cannot record the host assets for ${digest}."
+    return 1
+  fi
 }
 
 # Make sure a release's host-asset set exists under its digest, from the only

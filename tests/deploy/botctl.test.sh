@@ -225,6 +225,36 @@ parser_case 'an entry with no State does not suppress the fast-fail' \
 parser_case 'a State-less entry after a corpse is not read as life' \
   exited "${DEAD_STARTING}\n${NO_STATE}\n${WORKER_HEALTHY}"
 
+# --- D8: a running one-off must not hide a dead service container ------------
+#
+# The state-first rule fixed one direction of this — a health-carrying corpse
+# no longer hides a healthy container — and left the other. A `compose run`
+# container whose client was killed keeps RUNNING and carries the same Service
+# and the same healthcheck, so it answered "starting" while the real api next
+# to it had exited, and the fast-fail never fired: the update waited out the
+# whole readiness timeout before backing out.
+#
+# Compose distinguishes them by NAME: a service container is
+# <project>-<service>-<index>, a one-off is <project>-<service>-run-<id>. The
+# fixtures above carry no Name at all, which is deliberate — the rule must
+# degrade to the previous behaviour rather than change an answer it cannot
+# justify, and every case above is still asserted unchanged.
+ONEOFF_RUNNING='{"Name":"nexa-api-run-a1b2c3","Service":"api","State":"running","Health":"starting"}'
+ONEOFF_DEAD='{"Name":"nexa-api-run-d4e5f6","Service":"api","State":"exited","Health":"starting"}'
+SVC_API_DEAD='{"Name":"nexa-api-1","Service":"api","State":"exited","Health":"starting"}'
+SVC_API_HEALTHY='{"Name":"nexa-api-2","Service":"api","State":"running","Health":"healthy"}'
+
+parser_case 'D8: a running one-off does not hide an api that has died' \
+  exited "${ONEOFF_RUNNING}\n${SVC_API_DEAD}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
+parser_case 'D8: and not when it is listed after the corpse either' \
+  exited "${SVC_API_DEAD}\n${ONEOFF_RUNNING}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
+# The two directions the rule must NOT fire in, or it would back out releases
+# that are working.
+parser_case 'D8: a one-off corpse does not fast-fail a healthy api' \
+  healthy "${ONEOFF_DEAD}\n${SVC_API_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
+parser_case 'D8: a replaced container beside its replacement is not a failure' \
+  healthy "${SVC_API_DEAD}\n${SVC_API_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
+
 # --- C8: the worker is half of the application -------------------------------
 parser_case 'C8: api healthy + worker healthy is ready' \
   healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
@@ -614,6 +644,114 @@ test_case 'a rerun of the same version and the same digest is still accepted'
 installer_output="$(digest_probe _ "$DIGEST_A" || true)"
 assert_not_contains 'an unchanged digest was refused' \
   "$installer_output" 'that tag has been moved'
+
+test_case 'D12: the port preflight sees UDP, and only waives the port it actually holds'
+# Two defects in one check. `ss -Hltn` is a TCP-LISTEN filter, so the 443/udp
+# that compose.yml publishes for HTTP/3 was never looked at — a service holding
+# it passed preflight and then made Caddy fail to bind. And the escape hatch
+# counted containers named `nexa-caddy*` in `docker ps` and waived the conflict
+# on any match, so a nexa-caddy that was up but bound to nothing waved an
+# unrelated server through.
+#
+# Driven through the REAL `nexa_port_is_ours` against stub `ss` and `docker` on
+# PATH, so what is exercised is the shipped predicate rather than a copy of it.
+d12_bin="${NEXA_ROOT}/d12-bin"
+D12_ANSWERS="${NEXA_ROOT}/d12-answers"
+export D12_ANSWERS
+mkdir -p "$d12_bin" "$D12_ANSWERS"
+
+# The stubs answer from files this test writes, one per proto/port. An absent
+# file is an unused port, which is what `ss` reports by saying nothing.
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'case "$1" in *u*) proto=udp ;; *) proto=tcp ;; esac\n'
+  printf 'port="${2##*:}"\n'
+  printf 'answer="${D12_ANSWERS}/${proto}-${port}"\n'
+  printf '[ -r "$answer" ] && cat "$answer"\n'
+  printf 'exit 0\n'
+} >"${d12_bin}/ss"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf '[ "$1" = ps ] || exit 0\n'
+  printf '[ -r "${D12_ANSWERS}/containers" ] && cat "${D12_ANSWERS}/containers"\n'
+  printf 'exit 0\n'
+} >"${d12_bin}/docker"
+chmod 0755 "${d12_bin}/ss" "${d12_bin}/docker"
+
+# The predicate, called exactly as preflight calls it, in a child process so
+# the stubbed PATH cannot leak into the rest of the suite.
+d12_is_ours() {
+  # shellcheck disable=SC2031
+  # PATH is prefixed FOR THIS COMMAND only, which is the point: the stubs must
+  # be visible to the child that sources the library and to nothing else in the
+  # suite. SC2031's "the change might be lost" is the intended behaviour here.
+  PATH="${d12_bin}:${PATH}" bash -c '
+    . "$1" >/dev/null 2>&1
+    nexa_port_is_ours "$2" "$3"' _ "${REPO}/deploy/bin/nexa-lib.sh" "$1" "$2" >/dev/null 2>&1
+}
+
+: >"${D12_ANSWERS}/containers"
+rm -f "${D12_ANSWERS}/tcp-443" "${D12_ANSWERS}/udp-443"
+# 1. Nothing holds the port. The caller only asks once `ss` has already found a
+#    listener, so "no holder" is the cannot-establish answer, and a preflight
+#    that cannot establish must refuse.
+assert_fails 'an unheld port was claimed as ours' d12_is_ours 443 tcp
+
+# 2. An unrelated server holds 443/tcp while a nexa-caddy container is up. The
+#    old check waived exactly this.
+printf 'LISTEN 0 511 *:443 *:* users:(("nginx",pid=91,fd=7))\n' >"${D12_ANSWERS}/tcp-443"
+printf 'nexa-caddy\n' >"${D12_ANSWERS}/containers"
+assert_fails 'an unrelated nginx was waived because a nexa-caddy was running' \
+  d12_is_ours 443 tcp
+
+# 3. Our own edge holds it, and a nexa-caddy is up: an idempotent rerun.
+printf 'LISTEN 0 4096 *:443 *:* users:(("docker-proxy",pid=77,fd=4))\n' >"${D12_ANSWERS}/tcp-443"
+assert_ok 'our own edge was reported as a conflict' d12_is_ours 443 tcp
+
+# 4. Docker-proxy holds it but no Nexa edge is running: another stack's.
+: >"${D12_ANSWERS}/containers"
+assert_fails 'another stack does not own our ports' d12_is_ours 443 tcp
+
+# 5. UDP at all. With the old TCP-only filter this port was invisible.
+printf 'nexa-caddy\n' >"${D12_ANSWERS}/containers"
+printf 'UNCONN 0 0 *:443 *:* users:(("systemd-resolve",pid=42,fd=12))\n' >"${D12_ANSWERS}/udp-443"
+assert_fails 'a foreign holder of 443/udp was accepted as ours' d12_is_ours 443 udp
+printf 'UNCONN 0 0 *:443 *:* users:(("docker-proxy",pid=77,fd=9))\n' >"${D12_ANSWERS}/udp-443"
+assert_ok 'our own 443/udp was reported as a conflict' d12_is_ours 443 udp
+
+# And preflight must actually ask, or the predicate above is unreachable.
+installer_ports="$(sed -n '/--- Ports ---/,/ports 80 and 443 are free/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the port preflight never enumerates the udp proto' "$installer_ports" 'for proto in tcp udp'
+assert_contains 'the port preflight does not ask whose the socket is' \
+  "$installer_ports" 'nexa_port_is_ours'
+assert_not_contains 'the port preflight still waives on a container name alone' \
+  "$installer_ports" 'grep -c'
+unset D12_ANSWERS
+
+test_case 'D3: the installer refuses a moved tag BEFORE it replaces the host tooling'
+# `install_assets` overwrites compose.yml, the Caddyfile, nexa-lib.sh and
+# botctl — the installed release's TOOLING. It ran before the digest was even
+# resolved, so a rerun of a version whose tag had moved was refused exactly as
+# designed and stopped with the host already carrying this checkout's tooling
+# over the release that is actually running. A refusal that says nothing was
+# changed has to be true when it says it.
+#
+# Asserted on the ORDER of the calls in `main`, because that is the rule: the
+# suite cannot run the installer for real, and a test that called the two
+# functions itself would assert its own ordering rather than the installer's.
+installer_main="$(sed -n '/^main() {/,/^}/p' "${REPO}/deploy/install.sh")"
+assets_at="$(printf '%s\n' "$installer_main" | grep -n '^ *install_assets$' | sed -n '1s/:.*//p')"
+refusal_at="$(printf '%s\n' "$installer_main" | grep -n 'refuse_digest_change "\$digest"' | sed -n '1s/:.*//p')"
+secrets_at="$(printf '%s\n' "$installer_main" | grep -n '^ *generate_secrets$' | sed -n '1s/:.*//p')"
+assert_ok 'main does not call install_assets' test -n "$assets_at"
+assert_ok 'main does not call refuse_digest_change' test -n "$refusal_at"
+assert_ok 'main does not call generate_secrets' test -n "$secrets_at"
+assert_ok 'the host tooling is replaced before the moved-tag refusal' \
+  test "${refusal_at:-9999}" -lt "${assets_at:-0}"
+# And the other bound: `generate_secrets` substitutes into the nexa.env.template
+# that `install_assets` puts there, so it cannot move above it.
+assert_ok 'the secrets are generated before the template they substitute into is installed' \
+  test "${assets_at:-9999}" -lt "${secrets_at:-0}"
 
 test_case 'the installer actually calls the moved-tag refusal'
 # The rule above is only reachable if the installer calls it, and the probe
@@ -1800,6 +1938,104 @@ run_botctl rollback
 assert_fails 'a rollback that could not start reported success' test "$BOTCTL_STATUS" -eq 0
 assert_equals "a failed rollback left the previous release's botctl installed" 'B' "$(installed_label)"
 rm -f "${FAKE_DIR}/up_exit_${DIGEST_A}"
+
+test_case 'D2: a rollback that starts but is not ready puts the current release back'
+# The readiness path is where the old code left the installation describing
+# itself incorrectly. `up -d` has already SUCCEEDED by then, so the containers
+# are running the previous release — while `nexa_commit_release` is never
+# reached, so the recorded release and deploy.env both still say the current
+# one and AGREE with each other. `nexa_check_divergence` compares exactly those
+# two, so it saw nothing wrong, and every later `botctl status` named a release
+# that was not what was running.
+#
+# Restoring the assets was not enough. The containers have to come back too,
+# which is what an UPDATE's back-out has always done.
+fake_set "api_health_${DIGEST_A}" starting
+reset_docker_log
+run_botctl rollback
+assert_fails 'a rollback that never became ready reported success' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'the failed rollback moved the current release' 'vB' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_equals "the failed rollback left the previous release's botctl installed" 'B' "$(installed_label)"
+assert_contains 'the operator was not told the current release came back' \
+  "$BOTCTL_OUTPUT" 'is running again'
+# The containers were actually brought back, not merely described as back: the
+# LAST `up` in the log is the one without the previous image's digest.
+last_up="$(docker_log | grep 'up -d' | tail -1)"
+assert_ok 'nothing was started after the failed rollback' test -n "$last_up"
+assert_not_contains 'the last thing started was still the rollback target' \
+  "$last_up" "$DIGEST_A"
+fake_set "api_health_${DIGEST_A}" healthy
+
+test_case 'D6: a restore that cannot finish does not replace the diagnosis'
+# `nexa_activate_release_assets` reports its failures through `nexa_die`, which
+# EXITS. Called directly in a back-out path, a restore that could not finish
+# terminated botctl before the `nexa_die` that tells the operator which release
+# started — so the operator read an internal message about a staged file
+# instead of what had happened to their installation.
+fake_set "up_exit_${DIGEST_A}" 1
+current_digest_dir="$(assets_dir_for "$DIGEST_B")"
+# The restore must REACH the activation and fail INSIDE it. Removing the staged
+# directory would not do: `restore_current_assets` checks `nexa_assets_staged`
+# first and returns without calling activation at all, so the failure under test
+# would never happen. The set is left in place and one file in it is emptied,
+# which is what activation refuses ("staged X is missing or empty") — through
+# `nexa_die`, which is the exit this guards against.
+: >"${current_digest_dir}/bin/botctl"
+run_botctl rollback
+run_botctl_status_after_d6="$BOTCTL_STATUS"
+d6_output="$BOTCTL_OUTPUT"
+rm -rf "$current_digest_dir"
+rm -f "${FAKE_DIR}/up_exit_${DIGEST_A}"
+assert_fails 'a rollback that could not start reported success' \
+  test "$run_botctl_status_after_d6" -eq 0
+assert_contains 'the failure of the back-out replaced the diagnosis' \
+  "$d6_output" 'did not start'
+# And the back-out's own failure is still reported — silenced would be as bad
+# as fatal.
+assert_contains 'the failed restore was not reported at all' \
+  "$d6_output" "could not restore"
+# Put the current release's set back for the cases that follow.
+run_botctl update vB >/dev/null 2>&1 || true
+
+test_case 'D9: recording the outgoing assets reports and RETURNS, and never exits'
+# `nexa_capture_live_assets` reported every internal failure through `nexa_die`,
+# which exits the process. Its rollback caller invokes it as
+# `... || nexa_capture_live_assets ... || nexa_warn`, whose comment says "a
+# rollback whose target is sound must not be refused for the sake of its own
+# undo" — an intent the `||` could never carry out, because there was nothing
+# left to run. Same shape as the `cmd_backup` hazard this file documents.
+#
+# The contract, tested directly: the caller must still be alive afterwards. A
+# non-zero status alone cannot tell "returned 1" from "exited 1", so the probe
+# prints a marker AFTER the call and the marker is the assertion.
+capture_survives="$(bash -c '
+  . "$1" >/dev/null 2>&1
+  nexa_capture_live_assets "not-a-digest" v1.0.0 >/dev/null 2>&1
+  printf "SURVIVED:%s\n" "$?"' _ "${REPO}/deploy/bin/nexa-lib.sh" 2>/dev/null || true)"
+assert_contains 'a failure to record the outgoing assets killed its caller' \
+  "$capture_survives" 'SURVIVED:'
+assert_not_contains 'a failure to record the outgoing assets was reported as success' \
+  "$capture_survives" 'SURVIVED:0'
+
+test_case 'D9: a rollback whose target is sound is not refused for the sake of its own undo'
+# End to end. The CURRENT release's recorded set is removed and its recovery
+# from its own image refused, and one of the live files it would otherwise be
+# captured from is gone — so its assets cannot be recorded by any route. The
+# rollback TARGET is untouched and entirely sound throughout, and must proceed.
+mv "$current_digest_dir" "${current_digest_dir}.hidden"
+fake_set "assets_missing_${DIGEST_B}" 1
+mv "${NEXA_DEPLOY_DIR}/caddy/routes.caddy" "${NEXA_ROOT}/routes.caddy.hidden"
+run_botctl rollback
+mv "${NEXA_ROOT}/routes.caddy.hidden" "${NEXA_DEPLOY_DIR}/caddy/routes.caddy" 2>/dev/null || true
+rm -f "${FAKE_DIR}/assets_missing_${DIGEST_B}"
+assert_equals 'a sound rollback was refused because its undo could not be recorded' \
+  0 "$BOTCTL_STATUS"
+assert_equals 'the sound rollback did not become current' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_contains 'the operator was not warned that the undo cannot be recorded' \
+  "$BOTCTL_OUTPUT" 'could not be recorded'
+rm -rf "${current_digest_dir}.hidden"
+# Put the installation back on vB for the cases that follow.
+run_botctl update vB >/dev/null 2>&1 || true
 
 test_case "rollback refuses when the previous release's assets were never recorded"
 # An installation that predates this mechanism: its pointers were written by a

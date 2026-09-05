@@ -251,19 +251,36 @@ preflight() {
   # the writer ahead of it can die of SIGPIPE, and the pipeline returns 141 —
   # so the test reports "nothing listening" precisely when something is. On a
   # port preflight that is the wrong answer in the dangerous direction.
-  local port listeners names
+  # UDP is checked as well as TCP, and only on 443: `compose.yml` publishes
+  # `443:443/udp` for HTTP/3, so a service holding 443/udp is a real conflict
+  # that Caddy would fail to bind — and `ss -Hltn` is TCP-listen only, so it
+  # saw none of them. Port 80 is TCP alone; nothing here binds 80/udp.
+  local port listeners proto flags
   for port in 80 443; do
-    listeners="$(ss -Hltn "sport = :${port}" 2>/dev/null || true)"
-    if [ -n "$listeners" ]; then
+    for proto in tcp udp; do
+      [ "$proto" = tcp ] || [ "$port" = 443 ] || continue
+      # `-l` is a TCP-listen filter and means nothing for UDP; a bound UDP
+      # socket is simply present, so the sockets are enumerated without it.
+      [ "$proto" = tcp ] && flags='-Hltn' || flags='-Huan'
+      listeners="$(ss "$flags" "sport = :${port}" 2>/dev/null || true)"
+      [ -n "$listeners" ] || continue
+
       # Our own Caddy holding the port on a rerun is expected, not a conflict.
-      # `grep -c` reads to the end of its input, so nothing upstream is ever
-      # killed mid-write; `grep -q` would not.
-      names="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c '^nexa-caddy' || true)"
-      [ "${names:-0}" -eq 0 ] || continue
-      nexa_die "something is already listening on port ${port}. Nexa's edge needs 80 (ACME and the redirect) and 443. Stop the other service, or install Nexa on a host that is not already serving HTTP."
-    fi
+      #
+      # Established by asking WHICH process holds this socket, not by asking
+      # whether a container of that name happens to be running. The old check
+      # counted `nexa-caddy*` in `docker ps` and waived the conflict on any
+      # match — so a nexa-caddy that was up but bound to nothing waved through
+      # an unrelated nginx on the same port, and the installer proceeded to an
+      # edge that could never start. `ss -p` names the process; Caddy in this
+      # topology is what publishes these ports, and docker-proxy or the
+      # container's own caddy is what appears.
+      if ! nexa_port_is_ours "$port" "$proto"; then
+        nexa_die "something is already listening on ${port}/${proto}, and it is not Nexa's edge. Nexa needs 80 (ACME and the redirect) and 443 on both TCP and UDP (HTTP/3). Stop the other service, or install Nexa on a host that is not already serving HTTP."
+      fi
+    done
   done
-  nexa_ok "ports 80 and 443 are free"
+  nexa_ok "ports 80 and 443 are free, on TCP and on UDP"
 
   # --- The owner's password source ---
   if [ "$SKIP_OWNER" = "no" ] && [ -n "$OWNER_PASSWORD_FILE" ]; then
@@ -760,7 +777,6 @@ main() {
   # installer racing an update would interleave migrations.
   nexa_acquire_lock 0
 
-  install_assets
   check_registry
 
   nexa_step "resolving ${VERSION} to an immutable digest"
@@ -770,6 +786,19 @@ main() {
   image="${NEXA_IMAGE_REPO}@${digest}"
   refuse_digest_change "$digest"
   nexa_ok "${VERSION} is ${digest}"
+
+  # AFTER the refusal, and that ordering is the whole point of the refusal.
+  #
+  # This overwrites the host's compose.yml, Caddyfile, nexa-lib.sh and botctl —
+  # the installed release's TOOLING. It used to run before the digest was even
+  # resolved, so a rerun of a version whose tag had been moved was refused by
+  # `refuse_digest_change` as designed, and stopped with the host already
+  # carrying this checkout's tooling over the release that is actually running.
+  # A refusal that says "nothing was changed" has to be true when it says it.
+  #
+  # It stays before `generate_secrets`, which substitutes into the
+  # `nexa.env.template` installed here.
+  install_assets
 
   generate_secrets
   write_deploy_env "$image"
