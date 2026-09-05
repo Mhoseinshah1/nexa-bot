@@ -399,11 +399,19 @@ pass "a malformed webhook id is answered by the API"
 
 # The API prefix must reach the API, not the SPA. A 401 is the API answering;
 # HTML would mean the fallback swallowed it.
+#
+# The STATUS is asserted, not merely the absence of HTML. Reading only the body
+# meant every non-HTML outcome passed — a reset connection, an empty 502, a
+# Caddy error page that is not `<!doctype html>` — so a reverse-proxy upstream
+# pointed at a dead port would have printed this line green.
+api_status="$(curl -s -o /dev/null -w '%{http_code}' "${base}/api/admin/v1/settings" || true)"
 api_body="$(curl -s "${base}/api/admin/v1/settings" || true)"
 case "$(printf '%s' "$api_body" | tr '[:upper:]' '[:lower:]')" in
   *'<!doctype html'*) fail "an API request was answered with the SPA; the handle order is wrong" ;;
 esac
-pass "API requests reach the API, not the SPA"
+[ "$api_status" = "401" ] ||
+  fail "an API request answered ${api_status}, not the 401 that says the API itself replied"
+pass "API requests reach the API, not the SPA (401)"
 
 # ---------------------------------------------------------------------------
 step "7. backup"

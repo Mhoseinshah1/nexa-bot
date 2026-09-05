@@ -64,10 +64,22 @@ for dir in \
   apps/api/src/surfaces \
   apps/api/src/modules \
   apps/api/drizzle \
+  apps/api/src/modules/platform/providers \
   apps/web/src \
   docs/research; do
   require_dir "$dir" || true
 done
+
+# Same rule for the single files a check scans. The two Phase 3 checks below
+# were written as a bare `if [ -f ]` with no else — the exact shape the
+# `docs/research` note above records as already having cost this script a
+# silently skipped rule once.
+require_file() {
+  [ -f "$1" ] && return 0
+  fail "a checked file has moved: $1" "" \
+       "The check that scans it would pass vacuously. Update the path here and in the check."
+}
+require_file apps/api/src/modules/platform/panels/application/panel-monitor.service.ts || true
 
 # --- @nexa/contracts is the root of the dependency graph --------------------
 # It holds declarations only. A framework import here means an implementation
@@ -116,9 +128,20 @@ fi
 # Two surfaces each owning their own version of a shared concept is the root
 # cause of the legacy split brain: four admin roles in one surface, seven in the
 # other; 36 editable texts in one, 608 in the other.
-if grep -rnE "from '(drizzle-orm|pg)'" apps/api/src/surfaces >/dev/null 2>&1; then
-  fail "A surface imports a database library" \
-       "Surfaces call application services. They do not read the database."
+# Two ways in, and the check used to know only one of them.
+#
+# A surface that imports `pg` is caught by the first pattern. A surface that
+# reaches the pool through the container it is already handed is not — and one
+# did: the readiness probe held a `SELECT` against the migration ledger and a
+# `client.query('SELECT 1')`, in `apps/api/src/surfaces/web`, while this line
+# printed `ok surfaces contain no data access` on every build. The rule is that
+# surfaces hold no SQL and open no checkout; both halves are now asserted.
+SURFACE_DATA=$(scan_source \
+  "(from '(drizzle-orm|pg)'|\.withClient\(|\.withExecutor\(|\.query\(|\bsql\`)" \
+  apps/api/src/surfaces)
+if [ -n "$SURFACE_DATA" ]; then
+  fail "A surface reaches the database" "$SURFACE_DATA" \
+       "Surfaces call application services. Naming a purpose on the database handle is fine; holding a statement or a checkout is not."
 else
   pass "surfaces contain no data access"
 fi
@@ -205,7 +228,7 @@ fi
 # argument the check previously made only about the DISPATCHER's name, while
 # the repository methods themselves were one `container.notificationRepository`
 # away from a controller.
-RESOLVER_LEAK=$(grep -rnE "settingsResolver|featureFlagResolver|templateResolver|notifications\.queue\(|notificationDispatcher|NotificationDispatcher|failExhausted|claimDue|activeTenants|releaseClaim|opsLogWriter" \
+RESOLVER_LEAK=$(grep -rnE "settingsResolver|featureFlagResolver|templateResolver|notifications\.queue\(|notificationDispatcher|NotificationDispatcher|failExhausted|claimDue|activeTenants|releaseClaim|opsLogWriter|panelMonitor|PanelMonitorService|claimTenants|dueForTenants|refreshTenantBounds" \
   apps/api/src/surfaces 2>/dev/null || true)
 if [ -n "$RESOLVER_LEAK" ]; then
   fail "A surface reaches an unguarded resolver, the notification queue, the dispatcher, or cross-tenant housekeeping" \

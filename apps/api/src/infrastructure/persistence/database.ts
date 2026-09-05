@@ -47,6 +47,24 @@ export interface DatabaseHandle {
    * nowhere else.
    */
   withExecutor<T>(fn: (executor: Database) => Promise<T>, options?: ClientOptions): Promise<T>;
+  /**
+   * Round-trips to PostgreSQL under a deadline. Answers "is it there", nothing else.
+   *
+   * Named here so the readiness probe does not have to hold a statement. A
+   * surface holding SQL is the thing `check-boundaries.sh` exists to refuse,
+   * and it could not see this one: the probe reached the pool through the
+   * container rather than by importing `pg`, so the check passed vacuously on
+   * the one file that broke the rule it was reporting.
+   */
+  ping(deadlineAt: number): Promise<void>;
+  /**
+   * The applied migration ledger, oldest first, under a deadline.
+   *
+   * The readiness probe compares this against the journal THIS release ships,
+   * which is a persistence question asked by a surface. The comparison stays in
+   * the probe; the statement lives here.
+   */
+  appliedMigrations(deadlineAt: number): Promise<readonly { hash: string; createdAt: number }[]>;
   close(): Promise<void>;
 }
 
@@ -147,6 +165,21 @@ export function createDatabase(
     },
     withExecutor(fn, options) {
       return this.withClient((client) => fn(drizzle(client, { schema })), options);
+    },
+    async ping(deadlineAt) {
+      await this.withClient((client) => client.query('SELECT 1'), { deadlineAt });
+    },
+    async appliedMigrations(deadlineAt) {
+      const result = await this.withClient(
+        (client) =>
+          client.query<{ hash: string; created_at: string }>(
+            `SELECT hash, created_at::text AS created_at
+               FROM drizzle.__drizzle_migrations
+              ORDER BY created_at ASC`,
+          ),
+        { deadlineAt },
+      );
+      return result.rows.map((row) => ({ hash: row.hash, createdAt: Number(row.created_at) }));
     },
     async close() {
       await pool.end();

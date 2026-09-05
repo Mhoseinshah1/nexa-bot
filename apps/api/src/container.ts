@@ -302,11 +302,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   let installationTenantId: TenantId | null = null;
 
-  const relay = new OutboxRelay(database.db, [new PingLogConsumer(opsLog)], clock, logger, {
-    batchSize: config.OUTBOX_RELAY_BATCH_SIZE,
-    pollIntervalMs: config.OUTBOX_RELAY_POLL_INTERVAL_MS,
-    maxLagMs: config.OUTBOX_RELAY_MAX_LAG_MS,
-  });
+  const relay = new OutboxRelay(
+    database.db,
+    [new PingLogConsumer(opsLog)],
+    clock,
+    logger,
+    {
+      batchSize: config.OUTBOX_RELAY_BATCH_SIZE,
+      pollIntervalMs: config.OUTBOX_RELAY_POLL_INTERVAL_MS,
+      maxLagMs: config.OUTBOX_RELAY_MAX_LAG_MS,
+    },
+    database,
+  );
 
   // Comfortably past the longest window plus lockout the schema permits, so a
   // sweep can never remove a row something is still counting.
