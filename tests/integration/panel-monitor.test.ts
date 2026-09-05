@@ -1349,6 +1349,81 @@ describe('the panel health monitor', () => {
       expect(new Set(all).size).toBe(all.length);
     });
 
+    it('puts a tenant bound back where its own schedule says', async () => {
+      // F2: `refreshTenantBounds` was stubbed out in every test that reached
+      // it and bound to the real repository in exactly one, where nothing
+      // asserted what it did. It is the self-healing half of keeping the
+      // fairness bound cheap — writes move the bound down with a LEAST and
+      // never up, so it drifts earlier than the truth — and without it a
+      // tenant whose panels are all far in the future is claimed on EVERY
+      // tick for ever, spending a fairness slot to discover it has nothing to
+      // do while other tenants queue behind it.
+      const panelId = await createPanel(ownerA, tenantA, 'far-away');
+      const far = new Date(now.getTime() + 6 * 60 * 60 * 1000);
+      await ctx.container.database.db
+        .update(panelMonitorSchedule)
+        .set({ nextEligibleAt: far })
+        .where(eq(panelMonitorSchedule.panelId, panelId));
+      // The drift this repairs: a bound dragged earlier than any panel's.
+      await ctx.container.database.db
+        .update(panelMonitorTenants)
+        .set({ nextEligibleAt: new Date(now.getTime() - 60_000) })
+        .where(eq(panelMonitorTenants.tenantId, tenantA.tenantId));
+
+      const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      expect(await discovery.claimTenants(now, 10), 'the drifted bound is claimable').toContain(
+        tenantA.tenantId,
+      );
+
+      await discovery.refreshTenantBounds([tenantA.tenantId]);
+
+      const [bound] = await ctx.container.database.db
+        .select()
+        .from(panelMonitorTenants)
+        .where(eq(panelMonitorTenants.tenantId, tenantA.tenantId));
+      expect(bound!.nextEligibleAt.getTime()).toBe(far.getTime());
+      expect(await discovery.claimTenants(now, 10)).not.toContain(tenantA.tenantId);
+      // And it is not merely pushed away for ever: the tenant is claimable
+      // again once its own earliest panel is due.
+      expect(await discovery.claimTenants(new Date(far.getTime() + 1), 10)).toContain(
+        tenantA.tenantId,
+      );
+    });
+
+    it('suspends a tenant whose schedule rows have all gone', async () => {
+      // The other half of the same rule, and the first version of this test
+      // was vacuous: it drove a tenant that had never had a panel, so it had
+      // no scheduler row either and was unclaimable whatever the code did.
+      // The tenant has to HAVE a row, and that row has to be claimable, for
+      // the suspension to be the thing observed.
+      const panelId = await createPanel(ownerB, tenantB, 'about-to-go');
+      const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      await ctx.container.database.db
+        .update(panelMonitorTenants)
+        .set({ nextEligibleAt: new Date(now.getTime() - 60_000) })
+        .where(eq(panelMonitorTenants.tenantId, tenantB.tenantId));
+      expect(await discovery.claimTenants(now, 10)).toContain(tenantB.tenantId);
+
+      // Its last schedule row goes. There is now no minimum to take, and
+      // leaving the bound where it is would mean claiming this tenant on
+      // every tick to rediscover that it has nothing to do.
+      await ctx.container.database.db
+        .delete(panelMonitorSchedule)
+        .where(eq(panelMonitorSchedule.panelId, panelId));
+      await ctx.container.database.db
+        .update(panelMonitorTenants)
+        .set({ nextEligibleAt: new Date(now.getTime() - 60_000) })
+        .where(eq(panelMonitorTenants.tenantId, tenantB.tenantId));
+
+      await discovery.refreshTenantBounds([tenantB.tenantId]);
+      expect(await discovery.claimTenants(now, 10)).not.toContain(tenantB.tenantId);
+      const [bound] = await ctx.container.database.db
+        .select()
+        .from(panelMonitorTenants)
+        .where(eq(panelMonitorTenants.tenantId, tenantB.tenantId));
+      expect(bound!.nextEligibleAt.getTime()).toBe(SCHEDULE_SUSPENDED_AT.getTime());
+    });
+
     it('never hands one tenant to two replicas, over many races', async () => {
       // ONE race decides nothing here, and that is the point: this file's
       // single-race version of the check above failed about once in two
