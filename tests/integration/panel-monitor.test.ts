@@ -1343,12 +1343,57 @@ describe('the panel health monitor', () => {
         discovery.claimTenants(now, 1),
         discovery.claimTenants(now, 1),
       ]);
-      // `FOR UPDATE SKIP LOCKED`: one takes a tenant, the other takes the
-      // other or nothing — never the same one twice.
+      // One takes a tenant, the other takes the other or nothing — never the
+      // same one twice.
       const all = [...first, ...second];
       expect(new Set(all).size).toBe(all.length);
     });
 
+    it('never hands one tenant to two replicas, over many races', async () => {
+      // ONE race decides nothing here, and that is the point: this file's
+      // single-race version of the check above failed about once in two
+      // hundred runs and passed every time it was re-run in isolation, which
+      // reads exactly like an infrastructure flake and was not one.
+      //
+      // The claim's own comment used to say `FOR UPDATE SKIP LOCKED` was what
+      // made replicas disjoint. It is not sufficient. Under READ COMMITTED the
+      // second claim's snapshot predates the first one's commit, so it orders
+      // by a `last_served_at` whose turn has already been spent; by the time
+      // it reaches the row the first claim has committed and released the
+      // lock, so SKIP LOCKED has nothing to skip, and the row's re-check
+      // passes because spending a turn does not move `next_eligible_at`.
+      //
+      // Six hundred races here, against a real database. The unguarded
+      // statement produced a double claim about five times in a thousand, so
+      // this fails within a run or two of a regression rather than needing a
+      // lucky one.
+      await createPanel(ownerA, tenantA, 'a');
+      await createPanel(ownerB, tenantB, 'b');
+      const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      let doubled = 0;
+      let starved = 0;
+      for (let round = 0; round < 600; round += 1) {
+        // Both tenants due again, and their turns level, so both claims want
+        // the same one and the ordering is decided rather than incidental.
+        await ctx.container.database.db.execute(
+          sql`UPDATE panel_monitor_tenants
+                 SET next_eligible_at = ${new Date(now.getTime() - 60_000)},
+                     last_served_at = ${new Date(now.getTime() - 60_000)}` as never,
+        );
+        const [a, b] = await Promise.all([
+          discovery.claimTenants(now, 1),
+          discovery.claimTenants(now, 1),
+        ]);
+        const taken = [...a, ...b];
+        if (new Set(taken).size !== taken.length) doubled += 1;
+        if (taken.length < 2) starved += 1;
+      }
+      expect(doubled, 'one tenant was claimed by both replicas').toBe(0);
+      // Losing a claim to the re-check is the SAFE direction and is allowed:
+      // that tenant waits one tick. Asserted rather than left implicit, so a
+      // "fix" that made every race starve one side would be visible here.
+      expect(starved).toBeLessThan(180);
+    });
 
     it('does not overlap its own ticks', async () => {
       await createPanel(ownerA, tenantA, 'slow');
