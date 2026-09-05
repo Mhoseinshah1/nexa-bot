@@ -97,7 +97,7 @@ botctl — operate a Nexa installation
   botctl status              what is running, and whether it is ready
   botctl version             installed version, source commit, image digest
   botctl backup              a consistent PostgreSQL dump, timestamped
-  botctl update [VERSION]    update to VERSION (default: latest release tag)
+  botctl update VERSION      update to VERSION, by digest
   botctl rollback            return to the previous release's image
   botctl logs [SERVICE]      follow logs
   botctl restart             restart the stack
@@ -791,8 +791,16 @@ cmd_logs() {
   require_installed
   if [ $# -gt 0 ]; then
     case "$1" in
-      api | worker | postgres | redis | caddy | web-assets) nexa_compose logs -f --tail 200 "$1" ;;
-      *) nexa_die "unknown service \"$1\". One of: api worker postgres redis caddy web-assets." ;;
+      api | worker | monitor | postgres | redis | caddy | web-assets)
+        nexa_compose logs -f --tail 200 "$1"
+        ;;
+      # `monitor` was missing from this list for the whole of Phase 3C, which
+      # is the one service an operator reaches for here: it is the process
+      # role with no request path, so its log is the only place its behaviour
+      # is visible at all. The answer was `unknown service "monitor"`.
+      *)
+        nexa_die "unknown service \"$1\". One of: api worker monitor postgres redis caddy web-assets."
+        ;;
     esac
   else
     nexa_compose logs -f --tail 200
