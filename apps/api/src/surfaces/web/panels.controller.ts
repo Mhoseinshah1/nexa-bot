@@ -58,7 +58,9 @@ const CURSOR_MAX_LENGTH = 512;
 const CURSOR_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function encodeCursor(cursor: PanelCursor): string {
-  return Buffer.from(`${cursor.id}:${cursor.createdAt.toISOString()}`, 'utf8').toString('base64url');
+  return Buffer.from(`${cursor.id}:${cursor.createdAt.toISOString()}`, 'utf8').toString(
+    'base64url',
+  );
 }
 
 function decodeCursor(raw: string): PanelCursor | null {
