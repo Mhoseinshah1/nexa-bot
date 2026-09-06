@@ -4,6 +4,8 @@ import type { PoolClient } from 'pg';
 import type { Container } from '../../apps/api/src/container';
 import { ReadinessProbe } from '../../apps/api/src/surfaces/web/readiness.probe';
 import { createTestContext, type TestContext } from './harness';
+import { ReadinessService } from '../../apps/api/src/modules/platform/system/application/readiness.service';
+import { DrizzleReadinessProbes } from '../../apps/api/src/modules/platform/system/infrastructure/readiness-probes';
 
 /**
  * The readiness probe against a real database (C14, C15).
@@ -127,17 +129,33 @@ describe('a readiness timeout stops the query it was waiting on', () => {
    * the checked-out connection BEFORE the probe's own query. Everything else
    * — the pool, the timeout the probe sets, the release — is the real one.
    */
-  const slowContainer = (): Container => ({
-    ...ctx.container,
-    database: {
+  const slowContainer = (): Container => {
+    const database = {
       ...ctx.container.database,
-      withClient: (fn, options) =>
-        ctx.container.database.withClient(async (client: PoolClient) => {
-          await client.query('SELECT pg_sleep(20)');
-          return fn(client);
-        }, options),
-    },
-  });
+      withClient: (fn: Parameters<Container['database']['withClient']>[0], options?: unknown) =>
+        ctx.container.database.withClient(
+          async (client: PoolClient) => {
+            await client.query('SELECT pg_sleep(20)');
+            return fn(client);
+          },
+          options as Parameters<Container['database']['withClient']>[1],
+        ),
+    } as Container['database'];
+    // The readiness service is composed in the container over the REAL
+    // adapters, so a slow database handle has to be composed the same way —
+    // spreading the container alone would leave the service holding the
+    // original handle and this fixture would prove nothing.
+    return {
+      ...ctx.container,
+      database,
+      readiness: new ReadinessService({
+        probes: new DrizzleReadinessProbes(database, ctx.container.redis, ctx.container.relay),
+        logger: ctx.container.logger,
+        clock: ctx.container.clock,
+        maxOutboxLagMs: ctx.container.config.OUTBOX_RELAY_MAX_LAG_MS,
+      }),
+    };
+  };
 
   const sleepingStatements = async () =>
     (
@@ -157,7 +175,7 @@ describe('a readiness timeout stops the query it was waiting on', () => {
     const postgres = result.dependencies.find((d) => d.name === 'postgres')!;
     expect(postgres.status).toBe('down');
     expect(postgres.detail).toBe('timeout');
-    expect(elapsed).toBeLessThan(ReadinessProbe.PROBE_TIMEOUT_MS + 2_500);
+    expect(elapsed).toBeLessThan(ReadinessService.PROBE_TIMEOUT_MS + 2_500);
 
     // THE assertion. The race returned on time either way; what matters is
     // that PostgreSQL is no longer running the sleep on our behalf. Without
@@ -199,7 +217,7 @@ describe('a readiness timeout stops the query it was waiting on', () => {
       );
       return result.rows[0]!.v;
     });
-    expect(setting).not.toBe(`${ReadinessProbe.PROBE_TIMEOUT_MS}ms`);
+    expect(setting).not.toBe(`${ReadinessService.PROBE_TIMEOUT_MS}ms`);
     expect(setting).not.toBe('0');
   }, 20_000);
 

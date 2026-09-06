@@ -141,9 +141,32 @@ SURFACE_DATA=$(scan_source \
   apps/api/src/surfaces)
 if [ -n "$SURFACE_DATA" ]; then
   fail "A surface reaches the database" "$SURFACE_DATA" \
-       "Surfaces call application services. Naming a purpose on the database handle is fine; holding a statement or a checkout is not."
+       "Surfaces call application services. Holding a statement or a checkout is not one."
 else
-  pass "surfaces contain no data access"
+  pass "surfaces hold no statement and open no checkout"
+fi
+
+# And the DIRECTION, which the rule above cannot see.
+#
+# The fix for that finding moved the SQL out of the readiness probe and left it
+# holding `container.database`, `container.redis` and `container.relay` under
+# purpose-named methods — `ping`, `appliedMigrations`, `lagMsWithin`. No
+# statement, no checkout, and exactly the same dependency inversion: a surface
+# reaching past the application layer into infrastructure, so a second surface
+# or a replaced adapter would have to import the same handles. The check that
+# was supposed to catch the violation had been satisfied by renaming it.
+#
+# The rule is the direction, so this asks about the direction. A surface may
+# hold application services; the handles the composition root builds them from
+# are not for it.
+SURFACE_HANDLES=$(scan_source \
+  "(\.(database|redis|relay)\b|from '.*infrastructure/persistence/)" \
+  apps/api/src/surfaces)
+if [ -n "$SURFACE_HANDLES" ]; then
+  fail "A surface holds an infrastructure handle" "$SURFACE_HANDLES" \
+       "Declare an application service and a port for what the surface needs, and compose the adapter in container.ts."
+else
+  pass "surfaces hold no database, cache or relay handle"
 fi
 
 # --- The owner bootstrap is not reachable from a surface -------------------

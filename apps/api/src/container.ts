@@ -45,6 +45,8 @@ import {
 } from './modules/platform/tenancy/infrastructure/drizzle-tenant.repository.js';
 import { OutboxWriter } from './modules/platform/eventing/infrastructure/outbox-writer.js';
 import { OutboxRelay } from './modules/platform/eventing/infrastructure/outbox-relay.js';
+import { ReadinessService } from './modules/platform/system/application/readiness.service.js';
+import { DrizzleReadinessProbes } from './modules/platform/system/infrastructure/readiness-probes.js';
 import { DrizzleAuditWriter } from './modules/platform/audit/infrastructure/drizzle-audit-writer.js';
 import { DrizzleBootstrapRecordReader } from './modules/platform/identity/infrastructure/drizzle-bootstrap-record.reader.js';
 import { DrizzleOperationalEventRecorder } from './modules/platform/opslog/infrastructure/drizzle-operational-events.js';
@@ -123,6 +125,13 @@ export interface Container {
   readonly botInstances: DrizzleBotInstanceRepository;
   readonly outbox: OutboxWriter;
   readonly relay: OutboxRelay;
+  /**
+   * The readiness computation, in the application layer.
+   *
+   * Surfaces ask this; they do not ask the database, the cache or the relay.
+   * See `ReadinessService` and `check-boundaries.sh`.
+   */
+  readonly readiness: ReadinessService;
   readonly throttleSweeper: RetentionSweeper;
   readonly sessionSweeper: RetentionSweeper;
   readonly audit: AuditWriter;
@@ -368,6 +377,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
     database,
   );
+
+  // The readiness computation and the adapters that answer its questions. The
+  // composition happens HERE, which is the only place that may know both.
+  const readiness = new ReadinessService({
+    probes: new DrizzleReadinessProbes(database, redis, relay),
+    logger,
+    clock,
+    maxOutboxLagMs: config.OUTBOX_RELAY_MAX_LAG_MS,
+  });
 
   // Comfortably past the longest window plus lockout the schema permits, so a
   // sweep can never remove a row something is still counting.
@@ -696,6 +714,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     botInstances,
     outbox,
     relay,
+    readiness,
     throttleSweeper,
     sessionSweeper,
     audit,
