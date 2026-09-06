@@ -4,6 +4,7 @@ import {
   auditLogs,
   panelCredentials,
   panelHealth,
+  panelMonitorSchedule,
   panels,
   requestIdempotency,
   tenants,
@@ -1653,6 +1654,51 @@ describe('the panel list is a bounded, stable traversal', () => {
     }
     expect(new Set(seen).size, 'a panel was returned twice').toBe(seen.length);
     expect(seen.slice().sort()).toEqual(created.slice().sort());
+  });
+
+  it('does nothing at all for an edit that names no field', async () => {
+    // The frozen request schema permits a body carrying only an idempotency
+    // key. This used to advance `updated_at`, make the panel immediately
+    // probe-eligible and record a SUCCESS audit row — so repeated empty edits
+    // with fresh keys drove background probes at the caller's chosen rate and
+    // filled the audit trail with changes that never happened.
+    //
+    // The guard was in production code with no test at all, which is how a
+    // rule gets silently reverted. This is that test.
+    const panelId = await make(owner, tenantA, 'untouched');
+    const scheduleOf = async () =>
+      (
+        await ctx.container.database.db
+          .select()
+          .from(panelMonitorSchedule)
+          .where(eq(panelMonitorSchedule.panelId, panelId))
+      )[0];
+    const auditCount = async () =>
+      (
+        await ctx.container.database.db
+          .select()
+          .from(auditLogs)
+          .where(and(eq(auditLogs.tenantId, tenantA.tenantId), eq(auditLogs.entityId, panelId)))
+      ).length;
+
+    // Push the panel out, so "made eligible" is observable as a change.
+    const later = new Date(Date.now() + 60 * 60 * 1000);
+    await ctx.container.database.db
+      .update(panelMonitorSchedule)
+      .set({ nextEligibleAt: later })
+      .where(eq(panelMonitorSchedule.panelId, panelId));
+    const before = await service().get(tenantA, owner, panelId);
+    const auditsBefore = await auditCount();
+
+    const after = await service().update(tenantA, owner, panelId, {
+      idempotencyKey: pageKey(),
+    });
+
+    // It SUCCEEDS — the contract is unchanged — and it does nothing.
+    expect(after.panel.id).toBe(panelId);
+    expect(after.panel.updatedAt.getTime()).toBe(before.panel.updatedAt.getTime());
+    expect((await scheduleOf())!.nextEligibleAt.getTime()).toBe(later.getTime());
+    expect(await auditCount(), 'an edit that changed nothing was audited').toBe(auditsBefore);
   });
 
   it('is not disturbed by a rename between two pages', async () => {
