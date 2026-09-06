@@ -518,6 +518,31 @@ describe('the production Caddy routing', () => {
     }
   });
 
+  it('identifies the edge by the project and service compose actually writes', () => {
+    // `nexa_port_is_ours` waives a published-port conflict only for THIS
+    // installation's edge, and it recognises it by the labels Compose writes:
+    // `com.docker.compose.project` and `com.docker.compose.service`. Those
+    // come from the compose file's `name:` and its service key, so the two
+    // files have to agree — a rename here would make the preflight treat the
+    // real edge as somebody else's and refuse every install.
+    //
+    // It replaced a `^nexa-caddy` name-prefix match, which is not an identity:
+    // a container name is the operator's, and `nexa-caddy-foreign` satisfied
+    // it.
+    const lib = readFileSync(join(__dirname, '../../deploy/bin/nexa-lib.sh'), 'utf8');
+    const project = /^name:\s*(\S+)\s*$/m.exec(compose)?.[1];
+    expect(project, 'the compose file no longer names its project').toBeTruthy();
+    expect(lib).toContain(`NEXA_COMPOSE_PROJECT="\${NEXA_COMPOSE_PROJECT:-${project}}"`);
+
+    const service = 'caddy';
+    expect(compose, 'the edge service is no longer called caddy').toMatch(
+      new RegExp(`^ {2}${service}:$`, 'm'),
+    );
+    expect(lib).toContain(`NEXA_EDGE_SERVICE="\${NEXA_EDGE_SERVICE:-${service}}"`);
+    expect(lib).toContain('label=com.docker.compose.project=');
+    expect(lib).toContain('label=com.docker.compose.service=');
+  });
+
   it('leaves HSTS to the production site block', () => {
     // An HSTS header from the plain-HTTP CI origin would pin `localhost` to
     // HTTPS in the runner's client for a year.

@@ -267,14 +267,15 @@ preflight() {
 
       # Our own Caddy holding the port on a rerun is expected, not a conflict.
       #
-      # Established by asking WHICH process holds this socket, not by asking
-      # whether a container of that name happens to be running. The old check
-      # counted `nexa-caddy*` in `docker ps` and waived the conflict on any
-      # match — so a nexa-caddy that was up but bound to nothing waved through
-      # an unrelated nginx on the same port, and the installer proceeded to an
-      # edge that could never start. `ss -p` names the process; Caddy in this
-      # topology is what publishes these ports, and docker-proxy or the
-      # container's own caddy is what appears.
+      # Established by asking Docker which containers PUBLISH this port and
+      # whether every one of them carries this installation's own Compose
+      # project and service labels — not by a container's name. The first
+      # version of this check counted `nexa-caddy*` in `docker ps` and waived
+      # the conflict on any match, so a nexa-caddy that was up but bound to
+      # nothing waved through an unrelated nginx on the same port; the second
+      # matched the same prefix against the publishers, which a container
+      # called `nexa-caddy-foreign` satisfies just as well. A name is the
+      # operator's; the labels are Compose's.
       if ! nexa_port_is_ours "$port" "$proto"; then
         nexa_die "something is already listening on ${port}/${proto}, and it is not Nexa's edge. Nexa needs 80 (ACME and the redirect) and 443 on both TCP and UDP (HTTP/3). Stop the other service, or install Nexa on a host that is not already serving HTTP."
       fi

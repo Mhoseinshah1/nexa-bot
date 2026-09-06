@@ -308,10 +308,18 @@ function releaseAssets(releaseDir) {
  *
  * A name already in the pool is left alone when its bytes match, which is the
  * normal case: the build hashes asset filenames by content, so a name that
- * repeats across releases repeats byte for byte. It is REPLACED when they do
- * not, rather than assumed identical — a build configured to stop hashing
- * would otherwise serve the outgoing release's code under the incoming
- * release's name, silently and for ever.
+ * repeats across releases repeats byte for byte.
+ *
+ * A name that repeats with DIFFERENT bytes is refused, and this is the second
+ * place it is refused — `assertPoolIsCompatible` catches it before the volume
+ * is touched at all, and this catches it if that check is ever bypassed.
+ * Replacing the entry, which is what this used to do, is unserveable in both
+ * directions: the pool is filled BEFORE activation, so a browser fetching the
+ * still-current index gets the incoming release's script under the outgoing
+ * release's name; and `/assets/*` is served `immutable` for a year, so a
+ * browser that cached the name keeps the outgoing bytes long after activation.
+ * One URL cannot stand for two different files, and a bundle that asks it to
+ * is a build that has stopped hashing its asset names.
  */
 function fillPool(rootDir, releaseDir, nonce) {
   const poolAssets = join(rootDir, POOL, ASSETS);
@@ -319,11 +327,44 @@ function fillPool(rootDir, releaseDir, nonce) {
   for (const name of releaseAssets(releaseDir)) {
     const from = join(releaseDir, ASSETS, name);
     const to = join(poolAssets, name);
-    if (existsSync(to) && readFileSync(to).equals(readFileSync(from))) continue;
+    if (existsSync(to)) {
+      if (readFileSync(to).equals(readFileSync(from))) continue;
+      throw new Error(`${name} is already published with different content.`);
+    }
     const incoming = join(poolAssets, `${STAGING_PREFIX}${nonce}-${name}`);
     rmSync(incoming, { force: true });
     cpSync(from, incoming, { dereference: true });
     renameSync(incoming, to);
+  }
+}
+
+/**
+ * Refuses a bundle that reuses a retained release's asset name for other bytes.
+ *
+ * BEFORE the volume is touched, for the same reason the missing-index.html
+ * check is: a build that cannot be published coherently must leave whatever is
+ * being served exactly as it is, rather than being discovered half way through.
+ *
+ * Reads the SOURCE, not the staged release, so it runs before anything is
+ * copied. Republishing an identical bundle — which is what a rollback is —
+ * finds every name already there with matching bytes and is unaffected.
+ */
+function assertPoolIsCompatible(rootDir, sourceDir) {
+  const poolAssets = join(rootDir, POOL, ASSETS);
+  if (!existsSync(poolAssets)) return;
+  const conflicting = [];
+  for (const name of releaseAssets(sourceDir)) {
+    const published = join(poolAssets, name);
+    if (!existsSync(published)) continue;
+    if (readFileSync(published).equals(readFileSync(join(sourceDir, ASSETS, name)))) continue;
+    conflicting.push(name);
+  }
+  if (conflicting.length > 0) {
+    throw new Error(
+      `${sourceDir} reuses ${conflicting.join(', ')} with content different from the retained ` +
+        'releases. Asset names are content-addressed by the build; one URL cannot stand for two ' +
+        'files. Refusing to publish it.',
+    );
   }
 }
 
@@ -358,6 +399,8 @@ function publishLocked({ sourceDir, rootDir, releasesDir, lockDir }) {
 
   const releaseId = bundleId(sourceDir);
   const releaseDir = join(releasesDir, releaseId);
+  // Before anything is staged or copied. See `assertPoolIsCompatible`.
+  assertPoolIsCompatible(rootDir, sourceDir);
   // Read BEFORE anything is activated: this is the release a request resolving
   // `current` right now would be served out of, and the one that must survive
   // this publication.

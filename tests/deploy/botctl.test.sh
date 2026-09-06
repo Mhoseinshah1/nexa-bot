@@ -666,13 +666,20 @@ mkdir -p "$d12_bin" "$D12_ANSWERS"
 
 # Answers `docker ps --filter publish=<port>/<proto>` from a file per port and
 # proto. An absent file is "nothing publishes it", which is what a host process
-# holding the port looks like to Docker.
+# holding the port looks like to Docker. A query that ALSO carries the compose
+# project and service labels is answered from `<key>.ours`, so the stub can
+# express the case the name prefix could not tell apart: a container called
+# `nexa-caddy-something` that this installation did not create.
 {
   printf '#!/usr/bin/env bash\n'
   printf '[ "$1" = ps ] || exit 0\n'
-  printf 'key=""\n'
-  printf 'for arg in "$@"; do case "$arg" in publish=*) key="${arg#publish=}" ;; esac; done\n'
+  printf 'key=""; labelled=0\n'
+  printf 'for arg in "$@"; do case "$arg" in\n'
+  printf '  publish=*) key="${arg#publish=}" ;;\n'
+  printf '  label=com.docker.compose.service=*) labelled=1 ;;\n'
+  printf 'esac; done\n'
   printf 'answer="${D12_ANSWERS}/${key//\\//-}"\n'
+  printf '[ "$labelled" = 1 ] && answer="${answer}.ours"\n'
   printf '[ -r "$answer" ] && cat "$answer"\n'
   printf 'exit 0\n'
 } >"${d12_bin}/docker"
@@ -688,6 +695,23 @@ d12_is_ours() {
     nexa_port_is_ours "$2" "$3"' _ "${REPO}/deploy/bin/nexa-lib.sh" "$1" "$2" >/dev/null 2>&1
 }
 
+# `publishers <key> <id>...` writes what publishes the port; `ours <key> <id>...`
+# writes which of them carry this installation's compose labels.
+d12_publishers() {
+  local key="$1"
+  shift
+  printf '%s\n' "$@" >"${D12_ANSWERS}/${key}"
+}
+d12_ours() {
+  local key="$1"
+  shift
+  if [ "$#" -eq 0 ]; then
+    : >"${D12_ANSWERS}/${key}.ours"
+  else
+    printf '%s\n' "$@" >"${D12_ANSWERS}/${key}.ours"
+  fi
+}
+
 rm -f "${D12_ANSWERS}"/443-* "${D12_ANSWERS}"/80-*
 # 1. Nothing PUBLISHES it. The caller only asks once `ss` has already found a
 #    listener, so this is a host process holding the port — a conflict, and the
@@ -695,26 +719,54 @@ rm -f "${D12_ANSWERS}"/443-* "${D12_ANSWERS}"/80-*
 assert_fails 'an unpublished port was claimed as ours' d12_is_ours 443 tcp
 
 # 2. Our own edge publishes it. An idempotent rerun.
-printf 'nexa-caddy\n' >"${D12_ANSWERS}/443-tcp"
+d12_publishers 443-tcp 'aaaa111'
+d12_ours 443-tcp 'aaaa111'
 assert_ok 'our own edge was reported as a conflict' d12_is_ours 443 tcp
 
 # 3. ANOTHER STACK publishes it. This is the case the process-name check could
 #    not see: on a Docker host that port is held by `docker-proxy` too.
-printf 'someone-elses-nginx\n' >"${D12_ANSWERS}/443-tcp"
+d12_publishers 443-tcp 'bbbb222'
+d12_ours 443-tcp
 assert_fails 'another stack was accepted as our edge' d12_is_ours 443 tcp
 
 # 4. Ours AND another stack's. A conflict even though ours is there: the edge
 #    is about to be started and cannot bind. This is the exact shape the old
 #    escape hatch waived.
-printf 'nexa-caddy\nsomeone-elses-nginx\n' >"${D12_ANSWERS}/443-tcp"
+d12_publishers 443-tcp 'aaaa111' 'bbbb222'
+d12_ours 443-tcp 'aaaa111'
 assert_fails 'a foreign publisher was waived because ours was there too' d12_is_ours 443 tcp
 
 # 5. UDP is asked about at all. With the old TCP-only filter this port was
 #    invisible; it is asked here on the proto the old code never used.
-printf 'someone-elses-dns\n' >"${D12_ANSWERS}/443-udp"
+d12_publishers 443-udp 'cccc333'
+d12_ours 443-udp
 assert_fails 'a foreign publisher of 443/udp was accepted as ours' d12_is_ours 443 udp
-printf 'nexa-caddy\n' >"${D12_ANSWERS}/443-udp"
+d12_publishers 443-udp 'aaaa111'
+d12_ours 443-udp 'aaaa111'
 assert_ok 'our own 443/udp was reported as a conflict' d12_is_ours 443 udp
+
+# 6. The finding. Every one of these satisfied `^nexa-caddy` and none of them is
+#    this installation's edge: a second stack an operator named after ours, a
+#    container a rename left behind, and one somebody made by hand. Identity is
+#    the compose project and service labels, which Compose writes and an
+#    operator does not, so none of the three carries them.
+for impostor in nexa-caddy-foreign nexa-caddy-old nexa-caddy-test; do
+  d12_publishers 443-tcp "$impostor"
+  d12_ours 443-tcp
+  assert_fails "a container named ${impostor} was accepted as our edge" d12_is_ours 443 tcp
+done
+
+# 7. And a name has stopped mattering in the other direction too: our edge is
+#    ours because of its labels, whatever it is called.
+d12_publishers 443-tcp 'renamed-edge'
+d12_ours 443-tcp 'renamed-edge'
+assert_ok 'our own edge was rejected because of its name' d12_is_ours 443 tcp
+
+# 8. A foreign id that CONTAINS one of ours is still foreign. The comparison is
+#    whole-line and literal for exactly this.
+d12_publishers 443-tcp 'aaaa111' 'xaaaa111x'
+d12_ours 443-tcp 'aaaa111'
+assert_fails 'a foreign id containing ours was waived' d12_is_ours 443 tcp
 
 # And preflight must actually ask, or the predicate above is unreachable.
 installer_ports="$(sed -n '/--- Ports ---/,/ports 80 and 443 are free/p' "${REPO}/deploy/install.sh")"
@@ -723,6 +775,14 @@ assert_contains 'the port preflight does not ask whose the socket is' \
   "$installer_ports" 'nexa_port_is_ours'
 assert_not_contains 'the port preflight still waives on a container name alone' \
   "$installer_ports" 'grep -c'
+# The predicate identifies the edge by compose labels, not by a name prefix.
+d12_predicate="$(sed -n '/^nexa_port_is_ours()/,/^}/p' "${REPO}/deploy/bin/nexa-lib.sh")"
+assert_contains 'the edge is not identified by its compose project label' \
+  "$d12_predicate" 'com.docker.compose.project'
+assert_contains 'the edge is not identified by its compose service label' \
+  "$d12_predicate" 'com.docker.compose.service'
+assert_not_contains 'the edge is still identified by a container-name prefix' \
+  "$d12_predicate" 'nexa-caddy'
 unset D12_ANSWERS
 
 test_case 'D3: the installer refuses a moved tag BEFORE it replaces the host tooling'

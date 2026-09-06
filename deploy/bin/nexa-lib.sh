@@ -1012,14 +1012,37 @@ EOF
 # command fails. A preflight that cannot tell must refuse; passing on ignorance
 # is the wrong answer in the dangerous direction, which is the rule the checks
 # around it follow.
+# WHOSE a container is, is answered by Compose's own labels and not by its
+# name. A name is operator-controlled and a prefix match on it is not an
+# identity: `nexa-caddy-foreign`, a `nexa-caddy-old` left by a rename, or a
+# container somebody made called `nexa-caddy-test` all satisfied `^nexa-caddy`,
+# so an unrelated publisher of 443 waived the conflict and the installation
+# proceeded until the real edge could not bind.
+#
+# `com.docker.compose.project` and `com.docker.compose.service` are written by
+# Compose when it creates a container, and they are what `docker compose` reads
+# to find its own containers again. They must agree with `name:` and the
+# service key in `deploy/compose.yml`; a unit test pins the three together.
+NEXA_COMPOSE_PROJECT="${NEXA_COMPOSE_PROJECT:-nexa}"
+NEXA_EDGE_SERVICE="${NEXA_EDGE_SERVICE:-caddy}"
+
 nexa_port_is_ours() {
-  local port="$1" proto="$2" holders foreign
-  holders="$(docker ps --filter "publish=${port}/${proto}" --format '{{.Names}}' 2>/dev/null || true)"
+  local port="$1" proto="$2" holders ours foreign
+  # Container IDs, not names: an id is Docker's, a name is the operator's.
+  holders="$(docker ps --filter "publish=${port}/${proto}" --format '{{.ID}}' 2>/dev/null || true)"
   [ -n "$holders" ] || return 1
+  ours="$(docker ps --filter "publish=${port}/${proto}" \
+    --filter "label=com.docker.compose.project=${NEXA_COMPOSE_PROJECT}" \
+    --filter "label=com.docker.compose.service=${NEXA_EDGE_SERVICE}" \
+    --format '{{.ID}}' 2>/dev/null || true)"
+  # Nothing of ours publishes it, so whatever does is somebody else's.
+  [ -n "$ours" ] || return 1
   # `grep -c` reads to the end of its input, so nothing upstream is killed
   # mid-write; `grep -qv` would exit at the first match and can take the writer
-  # with it under `pipefail`.
-  foreign="$(printf '%s\n' "$holders" | grep -cv '^nexa-caddy' || true)"
+  # with it under `pipefail`. `-x -F` so an id is matched whole and literally:
+  # a substring match would accept a foreign id that merely contains one of
+  # ours.
+  foreign="$(printf '%s\n' "$holders" | grep -cxvF "$ours" || true)"
   [ "${foreign:-1}" -eq 0 ]
 }
 

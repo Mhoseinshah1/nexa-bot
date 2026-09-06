@@ -19,9 +19,12 @@ with the specific problem if one fails. The port check covers **443/udp** as
 well as TCP, because the edge publishes it for HTTP/3 and a service holding it
 would let Caddy fail to bind after the install had otherwise succeeded. A rerun
 on a host where Nexa's own edge already holds a port is not a conflict — but
-that is established by asking which process holds the SOCKET, not by observing
-that a container named `nexa-caddy` happens to be running, and a preflight that
-cannot establish the holder refuses.
+that is established by asking Docker which containers PUBLISH the port and
+whether every one of them carries this installation's own Compose project and
+service labels. Not by a container name: a name is the operator's, so
+`nexa-caddy-foreign` and a `nexa-caddy-old` left by a rename both satisfied the
+prefix match this replaced. A preflight that cannot establish the holder
+refuses.
 
 ## Architecture
 

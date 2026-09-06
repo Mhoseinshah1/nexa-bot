@@ -377,14 +377,18 @@ describe('publishing the Web Admin bundle', () => {
     expect(() => loadAssets(rootDir, inFlight)).toThrow();
   });
 
-  it('replaces a pool asset whose name repeats with different bytes', () => {
-    const rootDir = root();
+  it('refuses a bundle that reuses a retained asset name for different bytes', () => {
     // The build hashes asset filenames by content, so a name that repeats
-    // across releases normally repeats byte for byte and the pool leaves it
-    // alone. A build configured to stop hashing breaks that assumption, and
-    // the failure it produces is the worst kind: the outgoing release's code
-    // served under the incoming release's name, with a 200 and an `immutable`
-    // cache header on it.
+    // across releases normally repeats byte for byte. A build configured to
+    // stop hashing breaks that, and REPLACING the pool entry — which is what
+    // this used to do — is unserveable in both directions.
+    //
+    // The pool is filled BEFORE activation, so during publication a browser
+    // fetching the still-current index.html gets the INCOMING release's script
+    // under the outgoing release's name. And `/assets/*` is served `immutable`
+    // for a year, so a browser that cached that URL keeps the OUTGOING bytes
+    // long after activation. One URL cannot stand for two different files.
+    const rootDir = root();
     const first = join(workspace, 'src-stable-a');
     mkdirSync(join(first, 'assets'), { recursive: true });
     writeFileSync(join(first, 'assets', 'app.js'), '// release one\n');
@@ -401,9 +405,36 @@ describe('publishing the Web Admin bundle', () => {
     );
 
     run(first, rootDir);
+    const good = activeId(rootDir);
     expect(readServedTokens(rootDir)).toEqual(new Set(['one']));
-    run(second, rootDir);
-    expect(readServedTokens(rootDir)).toEqual(new Set(['two']));
+
+    expect(() => run(second, rootDir)).toThrow(/app\.js/);
+    // Refused BEFORE the volume was touched: the released bundle is still
+    // activated, its bytes are still its own, and no second release was staged.
+    expect(activeId(rootDir)).toBe(good);
+    expect(releases(rootDir)).toEqual([good]);
+    expect(readServedTokens(rootDir)).toEqual(new Set(['one']));
+    expect(readFileSync(join(rootDir, 'pool', 'assets', 'app.js'), 'utf8')).toContain(
+      'release one',
+    );
+    expect(
+      readdirSync(rootDir).filter((entry) => entry.startsWith('.staging-')),
+      'a staging directory survived the refusal',
+    ).toEqual([]);
+  });
+
+  it('republishes an identical bundle even though every asset name repeats', () => {
+    // The refusal must not catch the ordinary case it looks exactly like: a
+    // rollback republishes a bundle whose every asset name is already in the
+    // pool, byte for byte.
+    const rootDir = root();
+    run(source('one'), rootDir);
+    const first = activeId(rootDir);
+    run(source('two'), rootDir);
+    const output = run(source('one'), rootDir);
+    expect(activeId(rootDir)).toBe(first);
+    expect(output).toContain('already published');
+    expect(readServedTokens(rootDir)).toEqual(new Set(['one']));
   });
 
   it('never publishes a pool asset half written', async () => {
