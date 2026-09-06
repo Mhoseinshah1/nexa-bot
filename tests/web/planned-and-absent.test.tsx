@@ -2,7 +2,7 @@ import type { ReactElement } from 'react';
 import { describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
 import { PlannedPage, PLANNED_SURFACES } from '../../apps/web/src/pages/planned';
-import { isCurrent, resolve } from '../../apps/web/src/app';
+import { NAV, isCurrent, resolve } from '../../apps/web/src/app';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -44,22 +44,29 @@ describe('planned surfaces', () => {
    * eighteen assertions stayed green. This walks the paths the shell actually
    * serves.
    */
-  it.each(PLANNED_SURFACES.map((surface) => [surface.key, surface.path] as const))(
-    '%s is reachable at %s and resolves to the planned page',
-    (key, path) => {
+  it.each(PLANNED_SURFACES.map((surface) => surface.key))(
+    '%s is reachable at the path its navigation entry links to',
+    (key) => {
       stubApi([]);
-      const resolved = resolve({ path, query: new URLSearchParams() }, []);
+      // The NAV path, NOT `PLANNED_SURFACES[].path`. The two are separate
+      // declarations — NAV hardcodes `/users`, `resolve` looks the route up
+      // from `PLANNED_SURFACES` — so a typo in either sends a working link to
+      // `NotFound`. Reading the path from the table under test made the
+      // mutation self-consistent and the test useless; this drives what an
+      // operator clicks.
+      const entry = NAV.find((candidate) => candidate.id === key);
+      expect(entry, `no navigation entry for ${key}`).toBeDefined();
+
+      const resolved = resolve({ path: entry!.path, query: new URLSearchParams() }, []);
       const { container } = renderPage(resolved.element as ReactElement);
 
       // The planned page, not the 404 — asserted by its own copy.
       expect(screen.getByText('چرا هنوز فعال نیست')).toBeInTheDocument();
-      // And the route-level guarantee, which is the one that matters: no
-      // control of any kind, reached the way an operator reaches it.
+      // And the route-level guarantee, reached the way an operator reaches it.
       expect(container.querySelectorAll('button, input, select, table, a')).toHaveLength(0);
-      // The sidebar entry for this path marks itself current, so the link and
+      // The sidebar entry marks itself current at that path, so the link and
       // the route agree about which page is open.
-      expect(isCurrent(path, path)).toBe(true);
-      expect(key.length).toBeGreaterThan(0);
+      expect(isCurrent(entry!.path, entry!.path)).toBe(true);
     },
   );
 

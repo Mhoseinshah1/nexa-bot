@@ -71,7 +71,17 @@ interface NavEntry {
  * hiding them would leave an operator wondering whether the product has them,
  * which is the question the maturity vocabulary exists to answer.
  */
-const NAV: readonly NavEntry[] = [
+/**
+ * Exported so a test can drive the paths an operator actually CLICKS.
+ *
+ * These are hardcoded here and looked up from `PLANNED_SURFACES` in `resolve`,
+ * which makes the two independent: a typo in one sends a working navigation
+ * link to `NotFound`. A test that reads its path from the same table it
+ * checks cannot see that, and the first version of the route test did exactly
+ * that — the mutation moved its input and the route table together and
+ * survived.
+ */
+export const NAV: readonly NavEntry[] = [
   {
     id: 'dashboard',
     path: '/',
