@@ -458,6 +458,16 @@ export const configSchema = z
      * them. The per-tenant share of the batch is derived from how many were
      * actually claimed, so a single-tenant installation still gets the whole
      * batch and a fifty-tenant one still gets fairness.
+     *
+     * It is also a CAPACITY bound, and one that no field here can express: the
+     * rotation reaches `this x (healthy interval / tick)` tenants inside a
+     * freshness window, which at the shipped defaults is 10 x (180s / 30s) =
+     * 60. A hundred single-panel tenants is a hundred panels — far under the
+     * 900-panel scheduler ceiling, so no capacity condition fires — and forty
+     * of them still wait longer than the interval for their first probe. It is
+     * reported by `GET /system/monitor` as `tenantTurnCeiling` rather than
+     * refused here, because the number of tenants is not configuration: it
+     * grows, and a schema cannot see it.
      */
     PANEL_MONITOR_TENANTS_PER_TICK: z.coerce.number().int().min(1).max(200).default(10),
     /** Probes in flight at once. Bounds outbound sockets and pool checkouts. */

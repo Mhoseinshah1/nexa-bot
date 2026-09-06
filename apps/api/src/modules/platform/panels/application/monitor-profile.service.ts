@@ -5,6 +5,7 @@ import type { OperationalConditionReader } from '../../opslog/application/ports.
 import {
   schedulerFreshPanelUpperBound,
   tenantBudgetFreshPanelUpperBound,
+  tenantTurnFreshTenantUpperBound,
 } from '../domain/monitor-cadence.js';
 
 export const MONITOR_PROFILE_VIEW: PermissionKey = 'panels.view';
@@ -97,6 +98,11 @@ export class MonitorProfileService {
       ),
       installationFreshPanelCeiling: schedulerFreshPanelUpperBound(
         config.batchSize,
+        config.tickMs,
+        config.healthyIntervalMs,
+      ),
+      tenantTurnCeiling: tenantTurnFreshTenantUpperBound(
+        config.tenantsPerTick,
         config.tickMs,
         config.healthyIntervalMs,
       ),

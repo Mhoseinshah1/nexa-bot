@@ -5,14 +5,36 @@ import {
   type ActorContext,
   type PermissionKey,
   type ScopeContext,
+  uuidV7Schema,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import type { OperationalEventReader, OperationalEventRow } from './ports.js';
 
 export const OPSLOG_VIEW: PermissionKey = 'opslog.view';
 
+/** The page size the reader uses when a caller names none. */
+export const OPS_LOG_PAGE_DEFAULT = 50;
+
+/**
+ * The page size a caller may ask for, parsed rather than coerced.
+ *
+ * The controller over-fetches ONE past this to decide `nextCursor`, so the
+ * service's own ceiling has to leave room for that extra row — hence 201 here
+ * against a 200 maximum on the wire.
+ */
+export const opsLogPageSize = z.coerce.number().int().min(1).max(200);
+
+/**
+ * `open`, as an explicit true or false and nothing else.
+ *
+ * `query.open === 'true'` turned every other spelling — `tru`, `TRUE`, `1` —
+ * into `false`, so a malformed filter answered 200 with the OPPOSITE of what
+ * was asked for. A bad parameter is a 400.
+ */
+export const openFlag = z.enum(['true', 'false']).transform((v) => v === 'true');
+
 export const opsLogQuerySchema = z.object({
-  limit: z.number().int().min(1).max(200).default(50),
+  limit: z.number().int().min(1).max(201).default(OPS_LOG_PAGE_DEFAULT),
   /**
    * The cursor: the `lastSeenAt` of the oldest row already shown, and its id.
    *
@@ -22,7 +44,9 @@ export const opsLogQuerySchema = z.object({
    * page boundary.
    */
   before: z.date().optional(),
-  beforeId: z.string().max(64).optional(),
+  // An ID, not any short string: it is compared against a `uuid` column, so a
+  // malformed cursor became a driver error and a 500 rather than a 400.
+  beforeId: uuidV7Schema.optional(),
   severities: z.array(z.enum(OPERATIONAL_SEVERITIES)).optional(),
   code: z.string().max(200).optional(),
   since: z.date().optional(),

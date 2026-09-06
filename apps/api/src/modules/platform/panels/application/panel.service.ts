@@ -23,6 +23,8 @@ import {
   type TenantContext,
   type UnitOfWork,
   NexaError,
+  shapeAcceptsCredential,
+  providerDescriptor,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import {
@@ -374,6 +376,43 @@ export class PanelService {
     return verdict.url.toString();
   }
 
+  /**
+   * Refuse a credential the provider's declared shape cannot use.
+   *
+   * The descriptor was fetched and displayed and nothing acted on it, so a
+   * Marzban panel accepted an API token: stored, encrypted, audited — and
+   * ignored by `toProviderCredentials`, which reads only the fields the shape
+   * names. Every subsequent connection test then answered "credentials
+   * missing" about a credential the operator had just successfully saved.
+   *
+   * Enforced HERE rather than only in the form, because the form is not the
+   * authority and an API client bypasses it entirely.
+   */
+  private assertCredentialsFitShape(
+    providerType: string,
+    credentials: {
+      username?: string | null | undefined;
+      password?: string | null | undefined;
+      apiToken?: string | null | undefined;
+    },
+  ): void {
+    const descriptor = providerDescriptor(providerType as ProviderType);
+    if (descriptor === null) return;
+    const shape = descriptor.credentialShape;
+    for (const field of ['username', 'password', 'apiToken'] as const) {
+      const value = credentials[field];
+      // ABSENT leaves alone and NULL removes; neither asserts the credential
+      // is usable, so only a real value is refused.
+      if (value === undefined || value === null) continue;
+      if (!shapeAcceptsCredential(shape, field)) {
+        throw errors.validation(
+          PANEL_ERROR_CODES.PANEL_CREDENTIAL_UNSUPPORTED,
+          `This provider authenticates with ${shape}; ${field} would be stored and never used.`,
+        );
+      }
+    }
+  }
+
   async create(
     scope: ScopeContext,
     actor: ActorContext,
@@ -396,6 +435,9 @@ export class PanelService {
           }),
       idempotencyKey: parsed.idempotencyKey,
     };
+    if (parsed.credentials !== undefined) {
+      this.assertCredentialsFitShape(parsed.providerType, parsed.credentials);
+    }
 
     // Two different refusals, and the difference is the operator's next move.
     //
@@ -691,6 +733,10 @@ export class PanelService {
             'This panel is archived. Restore it before changing its credentials.',
           );
         }
+        // The panel's OWN provider decides which credentials it can use, so
+        // this is checked here rather than on the request: the request names a
+        // panel, not a provider. Inside the lock, against the row just read.
+        this.assertCredentialsFitShape(before.panel.providerType, write);
         await this.deps.credentials.write(tenant, panelId, write, now, tx);
         // Same rule as an edit, and this is the case that matters most: an
         // operator replacing a rejected password wants to know whether it

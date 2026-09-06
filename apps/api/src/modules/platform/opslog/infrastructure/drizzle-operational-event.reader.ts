@@ -1,7 +1,7 @@
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, or } from 'drizzle-orm';
 import {
   MANAGEMENT_EVENT_CODES,
-  MANAGEMENT_CONDITION_CODES,
+  MANAGEMENT_CONDITION_FAILURE_CODES,
   type OperationalSeverity,
   type ScopeContext,
 } from '@nexa/contracts';
@@ -58,9 +58,10 @@ export class DrizzleOperationalEventReader implements OperationalEventReader {
     // browser-side filter would leave the cursor having already walked past
     // everything it discarded, so paging would silently drop rows.
     //
-    // `MANAGEMENT_CONDITIONS` is the narrower list: codes that can be closed.
-    // The dashboard asks for it, because a card headed "needs attention" must
-    // not fill with one-shot records nothing can ever resolve.
+    // `MANAGEMENT_CONDITIONS` is the narrower list: the FAILURE codes. The
+    // dashboard asks for it, because a card headed "needs attention" must
+    // carry neither one-shot records nothing can resolve nor the recoveries
+    // that announce a condition is over.
     //
     // Both are `inArray` over compile-time constants from the contract. There
     // is no `like` here any more, and that is deliberate: the prefix form it
@@ -71,7 +72,12 @@ export class DrizzleOperationalEventReader implements OperationalEventReader {
       filters.push(inArray(operationalEvents.code, [...MANAGEMENT_EVENT_CODES]));
     }
     if (query.scope === 'MANAGEMENT_CONDITIONS') {
-      filters.push(inArray(operationalEvents.code, [...MANAGEMENT_CONDITION_CODES]));
+      // FAILURES only, not the whole lifecycle. A recovery row is inserted
+      // with its own `resolvedAt` null — it closes the failure, never itself —
+      // so selecting the lifecycle here made every recovery an open condition
+      // and left "needs attention" populated by the rows announcing that
+      // attention is no longer needed.
+      filters.push(inArray(operationalEvents.code, [...MANAGEMENT_CONDITION_FAILURE_CODES]));
     }
     // Half-open `[since, until)`: an event at exactly `until` belongs to the
     // next interval, so two adjacent reports never double-count it.

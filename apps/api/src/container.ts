@@ -719,7 +719,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       tenantsPerTick: config.PANEL_MONITOR_TENANTS_PER_TICK,
       probeTenantLimit: config.PANEL_PROBE_TENANT_LIMIT,
       probeTenantWindowMs: config.PANEL_PROBE_TENANT_WINDOW_MS,
-      probeCooldownMs: config.PANEL_PROBE_COOLDOWN_MS,
+      // The EFFECTIVE cooldown — the same value `probeCore` is built with, not
+      // the raw setting. A deployment with `PANEL_PROBE_COOLDOWN_MS=1000` and a
+      // 120s HTTP timeout holds each panel for at least 120s, and this
+      // endpoint's whole contract is that it reports what the deployment is
+      // actually running; publishing the raw number made it state a cooldown no
+      // probe obeys.
+      probeCooldownMs: probeCore.probeCooldownMs,
       budgetReservePercent: config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT,
     },
     new DrizzleOperationalConditionReader(database.db),

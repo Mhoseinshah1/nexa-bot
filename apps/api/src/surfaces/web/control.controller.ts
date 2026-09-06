@@ -34,6 +34,11 @@ import type { ResolvedSetting } from '../../modules/control/settings/application
 import type { ResolvedFeatureFlag } from '../../modules/control/features/application/feature-flags.service.js';
 import type { TemplateView } from '../../modules/control/templates/application/template-management.service.js';
 import type { OperationalEventRow } from '../../modules/platform/opslog/application/ports.js';
+import {
+  OPS_LOG_PAGE_DEFAULT,
+  openFlag,
+  opsLogPageSize,
+} from '../../modules/platform/opslog/application/opslog.service.js';
 import type {
   DeliveryAttemptRecord,
   NotificationIntent,
@@ -261,8 +266,16 @@ export class ControlController {
     @Query() query: Record<string, string | undefined>,
   ): Promise<OperationalEventListResponse> {
     const { scope, actor } = await this.authenticate(request);
-    const events = await this.container.opsLogService.list(scope, actor, {
-      ...(query.limit ? { limit: Number(query.limit) } : {}),
+    // The size the caller asked for, so the OVER-FETCH below can tell a full
+    // last page from a full page with more behind it. Kept in one place: a
+    // second spelling of the default would make the pager offer a page that is
+    // not there, or hide one that is.
+    const size = query.limit ? opsLogPageSize.parse(query.limit) : OPS_LOG_PAGE_DEFAULT;
+    const found = await this.container.opsLogService.list(scope, actor, {
+      // ONE MORE than the caller wants. `found.length === size` cannot
+      // distinguish "exactly a page" from "a page and more"; asking for
+      // `size + 1` and returning `size` makes `nextCursor` mean what it says.
+      limit: size + 1,
       ...(query.code ? { code: query.code } : {}),
       ...(query.severity ? { severities: query.severity.split(',') } : {}),
       ...(query.since ? { since: new Date(query.since) } : {}),
@@ -278,14 +291,23 @@ export class ControlController {
       // driver and answers 500 where the caller sent a bad query parameter and
       // deserves a 400.
       ...cursorFrom(query.before, query.beforeId),
-      ...(query.open ? { open: query.open === 'true' } : {}),
+      // An explicit true/false, REFUSED otherwise. `query.open === 'true'`
+      // silently turned `open=tru`, `open=TRUE` and `open=1` into `false`, so a
+      // malformed filter answered 200 with the opposite of what was asked for.
+      ...(query.open === undefined ? {} : { open: openFlag.parse(query.open) }),
       // Narrows to the management-facing codes. Passed straight through and
       // validated by the service's enum, so an unknown value is a 400 rather
       // than a silent fall back to the whole log — which would show an alerts
       // page the routine stream it exists to exclude.
       ...(query.scope ? { scope: query.scope } : {}),
     });
-    return { events: events.map(toEventResponse) };
+    const events = found.slice(0, size);
+    const oldest = found.length > size ? events[events.length - 1] : undefined;
+    return {
+      events: events.map(toEventResponse),
+      nextCursor:
+        oldest === undefined ? null : { at: oldest.lastSeenAt.toISOString(), id: oldest.id },
+    };
   }
 
   // --- Notifications -------------------------------------------------------
@@ -310,16 +332,19 @@ export class ControlController {
     // whether there is another page rather than leaving the surface to guess.
     const size = limit ?? NOTIFICATION_PAGE_DEFAULT;
     const found = await this.container.notifications.list(scope, actor, {
-      limit: size,
+      // ONE MORE than the caller wants — see the ops-log reader above for why
+      // `found.length === size` cannot answer this question.
+      limit: size + 1,
       // Both halves or neither: a timestamp without its tie-break is the
       // cursor bug this pair exists to avoid.
       ...(before !== undefined && beforeId !== undefined
         ? { before: { at: new Date(before), id: beforeId } }
         : {}),
     });
-    const oldest = found.length === size ? found[found.length - 1] : undefined;
+    const page = found.slice(0, size);
+    const oldest = found.length > size ? page[page.length - 1] : undefined;
     return {
-      notifications: found.map(toNotificationResponse),
+      notifications: page.map(toNotificationResponse),
       nextCursor:
         oldest === undefined ? null : { at: oldest.createdAt.toISOString(), id: oldest.id },
     };

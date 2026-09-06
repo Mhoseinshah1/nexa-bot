@@ -135,6 +135,30 @@ export function schedulerFreshPanelUpperBound(
 }
 
 /**
+ * The most tenants the fairness rotation can give a turn to inside one
+ * freshness window.
+ *
+ * The scheduler claims at most `tenantsPerTick` tenants per tick, so across an
+ * interval it reaches `tenantsPerTick x (interval / tick)` of them. A tenant
+ * beyond that number waits longer than the healthy interval for its FIRST
+ * probe of the cycle, and its panels go stale no matter how small they are.
+ *
+ * This is a THIRD bound, independent of the other two, and it was the one
+ * nothing reported. Shortening the healthy interval from ten minutes to three
+ * cut it from 200 tenants to 60 while `PANEL_MONITOR_TENANTS_PER_TICK` stayed
+ * at 10 — and a hundred single-panel tenants is a hundred panels, far under
+ * the 900-panel scheduler ceiling, so no capacity condition fires and nothing
+ * says the rotation cannot keep up. Defaults: 10 x 6 = 60 tenants.
+ */
+export function tenantTurnFreshTenantUpperBound(
+  tenantsPerTick: number,
+  tickMs: number,
+  healthyIntervalMs: number,
+): number {
+  return Math.floor(tenantsPerTick * (healthyIntervalMs / tickMs));
+}
+
+/**
  * A MODELLING figure for how much slow-probe latency costs. Not a capacity, not
  * a completion count, and never an SLA.
  *
