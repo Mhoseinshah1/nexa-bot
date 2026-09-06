@@ -675,7 +675,7 @@ shape:
 /srv/web/pool/assets/<file>        the union of the retained releases' assets
 ```
 
-Three rules, and each closes a failure an operator would meet on a routine
+Four rules, and each closes a failure an operator would meet on a routine
 update:
 
 - **A release is written off to one side and activated by one `rename(2)`.**
@@ -693,6 +693,17 @@ update:
   scripts a millisecond after it. The pool spans the retained releases, so both
   sides of a swap load. Two deployments later the older release is pruned along
   with its assets; `index.html` is `no-store`, so a reload resolves it.
+- **One publisher mutates the volume at a time.** Publication is a sequence —
+  read what is current, stage, fill the pool, swap, prune what the two retained
+  releases do not own — and two publishers interleaving through it can each
+  read the same previous release and have the loser's prune delete the winner's
+  just-activated one. `current` then names a directory that is not there, which
+  is a 404 for the whole Web Admin rather than a stale page. `.publish.lock` is
+  a `mkdir(2)` lock over the whole sequence. A holder in this container that is
+  no longer running is taken over at once; one in a container that is gone is
+  waited out to two minutes, so a publisher killed by a host that went down
+  costs an update that starts slowly rather than an installation that can never
+  publish again.
 
 Rolling back to a release older than this layout is safe in both directions:
 that release's compose file and its publisher travel with its image, and its

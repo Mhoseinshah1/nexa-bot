@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { Buffer } from 'node:buffer';
 import {
   existsSync,
@@ -12,7 +12,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -454,6 +454,196 @@ describe('publishing the Web Admin bundle', () => {
     expect(reads).toBeGreaterThan(20);
     expect(existsSync(served)).toBe(true);
     void sightings;
+  });
+
+  describe('two publishers running at once', () => {
+    /** Starts a publisher without waiting for it. Resolves to its exit code. */
+    function start(sourceDir: string, rootDir: string): { exit: Promise<number> } {
+      const child = spawn(process.execPath, [publisher], {
+        env: { ...process.env, NEXA_WEB_SOURCE_DIR: sourceDir, NEXA_WEB_ASSET_ROOT: rootDir },
+        stdio: ['ignore', 'ignore', 'pipe'],
+      });
+      let stderr = '';
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      return {
+        exit: new Promise<number>((resolveExit) => {
+          child.on('exit', (code) => resolveExit(code ?? -1));
+          child.on('error', () => resolveExit(-1));
+        }).then((code) => {
+          if (code !== 0) throw new Error(`publisher exited ${code}: ${stderr}`);
+          return code;
+        }),
+      };
+    }
+
+    /**
+     * Everything a served tree must satisfy at rest, checked against the
+     * filesystem rather than against what any one publisher reported.
+     *
+     * `current` naming a directory that is not there is the failure this is
+     * mostly here for: it is not a stale page, it is a 404 for the whole Web
+     * Admin, and it is what a publisher pruning another publisher's release
+     * leaves behind.
+     */
+    function assertCoherent(rootDir: string): void {
+      const active = activeId(rootDir);
+      expect(existsSync(join(rootDir, 'releases', active))).toBe(true);
+      // Every retained release is complete and every asset any of them names
+      // is in the pool, so any document that can still be resolved can still
+      // be loaded.
+      for (const id of releases(rootDir)) {
+        const dir = join(rootDir, 'releases', id);
+        expect(existsSync(join(dir, 'index.html'))).toBe(true);
+        for (const asset of readdirSync(join(dir, 'assets'))) {
+          expect(existsSync(join(rootDir, 'pool', 'assets', asset))).toBe(true);
+        }
+      }
+      // And nothing half-published is left lying around.
+      expect(
+        readdirSync(rootDir).filter(
+          (entry) => entry.startsWith('.staging-') || entry.startsWith('.activating-'),
+        ),
+      ).toEqual([]);
+      expect(existsSync(join(rootDir, '.publish.lock'))).toBe(false);
+      expect(readServedTokens(rootDir).size).toBe(1);
+    }
+
+    /** Reads the served tree until `done`, failing on any incoherent state. */
+    async function readWhile(rootDir: string, done: Promise<unknown>): Promise<number> {
+      let running = true;
+      void done.then(
+        () => {
+          running = false;
+        },
+        () => {
+          running = false;
+        },
+      );
+      let reads = 0;
+      const observed: Array<Set<string>> = [];
+      while (running) {
+        // A request: resolve `current`, read the document, load its assets.
+        // Under a dangling `current` or a pruned release this throws.
+        observed.push(readServedTokens(rootDir));
+        reads += 1;
+        await new Promise((r) => setImmediate(r));
+      }
+      for (const tokens of observed) expect(tokens.size).toBe(1);
+      return reads;
+    }
+
+    it('publishes two different bundles without either pruning the other', async () => {
+      // The interleaving that produced the bug: both publishers read the same
+      // `current`, so both compute the same "previous release" to retain, and
+      // the one that activates FIRST is not in the second one's retained set.
+      // Its prune then deletes the release `current` names.
+      const rootDir = root();
+      run(source('base', 200, 512), rootDir);
+      const baseId = activeId(rootDir);
+
+      const a = start(source('two', 200, 512), rootDir);
+      const b = start(source('three', 200, 512), rootDir);
+      const both = Promise.all([a.exit, b.exit]);
+      const reads = await readWhile(rootDir, both);
+      await expect(both).resolves.toEqual([0, 0]);
+
+      // A positive control: a loop that ran twice would pass whatever the
+      // publishers did to each other.
+      expect(reads).toBeGreaterThan(20);
+      assertCoherent(rootDir);
+      // Two publications past `base`, so exactly one of the two new releases
+      // is current and `base` is gone.
+      expect(activeId(rootDir)).not.toBe(baseId);
+      expect(releases(rootDir)).toHaveLength(2);
+      expect(releases(rootDir)).toContain(activeId(rootDir));
+    });
+
+    it('publishes the SAME bundle twice at once without the two runs colliding', async () => {
+      // Identical bundles collide on every derived name: the release
+      // directory, the staging directory, and the activation link. Two runs
+      // sharing them had one remove the other's staging directory mid-copy and
+      // one rename away the other's activation link before it could be used.
+      const rootDir = root();
+      run(source('base', 200, 512), rootDir);
+
+      const incoming = source('same', 200, 512);
+      const a = start(incoming, rootDir);
+      const b = start(incoming, rootDir);
+      const both = Promise.all([a.exit, b.exit]);
+      const reads = await readWhile(rootDir, both);
+      await expect(both).resolves.toEqual([0, 0]);
+
+      expect(reads).toBeGreaterThan(20);
+      assertCoherent(rootDir);
+      expect(readServedTokens(rootDir)).toEqual(new Set(['same']));
+      // One bundle, one release directory, however many publishers there were.
+      const ids = releases(rootDir);
+      expect(new Set(ids).size).toBe(ids.length);
+    });
+
+    it('lets a publisher that fails leave the other publisher activated', async () => {
+      // One good bundle and one that cannot be copied, started together. The
+      // failing run must not take the successful one down with it: it holds
+      // the same lock and walks the same prune.
+      const rootDir = root();
+      run(source('base', 200, 512), rootDir);
+
+      const broken = source('broken', 200, 512);
+      symlinkSync(join(broken, 'nowhere.js'), join(broken, 'assets', 'dangling.js'));
+      const good = start(source('good', 200, 512), rootDir);
+      const bad = start(broken, rootDir);
+      const settled = Promise.allSettled([good.exit, bad.exit]);
+      const reads = await readWhile(rootDir, settled);
+      const outcomes = await settled;
+
+      expect(reads).toBeGreaterThan(20);
+      expect(outcomes[0]!.status).toBe('fulfilled');
+      expect(outcomes[1]!.status).toBe('rejected');
+      assertCoherent(rootDir);
+      expect(readServedTokens(rootDir)).toEqual(new Set(['good']));
+    });
+
+    it('takes over a lock whose holder died and refuses one whose holder lives', () => {
+      const rootDir = root();
+      run(source('one'), rootDir);
+
+      // A lock left by a process that is gone. Waiting this out would turn a
+      // publisher killed mid-copy into an installation that can never publish
+      // again — and a publisher IS killed mid-copy, one test above.
+      const lockDir = join(rootDir, '.publish.lock');
+      mkdirSync(lockDir);
+      writeFileSync(
+        join(lockDir, 'holder'),
+        `${JSON.stringify({ pid: 2 ** 22 - 1, host: hostname(), at: Date.now() })}\n`,
+      );
+      run(source('two'), rootDir);
+      expect(readServedTokens(rootDir)).toEqual(new Set(['two']));
+      expect(existsSync(lockDir)).toBe(false);
+
+      // A lock held by a process that is alive is honoured, and honoured with
+      // a refusal rather than a silent overwrite. This test process is the
+      // living holder.
+      mkdirSync(lockDir);
+      writeFileSync(
+        join(lockDir, 'holder'),
+        `${JSON.stringify({ pid: process.pid, host: hostname(), at: Date.now() })}\n`,
+      );
+      const child = spawnSync(process.execPath, [publisher], {
+        encoding: 'utf8',
+        timeout: 4_000,
+        env: {
+          ...process.env,
+          NEXA_WEB_SOURCE_DIR: source('three'),
+          NEXA_WEB_ASSET_ROOT: rootDir,
+        },
+      });
+      // It is still waiting when the timeout kills it: it never published.
+      expect(child.signal).toBe('SIGTERM');
+      expect(readServedTokens(rootDir)).toEqual(new Set(['two']));
+      rmSync(lockDir, { recursive: true, force: true });
+    });
   });
 
   it('never lets a reader observe an empty or mixed tree while a bundle publishes', async () => {
