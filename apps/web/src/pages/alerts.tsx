@@ -1,6 +1,10 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { isOneShotManagementCode, type OperationalSeverity } from '@nexa/contracts';
+import {
+  isConditionRecoveryCode,
+  isOneShotManagementCode,
+  type OperationalSeverity,
+} from '@nexa/contracts';
 import {
   fetchNotification,
   fetchNotifications,
@@ -85,7 +89,15 @@ export function AlertsPage({ denied }: { denied: boolean }) {
     queryFn: () =>
       fetchOpsLog({
         limit: ALERTS_PAGE_SIZE,
-        scope: 'MANAGEMENT',
+        // The scope FOLLOWS the filter. "Open" narrows to the conditions —
+        // the codes something can actually close — because a one-shot record
+        // has a permanently null `resolvedAt` by design, so asking the wide
+        // scope for `open=true` returned every denial and every administrator
+        // change ever recorded, framed as outstanding work. The badge already
+        // said "recorded" on those rows, which made the page contradict itself
+        // in that one state: half of the rule stated in `ports.ts` was
+        // implemented and half was not.
+        scope: openOnly ? 'MANAGEMENT_CONDITIONS' : 'MANAGEMENT',
         ...(severity ? { severity } : {}),
         ...(openOnly ? { open: true } : {}),
         ...(cursor ? { before: cursor.at, beforeId: cursor.id } : {}),
@@ -153,8 +165,18 @@ export function AlertsPage({ denied }: { denied: boolean }) {
        * backlog, which is the reading this page exists to prevent.
        */
       render: (row) =>
-        isOneShotManagementCode(row.code) ? (
-          <Badge tone="neutral">{t('web.event_recorded')}</Badge>
+        // THREE kinds, not two. A recovery row is inserted with its own
+        // `resolvedAt` null — it closes the failure above it and nothing ever
+        // closes a recovery — so treating every non-one-shot null as an open
+        // failure put a warning "unresolved" badge on the row whose message
+        // announces the problem ended. That is the same defect as the one-shot
+        // case, one classification along, and it is why the contract now names
+        // the recoveries as their own list rather than leaving them inside the
+        // lifecycle.
+        isOneShotManagementCode(row.code) || isConditionRecoveryCode(row.code) ? (
+          <Badge tone={isConditionRecoveryCode(row.code) ? 'ok' : 'neutral'}>
+            {isConditionRecoveryCode(row.code) ? t('web.event_recovered') : t('web.event_recorded')}
+          </Badge>
         ) : (
           <Badge tone={row.resolvedAt ? 'ok' : 'warn'}>
             {row.resolvedAt ? t('web.resolved') : t('web.unresolved')}

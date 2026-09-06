@@ -317,9 +317,13 @@ export const WEB_FA = {
   'web.admin_active': 'فعال',
   'web.admin_suspended': 'معلق',
   'web.event_recorded': 'ثبت‌شده',
+  'web.event_recovered': 'برطرف شد',
   'web.credential_username': 'نام کاربری',
   'web.credential_password': 'گذرواژه',
   'web.credential_api_token': 'توکن API',
+  'web.credential_unusable': 'این نوع پنل از آن استفاده نمی‌کند',
+  'web.credential_stored_unusable':
+    'یکی از اعتبارنامه‌های ذخیره‌شده با نوع این پنل نمی‌خواند و در هیچ بررسی‌ای استفاده نمی‌شود. می‌توانید حذفش کنید.',
   'web.credential_unsupported_hint':
     'تنها فیلدهایی نمایش داده می‌شوند که این نوع پنل می‌پذیرد. فیلدهای دیگر پیش‌تر ذخیره می‌شدند و هیچ‌گاه استفاده نمی‌شدند.',
   'web.panel_archive': 'بایگانی',

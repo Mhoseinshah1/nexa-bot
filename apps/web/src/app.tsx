@@ -283,7 +283,15 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
 
   if (route.path === '/panels/new') {
     return {
-      element: <NewPanelPage denied={!may('panels.edit')} />,
+      element: (
+        <NewPanelPage
+          denied={!may('panels.edit')}
+          // Initial credentials are a credential write, guarded by the same
+          // CRITICAL permission as a rotation. Without this the create form
+          // was the way round the boundary the detail page enforces.
+          mayRotate={may('panels.credentials.rotate')}
+        />
+      ),
       crumbs: [nav('panels'), { label: t('web.panel_new') }],
       title: t('web.panel_new'),
     };

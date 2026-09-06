@@ -243,6 +243,10 @@ export function PanelsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bool
 
 type DetailTab = 'overview' | 'health' | 'credentials' | 'capabilities';
 
+/** The three credential kinds, once, so no list of them can drift from another. */
+type CredentialField = 'username' | 'password' | 'apiToken';
+const FIELDS: readonly CredentialField[] = ['username', 'password', 'apiToken'];
+
 export function PanelDetailPage({
   id,
   mayEdit,
@@ -356,12 +360,44 @@ export function PanelDetailPage({
 function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit: boolean }) {
   const client = useQueryClient();
   const toast = useToast();
+  /**
+   * The row the draft is based on, held apart from the one the query has.
+   *
+   * The same rule the settings and template editors already follow, and it is
+   * load-bearing HERE for a reason that only appeared once the form began
+   * sending changed fields only: `name` is initialised once and the `panel`
+   * prop refetches. Compare against the live prop and another administrator's
+   * rename makes the operator's stale `name` "changed" — so editing only the
+   * base URL silently reverts their edit, and `POST /panels/:id` has no
+   * expected-version check to catch it.
+   *
+   * Comparing against the basis means the request carries what THIS operator
+   * actually typed over, and a concurrent change is surfaced rather than
+   * overwritten.
+   */
+  const [basis, setBasis] = useState(panel);
   const [name, setName] = useState(panel.name);
   const [baseUrl, setBaseUrl] = useState(panel.baseUrl);
   const submission = useSubmissionKey();
   const statusSubmission = useSubmissionKey();
 
+  /** The query has a row the draft was not based on. */
+  const changedElsewhere = basis.name !== panel.name || basis.baseUrl !== panel.baseUrl;
+
+  const adopt = (fresh: PanelSummaryResponse) => {
+    setBasis(fresh);
+    setName(fresh.name);
+    setBaseUrl(fresh.baseUrl);
+  };
+
   const refresh = async () => {
+    // Keyed by the panel's own id, which is what `PanelDetailPage` keys the
+    // query on too — it receives the route parameter, and the only route that
+    // reaches this page is `/panels/:id` with that id. Written as `panel.id`
+    // rather than threading the parameter down so there is one source for the
+    // key on this side; if the two ever stop being the same value, a refetch
+    // after a write silently stops happening, which is a failure that looks
+    // like a stale screen rather than an error.
     await client.invalidateQueries({ queryKey: ['panel', panel.id] });
     await client.invalidateQueries({ queryKey: ['panels'] });
   };
@@ -373,8 +409,11 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     // the request carries only what actually differs.
     mutationFn: (command: { idempotencyKey: string; name?: string; baseUrl?: string }) =>
       updatePanel({ id: panel.id, ...command }),
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       submission.settle();
+      // The basis follows what was actually stored, so the next edit is
+      // compared against the row this operator just wrote.
+      adopt(result.panel);
       toast({ tone: 'ok', message: t('web.saved') });
       await refresh();
     },
@@ -405,9 +444,10 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     // panel immediately probe-eligible and wrote a successful audit row for a
     // change nobody made — the service's empty-edit guard cannot see it,
     // because the request is not empty.
+    // Against the BASIS, not the latest query result — see `basis` above.
     const command = {
-      ...(name === panel.name ? {} : { name }),
-      ...(baseUrl === panel.baseUrl ? {} : { baseUrl }),
+      ...(name === basis.name ? {} : { name }),
+      ...(baseUrl === basis.baseUrl ? {} : { baseUrl }),
     };
     if (Object.keys(command).length === 0) {
       toast({ tone: 'warn', message: t('web.no_changes') });
@@ -467,7 +507,28 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
           {/* The provider type is deliberately not editable. Changing it would
               reinterpret the stored credentials against a different protocol;
               the API does not accept it either. */}
-          {mayEdit && (
+
+          {/*
+            Somebody else changed this row while the draft was open. Said
+            rather than resolved: `POST /panels/:id` carries no expected
+            version, so nothing on the server can refuse the overwrite, and the
+            operator is the only party that can decide whose edit stands.
+          */}
+          {changedElsewhere && (
+            <p className="notice">
+              {t('web.changed_elsewhere')}{' '}
+              <button type="button" className="link" onClick={() => adopt(panel)}>
+                {t('web.reload_value')}
+              </button>
+            </p>
+          )}
+          {/*
+            `PanelService.update` refuses an ARCHIVED panel with a 412, so an
+            enabled Save here is a control that cannot work — and archiving is
+            now one press away on the card below, which lands the operator on
+            exactly this form. Restore first; the lifecycle card says so.
+          */}
+          {mayEdit && panel.status !== 'ARCHIVED' && (
             <div>
               <button type="submit" className="btn primary" disabled={save.isPending}>
                 {save.isPending ? t('web.saving') : t('web.save')}
@@ -661,8 +722,44 @@ function CredentialsTab({
    * missing" about a secret the operator had just saved. The server refuses
    * it now; this stops the form asking for it.
    */
+  /**
+   * An ARCHIVED panel refuses every credential write with a 412, so no rotate
+   * control may be drawn for one — neither the replace form nor the per-row
+   * remove. The presence rows stay: reading which credentials a retired panel
+   * still holds is exactly what an operator needs before restoring it.
+   */
+  const mayWrite = mayRotate && panel.status !== 'ARCHIVED';
+
   const shape = providerDescriptor(panel.providerType)?.credentialShape ?? null;
-  const accepts = (field: 'username' | 'password' | 'apiToken'): boolean =>
+  /**
+   * Whether a credential is worth SHOWING, as opposed to worth offering.
+   *
+   * A panel created before the shape rule existed may hold a credential its
+   * provider cannot use — an API token on a Marzban panel. Hiding the presence
+   * row outright made that secret undiscoverable and unremovable through the
+   * Web Admin, while the response still reported it and the service still
+   * accepts `null` to clear it. That is worse than the field it was hiding: a
+   * stored secret nobody can see is a stored secret nobody will remove.
+   *
+   * So the rule splits. `shows` covers the presence row and its remove button;
+   * `accepts` covers the replace INPUT, which is the thing that would produce
+   * a refusal.
+   */
+  /** The meta line for one row: when it was replaced, and whether it is dead. */
+  const metaFor = (field: CredentialField): string | undefined => {
+    const parts = [
+      panel.credentials[field].lastReplacedAt === null
+        ? null
+        : formatTimestamp(panel.credentials[field].lastReplacedAt),
+      // Stored and unusable. The operator can only act on what they are told.
+      panel.credentials[field].configured && !accepts(field) ? t('web.credential_unusable') : null,
+    ].filter((part): part is string => part !== null);
+    return parts.length === 0 ? undefined : parts.join(' · ');
+  };
+
+  const shows = (field: CredentialField): boolean =>
+    accepts(field) || panel.credentials[field].configured;
+  const accepts = (field: CredentialField): boolean =>
     // An unknown provider is not a licence to offer everything: a panel whose
     // adapter this build does not carry cannot have its credentials replaced
     // meaningfully either. The descriptor is the frozen catalogue, so this is
@@ -693,10 +790,15 @@ function CredentialsTab({
     // ABSENT and NULL mean different things, and only non-empty fields are
     // sent. Sending `''` for a field the operator did not touch would be a
     // request to store an empty credential.
+    // Guarded by `accepts` as well as by the field being hidden, for the same
+    // reason the create form is: this component is not remounted between two
+    // panel detail routes, so navigating from a Sanaei panel to a Marzban one
+    // through browser history keeps a typed token in state while its field is
+    // gone. Sending it puts the operator's secret on the wire to be refused.
     const credentials = {
-      ...(username === '' ? {} : { username }),
-      ...(password === '' ? {} : { password }),
-      ...(apiToken === '' ? {} : { apiToken }),
+      ...(username === '' || !accepts('username') ? {} : { username }),
+      ...(password === '' || !accepts('password') ? {} : { password }),
+      ...(apiToken === '' || !accepts('apiToken') ? {} : { apiToken }),
     };
     if (Object.keys(credentials).length === 0) {
       toast({ tone: 'warn', message: t('web.credentials_nothing_to_do') });
@@ -705,7 +807,7 @@ function CredentialsTab({
     save.mutate({ credentials, idempotencyKey: submission.current(credentials) });
   };
 
-  const remove = (field: 'username' | 'password' | 'apiToken') => {
+  const remove = (field: CredentialField) => {
     const credentials = { [field]: null };
     save.mutate({ credentials, idempotencyKey: submission.current(credentials) });
   };
@@ -719,46 +821,53 @@ function CredentialsTab({
       {/* Says WHY a field an operator may expect is not on the page — and only
           when one is actually missing, so it is never an unexplained aside on a
           form that shows everything. */}
-      {!(accepts('username') && accepts('password') && accepts('apiToken')) && (
+      {FIELDS.some((field) => !accepts(field)) && (
         <p className="faint small">{t('web.credential_unsupported_hint')}</p>
+      )}
+      {/* And the other direction: a credential this panel HOLDS that its
+          provider cannot use, stored before the shape rule existed. Named
+          explicitly, because the row alone would read as a working credential
+          and every probe will go on ignoring it. */}
+      {FIELDS.some((field) => panel.credentials[field].configured && !accepts(field)) && (
+        <p className="faint small">{t('web.credential_stored_unusable')}</p>
       )}
 
       <Card title={t('web.panel_tab_credentials')}>
         <div className="list-editor">
-          {accepts('username') && (
+          {shows('username') && (
             <Secret
               label={t('web.credential_username')}
               configured={panel.credentials.username.configured}
-              {...(panel.credentials.username.lastReplacedAt === null
+              {...(metaFor('username') === undefined
                 ? {}
-                : { meta: formatTimestamp(panel.credentials.username.lastReplacedAt) })}
-              {...(mayRotate ? { onRemove: () => remove('username') } : {})}
+                : { meta: metaFor('username') as string })}
+              {...(mayWrite ? { onRemove: () => remove('username') } : {})}
             />
           )}
-          {accepts('password') && (
+          {shows('password') && (
             <Secret
               label={t('web.credential_password')}
               configured={panel.credentials.password.configured}
-              {...(panel.credentials.password.lastReplacedAt === null
+              {...(metaFor('password') === undefined
                 ? {}
-                : { meta: formatTimestamp(panel.credentials.password.lastReplacedAt) })}
-              {...(mayRotate ? { onRemove: () => remove('password') } : {})}
+                : { meta: metaFor('password') as string })}
+              {...(mayWrite ? { onRemove: () => remove('password') } : {})}
             />
           )}
-          {accepts('apiToken') && (
+          {shows('apiToken') && (
             <Secret
               label={t('web.credential_api_token')}
               configured={panel.credentials.apiToken.configured}
-              {...(panel.credentials.apiToken.lastReplacedAt === null
+              {...(metaFor('apiToken') === undefined
                 ? {}
-                : { meta: formatTimestamp(panel.credentials.apiToken.lastReplacedAt) })}
-              {...(mayRotate ? { onRemove: () => remove('apiToken') } : {})}
+                : { meta: metaFor('apiToken') as string })}
+              {...(mayWrite ? { onRemove: () => remove('apiToken') } : {})}
             />
           )}
         </div>
       </Card>
 
-      {mayRotate && (
+      {mayWrite && (
         <Card title={t('web.credentials_replace')} hint={t('web.credentials_replace_hint')}>
           <form onSubmit={onSubmit} className="form-grid">
             {accepts('username') && (
@@ -862,7 +971,23 @@ function CapabilitiesTab({ panel }: { panel: PanelSummaryResponse }) {
  * be operated must not become a row" is enforced server-side, and this makes
  * the surface agree rather than duplicate the rule.
  */
-export function NewPanelPage({ denied }: { denied: boolean }) {
+export function NewPanelPage({
+  denied,
+  mayRotate,
+}: {
+  denied: boolean;
+  /**
+   * Whether this actor may write a credential at all.
+   *
+   * Initial credentials are guarded by `panels.credentials.rotate`, the same
+   * CRITICAL permission as a rotation — so an actor with `panels.edit` alone
+   * creates the panel and somebody else supplies its secrets. Offering the
+   * fields anyway would draw a control whose only outcome is a denial, and a
+   * denial here is not free: it writes an audit row and an unresolvable
+   * operational event.
+   */
+  mayRotate: boolean;
+}) {
   const toast = useToast();
   const client = useQueryClient();
   const providers = useQuery({
@@ -888,7 +1013,7 @@ export function NewPanelPage({ denied }: { denied: boolean }) {
    * before a provider is chosen, because nothing is known yet.
    */
   const accepts = (field: 'username' | 'password' | 'apiToken'): boolean =>
-    chosen !== undefined && shapeAcceptsCredential(chosen.credentialShape, field);
+    mayRotate && chosen !== undefined && shapeAcceptsCredential(chosen.credentialShape, field);
 
   const create = useMutation({
     mutationFn: (command: {
