@@ -39,6 +39,7 @@ import {
   type SeededAdmin,
   type TestContext,
 } from './harness';
+import { DrizzleOperationalConditionReader } from '../../apps/api/src/modules/platform/opslog/infrastructure/drizzle-operational-event.reader';
 
 /**
  * Panels, credentials and health against a real database.
@@ -228,6 +229,7 @@ describe('panels', () => {
         scopeActivity: ctx.container.tenants,
         audit: ctx.container.audit,
         opsLog: ctx.container.opsLog,
+        conditions: new DrizzleOperationalConditionReader(ctx.container.database.db),
         sessions: ctx.container.sessions,
         uow: ctx.container.uow,
         idempotency: ctx.container.idempotency,
@@ -1203,6 +1205,7 @@ describe('panels', () => {
       scopeActivity: ctx.container.tenants,
       audit: ctx.container.audit,
       opsLog: ctx.container.opsLog,
+      conditions: new DrizzleOperationalConditionReader(ctx.container.database.db),
       sessions: ctx.container.sessions,
       uow: ctx.container.uow,
       idempotency: ctx.container.idempotency,

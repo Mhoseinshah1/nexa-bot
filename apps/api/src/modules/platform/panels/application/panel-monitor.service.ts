@@ -56,6 +56,46 @@ const MAINTENANCE_RUN = 'maintenance.run' as const;
 /** The code a panel-health recovery is recorded under. */
 export const RECOVERED_CODE = 'panel.health.recovered';
 
+/**
+ * The code that says a panel will not be monitored again.
+ *
+ * Archiving is retirement, and a retired panel can never produce a recovery:
+ * nothing probes it, so whatever condition was open when it was archived would
+ * stay open for ever, describing a fault on a machine nobody operates. This is
+ * the recovery it gets instead. DISABLED deliberately does NOT get one — that
+ * is temporary, the panel is coming back, and the condition is still true.
+ */
+export const RETIRED_CODE = 'panel.health.retired';
+
+/**
+ * The dedupe key a panel-health row uses: one per PANEL and CONDITION.
+ *
+ * Shared by everything that writes one, because the format IS the identity: a
+ * recovery that computed it differently from the condition it names would
+ * resolve nothing, silently, and the operations view would keep an open ERROR
+ * for a panel that is fine.
+ */
+export function panelConditionKey(code: string, panelId: string): string {
+  return `${code}:${panelId}`;
+}
+
+/**
+ * Which of a panel's health rows a new event for it closes.
+ *
+ * Whichever condition its stored health represents, or — when it represents
+ * none, because the panel is healthy — the panel's own recovery row. Every
+ * recovery for a panel shares one dedupe key and an already-open row is only
+ * incremented, so closing it is what lets the NEXT one be seen at all.
+ */
+export function closesPanelCondition(
+  panelId: string,
+  health: { state: PanelHealthState; failure: ProviderFailureKind | null } | null,
+): { recoversCode: string; recoversDedupeKey: string } {
+  const open = health === null ? null : conditionOf(health.state, health.failure);
+  const code = open?.code ?? RECOVERED_CODE;
+  return { recoversCode: code, recoversDedupeKey: panelConditionKey(code, panelId) };
+}
+
 /** Operational conditions this loop reports about its own capacity. */
 const TENANT_BUDGET_CONDITION = 'panel.monitor.tenant_budget_exceeded';
 const TENANT_BUDGET_RESOLVED = 'panel.monitor.tenant_budget_ok';
@@ -1203,7 +1243,7 @@ function buildEvent(before: PanelView, transition: Transition): OperationalEvent
   // and then resolve itself, because the row still carried the code the
   // recovery was closing. A panel that went unreachable and then started
   // failing authentication announced nothing at all.
-  const keyFor = (code: string): string => `${code}:${panelId}`;
+  const keyFor = (code: string): string => panelConditionKey(code, panelId);
   // Whichever condition is being left, closed by name. `recoversDedupeKey` is
   // what keeps that to THIS panel: without it, one panel recovering would
   // resolve every other panel's open row of the same code.

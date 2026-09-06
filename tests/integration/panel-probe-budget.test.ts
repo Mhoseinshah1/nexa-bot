@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { Clock, Instant, ProviderProbeOutcome, ProviderType } from '@nexa/contracts';
 import {
   operationalEvents,
@@ -22,6 +22,7 @@ import {
   type SeededAdmin,
   type TestContext,
 } from './harness';
+import { DrizzleOperationalConditionReader } from '../../apps/api/src/modules/platform/opslog/infrastructure/drizzle-operational-event.reader';
 
 /**
  * The tenant-wide bound on real outbound probes (Fix C).
@@ -110,6 +111,7 @@ describe('the tenant-wide probe budget', () => {
       guard: context.container.guard,
       audit: context.container.audit,
       opsLog: context.container.opsLog,
+      conditions: new DrizzleOperationalConditionReader(context.container.database.db),
       sessions: context.container.sessions,
       uow: context.container.uow,
       idempotency: context.container.idempotency,
@@ -377,6 +379,74 @@ describe('the tenant-wide probe budget', () => {
       code: 'panel.probe_limited',
     });
     expect(probes).toBe(5);
+  });
+
+  it('says the limit ended when capacity comes back, once, and not before', async () => {
+    // `panel.probe.limited` was written as a deduplicated open WARN and NOTHING
+    // ever closed it. A single burst that earned one refusal left the
+    // operations view reporting connection tests as limited for ever, while
+    // the bucket refilled and every later test succeeded.
+    const svc = service(bucket(1, MINUTE));
+    const ids = await Promise.all(
+      Array.from({ length: 3 }, (_, i) => panelFor(svc, owner, tenantA, `Limit cycle ${i}`)),
+    );
+    const rowsFor = async (code: string) =>
+      ctx.container.database.db
+        .select()
+        .from(operationalEvents)
+        .where(
+          and(eq(operationalEvents.code, code), eq(operationalEvents.tenantId, tenantA.tenantId)),
+        );
+    const limited = async () => (await rowsFor('panel.probe.limited'))[0];
+    const served = async () => (await rowsFor('panel.probe.ok'))[0];
+
+    // Nothing has been limited, so a successful test announces no recovery.
+    // A "capacity is back" after every ordinary connection test is a recovery
+    // from nothing, and its occurrence count would climb for ever.
+    expect((await test(svc, owner, tenantA, ids[0]!)).probed).toBe(true);
+    expect(await limited()).toBeUndefined();
+    expect(await served()).toBeUndefined();
+
+    // 1. LIMITED.
+    await expect(test(svc, owner, tenantA, ids[1]!)).rejects.toMatchObject({
+      code: 'panel.probe_limited',
+    });
+    expect((await limited())!.resolvedAt).toBeNull();
+    expect(await served()).toBeUndefined();
+
+    // Still limited: one row, occurrence advancing, and still no recovery.
+    await expect(test(svc, owner, tenantA, ids[2]!)).rejects.toMatchObject({
+      code: 'panel.probe_limited',
+    });
+    expect(await rowsFor('panel.probe.limited')).toHaveLength(1);
+    expect((await limited())!.occurrenceCount).toBe(2);
+    expect(await served()).toBeUndefined();
+
+    // 2. Capacity returns and a test is GRANTED: one recovery.
+    clock.advance(MINUTE);
+    expect((await test(svc, owner, tenantA, ids[1]!)).probed).toBe(true);
+    expect((await served())!.occurrenceCount).toBe(1);
+    expect((await served())!.resolvedAt).toBeNull();
+    expect((await limited())!.resolvedAt).not.toBeNull();
+
+    // A second successful test while nothing is limited announces nothing.
+    clock.advance(MINUTE);
+    expect((await test(svc, owner, tenantA, ids[2]!)).probed).toBe(true);
+    expect((await served())!.occurrenceCount).toBe(1);
+
+    // 3. LIMITED again — and the recovery it contradicts is closed.
+    await expect(test(svc, owner, tenantA, ids[0]!)).rejects.toMatchObject({
+      code: 'panel.probe_limited',
+    });
+    expect((await limited())!.resolvedAt).toBeNull();
+    expect((await served())!.resolvedAt).not.toBeNull();
+
+    // 4. Granted again: a SECOND recovery, not a re-count of the first.
+    clock.advance(MINUTE);
+    expect((await test(svc, owner, tenantA, ids[0]!)).probed).toBe(true);
+    expect((await served())!.occurrenceCount).toBe(2);
+    expect((await served())!.resolvedAt).toBeNull();
+    expect((await limited())!.resolvedAt).not.toBeNull();
   });
 
   // The atomicity rule, stated directly rather than through a retiming: a

@@ -51,6 +51,8 @@ export interface OperationalEventReader {
 export interface OperationalConditionReader {
   /** Tenant ids with an unresolved condition of this code. */
   openTenantConditions(code: string): Promise<string[]>;
+  /** Whether ONE tenant's condition of this code is open. */
+  tenantConditionIsOpen(tenantId: string, code: string): Promise<boolean>;
   /** Whether the installation-wide (tenant-less) condition of this code is open. */
   systemConditionIsOpen(code: string): Promise<boolean>;
 }

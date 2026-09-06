@@ -441,11 +441,33 @@ stored address the probe would use.
 
 The refusal is `panel.probe_limited`, a `RATE_LIMITED` error mapped to HTTP
 429 with a `Retry-After` computed from the refill rate, and one deduplicated
-operational event per tenant. Neither says which panel, which address or which
-credential; the state carries none of those either. It does not clear on a
-credential or address replacement — that is the point — and it does not need
-Redis: the bucket is PostgreSQL state the API processes already share, and the
-refill is arithmetic on the clock the transaction was given.
+operational event per tenant, `panel.probe.limited`. Neither says which panel,
+which address or which credential; the state carries none of those either. It
+does not clear on a credential or address replacement — that is the point — and
+it does not need Redis: the bucket is PostgreSQL state the API processes
+already share, and the refill is arithmetic on the clock the transaction was
+given.
+
+It clears on the only thing that can end it: a manual probe that is GRANTED
+budget, which records `panel.probe.ok`. The two are mutually exclusive in both
+directions, each closing the other, so a tenant that runs out twice gets two
+limits and two recoveries rather than one of each with a stale row open beside
+it. The recovery is recorded only when a limit is actually open — read from the
+rows — because a "capacity is back" after every ordinary connection test is a
+recovery from nothing.
+
+### Archiving a panel closes its health condition
+
+A panel's health conditions are resolved by the next probe that finds it
+better. An ARCHIVED panel has no next probe, so whatever the monitor had open
+would stay open for ever: an ERROR in the operations view about a machine
+nobody operates, which no action can clear. Archiving therefore records
+`panel.health.retired`, which closes whichever health row the panel has open —
+its condition, or, when it was healthy, its own recovery row, which is equally
+a row about a panel that is not there.
+
+DISABLED gets none of this, deliberately. It is temporary, the panel is coming
+back, and the condition it left open is still true.
 
 ### Every write path takes a scope and an actor
 

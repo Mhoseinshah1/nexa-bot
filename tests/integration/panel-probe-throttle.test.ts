@@ -17,6 +17,7 @@ import {
   type SeededAdmin,
   type TestContext,
 } from './harness';
+import { DrizzleOperationalConditionReader } from '../../apps/api/src/modules/platform/opslog/infrastructure/drizzle-operational-event.reader';
 
 /**
  * The connection-test throttle.
@@ -96,6 +97,7 @@ describe('the panel connection-test throttle', () => {
       scopeActivity: ctx.container.tenants,
       audit: ctx.container.audit,
       opsLog: ctx.container.opsLog,
+      conditions: new DrizzleOperationalConditionReader(ctx.container.database.db),
       sessions: ctx.container.sessions,
       uow: ctx.container.uow,
       idempotency: ctx.container.idempotency,

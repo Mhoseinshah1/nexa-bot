@@ -754,6 +754,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       scopeActivity: tenants,
       audit,
       opsLog,
+      // Whether a probe limit is open, so a recovery is recorded when one ends
+      // and not after every successful test.
+      conditions: new DrizzleOperationalConditionReader(database.db),
       sessions,
       uow,
       idempotency,

@@ -32,6 +32,8 @@ import {
 import { rememberOnce } from '../../idempotency/application/remember-once.js';
 import type { SessionRepository } from '../../identity/application/ports.js';
 import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
+import type { OperationalConditionReader } from '../../opslog/application/ports.js';
+import { closesPanelCondition, panelConditionKey, RETIRED_CODE } from './panel-monitor.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   checkUrl,
@@ -53,6 +55,17 @@ import {
   scheduleAfterProbe,
   type MonitorCadence,
 } from '../domain/monitor-cadence.js';
+
+/**
+ * The tenant-wide probe limiter's condition, and its recovery.
+ *
+ * A pair, mutually exclusive in BOTH directions. The limit closes the
+ * recovery and the recovery closes the limit, so a tenant that runs out of
+ * capacity twice produces two limits and two recoveries rather than one of
+ * each with a stale row left open beside it.
+ */
+const PROBE_LIMITED_CODE = 'panel.probe.limited';
+const PROBE_LIMITED_OK_CODE = 'panel.probe.ok';
 
 const PANELS_VIEW = 'panels.view' as const;
 const PANELS_EDIT = 'panels.edit' as const;
@@ -107,6 +120,15 @@ export interface PanelServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
+  /**
+   * Which conditions are OPEN, read from the rows.
+   *
+   * Used to decide whether a recovery is worth recording at all. Recording one
+   * unconditionally would announce "capacity is back" after every successful
+   * connection test, including the thousands on installations that were never
+   * limited — a recovery from nothing is not information.
+   */
+  readonly conditions: OperationalConditionReader;
   readonly sessions: SessionRepository;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly idempotency: IdempotencyStore;
@@ -703,6 +725,31 @@ export class PanelService {
     return this.require(tenant, panelId);
   }
 
+  /**
+   * Says the probe limit has ended — but only if it had begun.
+   *
+   * Read from the ROWS rather than recorded unconditionally. A recovery after
+   * every successful connection test would be a "capacity is back" on
+   * installations that were never short of it, and the row's occurrence count
+   * would climb for ever on the strength of nothing happening.
+   */
+  private async resolveProbeLimit(scope: ScopeContext, tenant: TenantContext): Promise<void> {
+    const limited = await this.deps.conditions.tenantConditionIsOpen(
+      tenant.tenantId,
+      PROBE_LIMITED_CODE,
+    );
+    if (!limited) return;
+    await this.deps.opsLog.record(scope, {
+      code: PROBE_LIMITED_OK_CODE,
+      severity: 'INFO',
+      message:
+        'Panel connection tests are being served again: this tenant has outbound-probe capacity.',
+      dedupeKey: PROBE_LIMITED_OK_CODE,
+      recoversCode: PROBE_LIMITED_CODE,
+      recoversDedupeKey: PROBE_LIMITED_CODE,
+    });
+  }
+
   async setStatus(
     scope: ScopeContext,
     actor: ActorContext,
@@ -759,6 +806,35 @@ export class PanelService {
           now,
           tx,
         );
+        if (status === 'ARCHIVED') {
+          // Archiving is retirement, and a retired panel can never produce a
+          // recovery: nothing probes it again. Whatever condition the monitor
+          // had open — unreachable, a rejected credential — would stay open for
+          // ever, an ERROR in the operations view about a machine nobody
+          // operates and which no action can clear.
+          //
+          // DISABLED deliberately gets none of this. That is temporary, the
+          // panel is coming back, and the condition it left open is still true.
+          await this.deps.opsLog.record(
+            scope,
+            {
+              code: RETIRED_CODE,
+              severity: 'INFO',
+              message: `Panel "${before.panel.name}" was archived and is no longer monitored.`,
+              dedupeKey: panelConditionKey(RETIRED_CODE, panelId),
+              // Closes whichever health row this panel has open: its condition,
+              // or — when it was healthy — its own recovery row, which is a row
+              // about a panel that no longer exists either.
+              ...closesPanelCondition(panelId, before.health),
+              context: {
+                panelId,
+                panelName: before.panel.name,
+                providerType: before.panel.providerType,
+              },
+            },
+            tx,
+          );
+        }
         await this.deps.audit.record(
           scope,
           actor,
@@ -890,11 +966,15 @@ export class PanelService {
         // refused request: a limiter that is being leaned on would otherwise
         // fill the operations view with the thing it is preventing.
         await this.deps.opsLog.record(scope, {
-          code: 'panel.probe.limited',
+          code: PROBE_LIMITED_CODE,
           severity: 'WARN',
           message:
             'Panel connection tests are being refused: this tenant has used its outbound-probe capacity.',
-          dedupeKey: 'panel.probe.limited',
+          dedupeKey: PROBE_LIMITED_CODE,
+          // Closes the recovery this contradicts, so the next one is a
+          // recovery in its own right rather than a count on a stale row.
+          recoversCode: PROBE_LIMITED_OK_CODE,
+          recoversDedupeKey: PROBE_LIMITED_OK_CODE,
           context: { retryAfterSeconds },
         });
         // A RATE_LIMITED error carrying when to retry and nothing about any
@@ -917,6 +997,13 @@ export class PanelService {
       // would learn to retry through it.
       return { view: before, probed: false };
     }
+
+    // Budget was GRANTED, which is the only thing that can end a probe limit:
+    // nothing else in this codebase looks at that bucket on an operator's
+    // behalf. Without this a single burst that earned one refusal left the
+    // operations view reporting connection tests as limited for ever, while
+    // the bucket refilled and every later test succeeded.
+    await this.resolveProbeLimit(scope, tenant);
 
     const health = attempt.health;
     await runAuthorizedMutation(

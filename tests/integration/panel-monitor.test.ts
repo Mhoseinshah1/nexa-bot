@@ -213,6 +213,7 @@ describe('the panel health monitor', () => {
       scopeActivity: ctx.container.tenants,
       audit: ctx.container.audit,
       opsLog: ctx.container.opsLog,
+      conditions: new DrizzleOperationalConditionReader(ctx.container.database.db),
       sessions: ctx.container.sessions,
       uow: ctx.container.uow,
       idempotency: ctx.container.idempotency,
@@ -2582,6 +2583,62 @@ describe('the panel health monitor', () => {
       expect(await eventCodes(tenantA.tenantId)).toEqual([]);
       await probeWith(panelId, TIMED_OUT);
       expect(await openConditions(tenantA.tenantId)).toEqual(['panel.health.unreachable']);
+    });
+
+    it("closes a retired panel's condition when it is archived, but not when it is disabled", async () => {
+      // Archiving is retirement, and a retired panel can never produce a
+      // recovery: nothing probes it again. An open ERROR about a machine
+      // nobody operates cannot be cleared by any action, so an operator's
+      // only route was a database client.
+      const unreachable = await createPanel(ownerA, tenantA, 'retired-unreachable');
+      await probeWith(unreachable, TIMED_OUT);
+      expect(await openConditions(tenantA.tenantId)).toEqual(['panel.health.unreachable']);
+
+      // DISABLED is temporary: the panel is coming back and the condition it
+      // left open is still true. Asserted FIRST, so the archive assertion
+      // below cannot pass because setStatus resolves on every status change.
+      await service().setStatus(tenantA, adminActorFor(ownerA), unreachable, {
+        status: 'DISABLED',
+        idempotencyKey: key(),
+      });
+      expect(await openConditions(tenantA.tenantId)).toEqual(['panel.health.unreachable']);
+
+      await service().setStatus(tenantA, adminActorFor(ownerA), unreachable, {
+        status: 'ARCHIVED',
+        idempotencyKey: key(),
+      });
+      expect(await openConditions(tenantA.tenantId)).toEqual([]);
+      expect(await conditionCodes(tenantA)).toContain('panel.health.retired');
+    });
+
+    it("closes a HEALTHY panel's own recovery row when it is archived", async () => {
+      // The other half. A healthy panel has no condition open, but it does
+      // have its recovery row — "is answering health checks again" — about a
+      // panel that is not there any more.
+      const healthy = await createPanel(ownerA, tenantA, 'retired-healthy');
+      await probeWith(healthy, TIMED_OUT);
+      await probeWith(healthy, HEALTHY);
+      const openRows = async () =>
+        (
+          await ctx.container.database.db
+            .select({ code: operationalEvents.code })
+            .from(operationalEvents)
+            .where(
+              and(
+                eq(operationalEvents.tenantId, tenantA.tenantId),
+                isNull(operationalEvents.resolvedAt),
+              ),
+            )
+        )
+          .map((row) => row.code)
+          .sort();
+      expect(await openRows()).toEqual(['panel.health.recovered']);
+
+      await service().setStatus(tenantA, adminActorFor(ownerA), healthy, {
+        status: 'ARCHIVED',
+        idempotencyKey: key(),
+      });
+      expect(await openRows()).toEqual(['panel.health.retired']);
     });
 
     it('announces UNREACHABLE to AUTH_FAILED as a change of remedy', async () => {

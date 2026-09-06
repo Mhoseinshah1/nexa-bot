@@ -104,6 +104,21 @@ export class DrizzleOperationalConditionReader implements OperationalConditionRe
     return rows.flatMap((row) => (row.tenantId === null ? [] : [row.tenantId]));
   }
 
+  async tenantConditionIsOpen(tenantId: string, code: string): Promise<boolean> {
+    const rows = await this.db
+      .select({ id: operationalEvents.id })
+      .from(operationalEvents)
+      .where(
+        and(
+          eq(operationalEvents.code, code),
+          eq(operationalEvents.tenantId, tenantId),
+          isNull(operationalEvents.resolvedAt),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
   async systemConditionIsOpen(code: string): Promise<boolean> {
     const rows = await this.db
       .select({ id: operationalEvents.id })
