@@ -106,6 +106,29 @@ describe('planned surfaces', () => {
     },
   );
 
+  /**
+   * Revisions 4, 5, 6, 11, 14 and 17 — recorded, and each one named.
+   *
+   * These six are decisions about surfaces that have no backend, so there is
+   * no behaviour to assert; the deliverable IS the record, on the page whoever
+   * builds the surface will open. Until this block existed they were covered
+   * only by the generic "says what is missing" case above, which passes for
+   * any page carrying any sentence — so the ledger claimed six mandatory
+   * revisions were delivered on the strength of an assertion that could not
+   * tell whether they were there.
+   */
+  it.each<[string, RegExp, string]>([
+    ['payments', /مهلت پرداخت حداکثر یک ساعت/, 'revision 4 — one-hour payment validity'],
+    ['payments', /ترکیب ناممکن/, 'revision 5 — refund and fulfilment stay consistent'],
+    ['orders', /تاریخچهٔ واقعی سفارش/, 'revision 6 — real history is preserved'],
+    ['orders', /پروجکشن مشترک/, 'revision 11 — payment follows the order projection'],
+    ['services', /فیلتر چندانتخابی/, 'revision 14 — plan filter replaces location'],
+    ['payments', /در پنل وب ذخیره/, 'revision 17 — no Web Admin receipt storage'],
+  ])('records on %s: %s', (surface, pattern) => {
+    render(surface);
+    expect(screen.getByText(pattern)).toBeInTheDocument();
+  });
+
   /** Owner revision 15 — user tags are gone entirely. */
   it('carries no user-tag concept anywhere on the users surface', () => {
     const { container } = render('users');
