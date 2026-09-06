@@ -250,9 +250,18 @@ export const MANAGEMENT_CONDITION_FAILURE_CODES = [
  *
  * Management history — an operator should be able to see that a condition
  * ended — but never an open condition, because nothing resolves them.
- * `tests/unit/web-money-and-scope.test.ts` asserts the pairing is total in
- * both directions, so a failure code cannot be added without its recovery and
- * a recovery cannot leak into the conditions scope.
+ *
+ * `tests/unit/web-money-and-scope.test.ts` › "the condition lifecycle" asserts
+ * the two lists are disjoint and that the pairing is total in both directions,
+ * so a failure cannot be added without its recovery and a recovery cannot leak
+ * into the conditions scope. `tests/integration/web-admin-v2.test.ts` › "never
+ * returns a recovery as an open condition" proves it over the real recorder
+ * and the real endpoint.
+ *
+ * That sentence previously named the unit test for a property it did not
+ * assert — it looped over the UNION and never imported either list, so
+ * re-adding a recovery code to the failure list left it green. The test now
+ * exists; the claim came first, which is the defect this note records.
  */
 export const MANAGEMENT_CONDITION_RECOVERY_CODES = [
   'panel.monitor.tenant_budget_ok',
@@ -270,6 +279,25 @@ export const MANAGEMENT_CONDITION_CODES = [
 ] as const;
 
 /**
+ * The four administrator-change codes, as a type.
+ *
+ * Named separately so `AdminManagementService` cannot record a fifth code that
+ * this scope does not carry — the failure the `admin.` prefix hid, in the one
+ * place that could reintroduce it. `MANAGEMENT_ONE_SHOT_CODES` spreads this
+ * rather than restating it, which is what makes that guarantee hold by
+ * construction; declared here, above its use, because a `const` referenced
+ * before its declaration is a temporal dead zone at module evaluation, not a
+ * hoisted binding.
+ */
+export const MANAGEMENT_ADMIN_EVENT_CODES = [
+  'admin.created',
+  'admin.password_changed',
+  'admin.roles_changed',
+  'admin.status_changed',
+] as const;
+export type ManagementAdminEventCode = (typeof MANAGEMENT_ADMIN_EVENT_CODES)[number];
+
+/**
  * Codes that are records of a moment rather than a state: a denial, a lockout,
  * an administrator changed. `resolvedAt` is permanently null for these BY
  * DESIGN — there is no recovery and deliberately no acknowledgement — so a
@@ -279,15 +307,33 @@ export const MANAGEMENT_CONDITION_CODES = [
 export const MANAGEMENT_ONE_SHOT_CODES = [
   'access.permission_denied',
   'auth.login_locked_out',
-  'admin.created',
-  'admin.password_changed',
-  'admin.roles_changed',
-  'admin.status_changed',
+  // DERIVED, not re-typed. `MANAGEMENT_ADMIN_EVENT_CODES` is what types
+  // `AdminManagementService.recordAdminChange`, and its whole reason for
+  // existing is that the service cannot record a code this scope does not
+  // carry. Hand-copying the four here severed that: a fifth admin code would
+  // have type-checked, been recordable, and been invisible on the alerts page
+  // — the exact defect the `admin.` prefix used to hide. The spread is the
+  // guarantee.
+  ...MANAGEMENT_ADMIN_EVENT_CODES,
 ] as const;
 
 /** Whether a code is a one-shot record rather than a closable condition. */
 export function isOneShotManagementCode(code: string): boolean {
   return (MANAGEMENT_ONE_SHOT_CODES as readonly string[]).includes(code);
+}
+
+/**
+ * Whether a code is a RECOVERY — a row that closes a failure and is never
+ * closed itself.
+ *
+ * A surface needs this for the same reason it needs the one-shot predicate,
+ * and for one step further along: a recovery's `resolvedAt` is null by design
+ * too, so anything that reads "not resolved" as "still a problem" puts a
+ * warning on the row whose whole message is that the problem ended. Three
+ * kinds, not two.
+ */
+export function isConditionRecoveryCode(code: string): boolean {
+  return (MANAGEMENT_CONDITION_RECOVERY_CODES as readonly string[]).includes(code);
 }
 
 /**
@@ -330,21 +376,6 @@ export function isOneShotManagementCode(code: string): boolean {
  * dashboard. Putting it here would make this page the log the owner asked for
  * it not to be.
  */
-/**
- * The four administrator-change codes, as a type.
- *
- * Named separately so `AdminManagementService` cannot record a fifth code that
- * this scope does not carry — the failure the `admin.` prefix hid, in the one
- * place that could reintroduce it.
- */
-export const MANAGEMENT_ADMIN_EVENT_CODES = [
-  'admin.created',
-  'admin.password_changed',
-  'admin.roles_changed',
-  'admin.status_changed',
-] as const;
-export type ManagementAdminEventCode = (typeof MANAGEMENT_ADMIN_EVENT_CODES)[number];
-
 export const MANAGEMENT_EVENT_CODES = [
   ...MANAGEMENT_ONE_SHOT_CODES,
   ...MANAGEMENT_CONDITION_CODES,

@@ -668,33 +668,42 @@ export const notificationListResponseSchema = z.object({
  * silently rewritten rather than refused, so a caller could not tell a
  * misspelled request from an honoured one.
  */
-export const notificationListQuerySchema = z.object({
-  limit: z.coerce.number().int().positive().max(200).optional(),
-  /**
-   * The keyset cursor: the `createdAt` of the oldest intent already shown,
-   * and its id.
-   *
-   * BOTH, because `created_at` is not unique — a `Clock.now()` is captured
-   * once per transaction, so several intents share one microsecond — and a
-   * strict comparison on the timestamp alone skips the rest of a group that
-   * straddles a page boundary. Those rows then appear on no page at all,
-   * which is the defect the operational log had to fix for the same reason.
-   *
-   * Before this existed, the repository accepted `before` and the controller
-   * never parsed it, so the newest page was the ONLY page: past fifty intents
-   * the older ones were unreachable from the Web Admin unless their UUID was
-   * already known.
-   */
-  before: isoTimestamp.optional(),
-  /**
-   * Validated as an ID, not as any string under 64 characters.
-   *
-   * `beforeId=oops` used to reach the repository, which compares it against a
-   * PostgreSQL `uuid` column — so a malformed cursor became a driver error and
-   * a 500 where the caller had sent a bad query parameter and deserved a 400.
-   */
-  beforeId: uuidV7Schema.optional(),
-});
+export const notificationListQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().positive().max(200).optional(),
+    /**
+     * The keyset cursor: the `createdAt` of the oldest intent already shown,
+     * and its id.
+     *
+     * BOTH, because `created_at` is not unique — a `Clock.now()` is captured
+     * once per transaction, so several intents share one microsecond — and a
+     * strict comparison on the timestamp alone skips the rest of a group that
+     * straddles a page boundary. Those rows then appear on no page at all,
+     * which is the defect the operational log had to fix for the same reason.
+     *
+     * Before this existed, the repository accepted `before` and the controller
+     * never parsed it, so the newest page was the ONLY page: past fifty intents
+     * the older ones were unreachable from the Web Admin unless their UUID was
+     * already known.
+     */
+    before: isoTimestamp.optional(),
+    /**
+     * Validated as an ID, not as any string under 64 characters.
+     *
+     * `beforeId=oops` used to reach the repository, which compares it against a
+     * PostgreSQL `uuid` column — so a malformed cursor became a driver error and
+     * a 500 where the caller had sent a bad query parameter and deserved a 400.
+     */
+    beforeId: uuidV7Schema.optional(),
+  })
+  .refine((query) => (query.before === undefined) === (query.beforeId === undefined), {
+    // BOTH halves or neither. A timestamp without its tie-break is the cursor
+    // bug this pair exists to avoid, and the controller silently dropped a
+    // lone half and answered 200 with the NEWEST page — so a paging client
+    // whose cursor was truncated looped on page one instead of being told.
+    message: 'before and beforeId must be supplied together.',
+    path: ['beforeId'],
+  });
 
 /**
  * The page size a notification list uses when the caller names none.
