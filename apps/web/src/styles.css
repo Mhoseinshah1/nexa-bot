@@ -269,34 +269,6 @@ textarea {
   display: none;
 }
 
-.tenant {
-  margin: 10px 10px 4px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg-2);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  min-width: 0;
-}
-.tenant:hover {
-  border-color: var(--line-2);
-}
-.tenant .dot {
-  flex: none;
-}
-.tenant-name {
-  flex: 1;
-  min-width: 0;
-  font-size: 12.5px;
-  font-weight: 600;
-}
-.tenant-env {
-  font-size: 10.5px;
-  color: var(--fg-3);
-}
 .collapsed .tenant {
   justify-content: center;
   padding: 8px 0;
@@ -445,44 +417,6 @@ textarea {
 }
 .topbar .spacer {
   flex: 1;
-}
-.search-trigger {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 32px;
-  padding-inline: 10px;
-  border: 1px solid var(--line);
-  background: var(--bg-2);
-  border-radius: 7px;
-  color: var(--fg-3);
-  cursor: pointer;
-  min-width: 240px;
-  font-size: 12.5px;
-}
-.search-trigger:hover {
-  border-color: var(--line-2);
-  color: var(--fg-2);
-}
-.search-trigger kbd {
-  margin-inline-start: auto;
-  font-family: inherit;
-  font-size: 10.5px;
-  border: 1px solid var(--line-2);
-  border-radius: 4px;
-  padding: 0 5px;
-  direction: ltr;
-}
-.env-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 2px 9px;
-  color: var(--fg-2);
-  background: var(--bg-2);
 }
 
 .content {
@@ -706,13 +640,6 @@ textarea {
   }
 }
 
-.dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--fg-3);
-}
 .dot.ok {
   background: var(--ok);
 }
@@ -790,12 +717,6 @@ textarea {
 }
 .span2 {
   grid-column: span 2;
-}
-.span3 {
-  grid-column: span 3;
-}
-.span4 {
-  grid-column: span 4;
 }
 
 .stat {
@@ -948,16 +869,6 @@ textarea {
   height: 30px;
 }
 
-.tbl-foot {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
-  border-top: 1px solid var(--line);
-  font-size: 12px;
-  color: var(--fg-2);
-  flex-wrap: wrap;
-}
 .pager {
   display: inline-flex;
   gap: 3px;
@@ -982,17 +893,6 @@ textarea {
   border-color: var(--accent);
 }
 
-.avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  display: inline-grid;
-  place-items: center;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: #fff;
-  flex: none;
-}
 .avatar.lg {
   width: 48px;
   height: 48px;
@@ -1080,14 +980,6 @@ textarea.input {
 }
 .chip .x {
   opacity: 0.7;
-}
-.filter-row {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--line);
-  align-items: center;
 }
 
 /* --- Tabs ------------------------------------------------------------------- */
@@ -1238,22 +1130,6 @@ textarea.input {
   justify-content: space-between;
 }
 
-.timeline {
-  position: relative;
-  padding-inline-start: 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.timeline::before {
-  content: '';
-  position: absolute;
-  inset-inline-start: 5px;
-  top: 6px;
-  bottom: 6px;
-  width: 1px;
-  background: var(--line-2);
-}
 .timeline .ev {
   position: relative;
   font-size: 12.75px;
@@ -1328,16 +1204,7 @@ textarea.input {
 .form-grid .full {
   grid-column: 1 / -1;
 }
-.form-section {
-  padding: 18px 20px;
-  border-bottom: 1px solid var(--line);
-}
-.form-section:last-child {
-  border-bottom: none;
-}
-.form-section > h3 {
-  margin-bottom: 4px;
-}
+
 .form-section > .desc {
   color: var(--fg-3);
   font-size: 12px;
@@ -1402,16 +1269,7 @@ textarea.input {
   background: var(--danger);
   border-color: var(--danger);
 }
-.toggle-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--line);
-}
-.toggle-row:last-child {
-  border-bottom: none;
-}
+
 .toggle-row .txt {
   flex: 1;
   min-width: 0;
@@ -1707,50 +1565,7 @@ textarea.input {
   font-size: 11px;
   color: var(--fg-3);
 }
-.rel {
-  position: relative;
-}
 
-.tip {
-  position: relative;
-  cursor: help;
-}
-.tip::after {
-  content: attr(data-tip);
-  position: absolute;
-  bottom: calc(100% + 6px);
-  inset-inline-start: 50%;
-  transform: translateX(50%);
-  background: var(--fg);
-  color: var(--bg-0);
-  font-size: 11.5px;
-  padding: 4px 8px;
-  border-radius: 5px;
-  white-space: nowrap;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.1s;
-  z-index: 20;
-}
-.tip:hover::after {
-  opacity: 1;
-}
-
-/* Command palette */
-.palette {
-  position: fixed;
-  top: 12vh;
-  inset-inline-start: 50%;
-  transform: translateX(50%);
-  width: min(600px, 92vw);
-  background: var(--bg-1);
-  border: 1px solid var(--line-2);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
-  z-index: 50;
-  overflow: hidden;
-  animation: pop 0.14s ease;
-}
 .palette .in {
   display: flex;
   align-items: center;
@@ -1758,13 +1573,7 @@ textarea.input {
   padding: 12px 16px;
   border-bottom: 1px solid var(--line);
 }
-.palette input {
-  flex: 1;
-  background: none;
-  border: none;
-  outline: none;
-  font-size: 15px;
-}
+
 .palette .list {
   max-height: 380px;
   overflow: auto;
@@ -1848,14 +1657,6 @@ textarea.input {
   }
 }
 
-.state-switch {
-  display: inline-flex;
-  gap: 4px;
-  align-items: center;
-  font-size: 11px;
-  color: var(--fg-3);
-}
-
 /* --- Charts ---------------------------------------------------------------- */
 
 .chart {
@@ -1868,29 +1669,7 @@ textarea.input {
   fill: var(--fg-3);
   font-size: 10.5px;
 }
-.legend {
-  display: flex;
-  gap: 14px;
-  flex-wrap: wrap;
-  font-size: 11.75px;
-  color: var(--fg-2);
-}
-.legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.legend i {
-  width: 9px;
-  height: 9px;
-  border-radius: 2px;
-  display: inline-block;
-}
-.bars {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
+
 .bars .row {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -1947,12 +1726,8 @@ textarea.input {
   .grid.c3 {
     grid-template-columns: 1fr;
   }
-  .search-trigger {
-    min-width: 0;
-  }
-  .search-trigger span {
-    display: none;
-  }
+  
+  
   .content {
     padding: 16px;
   }
@@ -1975,11 +1750,7 @@ textarea.input {
   .head-stats {
     flex-wrap: wrap;
   }
-  .env-pill,
-  .search-trigger kbd,
-  .state-switch > span {
-    display: none;
-  }
+  
   .page-head .actions {
     width: 100%;
   }
