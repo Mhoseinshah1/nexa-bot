@@ -94,3 +94,61 @@ nothing for a per-gateway override to be keyed by, and the precedence rule
 cannot be expressed without inventing a gateway registry. The global default
 ships; the setting's own description and the Settings screen both say why the
 override is missing.
+
+## Corrections from the adversarial pass
+
+A read of the whole diff against this ADR's own standard found that the
+management-alerts classification was itself an example of what the ADR is
+against: it asserted coverage the server could not deliver.
+
+**Four of the ten declared codes could not appear.** `internal.unhandled` is an
+HTTP error-response code and `notification.attempts_exhausted` is a
+delivery-attempt `errorCode`; neither is ever recorded as an operational event.
+The two `panel.monitor.scheduler_capacity_*` codes are recorded, but under
+`SYSTEM_SCOPE` with a null tenant, and the log reader begins with
+`requireTenantId` — so no query could return them. And
+`MANAGEMENT_EVENT_CODE_PREFIXES = ['admin.']` matched nothing at all, because
+`admin.create` and its siblings are audit-log `action` values. Every test that
+covered this classification invented its own code, so none of it was visible.
+
+Three consequences, and they are the shape of the fix:
+
+- The registry now carries only codes some production path writes, enforced by
+  a test that names the recorder for each and fails if that file stops writing
+  it. Owner revision 24's administrator changes are delivered by RECORDING
+  them — `admin.created`, `admin.status_changed`, `admin.roles_changed`,
+  `admin.password_changed`, beside the audit rows they already produced — not
+  by a prefix that matched the wrong vocabulary.
+- The installation capacity condition reaches the operator through
+  `GET /system/monitor`, which is installation-scoped by construction and so
+  can answer for a row the tenant-scoped reader deliberately cannot reach.
+- The scope is **split**. `MANAGEMENT_CONDITIONS` holds only codes something
+  closes; `MANAGEMENT` holds those plus the one-shot records. This matters
+  because `access.permission_denied` writes a fresh row per denial with no
+  dedupe key and no recovery, and this product has no "mark as seen" by
+  design. On a card headed "needs attention" those rows accumulate for the life
+  of the installation — the same burial the management scope exists to prevent,
+  reached from the other direction. The dashboard asks for conditions; the
+  alerts page shows the management scope as history.
+
+**`GET /system/monitor` is guarded by `panels.view`, and that is a deliberate
+choice rather than an oversight.** The response describes the whole
+installation — batch size, concurrency, tick, the global ceiling — while
+`panels.view` is a tenant-scoped, LOW-risk permission, and this codebase
+otherwise puts cross-tenant reads behind `tenant.cross_read` (CRITICAL). The
+facts here are configuration an operator needs in order to read their own
+panels' freshness correctly, they name no other tenant and no secret, and a
+separate permission nobody could be denied would be a permission that exists to
+be looked at rather than enforced. Revisit if the product ever serves tenants
+who are not colleagues.
+
+**Owner revision 25's cost is accepted and worth stating.** Removing the
+general log browser leaves the routine operational stream — panel health
+transitions, delivery attempts — readable only through the Telegram report
+group, which is gated twice by default: `ops.notifications.min_severity`
+defaults to `ERROR`, and `ops.notifications.telegram_chat_id` defaults to
+empty. On a fresh installation that has not configured an ops chat, a `WARN`
+health flap is therefore recorded and surfaced nowhere. The owner asked for the
+browser to go, so it went; the System screen names where the stream is meant to
+land, and this paragraph is the record that the default configuration does not
+yet send it anywhere.

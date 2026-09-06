@@ -2,8 +2,6 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
-  useId,
   useMemo,
   useRef,
   useState,
@@ -48,8 +46,8 @@ export function Ltr({ children, mono = true }: { children: ReactNode; mono?: boo
  * ends. The separator is a real character, and the id carries its own isolate
  * so it does not drag the name around it.
  */
-export function Ident({ name, id, href }: { name: string; id?: string | null; href?: string }) {
-  const body = (
+export function Ident({ name, id }: { name: string; id?: string | null }) {
+  return (
     <span className="ident">
       <span className="strong">{name}</span>
       {id !== undefined && id !== null && id !== '' && (
@@ -64,7 +62,6 @@ export function Ident({ name, id, href }: { name: string; id?: string | null; hr
       )}
     </span>
   );
-  return href === undefined ? body : <a href={href}>{body}</a>;
 }
 
 /* ----------------------------------------------------------------- money --- */
@@ -319,46 +316,99 @@ export function Banner({
   );
 }
 
-export function Progress({ value, tone }: { value: number; tone?: Tone }) {
-  const clamped = Math.max(0, Math.min(100, value));
-  return (
-    <div
-      className="progress"
-      role="progressbar"
-      aria-valuenow={Math.round(clamped)}
-      aria-valuemin={0}
-      aria-valuemax={100}
-    >
-      <span className={tone ?? 'info'} style={{ width: `${clamped}%` }} />
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ tabs --- */
-
+/**
+ * A tablist, and the three things that make it one rather than three buttons
+ * wearing `role="tab"`.
+ *
+ * `aria-controls` and a matching `role="tabpanel"`, so a screen reader that
+ * announces "tab 2 of 3, selected" has something to associate it with; a
+ * ROVING `tabIndex`, so Tab moves past the whole strip instead of through it;
+ * and arrow keys to move between tabs, which the ARIA practices require and
+ * which is the only way a keyboard user reaches tab three without Tabbing
+ * through tab two's contents.
+ *
+ * `panelId` is what ties the two halves together, so `TabPanel` below takes
+ * the same id. A tablist whose panels are not identified is the accessible
+ * equivalent of a label pointing at nothing.
+ */
 export function Tabs<T extends string>({
   value,
   onChange,
   items,
+  panelId,
 }: {
   value: T;
   onChange: (next: T) => void;
   items: readonly { id: T; label: string }[];
+  panelId: string;
 }) {
+  const move = (delta: number) => {
+    const at = items.findIndex((item) => item.id === value);
+    if (at < 0) return;
+    // Wrapping, per the ARIA practices: from the last tab, End-of-strip is the
+    // first one rather than nothing happening.
+    const next = items[(at + delta + items.length) % items.length];
+    if (next) onChange(next.id);
+  };
+
   return (
-    <div className="tabs" role="tablist">
+    <div
+      className="tabs"
+      role="tablist"
+      onKeyDown={(event) => {
+        // RTL: the strip runs right-to-left, so ArrowLeft advances.
+        if (event.key === 'ArrowLeft') {
+          event.preventDefault();
+          move(1);
+        } else if (event.key === 'ArrowRight') {
+          event.preventDefault();
+          move(-1);
+        } else if (event.key === 'Home') {
+          event.preventDefault();
+          if (items[0]) onChange(items[0].id);
+        } else if (event.key === 'End') {
+          event.preventDefault();
+          const last = items[items.length - 1];
+          if (last) onChange(last.id);
+        }
+      }}
+    >
       {items.map((item) => (
         <button
           key={item.id}
           type="button"
           role="tab"
+          id={`${panelId}-tab-${item.id}`}
           aria-selected={item.id === value}
+          aria-controls={panelId}
+          // The roving part: only the selected tab is in the tab order.
+          tabIndex={item.id === value ? 0 : -1}
           className={item.id === value ? 'active' : undefined}
           onClick={() => onChange(item.id)}
         >
           {item.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+/**
+ * The panel a `Tabs` strip controls. Its `id` must be the strip's `panelId`,
+ * and `labelledBy` the id of the selected tab.
+ */
+export function TabPanel({
+  id,
+  labelledBy,
+  children,
+}: {
+  id: string;
+  labelledBy: string;
+  children: ReactNode;
+}) {
+  return (
+    <div id={id} role="tabpanel" aria-labelledby={labelledBy} tabIndex={0}>
+      {children}
     </div>
   );
 }
@@ -388,21 +438,6 @@ export function Pills<T extends string>({
     </div>
   );
 }
-
-export function Chip({ children, onRemove }: { children: ReactNode; onRemove?: () => void }) {
-  return (
-    <span className="chip">
-      {children}
-      {onRemove !== undefined && (
-        <button type="button" aria-label={t('web.remove')} onClick={onRemove}>
-          <Icon name="x" size={12} />
-        </button>
-      )}
-    </span>
-  );
-}
-
-/* ----------------------------------------------------------------- forms --- */
 
 export function Field({
   label,
@@ -601,13 +636,11 @@ export function DataTable<T>({
   columns,
   rows,
   rowKey,
-  onRowClick,
   caption,
 }: {
   columns: readonly Column<T>[];
   rows: readonly T[];
   rowKey: (row: T) => string;
-  onRowClick?: (row: T) => void;
   caption: string;
 }) {
   return (
@@ -632,15 +665,7 @@ export function DataTable<T>({
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr
-              key={rowKey(row)}
-              {...(onRowClick === undefined
-                ? {}
-                : {
-                    onClick: () => onRowClick(row),
-                    style: { cursor: 'pointer' },
-                  })}
-            >
+            <tr key={rowKey(row)}>
               {columns.map((column) => (
                 <td
                   key={column.key}
@@ -692,200 +717,6 @@ export function CursorPager({
         {t('web.older')}
       </button>
     </div>
-  );
-}
-
-export function SearchBox({
-  value,
-  onChange,
-  label,
-}: {
-  value: string;
-  onChange: (next: string) => void;
-  label: string;
-}) {
-  const id = useId();
-  return (
-    <div className="input-group">
-      <label className="visually-hidden" htmlFor={id}>
-        {label}
-      </label>
-      <Icon name="search" size={14} />
-      <input
-        id={id}
-        className="input"
-        type="search"
-        placeholder={label}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------- overlays --- */
-
-/**
- * Escape closes, focus goes in, and focus comes back.
- *
- * The third is the one usually missed: a dialog that returns focus to the
- * document body leaves a keyboard user at the top of the page, having lost the
- * control they opened it from.
- */
-function useDialog(open: boolean, onClose: () => void) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const restoreTo = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    restoreTo.current = document.activeElement as HTMLElement | null;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    const first = ref.current?.querySelector<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-    );
-    first?.focus();
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      restoreTo.current?.focus();
-    };
-  }, [open, onClose]);
-
-  return ref;
-}
-
-export function Modal({
-  open,
-  onClose,
-  title,
-  children,
-  foot,
-}: {
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  children: ReactNode;
-  foot?: ReactNode;
-}) {
-  const ref = useDialog(open, onClose);
-  const titleId = useId();
-  if (!open) return null;
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div
-        className="modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        ref={ref}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <header className="modal-head">
-          <h2 id={titleId}>{title}</h2>
-          <button
-            type="button"
-            className="btn ghost icon"
-            aria-label={t('web.close')}
-            onClick={onClose}
-          >
-            <Icon name="x" size={15} />
-          </button>
-        </header>
-        <div className="modal-body">{children}</div>
-        {foot !== undefined && <div className="modal-foot">{foot}</div>}
-      </div>
-    </div>
-  );
-}
-
-export function Drawer({
-  open,
-  onClose,
-  title,
-  children,
-  foot,
-}: {
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  children: ReactNode;
-  foot?: ReactNode;
-}) {
-  const ref = useDialog(open, onClose);
-  const titleId = useId();
-  if (!open) return null;
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div
-        className="drawer"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        ref={ref}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <header className="drawer-head">
-          <h2 id={titleId}>{title}</h2>
-          <button
-            type="button"
-            className="btn ghost icon"
-            aria-label={t('web.close')}
-            onClick={onClose}
-          >
-            <Icon name="x" size={15} />
-          </button>
-        </header>
-        <div className="drawer-body">{children}</div>
-        {foot !== undefined && <div className="drawer-foot">{foot}</div>}
-      </div>
-    </div>
-  );
-}
-
-export function Confirm({
-  open,
-  title,
-  body,
-  confirmLabel,
-  tone,
-  busy,
-  onConfirm,
-  onCancel,
-}: {
-  open: boolean;
-  title: string;
-  body: ReactNode;
-  confirmLabel: string;
-  tone?: 'danger';
-  busy?: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
-  return (
-    <Modal
-      open={open}
-      onClose={onCancel}
-      title={title}
-      foot={
-        <>
-          <button type="button" className="btn" onClick={onCancel}>
-            {t('web.cancel')}
-          </button>
-          <button
-            type="button"
-            className={`btn primary ${tone ?? ''}`}
-            disabled={busy === true}
-            onClick={onConfirm}
-          >
-            {busy === true ? t('web.working') : confirmLabel}
-          </button>
-        </>
-      }
-    >
-      {body}
-    </Modal>
   );
 }
 

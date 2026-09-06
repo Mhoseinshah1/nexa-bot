@@ -400,7 +400,10 @@ function MoneyEditor({
             onChange={(event) => onChange({ ...value, amountMinor: event.target.value })}
           />
         </Field>
-        <Field label={t('web.currency')} htmlFor="topup-currency">
+        <Field
+          label={`${t('web.currency')} — ${t('web.setting_topup_minimum')}`}
+          htmlFor="topup-currency"
+        >
           <select
             id="topup-currency"
             className="input"
@@ -431,7 +434,10 @@ function CurrencyEditor({
   disabled: boolean;
 }) {
   return (
-    <Field label={t('web.currency')} htmlFor="sales-currency">
+    <Field
+      label={`${t('web.currency')} — ${t('web.setting_sales_currency')}`}
+      htmlFor="sales-currency"
+    >
       <select
         id="sales-currency"
         className="input"
@@ -467,8 +473,12 @@ function TextEditor({
   disabled: boolean;
 }) {
   const [text, setText] = useState(() => toEditable(setting.value));
+  // The setting's own key, not the word "value". Five `ops.notifications.*`
+  // keys render at once, and labelling every one of them "مقدار" gave the page
+  // five inputs with one accessible name — indistinguishable to anything that
+  // navigates by label, which is the same defect the support-account list had.
   return (
-    <Field label={t('web.value')} htmlFor={`value-${setting.key}`}>
+    <Field label={`${t('web.value')} — ${setting.key}`} htmlFor={`value-${setting.key}`}>
       <input
         id={`value-${setting.key}`}
         className="input"
@@ -590,11 +600,20 @@ export function issuesFrom(error: unknown): string[] {
   if (!(error instanceof ApiError)) return [];
   const issues = error.details?.issues;
   if (!Array.isArray(issues)) return [];
-  return issues.map((issue) =>
-    typeof issue === 'string'
-      ? issue
-      : ((issue as { detail?: string }).detail ?? JSON.stringify(issue)),
-  );
+  // THREE shapes reach here, and only two were handled. `parseSettingValue`
+  // returns strings; template validation returns `{ kind, detail }`; and the
+  // global error filter returns `{ path, message }` for anything the REQUEST
+  // schema rejects. That third one fell through to `JSON.stringify`, so an
+  // operator saw `{"path":"value.0","message":"..."}` in their error list.
+  return issues.map((issue) => {
+    if (typeof issue === 'string') return issue;
+    const shaped = issue as { detail?: string; message?: string; path?: string };
+    if (shaped.detail !== undefined) return shaped.detail;
+    if (shaped.message !== undefined) {
+      return shaped.path ? `${shaped.path}: ${shaped.message}` : shaped.message;
+    }
+    return JSON.stringify(issue);
+  });
 }
 
 export function messageFor(error: unknown): string {

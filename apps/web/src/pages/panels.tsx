@@ -42,6 +42,7 @@ import {
   Secret,
   StateSwitch,
   Tabs,
+  TabPanel,
   useToast,
   type Column,
   type Tone,
@@ -324,6 +325,7 @@ export function PanelDetailPage({
         {data !== undefined && (
           <>
             <Tabs
+              panelId="panel-detail-panel"
               value={tab}
               onChange={setTab}
               items={[
@@ -334,12 +336,14 @@ export function PanelDetailPage({
               ]}
             />
 
-            {tab === 'overview' && <OverviewTab panel={data} mayEdit={mayEdit} />}
-            {tab === 'health' && <HealthTab panel={data} />}
-            {tab === 'credentials' && (
-              <CredentialsTab panel={data} mayRotate={mayRotate} onDone={refresh} />
-            )}
-            {tab === 'capabilities' && <CapabilitiesTab panel={data} />}
+            <TabPanel id="panel-detail-panel" labelledBy={`panel-detail-panel-tab-${tab}`}>
+              {tab === 'overview' && <OverviewTab panel={data} mayEdit={mayEdit} />}
+              {tab === 'health' && <HealthTab panel={data} />}
+              {tab === 'credentials' && (
+                <CredentialsTab panel={data} mayRotate={mayRotate} onDone={refresh} />
+              )}
+              {tab === 'capabilities' && <CapabilitiesTab panel={data} />}
+            </TabPanel>
           </>
         )}
       </StateSwitch>

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SessionResponse } from '@nexa/contracts';
 import { ApiError, fetchSession, signIn, signOut } from './api/client';
@@ -238,7 +238,15 @@ interface Resolved {
   readonly title: string;
 }
 
-function resolve(route: Route, permissions: readonly string[]): Resolved {
+/**
+ * The route table, exported so a test can walk it.
+ *
+ * The planned-surface suite asserted nine component KEYS, never nine PATHS —
+ * so a typo in `PLANNED_SURFACES[].path` would have left every one of its
+ * eighteen assertions green while the navigation link fell through to
+ * `NotFound`. Nothing exercised this function at all.
+ */
+export function resolve(route: Route, permissions: readonly string[]): Resolved {
   const may = (permission: string | null): boolean =>
     permission === null || permissions.includes(permission);
 
@@ -502,12 +510,30 @@ function SignedIn({
   const { choice, setChoice } = useTheme();
 
   // Collapsed below 980px, where a 248px sidebar is a third of the viewport.
-  // Read once and then owned by the operator: re-collapsing on every resize
-  // would fight somebody who deliberately opened it on a narrow screen.
+  /**
+   * The width decides, until the operator does — and then the operator does.
+   *
+   * The comment here used to say the state was "owned by the operator", while
+   * the listener below overwrote their choice on every crossing of the
+   * breakpoint: expand the sidebar at 900px, drag the window to 1000px and
+   * back, and it re-collapsed. The comment was true only of resizes that never
+   * crossed 980px, which is the least interesting case.
+   *
+   * `touched` is what makes it true. Before the operator has expressed a
+   * preference the viewport is the best guess available; afterwards it is not
+   * a guess any more, and nothing overrides it for the life of the session.
+   */
   const [collapsed, setCollapsed] = useState(() => window.innerWidth < 980);
+  const touched = useRef(false);
+  const choose = (next: boolean) => {
+    touched.current = true;
+    setCollapsed(next);
+  };
   useEffect(() => {
     const query = window.matchMedia('(max-width: 980px)');
-    const onChange = (event: MediaQueryListEvent) => setCollapsed(event.matches);
+    const onChange = (event: MediaQueryListEvent) => {
+      if (!touched.current) setCollapsed(event.matches);
+    };
     query.addEventListener('change', onChange);
     return () => query.removeEventListener('change', onChange);
   }, []);
@@ -576,7 +602,7 @@ function SignedIn({
             className="btn ghost icon sm"
             aria-label={t('web.toggle_sidebar')}
             aria-expanded={!collapsed}
-            onClick={() => setCollapsed((current) => !current)}
+            onClick={() => choose(!collapsed)}
           >
             <Icon name="sidebar" size={15} />
           </button>

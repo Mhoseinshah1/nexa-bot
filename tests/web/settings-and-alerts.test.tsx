@@ -125,7 +125,9 @@ describe('the settings screen', () => {
     expect((screen.getByLabelText('مبلغ به کوچک‌ترین واحد') as HTMLInputElement).value).toBe(
       '20000',
     );
-    expect((screen.getByLabelText('واحد پول') as HTMLSelectElement).value).toBe('IRT');
+    expect(
+      (screen.getByLabelText('واحد پول — کمینهٔ شارژ کیف پول') as HTMLSelectElement).value,
+    ).toBe('IRT');
     expect(screen.getByText(/حداقلِ مخصوص هر درگاه/)).toBeInTheDocument();
     expect(screen.getByText(/هیچ درگاه پرداختی ثبت نشده/)).toBeInTheDocument();
   });
@@ -140,7 +142,7 @@ describe('the settings screen', () => {
     renderPage(<SettingsPage mayEdit denied={false} />);
     await screen.findByText('sales.currency');
 
-    const select = screen.getByLabelText('واحد پول') as HTMLSelectElement;
+    const select = screen.getByLabelText('واحد پول — واحد پول فروشگاه') as HTMLSelectElement;
     expect([...select.options].map((option) => option.value)).toEqual(['IRT', 'IRR']);
     expect([...select.options].map((option) => option.text)).toEqual(['تومان', 'ریال']);
   });

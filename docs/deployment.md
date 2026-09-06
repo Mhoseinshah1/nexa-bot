@@ -285,7 +285,7 @@ Defaults: 150 x 6 = **900 panels for the whole installation**.
 These are different questions and the second is not a per-tenant number. A
 hundred tenants of twenty panels each is comfortably inside every per-tenant
 bound and asks the scheduler for two thousand starts an interval when it can
-manage a thousand — an overload no per-tenant check can see. What share of the
+manage nine hundred — an overload no per-tenant check can see. What share of the
 global ceiling any one tenant gets is decided by the fairness rotation against
 whoever is due at that moment, so it changes minute to minute and is
 deliberately not modelled as a constant.

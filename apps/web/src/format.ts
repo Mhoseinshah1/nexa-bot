@@ -25,8 +25,6 @@ const DATE_TIME = new Intl.DateTimeFormat('fa-IR', {
   timeStyle: 'short',
 });
 
-const DATE_ONLY = new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium' });
-
 /**
  * An ISO timestamp as a Jalali date and time in the viewer's own zone.
  *
@@ -39,12 +37,6 @@ export function formatTimestamp(iso: string): string {
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return iso;
   return DATE_TIME.format(at);
-}
-
-export function formatDate(iso: string): string {
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return iso;
-  return DATE_ONLY.format(at);
 }
 
 // ---------------------------------------------------------------------------

@@ -88,8 +88,11 @@ export const MONITOR_SPREAD_FRACTION = 0.1;
  * the standing stock. To keep `n` panels fresh at interval `i` the loop must
  * complete `n / i` probes per unit time, so `n <= refill x i`.
  *
- * With the shipped defaults — 30 tokens per 5 minutes, a 10-minute interval —
- * that is 60. Two caveats that make this a CEILING and not a promise:
+ * With the shipped defaults — 100 tokens per 5 minutes, a 3-minute interval —
+ * that is 60. Both inputs changed when the cadence dropped to three minutes,
+ * and the RESULT did not, which is exactly why this sentence went stale
+ * unnoticed: it read correctly while every number in it was wrong. Two caveats
+ * make it a CEILING and not a promise:
  *
  *   - It assumes the background lane has the whole refill rate. Manual "Test
  *     connection" probes come out of the same bucket, so sustained manual
@@ -112,7 +115,7 @@ export function tenantBudgetFreshPanelUpperBound(
  * A tick discovers at most `batchSize` candidates in total — the batch is a
  * global cap, shared out among the tenants claimed that tick — so across one
  * healthy interval the loop can begin at most `batchSize x (interval / tick)`
- * probes for everybody put together. Defaults: 50 x 20 = 1000.
+ * probes for everybody put together. Defaults: 150 x 6 = 900.
  *
  * NOT a per-tenant figure, and treating it as one hides a whole class of
  * overload: a hundred tenants of twenty panels each is under every per-tenant

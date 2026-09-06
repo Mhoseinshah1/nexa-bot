@@ -51,10 +51,10 @@ what the backend on `main` actually does.
 | `/panels/:id`             | detail, edit, credentials, status, test           | `GET                                                               | POST /panels/:id[/credentials | /status                                     | /test]`                                                                            | read, write | AVAILABLE NOW | `tests/web/panels.test.tsx` |
 | `/providers`              | provider catalogue                                | `GET /providers`                                                   | read                          | AVAILABLE NOW                               | rendered in `panels.test.tsx` fixtures                                             |
 | `/settings`               | settings registry, all nine keys                  | `GET/POST /settings[/:key]`                                        | read, write                   | AVAILABLE NOW; four keys' consumers PLANNED | `tests/web/settings-and-alerts.test.tsx`, `tests/integration/web-admin-v2.test.ts` |
-| `/features`               | feature flags                                     | `GET/POST /features[/:key]`                                        | read, write                   | AVAILABLE NOW                               | existing control-plane suites                                                      |
-| `/content`                | templates, revisions, preview, revert             | `GET/POST /templates…`                                             | read, write                   | AVAILABLE NOW                               | existing control-plane suites                                                      |
+| `/features`               | feature flags                                     | `GET/POST /features[/:key]`                                        | read, write                   | AVAILABLE NOW                               | `tests/web/control-plane-pages.test.tsx` + control-plane integration               |
+| `/content`                | templates, revisions, preview, revert             | `GET/POST /templates…`                                             | read, write                   | AVAILABLE NOW                               | `tests/web/control-plane-pages.test.tsx` + control-plane integration               |
 | `/alerts`                 | operational log, management scope                 | `GET /ops-log?scope=MANAGEMENT`                                    | read                          | AVAILABLE NOW                               | `tests/web/settings-and-alerts.test.tsx`, `tests/integration/web-admin-v2.test.ts` |
-| `/notifications`          | intent and attempts, test send                    | `GET /notifications…`, `POST /notifications/test`                  | read, test-send               | AVAILABLE NOW                               | existing control-plane suites                                                      |
+| `/notifications`          | intent and attempts, test send                    | `GET /notifications…`, `POST /notifications/test`                  | read, test-send               | AVAILABLE NOW                               | `tests/web/control-plane-pages.test.tsx` + control-plane integration               |
 | `/system`                 | readiness detail, build info                      | `system/readiness`, `health/info`                                  | read                          | AVAILABLE NOW                               | `tests/web/settings-and-alerts.test.tsx`                                           |
 | `/system?section=monitor` | effective monitor configuration and capacity      | `GET system/monitor`                                               | read                          | AVAILABLE NOW (read-only)                   | `tests/unit/monitor-profile.test.ts`, `tests/integration/web-admin-v2.test.ts`     |
 | `/system?section=admins`  | administrators and their roles                    | `GET /admins`                                                      | read                          | AVAILABLE NOW                               | existing admin suites                                                              |
@@ -67,7 +67,7 @@ what the backend on `main` actually does.
 | `/resellers`              | —                                                 | none                                                               | none                          | PLANNED                                     | same                                                                               |
 | `/reports`                | —                                                 | none                                                               | none                          | PLANNED                                     | same                                                                               |
 | `/bots`                   | —                                                 | none                                                               | none                          | PLANNED                                     | same                                                                               |
-| any other path            | —                                                 | —                                                                  | not-found                     | AVAILABLE NOW                               | captured in the screenshot pass                                                    |
+| any other path            | —                                                 | —                                                                  | not-found                     | AVAILABLE NOW                               | `tests/web/planned-and-absent.test.tsx` (through `resolve`)                        |
 
 Every `PLANNED` route renders one page that draws no `button`, `input`,
 `select`, `table` or link at all. That is asserted per route rather than
@@ -87,3 +87,16 @@ assumed.
 
 Each of these is covered by a regression test asserting its ABSENCE, because an
 absence with no test is an absence that comes back.
+
+## A correction to this ledger
+
+Four rows above previously cited coverage that did not exist. `/features`,
+`/content` and `/notifications` were marked as covered by "existing
+control-plane suites" — API-level integration tests, none of which renders any
+of those three components. The `tests/web/` suite's own stated rationale is
+that the risk it covers is production WIRING, which an API test cannot see; the
+ledger was claiming that risk was covered when nothing addressed it. The
+not-found row cited "the screenshot pass", which committed no probe at all
+until `scripts/visual/` was added.
+
+Each of those four now names a test that renders the route.

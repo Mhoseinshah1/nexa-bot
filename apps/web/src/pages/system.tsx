@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { MonitorProfile } from '@nexa/contracts';
 import { fetchAdmins, fetchInfo, fetchMonitorProfile, fetchReadiness } from '../api/client';
@@ -20,6 +19,7 @@ import {
   PageHead,
   StateSwitch,
   Tabs,
+  TabPanel,
 } from '../ui/kit';
 
 /**
@@ -56,17 +56,16 @@ export function SystemPage({
   // refresh — the same reason the routes themselves are paths rather than
   // component state.
   const section: Section = isSection(requested) ? requested : 'status';
-  const [, force] = useState(0);
 
   return (
     <>
       <PageHead title={t('web.system_title')} subtitle={t('web.system_intro')} maturity="now" />
 
       <Tabs
+        panelId="system-panel"
         value={section}
         onChange={(next) => {
           setQuery(route, 'section', next === 'status' ? null : next);
-          force((n) => n + 1);
         }}
         items={[
           { id: 'status', label: t('web.system_tab_status') },
@@ -75,9 +74,11 @@ export function SystemPage({
         ]}
       />
 
-      {section === 'status' && <StatusSection />}
-      {section === 'monitor' && <MonitorSection denied={!permissions.includes('panels.view')} />}
-      {section === 'admins' && <AdminsSection denied={!permissions.includes('admins.view')} />}
+      <TabPanel id="system-panel" labelledBy={`system-panel-tab-${section}`}>
+        {section === 'status' && <StatusSection />}
+        {section === 'monitor' && <MonitorSection denied={!permissions.includes('panels.view')} />}
+        {section === 'admins' && <AdminsSection denied={!permissions.includes('admins.view')} />}
+      </TabPanel>
 
       <Card title={t('web.system_logs_title')}>
         <Banner tone="info" title={t('web.system_logs_absent')}>
@@ -353,7 +354,13 @@ function AdminsSection({ denied }: { denied: boolean }) {
               header: t('web.status'),
               render: (row) => (
                 <Badge tone={row.status === 'ACTIVE' ? 'ok' : 'neutral'}>
-                  {row.status === 'ACTIVE' ? t('web.up') : t('web.down')}
+                  {/*
+                    An administrator is enabled or disabled, not "up" or "out
+                    of service". `web.down` is the dependency vocabulary this
+                    same page uses for a downed Postgres a few rows above, and
+                    reusing it here described a suspended person as an outage.
+                  */}
+                  {row.status === 'ACTIVE' ? t('web.admin_active') : t('web.admin_suspended')}
                 </Badge>
               ),
             },

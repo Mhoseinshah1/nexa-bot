@@ -1,6 +1,8 @@
+import type { ReactElement } from 'react';
 import { describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
 import { PlannedPage, PLANNED_SURFACES } from '../../apps/web/src/pages/planned';
+import { isCurrent, resolve } from '../../apps/web/src/app';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -31,6 +33,42 @@ describe('planned surfaces', () => {
         'users',
       ].sort(),
     );
+  });
+
+  /**
+   * Per ROUTE, not per component key.
+   *
+   * Everything below renders `<PlannedPage surface={key} />` directly, which
+   * cannot see the route table at all: a typo in one surface's `path` would
+   * send its navigation link through `resolve` to `NotFound` while all
+   * eighteen assertions stayed green. This walks the paths the shell actually
+   * serves.
+   */
+  it.each(PLANNED_SURFACES.map((surface) => [surface.key, surface.path] as const))(
+    '%s is reachable at %s and resolves to the planned page',
+    (key, path) => {
+      stubApi([]);
+      const resolved = resolve({ path, query: new URLSearchParams() }, []);
+      const { container } = renderPage(resolved.element as ReactElement);
+
+      // The planned page, not the 404 — asserted by its own copy.
+      expect(screen.getByText('چرا هنوز فعال نیست')).toBeInTheDocument();
+      // And the route-level guarantee, which is the one that matters: no
+      // control of any kind, reached the way an operator reaches it.
+      expect(container.querySelectorAll('button, input, select, table, a')).toHaveLength(0);
+      // The sidebar entry for this path marks itself current, so the link and
+      // the route agree about which page is open.
+      expect(isCurrent(path, path)).toBe(true);
+      expect(key.length).toBeGreaterThan(0);
+    },
+  );
+
+  it('serves the 404 for a path no entry claims', () => {
+    stubApi([]);
+    const resolved = resolve({ path: '/definitely-not-a-route', query: new URLSearchParams() }, []);
+    const { container } = renderPage(resolved.element as ReactElement);
+    expect(screen.queryByText('چرا هنوز فعال نیست')).toBeNull();
+    expect(container.textContent).toBeTruthy();
   });
 
   /**

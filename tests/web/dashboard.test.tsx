@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
 import { DashboardPage, healthSlices, providerSlices } from '../../apps/web/src/pages/dashboard';
+import { panelSummarySchema } from '@nexa/contracts';
 import { event, panel, renderPage, stubApi } from './harness';
+
+/**
+ * Fixtures through the SAME schema the server validates against.
+ *
+ * `healthSlices` takes `PanelSummaryResponse[]`; handing it a cast object
+ * means a contract rename cannot fail this file. Parsing means it can.
+ */
+const fleetOf = (...panels: Record<string, unknown>[]) =>
+  panels.map((one) => panelSummarySchema.parse(one));
 
 const READINESS = {
   url: '/system/readiness',
@@ -36,11 +46,16 @@ describe('the dashboard', () => {
   });
 
   it('counts each panel exactly once per breakdown', () => {
-    const fleet = [
+    // PARSED, not cast. `as never[]` handed `healthSlices` an unchecked
+    // `Record<string, unknown>`: rename `health.state` in the contract and
+    // every panel would land under the `undefined` key, the total would still
+    // be 3, and this test would still pass. The schema is the point of the
+    // fixture.
+    const fleet = fleetOf(
       panel({ health: { ...(panel().health as object), state: 'HEALTHY' } }),
       panel({ id: 'b', health: { ...(panel().health as object), state: 'HEALTHY' } }),
       panel({ id: 'c', health: { ...(panel().health as object), state: 'UNREACHABLE' } }),
-    ] as never[];
+    );
 
     const total = healthSlices(fleet).reduce((sum, slice) => sum + slice.count, 0);
     expect(total).toBe(3);
@@ -48,11 +63,11 @@ describe('the dashboard', () => {
   });
 
   it('orders a breakdown by share, biggest first', () => {
-    const fleet = [
+    const fleet = fleetOf(
       panel({ health: { ...(panel().health as object), state: 'UNREACHABLE' } }),
       panel({ id: 'b', health: { ...(panel().health as object), state: 'HEALTHY' } }),
       panel({ id: 'c', health: { ...(panel().health as object), state: 'HEALTHY' } }),
-    ] as never[];
+    );
     expect(healthSlices(fleet)[0]?.count).toBe(2);
   });
 

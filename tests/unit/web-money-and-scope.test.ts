@@ -239,3 +239,70 @@ describe('the management event scope', () => {
     }
   });
 });
+describe('the settings the owner revisions add', () => {
+  it('declares a store currency, so no amount has to assume Toman', () => {
+    const definition = settingDefinition('sales.currency');
+    expect(definition.schema.safeParse('IRT').success).toBe(true);
+    expect(definition.schema.safeParse('IRR').success).toBe(true);
+    expect(definition.schema.safeParse('USD').success).toBe(false);
+  });
+
+  it('accepts several support accounts, in order, and rejects a repeat', () => {
+    expect(parseSettingValue('support.accounts', ['@Support1', '@Support2', '@Support3']).ok).toBe(
+      true,
+    );
+    // Order is DATA, not decoration: two different orders are two different
+    // values, so reordering is a real edit the server records.
+    const first = parseSettingValue('support.accounts', ['@Support1', '@Support2']);
+    const second = parseSettingValue('support.accounts', ['@Support2', '@Support1']);
+    expect(first.ok && second.ok).toBe(true);
+    expect(first.ok && second.ok && JSON.stringify(first.value)).not.toBe(
+      second.ok ? JSON.stringify(second.value) : '',
+    );
+
+    expect(parseSettingValue('support.accounts', ['@Support1', '@support1']).ok).toBe(false);
+    expect(parseSettingValue('support.accounts', ['no-at-sign']).ok).toBe(false);
+    expect(parseSettingValue('support.accounts', ['@ab']).ok).toBe(false);
+  });
+
+  it('makes a channel carry a required-membership answer it cannot omit', () => {
+    expect(
+      parseSettingValue('telegram.channels', [
+        { handle: '@Channel1', mandatory: true },
+        { handle: '@NewsChannel', mandatory: false },
+      ]).ok,
+    ).toBe(true);
+    // No default. A missing flag would have to be read as one of the two, and
+    // both readings are wrong.
+    expect(parseSettingValue('telegram.channels', [{ handle: '@Channel1' }]).ok).toBe(false);
+    expect(
+      parseSettingValue('telegram.channels', [
+        { handle: '@Channel1', mandatory: true },
+        { handle: '@channel1', mandatory: false },
+      ]).ok,
+    ).toBe(false);
+  });
+
+  it('stores the top-up minimum as an amount AND a currency', () => {
+    expect(
+      parseSettingValue('wallet.topup.minimum', { amountMinor: '20000', currency: 'IRT' }).ok,
+    ).toBe(true);
+    // A bare number is not money. This is the legacy financial surface's whole
+    // defect: Toman implicit everywhere, no rate on any of seven gateways.
+    expect(parseSettingValue('wallet.topup.minimum', 20000).ok).toBe(false);
+    expect(parseSettingValue('wallet.topup.minimum', { amountMinor: '20000' }).ok).toBe(false);
+    expect(
+      parseSettingValue('wallet.topup.minimum', { amountMinor: 20000, currency: 'IRT' }).ok,
+    ).toBe(false);
+  });
+
+  it('marks the four as having no consumer, and everything older as having one', () => {
+    const planned = SETTINGS.filter((s) => s.consumer === 'PLANNED').map((s) => s.key);
+    expect(planned.sort()).toEqual(
+      ['sales.currency', 'support.accounts', 'telegram.channels', 'wallet.topup.minimum'].sort(),
+    );
+    for (const s of SETTINGS.filter((s) => s.key.startsWith('ops.notifications.'))) {
+      expect(s.consumer, s.key).toBe('ACTIVE');
+    }
+  });
+});
