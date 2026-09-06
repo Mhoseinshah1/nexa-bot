@@ -105,6 +105,39 @@ export function shapeAcceptsCredential(
 }
 
 /**
+ * Whether the credentials a panel HOLDS are enough for the shape to authenticate.
+ *
+ * The mirror of `toProviderCredentials` in the probe core, which returns `null`
+ * — and therefore `CREDENTIALS_MISSING`, a 412 — for exactly these cases. It
+ * lives here rather than in the surface because there are now two callers with
+ * one question between them, and a surface that answers it differently from the
+ * server is the defect this branch exists to remove: a "test connection" button
+ * on a panel whose stored credentials cannot produce a request.
+ *
+ * `TOKEN_OR_USERNAME_PASSWORD` is satisfied by EITHER, matching the probe
+ * core's precedence exactly; `NONE` is satisfied by nothing being needed.
+ *
+ * Takes presence, not values. `PanelSummaryResponse.credentials` carries three
+ * `configured` booleans and no ciphertext — deliberately, so no response
+ * builder can acquire a secret — which is precisely enough to answer this.
+ */
+export function shapeIsSatisfiedBy(
+  shape: CredentialShape,
+  configured: { username: boolean; password: boolean; apiToken: boolean },
+): boolean {
+  switch (shape) {
+    case 'USERNAME_PASSWORD':
+      return configured.username && configured.password;
+    case 'OPAQUE_TOKEN':
+      return configured.apiToken;
+    case 'TOKEN_OR_USERNAME_PASSWORD':
+      return configured.apiToken || (configured.username && configured.password);
+    case 'NONE':
+      return true;
+  }
+}
+
+/**
  * The provider types this release can operate, as a closed set.
  *
  * A hybrid on purpose. The identifier is persisted — `panels.provider_type` —
