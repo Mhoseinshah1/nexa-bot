@@ -10,7 +10,9 @@ import {
   maxHealthyIntervalMs,
   healthyCadenceFitsFreshness,
   effectivePreviousFailures,
+  budgetDeferralIntervalMs,
   deferralIntervalMs,
+  MONITOR_BUDGET_DEFERRAL_CAP_MS,
   MONITOR_NONRETRYABLE_FLOOR_MS,
   MONITOR_STABLE_DEFERRAL_MS,
   MONITOR_TRANSIENT_DEFERRAL_MS,
@@ -276,5 +278,31 @@ describe('the monitor cadence', () => {
       expect(deferralIntervalMs(transient), transient).toBe(MONITOR_TRANSIENT_DEFERRAL_MS);
     }
     expect(MONITOR_STABLE_DEFERRAL_MS).toBeGreaterThan(MONITOR_TRANSIENT_DEFERRAL_MS * 10);
+  });
+
+  it('defers a spent budget until the token it is waiting for, bounded', () => {
+    // The refusal knows exactly when the next background token arrives. A flat
+    // one-minute deferral made a tenant configured for a handful of probes a
+    // day wake every exhausted panel sixty times an hour for half a day, each
+    // time spending a claim and a due-scan slot to be refused again.
+    expect(budgetDeferralIntervalMs(12 * 60 * 60 * 1000)).toBe(MONITOR_BUDGET_DEFERRAL_CAP_MS);
+    expect(budgetDeferralIntervalMs(90 * 60 * 1000)).toBe(90 * 60 * 1000);
+    expect(budgetDeferralIntervalMs(90_500.4)).toBe(90_501);
+
+    // The floor: never NEARER than the flat interval this replaces, so the
+    // change cannot make the loop busier than it was.
+    expect(budgetDeferralIntervalMs(0)).toBe(MONITOR_TRANSIENT_DEFERRAL_MS);
+    expect(budgetDeferralIntervalMs(1)).toBe(MONITOR_TRANSIENT_DEFERRAL_MS);
+    expect(budgetDeferralIntervalMs(-5)).toBe(MONITOR_TRANSIENT_DEFERRAL_MS);
+
+    // And the cap, because the interval is computed from CONFIGURATION: a
+    // mis-set refill rate could otherwise name a date years out, stranding a
+    // panel where no operator would think to look — and produce an invalid
+    // Date rather than a schedule.
+    for (const absurd of [Number.MAX_SAFE_INTEGER, 1e30, Infinity, NaN]) {
+      const interval = budgetDeferralIntervalMs(absurd);
+      expect(interval, String(absurd)).toBeLessThanOrEqual(MONITOR_BUDGET_DEFERRAL_CAP_MS);
+      expect(Number.isNaN(new Date(Date.now() + interval).getTime()), String(absurd)).toBe(false);
+    }
   });
 });

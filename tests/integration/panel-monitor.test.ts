@@ -29,6 +29,7 @@ import { DrizzlePanelCredentialStore } from '../../apps/api/src/modules/platform
 import { providerAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
 import {
+  MONITOR_BUDGET_DEFERRAL_CAP_MS,
   MONITOR_NONRETRYABLE_FLOOR_MS,
   MONITOR_STABLE_DEFERRAL_MS,
   SCHEDULE_SUSPENDED_AT,
@@ -2156,6 +2157,80 @@ describe('the panel health monitor', () => {
         { idempotencyKey: key() },
       );
       expect(probed).toBe(true);
+    });
+
+    it('defers a panel until the token it is waiting for, not for one minute', async () => {
+      // The finding. `attemptProbe` computes exactly when the next background
+      // token arrives, and the monitor threw it away for a flat one-minute
+      // deferral. On a tenant configured for a handful of probes a day the
+      // wait is hours, so every exhausted panel became due sixty times an hour
+      // for the whole of it, spending a tenant claim and a due-scan slot each
+      // time to be refused again.
+      //
+      // One token, no refill for an hour: capacity is spent by the first panel
+      // and the second is refused with a refusal that knows the wait.
+      const refillPerMs = 1 / (60 * 60 * 1000);
+      const budget = { capacity: 1, refillPerMs };
+      const first = await createPanel(ownerA, tenantA, 'budget-first');
+      const second = await createPanel(ownerA, tenantA, 'budget-second');
+
+      const result = await tick(monitor({ budgetReserve: 0, probe: { probeBudget: budget } }));
+      expect(result.probed).toBe(1);
+
+      const rows = await ctx.container.database.db
+        .select()
+        .from(panelMonitorSchedule)
+        .where(eq(panelMonitorSchedule.tenantId, tenantA.tenantId));
+      const deferred = rows.find((row) => row.deferredReason === 'BUDGET_EXHAUSTED');
+      expect(deferred, 'nothing was deferred for the budget').toBeDefined();
+      expect([first, second]).toContain(deferred!.panelId);
+
+      // An hour per token, so the wait is about an hour — and emphatically not
+      // the flat minute. Asserted as a RANGE around the refusal's own
+      // arithmetic rather than an exact equality, because the token bucket's
+      // clock is the database's.
+      const waited = deferred!.nextEligibleAt.getTime() - now.getTime();
+      expect(waited).toBeGreaterThan(50 * 60 * 1000);
+      expect(waited).toBeLessThanOrEqual(MONITOR_BUDGET_DEFERRAL_CAP_MS);
+
+      // And it really is out of the way: the next tick finds nothing due.
+      now = new Date(now.getTime() + 5 * 60 * 1000);
+      expect((await tick(monitor({ probe: { probeBudget: budget } }))).probed).toBe(0);
+    });
+
+    it('re-arms a budget-deferred panel the moment an operator changes it', async () => {
+      // The long deferral must not become a way to strand a panel. Every
+      // operator write makes it eligible immediately, which is what stops the
+      // deferral from outliving the reason for it.
+      const budget = { capacity: 1, refillPerMs: 1 / (60 * 60 * 1000) };
+      await createPanel(ownerA, tenantA, 'rearm-first');
+      await createPanel(ownerA, tenantA, 'rearm-second');
+      await tick(monitor({ budgetReserve: 0, probe: { probeBudget: budget } }));
+
+      const scheduleFor = async (panelId: string) =>
+        (
+          await ctx.container.database.db
+            .select()
+            .from(panelMonitorSchedule)
+            .where(eq(panelMonitorSchedule.panelId, panelId))
+        )[0];
+      // Whichever of the two lost the race for the single token — read from
+      // the rows rather than assumed, so this cannot pass by testing the panel
+      // that was probed.
+      const rows = await ctx.container.database.db
+        .select()
+        .from(panelMonitorSchedule)
+        .where(eq(panelMonitorSchedule.tenantId, tenantA.tenantId));
+      const deferred = rows.find((row) => row.deferredReason === 'BUDGET_EXHAUSTED');
+      expect(deferred, 'nothing was deferred for the budget').toBeDefined();
+      expect(deferred!.nextEligibleAt.getTime() - now.getTime()).toBeGreaterThan(50 * 60 * 1000);
+
+      await service().update(tenantA, adminActorFor(ownerA), deferred!.panelId, {
+        name: 'renamed-by-the-operator',
+        idempotencyKey: key(),
+      });
+      const after = await scheduleFor(deferred!.panelId);
+      expect(after!.nextEligibleAt.getTime()).toBeLessThanOrEqual(now.getTime());
     });
 
     it("does not spend another tenant's capacity", async () => {

@@ -33,6 +33,7 @@ import {
   type ProbeRefusal,
 } from './probe-core.js';
 import {
+  budgetDeferralIntervalMs,
   deferralIntervalMs,
   effectivePreviousFailures,
   scheduleAfterProbe,
@@ -536,7 +537,14 @@ export class PanelMonitorService {
       // the panel steps back so it does not occupy its tenant's slot on every
       // tick for ever.
       const reason = deferralReasonOf(attempt.refusal.kind);
-      await this.defer(tenant, candidate.panelId, reason, configurationOf(before));
+      // The budget refusal is the one that knows WHEN it will be able to
+      // answer differently, and that is worth more than a flat interval: it is
+      // the difference between one wake-up and seven hundred.
+      const interval =
+        attempt.refusal.kind === 'BUDGET_EXHAUSTED'
+          ? budgetDeferralIntervalMs(attempt.refusal.retryAfterMs)
+          : null;
+      await this.defer(tenant, candidate.panelId, reason, configurationOf(before), interval);
       this.deps.logger.debug(
         { panelId: candidate.panelId, reason },
         'panel monitor deferred a panel without probing it',
@@ -801,6 +809,8 @@ export class PanelMonitorService {
     panelId: string,
     reason: MonitorDeferralReason,
     observed: string | null = null,
+    /** Overrides the reason's interval when the refusal knows better. */
+    intervalMs: number | null = null,
   ): Promise<void> {
     const at = this.deps.clock.now();
     await this.deps.uow.run(tenant, async (tx) => {
@@ -821,7 +831,7 @@ export class PanelMonitorService {
         tenant,
         panelId,
         {
-          nextEligibleAt: new Date(at.getTime() + deferralIntervalMs(reason)),
+          nextEligibleAt: new Date(at.getTime() + (intervalMs ?? deferralIntervalMs(reason))),
           // A deferral is not a failed probe. The backoff streak describes what
           // the provider said, and the provider said nothing.
           consecutiveFailures: 0,

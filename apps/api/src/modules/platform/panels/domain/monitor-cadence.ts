@@ -201,6 +201,38 @@ export const MONITOR_NONRETRYABLE_FLOOR_MS = 30 * 60 * 1000;
 export const MONITOR_STABLE_DEFERRAL_MS = 60 * 60 * 1000;
 export const MONITOR_TRANSIENT_DEFERRAL_MS = 60 * 1000;
 
+/**
+ * The longest a spent probe budget may defer a panel.
+ *
+ * Six hours. The refusal knows exactly when the next token arrives, and on a
+ * tenant configured for a handful of probes a day that can be half a day away —
+ * so a flat one-minute deferral had every exhausted panel become due sixty
+ * times an hour for the whole wait, each time spending its tenant's claim and a
+ * slot in the due scan to be refused again.
+ *
+ * The cap is not distrust of the arithmetic; it bounds two things the
+ * arithmetic cannot. The interval is computed from configuration, so a
+ * mis-configured refill rate could name a date years out and strand a panel
+ * where no operator would think to look; and a panel that has not been
+ * considered for six hours should be reconsidered, because the budget itself is
+ * configuration and changing it is a restart rather than a write on the panel.
+ */
+export const MONITOR_BUDGET_DEFERRAL_CAP_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * How long a spent budget defers a panel: what the refusal said, bounded.
+ *
+ * The floor is the ordinary transient deferral, so this can only ever move a
+ * panel further out than the flat interval did, never nearer.
+ */
+export function budgetDeferralIntervalMs(retryAfterMs: number): number {
+  if (!Number.isFinite(retryAfterMs)) return MONITOR_TRANSIENT_DEFERRAL_MS;
+  return Math.min(
+    MONITOR_BUDGET_DEFERRAL_CAP_MS,
+    Math.max(MONITOR_TRANSIENT_DEFERRAL_MS, Math.ceil(retryAfterMs)),
+  );
+}
+
 /** Which deferrals are stable, and therefore long. */
 export function deferralIntervalMs(reason: MonitorDeferralReason): number {
   switch (reason) {
