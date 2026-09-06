@@ -16,11 +16,13 @@ export const OPSLOG_VIEW: PermissionKey = 'opslog.view';
 export const OPS_LOG_PAGE_DEFAULT = 50;
 
 /**
- * The page size a caller may ask for, parsed rather than coerced.
+ * The page size a CALLER may ask for, parsed rather than coerced. 200 is the
+ * wire maximum and this is where it is enforced.
  *
- * The controller over-fetches ONE past this to decide `nextCursor`, so the
- * service's own ceiling has to leave room for that extra row — hence 201 here
- * against a 200 maximum on the wire.
+ * The service's own ceiling is one higher — see `opsLogQuerySchema.limit`
+ * below — because the controller over-fetches one row past whatever this
+ * accepts in order to decide `nextCursor`. Keeping the two ceilings equal is
+ * what silently truncated the notification list at its maximum page size.
  */
 export const opsLogPageSize = z.coerce.number().int().min(1).max(200);
 

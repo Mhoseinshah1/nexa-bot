@@ -435,10 +435,6 @@ export class PanelService {
           }),
       idempotencyKey: parsed.idempotencyKey,
     };
-    if (parsed.credentials !== undefined) {
-      this.assertCredentialsFitShape(parsed.providerType, parsed.credentials);
-    }
-
     // Two different refusals, and the difference is the operator's next move.
     //
     // A string that is not a provider type at all never gets here: the contract
@@ -462,6 +458,40 @@ export class PanelService {
       entityType: 'Panel',
       entityId: null,
     });
+
+    /**
+     * Initial credentials need the CREDENTIAL permission, not just the edit one.
+     *
+     * `setCredentials` is guarded by `panels.credentials.rotate`, which is
+     * CRITICAL and deliberately separate from `panels.edit`. Create wrote
+     * `command.credentials` under `panels.edit` alone, so an actor who is
+     * refused when replacing a panel's password could set one by creating a
+     * panel — the same secret, in the same column, through the door beside the
+     * locked one. A permission boundary that one endpoint enforces and another
+     * does not is not a boundary.
+     *
+     * Only when the request actually carries credentials: creating a panel and
+     * leaving its credentials for somebody who holds the permission stays a
+     * `panels.edit` operation.
+     */
+    if (parsed.credentials !== undefined) {
+      await this.authorize(scope, actor, PANELS_CREDENTIALS_ROTATE, {
+        action: 'panel.create',
+        entityType: 'Panel',
+        entityId: null,
+      });
+    }
+
+    // AFTER the authorization, deliberately.
+    //
+    // A caller without `panels.edit` must get the denial — with its audit row
+    // and its operational event — rather than a validation error that tells
+    // them which credentials this provider accepts. The adapter and URL checks
+    // above predate this rule and are about whether the REQUEST is coherent at
+    // all; this one is about the content of a write the caller may not make.
+    if (parsed.credentials !== undefined) {
+      this.assertCredentialsFitShape(parsed.providerType, parsed.credentials);
+    }
 
     // The credentials are NOT in the hash. Two creates with the same key and
     // different passwords must not be treated as different requests — that
@@ -866,17 +896,33 @@ export class PanelService {
           now,
           tx,
         );
-        if (status === 'ACTIVE' && before.panel.status === 'ARCHIVED') {
-          // Retirement is not permanent, so its row must not be. Nothing in
-          // the health transitions names `panel.health.retired`, so without
-          // this the installation goes back to monitoring a panel while the
-          // operations log still says it was archived and is not monitored.
+        if (before.panel.status === 'ARCHIVED' && status !== 'ARCHIVED') {
+          // Any transition OUT of ARCHIVED, not only the one to ACTIVE.
+          //
+          // Retirement is not permanent, so its row must not be, and nothing in
+          // the health transitions names `panel.health.retired` — so if this
+          // does not fire the row stays open for the life of the installation,
+          // unresolvable, with no path that can ever close it.
+          //
+          // It was `status === 'ACTIVE'` and that was wrong the moment the Web
+          // Admin gained a restore control, because restoring returns a panel
+          // to DISABLED rather than resuming probes: the retirement went
+          // unclosed, and the later DISABLED -> ACTIVE step saw a `before` that
+          // was no longer ARCHIVED and did not close it either. The
+          // installation then monitored a panel whose operations log said it
+          // was archived and unmonitored, which is the exact state
+          // `RESTORED_CODE` exists to prevent.
           await this.deps.opsLog.record(
             scope,
             {
               code: RESTORED_CODE,
               severity: 'INFO',
-              message: `Panel "${before.panel.name}" was restored and is monitored again.`,
+              // What the status now IS, because a restore may land on DISABLED
+              // and "monitored again" would then be false.
+              message:
+                status === 'ACTIVE'
+                  ? `Panel "${before.panel.name}" was restored and is monitored again.`
+                  : `Panel "${before.panel.name}" was restored from the archive and is ${status.toLowerCase()}.`,
               // No dedupe key: see `RESTORED_CODE`. This closes the
               // retirement and keeps no row of its own to be closed later.
               recoversCode: RETIRED_CODE,

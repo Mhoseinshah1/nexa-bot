@@ -68,13 +68,23 @@ export const RECOVERED_CODE = 'panel.health.recovered';
 export const RETIRED_CODE = 'panel.health.retired';
 
 /**
- * The code that says a retired panel is being monitored again.
+ * The code that says a panel is no longer retired.
+ *
+ * Recorded on any transition OUT of `ARCHIVED`, not only the one back to
+ * `ACTIVE`: the Web Admin's restore control returns a panel to `DISABLED` so
+ * that nothing silently resumes dialling it, and a recovery keyed on `ACTIVE`
+ * would have left the retirement open through that path — then missed it again
+ * on the later `DISABLED -> ACTIVE` step, whose `before` is no longer archived.
  *
  * Retirement is not permanent — restoring an archived panel is a supported
  * operation — and nothing in the health transitions ever names
- * `panel.health.retired`, so without this it would stay open for ever: an
- * installation monitoring a panel while its operations log says the panel was
- * archived and is not monitored.
+ * `panel.health.retired`, so without this it would stay open for ever, with no
+ * path that can close it: eventually an installation monitoring a panel while
+ * its operations log says the panel was archived and is not monitored.
+ *
+ * "No longer retired" is therefore the claim, not "being monitored again" —
+ * the panel may well be DISABLED, and the status is what says whether it is
+ * probed.
  *
  * Deliberately NOT deduplicated. Its whole job is to close the retirement, and
  * a row of its own would need closing in turn — by the next archive, which

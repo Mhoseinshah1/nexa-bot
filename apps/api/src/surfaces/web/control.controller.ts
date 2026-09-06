@@ -438,6 +438,18 @@ function cursorFrom(
   before: string | undefined,
   beforeId: string | undefined,
 ): { before?: Date; beforeId?: string } {
+  // BOTH halves or neither, and this is checked before either is parsed. A
+  // lone `before` walked the keyset with no tie-break — the exact defect the
+  // pair exists to prevent — and a lone `beforeId` was dropped entirely and
+  // answered with the newest page, so a client whose cursor was truncated
+  // looped on page one with a 200 instead of being told.
+  if ((before === undefined) !== (beforeId === undefined)) {
+    throw errors.validation(
+      CONTROL_ERROR_CODES.INVALID_VALUE,
+      'The `before` and `beforeId` cursor halves must be supplied together.',
+      { before, beforeId },
+    );
+  }
   if (before === undefined) return {};
   const at = new Date(before);
   if (Number.isNaN(at.getTime())) {
