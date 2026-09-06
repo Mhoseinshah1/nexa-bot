@@ -127,6 +127,16 @@ export const monitorProfileSchema = z.object({
   tenantFreshPanelCeiling: z.number().int().nonnegative(),
   /** The most the scheduler could START on across the whole installation. */
   installationFreshPanelCeiling: z.number().int().nonnegative(),
+  /**
+   * Whether the installation is CURRENTLY over that ceiling.
+   *
+   * The condition itself lives in `operational_events` under `SYSTEM_SCOPE`
+   * with a null tenant, where the tenant-scoped `GET /ops-log` reader cannot
+   * reach it under any scope. Reported here because this response is already
+   * installation-scoped, so it is the one surface that can answer without
+   * weakening that reader's isolation.
+   */
+  schedulerCapacityExceeded: z.boolean(),
 });
 export type MonitorProfile = z.infer<typeof monitorProfileSchema>;
 

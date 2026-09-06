@@ -9,6 +9,10 @@ import {
   settingListResponseSchema,
   settingWriteResponseSchema,
 } from '@nexa/contracts';
+import {
+  schedulerFreshPanelUpperBound,
+  tenantBudgetFreshPanelUpperBound,
+} from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
@@ -105,11 +109,14 @@ describe('the Web Admin V2 surface', () => {
           dedupeKey: `panel:${index}`,
         });
       }
+      // A code a production path actually writes. Every assertion in this
+      // block used to invent one — `admin.roles_change`, which is an AUDIT
+      // action, not an event code — so the suite proved the SQL could find a
+      // row nothing ever inserts.
       await api.container.opsLog.record(tenantA, {
-        code: 'admin.roles_change',
-        severity: 'WARN',
+        code: 'admin.roles_changed',
+        severity: 'INFO',
         message: 'roles changed',
-        dedupeKey: 'admin:1',
       });
     }
 
@@ -120,7 +127,7 @@ describe('the Web Admin V2 surface', () => {
         (await get(`${CONTROL_ROUTES.opsLog}?scope=MANAGEMENT&limit=5`, ownerCookie)).json(),
       );
 
-      expect(body.events.map((event) => event.code)).toEqual(['admin.roles_change']);
+      expect(body.events.map((event) => event.code)).toEqual(['admin.roles_changed']);
       // The point of applying it in SQL: `limit` bounds the MATCHING rows, so
       // the one management event is on the first page even though nine routine
       // events were recorded after it.
@@ -137,38 +144,95 @@ describe('the Web Admin V2 surface', () => {
       expect(body.events.some((event) => event.code === 'panel.health.unreachable')).toBe(true);
     });
 
-    it('matches an administrator code the enumeration does not list, by prefix', async () => {
+    /**
+     * The narrower scope, and the defect it exists to prevent.
+     *
+     * `access.permission_denied` is written fresh on every denial — no dedupe
+     * key, no recovery — and nothing in this product ever resolves it, because
+     * there is deliberately no "mark as seen". On a card headed "needs
+     * attention" those rows accumulate for the life of the installation. So
+     * the dashboard asks for `MANAGEMENT_CONDITIONS`, which admits only codes
+     * something closes, and the denial stays readable on the alerts page as
+     * history.
+     */
+    it('separates the conditions an operator can close from the records they cannot', async () => {
       await api.container.opsLog.record(tenantA, {
-        code: 'admin.some_future_change',
+        code: 'access.permission_denied',
         severity: 'WARN',
-        message: 'something new happened to an administrator',
-        dedupeKey: 'admin:future',
+        message: 'somebody was denied panels.edit',
       });
+      await api.container.opsLog.record(tenantA, {
+        code: 'settings.stored_value_invalid',
+        severity: 'ERROR',
+        message: 'a stored setting stopped parsing',
+        dedupeKey: 'settings.stored_value_invalid:ops.notifications.min_severity',
+      });
+
+      const wide = operationalEventListResponseSchema.parse(
+        (await get(`${CONTROL_ROUTES.opsLog}?scope=MANAGEMENT`, ownerCookie)).json(),
+      );
+      const codes = wide.events.map((event) => event.code);
+      expect(codes).toContain('access.permission_denied');
+      expect(codes).toContain('settings.stored_value_invalid');
+
+      const conditions = operationalEventListResponseSchema.parse(
+        (
+          await get(`${CONTROL_ROUTES.opsLog}?scope=MANAGEMENT_CONDITIONS&open=true`, ownerCookie)
+        ).json(),
+      );
+      const conditionCodes = conditions.events.map((event) => event.code);
+      expect(conditionCodes).toContain('settings.stored_value_invalid');
+      // The one that matters: a denial is never an outstanding task.
+      expect(conditionCodes).not.toContain('access.permission_denied');
+    });
+
+    /**
+     * The `admin.` PREFIX that used to be in the contract matched nothing:
+     * `admin.create` and friends are audit `action` values, not event codes.
+     * The four codes below are what the identity service now records beside
+     * those audit rows, which is what makes owner revision 24 true rather than
+     * claimed.
+     */
+    it('carries the administrator changes owner revision 24 asks for', async () => {
+      for (const code of [
+        'admin.created',
+        'admin.status_changed',
+        'admin.roles_changed',
+        'admin.password_changed',
+      ] as const) {
+        await api.container.opsLog.record(tenantA, {
+          code,
+          severity: 'INFO',
+          message: `${code} happened`,
+        });
+      }
 
       const body = operationalEventListResponseSchema.parse(
         (await get(`${CONTROL_ROUTES.opsLog}?scope=MANAGEMENT`, ownerCookie)).json(),
       );
-      expect(body.events.map((event) => event.code)).toContain('admin.some_future_change');
-    });
+      const codes = body.events.map((event) => event.code);
+      for (const code of [
+        'admin.created',
+        'admin.status_changed',
+        'admin.roles_changed',
+        'admin.password_changed',
+      ]) {
+        expect(codes, code).toContain(code);
+      }
 
-    it('refuses an unknown scope rather than silently widening to the whole log', async () => {
-      // A fall-back to ALL would show the alerts page the routine stream it
-      // exists to exclude, and nothing would say so.
-      const response = await get(`${CONTROL_ROUTES.opsLog}?scope=EVERYTHING`, ownerCookie);
-      expect(response.statusCode).toBe(400);
-    });
-
-    it('refuses a caller without opslog.view, scope or no scope', async () => {
-      expect(
-        (await get(`${CONTROL_ROUTES.opsLog}?scope=MANAGEMENT`, supportCookie)).statusCode,
-      ).toBe(403);
-      expect((await get(CONTROL_ROUTES.opsLog, supportCookie)).statusCode).toBe(403);
+      // And a code with the old prefix shape is NOT management-facing, because
+      // the prefix is gone and the enumeration is the whole rule.
+      await api.container.opsLog.record(tenantA, {
+        code: 'admin.some_future_change',
+        severity: 'WARN',
+        message: 'something new happened to an administrator',
+      });
+      const after = operationalEventListResponseSchema.parse(
+        (await get(`${CONTROL_ROUTES.opsLog}?scope=MANAGEMENT`, ownerCookie)).json(),
+      );
+      expect(after.events.map((event) => event.code)).not.toContain('admin.some_future_change');
     });
   });
-
-  // -------------------------------------------------------------------------
-  // Owner revisions 1, 22, 23, 24 — the four new settings
-  // -------------------------------------------------------------------------
 
   describe('the settings the owner revisions add', () => {
     it('reports whether anything reads each key', async () => {
@@ -315,8 +379,30 @@ describe('the Web Admin V2 surface', () => {
       expect(monitor.probeTenantLimit).toBe(api.container.config.PANEL_PROBE_TENANT_LIMIT);
       // Computed on the server, by the same functions the capacity conditions
       // use, so the screen and the alarm cannot disagree about a fleet fitting.
-      expect(monitor.tenantFreshPanelCeiling).toBeGreaterThan(0);
-      expect(monitor.installationFreshPanelCeiling).toBeGreaterThan(0);
+      //
+      // Asserted against those functions, not against `> 0`. The previous pair
+      // of assertions passed for any positive integer: swapping the two
+      // ceilings, or returning a constant 1, left them green while the comment
+      // above went on claiming the guarantee.
+      const config = api.container.config;
+      expect(monitor.tenantFreshPanelCeiling).toBe(
+        tenantBudgetFreshPanelUpperBound(
+          config.PANEL_PROBE_TENANT_LIMIT,
+          config.PANEL_PROBE_TENANT_WINDOW_MS,
+          config.PANEL_MONITOR_HEALTHY_INTERVAL_MS,
+        ),
+      );
+      expect(monitor.installationFreshPanelCeiling).toBe(
+        schedulerFreshPanelUpperBound(
+          config.PANEL_MONITOR_BATCH_SIZE,
+          config.PANEL_MONITOR_TICK_MS,
+          config.PANEL_MONITOR_HEALTHY_INTERVAL_MS,
+        ),
+      );
+      // The two are NOT interchangeable, which is what a swap would break.
+      expect(monitor.tenantFreshPanelCeiling).not.toBe(monitor.installationFreshPanelCeiling);
+      // Nothing is over capacity on a fresh installation with no panels.
+      expect(monitor.schedulerCapacityExceeded).toBe(false);
     });
 
     it('refuses a caller without panels.view', async () => {

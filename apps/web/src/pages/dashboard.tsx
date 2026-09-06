@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import type { PanelSummaryResponse } from '@nexa/contracts';
+import { PANEL_PAGE_MAX, type PanelSummaryResponse } from '@nexa/contracts';
 import { fetchOpsLog, fetchPanels, fetchReadiness } from '../api/client';
 import { formatNumber, formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -18,6 +18,17 @@ import {
   type Tone,
   type ViewState,
 } from '../ui/kit';
+
+/**
+ * One page of panels, at the contract's ceiling. `PANEL_PAGE_MAX` is the most
+ * `GET /panels` will return for any `limit`, so this is as close to the fleet
+ * as one request gets — and `truncated` below says so when it is not close
+ * enough.
+ */
+const DASHBOARD_PANEL_PAGE = PANEL_PAGE_MAX;
+
+/** How many open conditions the attention card draws before it counts the rest. */
+const ATTENTION_SHOWN = 6;
 
 /**
  * The dashboard.
@@ -55,15 +66,42 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
   // trigger four requests to draw one card.
   const panels = useQuery({
     queryKey: ['panels', 'dashboard'],
-    queryFn: () => fetchPanels({ limit: 200 }),
+    queryFn: () => fetchPanels({ limit: DASHBOARD_PANEL_PAGE }),
     enabled: mayViewPanels,
   });
 
+  /**
+   * `MANAGEMENT_CONDITIONS`, not `MANAGEMENT`.
+   *
+   * This card is headed "needs attention", so every row on it has to be
+   * something an operator can still do something about. The wider management
+   * scope also carries one-shot RECORDS — a denial, a lockout, an
+   * administrator added — which open and are never resolved, because this
+   * product deliberately has no "mark as seen". Asking for them here would
+   * fill the card permanently with items no action can clear, which is the
+   * burial the management scope was introduced to prevent, arrived at from
+   * the other direction. The narrower scope is decided on the server for the
+   * same reason the wider one is: a browser-side filter would leave the
+   * cursor having walked past what it discarded.
+   */
   const alerts = useQuery({
-    queryKey: ['ops-log', 'management', 'open'],
-    queryFn: () => fetchOpsLog({ scope: 'MANAGEMENT', open: true }),
+    queryKey: ['ops-log', 'management-conditions', 'open'],
+    queryFn: () => fetchOpsLog({ scope: 'MANAGEMENT_CONDITIONS', open: true }),
     enabled: mayViewOps,
   });
+
+  /**
+   * Whether the two distribution cards are counting the FLEET or one page of it.
+   *
+   * `GET /panels` is keyset-paged and 200 is its ceiling, not a large number.
+   * A tenant with 260 panels got sixty of them counted zero times, while the
+   * card's own hint said "each panel is counted exactly once" and the shares
+   * rendered as shares of a whole — a count over the wrong population,
+   * presented as the population, which is RSV2-BR-021 rebuilt. The aggregation
+   * stays (a second, exact endpoint does not exist), but a full page means the
+   * card says what it actually covers.
+   */
+  const truncated = (panels.data?.panels.length ?? 0) === DASHBOARD_PANEL_PAGE;
 
   return (
     <>
@@ -103,18 +141,25 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
               empty={<Empty title={t('web.dashboard_no_panels')} icon="panels" />}
             >
               <Distribution slices={healthSlices(panels.data?.panels ?? [])} />
+              {truncated && <p className="faint small">{t('web.dashboard_partial_fleet')}</p>}
             </StateSwitch>
           </Card>
         )}
 
         {mayViewPanels && (
-          <Card title={t('web.dashboard_by_provider')} hint={t('web.dashboard_by_provider_hint')}>
+          <Card
+            title={t('web.dashboard_by_provider')}
+            hint={
+              truncated ? t('web.dashboard_partial_fleet') : t('web.dashboard_by_provider_hint')
+            }
+          >
             <StateSwitch
               state={mayViewPanels ? queryState(panels) : 'denied'}
               onRetry={() => void panels.refetch()}
               empty={<Empty title={t('web.dashboard_no_panels')} icon="panels" />}
             >
               <Distribution slices={providerSlices(panels.data?.panels ?? [])} />
+              {truncated && <p className="faint small">{t('web.dashboard_partial_fleet')}</p>}
             </StateSwitch>
           </Card>
         )}
@@ -186,7 +231,7 @@ function AttentionCard({
         }
       >
         <ul className="side-list">
-          {events.slice(0, 6).map((event) => (
+          {events.slice(0, ATTENTION_SHOWN).map((event) => (
             <li key={event.id}>
               <Badge tone={severityTone(event.severity)}>{event.severity}</Badge>
               <span className="grow" dir="auto">
@@ -196,6 +241,14 @@ function AttentionCard({
             </li>
           ))}
         </ul>
+        {events.length > ATTENTION_SHOWN && (
+          // Six rows with no count read as "there are six". Saying how many
+          // were not drawn is the difference between a summary and a lie of
+          // omission on the one card headed "needs attention".
+          <p className="faint small">
+            {t('web.dashboard_more_conditions')} <Num value={events.length - ATTENTION_SHOWN} />
+          </p>
+        )}
       </StateSwitch>
     </Card>
   );

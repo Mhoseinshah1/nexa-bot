@@ -338,8 +338,21 @@ export function fetchOpsLog(query: {
    * past the other forty-eight, so paging would drop rows silently.
    */
   scope?: OperationalScope;
+  /**
+   * Sent EXPLICITLY, even when it matches the server default.
+   *
+   * `GET /ops-log` answers with rows and no `nextCursor`, so the only way a
+   * caller can tell a full page from the last one is to know the page size it
+   * asked for. Relying on the server's default meant the pager could not tell
+   * them apart and enabled "older" whenever the page had any row at all — one
+   * press past the end rendered "there are no open alerts" over an alert that
+   * existed, in the subsystem whose stated rule is that silence is the one
+   * outcome it may not produce.
+   */
+  limit?: number;
 }): Promise<OperationalEventListResponse> {
   const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
   if (query.severity) params.set('severity', query.severity);
   if (query.open !== undefined) params.set('open', String(query.open));
   if (query.before) params.set('before', query.before);

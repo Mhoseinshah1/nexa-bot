@@ -310,6 +310,11 @@ export const WEB_FA = {
     'تجمیع بر اساس پنل است، نه لوکیشن: یک پنل می‌تواند چند لوکیشن داشته باشد و شمارش بر پایهٔ لوکیشن آن را چند بار می‌شمارد.',
   'web.dashboard_by_provider': 'پنل‌ها بر پایهٔ ارائه‌دهنده',
   'web.dashboard_by_provider_hint': 'هر پنل یک بار شمرده می‌شود.',
+  'web.dashboard_partial_fleet':
+    'این شمارش فقط ۲۰۰ پنل نخست را در بر می‌گیرد؛ ناوگان بزرگ‌تر از یک صفحه است.',
+  'web.dashboard_more_conditions': 'شرایط باز دیگر:',
+  'web.monitor_over_capacity': 'فراتر از ظرفیت',
+  'web.monitor_within_capacity': 'در محدودهٔ ظرفیت',
   'web.dashboard_no_panels': 'هنوز پنلی ثبت نشده است.',
   'web.dashboard_attention': 'نیازمند توجه',
   'web.dashboard_attention_hint':

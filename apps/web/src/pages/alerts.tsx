@@ -46,9 +46,30 @@ const SEVERITIES: readonly OperationalSeverity[] = ['DEBUG', 'INFO', 'WARN', 'ER
  * would drop rows — in a subsystem whose stated rule is that silence is the one
  * outcome it may not produce.
  */
+/**
+ * The page size, and the reason it is a constant here rather than the server's
+ * default.
+ *
+ * `GET /ops-log` returns rows and no `nextCursor`. A caller can therefore only
+ * know it is on the last page by comparing what came back against what it
+ * asked for, which means it has to ASK — the pager below reads
+ * `rows.length === ALERTS_PAGE_SIZE`.
+ */
+const ALERTS_PAGE_SIZE = 25;
+
 export function AlertsPage({ denied }: { denied: boolean }) {
   const [severity, setSeverity] = useState<string>('');
-  const [openOnly, setOpenOnly] = useState(true);
+  /**
+   * Off by default.
+   *
+   * The management scope is already narrow, and most of what it carries — a
+   * denial, a lockout, an administrator added — is a one-shot RECORD that
+   * opens and is never resolved. Defaulting to "open only" showed those
+   * forever and framed them as outstanding work; the conditions that really
+   * are outstanding have their own card on the dashboard, which asks for
+   * `MANAGEMENT_CONDITIONS`. Here the default is history, newest first.
+   */
+  const [openOnly, setOpenOnly] = useState(false);
   /**
    * The cursor stack.
    *
@@ -64,6 +85,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
     queryKey: ['ops-log', 'management', severity, openOnly, cursor?.at, cursor?.id],
     queryFn: () =>
       fetchOpsLog({
+        limit: ALERTS_PAGE_SIZE,
         scope: 'MANAGEMENT',
         ...(severity ? { severity } : {}),
         ...(openOnly ? { open: true } : {}),
@@ -195,7 +217,10 @@ export function AlertsPage({ denied }: { denied: boolean }) {
         <CursorPager
           shown={rows.length}
           hasPrevious={trail.length > 0}
-          hasNext={oldest !== undefined && rows.length > 0}
+          // A FULL page, not a non-empty one. `rows.length > 0` enabled
+          // "older" on the last page too, and pressing it rendered the empty
+          // state — "there are no open alerts" — over alerts one page back.
+          hasNext={oldest !== undefined && rows.length === ALERTS_PAGE_SIZE}
           onPrevious={() => setTrail((current) => current.slice(0, -1))}
           onNext={() =>
             oldest !== undefined &&

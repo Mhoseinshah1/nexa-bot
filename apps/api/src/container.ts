@@ -706,20 +706,24 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   );
 
   const opsLogService = new OpsLogService(guard, new DrizzleOperationalEventReader(database.db));
-  const monitorProfileService = new MonitorProfileService(guard, {
-    enabled: config.PANEL_MONITOR_ENABLED,
-    tickMs: config.PANEL_MONITOR_TICK_MS,
-    healthyIntervalMs: config.PANEL_MONITOR_HEALTHY_INTERVAL_MS,
-    retryableIntervalMs: config.PANEL_MONITOR_RETRYABLE_INTERVAL_MS,
-    nonRetryableIntervalMs: config.PANEL_MONITOR_NONRETRYABLE_INTERVAL_MS,
-    batchSize: config.PANEL_MONITOR_BATCH_SIZE,
-    concurrency: config.PANEL_MONITOR_CONCURRENCY,
-    tenantsPerTick: config.PANEL_MONITOR_TENANTS_PER_TICK,
-    probeTenantLimit: config.PANEL_PROBE_TENANT_LIMIT,
-    probeTenantWindowMs: config.PANEL_PROBE_TENANT_WINDOW_MS,
-    probeCooldownMs: config.PANEL_PROBE_COOLDOWN_MS,
-    budgetReservePercent: config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT,
-  });
+  const monitorProfileService = new MonitorProfileService(
+    guard,
+    {
+      enabled: config.PANEL_MONITOR_ENABLED,
+      tickMs: config.PANEL_MONITOR_TICK_MS,
+      healthyIntervalMs: config.PANEL_MONITOR_HEALTHY_INTERVAL_MS,
+      retryableIntervalMs: config.PANEL_MONITOR_RETRYABLE_INTERVAL_MS,
+      nonRetryableIntervalMs: config.PANEL_MONITOR_NONRETRYABLE_INTERVAL_MS,
+      batchSize: config.PANEL_MONITOR_BATCH_SIZE,
+      concurrency: config.PANEL_MONITOR_CONCURRENCY,
+      tenantsPerTick: config.PANEL_MONITOR_TENANTS_PER_TICK,
+      probeTenantLimit: config.PANEL_PROBE_TENANT_LIMIT,
+      probeTenantWindowMs: config.PANEL_PROBE_TENANT_WINDOW_MS,
+      probeCooldownMs: config.PANEL_PROBE_COOLDOWN_MS,
+      budgetReservePercent: config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT,
+    },
+    new DrizzleOperationalConditionReader(database.db),
+  );
 
   return {
     config,

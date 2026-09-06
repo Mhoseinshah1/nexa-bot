@@ -28,6 +28,7 @@ import {
   type RoleId,
   type ScopeContext,
   type UnitOfWork,
+  type ManagementAdminEventCode,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import type { OutboxWriter } from '../../eventing/infrastructure/outbox-writer.js';
@@ -259,6 +260,14 @@ export class AdminManagementService {
           tx,
         );
 
+        await this.recordAdminChange(
+          scope,
+          tx,
+          'admin.created',
+          `administrator ${username} was created`,
+          { adminId, username, roleKeys },
+        );
+
         await this.outbox.write(tx, actor, {
           eventType: 'AdminCreated',
           aggregateType: 'Admin',
@@ -401,6 +410,14 @@ export class AdminManagementService {
           tx,
         );
 
+        await this.recordAdminChange(
+          scope,
+          tx,
+          'admin.status_changed',
+          `administrator ${target.username} went from ${target.status} to ${command.status}`,
+          { adminId: targetId, from: target.status, to: command.status },
+        );
+
         await this.outbox.write(tx, actor, {
           eventType: 'AdminStatusChanged',
           aggregateType: 'Admin',
@@ -531,6 +548,14 @@ export class AdminManagementService {
             result: 'SUCCESS',
           },
           tx,
+        );
+
+        await this.recordAdminChange(
+          scope,
+          tx,
+          'admin.roles_changed',
+          `administrator ${target.username} had roles changed`,
+          { adminId: target.id, added: delta.added, removed: delta.removed },
         );
 
         await this.outbox.write(tx, actor, {
@@ -760,6 +785,14 @@ export class AdminManagementService {
         },
         tx,
       );
+
+      await this.recordAdminChange(
+        scope,
+        tx,
+        'admin.password_changed',
+        'an administrator changed their own password',
+        { adminId, bySelf: true },
+      );
       await this.outbox.write(tx, actor, {
         eventType: 'AdminPasswordChanged',
         aggregateType: 'Admin',
@@ -956,6 +989,38 @@ export class AdminManagementService {
         'The session is not valid. Sign in again.',
       );
     }
+  }
+
+  /**
+   * The management-facing operational event for an administrator change.
+   *
+   * Owner revision 24 names administrator changes — adds, removals, role and
+   * permission changes — as belonging on the Web Admin's Management Alerts
+   * page. That page reads `operational_events`; these changes were only ever
+   * written to `audit_logs`, under an `action` that merely LOOKED like an
+   * event code. `MANAGEMENT_EVENT_CODE_PREFIXES = ['admin.']` matched the
+   * audit vocabulary and therefore matched nothing the page could read, so
+   * the requirement was claimed and not delivered.
+   *
+   * Recorded inside the caller's transaction, beside the audit row, so the two
+   * records cannot disagree about whether the change happened.
+   *
+   * NO `dedupeKey`: each of these is a distinct act by a distinct person at a
+   * distinct time, and collapsing "roles changed" onto one row with a counter
+   * would destroy exactly the history an operator opens this page to read.
+   * They are one-shot records, which is why they are in
+   * `MANAGEMENT_EVENT_CODES` and NOT in `MANAGEMENT_CONDITION_CODES`: nothing
+   * resolves them, and the dashboard's "needs attention" card must not fill
+   * with them.
+   */
+  private async recordAdminChange(
+    scope: ScopeContext,
+    tx: TransactionScope,
+    code: ManagementAdminEventCode,
+    message: string,
+    context: Record<string, unknown>,
+  ): Promise<void> {
+    await this.opsLog.record(scope, { code, severity: 'INFO', message, context }, tx);
   }
 
   private async runLockedMutation<T>(

@@ -172,6 +172,20 @@ describe('the panel detail', () => {
     expect(container.querySelector('svg.chart')).toBeNull();
   });
 
+  /**
+   * `testConnection` is guarded by `panels.edit`, so a viewer pressing this
+   * button gets a 403 — and the refusal is not free: it writes an
+   * `access.permission_denied` operational event and a `DENIED` audit row.
+   * The seeded `operator` role holds `panels.view` without `panels.edit`, so
+   * this is an ordinary role, not a contrived one.
+   */
+  it('does not offer a connection test to an actor who may only view', async () => {
+    stubApi(detail());
+    renderPage(<PanelDetailPage id="p1" mayEdit={false} mayRotate={false} denied={false} />);
+    await screen.findByText('Frankfurt A');
+    expect(screen.queryByRole('button', { name: 'تست اتصال' })).toBeNull();
+  });
+
   it('does not offer a connection test on an archived panel', async () => {
     stubApi(detail({ status: 'ARCHIVED' }));
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);

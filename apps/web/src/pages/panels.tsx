@@ -297,7 +297,14 @@ export function PanelDetailPage({
         {...(data === undefined ? {} : { subtitle: data.providerName })}
         maturity="now"
         actions={
-          data === undefined || data.status === 'ARCHIVED' ? undefined : (
+          // `mayEdit`, because `testConnection` is guarded by `panels.edit` on
+          // the server (`PanelService.testConnection`). Drawing it for a viewer
+          // is not a cosmetic slip: pressing it records an `access.permission_denied`
+          // operational event AND a `DENIED` audit row, so a control that can
+          // never work would manufacture the very noise the alerts page exists
+          // to keep clear. Every other write control on this surface is gated
+          // the same way; this was the one that was not.
+          !mayEdit || data === undefined || data.status === 'ARCHIVED' ? undefined : (
             <button
               type="button"
               className="btn sm"

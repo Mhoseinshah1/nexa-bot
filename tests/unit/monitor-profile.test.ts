@@ -92,13 +92,37 @@ describe('the shipped monitor cadence', () => {
     // bound's whole purpose.
     expect(config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT).toBeGreaterThan(0);
     expect(config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT).toBeLessThan(100);
-    const reserve = Math.max(
-      1,
-      Math.floor(
-        (config.PANEL_PROBE_TENANT_LIMIT * config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT) / 100,
-      ),
-    );
-    expect(config.PANEL_PROBE_TENANT_LIMIT - reserve).toBeGreaterThanOrEqual(1);
+  });
+
+  /**
+   * The reserve floor rounds UP, and this proves it by BEHAVIOUR.
+   *
+   * The check here used to re-derive the floor with `Math.floor` while the
+   * schema used `Math.ceil`, and asserted the two agreed — which they do at
+   * the shipped defaults (both give 40), so the divergence was invisible. A
+   * test that re-implements the rule it is checking, differently, is checking
+   * nothing. This drives `loadConfig` at the one pair where the two rules
+   * disagree about ACCEPTANCE: a bucket of 2 with a 51% reserve is `ceil`
+   * → 2, leaving the monitor no token and refused; `floor` → 1, accepted.
+   */
+  it('rounds the reserve floor up, so a positive reserve is never silently zero', () => {
+    expect(() =>
+      loadConfig({
+        ...BASE_ENV,
+        PANEL_PROBE_TENANT_LIMIT: '2',
+        PANEL_MONITOR_BUDGET_RESERVE_PERCENT: '51',
+      }),
+    ).toThrow(/reserves all 2 token/);
+
+    // And one token lower in percentage is accepted, so the refusal above is
+    // the rounding and not the pair being rejected for some other reason.
+    expect(() =>
+      loadConfig({
+        ...BASE_ENV,
+        PANEL_PROBE_TENANT_LIMIT: '2',
+        PANEL_MONITOR_BUDGET_RESERVE_PERCENT: '50',
+      }),
+    ).not.toThrow();
   });
 
   it('still refuses a cadence that cannot keep a panel fresh', () => {
@@ -118,6 +142,12 @@ describe('the shipped monitor cadence', () => {
  */
 describe('the monitor profile service', () => {
   const guard = { check: async () => undefined } as never;
+  /**
+   * The installation capacity condition. `false` here; the case where it is
+   * open has its own assertion below, because it is the one condition that
+   * reaches an operator through no other surface.
+   */
+  const quiet = { systemConditionIsOpen: async () => false } as never;
   const config: MonitorProfileConfig = {
     enabled: true,
     tickMs: 30_000,
@@ -134,7 +164,7 @@ describe('the monitor profile service', () => {
   };
 
   it('computes the ceilings with the same functions the capacity conditions use', async () => {
-    const profile = await new MonitorProfileService(guard, config).read(
+    const profile = await new MonitorProfileService(guard, config, quiet).read(
       { tenantId: 't1' } as never,
       {} as never,
     );
@@ -149,16 +179,41 @@ describe('the monitor profile service', () => {
   });
 
   it('reports the configuration it was given rather than a constant', async () => {
-    const slower = await new MonitorProfileService(guard, {
-      ...config,
-      healthyIntervalMs: 600_000,
-    }).read({ tenantId: 't1' } as never, {} as never);
+    const slower = await new MonitorProfileService(
+      guard,
+      { ...config, healthyIntervalMs: 600_000 },
+      quiet,
+    ).read({ tenantId: 't1' } as never, {} as never);
 
     // A deployment that configured ten minutes must be described as ten
     // minutes. A surface printing "3" from its own bundle would be stating a
     // number this installation is not running.
     expect(slower.healthyIntervalMs).toBe(600_000);
     expect(slower.tenantFreshPanelCeiling).toBe(200);
+  });
+
+  /**
+   * The installation is over its scheduler ceiling.
+   *
+   * `panel.monitor.scheduler_capacity_exceeded` is recorded under
+   * `SYSTEM_SCOPE` with a null tenant, and `DrizzleOperationalEventReader`
+   * begins with `requireTenantId`, so `GET /ops-log` cannot return it under
+   * any scope. Reporting it here is the only way an operator learns of it in
+   * the Web Admin.
+   */
+  it('reports the installation capacity condition the tenant-scoped log cannot reach', async () => {
+    const over = { systemConditionIsOpen: async () => true } as never;
+    const profile = await new MonitorProfileService(guard, config, over).read(
+      { tenantId: 't1' } as never,
+      {} as never,
+    );
+    expect(profile.schedulerCapacityExceeded).toBe(true);
+
+    const calm = await new MonitorProfileService(guard, config, quiet).read(
+      { tenantId: 't1' } as never,
+      {} as never,
+    );
+    expect(calm.schedulerCapacityExceeded).toBe(false);
   });
 
   it('refuses a caller the permission guard rejects', async () => {
@@ -168,7 +223,10 @@ describe('the monitor profile service', () => {
       },
     } as never;
     await expect(
-      new MonitorProfileService(denying, config).read({ tenantId: 't1' } as never, {} as never),
+      new MonitorProfileService(denying, config, quiet).read(
+        { tenantId: 't1' } as never,
+        {} as never,
+      ),
     ).rejects.toThrow('denied');
   });
 });

@@ -213,23 +213,45 @@ describe('management alerts', () => {
   });
 
   it('pages with the cursor pair rather than an offset', async () => {
-    const api = stubApi([
-      {
-        url: '/ops-log',
-        body: { events: [event({ id: 'e1', lastSeenAt: '2026-09-06T08:00:00.000Z' })] },
-      },
-    ]);
+    // A FULL page. "Older" is only offered when the page came back at the size
+    // it asked for — see the test below for why that matters.
+    const full = Array.from({ length: 25 }, (_, index) =>
+      event({ id: `e${index}`, lastSeenAt: `2026-09-06T08:00:0${index % 10}.000Z` }),
+    );
+    const api = stubApi([{ url: '/ops-log', body: { events: full } }]);
     renderPage(<AlertsPage denied={false} />);
-    await screen.findByText('Roles changed.');
+    await screen.findAllByText('Roles changed.');
 
     fireEvent.click(screen.getByRole('button', { name: 'قدیمی‌تر' }));
     await waitFor(() => {
       const paged = api.calls.find((call) => call.url.includes('beforeId'));
-      expect(paged?.url).toContain('beforeId=e1');
+      expect(paged?.url).toContain('beforeId=e24');
       // Both halves of the cursor: `lastSeenAt` alone is not unique, and a
       // strict comparison on it skips the tail of a group that straddles a page.
-      expect(paged?.url).toContain('before=2026-09-06T08%3A00%3A00.000Z');
+      expect(paged?.url).toContain('before=2026-09-06T08%3A00%3A04.000Z');
     });
+  });
+
+  /**
+   * The false negative this page could produce, and the reason `hasNext` is a
+   * FULL page rather than a non-empty one.
+   *
+   * `GET /ops-log` returns rows and no `nextCursor`, so the only thing that
+   * distinguishes the last page is the size the caller asked for. Enabling
+   * "older" on any non-empty page meant one press past the end rendered
+   * "there are no open alerts" over alerts that existed one page back — a
+   * silence, in the subsystem whose stated rule is that silence is the one
+   * outcome it may not produce.
+   */
+  it('offers no older page when the page came back short', async () => {
+    const api = stubApi([{ url: '/ops-log', body: { events: [event()] } }]);
+    renderPage(<AlertsPage denied={false} />);
+    await screen.findByText('Roles changed.');
+
+    expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeDisabled();
+    // And it asked for a bounded page, which is what makes the comparison
+    // above meaningful at all.
+    expect(api.calls[0]?.url).toContain('limit=25');
   });
 
   it('says plainly that it is not the operational history', async () => {
@@ -239,15 +261,25 @@ describe('management alerts', () => {
     expect(screen.getByText(/گروه گزارش تلگرام/)).toBeInTheDocument();
   });
 
-  it('defaults to the unresolved conditions, and can be widened', async () => {
+  /**
+   * The default is HISTORY, not open items — and the reason is C1.
+   *
+   * Most of the management scope is one-shot records: a denial, a lockout, an
+   * administrator added. None of them is ever resolved, because there is
+   * deliberately no "mark as seen". Defaulting to `open=true` therefore showed
+   * every denial ever recorded, for ever, framed as outstanding work. The
+   * conditions that genuinely ARE outstanding have the dashboard's own card,
+   * which asks the server for `MANAGEMENT_CONDITIONS`.
+   */
+  it('defaults to the management history and can be narrowed to open items', async () => {
     const api = stubApi([{ url: '/ops-log', body: { events: [] } }]);
     renderPage(<AlertsPage denied={false} />);
     await screen.findByText('هشدار بازی وجود ندارد.');
-    expect(api.calls[0]?.url).toContain('open=true');
+    expect(api.calls[0]?.url).not.toContain('open=');
 
-    fireEvent.click(screen.getByRole('button', { name: 'همه' }));
+    fireEvent.click(screen.getByRole('button', { name: 'باز' }));
     await waitFor(() => {
-      expect(api.calls.some((call) => !call.url.includes('open='))).toBe(true);
+      expect(api.calls.some((call) => call.url.includes('open=true'))).toBe(true);
     });
   });
 });

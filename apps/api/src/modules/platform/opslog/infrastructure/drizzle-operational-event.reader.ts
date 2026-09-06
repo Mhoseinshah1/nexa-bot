@@ -1,7 +1,7 @@
-import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lt, or } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, or } from 'drizzle-orm';
 import {
   MANAGEMENT_EVENT_CODES,
-  MANAGEMENT_EVENT_CODE_PREFIXES,
+  MANAGEMENT_CONDITION_CODES,
   type OperationalSeverity,
   type ScopeContext,
 } from '@nexa/contracts';
@@ -54,22 +54,24 @@ export class DrizzleOperationalEventReader implements OperationalEventReader {
     }
     if (query.code) filters.push(eq(operationalEvents.code, query.code));
     // The management scope, applied HERE so that `limit` bounds the rows the
-    // reader will actually see and the cursor advances over the same set. The
-    // classification itself lives in `@nexa/contracts` and is shared with the
-    // predicate a test calls, so the SQL and the rule cannot drift apart.
+    // reader will actually see and the cursor advances over the same set. A
+    // browser-side filter would leave the cursor having already walked past
+    // everything it discarded, so paging would silently drop rows.
     //
-    // `like` with a literal prefix and no wildcards of its own: the prefixes
-    // are compile-time constants from the contract, not anything a caller
-    // supplies, so there is no pattern to escape.
+    // `MANAGEMENT_CONDITIONS` is the narrower list: codes that can be closed.
+    // The dashboard asks for it, because a card headed "needs attention" must
+    // not fill with one-shot records nothing can ever resolve.
+    //
+    // Both are `inArray` over compile-time constants from the contract. There
+    // is no `like` here any more, and that is deliberate: the prefix form it
+    // replaced matched nothing in production, and SQL `LIKE` treats `_` as a
+    // single-character wildcard, so a prefix such as `panel_monitor.` would
+    // have quietly matched more than the shared predicate did.
     if (query.scope === 'MANAGEMENT') {
-      filters.push(
-        or(
-          inArray(operationalEvents.code, [...MANAGEMENT_EVENT_CODES]),
-          ...MANAGEMENT_EVENT_CODE_PREFIXES.map((prefix) =>
-            like(operationalEvents.code, `${prefix}%`),
-          ),
-        )!,
-      );
+      filters.push(inArray(operationalEvents.code, [...MANAGEMENT_EVENT_CODES]));
+    }
+    if (query.scope === 'MANAGEMENT_CONDITIONS') {
+      filters.push(inArray(operationalEvents.code, [...MANAGEMENT_CONDITION_CODES]));
     }
     // Half-open `[since, until)`: an event at exactly `until` belongs to the
     // next interval, so two adjacent reports never double-count it.

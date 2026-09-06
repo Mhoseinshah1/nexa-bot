@@ -1,12 +1,21 @@
 import { PANEL_HEALTH_FRESH_FOR_MS } from '@nexa/contracts';
 import type { ActorContext, MonitorProfile, PermissionKey, ScopeContext } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
+import type { OperationalConditionReader } from '../../opslog/application/ports.js';
 import {
   schedulerFreshPanelUpperBound,
   tenantBudgetFreshPanelUpperBound,
 } from '../domain/monitor-cadence.js';
 
 export const MONITOR_PROFILE_VIEW: PermissionKey = 'panels.view';
+
+/**
+ * The code `PanelMonitorService` opens when the active fleet exceeds what the
+ * scheduler can start within one freshness window. Duplicated as a constant
+ * rather than imported to keep this read off the monitor's module graph; the
+ * integration suite asserts the two agree.
+ */
+export const SCHEDULER_CAPACITY_CONDITION = 'panel.monitor.scheduler_capacity_exceeded';
 
 /**
  * What the monitor is configured to do, and what that configuration can carry.
@@ -48,6 +57,7 @@ export class MonitorProfileService {
   constructor(
     private readonly guard: PermissionGuard,
     private readonly config: MonitorProfileConfig,
+    private readonly conditions: OperationalConditionReader,
   ) {}
 
   async read(scope: ScopeContext, actor: ActorContext): Promise<MonitorProfile> {
@@ -58,8 +68,27 @@ export class MonitorProfileService {
     await this.guard.check(scope, actor, MONITOR_PROFILE_VIEW);
 
     const config = this.config;
+    // The one condition an operator cannot reach any other way.
+    //
+    // `panel.monitor.scheduler_capacity_exceeded` is the installation's
+    // condition, so the monitor records it under `SYSTEM_SCOPE` with a null
+    // tenant — and `DrizzleOperationalEventReader.list` begins with
+    // `requireTenantId(scope)`, so `GET /ops-log` can never return it under
+    // any scope. It was declared management-facing for a while, which made the
+    // alerts page claim to show the one condition the deployment docs call
+    // installation-level and un-self-healing, while showing an empty state.
+    //
+    // This endpoint is installation-scoped by construction — everything else
+    // it returns is a fact about the whole deployment — so it is the surface
+    // that CAN answer, and answering here needs no change to the tenant
+    // isolation the log reader deliberately enforces.
+    const schedulerCapacityExceeded = await this.conditions.systemConditionIsOpen(
+      SCHEDULER_CAPACITY_CONDITION,
+    );
+
     return {
       ...config,
+      schedulerCapacityExceeded,
       freshForMs: PANEL_HEALTH_FRESH_FOR_MS,
       tenantFreshPanelCeiling: tenantBudgetFreshPanelUpperBound(
         config.probeTenantLimit,

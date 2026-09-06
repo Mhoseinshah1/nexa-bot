@@ -196,9 +196,18 @@ export type OperationalSeverity = (typeof OPERATIONAL_SEVERITIES)[number];
  * Which slice of the operational log a reader is asking for.
  *
  * `ALL` is the whole stream. `MANAGEMENT` is the far smaller set that wants a
- * person's attention: an administrator was added, a role changed, the
- * installation ran out of monitoring capacity, the notification channel gave
- * up, a stored setting stopped parsing, somebody was locked out.
+ * person's attention. `MANAGEMENT_CONDITIONS` is narrower still: the subset of
+ * management codes that can actually be CLOSED.
+ *
+ * That third value is not a convenience. A denial and a lockout are facts
+ * about a moment; nothing resolves them, and nothing in this product ever
+ * will, because there is deliberately no "mark as seen". Shown on a card
+ * titled "needs attention" they accumulate for the life of the installation,
+ * and after a month of ordinary misclicks that card is denial noise — which is
+ * exactly the burial the `MANAGEMENT` scope was introduced to prevent, arrived
+ * at from the other direction. So the dashboard asks for conditions, which
+ * open and close, and the alerts page asks for the whole management scope,
+ * where a one-shot record is history rather than an outstanding task.
  *
  * The distinction exists because the Web Admin's alerts page is not an
  * operational history. Routine events — every probe, every health transition,
@@ -211,51 +220,20 @@ export type OperationalSeverity = (typeof OPERATIONAL_SEVERITIES)[number];
  * everything else, and paging that silently loses rows — which is the same
  * class of defect as the cursor tie-break this log already had to fix.
  */
-export const OPERATIONAL_SCOPES = ['ALL', 'MANAGEMENT'] as const;
+export const OPERATIONAL_SCOPES = ['ALL', 'MANAGEMENT', 'MANAGEMENT_CONDITIONS'] as const;
 export type OperationalScope = (typeof OPERATIONAL_SCOPES)[number];
 
 /**
- * Whole families of codes that are management-facing.
+ * Management codes that OPEN and CLOSE — a state the installation is in, which
+ * an operator can do something about and which something later resolves.
  *
- * A prefix rather than an enumeration for `admin.` because every event about
- * an administrator qualifies by construction — adding one, suspending one,
- * changing their roles or their password — and a new one must not fall out of
- * the scope silently for want of being listed.
+ * Each entry here is paired: the condition names its recovery through
+ * `recoversCode`, and the recovery names the condition. That pairing is the
+ * membership rule, and `tests/unit/web-money-and-scope.test.ts` walks the
+ * production recorders to enforce it — a code listed here whose recovery
+ * nothing emits would be an alert that can never be cleared.
  */
-export const MANAGEMENT_EVENT_CODE_PREFIXES = ['admin.'] as const;
-
-/**
- * The individual codes that are management-facing.
- *
- * Enumerated, and each one has a reason:
- *
- *   - `access.permission_denied`, `auth.login_locked_out` — somebody was
- *     refused, or locked out. Both are security facts about people.
- *   - `internal.unhandled` — the process failed in a way nothing anticipated.
- *   - `notification.attempts_exhausted` — the operations channel itself has
- *     stopped delivering, so the OTHER stream can no longer be trusted to
- *     report anything. It has to surface here or it surfaces nowhere.
- *   - `panel.monitor.*_exceeded` and their `_ok` recoveries — the installation
- *     is over its monitoring capacity. An operator has to add capacity or
- *     lower the fleet; no amount of waiting fixes it.
- *   - `settings.stored_value_invalid` and its `..._valid` recovery — a stored
- *     setting no longer parses, so a default is silently in force in its
- *     place. The recovery is here too: a scope that shows a failure and hides
- *     the news that it is over is a scope that reads as permanently broken.
- *
- * Deliberately NOT here: `panel.health.*` and `panel.monitor.probe`. A panel
- * going unreachable and coming back is the routine operational stream, and it
- * is already visible where it is actionable — on the panel itself, and on the
- * dashboard. Putting it here would make this page the log the owner asked for
- * it not to be.
- */
-export const MANAGEMENT_EVENT_CODES = [
-  'access.permission_denied',
-  'auth.login_locked_out',
-  'internal.unhandled',
-  'notification.attempts_exhausted',
-  'panel.monitor.scheduler_capacity_exceeded',
-  'panel.monitor.scheduler_capacity_ok',
+export const MANAGEMENT_CONDITION_CODES = [
   'panel.monitor.tenant_budget_exceeded',
   'panel.monitor.tenant_budget_ok',
   'settings.stored_value_invalid',
@@ -263,16 +241,66 @@ export const MANAGEMENT_EVENT_CODES = [
 ] as const;
 
 /**
- * Whether a code belongs to the management scope.
+ * The management scope: conditions, plus the one-shot records about people and
+ * privilege that an operator should be able to find.
  *
- * Exported so the same rule answers the question in the query, in a test, and
- * anywhere else that has to decide — rather than the SQL holding one version of
- * it and a surface another.
+ * Enumerated rather than prefix-matched, and every entry is a code some
+ * production path actually writes to `operational_events`. That last clause is
+ * the whole discipline of this list. It previously carried four entries that
+ * no recorder emitted — `internal.unhandled` (an HTTP error-response code),
+ * `notification.attempts_exhausted` (a delivery-attempt `errorCode`), and the
+ * two `panel.monitor.scheduler_capacity_*` codes, which ARE recorded but under
+ * `SYSTEM_SCOPE` with a null tenant, where this tenant-scoped reader can never
+ * see them. It also carried an `admin.` PREFIX that matched nothing at all,
+ * because `admin.create`/`admin.roles_change`/`admin.status_change` are audit
+ * `action` values, not event codes. Together they made the page claim four
+ * kinds of coverage it did not have, and no test could tell, because every
+ * test that exercised the scope invented its own code.
+ *
+ * The installation-scoped capacity condition is not lost: it reaches the
+ * operator through `GET /system/monitor`, which is installation-scoped by
+ * construction and so can answer for a row this reader cannot reach.
+ *
+ * Each remaining entry has a reason:
+ *
+ *   - `access.permission_denied`, `auth.login_locked_out` — somebody was
+ *     refused, or locked out. Security facts about people. History, not tasks:
+ *     they are NOT in `MANAGEMENT_CONDITION_CODES`.
+ *   - `admin.created`, `admin.status_changed`, `admin.roles_changed`,
+ *     `admin.password_changed` — owner revision 24 names administrator changes
+ *     as management-facing. They are recorded beside the audit row they
+ *     already produced, in the same transaction, so the page can show them.
+ *     Also history rather than tasks.
+ *   - `panel.monitor.tenant_budget_*` and `settings.stored_value_*` — the
+ *     conditions above, which open and close.
+ *
+ * Deliberately NOT here: `panel.health.*` and `panel.monitor.probe`. A panel
+ * going unreachable and coming back is the routine operational stream, and it
+ * is already visible where it is actionable — on the panel itself, and on the
+ * dashboard. Putting it here would make this page the log the owner asked for
+ * it not to be.
  */
-export function isManagementEventCode(code: string): boolean {
-  if ((MANAGEMENT_EVENT_CODES as readonly string[]).includes(code)) return true;
-  return MANAGEMENT_EVENT_CODE_PREFIXES.some((prefix) => code.startsWith(prefix));
-}
+/**
+ * The four administrator-change codes, as a type.
+ *
+ * Named separately so `AdminManagementService` cannot record a fifth code that
+ * this scope does not carry — the failure the `admin.` prefix hid, in the one
+ * place that could reintroduce it.
+ */
+export const MANAGEMENT_ADMIN_EVENT_CODES = [
+  'admin.created',
+  'admin.password_changed',
+  'admin.roles_changed',
+  'admin.status_changed',
+] as const;
+export type ManagementAdminEventCode = (typeof MANAGEMENT_ADMIN_EVENT_CODES)[number];
+
+export const MANAGEMENT_EVENT_CODES = [
+  'access.permission_denied',
+  'auth.login_locked_out',
+  ...MANAGEMENT_ADMIN_EVENT_CODES,
+  ...MANAGEMENT_CONDITION_CODES,
+] as const;
 
 /**
  * An operational event: what the system did, as opposed to who changed what.

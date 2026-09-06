@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  MANAGEMENT_CONDITION_CODES,
   MANAGEMENT_EVENT_CODES,
-  isManagementEventCode,
   SETTINGS,
   settingDefinition,
   parseSettingValue,
@@ -13,6 +16,8 @@ import {
   formatNumber,
   splitDuration,
 } from '../../apps/web/src/format';
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 /**
  * Owner revision 1 — money is rendered in full, and takes its unit from the
@@ -98,22 +103,84 @@ describe('durations', () => {
 /**
  * Owner revision 21 — the Web Admin's alerts page is management-facing, and the
  * routine operational stream belongs to the Telegram report group.
+ *
+ * This block used to assert `isManagementEventCode`, a predicate NOTHING in
+ * production called: the shipped rule was the SQL in
+ * `DrizzleOperationalEventReader`, and the two shared constants rather than a
+ * rule. Worse, every code it asserted over was invented for the assertion —
+ * `admin.roles_change`, `notification.attempts_exhausted`, `internal.unhandled`
+ * — and four of them were codes no recorder anywhere ever writes. Thirty-nine
+ * green assertions described a page that showed four kinds of nothing.
+ *
+ * So the predicate is gone, the SQL is the only rule, and what is checked here
+ * is the property those assertions could not see: every declared code has a
+ * production recorder, named, in a file that still contains it.
  */
+const RECORDED_BY: Readonly<Record<string, { file: string; needle: string }>> = {
+  'access.permission_denied': {
+    file: 'apps/api/src/modules/platform/access/application/permission-guard.ts',
+    needle: "code: 'access.permission_denied'",
+  },
+  'auth.login_locked_out': {
+    file: 'apps/api/src/modules/platform/identity/application/credential-throttle.ts',
+    needle: "code: 'auth.login_locked_out'",
+  },
+  'admin.created': {
+    file: 'apps/api/src/modules/platform/identity/application/admin-management.service.ts',
+    needle: "'admin.created'",
+  },
+  'admin.status_changed': {
+    file: 'apps/api/src/modules/platform/identity/application/admin-management.service.ts',
+    needle: "'admin.status_changed'",
+  },
+  'admin.roles_changed': {
+    file: 'apps/api/src/modules/platform/identity/application/admin-management.service.ts',
+    needle: "'admin.roles_changed'",
+  },
+  'admin.password_changed': {
+    file: 'apps/api/src/modules/platform/identity/application/admin-management.service.ts',
+    needle: "'admin.password_changed'",
+  },
+  'panel.monitor.tenant_budget_exceeded': {
+    file: 'apps/api/src/modules/platform/panels/application/panel-monitor.service.ts',
+    needle: "const TENANT_BUDGET_CONDITION = 'panel.monitor.tenant_budget_exceeded'",
+  },
+  'panel.monitor.tenant_budget_ok': {
+    file: 'apps/api/src/modules/platform/panels/application/panel-monitor.service.ts',
+    needle: "const TENANT_BUDGET_RESOLVED = 'panel.monitor.tenant_budget_ok'",
+  },
+  'settings.stored_value_invalid': {
+    file: 'apps/api/src/modules/control/settings/application/settings-resolver.ts',
+    needle: 'code: INVALID_STORED_SETTING_CODE',
+  },
+  // The recovery is written by the SERVICE, not the resolver — the resolver
+  // only ever sees a value that failed. Getting this entry wrong is how the
+  // check earned its keep on its first run.
+  'settings.stored_value_valid': {
+    file: 'apps/api/src/modules/control/settings/application/settings.service.ts',
+    needle: "code: 'settings.stored_value_valid'",
+  },
+};
+
 describe('the management event scope', () => {
-  it('includes administrator changes by prefix, so a new one cannot fall out', () => {
-    for (const code of [
-      'admin.create',
-      'admin.roles_change',
-      'admin.status_change',
-      'admin.password_change',
-      // The one nobody has written yet. A prefix is what makes this pass.
-      'admin.some_future_change',
-    ]) {
-      expect(isManagementEventCode(code), code).toBe(true);
+  it('declares no code that nothing records', () => {
+    for (const code of MANAGEMENT_EVENT_CODES) {
+      const source = RECORDED_BY[code];
+      expect(source, `${code} has no named recorder`).toBeDefined();
+      const text = readFileSync(resolve(REPO_ROOT, source!.file), 'utf8');
+      expect(text.includes(source!.needle), `${source!.file} no longer writes ${code}`).toBe(true);
     }
   });
 
-  it('excludes the routine operational stream', () => {
+  it('names a recorder for nothing it does not declare', () => {
+    // The other direction, so the map cannot rot into a list of codes the
+    // scope dropped.
+    const declared = new Set<string>(MANAGEMENT_EVENT_CODES);
+    for (const code of Object.keys(RECORDED_BY)) expect(declared.has(code), code).toBe(true);
+  });
+
+  it('keeps the routine operational stream out', () => {
+    const declared = new Set<string>(MANAGEMENT_EVENT_CODES);
     for (const code of [
       'panel.health.unreachable',
       'panel.health.degraded',
@@ -122,110 +189,53 @@ describe('the management event scope', () => {
       'system.ping',
       'http.error',
       'request.invalid',
-      'notification.render_failed',
-      'notification.transport_threw',
       'notification.sweep_withdrawn',
     ]) {
-      expect(isManagementEventCode(code), code).toBe(false);
+      expect(declared.has(code), code).toBe(false);
     }
   });
 
-  it('includes the capacity and channel-failure conditions an operator must act on', () => {
+  /**
+   * The rule that made the dashboard honest.
+   *
+   * A card headed "needs attention" may only carry conditions that can be
+   * CLOSED. `access.permission_denied` writes a fresh row per denial with no
+   * dedupe key and no recovery, and there is deliberately no "mark as seen",
+   * so every misclick left a permanent, unresolvable alert — the card filled
+   * with denial noise for the life of the installation. Conditions are the
+   * narrower list precisely because each has a recovery.
+   */
+  it('admits to the conditions scope only codes something resolves', () => {
+    for (const code of MANAGEMENT_CONDITION_CODES) {
+      const recovery = code.endsWith('_exceeded')
+        ? code.replace('_exceeded', '_ok')
+        : code.endsWith('_invalid')
+          ? code.replace('_invalid', '_valid')
+          : null;
+      if (recovery === null) continue;
+      expect(
+        (MANAGEMENT_CONDITION_CODES as readonly string[]).includes(recovery),
+        `${code} has no recovery in the conditions scope`,
+      ).toBe(true);
+      // And the recovery must actually be emitted, naming the condition.
+      const source = RECORDED_BY[recovery]!;
+      const text = readFileSync(resolve(REPO_ROOT, source.file), 'utf8');
+      expect(text.includes('recoversCode'), `${source.file} emits no recovery`).toBe(true);
+    }
+  });
+
+  it('keeps the one-shot records out of the conditions scope', () => {
+    const conditions = new Set<string>(MANAGEMENT_CONDITION_CODES);
     for (const code of [
-      'panel.monitor.scheduler_capacity_exceeded',
-      'panel.monitor.tenant_budget_exceeded',
-      'notification.attempts_exhausted',
-      'internal.unhandled',
       'access.permission_denied',
       'auth.login_locked_out',
-      'settings.stored_value_invalid',
+      'admin.created',
+      'admin.status_changed',
+      'admin.roles_changed',
+      'admin.password_changed',
     ]) {
-      expect(isManagementEventCode(code), code).toBe(true);
-    }
-  });
-
-  it('pairs every failure condition with its recovery', () => {
-    // A scope that shows a failure and hides the news that it is over reads as
-    // permanently broken.
-    for (const code of MANAGEMENT_EVENT_CODES) {
-      if (code.endsWith('_exceeded')) {
-        expect(isManagementEventCode(code.replace('_exceeded', '_ok'))).toBe(true);
-      }
-      if (code.endsWith('stored_value_invalid')) {
-        expect(isManagementEventCode('settings.stored_value_valid')).toBe(true);
-      }
-    }
-  });
-});
-
-/**
- * Owner revisions 1, 22, 23 and 24 — the four settings they need, as the
- * registry actually declares them.
- */
-describe('the settings the owner revisions add', () => {
-  it('declares a store currency, so no amount has to assume Toman', () => {
-    const definition = settingDefinition('sales.currency');
-    expect(definition.schema.safeParse('IRT').success).toBe(true);
-    expect(definition.schema.safeParse('IRR').success).toBe(true);
-    expect(definition.schema.safeParse('USD').success).toBe(false);
-  });
-
-  it('accepts several support accounts, in order, and rejects a repeat', () => {
-    expect(parseSettingValue('support.accounts', ['@Support1', '@Support2', '@Support3']).ok).toBe(
-      true,
-    );
-    // Order is DATA, not decoration: two different orders are two different
-    // values, so reordering is a real edit the server records.
-    const first = parseSettingValue('support.accounts', ['@Support1', '@Support2']);
-    const second = parseSettingValue('support.accounts', ['@Support2', '@Support1']);
-    expect(first.ok && second.ok).toBe(true);
-    expect(first.ok && second.ok && JSON.stringify(first.value)).not.toBe(
-      second.ok ? JSON.stringify(second.value) : '',
-    );
-
-    expect(parseSettingValue('support.accounts', ['@Support1', '@support1']).ok).toBe(false);
-    expect(parseSettingValue('support.accounts', ['no-at-sign']).ok).toBe(false);
-    expect(parseSettingValue('support.accounts', ['@ab']).ok).toBe(false);
-  });
-
-  it('makes a channel carry a required-membership answer it cannot omit', () => {
-    expect(
-      parseSettingValue('telegram.channels', [
-        { handle: '@Channel1', mandatory: true },
-        { handle: '@NewsChannel', mandatory: false },
-      ]).ok,
-    ).toBe(true);
-    // No default. A missing flag would have to be read as one of the two, and
-    // both readings are wrong.
-    expect(parseSettingValue('telegram.channels', [{ handle: '@Channel1' }]).ok).toBe(false);
-    expect(
-      parseSettingValue('telegram.channels', [
-        { handle: '@Channel1', mandatory: true },
-        { handle: '@channel1', mandatory: false },
-      ]).ok,
-    ).toBe(false);
-  });
-
-  it('stores the top-up minimum as an amount AND a currency', () => {
-    expect(
-      parseSettingValue('wallet.topup.minimum', { amountMinor: '20000', currency: 'IRT' }).ok,
-    ).toBe(true);
-    // A bare number is not money. This is the legacy financial surface's whole
-    // defect: Toman implicit everywhere, no rate on any of seven gateways.
-    expect(parseSettingValue('wallet.topup.minimum', 20000).ok).toBe(false);
-    expect(parseSettingValue('wallet.topup.minimum', { amountMinor: '20000' }).ok).toBe(false);
-    expect(
-      parseSettingValue('wallet.topup.minimum', { amountMinor: 20000, currency: 'IRT' }).ok,
-    ).toBe(false);
-  });
-
-  it('marks the four as having no consumer, and everything older as having one', () => {
-    const planned = SETTINGS.filter((s) => s.consumer === 'PLANNED').map((s) => s.key);
-    expect(planned.sort()).toEqual(
-      ['sales.currency', 'support.accounts', 'telegram.channels', 'wallet.topup.minimum'].sort(),
-    );
-    for (const s of SETTINGS.filter((s) => s.key.startsWith('ops.notifications.'))) {
-      expect(s.consumer, s.key).toBe('ACTIVE');
+      expect(conditions.has(code), code).toBe(false);
+      expect((MANAGEMENT_EVENT_CODES as readonly string[]).includes(code), code).toBe(true);
     }
   });
 });

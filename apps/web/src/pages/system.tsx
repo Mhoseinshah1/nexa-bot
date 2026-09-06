@@ -271,7 +271,22 @@ function CapacityView({ profile }: { profile: MonitorProfile }) {
           ],
           [
             t('web.monitor_installation_ceiling'),
-            <Num key="i" value={profile.installationFreshPanelCeiling} />,
+            <span key="i">
+              <Num value={profile.installationFreshPanelCeiling} />{' '}
+              {/*
+                The installation's capacity condition, which reaches an
+                operator NOWHERE else. The monitor opens
+                `panel.monitor.scheduler_capacity_exceeded` under `SYSTEM_SCOPE`
+                with a null tenant, and the ops-log reader is tenant-scoped, so
+                no `GET /ops-log` query can return it. This response is
+                installation-scoped already, so it is the surface that can say.
+              */}
+              {profile.schedulerCapacityExceeded ? (
+                <Badge tone="danger">{t('web.monitor_over_capacity')}</Badge>
+              ) : (
+                <Badge tone="ok">{t('web.monitor_within_capacity')}</Badge>
+              )}
+            </span>,
           ],
           [
             t('web.monitor_probe_budget'),
