@@ -9,7 +9,10 @@ import {
 import { DrizzlePanelCredentialStore } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-credentials';
 import { DrizzlePanelRepository } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel.repository';
 import { PanelService } from '../../apps/api/src/modules/platform/panels/application/panel.service';
-import type { ProbeBudget } from '../../apps/api/src/modules/platform/panels/application/ports';
+import type {
+  PanelRepository,
+  ProbeBudget,
+} from '../../apps/api/src/modules/platform/panels/application/ports';
 import { providerAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
 import type { UrlPolicyOptions } from '../../apps/api/src/infrastructure/net/url-policy';
@@ -100,9 +103,10 @@ describe('the tenant-wide probe budget', () => {
     context: TestContext = ctx,
     urlPolicy: UrlPolicyOptions = { allowLoopback: true },
     cooldownMs = 10_000,
+    repository: PanelRepository = new DrizzlePanelRepository(context.container.database.db),
   ) =>
     new PanelService({
-      repository: new DrizzlePanelRepository(context.container.database.db),
+      repository,
       credentials: new DrizzlePanelCredentialStore(
         context.container.database.db,
         context.container.cipher,
@@ -447,6 +451,81 @@ describe('the tenant-wide probe budget', () => {
     expect((await served())!.occurrenceCount).toBe(2);
     expect((await served())!.resolvedAt).toBeNull();
     expect((await limited())!.resolvedAt).not.toBeNull();
+  });
+
+  it('writes the recovery in the transaction that records the probe, or not at all', async () => {
+    // The recovery used to sit between a probe that had already gone out and
+    // the transaction that records it. Outside that transaction it could:
+    // throw and destroy the entire record of a real probe, charging the
+    // operator's budget again on their retry; commit for a scope the very next
+    // statement refuses; and — because the recorder runs its dedupe in one
+    // transaction and its resolve after it — leave BOTH rows of a mutually
+    // exclusive pair open, the state the pair exists to make impossible.
+    //
+    // All three are the same property, and this is the deterministic way to
+    // assert it: make the transaction fail AFTER the recovery would be
+    // written, and require that the recovery is not there. Under the old
+    // placement it survives the rollback.
+    const budget = bucket(1, MINUTE);
+    const ids = await Promise.all(
+      Array.from({ length: 2 }, (_, i) => panelFor(service(budget), owner, tenantA, `Atomic ${i}`)),
+    );
+    expect((await test(service(budget), owner, tenantA, ids[0]!)).probed).toBe(true);
+    await expect(test(service(budget), owner, tenantA, ids[1]!)).rejects.toMatchObject({
+      code: 'panel.probe_limited',
+    });
+    const limitRows = async () =>
+      ctx.container.database.db
+        .select()
+        .from(operationalEvents)
+        .where(
+          and(
+            eq(operationalEvents.code, 'panel.probe.limited'),
+            eq(operationalEvents.tenantId, tenantA.tenantId),
+          ),
+        );
+    expect((await limitRows())[0]!.resolvedAt).toBeNull();
+
+    // Capacity is back, so the next test is granted and the recovery is due.
+    // The write that follows it fails.
+    clock.advance(MINUTE);
+    const real = new DrizzlePanelRepository(ctx.container.database.db);
+    const breaking = new Proxy(real, {
+      get(target, prop, receiver) {
+        if (prop === 'scheduleNext') {
+          return async () => {
+            throw new Error('the write after the recovery failed');
+          };
+        }
+        const value = Reflect.get(target, prop, receiver) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as unknown as PanelRepository;
+
+    await expect(
+      test(
+        service(budget, ctx, { allowLoopback: true }, 10_000, breaking),
+        owner,
+        tenantA,
+        ids[1]!,
+      ),
+    ).rejects.toThrow('the write after the recovery failed');
+
+    const recovered = await ctx.container.database.db
+      .select()
+      .from(operationalEvents)
+      .where(
+        and(
+          eq(operationalEvents.code, 'panel.probe.ok'),
+          eq(operationalEvents.tenantId, tenantA.tenantId),
+        ),
+      );
+    expect(recovered, 'the recovery survived the rollback of the write it belongs to').toHaveLength(
+      0,
+    );
+    // And the limit is still open, which is the point: nothing was resolved by
+    // a probe whose record did not land.
+    expect((await limitRows())[0]!.resolvedAt).toBeNull();
   });
 
   // The atomicity rule, stated directly rather than through a retiming: a

@@ -2,7 +2,10 @@ import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, or } from 'drizzle-
 import type { OperationalSeverity, ScopeContext } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { operationalEvents } from '../../../../infrastructure/persistence/schema.js';
-import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
+import {
+  requireTenantId,
+  type TransactionScope,
+} from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
   OperationalConditionReader,
   OperationalEventQuery,
@@ -104,8 +107,12 @@ export class DrizzleOperationalConditionReader implements OperationalConditionRe
     return rows.flatMap((row) => (row.tenantId === null ? [] : [row.tenantId]));
   }
 
-  async tenantConditionIsOpen(tenantId: string, code: string): Promise<boolean> {
-    const rows = await this.db
+  async tenantConditionIsOpen(
+    tenantId: string,
+    code: string,
+    tx?: TransactionScope,
+  ): Promise<boolean> {
+    const rows = await (tx?.tx ?? this.db)
       .select({ id: operationalEvents.id })
       .from(operationalEvents)
       .where(

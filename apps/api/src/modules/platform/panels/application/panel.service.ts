@@ -733,21 +733,30 @@ export class PanelService {
    * installations that were never short of it, and the row's occurrence count
    * would climb for ever on the strength of nothing happening.
    */
-  private async resolveProbeLimit(scope: ScopeContext, tenant: TenantContext): Promise<void> {
+  private async resolveProbeLimit(
+    scope: ScopeContext,
+    tenant: TenantContext,
+    tx: TransactionScope,
+  ): Promise<void> {
     const limited = await this.deps.conditions.tenantConditionIsOpen(
       tenant.tenantId,
       PROBE_LIMITED_CODE,
+      tx,
     );
     if (!limited) return;
-    await this.deps.opsLog.record(scope, {
-      code: PROBE_LIMITED_OK_CODE,
-      severity: 'INFO',
-      message:
-        'Panel connection tests are being served again: this tenant has outbound-probe capacity.',
-      dedupeKey: PROBE_LIMITED_OK_CODE,
-      recoversCode: PROBE_LIMITED_CODE,
-      recoversDedupeKey: PROBE_LIMITED_CODE,
-    });
+    await this.deps.opsLog.record(
+      scope,
+      {
+        code: PROBE_LIMITED_OK_CODE,
+        severity: 'INFO',
+        message:
+          'Panel connection tests are being served again: this tenant has outbound-probe capacity.',
+        dedupeKey: PROBE_LIMITED_OK_CODE,
+        recoversCode: PROBE_LIMITED_CODE,
+        recoversDedupeKey: PROBE_LIMITED_CODE,
+      },
+      tx,
+    );
   }
 
   async setStatus(
@@ -998,13 +1007,6 @@ export class PanelService {
       return { view: before, probed: false };
     }
 
-    // Budget was GRANTED, which is the only thing that can end a probe limit:
-    // nothing else in this codebase looks at that bucket on an operator's
-    // behalf. Without this a single burst that earned one refusal left the
-    // operations view reporting connection tests as limited for ever, while
-    // the bucket refilled and every later test succeeded.
-    await this.resolveProbeLimit(scope, tenant);
-
     const health = attempt.health;
     await runAuthorizedMutation(
       this.mutationDeps(),
@@ -1021,6 +1023,21 @@ export class PanelService {
         // The probe itself has already happened; what this stops is the
         // record of it, which is what the operator and the monitor read.
         await this.requireActiveScope(scope, tx);
+        // Budget was GRANTED, which is the only thing that can end a probe
+        // limit: nothing else in this codebase looks at that bucket on an
+        // operator's behalf. Without it a single burst that earned one refusal
+        // left the operations view reporting connection tests as limited for
+        // ever, while the bucket refilled and every later test succeeded.
+        //
+        // INSIDE this transaction, and that is not tidiness. Outside it, this
+        // sat between a probe that had already gone out and the write that
+        // records it: a pool timeout here threw away the whole record of a
+        // real probe and charged the operator's budget again on their retry;
+        // it wrote into a scope the very next statement refuses; and the
+        // recorder's own resolve runs after its dedupe, on the pool, so a
+        // failure between the two left BOTH rows of a mutually exclusive pair
+        // open — the state this pair exists to make impossible.
+        await this.resolveProbeLimit(scope, tenant, tx);
         const { outcome, previous } = await persistProbeResult(
           this.deps,
           tenant,

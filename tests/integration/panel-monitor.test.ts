@@ -2373,6 +2373,97 @@ describe('the panel health monitor', () => {
   // 36-38. Races: configuration changed, stale writes, phantom events
   // ===========================================================================
 
+  describe("the tenant bound is the operator's to lower", () => {
+    it('does not overwrite an eligibility an operator committed while it was reading', async () => {
+      // `refreshTenantBounds` puts a claimed tenant's bound back where its own
+      // schedule says, unconditionally. An operator's write lowers that same
+      // bound with `LEAST` while holding the row. Interleaved, the LATERAL
+      // reads the schedule from a snapshot that predates the operator's
+      // commit, the UPDATE blocks on the tenant row, and PostgreSQL's re-check
+      // under READ COMMITTED re-evaluates only the target row's own condition
+      // and never the subquery — so the stale minimum lands on top.
+      //
+      // The panel the operator has just fixed then says it is due while its
+      // tenant says it is not, and `claimTenants` never offers it: the same
+      // shape as the panel-row race `lockPanel` closed, one level up.
+      const repo = new DrizzlePanelRepository(ctx.container.database.db);
+      const real = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      const soon = await createPanel(ownerA, tenantA, 'bound-soon');
+      const later = await createPanel(ownerA, tenantA, 'bound-later');
+      // One panel far out, one further: the tenant's own minimum is an hour
+      // away, so nothing but the operator's write can bring the bound back.
+      const hour = new Date(now.getTime() + 60 * 60 * 1000);
+      await ctx.container.database.db
+        .update(panelMonitorSchedule)
+        .set({ nextEligibleAt: hour })
+        .where(eq(panelMonitorSchedule.tenantId, tenantA.tenantId));
+      await ctx.container.database.db
+        .update(panelMonitorTenants)
+        .set({ nextEligibleAt: hour })
+        .where(eq(panelMonitorTenants.tenantId, tenantA.tenantId));
+      void later;
+
+      // The operator's transaction, held open: its schedule write and its
+      // `LEAST` on the tenant row are committed together, as production does.
+      let release!: () => void;
+      let holding!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const holdsTheRow = new Promise<void>((resolve) => {
+        holding = resolve;
+      });
+      const operator = ctx.container.uow.run(tenantA, async (tx) => {
+        await repo.setScheduleEligibility(tenantA, soon, 'ELIGIBLE_NOW', now, tx);
+        holding();
+        await held;
+      });
+
+      try {
+        // The write has returned, so that transaction really holds the tenant
+        // row and the refresh below meets it rather than racing ahead of it.
+        await holdsTheRow;
+        const refresh = real.refreshTenantBounds([tenantA.tenantId]);
+        // And it is queued BEHIND it — read from the server's own wait state,
+        // not from a timer.
+        await waitUntilBlocked();
+
+        release();
+        await operator;
+        await refresh;
+      } finally {
+        release();
+        await operator.catch(() => undefined);
+      }
+
+      const bound = (await rotationOf(tenantA.tenantId))!.nextEligibleAt;
+      expect(
+        bound.getTime(),
+        "the operator's eligibility was overwritten by a stale minimum",
+      ).toBeLessThanOrEqual(now.getTime());
+      // And the tenant is claimable again, which is what the bound is for.
+      expect(await real.claimTenants(now, 10)).toContain(tenantA.tenantId);
+    });
+
+    /** Waits until some session is blocked waiting for a lock. */
+    async function waitUntilBlocked(): Promise<void> {
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        const blocked = await ctx.container.database.withClient(async (client) => {
+          const { rows } = await client.query<{ n: string }>(
+            `SELECT count(*)::text AS n
+               FROM pg_stat_activity
+              WHERE wait_event_type = 'Lock' AND pid <> pg_backend_pid()`,
+          );
+          return Number(rows[0]!.n);
+        });
+        if (blocked > 0) return;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error('the refresh never queued behind the operator');
+    }
+  });
+
   describe('races', () => {
     it('discards a result that describes a configuration the operator replaced', async () => {
       const panelId = await createPanel(ownerA, tenantA, 'raced-config');

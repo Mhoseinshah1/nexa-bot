@@ -1,3 +1,4 @@
+import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { OperationalSeverity, ScopeContext } from '@nexa/contracts';
 
 /** An operational event as an operator reads it. */
@@ -51,8 +52,15 @@ export interface OperationalEventReader {
 export interface OperationalConditionReader {
   /** Tenant ids with an unresolved condition of this code. */
   openTenantConditions(code: string): Promise<string[]>;
-  /** Whether ONE tenant's condition of this code is open. */
-  tenantConditionIsOpen(tenantId: string, code: string): Promise<boolean>;
+  /**
+   * Whether ONE tenant's condition of this code is open.
+   *
+   * Takes the caller's transaction, because the answer decides whether to
+   * write: read outside it, two concurrent callers both see the condition open
+   * and both record the recovery, and the read is not covered by whatever the
+   * caller has already refused or committed.
+   */
+  tenantConditionIsOpen(tenantId: string, code: string, tx?: TransactionScope): Promise<boolean>;
   /** Whether the installation-wide (tenant-less) condition of this code is open. */
   systemConditionIsOpen(code: string): Promise<boolean>;
 }

@@ -1003,20 +1003,52 @@ export class DrizzlePanelMonitorRepository implements PanelMonitorRepository {
      * short". A tenant that filled its share may still have had its bound
      * dragged earlier by an unrelated write, and recomputing costs one index
      * probe.
+     *
+     * The tenant rows are LOCKED before the minimum is read, and that is the
+     * whole reason this is a transaction. An operator's write lowers the bound
+     * with `LEAST` while holding this same row, and this statement overwrites
+     * it unconditionally — so without the lock the two interleave exactly as
+     * the panel row did before `lockPanel`:
+     *
+     *   1. the LATERAL is planned and reads the schedule from a snapshot that
+     *      predates the operator's commit;
+     *   2. the operator commits `ELIGIBLE_NOW` on a panel and `LEAST` on the
+     *      tenant;
+     *   3. this UPDATE, which was blocked on the tenant row, resumes — and
+     *      PostgreSQL's re-check under READ COMMITTED re-evaluates only the
+     *      target row's own condition, never the subquery, so the stale
+     *      minimum is written over the operator's.
+     *
+     * The panel the operator has just fixed then says it is due while its
+     * tenant says it is not, and `claimTenants` never offers it. Locking first
+     * makes the read happen after any such commit; ordering by tenant id keeps
+     * two monitor replicas from deadlocking on the same pair.
      */
-    await this.db.execute(sql`
-      UPDATE ${panelMonitorTenants} AS t
-         SET next_eligible_at = COALESCE(m.next_eligible_at, ${SCHEDULE_SUSPENDED_AT})
-        FROM (VALUES ${tenantList(tenantIds)}) AS c(tenant_id)
-        LEFT JOIN LATERAL (
-             SELECT s.next_eligible_at
-               FROM ${panelMonitorSchedule} AS s
-              WHERE s.tenant_id = c.tenant_id
-              ORDER BY s.next_eligible_at ASC
-              LIMIT 1
-           ) AS m ON TRUE
-       WHERE t.tenant_id = c.tenant_id
-    `);
+    await this.db.transaction(async (tx) => {
+      await tx.execute(sql`
+        SELECT tenant_id
+          FROM ${panelMonitorTenants}
+         WHERE tenant_id IN (${sql.join(
+           tenantIds.map((id) => sql`${id}::uuid`),
+           sql`, `,
+         )})
+         ORDER BY tenant_id
+           FOR UPDATE
+      `);
+      await tx.execute(sql`
+        UPDATE ${panelMonitorTenants} AS t
+           SET next_eligible_at = COALESCE(m.next_eligible_at, ${SCHEDULE_SUSPENDED_AT})
+          FROM (VALUES ${tenantList(tenantIds)}) AS c(tenant_id)
+          LEFT JOIN LATERAL (
+               SELECT s.next_eligible_at
+                 FROM ${panelMonitorSchedule} AS s
+                WHERE s.tenant_id = c.tenant_id
+                ORDER BY s.next_eligible_at ASC
+                LIMIT 1
+             ) AS m ON TRUE
+         WHERE t.tenant_id = c.tenant_id
+      `);
+    });
   }
 }
 
