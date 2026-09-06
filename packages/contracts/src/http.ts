@@ -6,6 +6,7 @@ import {
   NOTIFICATION_STATUSES,
   NOTIFICATION_TRANSPORTS,
 } from './notifications.js';
+import { uuidV7Schema } from './ids.js';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
 import {
   SETTING_CLASSIFICATIONS,
@@ -127,6 +128,16 @@ export const monitorProfileSchema = z.object({
   tenantFreshPanelCeiling: z.number().int().nonnegative(),
   /** The most the scheduler could START on across the whole installation. */
   installationFreshPanelCeiling: z.number().int().nonnegative(),
+  /**
+   * The most TENANTS the fairness rotation can reach inside one freshness
+   * window — a third bound, independent of the two panel ceilings above.
+   *
+   * A hundred tenants of one panel each is a hundred panels: comfortably under
+   * the installation ceiling, and still more tenants than the rotation can
+   * visit, so their panels go stale with nothing to say so. Reported because
+   * it is the bound that was invisible.
+   */
+  tenantTurnCeiling: z.number().int().nonnegative(),
   /**
    * Whether the installation is CURRENTLY over that ceiling.
    *
@@ -608,6 +619,17 @@ export type OperationalEventResponse = z.infer<typeof operationalEventSchema>;
 
 export const operationalEventListResponseSchema = z.object({
   events: z.array(operationalEventSchema),
+  /**
+   * The cursor for the next (older) page, or `null` on the last one.
+   *
+   * Returned by the server, which is the only party that can know. A surface
+   * comparing `rows.length` against the size it asked for cannot tell a full
+   * last page from a full page with more behind it, so it offers an "older"
+   * page that does not exist and the operator lands on the empty state — a
+   * false "no open alerts" in the subsystem whose stated rule is that silence
+   * is the one outcome it may not produce.
+   */
+  nextCursor: z.object({ at: isoTimestamp, id: z.string() }).nullable(),
 });
 export type OperationalEventListResponse = z.infer<typeof operationalEventListResponseSchema>;
 
@@ -664,7 +686,14 @@ export const notificationListQuerySchema = z.object({
    * already known.
    */
   before: isoTimestamp.optional(),
-  beforeId: z.string().max(64).optional(),
+  /**
+   * Validated as an ID, not as any string under 64 characters.
+   *
+   * `beforeId=oops` used to reach the repository, which compares it against a
+   * PostgreSQL `uuid` column — so a malformed cursor became a driver error and
+   * a 500 where the caller had sent a bad query parameter and deserved a 400.
+   */
+  beforeId: uuidV7Schema.optional(),
 });
 
 /**

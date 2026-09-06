@@ -324,7 +324,16 @@ export const SETTINGS = [
     // Money, not a number. An amount without a currency is the defect that runs
     // through the whole legacy financial surface: no exchange rate exists on
     // any of its seven gateways and Toman is implicit everywhere.
-    schema: moneySchema,
+    // NON-NEGATIVE, unlike the generic money type. `moneySchema` accepts a
+    // signed integer because a balance or a debit legitimately goes below
+    // zero; a smallest ACCEPTED top-up cannot, and this key's own description
+    // defines zero as the only no-minimum sentinel. Without the refinement
+    // `{ amountMinor: '-1' }` validated, stored and reported as a legitimate
+    // minimum.
+    schema: moneySchema.refine(
+      (money) => BigInt(money.amountMinor) >= 0n,
+      'A minimum top-up cannot be negative; zero means no minimum.',
+    ),
     defaultValue: { amountMinor: '0', currency: 'IRT' },
     zeroMeaning: 'DISABLES',
     mutability: 'RUNTIME',

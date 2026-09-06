@@ -224,21 +224,71 @@ export const OPERATIONAL_SCOPES = ['ALL', 'MANAGEMENT', 'MANAGEMENT_CONDITIONS']
 export type OperationalScope = (typeof OPERATIONAL_SCOPES)[number];
 
 /**
- * Management codes that OPEN and CLOSE — a state the installation is in, which
- * an operator can do something about and which something later resolves.
+ * The FAILURE codes: a state the installation is in that an operator can do
+ * something about, and which something later resolves.
  *
- * Each entry here is paired: the condition names its recovery through
- * `recoversCode`, and the recovery names the condition. That pairing is the
- * membership rule, and `tests/unit/web-money-and-scope.test.ts` walks the
- * production recorders to enforce it — a code listed here whose recovery
- * nothing emits would be an alert that can never be cleared.
+ * These are what `MANAGEMENT_CONDITIONS` selects, and the distinction from the
+ * recoveries below is not cosmetic. A recovery row is INSERTED, with its own
+ * `resolvedAt` left null — it resolves the preceding FAILURE row, never
+ * itself, and nothing ever resolves a recovery. Including recoveries in the
+ * conditions scope therefore made `scope=MANAGEMENT_CONDITIONS&open=true`
+ * return `panel.monitor.tenant_budget_ok` and `settings.stored_value_valid`
+ * as open conditions, so the dashboard's "needs attention" card stayed
+ * populated by the very rows that say the problem is over.
+ *
+ * That is the same defect this scope was introduced to fix, reintroduced from
+ * the other side: the first version buried the card under unresolvable
+ * denials, and its replacement buried it under unresolvable recoveries.
  */
-export const MANAGEMENT_CONDITION_CODES = [
+export const MANAGEMENT_CONDITION_FAILURE_CODES = [
   'panel.monitor.tenant_budget_exceeded',
-  'panel.monitor.tenant_budget_ok',
   'settings.stored_value_invalid',
+] as const;
+
+/**
+ * The RECOVERY codes, each paired with the failure above that it closes.
+ *
+ * Management history — an operator should be able to see that a condition
+ * ended — but never an open condition, because nothing resolves them.
+ * `tests/unit/web-money-and-scope.test.ts` asserts the pairing is total in
+ * both directions, so a failure code cannot be added without its recovery and
+ * a recovery cannot leak into the conditions scope.
+ */
+export const MANAGEMENT_CONDITION_RECOVERY_CODES = [
+  'panel.monitor.tenant_budget_ok',
   'settings.stored_value_valid',
 ] as const;
+
+/**
+ * Failures and recoveries together: the codes that participate in the
+ * condition lifecycle at all. NOT the conditions scope — that is the failure
+ * list alone.
+ */
+export const MANAGEMENT_CONDITION_CODES = [
+  ...MANAGEMENT_CONDITION_FAILURE_CODES,
+  ...MANAGEMENT_CONDITION_RECOVERY_CODES,
+] as const;
+
+/**
+ * Codes that are records of a moment rather than a state: a denial, a lockout,
+ * an administrator changed. `resolvedAt` is permanently null for these BY
+ * DESIGN — there is no recovery and deliberately no acknowledgement — so a
+ * surface must not render them as "unresolved" or offer them under an
+ * open-only filter as though they were outstanding work.
+ */
+export const MANAGEMENT_ONE_SHOT_CODES = [
+  'access.permission_denied',
+  'auth.login_locked_out',
+  'admin.created',
+  'admin.password_changed',
+  'admin.roles_changed',
+  'admin.status_changed',
+] as const;
+
+/** Whether a code is a one-shot record rather than a closable condition. */
+export function isOneShotManagementCode(code: string): boolean {
+  return (MANAGEMENT_ONE_SHOT_CODES as readonly string[]).includes(code);
+}
 
 /**
  * The management scope: conditions, plus the one-shot records about people and
@@ -296,9 +346,7 @@ export const MANAGEMENT_ADMIN_EVENT_CODES = [
 export type ManagementAdminEventCode = (typeof MANAGEMENT_ADMIN_EVENT_CODES)[number];
 
 export const MANAGEMENT_EVENT_CODES = [
-  'access.permission_denied',
-  'auth.login_locked_out',
-  ...MANAGEMENT_ADMIN_EVENT_CODES,
+  ...MANAGEMENT_ONE_SHOT_CODES,
   ...MANAGEMENT_CONDITION_CODES,
 ] as const;
 

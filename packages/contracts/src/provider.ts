@@ -74,6 +74,37 @@ export const CREDENTIAL_SHAPES = [
 export type CredentialShape = (typeof CREDENTIAL_SHAPES)[number];
 
 /**
+ * Which credential fields a shape can actually USE.
+ *
+ * The descriptor was fetched and shown, and nothing enforced it. A Marzban
+ * panel — `USERNAME_PASSWORD` — accepted an API token, stored the secret, and
+ * then failed every connection test with "credentials missing", because
+ * `toProviderCredentials` ignores a field the shape does not name. The Web
+ * Admin had accepted a credential that could never affect the panel: a write
+ * that reports success and does nothing, which is the legacy behaviour this
+ * codebase exists to end.
+ *
+ * Exported so the service refuses it and the forms do not offer it — the
+ * server is the enforcement, the UI merely stops asking.
+ */
+export const CREDENTIAL_FIELDS_BY_SHAPE: Readonly<
+  Record<CredentialShape, readonly ('username' | 'password' | 'apiToken')[]>
+> = {
+  USERNAME_PASSWORD: ['username', 'password'],
+  OPAQUE_TOKEN: ['apiToken'],
+  TOKEN_OR_USERNAME_PASSWORD: ['username', 'password', 'apiToken'],
+  NONE: [],
+};
+
+/** Whether `field` is one the given shape can use. */
+export function shapeAcceptsCredential(
+  shape: CredentialShape,
+  field: 'username' | 'password' | 'apiToken',
+): boolean {
+  return CREDENTIAL_FIELDS_BY_SHAPE[shape].includes(field);
+}
+
+/**
  * The provider types this release can operate, as a closed set.
  *
  * A hybrid on purpose. The identifier is persisted — `panels.provider_type` —
