@@ -92,7 +92,7 @@ reported a survivor and was a stale build.
 
 | #     | Rule                                                                   | Mutation                                                           | Named test                                                                                              |
 | ----- | ---------------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| R-01  | The dashboard claims a partial fleet only from the server's cursor     | back to `panels.length === DASHBOARD_PANEL_PAGE`                   | `dashboard.tsx` › claims a partial fleet only when the server left a panel out                          |
+| R-01  | The dashboard claims a partial fleet only from the server's cursor     | back to `panels.length === DASHBOARD_PANEL_PAGE`                   | `dashboard.test.tsx` › claims a partial fleet only when the server left a panel out                     |
 | R-04  | `/system/monitor` reports the EFFECTIVE probe cooldown                 | `probeCore.probeCooldownMs` → `config.PANEL_PROBE_COOLDOWN_MS`     | `web-admin-v2.test.ts` › reports the cooldown the probes actually obey                                  |
 | R-05  | The revert button is gated on the draft basis                          | `revertable !== null` → `template.version !== null`                | `control-plane-pages.test.tsx` › offers no revert while the draft is based on no override               |
 | R-06  | The alerts pager reads the server's `nextCursor`                       | back to a page-length comparison                                   | `settings-and-alerts.test.tsx` › offers no older page on a FULL page the server reports as the last one |
@@ -251,7 +251,7 @@ stating rather than averaging away:
 | V05  | failures and recoveries are disjoint and paired                 | add a recovery to the failure list | _the condition lifecycle_                                                  |
 | V06  | "open" narrows to the conditions scope                          | back to a fixed `MANAGEMENT`       | _asks for the conditions scope when narrowed to open items_                |
 | V07  | the CSP dashboard test detects a broken card                    | drop `nextCursor` from the stub    | _renders a dashboard with no style attribute_                              |
-| V07b | the route sweep detects a broken card                           | drop the panel-detail stub         | the sweep, on `/panels/:id`                                                |
+| V07b | the route sweep detects a broken card                           | drop the panel-detail stub         | `csp.test.tsx` › renders %s with no style attribute the policy would drop  |
 | U02  | a recovery renders as recovered                                 | drop the recovery branch           | _marks a recovery as recovered rather than unresolved_                     |
 | U04  | half a cursor is a 400                                          | `if (false)`                       | _refuses half an ops-log cursor_                                           |
 | U04b | ...and on the contract side                                     | neutralise the refinement          | _refuses half a notification cursor_                                       |
@@ -364,3 +364,70 @@ tree**. None of them is a statement about what gets pushed, and the gap between
 those two is where U09 lived. A verification harness that never looks at the
 commit cannot tell a rule that is tested from a rule that was tested once on a
 machine that no longer exists.
+
+# Round 5 — a fresh-context read-only review, and a checker with its own disease
+
+A reviewer with no history on this branch read the whole diff and returned seven
+findings. **All seven were confirmed against the code.** The most useful of them
+is the one about the check the previous round added.
+
+## The checker had the disease it was written to cure
+
+`scripts/check-falsification-citations.mjs` was added in `fd57d79` so that a
+cited test which no commit contains fails the gate. Its first version recognised
+two spellings of a citation and **silently skipped everything else** — no count,
+no warning. The record's two newest rows are written in a third spelling:
+
+```
+| _offers no save on an archived panel_ (`toBeDisabled`)    |
+| _leaves the identity fields editable on a live panel_ + 3 |
+```
+
+Both failed the anchored italic regex and were dropped. The commit message said
+"52 citations, all resolving", which was true of the 52 it looked at and said
+nothing about the evidence for the newest production rule on the branch. A
+checker that decides for itself what to ignore can be green and wrong, which is
+precisely the property it existed to remove.
+
+It no longer guesses. It finds the tables that HAVE a citation column, by their
+header, and **a row in one that yields no test name is a failure, not a skip**.
+It also resolves a `` `file` › name `` citation in the file it names, rather
+than in a concatenation of every test source — a name found in some other file
+is not evidence for the row citing it.
+
+Turning the skips into failures immediately found two more record defects that
+the first version had passed over in silence: R-01 cited `dashboard.tsx`, the
+production file, where the test lives in `dashboard.test.tsx`; and V07b's cell
+was prose (`the sweep, on /panels/:id`) naming no test at all. The count is now
+**55**, and the three extra citations are the ones nobody was checking.
+
+## The six mutations
+
+| #   | rule                                                        | mutation                               | test that dies                                                                                               |
+| --- | ----------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Y1  | no connection test when credentials cannot authenticate     | drop `!probeable(data)`                | `panels.test.tsx` › offers no connection test when the stored credentials cannot authenticate                |
+| Y2  | an either/or shape is satisfied by EITHER                   | `\|\|` → `&&` in `shapeIsSatisfiedBy`  | `panels.test.tsx` › offers the connection test when either half of an either/or shape is set                 |
+| Y3  | the strong empty state belongs to the unfiltered open view  | `openOnly && severity === ''` → `true` | `settings-and-alerts.test.tsx` › does not deny that anything is open when a severity filter emptied the page |
+| Y4  | the banner promises no alert class the scope cannot return  | put the notification clause back       | `settings-and-alerts.test.tsx` › promises no alert class the management scope cannot return                  |
+| Y5  | the ceiling note says which ceilings have no alarm          | delete the exception clause            | `settings-and-alerts.test.tsx` › says which ceilings have an alarm behind them and which does not            |
+| Y6  | `panel.probe.limited` is excluded from the management scope | add it to the failure list             | `web-money-and-scope.test.ts` › keeps the routine operational stream out                                     |
+
+Y3 killed four tests and Y6 three — Y6 taking the failure/recovery pairing and
+the every-code-has-a-recorder invariants with it, which is the correct blast
+radius for admitting an unpaired code to a lifecycle list. Three checks of the
+citation checker itself were run the same way: a row naming no test, a citation
+naming the wrong file, and a test that does not exist each fail it, and the
+record restored to sha256 `fdd10555…` afterwards.
+
+## What this round says about the method
+
+The previous four rounds each found their defect inside the previous round's
+fix. This one found its defect inside the previous round's **verification** —
+one level up. The check was correct about everything it examined and wrong about
+what it examined, and no amount of reviewing its output would have shown that,
+because its output was a number that looked right.
+
+The lesson is narrow and worth stating exactly: **a check that skips is a check
+that must say what it skipped.** Silence in a verifier is indistinguishable from
+success, which is the same sentence this codebase already has about the alerts
+page, arrived at from the other end.
