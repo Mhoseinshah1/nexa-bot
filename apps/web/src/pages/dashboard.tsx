@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import type { PanelSummaryResponse } from '@nexa/contracts';
 import { fetchOpsLog, fetchPanels, fetchReadiness } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatNumber, formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
 import {
@@ -79,7 +79,13 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
                   label={dependency.name}
                   value={dependency.status === 'up' ? t('web.up') : t('web.down')}
                   tone={dependency.status === 'up' ? 'ok' : 'danger'}
-                  {...(dependency.latencyMs === null ? {} : { hint: `${dependency.latencyMs} ms` })}
+                  // `latencyMs` is OPTIONAL on the wire, not nullable: a
+                  // dependency that reports no timing omits it. Guarding on
+                  // `null` let `undefined` through, and the page rendered the
+                  // literal text "undefined ms" beside a healthy dependency.
+                  {...(dependency.latencyMs === undefined
+                    ? {}
+                    : { hint: `${formatNumber(dependency.latencyMs)} ms` })}
                 />
               ))}
             </div>

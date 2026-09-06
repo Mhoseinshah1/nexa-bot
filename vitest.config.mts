@@ -43,6 +43,29 @@ export default defineConfig({
         plugins: [tsExtensionResolver()],
         test: {
           ...shared,
+          /**
+           * The Web Admin, rendered.
+           *
+           * Its own project because it is the one suite that needs a DOM, and
+           * granting `jsdom` to the whole corpus would let a node-only test
+           * name a browser global and still pass. The split mirrors the one
+           * `tsconfig.tests.web.json` already makes for the same reason.
+           *
+           * These render REAL components against a real query client and
+           * assert what an operator would see. A grep over the source would
+           * pass just as happily against a file nothing imports.
+           */
+          name: 'web',
+          environment: 'jsdom',
+          include: ['tests/web/**/*.test.tsx'],
+          setupFiles: ['tests/web/setup.ts'],
+          testTimeout: 15_000,
+        },
+      },
+      {
+        plugins: [tsExtensionResolver()],
+        test: {
+          ...shared,
           // The combinatorial enumeration. Deliberately NOT in `integration`:
           // 1 341 orderings, each with a full database reset. The suite runs
           // in about four minutes and took the whole CI integration job to

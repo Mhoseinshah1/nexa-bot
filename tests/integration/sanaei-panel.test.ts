@@ -321,9 +321,17 @@ describe('a Sanaei panel is bound by the same probe orchestration as any other',
     const { view } = await create(owner, tenantA, server.baseUrl, { apiToken: CANARY.token });
     const panelId = view.panel.id;
 
+    // Derived from the CONFIGURED bucket rather than hardcoded. The limit
+    // moved once already — from 30 to 100, when the health cadence went to
+    // three minutes — and a loop of 40 against a bucket of 100 does not exhaust
+    // it, so the test would have passed while exercising nothing at all. Ten
+    // rounds past the limit guarantees the refusals happen.
+    const limit = ctx.container.config.PANEL_PROBE_TENANT_LIMIT;
+    const rounds = limit + 10;
+
     let probes = 0;
     let limited = 0;
-    for (let round = 0; round < 40; round += 1) {
+    for (let round = 0; round < rounds; round += 1) {
       // Alternate the token, so every attempt is a fresh configuration.
       await ctx.container.panels.setCredentials(tenantA, adminActorFor(owner), panelId, {
         credentials: { apiToken: round % 2 === 0 ? CANARY.token : 'monitor-token-cccccccccccc' },
@@ -338,11 +346,11 @@ describe('a Sanaei panel is bound by the same probe orchestration as any other',
       }
     }
 
-    // The default bucket is 30 real probes per five minutes, and the clock does
-    // not move inside this test, so the refusals begin and never stop.
-    expect(probes).toBeLessThanOrEqual(30);
+    // The bucket is `limit` real probes per window, and the clock does not move
+    // inside this test, so the refusals begin and never stop.
+    expect(probes).toBeLessThanOrEqual(limit);
     expect(limited).toBeGreaterThan(0);
-    expect(probes + limited).toBe(40);
+    expect(probes + limited).toBe(rounds);
     // What the panel actually saw matches what Nexa believes it permitted.
     expect(server.requests).toHaveLength(probes);
   });

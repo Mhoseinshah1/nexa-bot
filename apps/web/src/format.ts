@@ -98,6 +98,17 @@ export function currencyLabel(currency: CurrencyCode): string {
   return t(CURRENCY_KEY[currency]);
 }
 
+/**
+ * The resolved labels, for the test that asserts none is blank.
+ *
+ * `Record<CurrencyCode, WebKey>` already makes a MISSING entry a compile error.
+ * What it cannot catch is an entry pointing at an empty string, which renders
+ * as an amount with no unit — the exact thing this file exists to prevent.
+ */
+export const CURRENCY_LABEL_FOR_TEST: Readonly<Record<CurrencyCode, string>> = Object.fromEntries(
+  Object.entries(CURRENCY_KEY).map(([code, key]) => [code, t(key)]),
+) as Record<CurrencyCode, string>;
+
 export interface FormattedMoney {
   /** The full amount, grouped. Never abbreviated, never rounded. */
   readonly amount: string;

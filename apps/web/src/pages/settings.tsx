@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { CurrencyCode, MoneyWire, ResolvedSettingResponse } from '@nexa/contracts';
 import { ApiError, fetchSettings, saveSetting } from '../api/client';
-import { currencyLabel, formatTimestamp } from '../format';
+import { currencyLabel, formatNumber, formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { queryState } from './dashboard';
@@ -288,8 +288,14 @@ function HandleListEditor({
       onAdd={() => ''}
       renderRow={(item, index, update) => (
         <>
+          {/*
+            The position is part of the label. Three rows all announced as
+            "support handle" leave somebody using a screen reader unable to tell
+            which field they are in — and the ordinal is exactly the thing that
+            distinguishes them, since order is meaningful here.
+          */}
           <label className="visually-hidden" htmlFor={`support-${index}`}>
-            {t('web.support_handle')}
+            {`${t('web.support_handle')} ${formatNumber(index + 1)}`}
           </label>
           <input
             id={`support-${index}`}
@@ -333,7 +339,7 @@ function ChannelListEditor({
       renderRow={(item, index, update) => (
         <div className="input-group">
           <label className="visually-hidden" htmlFor={`channel-${index}`}>
-            {t('web.channel_handle')}
+            {`${t('web.channel_handle')} ${formatNumber(index + 1)}`}
           </label>
           <input
             id={`channel-${index}`}
@@ -346,7 +352,7 @@ function ChannelListEditor({
           <Switch
             checked={item.mandatory}
             disabled={disabled}
-            label={t('web.channel_mandatory')}
+            label={`${t('web.channel_mandatory')} ${formatNumber(index + 1)}`}
             onChange={(next) => update({ ...item, mandatory: next })}
           />
           <span className="muted small nowrap">
