@@ -620,7 +620,6 @@ export interface Column<T> {
   readonly render: (row: T) => ReactNode;
   /** Right-aligned numeric column in a logical-property world: `end`. */
   readonly align?: 'start' | 'end';
-  readonly width?: string;
 }
 
 /**
@@ -650,13 +649,16 @@ export function DataTable<T>({
         <thead>
           <tr>
             {columns.map((column) => (
+              // Classes, not a `style` attribute. The production document
+              // policy is `style-src 'self'`, which blocks element `style`
+              // attributes outright — so an inline alignment silently does
+              // nothing in the DEPLOYMENT while jsdom and the build stay
+              // green. `column.width` was inline for the same reason and had
+              // no caller at all, so it is gone rather than reproduced.
               <th
                 key={column.key}
                 scope="col"
-                style={{
-                  textAlign: column.align === 'end' ? 'end' : 'start',
-                  ...(column.width === undefined ? {} : { width: column.width }),
-                }}
+                className={`al-${column.align === 'end' ? 'end' : 'start'}`}
               >
                 {column.header}
               </th>
@@ -667,10 +669,7 @@ export function DataTable<T>({
           {rows.map((row) => (
             <tr key={rowKey(row)}>
               {columns.map((column) => (
-                <td
-                  key={column.key}
-                  style={{ textAlign: column.align === 'end' ? 'end' : 'start' }}
-                >
+                <td key={column.key} className={`al-${column.align === 'end' ? 'end' : 'start'}`}>
                   {column.render(row)}
                 </td>
               ))}
@@ -798,12 +797,32 @@ export function Distribution({ slices }: { slices: readonly DistributionSlice[] 
           <span className="num muted">
             <Num value={slice.count} />
           </span>
-          <span className="bar">
-            <span
+          {/*
+            SVG, because the width is a CONTINUOUS value and the production
+            policy is `style-src 'self'`.
+            
+            A percentage cannot be expressed as one of a fixed set of classes,
+            and every other way of setting it — a `style` attribute, a CSS
+            custom property written through one, an injected `<style>` block —
+            is exactly what that policy blocks. SVG geometry is a presentation
+            ATTRIBUTE rather than a style, so it is not subject to `style-src`
+            at all, and the bar renders under the deployed CSP.
+          */}
+          <svg
+            className="bar"
+            viewBox="0 0 100 8"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <rect
               className={slice.tone ?? 'info'}
-              style={{ width: `${(slice.count / total) * 100}%` }}
+              x="0"
+              y="0"
+              height="8"
+              width={(slice.count / total) * 100}
             />
-          </span>
+          </svg>
         </div>
       ))}
     </div>
@@ -872,7 +891,15 @@ export function ListEditor<T>({
             disabled={disabled === true || index === 0}
             onClick={() => move(index, -1)}
           >
-            <Icon name="chevron" size={13} style={{ transform: 'rotate(180deg)' }} />
+            {/*
+              A class, not `style={{ transform }}`: under `style-src 'self'`
+              the inline transform is dropped and BOTH reorder arrows point
+              the same way — a control that lies about its direction, in the
+              deployment only.
+            */}
+            <span className="flip">
+              <Icon name="chevron" size={13} />
+            </span>
           </button>
           <button
             type="button"

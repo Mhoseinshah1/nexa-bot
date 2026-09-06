@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { featureFlagSchema, notificationSchema, templateViewSchema } from '@nexa/contracts';
 import { FeaturesPage } from '../../apps/web/src/pages/features';
 import { ContentPage } from '../../apps/web/src/pages/content';
@@ -143,7 +143,9 @@ describe('the content page', () => {
 
 describe('the notifications page', () => {
   it('renders an intent and its delivery state', async () => {
-    stubApi([{ url: '/notifications', body: { notifications: [notification()] } }]);
+    stubApi([
+      { url: '/notifications', body: { notifications: [notification()], nextCursor: null } },
+    ]);
     renderPage(<NotificationsPage mayTest denied={false} />);
 
     expect(await screen.findByText('event.panel.unreachable')).toBeInTheDocument();
@@ -159,6 +161,7 @@ describe('the notifications page', () => {
       {
         url: '/notifications',
         body: {
+          nextCursor: null,
           notifications: [
             notification(),
             notification({
@@ -182,11 +185,52 @@ describe('the notifications page', () => {
   });
 
   it('offers no test send to an actor without settings.edit', async () => {
-    stubApi([{ url: '/notifications', body: { notifications: [] } }]);
+    stubApi([{ url: '/notifications', body: { notifications: [], nextCursor: null } }]);
     const { container } = renderPage(<NotificationsPage mayTest={false} denied={false} />);
     await screen.findAllByText('اعلان‌ها');
 
     expect(screen.queryByRole('button', { name: /آزمایشی/ })).toBeNull();
     expect(container.textContent).toBeTruthy();
+  });
+});
+
+describe('the notification pager', () => {
+  /**
+   * `GET /notifications` accepted a `before` in the repository all along, and
+   * the controller never parsed it — so the newest page was the only page and
+   * an intent past the fiftieth was unreachable from the Web Admin unless its
+   * UUID was already known.
+   */
+  it('offers no older page when the server says there is none', async () => {
+    stubApi([
+      { url: '/notifications', body: { notifications: [notification()], nextCursor: null } },
+    ]);
+    renderPage(<NotificationsPage mayTest denied={false} />);
+    await screen.findByText('event.panel.unreachable');
+
+    expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeDisabled();
+  });
+
+  it('pages with the cursor the server returned, not one it guessed', async () => {
+    const api = stubApi([
+      {
+        url: '/notifications',
+        body: {
+          notifications: [notification()],
+          nextCursor: { at: '2026-09-06T08:00:00.000Z', id: 'n1' },
+        },
+      },
+    ]);
+    renderPage(<NotificationsPage mayTest denied={false} />);
+    await screen.findByText('event.panel.unreachable');
+
+    fireEvent.click(screen.getByRole('button', { name: 'قدیمی‌تر' }));
+    await waitFor(() => {
+      const paged = api.calls.find((call) => call.url.includes('beforeId'));
+      expect(paged?.url).toContain('beforeId=n1');
+      // Both halves: `createdAt` is not unique, and a strict comparison on it
+      // alone drops the tail of a group that straddles a page boundary.
+      expect(paged?.url).toContain('before=2026-09-06T08%3A00%3A00.000Z');
+    });
   });
 });

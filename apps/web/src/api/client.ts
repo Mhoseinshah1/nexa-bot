@@ -365,8 +365,24 @@ export function fetchOpsLog(query: {
   );
 }
 
-export function fetchNotifications(): Promise<NotificationListResponse> {
-  return authedGet(CONTROL_ROUTES.notifications, notificationListResponseSchema);
+export function fetchNotifications(
+  query: {
+    limit?: number;
+    /** The `createdAt` of the oldest intent already shown; returns older ones. */
+    before?: string;
+    /** Its id, which breaks ties when several intents share that timestamp. */
+    beforeId?: string;
+  } = {},
+): Promise<NotificationListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.before) params.set('before', query.before);
+  if (query.beforeId) params.set('beforeId', query.beforeId);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${CONTROL_ROUTES.notifications}?${suffix}` : CONTROL_ROUTES.notifications,
+    notificationListResponseSchema,
+  );
 }
 
 export function fetchNotification(id: string): Promise<NotificationDetailResponse> {

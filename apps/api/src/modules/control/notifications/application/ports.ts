@@ -95,7 +95,8 @@ export interface NotificationRepository {
     scope: ScopeContext,
     options: {
       readonly limit: number;
-      readonly before?: Date;
+      /** The keyset cursor: the oldest row already shown, and its id. */
+      readonly before?: { readonly at: Date; readonly id: string };
       readonly status?: NotificationStatus;
     },
     tx?: unknown,

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, lt, lte, inArray, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, lt, lte, inArray, ne, or, sql } from 'drizzle-orm';
 import type {
   DeliveryOutcome,
   IdGenerator,
@@ -223,19 +223,41 @@ export class DrizzleNotificationRepository implements NotificationRepository {
 
   async list(
     scope: ScopeContext,
-    options: { limit: number; before?: Date; status?: NotificationStatus },
+    options: {
+      limit: number;
+      /**
+       * The cursor: the `createdAt` of the oldest row already shown, and its
+       * id. Both, for the same reason the operational log needs both —
+       * `created_at` is not unique, because a `Clock.now()` is captured once
+       * per transaction, so several intents share one microsecond. A strict
+       * comparison on the timestamp alone skips the rest of a group that
+       * straddles a page boundary, and those rows appear on NO page.
+       */
+      before?: { at: Date; id: string };
+      status?: NotificationStatus;
+    },
     tx?: unknown,
   ): Promise<NotificationIntent[]> {
     const tenantId = requireTenantId(scope);
     const filters = [eq(notifications.tenantId, tenantId)];
-    if (options.before) filters.push(lt(notifications.createdAt, options.before));
+    if (options.before) {
+      const cursor = options.before;
+      filters.push(
+        or(
+          lt(notifications.createdAt, cursor.at),
+          and(eq(notifications.createdAt, cursor.at), lt(notifications.id, cursor.id)),
+        )!,
+      );
+    }
     if (options.status) filters.push(eq(notifications.status, options.status));
 
     const rows = await executorOf(this.db, tx)
       .select()
       .from(notifications)
       .where(and(...filters))
-      .orderBy(desc(notifications.createdAt))
+      // Both columns, matching the cursor. Without the tie-break the order
+      // within a shared timestamp is arbitrary and the cursor cannot resume.
+      .orderBy(desc(notifications.createdAt), desc(notifications.id))
       .limit(options.limit);
     return rows.map(toIntent);
   }

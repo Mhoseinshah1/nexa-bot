@@ -1635,19 +1635,6 @@ textarea.input {
   gap: 8px 12px;
   align-items: center;
 }
-.dist-row .bar {
-  grid-column: 1 / -1;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--bg-3);
-  overflow: hidden;
-}
-.dist-row .bar > span {
-  display: block;
-  height: 100%;
-  border-radius: 3px;
-  background: var(--accent);
-}
 
 /* --- Repeatable list editor (support accounts, channels) ------------------- */
 .list-editor {
@@ -1715,4 +1702,57 @@ textarea.input {
 
 .spacer {
   flex: 1;
+}
+
+/* --------------------------------------------------------------- CSP-safe ---
+ *
+ * The production document policy is `style-src 'self'`, which blocks element
+ * `style` attributes outright. Anything that used to be an inline style is
+ * therefore a class here, and the two values below are the whole set — table
+ * alignment and the reorder chevron's flip. A dynamic width cannot become a
+ * class, so the distribution bar is an SVG `rect` instead: its geometry is a
+ * presentation ATTRIBUTE, which `style-src` does not govern.
+ *
+ * A test asserts no `style=` attribute survives in the rendered app, because
+ * this is invisible in jsdom and in the build — it only fails in production.
+ */
+.tbl th.al-start,
+.tbl td.al-start {
+  text-align: start;
+}
+
+.tbl th.al-end,
+.tbl td.al-end {
+  text-align: end;
+}
+
+.flip {
+  display: inline-flex;
+  transform: rotate(180deg);
+}
+
+.dist-row svg.bar {
+  grid-column: 1 / -1;
+  display: block;
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+
+.dist-row svg.bar rect.ok {
+  fill: var(--ok);
+}
+.dist-row svg.bar rect.warn {
+  fill: var(--warn);
+}
+.dist-row svg.bar rect.danger {
+  fill: var(--danger);
+}
+.dist-row svg.bar rect.info {
+  fill: var(--accent);
+}
+.dist-row svg.bar rect.neutral {
+  fill: var(--text-3);
 }

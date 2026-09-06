@@ -44,7 +44,10 @@ export function useSubmissionKey(): {
    * back, keeps the key.
    */
   settle: () => void;
-  /** Retires the key when the error carries a server status, keeps it otherwise. */
+  /**
+   * Retires the key only when the outcome is KNOWN — a 4xx the server
+   * authored. A 5xx or a transport failure keeps it.
+   */
   settleOn: (error: unknown) => void;
 } {
   const held = useRef<{ key: string; payload: string } | null>(null);
@@ -61,11 +64,22 @@ export function useSubmissionKey(): {
     },
     settle,
     settleOn: (error: unknown) => {
-      // An `ApiError` means an HTTP status came back, so the command's outcome
-      // is known and the next press is a NEW command. Anything else — a dropped
-      // connection, a DNS failure — saw nothing, and the next press is the same
-      // question asked again.
-      if (error instanceof ApiError) settle();
+      // A 4xx is an ANSWER: the server considered the command and refused it,
+      // so the next press is a new question and deserves a new key.
+      //
+      // A 5xx is not. A 500 from the application, or a 502 from a proxy that
+      // never heard back, leaves the caller unable to tell whether the write
+      // committed — and this used to retire the key for those too, on the
+      // grounds that "an HTTP status came back". So a `POST /notifications/test`
+      // that queued its intent and then died behind a 502 would, on the next
+      // press, arrive with a FRESH key and queue a second external message:
+      // the exact double-send the key exists to prevent, in the one case it
+      // was written for.
+      //
+      // Ambiguity therefore keeps the key, alongside the transport failures
+      // that saw nothing at all. The retry then carries the key its first
+      // attempt used, and the server recognises the same command.
+      if (error instanceof ApiError && error.status < 500) settle();
     },
   };
 }

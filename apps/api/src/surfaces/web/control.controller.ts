@@ -24,6 +24,7 @@ import {
   type TenantContext,
   uuidV7Schema,
   notificationListQuerySchema,
+  NOTIFICATION_PAGE_DEFAULT,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { ReadinessProbe } from './readiness.probe.js';
@@ -300,13 +301,28 @@ export class ControlController {
     // the SQL LIMIT and came back as an internal error instead of a bad
     // request; fractional, infinite, zero and negative spellings were silently
     // rewritten rather than refused.
-    const { limit } = notificationListQuerySchema.parse({
+    const { limit, before, beforeId } = notificationListQuerySchema.parse({
       ...(query.limit === undefined ? {} : { limit: query.limit }),
+      ...(query.before === undefined ? {} : { before: query.before }),
+      ...(query.beforeId === undefined ? {} : { beforeId: query.beforeId }),
     });
+    // The page size the caller actually gets, so `nextCursor` below can say
+    // whether there is another page rather than leaving the surface to guess.
+    const size = limit ?? NOTIFICATION_PAGE_DEFAULT;
     const found = await this.container.notifications.list(scope, actor, {
-      ...(limit === undefined ? {} : { limit }),
+      limit: size,
+      // Both halves or neither: a timestamp without its tie-break is the
+      // cursor bug this pair exists to avoid.
+      ...(before !== undefined && beforeId !== undefined
+        ? { before: { at: new Date(before), id: beforeId } }
+        : {}),
     });
-    return { notifications: found.map(toNotificationResponse) };
+    const oldest = found.length === size ? found[found.length - 1] : undefined;
+    return {
+      notifications: found.map(toNotificationResponse),
+      nextCursor:
+        oldest === undefined ? null : { at: oldest.createdAt.toISOString(), id: oldest.id },
+    };
   }
 
   @Get('notifications/:id')

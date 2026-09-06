@@ -19,6 +19,7 @@ import {
   type TemplateKey,
   type TemplateValues,
   type UnitOfWork,
+  NOTIFICATION_PAGE_DEFAULT,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
@@ -133,11 +134,11 @@ export class NotificationService {
   async list(
     scope: ScopeContext,
     actor: ActorContext,
-    options: { limit?: number; before?: Date } = {},
+    options: { limit?: number; before?: { at: Date; id: string } } = {},
   ): Promise<NotificationIntent[]> {
     await this.guard.check(scope, actor, NOTIFICATIONS_VIEW);
     return this.notifications.list(scope, {
-      limit: Math.min(Math.max(options.limit ?? 50, 1), 200),
+      limit: Math.min(Math.max(options.limit ?? NOTIFICATION_PAGE_DEFAULT, 1), 200),
       ...(options.before ? { before: options.before } : {}),
     });
   }

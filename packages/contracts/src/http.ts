@@ -627,6 +627,14 @@ export type NotificationResponse = z.infer<typeof notificationSchema>;
 
 export const notificationListResponseSchema = z.object({
   notifications: z.array(notificationSchema),
+  /**
+   * The cursor for the next (older) page, or `null` on the last one.
+   *
+   * Returned rather than derived by the caller, so a surface cannot tell a
+   * full page from the last one by guessing at the page size — the mistake
+   * that had the alerts pager offering an "older" page that did not exist.
+   */
+  nextCursor: z.object({ at: isoTimestamp, id: z.string() }).nullable(),
 });
 /**
  * The bounded page size a notification list accepts.
@@ -640,7 +648,34 @@ export const notificationListResponseSchema = z.object({
  */
 export const notificationListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(200).optional(),
+  /**
+   * The keyset cursor: the `createdAt` of the oldest intent already shown,
+   * and its id.
+   *
+   * BOTH, because `created_at` is not unique — a `Clock.now()` is captured
+   * once per transaction, so several intents share one microsecond — and a
+   * strict comparison on the timestamp alone skips the rest of a group that
+   * straddles a page boundary. Those rows then appear on no page at all,
+   * which is the defect the operational log had to fix for the same reason.
+   *
+   * Before this existed, the repository accepted `before` and the controller
+   * never parsed it, so the newest page was the ONLY page: past fifty intents
+   * the older ones were unreachable from the Web Admin unless their UUID was
+   * already known.
+   */
+  before: isoTimestamp.optional(),
+  beforeId: z.string().max(64).optional(),
 });
+
+/**
+ * The page size a notification list uses when the caller names none.
+ *
+ * Shared, because the controller has to know the size it asked for in order to
+ * decide whether `nextCursor` is set, and the service applies the same default
+ * when it clamps. Two spellings of "50" would make the pager offer a page that
+ * is not there, or hide one that is.
+ */
+export const NOTIFICATION_PAGE_DEFAULT = 50;
 export type NotificationListQuery = z.infer<typeof notificationListQuerySchema>;
 
 export type NotificationListResponse = z.infer<typeof notificationListResponseSchema>;

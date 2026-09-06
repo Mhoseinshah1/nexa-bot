@@ -8,6 +8,7 @@ import {
   SESSION_COOKIE_NAME,
   settingListResponseSchema,
   settingWriteResponseSchema,
+  notificationListResponseSchema,
 } from '@nexa/contracts';
 import {
   schedulerFreshPanelUpperBound,
@@ -366,6 +367,81 @@ describe('the Web Admin V2 surface', () => {
   // -------------------------------------------------------------------------
   // Owner revision 18 — the monitor profile
   // -------------------------------------------------------------------------
+
+  /**
+   * Owner-facing history has to be REACHABLE.
+   *
+   * The repository accepted a `before` from the day it was written and the
+   * controller never parsed it, so the newest page was the only page: past
+   * the default fifty, an intent was unreachable from the Web Admin unless
+   * its UUID was already known.
+   */
+  describe('the notification pager', () => {
+    /**
+     * `count` intents that ALL share one `created_at`.
+     *
+     * Written through the repository with an explicit `now` rather than
+     * through `NotificationService.queue`, and the shared timestamp is the
+     * whole point: `Clock.now()` is read per call, so intents queued normally
+     * get distinct timestamps and a timestamp-ONLY cursor walks them
+     * perfectly. Two earlier versions of this block did exactly that, and both
+     * stayed green with the tie-break reverted — a test that could not fail
+     * for the defect it was written for.
+     *
+     * With a shared timestamp, a page boundary falls inside the group, and
+     * `lt(created_at, cursor)` skips every remaining member of it.
+     */
+    async function recordIntents(count: number): Promise<void> {
+      const at = new Date('2026-09-06T08:00:00.000Z');
+      for (let index = 0; index < count; index += 1) {
+        await api.container.notificationRepository.create(tenantA, {
+          id: api.container.ids.uuid(),
+          kind: 'OPERATIONAL_EVENT',
+          dedupeKey: `phase3d-pager-${(keyCounter += 1)}`,
+          destination: { transport: 'TELEGRAM', chatId: '-1001234567890', topicId: null },
+          payload: { code: 'panel.health.unreachable', message: `panel ${index}` },
+          templateKey: 'ops.notification.operational_event',
+          maxAttempts: 5,
+          correlationId: null,
+          now: at,
+        });
+      }
+    }
+
+    it('walks the whole history with a cursor, seeing every intent exactly once', async () => {
+      await recordIntents(7);
+
+      const seen: string[] = [];
+      let cursor: { at: string; id: string } | null = null;
+      for (let page = 0; page < 10; page += 1) {
+        const params = new URLSearchParams({ limit: '3' });
+        if (cursor) {
+          params.set('before', cursor.at);
+          params.set('beforeId', cursor.id);
+        }
+        const body = notificationListResponseSchema.parse(
+          (await get(`${CONTROL_ROUTES.notifications}?${params.toString()}`, ownerCookie)).json(),
+        );
+        seen.push(...body.notifications.map((one) => one.id));
+        cursor = body.nextCursor;
+        if (cursor === null) break;
+      }
+
+      expect(seen).toHaveLength(7);
+      // Exactly once: a timestamp-only cursor would DROP the tail of any group
+      // sharing a `created_at`, and those rows would appear on no page at all.
+      expect(new Set(seen).size).toBe(7);
+    });
+
+    it('reports no next cursor on a short page', async () => {
+      await recordIntents(2);
+      const body = notificationListResponseSchema.parse(
+        (await get(`${CONTROL_ROUTES.notifications}?limit=50`, ownerCookie)).json(),
+      );
+      expect(body.notifications).toHaveLength(2);
+      expect(body.nextCursor).toBeNull();
+    });
+  });
 
   describe('the monitor profile', () => {
     it('reports the cadence and the capacity this deployment actually has', async () => {

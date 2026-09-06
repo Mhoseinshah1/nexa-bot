@@ -246,13 +246,38 @@ const STATUS_KEYS: Record<string, WebKey> = {
  * whether its notification report means "sent" or merely "matched" is unknown
  * (UNK-LGR-015) — here you can read the answer off the row.
  */
+/**
+ * One page of notification intents.
+ *
+ * Smaller than the server's default of fifty because this page shows one row
+ * per intent with no grouping, and because a pager the operator never reaches
+ * is a pager that might as well not exist.
+ */
+const NOTIFICATION_PAGE_SIZE = 25;
+
 export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denied: boolean }) {
   const client = useQueryClient();
   const [selected, setSelected] = useState<string | null>(null);
+  /**
+   * The cursor stack — the same shape the alerts page uses, and for the same
+   * reason: keyset paging goes forward on its own but can only go BACK to a
+   * cursor it has already seen.
+   *
+   * Before this, the page asked for the newest page and offered nothing else.
+   * Past fifty intents the older ones were unreachable from the Web Admin
+   * altogether, even though the repository had accepted a `before` all along
+   * and the controller simply never parsed it.
+   */
+  const [trail, setTrail] = useState<readonly { at: string; id: string }[]>([]);
+  const cursor = trail.length > 0 ? trail[trail.length - 1] : undefined;
 
   const notifications = useQuery({
-    queryKey: ['notifications'],
-    queryFn: fetchNotifications,
+    queryKey: ['notifications', cursor?.at, cursor?.id],
+    queryFn: () =>
+      fetchNotifications({
+        limit: NOTIFICATION_PAGE_SIZE,
+        ...(cursor ? { before: cursor.at, beforeId: cursor.id } : {}),
+      }),
     enabled: !denied,
     // Delivery is ASYNCHRONOUS: the worker claims and sends on its own poll,
     // so the list a test send refreshes almost always still says PENDING.
@@ -378,6 +403,20 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
             rowKey={(row) => row.id}
           />
         </StateSwitch>
+
+        <CursorPager
+          shown={rows.length}
+          hasPrevious={trail.length > 0}
+          // The SERVER's cursor, not a guess from the page length. `null`
+          // means the last page, so "older" is never offered where there is
+          // nothing older.
+          hasNext={notifications.data?.nextCursor != null}
+          onPrevious={() => setTrail((current) => current.slice(0, -1))}
+          onNext={() => {
+            const next = notifications.data?.nextCursor;
+            if (next) setTrail((current) => [...current, next]);
+          }}
+        />
       </Card>
 
       {detail.isError && <Banner tone="danger">{messageFor(detail.error)}</Banner>}

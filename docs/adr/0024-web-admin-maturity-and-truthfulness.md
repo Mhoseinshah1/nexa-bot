@@ -152,3 +152,24 @@ health flap is therefore recorded and surfaced nowhere. The owner asked for the
 browser to go, so it went; the System screen names where the stream is meant to
 land, and this paragraph is the record that the default configuration does not
 yet send it anywhere.
+
+## The content-security policy is part of the component contract
+
+The production document policy is `style-src 'self'`, which blocks element
+`style` **attributes**, not just `<style>` blocks. Four components set one, so
+in the deployment — and nowhere else — the dashboard's distribution bars lost
+their widths, both reorder chevrons pointed the same way, and table alignment
+was dropped. jsdom applies inline styles, Vite emits them, and every test was
+green.
+
+Three of the four became classes. The fourth could not: a distribution bar's
+width is a continuous value, and every way of expressing one — a `style`
+attribute, a CSS custom property written through one, an injected `<style>`
+block — is what the policy blocks. It is now an SVG `rect`, whose geometry is
+a presentation **attribute** and therefore outside `style-src` entirely.
+
+`tests/web/csp.test.tsx` holds the rule in both directions: the policy still
+says what the components assume, and no source or rendered element carries a
+`style` attribute. Loosening the policy to `'unsafe-inline'` would fail that
+test rather than quietly widen it, which is the point — a deliberate change to
+the policy should be a deliberate change to this file.
