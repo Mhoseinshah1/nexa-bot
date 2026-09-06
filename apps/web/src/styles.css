@@ -1726,8 +1726,7 @@ textarea.input {
   .grid.c3 {
     grid-template-columns: 1fr;
   }
-  
-  
+
   .content {
     padding: 16px;
   }
@@ -1750,7 +1749,7 @@ textarea.input {
   .head-stats {
     flex-wrap: wrap;
   }
-  
+
   .page-head .actions {
     width: 100%;
   }
