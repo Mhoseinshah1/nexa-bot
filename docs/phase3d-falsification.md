@@ -105,7 +105,7 @@ reported a survivor and was a stale build.
 | R-16  | A one-shot record renders as history, not as unresolved                | `isOneShotManagementCode(row.code)` → `false`                      | `settings-and-alerts.test.tsx` › marks a one-shot record as recorded rather than unresolved             |
 | R-17  | The notification reader over-fetches one row                           | back to `limit: size` with `found.length === size`                 | `web-admin-v2.test.ts` › reports no next cursor on a page that is exactly full                          |
 | R-18  | A cursor id is validated as an identifier                              | `uuidV7Schema` → `z.string().max(64)`                              | `web-admin-v2.test.ts` › refuses a notification cursor id that is not an identifier                     |
-| R-19  | A malformed route parameter is an unmatched route                      | drop the try/catch around `decodeURIComponent`                     | `router.test.tsx` › treats /panels/%E0 as unmatched rather than throwing                                |
+| R-19  | A malformed route parameter is an unmatched route                      | drop the try/catch around `decodeURIComponent`                     | `router.test.tsx` › treats /panels/%s as unmatched rather than throwing (it.each, 7 cases)              |
 | R-20  | Archive and restore are offered                                        | `panel.status !== 'ARCHIVED' &&` → `false &&`                      | `panels.test.tsx` › offers archiving on a live panel                                                    |
 | R-21  | The tenant-turn bound rounds DOWN                                      | `Math.floor` → `Math.ceil`                                         | `monitor-cadence.test.ts` › rounds DOWN, because a partial turn is not a turn                           |
 | R-21p | The profile reports the tenant-turn ceiling, not a panel ceiling       | swap in `schedulerFreshPanelUpperBound`                            | `web-admin-v2.test.ts` › reports the cadence and the capacity this deployment actually has              |
@@ -298,3 +298,29 @@ this one was found inside a fix whose own falsification record says "killed".
 A mutation test proves a rule is load-bearing. It cannot prove the rule is
 _wide enough_, because the mutation and the assertion are written from the same
 understanding.
+
+## A correction to this record
+
+Auditing every test this document names — 54 citations across rounds 2, 3 and 4 —
+found **one that did not exist**. Row U09 claimed the mutation `shows = accepts`
+was killed by a test called _keeps an unusable stored credential visible and
+removable_. The production fix was real and correct; the test was never written,
+so the mutation had never actually been run against anything.
+
+That is precisely the failure `CLAUDE.md` names as worse than making no claim at
+all: the next reader believes a coverage that does not exist, and the rule is
+free to be reverted silently. The test now exists in `tests/web/panels.test.tsx`,
+the mutation was run against it for real — it fails on the missing
+`حذف — توکن API` button — and the source was restored to sha256
+`b24b219e0362cc59cf49cf20266da62f024dc1b8a9eb6a7687e219e2c9b38d93` afterwards
+with 36 passing.
+
+One further citation, R-19, named its test in the interpolated form
+(`/panels/%E0`) rather than the `it.each` template (`/panels/%s`), so a literal
+search for it failed. The test exists; the citation is now written as it appears
+in the source, because a citation nobody can grep for is halfway to a citation
+that is not true.
+
+The audit itself is the durable part: **every rule in this document is now
+name-checked against the test files**, and a name that does not resolve is a
+defect in the record.

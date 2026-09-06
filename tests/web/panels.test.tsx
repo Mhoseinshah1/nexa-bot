@@ -579,6 +579,59 @@ describe('the panel detail', () => {
     expect(screen.getByRole('button', { name: 'ذخیره' })).toBeInTheDocument();
   });
 
+  /**
+   * A stored credential the provider cannot use stays visible, and removable.
+   *
+   * A panel created before the shape rule was enforced can hold an API token on
+   * a Marzban panel, whose shape is USERNAME_PASSWORD. Gating the whole
+   * presence row on the shape made that secret undiscoverable and unremovable
+   * through the Web Admin while the response still reported it, and
+   * `setCredentials` still accepts `null` to clear it. A stored secret nobody
+   * can see is a stored secret nobody will remove — which is worse than the
+   * field the gate was hiding.
+   *
+   * So the rule is two rules: `shows` covers the presence row and its remove
+   * button, `accepts` covers only the replace INPUT, which is the control that
+   * would produce a refusal.
+   *
+   * This test did not exist when the falsification record first claimed
+   * mutation U09 was killed by it. Writing the claim before the test is the
+   * failure `CLAUDE.md` names as worse than making no claim at all.
+   */
+  it('keeps an unusable stored credential visible and removable', async () => {
+    // Marzban: USERNAME_PASSWORD. The token is stored anyway, as a pre-shape
+    // panel's would be.
+    stubApi(
+      detail({
+        providerType: 'marzban',
+        providerName: 'Marzban',
+        credentials: {
+          username: { configured: true, lastReplacedAt: '2026-01-01T00:00:00.000Z' },
+          password: { configured: true, lastReplacedAt: '2026-01-01T00:00:00.000Z' },
+          apiToken: { configured: true, lastReplacedAt: '2026-01-01T00:00:00.000Z' },
+        },
+      }),
+    );
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
+    await screen.findByText('جایگزینی اعتبارنامه');
+
+    // Visible: the row is there, and it is three, not two.
+    const removes = screen.getAllByRole('button', { name: /^حذف — / });
+    expect(removes.map((button) => button.getAttribute('aria-label'))).toContain('حذف — توکن API');
+    // Told: the operator can only act on what the screen says.
+    // Substring, because `metaFor` joins the replacement date and this marker
+    // into one text node with a separator.
+    expect(screen.getAllByText(/این نوع پنل از آن استفاده نمی‌کند/).length).toBeGreaterThan(0);
+    // But NOT offered for replacement — that is the request the server refuses.
+    expect(screen.queryByLabelText('توکن API')).toBeNull();
+    // The two the shape does accept are still offered, so this is not a test
+    // that would pass on a credentials tab that rendered nothing at all.
+    expect(screen.getByLabelText('نام کاربری')).toBeInTheDocument();
+    expect(screen.getByLabelText('گذرواژه')).toBeInTheDocument();
+  });
+
   it('offers no credential write on an archived panel, but still shows what it holds', async () => {
     stubApi(detail({ status: 'ARCHIVED', providerType: 'sanaei', providerName: 'Sanaei (3X-UI)' }));
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
