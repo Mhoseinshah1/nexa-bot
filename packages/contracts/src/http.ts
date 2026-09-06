@@ -910,9 +910,30 @@ export type PanelSummaryResponse = z.infer<typeof panelSummarySchema>;
  * `(name, id)`, and a caller that started parsing it would be depending on an
  * ordering this API has not promised.
  */
+/**
+ * Which side of the archive to list.
+ *
+ * `exclude` is the working fleet and the default — an archived panel is retired
+ * and does not belong in the list an operator scans every day.
+ *
+ * `only` exists because "not in the list" turned out to mean "gone". Archiving
+ * removed a panel from the ONE browser the Web Admin has, so the Restore
+ * control on its detail page was reachable only by an operator who had kept the
+ * UUID. A lifecycle with an exit and no way back to the door is a dead end, and
+ * the server could already answer the question.
+ *
+ * Deliberately two values rather than an `includeArchived` boolean: mixing
+ * retired panels into the live list is a different, worse answer to a different
+ * question, and it is the one an operator looking for something to restore
+ * would have to filter by eye.
+ */
+export const PANEL_LIST_ARCHIVED_MODES = ['exclude', 'only'] as const;
+export type PanelListArchivedMode = (typeof PANEL_LIST_ARCHIVED_MODES)[number];
+
 export const panelListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(PANEL_PAGE_MAX).optional(),
   cursor: z.string().max(512).optional(),
+  archived: z.enum(PANEL_LIST_ARCHIVED_MODES).optional(),
 });
 export type PanelListQuery = z.infer<typeof panelListQuerySchema>;
 
@@ -983,8 +1004,25 @@ export const setPanelCredentialsRequestSchema = z.object({
 });
 export type SetPanelCredentialsRequest = z.infer<typeof setPanelCredentialsRequestSchema>;
 
+/**
+ * A lifecycle transition, and — only when leaving the archive — a new name.
+ *
+ * The name is here because of a real dead end. `panels_tenant_name_live_key` is
+ * UNIQUE `(tenant_id, name) WHERE status <> 'ARCHIVED'`, so archiving RELEASES
+ * the name and another panel may take it. Restoring then puts the old row back
+ * under that index and collides. `update` refuses every edit to an ARCHIVED
+ * panel with `PANEL_ARCHIVED`, so the operator could not rename it out of the
+ * way either: the panel could never be restored, by any sequence of requests.
+ *
+ * Renaming AS PART OF the restore is the resolution that does not contradict
+ * the archived-edit rule — the row stops being archived in the same
+ * transaction, so this is not an edit to an archived panel. It is accepted only
+ * on a transition out of `ARCHIVED`; sending it with any other status is a
+ * validation error rather than a silently ignored field.
+ */
 export const setPanelStatusRequestSchema = z.object({
   status: z.enum(PANEL_STATUSES),
+  name: z.string().trim().min(1).max(120).optional(),
   idempotencyKey: z.string().min(8).max(255),
 });
 export type SetPanelStatusRequest = z.infer<typeof setPanelStatusRequestSchema>;
