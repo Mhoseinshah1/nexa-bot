@@ -403,7 +403,7 @@ export const ROUTES = {
     ],
   },
   '/ops-log': { events: EVENTS },
-  '/notifications': { notifications: NOTIFICATIONS },
+  '/notifications': { notifications: NOTIFICATIONS, nextCursor: null },
   '/admins': {
     admins: [
       {

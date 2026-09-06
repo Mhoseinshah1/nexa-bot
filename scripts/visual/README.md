@@ -19,8 +19,17 @@ It is a **measurement**, not an impression. Each visit records:
 | `themeMismatches`                | the requested theme was not the one applied       |
 | `nonRtl`                         | the document was not right-to-left                |
 
-`stillLoadingAfterSettle` and `showingErrorState` exist because they have both
-already fired for real. A `fixtures.mjs` that had drifted from the frozen
+`stillLoadingAfterSettle` and `showingErrorState` are the load-bearing pair.
+Between them they have caught fixture drift **three times** on this branch
+alone — a missing `source` on a feature flag, a `blastRadius` of `OPERATIONAL`
+where the enum says `LOCAL`, a new `schedulerCapacityExceeded` field, and a
+required `nextCursor` the notification response had gained. Each time the
+symptom was the same: a route rendering its error state or a skeleton in all
+three views, with nothing else wrong.
+
+Treat a non-zero count in either as fixture drift until proven otherwise, and
+check the response schema for the affected route first. They exist because they
+have both already fired for real. A `fixtures.mjs` that had drifted from the frozen
 schemas — a missing `source`, a `blastRadius` of `OPERATIONAL` where the enum
 says `LOCAL` — made four routes render a loading skeleton, and the captures
 were reported as a clean pass because nobody had compared them. The check is

@@ -46,7 +46,14 @@ reason. It now waits on the rendered data.
 
 ## The visual harness
 
-Falsified as a tool, not just used as one (F-J). It also had a defect of its
+Falsified as a tool, not just used as one (F-J). It has now caught fixture
+drift from the frozen schemas **three times** on this branch — a feature flag
+missing `source` and carrying an invalid `blastRadius`, the new
+`schedulerCapacityExceeded` field, and the `nextCursor` the notification
+response gained. Every time the symptom was identical: one route rendering its
+error state or a skeleton in all three views, with nothing else wrong. The
+`stillLoadingAfterSettle` and `showingErrorState` counters are load-bearing,
+not decorative. It also had a defect of its
 own: it printed its summary and wrote nothing, so a `verification.json` from an
 earlier run sat on disk looking current — and its numbers were nearly reported
 as a clean pass for a run that had produced none. It now writes the summary

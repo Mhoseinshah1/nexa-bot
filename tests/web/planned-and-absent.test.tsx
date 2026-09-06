@@ -107,7 +107,7 @@ describe('planned surfaces', () => {
   );
 
   /**
-   * Revisions 4, 5, 6, 11, 14 and 17 — recorded, and each one named.
+   * Revisions 4, 5, 6, 11, 13, 14 and 17 — recorded, and each one named.
    *
    * These six are decisions about surfaces that have no backend, so there is
    * no behaviour to assert; the deliverable IS the record, on the page whoever
@@ -122,6 +122,7 @@ describe('planned surfaces', () => {
     ['payments', /ترکیب ناممکن/, 'revision 5 — refund and fulfilment stay consistent'],
     ['orders', /تاریخچهٔ واقعی سفارش/, 'revision 6 — real history is preserved'],
     ['orders', /پروجکشن مشترک/, 'revision 11 — payment follows the order projection'],
+    ['services', /created_at نزولی/, 'revision 13 — newest first, ordered by the server'],
     ['services', /فیلتر چندانتخابی/, 'revision 14 — plan filter replaces location'],
     ['payments', /در پنل وب ذخیره/, 'revision 17 — no Web Admin receipt storage'],
   ])('records on %s: %s', (surface, pattern) => {
