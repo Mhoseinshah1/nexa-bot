@@ -119,6 +119,7 @@ export function fromReplayRecord(key: SettingKey, record: SettingReplayRecord): 
     mutability: definition.mutability,
     classification: definition.classification,
     configures: definition.configures,
+    consumer: definition.consumer,
   };
 }
 

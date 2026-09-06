@@ -412,6 +412,7 @@ function toSettingResponse(setting: ResolvedSetting): ResolvedSettingResponse {
     mutability: setting.mutability,
     classification: setting.classification,
     configures: setting.configures,
+    consumer: setting.consumer,
     storedValueInvalid: setting.storedValueInvalid,
   };
 }

@@ -4,6 +4,7 @@ import {
   type OperationalEventRecorder,
   type ScopeContext,
   type SettingClassification,
+  type SettingConsumer,
   type SettingKey,
   type SettingMutability,
   type SettingSource,
@@ -54,6 +55,8 @@ export interface ResolvedSetting {
   readonly mutability: SettingMutability;
   readonly classification: SettingClassification;
   readonly configures: string | null;
+  /** Whether anything in this release reads the value. */
+  readonly consumer: SettingConsumer;
   /**
    * True when a row exists whose value no longer parses against its
    * declaration. The default is in force, `version` is the row's, and
@@ -111,6 +114,7 @@ export class SettingsResolver {
       mutability: definition.mutability,
       classification: definition.classification,
       configures: definition.configures,
+      consumer: definition.consumer,
     } as const;
 
     const unset = (): ResolvedSetting => ({

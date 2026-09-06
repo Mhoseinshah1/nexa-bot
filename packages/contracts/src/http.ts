@@ -9,6 +9,7 @@ import {
 import { OPERATIONAL_SEVERITIES } from './ports.js';
 import {
   SETTING_CLASSIFICATIONS,
+  SETTING_CONSUMERS,
   SETTING_MUTABILITIES,
   SETTING_SOURCES,
   ZERO_MEANINGS,
@@ -322,6 +323,14 @@ export const resolvedSettingSchema = z.object({
   mutability: z.enum(SETTING_MUTABILITIES),
   classification: z.enum(SETTING_CLASSIFICATIONS),
   configures: z.string().nullable(),
+  /**
+   * Whether anything in this release reads the value.
+   *
+   * On the wire so the admin can say "stored, and nothing consumes it yet"
+   * without holding its own list of which keys those are — a list that would go
+   * stale on the release a consumer lands, and go stale silently.
+   */
+  consumer: z.enum(SETTING_CONSUMERS),
   /**
    * A row exists whose value no longer parses against its declaration, so the
    * default is in force. A surface should say so rather than present the

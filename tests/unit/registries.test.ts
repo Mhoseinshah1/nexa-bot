@@ -34,6 +34,29 @@ import {
  */
 const meansUnlimited = (meaning: ZeroMeaning): boolean => meaning === 'UNLIMITED';
 
+/**
+ * Every shape an "empty state" can take in this registry.
+ *
+ * `0`, `''` and `null` were the whole list while every setting held a scalar.
+ * They stopped being it when the registry gained a LIST — whose empty state is
+ * `[]` and not any of the three — and a MONEY, whose zero is an amount of zero
+ * in some currency. A key declaring DISABLES for `[]` would have failed the
+ * check below against a schema that models its empty state perfectly well.
+ *
+ * The check keeps its teeth: it still demands that a key declaring a meaning
+ * for emptiness have SOME value its own schema accepts as empty. Widening the
+ * vocabulary is not the same as accepting anything, and a key whose schema
+ * admits no empty state at all still fails.
+ */
+const ZERO_STATES: readonly unknown[] = [
+  0,
+  '',
+  null,
+  [],
+  { amountMinor: '0', currency: 'IRT' },
+  { amountMinor: '0', currency: 'IRR' },
+];
+
 describe('the settings registry', () => {
   it('parses every declared default with its own schema', () => {
     // A malformed default cannot ship: it would be returned by every read until
@@ -57,10 +80,9 @@ describe('the settings registry', () => {
       // `null` too. Leaving it out is how a key whose ABSENCE is its most
       // interesting state came to declare that its absence cannot occur, with
       // this test passing against the mis-declaration.
-      const zeroIsRejected =
-        !setting.schema.safeParse(0).success &&
-        !setting.schema.safeParse('').success &&
-        !setting.schema.safeParse(null).success;
+      const zeroIsRejected = ZERO_STATES.every(
+        (candidate) => !setting.schema.safeParse(candidate).success,
+      );
       expect(
         zeroIsRejected,
         `${setting.key} claims zero cannot occur, but the schema allows it`,
@@ -87,9 +109,10 @@ describe('the settings registry', () => {
       const accepted = meansUnlimited(zeroMeaning)
         ? // "Zero means no limit" is a claim about the number.
           parses(0)
-        : // DISABLES and LITERAL are claims about the key's empty state,
-          // which is `0`, `''` or absent depending on what the value is.
-          parses(0) || parses('') || parses(null);
+        : // DISABLES and LITERAL are claims about the key's empty state, and
+          // which value that IS depends on the shape the key holds: `0`, `''`,
+          // absent, an empty list, or a zero amount.
+          ZERO_STATES.some(parses);
       expect(
         accepted,
         `${setting.key} declares ${zeroMeaning} for a zero state its schema rejects`,
