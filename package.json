@@ -15,6 +15,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check:boundaries": "bash scripts/check-boundaries.sh",
+    "check:citations": "node scripts/check-falsification-citations.mjs",
     "check:i18n": "node scripts/check-i18n-keys.mjs",
     "check:shell": "bash scripts/check-shell.sh",
     "test": "vitest run --project unit",
@@ -36,7 +37,7 @@
     "admin:bootstrap:dev": "pnpm --filter @nexa/api admin:bootstrap:dev",
     "provision:dev": "pnpm --filter @nexa/api provision:dev",
     "dev:services": "bash scripts/dev-services.sh",
-    "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm check:boundaries && pnpm check:i18n && pnpm check:shell && pnpm test && pnpm test:web && pnpm test:deploy && pnpm build"
+    "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm check:boundaries && pnpm check:i18n && pnpm check:citations && pnpm check:shell && pnpm test && pnpm test:web && pnpm test:deploy && pnpm build"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

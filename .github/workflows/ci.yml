@@ -58,6 +58,14 @@ jobs:
       - name: i18n key check
         run: pnpm check:i18n
 
+      # The falsification record cites a test per rule. This resolves every one
+      # of those names against the COMMITTED test sources — which is the half
+      # the mutation harness structurally cannot check, because it verifies the
+      # working tree. One cited test had been run there and never committed,
+      # and the record read exactly like a verified claim.
+      - name: Falsification citations
+        run: pnpm check:citations
+
   test:
     name: Unit and integration tests
     runs-on: ubuntu-latest

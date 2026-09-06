@@ -78,7 +78,13 @@ PASS. A rule whose mutation left the suite green, or failed it for a different
 reason than the one named, is not listed as killed — two did on the first
 attempt and are recorded under "Two mutations that were wrong" below.
 
-**39 mutations, 39 killed, 0 survivors.** Contract-package mutations rebuild
+**39 mutation runs, 39 killed, 0 survivors** — recorded in
+`falsify/results-all.json`. The table below has 38 rows because it is keyed by
+RULE and the runner is keyed by MUTATION, and one rule is reverted from two
+directions in a single row. The two numbers are given separately rather than
+rounded to one, because "39 mutations" beside a 38-row table is the kind of
+small unreconciled claim that this document has already been caught making
+once. Contract-package mutations rebuild
 `@nexa/contracts` before the run: the suites import the package's `dist`
 through the workspace link, not its source, so a mutation without a rebuild
 tests nothing. That is itself a finding — the first attempt at the T08 mutation
@@ -219,10 +225,21 @@ the loading branch, that test fails and the guard stops being redundant. A
 guard whose justification is a behaviour elsewhere should fail when that
 behaviour changes, not when it does not.
 
-## The 21 mutations
+## The mutations: 21 runs, 19 distinct, 18 in the table
 
 All killed, each requiring a failure for the named reason, a byte-for-byte
-restore, and a pass afterwards.
+restore, and a pass afterwards. The three numbers differ for reasons worth
+stating rather than averaging away:
+
+- **21 runs**, across `results-round3.json` and `results-round3b.json`. Two
+  mutations were run twice — `V07-csp-stub` and `U08-draft-basis` — because the
+  first run showed their tests could not fail, and the re-run is against the
+  repaired test.
+- **19 distinct mutations**, once those two re-runs are collapsed.
+- **18 rows below**, because `U13-credentials-stale` names a scenario that was
+  then proved unreachable; its test was deleted rather than kept green, and what
+  replaced it is `U13-unmount-fact`. The finding is written up above rather than
+  listed here as a rule that holds.
 
 | #    | rule                                                            | mutation                           | test that dies                                                             |
 | ---- | --------------------------------------------------------------- | ---------------------------------- | -------------------------------------------------------------------------- |
@@ -302,18 +319,35 @@ understanding.
 ## A correction to this record
 
 Auditing every test this document names — 54 citations across rounds 2, 3 and 4 —
-found **one that did not exist**. Row U09 claimed the mutation `shows = accepts`
-was killed by a test called _keeps an unusable stored credential visible and
-removable_. The production fix was real and correct; the test was never written,
-so the mutation had never actually been run against anything.
+found **one that no commit contains**. Row U09 claimed the mutation
+`shows = accepts` was killed by a test called _keeps an unusable stored credential
+visible and removable_.
 
-That is precisely the failure `CLAUDE.md` names as worse than making no claim at
-all: the next reader believes a coverage that does not exist, and the rule is
-free to be reverted silently. The test now exists in `tests/web/panels.test.tsx`,
-the mutation was run against it for real — it fails on the missing
-`حذف — توکن API` button — and the source was restored to sha256
-`b24b219e0362cc59cf49cf20266da62f024dc1b8a9eb6a7687e219e2c9b38d93` afterwards
-with 36 passing.
+The first version of this correction said the test was never written. That was
+wrong, and the truth is worse. `results-round3.json` records U09 with
+`failed_for_intended_reason: true`, and the runner sets that flag only when the
+named string appears in the test output — so the test **did** exist and the
+mutation **was** genuinely killed by it, in the working tree, at the moment the
+harness ran. It then never reached a commit. `git log -S` over the whole history
+finds the name in exactly one commit: the one that added it back, afterwards.
+
+So the harness was honest and the repository was not. Reverting `shows` to
+`accepts` on the committed tree left the entire web suite green — 187 passed —
+which is the state the branch was actually pushed in. The rule was load-bearing
+in a checkout nobody else had.
+
+That is the failure `CLAUDE.md` names in one line: **commit the probe or do not
+cite it.** A mutation run against an uncommitted test is a claim with no evidence
+behind it, and it reads exactly like a claim with evidence.
+
+Two things follow, and both are now in place. The test is committed, and the
+mutation was re-run against the committed tree — it fails on the missing
+`حذف — توکن API` button, with the source restored to sha256
+`b24b219e0362cc59cf49cf20266da62f024dc1b8a9eb6a7687e219e2c9b38d93` and 36
+passing afterwards. And `scripts/check-falsification-citations.mjs` now resolves
+every test name this document cites against the committed test sources, on the
+`pnpm verify` path, so a citation that names nothing fails the gate rather than
+waiting for somebody to audit it by hand.
 
 One further citation, R-19, named its test in the interpolated form
 (`/panels/%E0`) rather than the `it.each` template (`/panels/%s`), so a literal
@@ -321,6 +355,12 @@ search for it failed. The test exists; the citation is now written as it appears
 in the source, because a citation nobody can grep for is halfway to a citation
 that is not true.
 
-The audit itself is the durable part: **every rule in this document is now
-name-checked against the test files**, and a name that does not resolve is a
-defect in the record.
+## What the harness could not see
+
+The runner checks the right things about a mutation — that the suite fails, that
+it fails for the named reason, that the file is restored byte-for-byte, that the
+suite is green again. Every one of those is a statement about the **working
+tree**. None of them is a statement about what gets pushed, and the gap between
+those two is where U09 lived. A verification harness that never looks at the
+commit cannot tell a rule that is tested from a rule that was tested once on a
+machine that no longer exists.
