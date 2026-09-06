@@ -290,6 +290,22 @@ global ceiling any one tenant gets is decided by the fairness rotation against
 whoever is due at that moment, so it changes minute to minute and is
 deliberately not modelled as a constant.
 
+**How many TENANTS get a turn — the fairness rotation.** A third ceiling,
+independent of both panel counts above, and the one that was invisible. A tick
+claims at most `PANEL_MONITOR_TENANTS_PER_TICK` tenants, so inside one interval
+the rotation reaches
+
+    PANEL_MONITOR_TENANTS_PER_TICK x (PANEL_MONITOR_HEALTHY_INTERVAL_MS / PANEL_MONITOR_TICK_MS)
+
+Defaults: 10 x 6 = **60 tenants**. A tenant beyond that waits longer than the
+healthy interval for its first probe of the cycle and its panels go stale no
+matter how few it has — and because a hundred single-panel tenants is a hundred
+panels, far under the 900-panel scheduler ceiling, neither of the panel bounds
+above says anything about it. `GET /system/monitor` reports it as
+`tenantTurnCeiling` beside the other two. Raising `PANEL_MONITOR_TENANTS_PER_TICK`
+raises it, bounded by `PANEL_MONITOR_BATCH_SIZE`; shortening the tick raises it
+too, at the cost of more discovery queries.
+
 Neither number is a guarantee:
 
 - **Latency is not modelled.** Throughput also depends on how long a probe
