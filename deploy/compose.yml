@@ -283,20 +283,28 @@ services:
     # A real signal, not "is the process running". The worker serves no HTTP,
     # so it writes a heartbeat file every WORKER_HEARTBEAT_INTERVAL_MS (10s by
     # default) — and only after a round trip to the database succeeds. This
-    # check reads the file's age: younger than 30s is healthy. A worker in a
-    # crash loop, alive with a blocked event loop, or alive and cut off from
-    # PostgreSQL goes unhealthy within a check or two, and `botctl` treats an
-    # unhealthy worker as a release that is not ready (C8).
+    # check reads the file's age: younger than THREE intervals is healthy, so
+    # one slow beat does not flap the container. A worker in a crash loop,
+    # alive with a blocked event loop, or alive and cut off from PostgreSQL
+    # goes unhealthy within a check or two, and `botctl` treats an unhealthy
+    # worker as a release that is not ready (C8).
     #
-    # The path and the age must agree with the defaults in config.schema.ts;
-    # a unit test pins them together.
+    # The maximum age is DERIVED from the interval rather than written in.
+    # A fixed 30s agreed with the default interval and with nothing else: the
+    # schema accepts up to 60s, and at that setting a perfectly healthy worker
+    # was unhealthy between every pair of beats — restarted by Docker, and its
+    # release reported not ready.
+    #
+    # The path and the derivation must agree with config.schema.ts; a unit test
+    # RUNS this script against both the default interval and the largest one
+    # the schema accepts.
     healthcheck:
       test:
         [
           'CMD',
           'node',
           '-e',
-          "const fs=require('fs');const p=process.env.WORKER_HEARTBEAT_PATH||'/tmp/nexa-worker.heartbeat';try{const s=fs.readFileSync(p,'utf8').trim();const at=Number(s);process.exit(s!==''&&Number.isFinite(at)&&Date.now()-at<=30000?0:1)}catch{process.exit(1)}",
+          "const fs=require('fs');const p=process.env.WORKER_HEARTBEAT_PATH||'/tmp/nexa-worker.heartbeat';const i=Number(process.env.WORKER_HEARTBEAT_INTERVAL_MS);const max=(Number.isFinite(i)&&i>0?i:10000)*3;try{const s=fs.readFileSync(p,'utf8').trim();const at=Number(s);process.exit(s!==''&&Number.isFinite(at)&&Date.now()-at<=max?0:1)}catch{process.exit(1)}",
         ]
       interval: 10s
       timeout: 5s
@@ -319,15 +327,17 @@ services:
     # deliberately disabled monitor (PANEL_MONITOR_ENABLED=false) stays healthy:
     # it is a process doing nothing on purpose, not a broken one.
     #
-    # The path and the age must agree with the defaults in config.schema.ts; a
-    # unit test pins them together.
+    # The path and the derivation must agree with config.schema.ts; a unit test
+    # RUNS this script against both the default interval and the largest one
+    # the schema accepts. The monitor writes on the same WORKER_HEARTBEAT
+    # interval as the worker, so it reads the same variable.
     healthcheck:
       test:
         [
           'CMD',
           'node',
           '-e',
-          "const fs=require('fs');const p=process.env.PANEL_MONITOR_HEARTBEAT_PATH||'/tmp/nexa-monitor.heartbeat';try{const s=fs.readFileSync(p,'utf8').trim();const at=Number(s);process.exit(s!==''&&Number.isFinite(at)&&Date.now()-at<=30000?0:1)}catch{process.exit(1)}",
+          "const fs=require('fs');const p=process.env.PANEL_MONITOR_HEARTBEAT_PATH||'/tmp/nexa-monitor.heartbeat';const i=Number(process.env.WORKER_HEARTBEAT_INTERVAL_MS);const max=(Number.isFinite(i)&&i>0?i:10000)*3;try{const s=fs.readFileSync(p,'utf8').trim();const at=Number(s);process.exit(s!==''&&Number.isFinite(at)&&Date.now()-at<=max?0:1)}catch{process.exit(1)}",
         ]
       interval: 10s
       timeout: 5s
