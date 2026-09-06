@@ -385,6 +385,56 @@ describe('the Sanaei adapter — session compatibility mode', () => {
     expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
   });
 
+  it('16g. P7: a LOGIN that rotates the session to something unusable is reported', async () => {
+    // The defect this pins is the one a `?? session` fallback creates: an
+    // unusable rotation was indistinguishable from no rotation, so the adapter
+    // kept sending the cookie the panel had just replaced. The panel then
+    // rejected the stale cookie with a 401, which this adapter maps to
+    // DEGRADED — an operator told the credentials are fine and something else
+    // is wrong, about a panel Nexa can never read.
+    const server = await panel({ behaviour: 'login-enormous-cookie' });
+    const outcome = await probe(server, withPassword());
+
+    // It got as far as the login and stopped there: no status read with a
+    // stale cookie.
+    expect(server.requests.map((r) => r.path.replace(/^\//, ''))).toEqual([
+      'csrf-token',
+      'getTwoFactorEnable',
+      'login',
+    ]);
+    expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+    // Emphatically NOT degraded: that is the outcome the old fallback produced.
+    expect(outcome).not.toMatchObject({ ok: true });
+  });
+
+  it('16h. P7: a 2FA response that rotates the session the same way is reported', async () => {
+    const server = await panel({ behaviour: 'twofactor-enormous-cookie' });
+    const outcome = await probe(server, withPassword());
+
+    expect(server.requests.map((r) => r.path.replace(/^\//, ''))).toEqual([
+      'csrf-token',
+      'getTwoFactorEnable',
+    ]);
+    // And no credential was submitted, because the flow stopped before login.
+    expect(asText(server.requests)).not.toContain(CANARY.password);
+    expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+  });
+
+  it('16i. P7: a response that sets NO session cookie keeps the one in hand', async () => {
+    // The other half of the distinction, and the reason it cannot simply be
+    // "any absent value is a failure": v3.7.0 does not rotate the session on
+    // every response, and a probe that demanded one would fail against a
+    // perfectly healthy panel. The ordinary path is the assertion.
+    const server = await panel();
+    const outcome = await probe(server, withPassword());
+
+    expect(outcome).toMatchObject({ ok: true });
+    // Every authenticated request carried the cookie minted at csrf-token.
+    for (const request of server.requests.filter((r) => !r.path.endsWith('csrf-token'))) {
+      expect(request.headers['cookie'], request.path).toMatch(/^3x-ui=/);
+    }
+  });
+
   it('16. never sends a twoFactorCode field', async () => {
     const server = await panel();
     await probe(server, withPassword());

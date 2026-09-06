@@ -94,9 +94,17 @@ describe('the safe-http client does not restate retryability (P4)', () => {
       new URL('../../apps/api/src/infrastructure/net/safe-http.ts', import.meta.url),
       'utf8',
     );
-    expect(source).toContain('PROVIDER_FAILURE_RETRYABLE');
-    // The exact shape that was there, and the shape any future restatement
-    // would take: a hand-written set of kinds.
+    // The IMPORT, not the identifier: the docblock explaining this rule also
+    // contains the name in prose, so `toContain` alone was satisfied by the
+    // comment and would have passed over a file that had gone back to a local
+    // set with an explanation of why it should not.
+    expect(source).toMatch(/^import \{[^}]*PROVIDER_FAILURE_RETRYABLE/m);
+    expect(source).toMatch(/PROVIDER_FAILURE_RETRYABLE\[failure\]/);
+    // And no second answer to the same question, in any of the shapes one
+    // would take. Narrower than "a restatement" in general — a `switch` or a
+    // hand-written object would pass — so the positive assertions above are
+    // what carry this, and this only catches the exact revert.
     expect(source).not.toMatch(/new Set<ProviderFailureKind>\(\[/);
+    expect(source).not.toMatch(/const TRANSIENT/);
   });
 });

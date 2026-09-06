@@ -884,6 +884,27 @@ type Condition = {
   readonly summary: string;
 };
 
+/**
+ * Splitting or renaming one of these codes is an UPGRADE, not an edit.
+ *
+ * `operational_events` dedupes and recovers by `(dedupe_scope, code)`, and the
+ * append-only guard in `0001_append_only_guards.sql` forbids an UPDATE that
+ * changes `code` or `dedupe_key`. So a row already open under a code this
+ * function stops producing can never be re-coded and can never be resolved:
+ * the recovery names the code being LEFT, which is by then the new one, and
+ * matches nothing. The panel recovers and the operations view keeps showing an
+ * open ERROR for it, for ever.
+ *
+ * That is why the split of `panel.health.provider_error` into three codes is
+ * safe HERE and would not be in a later release: no tag and no commit on `main`
+ * contains this file, so no released application has ever written one of these
+ * rows and none can exist to strand. A future split does not get that, and has
+ * to ship a reconciliation with it — resolving the open rows through the
+ * ordinary recorder, since rewriting them is not permitted.
+ *
+ * The test in `panel-health-conditions.test.ts` pins the exact set of codes, so
+ * a change to it is a change a reader has to make deliberately.
+ */
 export function conditionOf(
   state: PanelHealthState,
   failure: ProviderFailureKind | null,

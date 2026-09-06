@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { PANEL_HEALTH_STATES } from '@nexa/contracts';
 import { PANEL_FAILURE_KINDS_FOR_TEST } from './support/panel-failure-kinds';
 import { conditionOf } from '../../apps/api/src/modules/platform/panels/application/panel-monitor.service';
 
@@ -67,5 +68,39 @@ describe('the condition a failing panel announces', () => {
     expect(degraded.severity).toBe('WARN');
     expect(degraded.summary).toMatch(/authenticated/);
     expect(conditionOf('HEALTHY', null)).toBeNull();
+  });
+});
+
+describe('the set of condition codes is fixed deliberately', () => {
+  it('is exactly these ten, and changing one is an upgrade', () => {
+    // `operational_events` dedupes and recovers by code, and the append-only
+    // guard forbids rewriting `code` on a row that already exists — so a code
+    // this function stops producing strands every row still open under it,
+    // unresolvable. Splitting `panel.health.provider_error` into three was
+    // safe only because no released application had ever written one.
+    //
+    // This test exists so that the next such change cannot be made without
+    // reading that, and so the reader who changes it has to say what happens
+    // to the rows already open.
+    const codes = new Set<string>();
+    for (const state of PANEL_HEALTH_STATES) {
+      codes.add(conditionOf(state, null)?.code ?? 'none');
+      for (const failure of PANEL_FAILURE_KINDS_FOR_TEST) {
+        codes.add(conditionOf(state, failure)?.code ?? 'none');
+      }
+    }
+    codes.delete('none');
+    expect([...codes].sort()).toEqual([
+      'panel.health.auth_failed',
+      'panel.health.auth_interaction_required',
+      'panel.health.degraded',
+      'panel.health.malformed_response',
+      'panel.health.provider_error',
+      'panel.health.rate_limited',
+      'panel.health.target_blocked',
+      'panel.health.tls_failed',
+      'panel.health.unreachable',
+      'panel.health.unsupported_capability',
+    ]);
   });
 });

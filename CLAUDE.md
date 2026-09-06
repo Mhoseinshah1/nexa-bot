@@ -75,6 +75,15 @@ Three Phase 2 rules that are easy to break by accident:
 - A feature flag is a boolean; its parameters are settings. Neither registry
   grows a field that belongs to the other.
 
+One more, learned in Phase 3C:
+
+- An operational-event CODE is part of the schema, not a string. `operational_events`
+  dedupes and recovers by code, and the append-only guard forbids rewriting
+  `code` on an existing row — so splitting or renaming one strands every row
+  still open under it, unresolvable, for ever. Do it only in the release that
+  introduced the code, or ship a reconciliation that resolves the open rows
+  through the ordinary recorder.
+
 ## Before you change anything
 
 - `packages/contracts` is the **frozen specification**. Adding a state, event,

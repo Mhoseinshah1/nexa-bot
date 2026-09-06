@@ -3,7 +3,9 @@ import { and, eq, sql, type SQL } from 'drizzle-orm';
 import {
   auditLogs,
   panelCredentials,
+  panelHealth,
   panels,
+  requestIdempotency,
   tenants,
 } from '../../apps/api/src/infrastructure/persistence/schema';
 import {
@@ -169,10 +171,24 @@ describe('panels', () => {
       ).rejects.toMatchObject({ code: 'platform.tenant_not_found' });
 
       // Nothing moved. A refusal that had already written its audit or
-      // idempotency row would be the defect wearing a different hat.
+      // idempotency row would be the defect wearing a different hat — so both
+      // are ASSERTED rather than described. The check runs inside the
+      // transaction, so a refusal rolls back whatever preceded it; a check
+      // moved after the first write would leave rows here.
       const [row] = await ctx.container.database.db.select().from(panels);
       expect(row!.name).toBe('Frankfurt');
       expect(row!.status).toBe('ACTIVE');
+
+      const audits = await ctx.container.database.db
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.tenantId, tenantA.tenantId));
+      expect(audits.map((a) => a.action)).toEqual(['panel.create']);
+      const keys = await ctx.container.database.db
+        .select()
+        .from(requestIdempotency)
+        .where(eq(requestIdempotency.tenantId, tenantA.tenantId));
+      expect(keys).toHaveLength(1);
     });
 
     it('refuses an operator connection test, which dials somebody else’s machine', async () => {
@@ -185,6 +201,76 @@ describe('panels', () => {
           idempotencyKey: key(),
         }),
       ).rejects.toMatchObject({ code: 'platform.tenant_not_found' });
+    });
+
+    it('refuses to RECORD a probe when the stop lands while it is on the wire', async () => {
+      // The window the check before the socket cannot close, and the reason
+      // that check is not the only one. A probe takes up to the HTTP timeout;
+      // a stop committed during it would otherwise land a health row, a
+      // schedule row, an audit row and an idempotency row afterwards — the
+      // whole of what the four write paths above refuse, arriving late.
+      //
+      // The stop is committed from INSIDE the probe, so the ordering is the
+      // real one rather than a simulated one.
+      const { view } = await create(owner, tenantA, {
+        credentials: { username: USERNAME, password: PASSWORD },
+      });
+      const panelId = view.panel.id;
+
+      const service = new PanelService({
+        repository: new DrizzlePanelRepository(ctx.container.database.db),
+        credentials: new DrizzlePanelCredentialStore(
+          ctx.container.database.db,
+          ctx.container.cipher,
+        ),
+        guard: ctx.container.guard,
+        scopeActivity: ctx.container.tenants,
+        audit: ctx.container.audit,
+        opsLog: ctx.container.opsLog,
+        sessions: ctx.container.sessions,
+        uow: ctx.container.uow,
+        idempotency: ctx.container.idempotency,
+        clock: ctx.container.clock,
+        ids: ctx.container.ids,
+        http: new SafeHttpClient({
+          allowLoopback: true,
+          totalTimeoutMs: 1_000,
+          maxResponseBytes: 1_024,
+          maxRetries: 0,
+        }),
+        urlPolicy: { allowLoopback: true },
+        probeCooldownMs: 0,
+        probeBudget: { capacity: 10_000, refillPerMs: 1 },
+        adapters: (type: ProviderType) => ({
+          ...providerAdapter(type),
+          // The stop commits WHILE the probe is on the wire, which is the
+          // real ordering rather than a simulated one.
+          probe: async () => {
+            await stop();
+            return { ok: true, providerVersion: '1.0.0', degraded: false };
+          },
+        }),
+        cadence: {
+          healthyIntervalMs: 10 * 60 * 1000,
+          retryableIntervalMs: 2 * 60 * 1000,
+          nonRetryableIntervalMs: 60 * 60 * 1000,
+        },
+      });
+
+      await expect(
+        service.testConnection(tenantA, adminActorFor(owner), panelId, {
+          idempotencyKey: key(),
+        }),
+      ).rejects.toMatchObject({ code: 'platform.tenant_not_found' });
+
+      // The probe happened — that cannot be undone — but nothing it produced
+      // was recorded.
+      expect(await ctx.container.database.db.select().from(panelHealth)).toHaveLength(0);
+      const audits = await ctx.container.database.db
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.tenantId, tenantA.tenantId));
+      expect(audits.map((a) => a.action)).toEqual(['panel.create']);
     });
 
     it('still lets an operator READ, which is how they diagnose the stop', async () => {

@@ -115,7 +115,11 @@ export type Behaviour =
   /** csrf-token mints a token carrying CRLF, which Node refuses in a header. */
   | 'csrf-token-with-crlf'
   /** The session cookie's value is far larger than any real one. */
-  | 'csrf-enormous-cookie';
+  | 'csrf-enormous-cookie'
+  /** The LOGIN response rotates the session to a value larger than any real one. */
+  | 'login-enormous-cookie'
+  /** The 2FA question's response rotates the session the same way. */
+  | 'twofactor-enormous-cookie';
 
 export interface Fake3xUi {
   readonly baseUrl: string;
@@ -290,6 +294,13 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
           response.end();
           return;
         }
+        if (behaviour === 'twofactor-enormous-cookie') {
+          // A ROTATION the adapter will not send. Distinct from setting no
+          // cookie at all, which is an ordinary response.
+          return void json(200, envelope(true, options.twoFactorEnabled === true), {
+            'set-cookie': `3x-ui=${'r'.repeat(4_000)}; Path=${basePath}; HttpOnly`,
+          });
+        }
         switch (behaviour) {
           case 'twofactor-obj-missing':
             return void json(200, { success: true, msg: '' });
@@ -325,6 +336,11 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
           submitted.username === (options.username ?? CANARY.username) &&
           submitted.password === (options.password ?? CANARY.password);
 
+        if (behaviour === 'login-enormous-cookie' && correct) {
+          return void json(200, envelope(true, null), {
+            'set-cookie': `3x-ui=${'r'.repeat(4_000)}; Path=${basePath}; HttpOnly`,
+          });
+        }
         if (behaviour === 'login-reflects-credentials') {
           // Hostile: the panel echoes what it was sent. Nothing of this may
           // reach any Nexa surface.

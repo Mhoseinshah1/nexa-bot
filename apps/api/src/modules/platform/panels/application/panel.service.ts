@@ -799,11 +799,13 @@ export class PanelService {
     // refuses them in `claimTenants`; this is the operator's lane, and a probe
     // it runs reaches somebody else's machine just as surely.
     //
-    // Read WITHOUT a transaction because this path has none to join — the
-    // claim inside `probe-core` opens its own. So this is a snapshot, and the
-    // window is the same one the monitor documents: a tenant stopped after
-    // this check has this one probe complete. What it stops is the steady
-    // state, which is what matters.
+    // Read WITHOUT a transaction here because there is none yet: this check is
+    // BEFORE the socket, which is the point of it. It is a snapshot, and the
+    // write this path performs is checked again inside its own transaction
+    // below — the first draft of this said "this path has none to join", which
+    // was simply false, and would have let a probe that started before a stop
+    // commit a health row, a schedule, an audit row and an idempotency row
+    // afterwards.
     if (!(await this.deps.scopeActivity.scopeIsActive(scope))) {
       throw errors.notFound(
         PLATFORM_ERROR_CODES.TENANT_NOT_FOUND,
@@ -906,6 +908,14 @@ export class PanelService {
       PANELS_EDIT,
       { action: 'panel.test', entityType: 'Panel', entityId: panelId },
       async (tx) => {
+        // Checked again, in the transaction that writes. A probe takes up to
+        // `PANEL_HTTP_TIMEOUT_MS`, and a stop committed during it would
+        // otherwise land a health row, a schedule row, an audit row and an
+        // idempotency row for an installation somebody had already switched
+        // off — which is the whole of what the four write paths above refuse.
+        // The probe itself has already happened; what this stops is the
+        // record of it, which is what the operator and the monitor read.
+        await this.requireActiveScope(scope, tx);
         const { outcome } = await persistProbeResult(
           this.deps,
           tenant,

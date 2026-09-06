@@ -204,8 +204,12 @@ const SESSION_COOKIE = '3x-ui';
  * The longest a session cookie value or a CSRF token may be before this adapter
  * stops believing it is one.
  *
- * v3.7.0 mints a 32-character token and a session id of similar order; a
- * kilobyte is generous by three decimal orders and still bounded. Without a
+ * A kilobyte, chosen as a bound rather than as a measurement. The sizes v3.7.0
+ * actually mints are not recorded in `docs/research/`, and this comment used to
+ * assert them as fact — see `UNK-SANAEI-COOKIE-SIZE` in `docs/open-questions.md`.
+ * What the number has to be is large enough that no plausible session id or
+ * CSRF token reaches it and small enough to bound a header, and a kilobyte is
+ * both by a wide margin whichever the panel mints. Without a
  * bound the only limit was `maxResponseBytes` — half a megabyte by default —
  * and both values are written straight into the headers of the two or three
  * requests that follow, on every probe, for ever.
@@ -249,20 +253,31 @@ function usableHeaderValue(value: string): boolean {
  * passed forward through the requests of a single session flow, and goes out of
  * scope with them. Nothing writes it to a row, a log or an error.
  */
-function sessionCookieFrom(setCookie: readonly string[]): string | null {
+type SessionCookieRead =
+  /** This response set no `3x-ui` cookie. Keep whatever the flow already holds. */
+  | { readonly found: false }
+  /** It set one. `null` means this adapter will not put that value in a header. */
+  | { readonly found: true; readonly value: string | null };
+
+function sessionCookieFrom(setCookie: readonly string[]): SessionCookieRead {
   for (const header of setCookie) {
     const pair = header.split(';', 1)[0] ?? '';
     const equals = pair.indexOf('=');
     if (equals <= 0) continue;
     if (pair.slice(0, equals).trim() !== SESSION_COOKIE) continue;
     const value = pair.slice(equals + 1).trim();
-    // Bounded and header-safe here too, not only at the first mint: the login
-    // and 2FA responses each rotate this value, and a replacement is adopted
-    // for the requests that follow. A rotation is exactly as provider-supplied
-    // as the original.
-    if (usableHeaderValue(value)) return value;
+    // FOUND is reported separately from USABLE, and that distinction is the
+    // whole reason this returns a pair. Collapsing them to `string | null` made
+    // "the panel rotated the session to something unusable" and "the panel did
+    // not rotate the session" the same answer, and the callers below read that
+    // answer as `?? session` — so an unusable rotation silently kept the cookie
+    // it replaced. The panel then rejected the stale cookie with a 401, which
+    // this adapter maps to DEGRADED: an operator told the credentials are fine
+    // and something else is wrong, about a panel Nexa can never read, with
+    // `lastHealthyAt` ticking forward for ever.
+    return { found: true, value: usableHeaderValue(value) ? value : null };
   }
-  return null;
+  return { found: false };
 }
 
 export class SanaeiAdapter implements ProviderConnectionAdapter {
@@ -319,8 +334,8 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
       return { ok: false, failure: 'MALFORMED_RESPONSE', status: csrf.status };
     }
     const csrfToken = minted.obj;
-    let session = sessionCookieFrom(csrf.setCookie);
-    if (session === null || !usableHeaderValue(csrfToken) || !usableHeaderValue(session)) {
+    const minting = sessionCookieFrom(csrf.setCookie);
+    if (!minting.found || minting.value === null || !usableHeaderValue(csrfToken)) {
       // v3.7.0 binds the token to the session it was minted in. Without the
       // `3x-ui` cookie there is no session to bind to, so a login would be
       // refused for a reason that has nothing to do with the operator's
@@ -334,6 +349,23 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
       // on the next request.
       return { ok: false, failure: 'MALFORMED_RESPONSE', status: csrf.status };
     }
+    let session: string = minting.value;
+
+    /**
+     * Adopt a rotated session, or report that it cannot be adopted.
+     *
+     * Returns the outcome to return, or null to carry on. A rotation the
+     * adapter will not send is the same compatibility failure as a mint it
+     * will not send — NOT a reason to keep sending the value the panel just
+     * replaced.
+     */
+    const adoptSession = (read: SessionCookieRead, status: number): ProviderProbeOutcome | null => {
+      if (!read.found) return null;
+      if (read.value === null) return { ok: false, failure: 'MALFORMED_RESPONSE', status };
+      session = read.value;
+      return null;
+    };
+
     const authHeaders = (): Record<string, string> => ({
       ...XHR_HEADER,
       'x-csrf-token': csrfToken,
@@ -374,7 +406,11 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
       // so there is nothing to try; retrying would only feed the login limiter.
       return { ok: false, failure: 'AUTHENTICATION_REQUIRES_INTERACTION', status: null };
     }
-    session = sessionCookieFrom(twoFactor.setCookie) ?? session;
+    const rotatedByTwoFactor = adoptSession(
+      sessionCookieFrom(twoFactor.setCookie),
+      twoFactor.status,
+    );
+    if (rotatedByTwoFactor !== null) return rotatedByTwoFactor;
 
     const login = await http.send({
       method: 'POST',
@@ -406,8 +442,10 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
       return { ok: false, failure: 'AUTHENTICATION_FAILED', status: login.status };
     }
     // A login that rotates the session replaces it; one that does not keeps
-    // the cookie the flow already holds.
-    session = sessionCookieFrom(login.setCookie) ?? session;
+    // the cookie the flow already holds; one that rotates it to something this
+    // adapter will not send is reported rather than ignored.
+    const rotatedByLogin = adoptSession(sessionCookieFrom(login.setCookie), login.status);
+    if (rotatedByLogin !== null) return rotatedByLogin;
 
     const status = await http.send({
       method: 'GET',

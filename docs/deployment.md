@@ -6,13 +6,13 @@ reasoning behind these choices is in
 
 ## What is supported
 
-|                  |                                        |
-| ---------------- | -------------------------------------- |
-| Operating system | Ubuntu **22.04 LTS** or **24.04 LTS**  |
-| Architecture     | `x86_64` (amd64) or `aarch64` (arm64)  |
-| Disk             | at least 8 GB free on `/var`           |
+|                  |                                                 |
+| ---------------- | ----------------------------------------------- |
+| Operating system | Ubuntu **22.04 LTS** or **24.04 LTS**           |
+| Architecture     | `x86_64` (amd64) or `aarch64` (arm64)           |
+| Disk             | at least 8 GB free on `/var`                    |
 | Ports            | 80 and 443/tcp, and 443/udp, free and reachable |
-| DNS              | a name already pointing at the host    |
+| DNS              | a name already pointing at the host             |
 
 The installer checks every one of these before it changes anything, and stops
 with the specific problem if one fails. The port check covers **443/udp** as

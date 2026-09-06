@@ -36,14 +36,22 @@ import type {
  * transaction or an audit row.
  */
 function unreachable<T>(what: string): T {
-  return new Proxy(
-    {},
-    {
-      get() {
-        throw new Error(`the lifecycle tests should never reach ${what}`);
-      },
-    },
-  ) as T;
+  const refuse = (): never => {
+    throw new Error(`the lifecycle tests should never reach ${what}`);
+  };
+  // Every trap, not just `get`. With `get` alone, `'x' in dep` answered false,
+  // a spread produced `{}` and an assignment succeeded — all silently — so the
+  // comment above promised more than the object delivered.
+  return new Proxy(function () {} as object, {
+    get: refuse,
+    set: refuse,
+    has: refuse,
+    apply: refuse,
+    construct: refuse,
+    ownKeys: refuse,
+    getOwnPropertyDescriptor: refuse,
+    deleteProperty: refuse,
+  }) as T;
 }
 
 const silentLogger: Logger = {
@@ -244,8 +252,16 @@ describe('the panel monitor timer lifecycle', () => {
     await advance(0);
 
     const stopping = m.stop();
-    // Two whole intervals pass while the first tick is stuck. `stop()` clears
-    // the interval before it waits, so nothing new is armed.
+    // Two whole intervals pass while the first tick is stuck and nothing new
+    // runs. What this pins is the OUTCOME, not the mechanism: moving
+    // `clearInterval` to after the drain loop, or deleting it from `stop()`
+    // altogether, leaves this green — because `tick()`'s own `running` guard
+    // already turns every firing during the drain into a no-op. Two rules
+    // produce this behaviour and no assertion can separate them, which is
+    // recorded here rather than claimed away. `clearInterval`'s existence is
+    // pinned by "stops scheduling once stopped" above, where nothing is held
+    // and the guard is down; its ORDER relative to the drain is a genuine
+    // no-op in production for the same reason it is untestable here.
     await advance(INTERVAL_MS * 2);
     expect(claims).toBe(1);
 
@@ -259,6 +275,11 @@ describe('the panel monitor timer lifecycle', () => {
     const m = monitor();
     // No grace period. A monitor that has never completed a pass has never
     // done its job, and a release that ships one must not be accepted.
+    //
+    // Three guards in `iterationIsFresh` each produce this answer on their
+    // own, so no single mutation fails this test. It pins the PROPERTY, which
+    // is the one a release gate depends on; the guards are separated by the
+    // restart tests below.
     expect(m.iterationIsFresh(now.getTime())).toBe(false);
   });
 
@@ -285,6 +306,11 @@ describe('the panel monitor timer lifecycle', () => {
     await m.stop();
     // A draining monitor is not a live one, and this must not depend on
     // `main.monitor.ts` happening to stop the heartbeat first.
+    //
+    // `stop()` clears the progress mark AND the reconciliation flag, and
+    // either alone yields false here, so this too pins the property rather
+    // than a line. The two are separated by the two restart tests above,
+    // which is where their mutations do fail.
     expect(m.iterationIsFresh(now.getTime())).toBe(false);
   });
 

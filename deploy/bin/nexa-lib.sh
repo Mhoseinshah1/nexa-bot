@@ -994,6 +994,35 @@ EOF
   mv -f "$partial" "$final" || nexa_die "cannot stage the host assets for ${digest}."
 }
 
+# Whether the thing holding <port>/<proto> is this installation's own edge.
+#
+# Asked of DOCKER, not of `ss -p`. On a Docker host every published port is
+# held by `docker-proxy`, so matching the holder's process NAME cannot tell our
+# edge from another stack's — and the check this replaced was worse still: it
+# counted containers called `nexa-caddy*` in `docker ps` and waived the
+# conflict on any match, so a nexa-caddy that was up but bound to nothing waved
+# an unrelated server through. `--filter publish=` answers the question that
+# was actually being asked: which containers publish this port.
+#
+# EVERY publisher must be ours. One that is not is a conflict even when ours is
+# there too, because the installer is about to start an edge that cannot bind.
+#
+# Returns 1 — a conflict — whenever that cannot be established: nothing
+# publishes it (so a host process does, or Docker cannot be reached), or the
+# command fails. A preflight that cannot tell must refuse; passing on ignorance
+# is the wrong answer in the dangerous direction, which is the rule the checks
+# around it follow.
+nexa_port_is_ours() {
+  local port="$1" proto="$2" holders foreign
+  holders="$(docker ps --filter "publish=${port}/${proto}" --format '{{.Names}}' 2>/dev/null || true)"
+  [ -n "$holders" ] || return 1
+  # `grep -c` reads to the end of its input, so nothing upstream is killed
+  # mid-write; `grep -qv` would exit at the first match and can take the writer
+  # with it under `pipefail`.
+  foreign="$(printf '%s\n' "$holders" | grep -cv '^nexa-caddy' || true)"
+  [ "${foreign:-1}" -eq 0 ]
+}
+
 # What is installed RIGHT NOW, kept under the digest that is live so a rollback
 # has something to put back.
 #
@@ -1002,44 +1031,6 @@ EOF
 # the first update captures whatever those installs put on disk as the current
 # release's set.
 #
-# Whether the process holding <port>/<proto> is this installation's own edge.
-#
-# The question the port preflight actually needs, and it is about the SOCKET,
-# not about the container list. The check this replaced counted containers
-# named `nexa-caddy*` in `docker ps` and waived the conflict on any match — so
-# a nexa-caddy that was up but bound to nothing waved an unrelated nginx
-# through, and the installer proceeded to build an edge that could never bind.
-#
-# `ss -p` names the process behind each socket. In this topology a published
-# port is held by `docker-proxy` (userland proxy) or, with it disabled, by the
-# container's own `caddy`; both are accepted, and only when a Nexa Caddy
-# container is actually running, so an unrelated docker-proxy for somebody
-# else's stack is still a conflict.
-#
-# Returns 1 — a conflict — whenever the holder cannot be established. A
-# preflight that cannot tell must refuse: passing on ignorance is the wrong
-# answer in the dangerous direction, which is the same rule the surrounding
-# checks follow.
-nexa_port_is_ours() {
-  local port="$1" proto="$2" flags sockets
-  [ "$proto" = tcp ] && flags='-Hltnp' || flags='-Huanp'
-  # Read into a variable rather than piping into a matcher: under `pipefail` a
-  # matcher that exits early can kill the writer and turn "something is here"
-  # into a success.
-  sockets="$(ss "$flags" "sport = :${port}" 2>/dev/null || true)"
-  [ -n "$sockets" ] || return 1
-  case "$sockets" in
-    *docker-proxy* | *caddy*) ;;
-    *) return 1 ;;
-  esac
-  # And a Nexa edge must actually be running, so another stack's docker-proxy
-  # is not read as ours. `grep -c` reads to the end of its input, so nothing
-  # upstream is killed mid-write; `grep -q` would not.
-  local running
-  running="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c '^nexa-caddy' || true)"
-  [ "${running:-0}" -gt 0 ]
-}
-
 # Every failure is REPORTED AND RETURNED, never `nexa_die`. The caller decides
 # what a failure to record means, and the two callers mean opposite things by
 # it: an update refuses to replace the live assets while the outgoing set

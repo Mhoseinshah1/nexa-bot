@@ -645,7 +645,7 @@ installer_output="$(digest_probe _ "$DIGEST_A" || true)"
 assert_not_contains 'an unchanged digest was refused' \
   "$installer_output" 'that tag has been moved'
 
-test_case 'D12: the port preflight sees UDP, and only waives the port it actually holds'
+test_case 'D12: the port preflight sees UDP, and only waives a port our own edge publishes'
 # Two defects in one check. `ss -Hltn` is a TCP-LISTEN filter, so the 443/udp
 # that compose.yml publishes for HTTP/3 was never looked at — a service holding
 # it passed preflight and then made Caddy fail to bind. And the escape hatch
@@ -653,70 +653,67 @@ test_case 'D12: the port preflight sees UDP, and only waives the port it actuall
 # on any match, so a nexa-caddy that was up but bound to nothing waved an
 # unrelated server through.
 #
-# Driven through the REAL `nexa_port_is_ours` against stub `ss` and `docker` on
-# PATH, so what is exercised is the shipped predicate rather than a copy of it.
+# The first fix for the second half asked `ss -p` for the holder's process
+# NAME, which is no fix at all on a Docker host: EVERY published port is held
+# by `docker-proxy`, so another stack's published 443 matched the same arm. The
+# question is asked of Docker instead — which containers publish this port —
+# and this is driven through the REAL `nexa_port_is_ours` against a stub
+# `docker` on PATH, so what is exercised is the shipped predicate.
 d12_bin="${NEXA_ROOT}/d12-bin"
 D12_ANSWERS="${NEXA_ROOT}/d12-answers"
 export D12_ANSWERS
 mkdir -p "$d12_bin" "$D12_ANSWERS"
 
-# The stubs answer from files this test writes, one per proto/port. An absent
-# file is an unused port, which is what `ss` reports by saying nothing.
-{
-  printf '#!/usr/bin/env bash\n'
-  printf 'case "$1" in *u*) proto=udp ;; *) proto=tcp ;; esac\n'
-  printf 'port="${2##*:}"\n'
-  printf 'answer="${D12_ANSWERS}/${proto}-${port}"\n'
-  printf '[ -r "$answer" ] && cat "$answer"\n'
-  printf 'exit 0\n'
-} >"${d12_bin}/ss"
+# Answers `docker ps --filter publish=<port>/<proto>` from a file per port and
+# proto. An absent file is "nothing publishes it", which is what a host process
+# holding the port looks like to Docker.
 {
   printf '#!/usr/bin/env bash\n'
   printf '[ "$1" = ps ] || exit 0\n'
-  printf '[ -r "${D12_ANSWERS}/containers" ] && cat "${D12_ANSWERS}/containers"\n'
+  printf 'key=""\n'
+  printf 'for arg in "$@"; do case "$arg" in publish=*) key="${arg#publish=}" ;; esac; done\n'
+  printf 'answer="${D12_ANSWERS}/${key//\\//-}"\n'
+  printf '[ -r "$answer" ] && cat "$answer"\n'
   printf 'exit 0\n'
 } >"${d12_bin}/docker"
-chmod 0755 "${d12_bin}/ss" "${d12_bin}/docker"
+chmod 0755 "${d12_bin}/docker"
 
-# The predicate, called exactly as preflight calls it, in a child process so
-# the stubbed PATH cannot leak into the rest of the suite.
+# In a child process, so the stubbed PATH cannot leak into the rest of the suite.
 d12_is_ours() {
   # shellcheck disable=SC2031
-  # PATH is prefixed FOR THIS COMMAND only, which is the point: the stubs must
-  # be visible to the child that sources the library and to nothing else in the
-  # suite. SC2031's "the change might be lost" is the intended behaviour here.
+  # PATH is prefixed FOR THIS COMMAND only, which is the point: the stub must
+  # be visible to the child that sources the library and to nothing else.
   PATH="${d12_bin}:${PATH}" bash -c '
     . "$1" >/dev/null 2>&1
     nexa_port_is_ours "$2" "$3"' _ "${REPO}/deploy/bin/nexa-lib.sh" "$1" "$2" >/dev/null 2>&1
 }
 
-: >"${D12_ANSWERS}/containers"
-rm -f "${D12_ANSWERS}/tcp-443" "${D12_ANSWERS}/udp-443"
-# 1. Nothing holds the port. The caller only asks once `ss` has already found a
-#    listener, so "no holder" is the cannot-establish answer, and a preflight
-#    that cannot establish must refuse.
-assert_fails 'an unheld port was claimed as ours' d12_is_ours 443 tcp
+rm -f "${D12_ANSWERS}"/443-* "${D12_ANSWERS}"/80-*
+# 1. Nothing PUBLISHES it. The caller only asks once `ss` has already found a
+#    listener, so this is a host process holding the port — a conflict, and the
+#    same answer a preflight that cannot reach Docker must give.
+assert_fails 'an unpublished port was claimed as ours' d12_is_ours 443 tcp
 
-# 2. An unrelated server holds 443/tcp while a nexa-caddy container is up. The
-#    old check waived exactly this.
-printf 'LISTEN 0 511 *:443 *:* users:(("nginx",pid=91,fd=7))\n' >"${D12_ANSWERS}/tcp-443"
-printf 'nexa-caddy\n' >"${D12_ANSWERS}/containers"
-assert_fails 'an unrelated nginx was waived because a nexa-caddy was running' \
-  d12_is_ours 443 tcp
-
-# 3. Our own edge holds it, and a nexa-caddy is up: an idempotent rerun.
-printf 'LISTEN 0 4096 *:443 *:* users:(("docker-proxy",pid=77,fd=4))\n' >"${D12_ANSWERS}/tcp-443"
+# 2. Our own edge publishes it. An idempotent rerun.
+printf 'nexa-caddy\n' >"${D12_ANSWERS}/443-tcp"
 assert_ok 'our own edge was reported as a conflict' d12_is_ours 443 tcp
 
-# 4. Docker-proxy holds it but no Nexa edge is running: another stack's.
-: >"${D12_ANSWERS}/containers"
-assert_fails 'another stack does not own our ports' d12_is_ours 443 tcp
+# 3. ANOTHER STACK publishes it. This is the case the process-name check could
+#    not see: on a Docker host that port is held by `docker-proxy` too.
+printf 'someone-elses-nginx\n' >"${D12_ANSWERS}/443-tcp"
+assert_fails 'another stack was accepted as our edge' d12_is_ours 443 tcp
 
-# 5. UDP at all. With the old TCP-only filter this port was invisible.
-printf 'nexa-caddy\n' >"${D12_ANSWERS}/containers"
-printf 'UNCONN 0 0 *:443 *:* users:(("systemd-resolve",pid=42,fd=12))\n' >"${D12_ANSWERS}/udp-443"
-assert_fails 'a foreign holder of 443/udp was accepted as ours' d12_is_ours 443 udp
-printf 'UNCONN 0 0 *:443 *:* users:(("docker-proxy",pid=77,fd=9))\n' >"${D12_ANSWERS}/udp-443"
+# 4. Ours AND another stack's. A conflict even though ours is there: the edge
+#    is about to be started and cannot bind. This is the exact shape the old
+#    escape hatch waived.
+printf 'nexa-caddy\nsomeone-elses-nginx\n' >"${D12_ANSWERS}/443-tcp"
+assert_fails 'a foreign publisher was waived because ours was there too' d12_is_ours 443 tcp
+
+# 5. UDP is asked about at all. With the old TCP-only filter this port was
+#    invisible; it is asked here on the proto the old code never used.
+printf 'someone-elses-dns\n' >"${D12_ANSWERS}/443-udp"
+assert_fails 'a foreign publisher of 443/udp was accepted as ours' d12_is_ours 443 udp
+printf 'nexa-caddy\n' >"${D12_ANSWERS}/443-udp"
 assert_ok 'our own 443/udp was reported as a conflict' d12_is_ours 443 udp
 
 # And preflight must actually ask, or the predicate above is unreachable.
@@ -1871,6 +1868,38 @@ assert_equals "a failed start left the target's compose file installed" \
 assert_contains 'the outgoing release was not brought back' "$BOTCTL_OUTPUT" 'is running again'
 rm -f "${FAKE_DIR}/up_exit_${DIGEST_B}"
 
+test_case "an update whose back-out cannot restore the tooling does not restart under it"
+# The rule the subshell fix inverted. `nexa_activate_release_assets` reports
+# through `nexa_die`, so before this branch a failed restore TERMINATED botctl
+# — badly, with an internal message instead of the diagnosis, which is what D6
+# is about. Subshelling it without making its status part of the verdict
+# replaced that with something worse: the back-out fell through to
+# `nexa_compose up -d`, starting ${current} under ${target}'s compose file,
+# and then told the operator the installation was consistent. The comment three
+# lines above that call forbids exactly this.
+fake_set "up_exit_${DIGEST_B}" 1
+# Make the restore reach the activation and fail inside it: the set is present
+# so the caller does not skip it, and one file in it is empty so activation
+# refuses.
+outgoing_dir="$(assets_dir_for "$DIGEST_A")"
+assert_ok "vA's host assets are not recorded, so this case cannot run" \
+  test -s "${outgoing_dir}/bin/botctl"
+cp -p "${outgoing_dir}/bin/botctl" "${NEXA_ROOT}/outgoing-botctl.saved"
+: >"${outgoing_dir}/bin/botctl"
+run_botctl update vB
+cp -p "${NEXA_ROOT}/outgoing-botctl.saved" "${outgoing_dir}/bin/botctl"
+rm -f "${NEXA_ROOT}/outgoing-botctl.saved" "${FAKE_DIR}/up_exit_${DIGEST_B}"
+assert_fails 'an update whose back-out failed reported success' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the failed restore was not reported' "$BOTCTL_OUTPUT" 'could not restore'
+assert_contains 'a failed restore did not stop the restart' "$BOTCTL_OUTPUT" 'NOT restarting'
+assert_not_contains 'a back-out that could not restore claimed the release was back' \
+  "$BOTCTL_OUTPUT" 'is running again'
+# And it is reported as the stranded case, which is what it is.
+assert_contains 'the stranded state was not named' "$BOTCTL_OUTPUT" 'did not come back cleanly'
+# Put the installation back on a consistent footing for the cases below.
+run_botctl update vA >/dev/null 2>&1 || true
+assert_equals 'the repair left the wrong release current' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+
 test_case "a target that never becomes ready leaves the outgoing release's tooling"
 fake_set "api_health_${DIGEST_B}" starting
 NEXA_READY_TIMEOUT=6 run_botctl update vB
@@ -1966,6 +1995,129 @@ assert_not_contains 'the last thing started was still the rollback target' \
   "$last_up" "$DIGEST_A"
 fake_set "api_health_${DIGEST_A}" healthy
 
+test_case 'a rollback back-out with NOTHING recorded to restore does not restart either'
+# The other half of the same rule, and the one `return 0` hid. "There is
+# nothing to put back" is not "the tooling is back": the rollback has already
+# activated ${previous}'s compose file by this point, so starting ${current}'s
+# image would run it under a topology it was never released with — and the
+# verdict would say the installation is consistent.
+#
+# Driven by removing the CURRENT release's recorded set entirely, which is the
+# state an installation reaches when its assets could not be recorded on the
+# way out (the D9 case below), and then failing the rollback's start.
+#
+# Removing the directory is not enough on its own: the rollback re-records the
+# current release's set on the way out, from its image or from the live files.
+# All three routes have to be closed for the back-out to find nothing.
+missing_dir="$(assets_dir_for "$DIGEST_B")"
+mv "$missing_dir" "${missing_dir}.aside"
+fake_set "assets_missing_${DIGEST_B}" 1
+mv "${NEXA_DEPLOY_DIR}/caddy/routes.caddy" "${NEXA_ROOT}/routes.caddy.aside"
+fake_set "up_exit_${DIGEST_A}" 1
+run_botctl rollback
+rb_output="$BOTCTL_OUTPUT"
+rb_status="$BOTCTL_STATUS"
+mv "${NEXA_ROOT}/routes.caddy.aside" "${NEXA_DEPLOY_DIR}/caddy/routes.caddy" 2>/dev/null || true
+rm -f "${FAKE_DIR}/up_exit_${DIGEST_A}" "${FAKE_DIR}/assets_missing_${DIGEST_B}"
+rm -rf "$missing_dir"
+mv "${missing_dir}.aside" "$missing_dir"
+assert_fails 'a rollback whose back-out could not restore reported success' \
+  test "$rb_status" -eq 0
+assert_contains 'an unrecorded set was not reported' "$rb_output" 'are not recorded'
+assert_contains 'nothing to restore did not stop the restart' "$rb_output" 'NOT restarting'
+assert_not_contains 'a back-out with nothing to restore claimed the release was back' \
+  "$rb_output" 'is running again'
+
+test_case 'D9: recording the outgoing assets reports and RETURNS at every failure'
+# `nexa_capture_live_assets` reported four of its five failures through
+# `nexa_die`, which exits the process. Its rollback caller invokes it as
+# `... || nexa_capture_live_assets ... || nexa_warn`, whose comment says "a
+# rollback whose target is sound must not be refused for the sake of its own
+# undo" — an intent the `||` could never carry out, because there was nothing
+# left to run. Same shape as the `cmd_backup` hazard this file documents.
+#
+# ALL FOUR converted sites, not one. The first version of this test drove only
+# the bad-digest path, so reverting any of the other three left the suite
+# green — and the end-to-end case it was paired with drove the ONE branch that
+# already returned before the change, so it passed on the unfixed code too.
+#
+# A non-zero status alone cannot tell "returned 1" from "exited 1", so each
+# probe prints a marker AFTER the call and the marker is the assertion.
+d9_probe() {
+  bash -c '
+    . "$1" >/dev/null 2>&1
+    NEXA_ASSETS_DIR="$2"
+    '"$2"'
+    nexa_capture_live_assets "$3" v1.0.0 >/dev/null 2>&1
+    printf "SURVIVED:%s\n" "$?"' _ "${REPO}/deploy/bin/nexa-lib.sh" "$1" "$3" 2>/dev/null || true
+}
+d9_dir="${NEXA_ROOT}/d9-assets"
+rm -rf "$d9_dir"; mkdir -p "$d9_dir"
+
+# 1. `nexa_assets_path` refuses a malformed digest.
+out="$(d9_probe "$d9_dir" ':' 'not-a-digest')"
+assert_contains 'a malformed digest killed the caller' "$out" 'SURVIVED:'
+assert_not_contains 'a malformed digest was reported as success' "$out" 'SURVIVED:0'
+
+# 2. `mkdir -p` cannot create the staging directory. The obstruction has to be
+#    the assets DIRECTORY itself — the function does `rm -rf "$partial"` first,
+#    so anything placed at the staging path is removed before mkdir sees it.
+D9_DIGEST='sha256:1111111111111111111111111111111111111111111111111111111111111111'
+d9_file="${NEXA_ROOT}/d9-not-a-dir"
+: >"$d9_file"
+out="$(d9_probe "$d9_file" ':' "$D9_DIGEST")"
+assert_contains 'a failed mkdir killed the caller' "$out" 'SURVIVED:'
+assert_not_contains 'a failed mkdir was reported as success' "$out" 'SURVIVED:0'
+
+# 3. `cp` cannot copy a destination that is readable but is a DIRECTORY. This
+#    is the branch a missing file does NOT reach: `[ -r ]` is true for a
+#    directory, and `cp` without -r then fails.
+D9_DIGEST2='sha256:2222222222222222222222222222222222222222222222222222222222222222'
+d9_hostdir="${NEXA_ROOT}/d9-host"
+rm -rf "$d9_hostdir"; mkdir -p "${d9_hostdir}/bin" "${d9_hostdir}/caddy"
+out="$(d9_probe "$d9_dir" 'NEXA_DEPLOY_DIR="'"${d9_hostdir}"'"; NEXA_BIN_DIR="'"${d9_hostdir}"'/bin"; NEXA_LIB_DIR="'"${d9_hostdir}"'"; mkdir -p "${NEXA_DEPLOY_DIR}/compose.yml"' "$D9_DIGEST2")"
+assert_contains 'a failed copy killed the caller' "$out" 'SURVIVED:'
+assert_not_contains 'a failed copy was reported as success' "$out" 'SURVIVED:0'
+
+# 4. The missing-destination branch, which was ALREADY report-and-return before
+#    the change. Asserted so the set is complete and so a future edit that made
+#    it fatal would be caught, not because it falsifies this one.
+D9_DIGEST3='sha256:3333333333333333333333333333333333333333333333333333333333333333'
+out="$(d9_probe "$d9_dir" 'NEXA_DEPLOY_DIR="'"${NEXA_ROOT}"'/d9-empty"; NEXA_BIN_DIR="'"${NEXA_ROOT}"'/d9-empty/bin"; NEXA_LIB_DIR="'"${NEXA_ROOT}"'/d9-empty"' "$D9_DIGEST3")"
+assert_contains 'a missing destination killed the caller' "$out" 'SURVIVED:'
+assert_not_contains 'a missing destination was reported as success' "$out" 'SURVIVED:0'
+rm -rf "$d9_dir" "$d9_hostdir"
+
+test_case 'D9: a rollback whose target is sound is not refused for the sake of its own undo'
+# End to end. The CURRENT release's recorded set is removed and its recovery
+# from its own image refused, and one of the live files it would otherwise be
+# captured from is gone — so its assets cannot be recorded by any route. The
+# rollback TARGET is untouched and entirely sound, and must proceed.
+#
+# This drives the MISSING-DESTINATION branch, which already reported-and-
+# returned before this change, so it does NOT falsify the four converted
+# `nexa_die`s — the probes above do that. What it pins is the other half of
+# D9, which is the CALLER's contract: `|| nexa_warn` and carry on, rather than
+# treat a failure to record the undo as a reason to refuse the rollback.
+current_digest_dir="$(assets_dir_for "$DIGEST_B")"
+mv "$current_digest_dir" "${current_digest_dir}.hidden"
+fake_set "assets_missing_${DIGEST_B}" 1
+mv "${NEXA_DEPLOY_DIR}/caddy/routes.caddy" "${NEXA_ROOT}/routes.caddy.hidden"
+run_botctl rollback
+mv "${NEXA_ROOT}/routes.caddy.hidden" "${NEXA_DEPLOY_DIR}/caddy/routes.caddy" 2>/dev/null || true
+rm -f "${FAKE_DIR}/assets_missing_${DIGEST_B}"
+assert_equals 'a sound rollback was refused because its undo could not be recorded' \
+  0 "$BOTCTL_STATUS"
+assert_equals 'the sound rollback did not become current' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_contains 'the operator was not warned that the undo cannot be recorded' \
+  "$BOTCTL_OUTPUT" 'could not be recorded'
+# Put the recorded set and the installation back, explicitly, rather than
+# leaving the cases below to inherit whatever this one happened to produce.
+rm -rf "$current_digest_dir"
+mv "${current_digest_dir}.hidden" "$current_digest_dir"
+run_botctl update vB
+assert_equals 'the installation was not put back on vB' 'vB' "$(cat "${NEXA_STATE_DIR}/current")"
+
 test_case 'D6: a restore that cannot finish does not replace the diagnosis'
 # `nexa_activate_release_assets` reports its failures through `nexa_die`, which
 # EXITS. Called directly in a back-out path, a restore that could not finish
@@ -1974,6 +2126,8 @@ test_case 'D6: a restore that cannot finish does not replace the diagnosis'
 # instead of what had happened to their installation.
 fake_set "up_exit_${DIGEST_A}" 1
 current_digest_dir="$(assets_dir_for "$DIGEST_B")"
+assert_ok "vB's host assets are not recorded, so this case cannot run" \
+  test -s "${current_digest_dir}/bin/botctl"
 # The restore must REACH the activation and fail INSIDE it. Removing the staged
 # directory would not do: `restore_current_assets` checks `nexa_assets_staged`
 # first and returns without calling activation at all, so the failure under test
@@ -1988,54 +2142,33 @@ rm -rf "$current_digest_dir"
 rm -f "${FAKE_DIR}/up_exit_${DIGEST_A}"
 assert_fails 'a rollback that could not start reported success' \
   test "$run_botctl_status_after_d6" -eq 0
+# NOT `did not start`: botctl warns that before the back-out runs, so that
+# string is present whether or not the subshell exists and the assertion naming
+# the defect proved nothing. The diagnosis that must survive is the FINAL one,
+# which only prints if the back-out did not terminate the process.
 assert_contains 'the failure of the back-out replaced the diagnosis' \
-  "$d6_output" 'did not start'
+  "$d6_output" 'NEITHER release has been deleted'
 # And the back-out's own failure is still reported — silenced would be as bad
 # as fatal.
 assert_contains 'the failed restore was not reported at all' \
   "$d6_output" "could not restore"
-# Put the current release's set back for the cases that follow.
-run_botctl update vB >/dev/null 2>&1 || true
-
-test_case 'D9: recording the outgoing assets reports and RETURNS, and never exits'
-# `nexa_capture_live_assets` reported every internal failure through `nexa_die`,
-# which exits the process. Its rollback caller invokes it as
-# `... || nexa_capture_live_assets ... || nexa_warn`, whose comment says "a
-# rollback whose target is sound must not be refused for the sake of its own
-# undo" — an intent the `||` could never carry out, because there was nothing
-# left to run. Same shape as the `cmd_backup` hazard this file documents.
-#
-# The contract, tested directly: the caller must still be alive afterwards. A
-# non-zero status alone cannot tell "returned 1" from "exited 1", so the probe
-# prints a marker AFTER the call and the marker is the assertion.
-capture_survives="$(bash -c '
-  . "$1" >/dev/null 2>&1
-  nexa_capture_live_assets "not-a-digest" v1.0.0 >/dev/null 2>&1
-  printf "SURVIVED:%s\n" "$?"' _ "${REPO}/deploy/bin/nexa-lib.sh" 2>/dev/null || true)"
-assert_contains 'a failure to record the outgoing assets killed its caller' \
-  "$capture_survives" 'SURVIVED:'
-assert_not_contains 'a failure to record the outgoing assets was reported as success' \
-  "$capture_survives" 'SURVIVED:0'
-
-test_case 'D9: a rollback whose target is sound is not refused for the sake of its own undo'
-# End to end. The CURRENT release's recorded set is removed and its recovery
-# from its own image refused, and one of the live files it would otherwise be
-# captured from is gone — so its assets cannot be recorded by any route. The
-# rollback TARGET is untouched and entirely sound throughout, and must proceed.
-mv "$current_digest_dir" "${current_digest_dir}.hidden"
-fake_set "assets_missing_${DIGEST_B}" 1
-mv "${NEXA_DEPLOY_DIR}/caddy/routes.caddy" "${NEXA_ROOT}/routes.caddy.hidden"
+# The rule the review found inverted: a back-out that could not put the tooling
+# back must not start anything under the tooling that IS there, and must not
+# tell the operator the installation is consistent.
+assert_contains 'a failed restore did not stop the restart' \
+  "$d6_output" 'NOT restarting'
+assert_not_contains 'a failed back-out claimed the current release was back' \
+  "$d6_output" 'is running again'
+# Put the installation back, explicitly. The failed back-out deliberately left
+# vA's tooling on the host with vB still recorded as current — which is the
+# very inconsistency asserted above — so `update vB` alone would take the
+# already-current path and repair nothing. A real rollback then a real update
+# rebuilds both the recorded set and the host tooling.
 run_botctl rollback
-mv "${NEXA_ROOT}/routes.caddy.hidden" "${NEXA_DEPLOY_DIR}/caddy/routes.caddy" 2>/dev/null || true
-rm -f "${FAKE_DIR}/assets_missing_${DIGEST_B}"
-assert_equals 'a sound rollback was refused because its undo could not be recorded' \
-  0 "$BOTCTL_STATUS"
-assert_equals 'the sound rollback did not become current' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
-assert_contains 'the operator was not warned that the undo cannot be recorded' \
-  "$BOTCTL_OUTPUT" 'could not be recorded'
-rm -rf "${current_digest_dir}.hidden"
-# Put the installation back on vB for the cases that follow.
-run_botctl update vB >/dev/null 2>&1 || true
+assert_equals 'the repair rollback did not reach vA' 'vA' "$(cat "${NEXA_STATE_DIR}/current")"
+run_botctl update vB
+assert_equals 'the repair update did not reach vB' 'vB' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_equals "the repair left the wrong release's botctl installed" 'B' "$(installed_label)"
 
 test_case "rollback refuses when the previous release's assets were never recorded"
 # An installation that predates this mechanism: its pointers were written by a
