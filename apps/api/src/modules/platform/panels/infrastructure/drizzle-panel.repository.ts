@@ -114,8 +114,15 @@ export class DrizzlePanelRepository implements PanelRepository {
       options.cursor === null
         ? sql`TRUE`
         : sql`(${panels.createdAt}, ${panels.id}) > (${options.cursor.createdAt}::timestamptz, ${options.cursor.id}::uuid)`;
+    // `to_char`, not the driver's own parse. `timestamptz` keeps microseconds
+    // and a JavaScript Date keeps milliseconds, TRUNCATING the rest — so a
+    // cursor read as a Date is strictly below the row it names and that row
+    // comes back on the next page. Rendered explicitly rather than by
+    // `::text`, because `::text` follows the session's `DateStyle` and this
+    // has to be the same string on every connection.
     return sql`
-      SELECT ${panels.id} AS id, ${panels.createdAt} AS created_at
+      SELECT ${panels.id} AS id,
+             to_char(${panels.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at
         FROM ${panels}
        WHERE ${panels.tenantId} = ${scope.tenantId} AND ${live} AND ${after}
        ORDER BY ${panels.createdAt} ASC, ${panels.id} ASC
@@ -174,7 +181,7 @@ export class DrizzlePanelRepository implements PanelRepository {
   ): Promise<{ panels: PanelView[]; nextCursor: PanelCursor | null }> {
     const executor = executorOf(this.db, tx);
     const limit = options.limit ?? PANEL_PAGE_DEFAULT;
-    const keys = await executor.execute<{ id: string; created_at: Date }>(
+    const keys = await executor.execute<{ id: string; created_at: string }>(
       DrizzlePanelRepository.pageKeysQuery(scope, {
         includeArchived: options.includeArchived,
         limit,
@@ -205,7 +212,7 @@ export class DrizzlePanelRepository implements PanelRepository {
       panels: ordered,
       nextCursor:
         keys.rows.length > limit && last !== undefined
-          ? { createdAt: new Date(last.created_at), id: last.id }
+          ? { createdAt: last.created_at, id: last.id }
           : null,
     };
   }

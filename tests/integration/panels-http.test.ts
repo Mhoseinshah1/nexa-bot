@@ -340,8 +340,15 @@ describe('panel HTTP surface', () => {
       // A real uuid with a timestamp that is not one.
       b64(`${created.panel.id}:not-a-time`),
       b64(`${created.panel.id}:`),
-      // Longer than any cursor this API issues.
-      'A'.repeat(4_096),
+      // In range for a JavaScript Date and OUT of range for `timestamptz`,
+      // which raises 22008 at the cast — the same 500 by another route.
+      b64(`${created.panel.id}:-005000-01-01T00:00:00.000000Z`),
+      b64(`${created.panel.id}:275760-09-13T00:00:00.000000Z`),
+      // A date JavaScript rolls over and PostgreSQL refuses.
+      b64(`${created.panel.id}:2026-02-30T00:00:00.000000Z`),
+      b64(`${created.panel.id}:2026-13-01T00:00:00.000000Z`),
+      // The right shape, the wrong precision: this API issues microseconds.
+      b64(`${created.panel.id}:2026-01-01T00:00:00.000Z`),
       // Empty.
       '',
     ];
@@ -351,18 +358,27 @@ describe('panel HTTP surface', () => {
         `${PANEL_ROUTES.list}?limit=1&cursor=${encodeURIComponent(cursor)}`,
         ownerCookie,
       );
-      expect(
-        response.statusCode,
-        `cursor ${cursor.slice(0, 40)} answered a server error`,
-      ).toBeLessThan(500);
-      // And it restarted rather than half-answering: the same first page.
-      if (response.statusCode === 200) {
-        const body = panelListResponseSchema.parse(response.json());
-        expect(body.panels.map((panel) => panel.id)).toEqual(
-          firstPage.panels.map((panel) => panel.id),
-        );
-      }
+      // 200 exactly, not merely "under 500": the documented behaviour for a
+      // cursor this code cannot read is to RESTART the traversal, and a guard
+      // that only ran the assertion when the status happened to be 200 would
+      // stay green if a future change started refusing instead.
+      expect(response.statusCode, `cursor ${cursor.slice(0, 40)} was not restarted`).toBe(200);
+      const body = panelListResponseSchema.parse(response.json());
+      expect(body.panels.map((panel) => panel.id)).toEqual(
+        firstPage.panels.map((panel) => panel.id),
+      );
     }
+
+    // An OVERSIZED cursor is the one that does not restart, and that is a
+    // different rule for a different reason: the request schema bounds the
+    // string at 512 characters before this code ever sees it, so what is
+    // refused is the request rather than the bookmark. Asserted rather than
+    // folded into the loop above, because a test that accepted either answer
+    // would not notice if the two rules swapped.
+    expect(
+      (await get(`${PANEL_ROUTES.list}?limit=1&cursor=${'A'.repeat(4_096)}`, ownerCookie))
+        .statusCode,
+    ).toBe(400);
 
     // A cursor this API issued is still honoured, so the validation did not
     // simply refuse everything.

@@ -56,11 +56,34 @@ import type { PanelView } from '../../modules/platform/panels/application/ports.
  */
 const CURSOR_MAX_LENGTH = 512;
 const CURSOR_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * The exact rendering `pageKeysQuery` produces, and nothing else.
+ *
+ * The four-digit year is load-bearing: it is what keeps the value inside
+ * `timestamptz`'s range. A JavaScript `Date` spans ±271821 years, so
+ * `-005000-01-01T00:00:00.000Z` is a perfectly good Date, serialises as
+ * `5001-01-01 BC`, and raises `22008` at the `::timestamptz` cast — reaching
+ * the caller as the same 500 the uuid check was added to close.
+ */
+const CURSOR_INSTANT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.\d{6}Z$/;
 
 function encodeCursor(cursor: PanelCursor): string {
-  return Buffer.from(`${cursor.id}:${cursor.createdAt.toISOString()}`, 'utf8').toString(
-    'base64url',
+  return Buffer.from(`${cursor.id}:${cursor.createdAt}`, 'utf8').toString('base64url');
+}
+
+/** The timestamp half, or null if PostgreSQL would refuse it. */
+function decodeInstant(text: string): string | null {
+  const parts = CURSOR_INSTANT.exec(text);
+  if (parts === null) return null;
+  const at = new Date(
+    `${parts[1]}-${parts[2]}-${parts[3]}T${parts[4]}:${parts[5]}:${parts[6]}.000Z`,
   );
+  if (Number.isNaN(at.getTime())) return null;
+  // A date JavaScript silently ROLLS OVER — `2026-02-30` becomes 2 March —
+  // and PostgreSQL refuses outright. The regex cannot see that, so the value
+  // is compared with what it parsed to.
+  if (at.toISOString().slice(0, 19) !== text.slice(0, 19)) return null;
+  return text;
 }
 
 function decodeCursor(raw: string): PanelCursor | null {
@@ -76,8 +99,8 @@ function decodeCursor(raw: string): PanelCursor | null {
     // be is a legal `uuid` literal; refusing a legal one would restart the
     // traversal for ever rather than fail it, which is the worse outcome.
     if (!CURSOR_UUID.test(id)) return null;
-    const createdAt = new Date(decoded.slice(separator + 1));
-    if (Number.isNaN(createdAt.getTime())) return null;
+    const createdAt = decodeInstant(decoded.slice(separator + 1));
+    if (createdAt === null) return null;
     return { id: id.toLowerCase(), createdAt };
   } catch {
     return null;

@@ -1603,6 +1603,58 @@ describe('the panel list is a bounded, stable traversal', () => {
     expect(seen.slice().sort()).toEqual(created.slice().sort());
   });
 
+  it('does not repeat a row whose timestamp carries microseconds', async () => {
+    // `timestamptz` keeps microseconds; a JavaScript Date keeps milliseconds
+    // and the driver TRUNCATES. A cursor built from a Date is therefore
+    // strictly BELOW the row it names, and the tuple comparison lets that row
+    // back in — one duplicate per page boundary, and at `limit=1` a walk that
+    // never ends because every page returns the same row and hands back the
+    // same cursor.
+    //
+    // The service passes a millisecond `Clock.now()` today, so the rows that
+    // have microseconds are the ones a restore, an import or a fixture made:
+    // exactly the set nobody would think to test. Forced here.
+    const repo = new DrizzlePanelRepository(ctx.container.database.db);
+    const created: string[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      created.push(await make(owner, tenantA, `micro-${i}`));
+    }
+    await ctx.container.database.withClient((client) =>
+      client.query(
+        `UPDATE panels
+            SET created_at = timestamptz '2021-03-04 05:06:07+00'
+                             + (row_number * interval '1 microsecond')
+           FROM (SELECT id, row_number() OVER (ORDER BY id) AS row_number
+                   FROM panels WHERE tenant_id = $1::uuid) AS ordered
+          WHERE panels.id = ordered.id`,
+        [tenantA.tenantId],
+      ),
+    );
+    // Microseconds a millisecond cursor cannot represent.
+    const stored = await ctx.container.database.withClient(async (client) =>
+      (
+        await client.query<{ micros: string }>(
+          `SELECT to_char(created_at, 'US') AS micros FROM panels WHERE tenant_id = $1::uuid`,
+          [tenantA.tenantId],
+        )
+      ).rows.map((row) => row.micros),
+    );
+    expect(stored.every((micros) => Number(micros) % 1000 !== 0)).toBe(true);
+
+    // ONE per page: the page size at which a repeat is also a walk that never
+    // terminates, so this cannot pass by looping the guard out.
+    const seen: string[] = [];
+    let cursor: PanelCursor | null = null;
+    for (let guard = 0; guard < 20; guard += 1) {
+      const page = await repo.list(tenantA, { includeArchived: true, limit: 1, cursor });
+      seen.push(...page.panels.map((view) => view.panel.id));
+      if (page.nextCursor === null) break;
+      cursor = page.nextCursor;
+    }
+    expect(new Set(seen).size, 'a panel was returned twice').toBe(seen.length);
+    expect(seen.slice().sort()).toEqual(created.slice().sort());
+  });
+
   it('is not disturbed by a rename between two pages', async () => {
     // The keyset used to be ordered by `name`, which an operator can edit.
     // Renaming a panel already returned to a value AFTER the cursor brought it
@@ -1668,14 +1720,27 @@ describe('the panel list is a bounded, stable traversal', () => {
       );
       await client.query('ANALYZE panels');
     });
-    // The timestamp the bulk rows share, read back rather than assumed: the
-    // default is the database's clock, not this process's.
-    const bulkCreatedAt = await ctx.container.database.withClient(async (client) => {
-      const { rows } = await client.query<{ created_at: Date }>(
-        `SELECT created_at FROM panels WHERE tenant_id = $1::uuid ORDER BY created_at DESC LIMIT 1`,
+    // A cursor three thousand rows INTO the collection, read back rather than
+    // constructed. The first version of this passed `{ createdAt: <the one
+    // timestamp all four thousand bulk rows share>, id: <the zero uuid> }`,
+    // which sorts before every real row — so the "deep" scan was the same scan
+    // as the `cursor: null` one asserted above and the assertion could not
+    // fail. All the bulk rows share one `created_at` (one INSERT … SELECT), so
+    // this is also the tie case: the seek has to continue on `id` INSIDE that
+    // timestamp, which is the part an index can only do as an Index Cond.
+    const deepCursor = await ctx.container.database.withClient(async (client) => {
+      const { rows } = await client.query<{ created_at: string; id: string }>(
+        `SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at,
+                id::text AS id
+           FROM panels
+          WHERE tenant_id = $1::uuid AND status <> 'ARCHIVED'
+          ORDER BY created_at, id
+         OFFSET 3000 LIMIT 1`,
         [tenantA.tenantId],
       );
-      return rows[0]!.created_at;
+      const row = rows[0];
+      if (row === undefined) throw new Error('the bulk insert did not produce 3000 live panels');
+      return { createdAt: row.created_at, id: row.id };
     });
 
     const rowsRead = async (statement: SQL, relation: string): Promise<number> => {
@@ -1706,10 +1771,7 @@ describe('the panel list is a bounded, stable traversal', () => {
     const deep = DrizzlePanelRepository.pageKeysQuery(tenantA, {
       includeArchived: false,
       limit: 50,
-      // Deep into the collection on the IMMUTABLE key the cursor now uses.
-      // The bulk rows all share one `created_at`, so this is also the tie case:
-      // the seek has to continue on `id` inside the same timestamp.
-      cursor: { createdAt: bulkCreatedAt, id: '00000000-0000-0000-0000-000000000000' },
+      cursor: deepCursor,
     });
     expect(await rowsRead(deep, 'panels')).toBeLessThanOrEqual(51);
 
