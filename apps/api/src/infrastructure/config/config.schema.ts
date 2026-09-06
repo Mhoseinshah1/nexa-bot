@@ -317,8 +317,18 @@ export const configSchema = z
      * total volume of outbound probes needs a bound configuration cannot
      * reset. A token bucket of LIMIT tokens refilling continuously at
      * LIMIT per WINDOW: a burst of LIMIT, then one every WINDOW/LIMIT.
+     *
+     * A hundred per five minutes, raised from thirty when the health cadence
+     * went from ten minutes to three. It is the SAME bucket, not a second one:
+     * background probes and an operator's manual tests still come out of one
+     * allowance per tenant, which is the whole point of the bound. What changed
+     * is its size, and it changed because the cadence did — `n` panels at
+     * interval `i` need `n / i` probes per unit time, so holding the fleet a
+     * tenant can keep fresh at 60 panels while the interval falls by 3.3x means
+     * the refill rate has to rise by the same factor. Leaving it at thirty
+     * would have been a silent capacity cut dressed up as a cadence change.
      */
-    PANEL_PROBE_TENANT_LIMIT: z.coerce.number().int().min(1).max(10_000).default(30),
+    PANEL_PROBE_TENANT_LIMIT: z.coerce.number().int().min(1).max(10_000).default(100),
     PANEL_PROBE_TENANT_WINDOW_MS: z.coerce
       .number()
       .int()
@@ -352,9 +362,20 @@ export const configSchema = z
     /**
      * How long a HEALTHY result is allowed to stand before a re-probe.
      *
-     * Ten minutes against a `PANEL_HEALTH_FRESH_FOR_MS` of fifteen: the
-     * refresh lands comfortably before the result an operator reads goes
-     * stale, with room for a missed tick.
+     * THREE MINUTES, on the owner's instruction: a panel that goes down should
+     * be known to be down in minutes, not in a quarter of an hour. It was ten,
+     * which sat comfortably inside `PANEL_HEALTH_FRESH_FOR_MS` of fifteen and
+     * was chosen for exactly that reason; three sits further inside it still.
+     *
+     * Faster is not free, and the cost is arithmetic rather than opinion.
+     * Keeping `n` panels fresh at interval `i` needs `n / i` probes per unit
+     * time, so cutting the interval by 3.3x cuts what a FIXED probe budget can
+     * keep fresh by the same factor: at the old budget this default alone would
+     * have taken a tenant from 60 panels to 18 and the installation from 1000
+     * to 300, silently, with the capacity conditions firing on fleets that were
+     * comfortable the release before. `PANEL_PROBE_TENANT_LIMIT` and
+     * `PANEL_MONITOR_BATCH_SIZE` are raised in step to hold the ceilings where
+     * they were — see the note on each.
      *
      * The per-field ceiling here is only half the bound. Worst-case refresh is
      * the interval PLUS the anti-herd spread PLUS however long a due panel
@@ -368,7 +389,7 @@ export const configSchema = z
       .int()
       .min(30_000)
       .max(12 * 60 * 1000)
-      .default(10 * 60 * 1000),
+      .default(3 * 60 * 1000),
     /**
      * After a RETRYABLE failure — a timeout, an unreachable host, a provider
      * error. Trying again soon is the point: these are the failures that fix
@@ -404,8 +425,16 @@ export const configSchema = z
       .min(MONITOR_NONRETRYABLE_FLOOR_MS)
       .max(24 * 60 * 60 * 1000)
       .default(60 * 60 * 1000),
-    /** Panels considered in one tick. The query is LIMITed by this. */
-    PANEL_MONITOR_BATCH_SIZE: z.coerce.number().int().min(1).max(1_000).default(50),
+    /**
+     * Panels considered in one tick. The query is LIMITed by this.
+     *
+     * A hundred and fifty, raised from fifty for the same reason as the tenant
+     * limit: the installation-wide ceiling is `batch x (interval / tick)`, so
+     * the three-minute cadence would have taken it from 1000 to 300. At 150 it
+     * is 900 — near enough the same fleet, with a tick that still does bounded
+     * work.
+     */
+    PANEL_MONITOR_BATCH_SIZE: z.coerce.number().int().min(1).max(1_000).default(150),
     /**
      * How often the monitor re-assesses what this installation can keep fresh.
      *

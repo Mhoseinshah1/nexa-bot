@@ -69,6 +69,7 @@ import {
   DrizzleOperationalConditionReader,
   DrizzleOperationalEventReader,
 } from './modules/platform/opslog/infrastructure/drizzle-operational-event.reader.js';
+import { MonitorProfileService } from './modules/platform/panels/application/monitor-profile.service.js';
 import { OpsLogService } from './modules/platform/opslog/application/opslog.service.js';
 import { DrizzleSettingRepository } from './modules/control/settings/infrastructure/drizzle-settings.repository.js';
 import { SettingsResolver } from './modules/control/settings/application/settings-resolver.js';
@@ -198,6 +199,12 @@ export interface Container {
   readonly notificationDispatcher: NotificationDispatcher;
   readonly notificationTransport: NotificationTransport;
   readonly opsLogService: OpsLogService;
+  /**
+   * What the background monitor is configured to do, and what that
+   * configuration can carry. A read of installation configuration plus two
+   * pure capacity functions; it touches no repository and not the monitor.
+   */
+  readonly monitorProfileService: MonitorProfileService;
 
   shutdown(): Promise<void>;
 }
@@ -699,6 +706,20 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   );
 
   const opsLogService = new OpsLogService(guard, new DrizzleOperationalEventReader(database.db));
+  const monitorProfileService = new MonitorProfileService(guard, {
+    enabled: config.PANEL_MONITOR_ENABLED,
+    tickMs: config.PANEL_MONITOR_TICK_MS,
+    healthyIntervalMs: config.PANEL_MONITOR_HEALTHY_INTERVAL_MS,
+    retryableIntervalMs: config.PANEL_MONITOR_RETRYABLE_INTERVAL_MS,
+    nonRetryableIntervalMs: config.PANEL_MONITOR_NONRETRYABLE_INTERVAL_MS,
+    batchSize: config.PANEL_MONITOR_BATCH_SIZE,
+    concurrency: config.PANEL_MONITOR_CONCURRENCY,
+    tenantsPerTick: config.PANEL_MONITOR_TENANTS_PER_TICK,
+    probeTenantLimit: config.PANEL_PROBE_TENANT_LIMIT,
+    probeTenantWindowMs: config.PANEL_PROBE_TENANT_WINDOW_MS,
+    probeCooldownMs: config.PANEL_PROBE_COOLDOWN_MS,
+    budgetReservePercent: config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT,
+  });
 
   return {
     config,
@@ -781,6 +802,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     notificationDispatcher,
     notificationTransport,
     opsLogService,
+    monitorProfileService,
     panelMonitor,
     async shutdown() {
       await relay.stop();

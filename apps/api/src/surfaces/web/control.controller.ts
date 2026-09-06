@@ -20,6 +20,7 @@ import {
   type TemplateViewResponse,
   type TemplateWriteResponse,
   type SystemReadinessResponse,
+  type MonitorProfileResponse,
   type TenantContext,
   uuidV7Schema,
   notificationListQuerySchema,
@@ -237,6 +238,20 @@ export class ControlController {
     return { status: degraded ? 'degraded' : 'ok', dependencies };
   }
 
+  /**
+   * What the background panel monitor is configured to do.
+   *
+   * Read-only. The cadence and the two capacity ceilings come from the
+   * application service, which computes them with the same functions the
+   * monitor's own capacity conditions use — so the screen and the alarm cannot
+   * disagree about whether a fleet fits.
+   */
+  @Get('system/monitor')
+  async systemMonitor(@Req() request: FastifyRequest): Promise<MonitorProfileResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    return { monitor: await this.container.monitorProfileService.read(scope, actor) };
+  }
+
   // --- Operational events --------------------------------------------------
 
   @Get('ops-log')
@@ -263,6 +278,11 @@ export class ControlController {
       // deserves a 400.
       ...cursorFrom(query.before, query.beforeId),
       ...(query.open ? { open: query.open === 'true' } : {}),
+      // Narrows to the management-facing codes. Passed straight through and
+      // validated by the service's enum, so an unknown value is a 400 rather
+      // than a silent fall back to the whole log — which would show an alerts
+      // page the routine stream it exists to exclude.
+      ...(query.scope ? { scope: query.scope } : {}),
     });
     return { events: events.map(toEventResponse) };
   }

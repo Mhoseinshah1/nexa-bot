@@ -1,5 +1,10 @@
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, or } from 'drizzle-orm';
-import type { OperationalSeverity, ScopeContext } from '@nexa/contracts';
+import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lt, or } from 'drizzle-orm';
+import {
+  MANAGEMENT_EVENT_CODES,
+  MANAGEMENT_EVENT_CODE_PREFIXES,
+  type OperationalSeverity,
+  type ScopeContext,
+} from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { operationalEvents } from '../../../../infrastructure/persistence/schema.js';
 import {
@@ -48,6 +53,24 @@ export class DrizzleOperationalEventReader implements OperationalEventReader {
       filters.push(inArray(operationalEvents.severity, [...query.severities]));
     }
     if (query.code) filters.push(eq(operationalEvents.code, query.code));
+    // The management scope, applied HERE so that `limit` bounds the rows the
+    // reader will actually see and the cursor advances over the same set. The
+    // classification itself lives in `@nexa/contracts` and is shared with the
+    // predicate a test calls, so the SQL and the rule cannot drift apart.
+    //
+    // `like` with a literal prefix and no wildcards of its own: the prefixes
+    // are compile-time constants from the contract, not anything a caller
+    // supplies, so there is no pattern to escape.
+    if (query.scope === 'MANAGEMENT') {
+      filters.push(
+        or(
+          inArray(operationalEvents.code, [...MANAGEMENT_EVENT_CODES]),
+          ...MANAGEMENT_EVENT_CODE_PREFIXES.map((prefix) =>
+            like(operationalEvents.code, `${prefix}%`),
+          ),
+        )!,
+      );
+    }
     // Half-open `[since, until)`: an event at exactly `until` belongs to the
     // next interval, so two adjacent reports never double-count it.
     if (query.since) filters.push(gte(operationalEvents.lastSeenAt, query.since));

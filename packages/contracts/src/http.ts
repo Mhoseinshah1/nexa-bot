@@ -94,6 +94,46 @@ export const systemReadinessResponseSchema = z.object({
 export type SystemReadinessResponse = z.infer<typeof systemReadinessResponseSchema>;
 
 /**
+ * What the background panel monitor is actually configured to do.
+ *
+ * Read-only, and it exists because the alternative is a screen that PRINTS a
+ * cadence. The shipped default is three minutes; a deployment can set anything
+ * the schema accepts, and an admin panel that renders "every 3 minutes" from a
+ * constant in its own bundle would be stating a number the installation may not
+ * be running. That is the legacy statistics screen counting CONFIGURED panels
+ * and calling them connected, in a new place.
+ *
+ * The two ceilings are computed SERVER-side by the same functions the monitor's
+ * own capacity conditions use. Recomputing them in the browser would be a
+ * second implementation of the arithmetic, free to disagree with the one that
+ * decides whether an alarm fires.
+ */
+export const monitorProfileSchema = z.object({
+  enabled: z.boolean(),
+  tickMs: z.number().int().positive(),
+  healthyIntervalMs: z.number().int().positive(),
+  retryableIntervalMs: z.number().int().positive(),
+  nonRetryableIntervalMs: z.number().int().positive(),
+  batchSize: z.number().int().positive(),
+  concurrency: z.number().int().positive(),
+  tenantsPerTick: z.number().int().positive(),
+  probeTenantLimit: z.number().int().positive(),
+  probeTenantWindowMs: z.number().int().positive(),
+  probeCooldownMs: z.number().int().positive(),
+  budgetReservePercent: z.number().int().nonnegative(),
+  /** The constant a surface calls a result stale against. */
+  freshForMs: z.number().int().positive(),
+  /** The most panels ONE tenant's probe budget could keep inside that window. */
+  tenantFreshPanelCeiling: z.number().int().nonnegative(),
+  /** The most the scheduler could START on across the whole installation. */
+  installationFreshPanelCeiling: z.number().int().nonnegative(),
+});
+export type MonitorProfile = z.infer<typeof monitorProfileSchema>;
+
+export const monitorProfileResponseSchema = z.object({ monitor: monitorProfileSchema });
+export type MonitorProfileResponse = z.infer<typeof monitorProfileResponseSchema>;
+
+/**
  * Build metadata. Requires an authenticated session.
  *
  * Version, commit, build time, Node version and environment are not secrets and
@@ -698,6 +738,8 @@ export const CONTROL_ROUTES = {
   notificationTest: '/notifications/test',
   /** Readiness with dependency detail. Authenticated; see the schema. */
   systemReadiness: '/system/readiness',
+  /** What the background panel monitor is configured to do. Read-only. */
+  systemMonitor: '/system/monitor',
 } as const;
 
 // ---------------------------------------------------------------------------

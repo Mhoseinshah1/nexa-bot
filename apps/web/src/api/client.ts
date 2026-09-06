@@ -42,6 +42,21 @@ import {
   type TemplateWriteResponse,
   systemReadinessResponseSchema,
   type SystemReadinessResponse,
+  PANEL_ROUTES,
+  panelListResponseSchema,
+  panelResponseSchema,
+  providerListResponseSchema,
+  testPanelResponseSchema,
+  type PanelCredentialsInput,
+  type PanelListResponse,
+  type PanelResponse,
+  type PanelStatus,
+  type ProviderListResponse,
+  type ProviderType,
+  type TestPanelResponse,
+  type OperationalScope,
+  monitorProfileResponseSchema,
+  type MonitorProfileResponse,
 } from '@nexa/contracts';
 
 /**
@@ -51,6 +66,19 @@ import {
  * A change to a shape in `@nexa/contracts` is therefore a type error here and
  * in the API at the same time — which is the whole reason the seam exists.
  */
+
+/**
+ * What the background panel monitor is configured to do, and what that
+ * configuration can carry.
+ *
+ * Fetched rather than derived. The shipped health cadence is three minutes and
+ * a deployment can set anything the schema accepts; a screen that printed
+ * "every 3 minutes" from a constant in this bundle would be stating a number
+ * the installation may not be running.
+ */
+export function fetchMonitorProfile(): Promise<MonitorProfileResponse> {
+  return authedGet(CONTROL_ROUTES.systemMonitor, monitorProfileResponseSchema);
+}
 
 /** Readiness with dependency detail. Requires a session. */
 export function fetchReadiness(): Promise<SystemReadinessResponse> {
@@ -302,12 +330,21 @@ export function fetchOpsLog(query: {
   before?: string;
   /** Its id, which breaks ties when several rows share that timestamp. */
   beforeId?: string;
+  /**
+   * `MANAGEMENT` narrows to the codes that want a person's attention.
+   *
+   * Sent to the server rather than applied to the answer: filtering a page of
+   * fifty rows down to two here would leave the cursor having already walked
+   * past the other forty-eight, so paging would drop rows silently.
+   */
+  scope?: OperationalScope;
 }): Promise<OperationalEventListResponse> {
   const params = new URLSearchParams();
   if (query.severity) params.set('severity', query.severity);
   if (query.open !== undefined) params.set('open', String(query.open));
   if (query.before) params.set('before', query.before);
   if (query.beforeId) params.set('beforeId', query.beforeId);
+  if (query.scope) params.set('scope', query.scope);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${CONTROL_ROUTES.opsLog}?${suffix}` : CONTROL_ROUTES.opsLog,
@@ -331,4 +368,101 @@ export function sendTestNotification(
     { idempotencyKey },
     sendTestNotificationResponseSchema,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Panels and providers
+// ---------------------------------------------------------------------------
+
+/**
+ * The provider catalogue.
+ *
+ * Fetched rather than hardcoded, because a provider is CODE: its capabilities
+ * come from the adapter's descriptor, and a copy of that list in the browser is
+ * a copy that goes stale the release a capability is added. The picker on the
+ * add-panel form is populated from this and from nothing else.
+ */
+export function fetchProviders(): Promise<ProviderListResponse> {
+  return authedGet(PANEL_ROUTES.providers, providerListResponseSchema);
+}
+
+/**
+ * One page of panels.
+ *
+ * `cursor` is opaque and is passed back exactly as received. Parsing it here
+ * would make this client depend on an ordering the API has deliberately not
+ * promised — and the server rejects a cursor it did not mint, so a "clever"
+ * client-side cursor is a 400 rather than a subtle bug.
+ */
+export function fetchPanels(
+  query: { limit?: number; cursor?: string } = {},
+): Promise<PanelListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${PANEL_ROUTES.list}?${suffix}` : PANEL_ROUTES.list,
+    panelListResponseSchema,
+  );
+}
+
+export function fetchPanel(id: string): Promise<PanelResponse> {
+  return authedGet(PANEL_ROUTES.detail(id), panelResponseSchema);
+}
+
+export function createPanel(input: {
+  name: string;
+  providerType: ProviderType;
+  baseUrl: string;
+  credentials?: PanelCredentialsInput;
+  idempotencyKey: string;
+}): Promise<PanelResponse> {
+  return post(PANEL_ROUTES.create, input, panelResponseSchema);
+}
+
+export function updatePanel(input: {
+  id: string;
+  name?: string;
+  baseUrl?: string;
+  idempotencyKey: string;
+}): Promise<PanelResponse> {
+  const { id, ...body } = input;
+  return post(PANEL_ROUTES.update(id), body, panelResponseSchema);
+}
+
+/**
+ * Replacing a credential is its own route because it is its own permission:
+ * `panels.credentials.rotate` is CRITICAL and `panels.edit` is HIGH. Folding
+ * them together would force every name change to require the right to rotate.
+ */
+export function setPanelCredentials(input: {
+  id: string;
+  credentials: PanelCredentialsInput;
+  idempotencyKey: string;
+}): Promise<PanelResponse> {
+  const { id, ...body } = input;
+  return post(PANEL_ROUTES.credentials(id), body, panelResponseSchema);
+}
+
+export function setPanelStatus(input: {
+  id: string;
+  status: PanelStatus;
+  idempotencyKey: string;
+}): Promise<PanelResponse> {
+  const { id, ...body } = input;
+  return post(PANEL_ROUTES.status(id), body, panelResponseSchema);
+}
+
+/**
+ * A connection test. It is a state-changing command and carries a key like one:
+ * it writes a health row and an audit entry, and `probed: false` in the answer
+ * means the stored health came back without a new probe being made.
+ */
+export function testPanel(input: {
+  id: string;
+  idempotencyKey: string;
+}): Promise<TestPanelResponse> {
+  const { id, ...body } = input;
+  return post(PANEL_ROUTES.test(id), body, testPanelResponseSchema);
 }

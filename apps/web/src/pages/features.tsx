@@ -4,7 +4,9 @@ import type { FeatureFlagResponse } from '@nexa/contracts';
 import { fetchFeatureFlags, saveFeatureFlag } from '../api/client';
 import { useSubmissionKey } from '../submission-key';
 import { t } from '../i18n/web.fa';
-import { ErrorReport, messageFor } from './settings';
+import { ErrorReport } from './settings';
+import { queryState } from './dashboard';
+import { Badge, Banner, Card, DataTable, Ltr, PageHead, StateSwitch } from '../ui/kit';
 
 /**
  * The feature-flag screen.
@@ -19,21 +21,22 @@ import { ErrorReport, messageFor } from './settings';
  * capability screen renders the whole-bot kill switch identically to the dice
  * toggle and takes one press (CBR-009).
  */
-export function FeaturesPage({ mayEdit }: { mayEdit: boolean }) {
-  const flags = useQuery({ queryKey: ['features'], queryFn: fetchFeatureFlags });
+export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: boolean }) {
+  const flags = useQuery({ queryKey: ['features'], queryFn: fetchFeatureFlags, enabled: !denied });
+  const rows = flags.data?.flags ?? [];
 
   return (
-    <section>
-      <h2>{t('web.features_title')}</h2>
-      <p className="notice">{t('web.features_intro')}</p>
-
-      {flags.isPending && <p>{t('web.loading')}</p>}
-      {flags.isError && <p className="error">{messageFor(flags.error)}</p>}
-
-      {flags.data?.flags.map((flag) => (
-        <FlagCard key={flag.key} flag={flag} mayEdit={mayEdit} />
-      ))}
-    </section>
+    <>
+      <PageHead title={t('web.features_title')} subtitle={t('web.features_intro')} maturity="now" />
+      <StateSwitch
+        state={denied ? 'denied' : queryState(flags, rows.length === 0)}
+        onRetry={() => void flags.refetch()}
+      >
+        {rows.map((flag) => (
+          <FlagCard key={flag.key} flag={flag} mayEdit={mayEdit} />
+        ))}
+      </StateSwitch>
+    </>
   );
 }
 
@@ -89,77 +92,89 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
   };
 
   return (
-    <form className={wide ? 'card wide' : 'card'} onSubmit={onSubmit}>
-      <h3>
-        <code>{flag.key}</code>
-        <span className={flag.enabled ? 'up' : 'down'}>
-          {flag.enabled ? t('web.enabled') : t('web.disabled')}
-        </span>
-        {wide && <span className="tag danger">{t('web.tenant_wide')}</span>}
-      </h3>
-      <p>{flag.description}</p>
-
-      {flag.reason && (
-        <p className="meta">
-          {t('web.confirm_reason')}: {flag.reason}
-        </p>
-      )}
-
-      {flag.configuration.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th>{t('web.key')}</th>
-              <th>{t('web.value')}</th>
-              <th>{t('web.source')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {flag.configuration.map((setting) => (
-              <tr key={setting.key} className={setting.inert ? 'inert' : undefined}>
-                <td>
-                  <code>{setting.key}</code>
-                  {setting.inert && <p className="notice">{t('web.inert')}</p>}
-                  {setting.storedValueInvalid && (
-                    <p className="error">{t('web.stored_value_invalid')}</p>
-                  )}
-                </td>
-                <td>{displayValue(setting.value)}</td>
-                <td>
-                  {setting.source === 'TENANT' ? t('web.source_tenant') : t('web.source_default')}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      {mayEdit && wide && (
+    <Card
+      title={flag.key}
+      actions={
         <>
-          <p className="notice">{t('web.confirm_required')}</p>
-          <label htmlFor={`confirm-${flag.key}`}>{t('web.confirm_key')}</label>
-          <input
-            id={`confirm-${flag.key}`}
-            value={confirmKey}
-            onChange={(event) => setConfirmKey(event.target.value)}
-            placeholder={flag.key}
-          />
-          <label htmlFor={`reason-${flag.key}`}>{t('web.confirm_reason')}</label>
-          <input
-            id={`reason-${flag.key}`}
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-          />
+          <Badge tone={flag.enabled ? 'ok' : 'neutral'}>
+            {flag.enabled ? t('web.enabled') : t('web.disabled')}
+          </Badge>
+          {wide && <Badge tone="danger">{t('web.tenant_wide')}</Badge>}
         </>
-      )}
+      }
+    >
+      <form onSubmit={onSubmit}>
+        <p className="muted small">{flag.description}</p>
 
-      {mayEdit && (
-        <button type="submit" disabled={toggle.isPending}>
-          {toggle.isPending ? t('web.saving') : flag.enabled ? t('web.disable') : t('web.enable')}
-        </button>
-      )}
-      {toggle.isError && <ErrorReport error={toggle.error} />}
-    </form>
+        {flag.reason !== null && flag.reason !== '' && (
+          <p className="faint small">
+            {t('web.confirm_reason')}: <span className="plain">{flag.reason}</span>
+          </p>
+        )}
+
+        {flag.configuration.length > 0 && (
+          <DataTable
+            caption={t('web.features_title')}
+            rows={flag.configuration}
+            rowKey={(setting) => setting.key}
+            columns={[
+              {
+                key: 'key',
+                header: t('web.key'),
+                render: (setting) => (
+                  <div className={setting.inert ? 'inert' : undefined}>
+                    <Ltr>{setting.key}</Ltr>
+                    {setting.inert && <p className="muted small">{t('web.inert')}</p>}
+                    {setting.storedValueInvalid && (
+                      <p className="danger small">{t('web.stored_value_invalid')}</p>
+                    )}
+                  </div>
+                ),
+              },
+              {
+                key: 'value',
+                header: t('web.value'),
+                render: (setting) => <Ltr>{displayValue(setting.value)}</Ltr>,
+              },
+              {
+                key: 'source',
+                header: t('web.source'),
+                render: (setting) =>
+                  setting.source === 'TENANT' ? t('web.source_tenant') : t('web.source_default'),
+              },
+            ]}
+          />
+        )}
+
+        {mayEdit && wide && (
+          <>
+            <Banner tone="warn">{t('web.confirm_required')}</Banner>
+            <label htmlFor={`confirm-${flag.key}`}>{t('web.confirm_key')}</label>
+            <input
+              id={`confirm-${flag.key}`}
+              className="input ltr mono"
+              value={confirmKey}
+              onChange={(event) => setConfirmKey(event.target.value)}
+              placeholder={flag.key}
+            />
+            <label htmlFor={`reason-${flag.key}`}>{t('web.confirm_reason')}</label>
+            <input
+              id={`reason-${flag.key}`}
+              className="input"
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          </>
+        )}
+
+        {mayEdit && (
+          <button type="submit" className="btn primary" disabled={toggle.isPending}>
+            {toggle.isPending ? t('web.saving') : flag.enabled ? t('web.disable') : t('web.enable')}
+          </button>
+        )}
+        {toggle.isError && <ErrorReport error={toggle.error} />}
+      </form>
+    </Card>
   );
 }
 

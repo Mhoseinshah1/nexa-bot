@@ -193,6 +193,88 @@ export const OPERATIONAL_SEVERITIES = ['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITIC
 export type OperationalSeverity = (typeof OPERATIONAL_SEVERITIES)[number];
 
 /**
+ * Which slice of the operational log a reader is asking for.
+ *
+ * `ALL` is the whole stream. `MANAGEMENT` is the far smaller set that wants a
+ * person's attention: an administrator was added, a role changed, the
+ * installation ran out of monitoring capacity, the notification channel gave
+ * up, a stored setting stopped parsing, somebody was locked out.
+ *
+ * The distinction exists because the Web Admin's alerts page is not an
+ * operational history. Routine events — every probe, every health transition,
+ * every delivery attempt — go to the Telegram report group, which is the
+ * human-facing operational stream; a page that mixed the two would bury the six
+ * events an operator must act on under the six thousand they must not.
+ *
+ * It is a SERVER-side scope on purpose. Filtering a page of fifty rows in the
+ * browser yields a page of two, a cursor that has already skipped past
+ * everything else, and paging that silently loses rows — which is the same
+ * class of defect as the cursor tie-break this log already had to fix.
+ */
+export const OPERATIONAL_SCOPES = ['ALL', 'MANAGEMENT'] as const;
+export type OperationalScope = (typeof OPERATIONAL_SCOPES)[number];
+
+/**
+ * Whole families of codes that are management-facing.
+ *
+ * A prefix rather than an enumeration for `admin.` because every event about
+ * an administrator qualifies by construction — adding one, suspending one,
+ * changing their roles or their password — and a new one must not fall out of
+ * the scope silently for want of being listed.
+ */
+export const MANAGEMENT_EVENT_CODE_PREFIXES = ['admin.'] as const;
+
+/**
+ * The individual codes that are management-facing.
+ *
+ * Enumerated, and each one has a reason:
+ *
+ *   - `access.permission_denied`, `auth.login_locked_out` — somebody was
+ *     refused, or locked out. Both are security facts about people.
+ *   - `internal.unhandled` — the process failed in a way nothing anticipated.
+ *   - `notification.attempts_exhausted` — the operations channel itself has
+ *     stopped delivering, so the OTHER stream can no longer be trusted to
+ *     report anything. It has to surface here or it surfaces nowhere.
+ *   - `panel.monitor.*_exceeded` and their `_ok` recoveries — the installation
+ *     is over its monitoring capacity. An operator has to add capacity or
+ *     lower the fleet; no amount of waiting fixes it.
+ *   - `settings.stored_value_invalid` and its `..._valid` recovery — a stored
+ *     setting no longer parses, so a default is silently in force in its
+ *     place. The recovery is here too: a scope that shows a failure and hides
+ *     the news that it is over is a scope that reads as permanently broken.
+ *
+ * Deliberately NOT here: `panel.health.*` and `panel.monitor.probe`. A panel
+ * going unreachable and coming back is the routine operational stream, and it
+ * is already visible where it is actionable — on the panel itself, and on the
+ * dashboard. Putting it here would make this page the log the owner asked for
+ * it not to be.
+ */
+export const MANAGEMENT_EVENT_CODES = [
+  'access.permission_denied',
+  'auth.login_locked_out',
+  'internal.unhandled',
+  'notification.attempts_exhausted',
+  'panel.monitor.scheduler_capacity_exceeded',
+  'panel.monitor.scheduler_capacity_ok',
+  'panel.monitor.tenant_budget_exceeded',
+  'panel.monitor.tenant_budget_ok',
+  'settings.stored_value_invalid',
+  'settings.stored_value_valid',
+] as const;
+
+/**
+ * Whether a code belongs to the management scope.
+ *
+ * Exported so the same rule answers the question in the query, in a test, and
+ * anywhere else that has to decide — rather than the SQL holding one version of
+ * it and a surface another.
+ */
+export function isManagementEventCode(code: string): boolean {
+  if ((MANAGEMENT_EVENT_CODES as readonly string[]).includes(code)) return true;
+  return MANAGEMENT_EVENT_CODE_PREFIXES.some((prefix) => code.startsWith(prefix));
+}
+
+/**
  * An operational event: what the system did, as opposed to who changed what.
  *
  * `dedupeKey` collapses repeats into one row with an occurrence counter — the

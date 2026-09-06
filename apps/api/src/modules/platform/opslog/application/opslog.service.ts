@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  OPERATIONAL_SCOPES,
   OPERATIONAL_SEVERITIES,
   type ActorContext,
   type PermissionKey,
@@ -27,6 +28,15 @@ export const opsLogQuerySchema = z.object({
   since: z.date().optional(),
   until: z.date().optional(),
   open: z.boolean().optional(),
+  /**
+   * `ALL` by default, so an existing caller keeps the whole stream.
+   *
+   * `MANAGEMENT` narrows to the codes that want a person's attention. It is a
+   * query rather than a separate endpoint because it is the same read with the
+   * same permission, the same cursor and the same shape — a second endpoint
+   * would be a second place for the paging to be wrong.
+   */
+  scope: z.enum(OPERATIONAL_SCOPES).default('ALL'),
 });
 export type OpsLogQuery = z.infer<typeof opsLogQuerySchema>;
 

@@ -271,7 +271,7 @@ refill rate:
     (PANEL_PROBE_TENANT_LIMIT / PANEL_PROBE_TENANT_WINDOW_MS)
       x PANEL_MONITOR_HEALTHY_INTERVAL_MS
 
-Defaults: 30 tokens per 5 minutes over a 10-minute interval = **60 panels per
+Defaults: 100 tokens per 5 minutes over a 3-minute interval = **60 panels per
 tenant**.
 
 **Installation-wide — the scheduler.** A tick discovers at most
@@ -280,7 +280,7 @@ claimed that tick, so across one interval the loop can start at most
 
     PANEL_MONITOR_BATCH_SIZE x (PANEL_MONITOR_HEALTHY_INTERVAL_MS / PANEL_MONITOR_TICK_MS)
 
-Defaults: 50 x 20 = **1000 panels for the whole installation**.
+Defaults: 150 x 6 = **900 panels for the whole installation**.
 
 These are different questions and the second is not a per-tenant number. A
 hundred tenants of twenty panels each is comfortably inside every per-tenant

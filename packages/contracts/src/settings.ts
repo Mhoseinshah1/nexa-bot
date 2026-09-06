@@ -264,9 +264,12 @@ export const SETTINGS = [
     schema: z
       .array(telegramHandleSchema)
       .max(10)
-      .refine(unique((handle: string) => handle.toLowerCase()), {
-        message: 'The same support account is listed twice.',
-      }),
+      .refine(
+        unique((handle: string) => handle.toLowerCase()),
+        {
+          message: 'The same support account is listed twice.',
+        },
+      ),
     defaultValue: [],
     // An empty list is not "no limit" and not a sentinel: it means no support
     // contact is offered at all.
@@ -298,9 +301,12 @@ export const SETTINGS = [
         }),
       )
       .max(10)
-      .refine(unique((channel: { handle: string }) => channel.handle.toLowerCase()), {
-        message: 'The same channel is listed twice.',
-      }),
+      .refine(
+        unique((channel: { handle: string }) => channel.handle.toLowerCase()),
+        {
+          message: 'The same channel is listed twice.',
+        },
+      ),
     defaultValue: [],
     zeroMeaning: 'DISABLES',
     mutability: 'RUNTIME',
