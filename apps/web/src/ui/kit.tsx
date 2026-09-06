@@ -342,13 +342,30 @@ export function Tabs<T extends string>({
   items: readonly { id: T; label: string }[];
   panelId: string;
 }) {
+  /**
+   * The tab buttons, so activation can MOVE FOCUS.
+   *
+   * Selecting with an arrow key and leaving `document.activeElement` on the
+   * old button puts focus on a tab that is now `aria-selected=false` with
+   * `tabIndex={-1}` while a different panel is shown — the roving tabindex
+   * advertised by the markup then does not work for exactly the users it
+   * exists for.
+   */
+  const buttons = useRef(new Map<T, HTMLButtonElement | null>());
+
+  const select = (next: T) => {
+    onChange(next);
+    // After the state change, so the newly selected button is the one focused.
+    queueMicrotask(() => buttons.current.get(next)?.focus());
+  };
+
   const move = (delta: number) => {
     const at = items.findIndex((item) => item.id === value);
     if (at < 0) return;
     // Wrapping, per the ARIA practices: from the last tab, End-of-strip is the
     // first one rather than nothing happening.
     const next = items[(at + delta + items.length) % items.length];
-    if (next) onChange(next.id);
+    if (next) select(next.id);
   };
 
   return (
@@ -365,17 +382,20 @@ export function Tabs<T extends string>({
           move(-1);
         } else if (event.key === 'Home') {
           event.preventDefault();
-          if (items[0]) onChange(items[0].id);
+          if (items[0]) select(items[0].id);
         } else if (event.key === 'End') {
           event.preventDefault();
           const last = items[items.length - 1];
-          if (last) onChange(last.id);
+          if (last) select(last.id);
         }
       }}
     >
       {items.map((item) => (
         <button
           key={item.id}
+          ref={(node) => {
+            buttons.current.set(item.id, node);
+          }}
           type="button"
           role="tab"
           id={`${panelId}-tab-${item.id}`}
@@ -383,7 +403,7 @@ export function Tabs<T extends string>({
           aria-controls={panelId}
           // The roving part: only the selected tab is in the tab order.
           tabIndex={item.id === value ? 0 : -1}
-          className={item.id === value ? 'active' : undefined}
+          className={item.id === value ? 'on' : undefined}
           onClick={() => onChange(item.id)}
         >
           {item.label}
@@ -429,7 +449,7 @@ export function Pills<T extends string>({
           key={item.id}
           type="button"
           aria-pressed={item.id === value}
-          className={item.id === value ? 'active' : undefined}
+          className={item.id === value ? 'on' : undefined}
           onClick={() => onChange(item.id)}
         >
           {item.label}
@@ -501,11 +521,22 @@ export function Switch({
  * else. A replace field starts EMPTY for the same reason.
  */
 export function Secret({
+  label,
   configured,
   meta,
   onReplace,
   onRemove,
 }: {
+  /**
+   * Which credential this row IS — required, not optional.
+   *
+   * Three rows rendered only presence, a timestamp and an identically named
+   * "Remove". With a username and an API token configured, an operator saw two
+   * indistinguishable destructive controls and could delete the wrong live
+   * credential; a screen reader announced both as simply "remove". The name is
+   * both visible and part of each button's accessible name.
+   */
+  label: string;
   configured: boolean;
   meta?: string;
   onReplace?: () => void;
@@ -513,18 +544,29 @@ export function Secret({
 }) {
   return (
     <div className="secret">
+      <span className="strong">{label}</span>
       <Badge tone={configured ? 'ok' : 'neutral'}>
         {configured ? t('web.credential_set') : t('web.credential_absent')}
       </Badge>
       {meta !== undefined && <span className="faint small">{meta}</span>}
       <span className="spacer" />
       {onReplace !== undefined && (
-        <button type="button" className="btn sm" onClick={onReplace}>
+        <button
+          type="button"
+          className="btn sm"
+          aria-label={`${t('web.replace')} — ${label}`}
+          onClick={onReplace}
+        >
           {t('web.replace')}
         </button>
       )}
       {onRemove !== undefined && configured && (
-        <button type="button" className="btn sm ghost danger" onClick={onRemove}>
+        <button
+          type="button"
+          className="btn sm ghost danger"
+          aria-label={`${t('web.remove')} — ${label}`}
+          onClick={onRemove}
+        >
           {t('web.remove')}
         </button>
       )}
@@ -887,7 +929,7 @@ export function ListEditor<T>({
           <button
             type="button"
             className="btn ghost icon sm"
-            aria-label={t('web.move_up')}
+            aria-label={`${t('web.move_up')} — ${index + 1}`}
             disabled={disabled === true || index === 0}
             onClick={() => move(index, -1)}
           >
@@ -904,7 +946,7 @@ export function ListEditor<T>({
           <button
             type="button"
             className="btn ghost icon sm"
-            aria-label={t('web.move_down')}
+            aria-label={`${t('web.move_down')} — ${index + 1}`}
             disabled={disabled === true || index === items.length - 1}
             onClick={() => move(index, 1)}
           >
@@ -913,7 +955,7 @@ export function ListEditor<T>({
           <button
             type="button"
             className="btn ghost icon sm danger"
-            aria-label={t('web.remove')}
+            aria-label={`${t('web.remove')} — ${index + 1}`}
             disabled={disabled === true}
             onClick={() => onChange(items.filter((_, at) => at !== index))}
           >

@@ -290,6 +290,10 @@ function CapacityView({ profile }: { profile: MonitorProfile }) {
             </span>,
           ],
           [
+            t('web.monitor_tenant_turn_ceiling'),
+            <Num key="tt" value={profile.tenantTurnCeiling} />,
+          ],
+          [
             t('web.monitor_probe_budget'),
             <span key="b">
               <Num value={profile.probeTenantLimit} />

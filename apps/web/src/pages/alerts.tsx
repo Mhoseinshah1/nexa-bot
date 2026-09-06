@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { OperationalSeverity } from '@nexa/contracts';
+import { isOneShotManagementCode, type OperationalSeverity } from '@nexa/contracts';
 import {
   fetchNotification,
   fetchNotifications,
@@ -50,10 +50,9 @@ const SEVERITIES: readonly OperationalSeverity[] = ['DEBUG', 'INFO', 'WARN', 'ER
  * The page size, and the reason it is a constant here rather than the server's
  * default.
  *
- * `GET /ops-log` returns rows and no `nextCursor`. A caller can therefore only
- * know it is on the last page by comparing what came back against what it
- * asked for, which means it has to ASK — the pager below reads
- * `rows.length === ALERTS_PAGE_SIZE`.
+ * Sent explicitly so the page size is the caller's decision rather than the
+ * server default. Whether ANOTHER page exists is a separate question and only
+ * the server can answer it, which is why the response carries `nextCursor`.
  */
 const ALERTS_PAGE_SIZE = 25;
 
@@ -103,7 +102,6 @@ export function AlertsPage({ denied }: { denied: boolean }) {
   };
 
   const rows = events.data?.events ?? [];
-  const oldest = rows.length > 0 ? rows[rows.length - 1] : undefined;
 
   const columns: readonly Column<(typeof rows)[number]>[] = [
     {
@@ -145,11 +143,23 @@ export function AlertsPage({ denied }: { denied: boolean }) {
     {
       key: 'state',
       header: t('web.status'),
-      render: (row) => (
-        <Badge tone={row.resolvedAt ? 'ok' : 'warn'}>
-          {row.resolvedAt ? t('web.resolved') : t('web.unresolved')}
-        </Badge>
-      ),
+      /**
+       * A one-shot record is HISTORY, not outstanding work.
+       *
+       * `resolvedAt` is permanently null for a denial, a lockout or an
+       * administrator change, by design — there is no recovery and
+       * deliberately no acknowledgement. Rendering the same
+       * resolved/unresolved badge for those framed immutable facts as a
+       * backlog, which is the reading this page exists to prevent.
+       */
+      render: (row) =>
+        isOneShotManagementCode(row.code) ? (
+          <Badge tone="neutral">{t('web.event_recorded')}</Badge>
+        ) : (
+          <Badge tone={row.resolvedAt ? 'ok' : 'warn'}>
+            {row.resolvedAt ? t('web.resolved') : t('web.unresolved')}
+          </Badge>
+        ),
     },
   ];
 
@@ -217,15 +227,18 @@ export function AlertsPage({ denied }: { denied: boolean }) {
         <CursorPager
           shown={rows.length}
           hasPrevious={trail.length > 0}
-          // A FULL page, not a non-empty one. `rows.length > 0` enabled
-          // "older" on the last page too, and pressing it rendered the empty
-          // state — "there are no open alerts" — over alerts one page back.
-          hasNext={oldest !== undefined && rows.length === ALERTS_PAGE_SIZE}
+          // The SERVER's cursor. A full page is not the same question as
+          // "is there another page": with exactly `ALERTS_PAGE_SIZE` matching
+          // rows the page is full and there is nothing behind it, so comparing
+          // lengths offered an "older" page that did not exist and landed the
+          // operator on "there are no open alerts" over alerts one page back.
+          // The reader over-fetches one row to answer this properly.
+          hasNext={events.data?.nextCursor != null}
           onPrevious={() => setTrail((current) => current.slice(0, -1))}
-          onNext={() =>
-            oldest !== undefined &&
-            setTrail((current) => [...current, { at: oldest.lastSeenAt, id: oldest.id }])
-          }
+          onNext={() => {
+            const next = events.data?.nextCursor;
+            if (next) setTrail((current) => [...current, next]);
+          }}
         />
       </Card>
     </>

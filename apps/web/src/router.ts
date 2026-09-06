@@ -137,8 +137,19 @@ export function match(pattern: string, path: string): Record<string, string> | n
   for (let index = 0; index < wanted.length; index += 1) {
     const segment = wanted[index] ?? '';
     const value = actual[index] ?? '';
-    if (segment.startsWith(':')) params[segment.slice(1)] = decodeURIComponent(value);
-    else if (segment !== value) return null;
+    if (segment.startsWith(':')) {
+      // `decodeURIComponent` THROWS on a malformed escape such as `%E0`, and
+      // `match` runs inside `resolve` during render — with no error boundary
+      // above it, one hand-typed URL took the whole signed-in admin down. A
+      // route that cannot be decoded is a route that does not match.
+      let decoded: string;
+      try {
+        decoded = decodeURIComponent(value);
+      } catch {
+        return null;
+      }
+      params[segment.slice(1)] = decoded;
+    } else if (segment !== value) return null;
   }
   return params;
 }

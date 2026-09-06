@@ -8,6 +8,8 @@ import {
   type PanelSummaryResponse,
   type ProviderCapability,
   type ProviderType,
+  providerDescriptor,
+  shapeAcceptsCredential,
 } from '@nexa/contracts';
 import {
   createPanel,
@@ -367,7 +369,9 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
   const save = useMutation({
     // The whole command is the variable, so a retry carries the payload its
     // key was minted for rather than whatever the fields hold 500 ms later.
-    mutationFn: (command: { idempotencyKey: string; name: string; baseUrl: string }) =>
+    // Both optional: an ABSENT field is one the operator did not change, and
+    // the request carries only what actually differs.
+    mutationFn: (command: { idempotencyKey: string; name?: string; baseUrl?: string }) =>
       updatePanel({ id: panel.id, ...command }),
     onSuccess: async () => {
       submission.settle();
@@ -396,7 +400,19 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    const command = { name, baseUrl };
+    // Only what CHANGED. `PanelService.update` treats a present field as an
+    // edit, so submitting an untouched form advanced `updatedAt`, made the
+    // panel immediately probe-eligible and wrote a successful audit row for a
+    // change nobody made — the service's empty-edit guard cannot see it,
+    // because the request is not empty.
+    const command = {
+      ...(name === panel.name ? {} : { name }),
+      ...(baseUrl === panel.baseUrl ? {} : { baseUrl }),
+    };
+    if (Object.keys(command).length === 0) {
+      toast({ tone: 'warn', message: t('web.no_changes') });
+      return;
+    }
     save.mutate({ ...command, idempotencyKey: submission.current(command) });
   };
 
@@ -461,7 +477,15 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
         </form>
       </Card>
 
-      {mayEdit && panel.status !== 'ARCHIVED' && (
+      {/*
+        Archiving and restoring are part of the lifecycle the status API
+        supports, and this card used to disappear entirely for an ARCHIVED
+        panel while offering only ACTIVE<->DISABLED otherwise. The Web Admin
+        could therefore neither archive a finished panel — the mechanism that
+        releases its name and takes it out of lists and probes — nor restore
+        one archived through another client.
+      */}
+      {mayEdit && (
         <Card title={t('web.panel_lifecycle')} hint={t('web.panel_lifecycle_hint')}>
           <div className="btn-group">
             {panel.status === 'ACTIVE' && (
@@ -496,7 +520,40 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
                 {t('web.panel_enable')}
               </button>
             )}
+            {panel.status !== 'ARCHIVED' && (
+              <button
+                type="button"
+                className="btn ghost danger"
+                disabled={status.isPending}
+                onClick={() => {
+                  const command = { status: 'ARCHIVED' as PanelStatus };
+                  status.mutate({
+                    ...command,
+                    idempotencyKey: statusSubmission.current(command),
+                  });
+                }}
+              >
+                {t('web.panel_archive')}
+              </button>
+            )}
+            {panel.status === 'ARCHIVED' && (
+              <button
+                type="button"
+                className="btn"
+                disabled={status.isPending}
+                onClick={() => {
+                  const command = { status: 'DISABLED' as PanelStatus };
+                  status.mutate({
+                    ...command,
+                    idempotencyKey: statusSubmission.current(command),
+                  });
+                }}
+              >
+                {t('web.panel_restore')}
+              </button>
+            )}
           </div>
+          <p className="faint small">{t('web.panel_archive_hint')}</p>
         </Card>
       )}
     </>
@@ -595,6 +652,23 @@ function CredentialsTab({
   const [apiToken, setApiToken] = useState('');
   const submission = useSubmissionKey();
 
+  /**
+   * Which credential fields this panel's provider can actually USE.
+   *
+   * The descriptor used to be shown and never acted on, so a Marzban panel
+   * offered an API token field: the value was accepted, encrypted and stored,
+   * and then ignored by every probe, which went on reporting "credentials
+   * missing" about a secret the operator had just saved. The server refuses
+   * it now; this stops the form asking for it.
+   */
+  const shape = providerDescriptor(panel.providerType)?.credentialShape ?? null;
+  const accepts = (field: 'username' | 'password' | 'apiToken'): boolean =>
+    // An unknown provider is not a licence to offer everything: a panel whose
+    // adapter this build does not carry cannot have its credentials replaced
+    // meaningfully either. The descriptor is the frozen catalogue, so this is
+    // the same answer the server reaches.
+    shape !== null && shapeAcceptsCredential(shape, field);
+
   const save = useMutation({
     mutationFn: (command: {
       idempotencyKey: string;
@@ -642,68 +716,90 @@ function CredentialsTab({
         {t('web.credentials_one_way_body')}
       </Banner>
 
+      {/* Says WHY a field an operator may expect is not on the page — and only
+          when one is actually missing, so it is never an unexplained aside on a
+          form that shows everything. */}
+      {!(accepts('username') && accepts('password') && accepts('apiToken')) && (
+        <p className="faint small">{t('web.credential_unsupported_hint')}</p>
+      )}
+
       <Card title={t('web.panel_tab_credentials')}>
         <div className="list-editor">
-          <Secret
-            configured={panel.credentials.username.configured}
-            {...(panel.credentials.username.lastReplacedAt === null
-              ? {}
-              : { meta: formatTimestamp(panel.credentials.username.lastReplacedAt) })}
-            {...(mayRotate ? { onRemove: () => remove('username') } : {})}
-          />
-          <Secret
-            configured={panel.credentials.password.configured}
-            {...(panel.credentials.password.lastReplacedAt === null
-              ? {}
-              : { meta: formatTimestamp(panel.credentials.password.lastReplacedAt) })}
-            {...(mayRotate ? { onRemove: () => remove('password') } : {})}
-          />
-          <Secret
-            configured={panel.credentials.apiToken.configured}
-            {...(panel.credentials.apiToken.lastReplacedAt === null
-              ? {}
-              : { meta: formatTimestamp(panel.credentials.apiToken.lastReplacedAt) })}
-            {...(mayRotate ? { onRemove: () => remove('apiToken') } : {})}
-          />
+          {accepts('username') && (
+            <Secret
+              label={t('web.credential_username')}
+              configured={panel.credentials.username.configured}
+              {...(panel.credentials.username.lastReplacedAt === null
+                ? {}
+                : { meta: formatTimestamp(panel.credentials.username.lastReplacedAt) })}
+              {...(mayRotate ? { onRemove: () => remove('username') } : {})}
+            />
+          )}
+          {accepts('password') && (
+            <Secret
+              label={t('web.credential_password')}
+              configured={panel.credentials.password.configured}
+              {...(panel.credentials.password.lastReplacedAt === null
+                ? {}
+                : { meta: formatTimestamp(panel.credentials.password.lastReplacedAt) })}
+              {...(mayRotate ? { onRemove: () => remove('password') } : {})}
+            />
+          )}
+          {accepts('apiToken') && (
+            <Secret
+              label={t('web.credential_api_token')}
+              configured={panel.credentials.apiToken.configured}
+              {...(panel.credentials.apiToken.lastReplacedAt === null
+                ? {}
+                : { meta: formatTimestamp(panel.credentials.apiToken.lastReplacedAt) })}
+              {...(mayRotate ? { onRemove: () => remove('apiToken') } : {})}
+            />
+          )}
         </div>
       </Card>
 
       {mayRotate && (
         <Card title={t('web.credentials_replace')} hint={t('web.credentials_replace_hint')}>
           <form onSubmit={onSubmit} className="form-grid">
-            <Field label={t('web.username')} htmlFor={`cu-${panel.id}`}>
-              <input
-                id={`cu-${panel.id}`}
-                className="input ltr mono"
-                autoComplete="off"
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-              />
-            </Field>
-            <Field label={t('web.password')} htmlFor={`cp-${panel.id}`}>
-              <input
-                id={`cp-${panel.id}`}
-                className="input ltr mono"
-                type="password"
-                autoComplete="new-password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-            </Field>
-            <Field
-              label={t('web.api_token')}
-              hint={t('web.api_token_hint')}
-              htmlFor={`ct-${panel.id}`}
-            >
-              <input
-                id={`ct-${panel.id}`}
-                className="input ltr mono"
-                type="password"
-                autoComplete="off"
-                value={apiToken}
-                onChange={(event) => setApiToken(event.target.value)}
-              />
-            </Field>
+            {accepts('username') && (
+              <Field label={t('web.username')} htmlFor={`cu-${panel.id}`}>
+                <input
+                  id={`cu-${panel.id}`}
+                  className="input ltr mono"
+                  autoComplete="off"
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                />
+              </Field>
+            )}
+            {accepts('password') && (
+              <Field label={t('web.password')} htmlFor={`cp-${panel.id}`}>
+                <input
+                  id={`cp-${panel.id}`}
+                  className="input ltr mono"
+                  type="password"
+                  autoComplete="new-password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                />
+              </Field>
+            )}
+            {accepts('apiToken') && (
+              <Field
+                label={t('web.api_token')}
+                hint={t('web.api_token_hint')}
+                htmlFor={`ct-${panel.id}`}
+              >
+                <input
+                  id={`ct-${panel.id}`}
+                  className="input ltr mono"
+                  type="password"
+                  autoComplete="off"
+                  value={apiToken}
+                  onChange={(event) => setApiToken(event.target.value)}
+                />
+              </Field>
+            )}
             <div>
               <button type="submit" className="btn primary" disabled={save.isPending}>
                 {save.isPending ? t('web.saving') : t('web.save')}
@@ -784,6 +880,15 @@ export function NewPanelPage({ denied }: { denied: boolean }) {
   const submission = useSubmissionKey();
 
   const chosen = providers.data?.providers.find((provider) => provider.key === providerType);
+  /**
+   * Which credential fields the CHOSEN provider can use — the same rule the
+   * detail page applies, and for the same reason: the server refuses a
+   * credential outside the shape, so offering the field can only produce a
+   * 400 after the operator has typed a secret into it. Nothing is offered
+   * before a provider is chosen, because nothing is known yet.
+   */
+  const accepts = (field: 'username' | 'password' | 'apiToken'): boolean =>
+    chosen !== undefined && shapeAcceptsCredential(chosen.credentialShape, field);
 
   const create = useMutation({
     mutationFn: (command: {
@@ -808,10 +913,13 @@ export function NewPanelPage({ denied }: { denied: boolean }) {
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
     if (providerType === '') return;
+    // Guarded by `accepts` as well as by the field being hidden: switching the
+    // provider after typing leaves the old value in state, and sending it would
+    // be refused by the server with the operator's secret already on the wire.
     const credentials = {
-      ...(username === '' ? {} : { username }),
-      ...(password === '' ? {} : { password }),
-      ...(apiToken === '' ? {} : { apiToken }),
+      ...(username === '' || !accepts('username') ? {} : { username }),
+      ...(password === '' || !accepts('password') ? {} : { password }),
+      ...(apiToken === '' || !accepts('apiToken') ? {} : { apiToken }),
     };
     const command = {
       name,
@@ -829,97 +937,117 @@ export function NewPanelPage({ denied }: { denied: boolean }) {
       <PageHead title={t('web.panel_new')} subtitle={t('web.panel_new_intro')} maturity="now" />
 
       <Card>
-        <form onSubmit={onSubmit} className="form-grid">
-          <Field label={t('web.panel_name')} htmlFor="new-name">
-            <input
-              id="new-name"
-              className="input"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              required
-            />
-          </Field>
+        {/*
+          The provider catalogue decides whether this form can do anything at
+          all. Reading `providers.data` directly meant a 503 from `/providers`
+          rendered a complete, enabled form with an empty picker: submitting
+          returned silently because `providerType` was '', so an outage looked
+          exactly like an installation with no supported providers, and offered
+          no retry.
+        */}
+        <StateSwitch
+          state={queryState(providers, (providers.data?.providers.length ?? 0) === 0)}
+          onRetry={() => void providers.refetch()}
+          empty={<Empty title={t('web.providers_none')} icon="panels" />}
+        >
+          <form onSubmit={onSubmit} className="form-grid">
+            <Field label={t('web.panel_name')} htmlFor="new-name">
+              <input
+                id="new-name"
+                className="input"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                required
+              />
+            </Field>
 
-          <Field label={t('web.panel_provider')} htmlFor="new-provider">
-            <select
-              id="new-provider"
-              className="input"
-              value={providerType}
-              onChange={(event) => setProviderType(event.target.value as ProviderType | '')}
-              required
+            <Field label={t('web.panel_provider')} htmlFor="new-provider">
+              <select
+                id="new-provider"
+                className="input"
+                value={providerType}
+                onChange={(event) => setProviderType(event.target.value as ProviderType | '')}
+                required
+              >
+                <option value="">—</option>
+                {(providers.data?.providers ?? []).map((provider) => (
+                  <option key={provider.key} value={provider.key}>
+                    {provider.canonicalName}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field
+              label={t('web.panel_base_url')}
+              hint={t('web.panel_base_url_hint')}
+              htmlFor="new-url"
             >
-              <option value="">—</option>
-              {(providers.data?.providers ?? []).map((provider) => (
-                <option key={provider.key} value={provider.key}>
-                  {provider.canonicalName}
-                </option>
-              ))}
-            </select>
-          </Field>
+              <input
+                id="new-url"
+                className="input ltr mono"
+                value={baseUrl}
+                onChange={(event) => setBaseUrl(event.target.value)}
+                required
+              />
+            </Field>
 
-          <Field
-            label={t('web.panel_base_url')}
-            hint={t('web.panel_base_url_hint')}
-            htmlFor="new-url"
-          >
-            <input
-              id="new-url"
-              className="input ltr mono"
-              value={baseUrl}
-              onChange={(event) => setBaseUrl(event.target.value)}
-              required
-            />
-          </Field>
-
-          {chosen !== undefined && (
-            <>
-              <Banner tone="info" title={t('web.panel_credential_shape')}>
-                <Ltr>{chosen.credentialShape}</Ltr>
-              </Banner>
-              {chosen.requiredActivationFields.length > 0 && (
-                <Banner tone="warn" title={t('web.panel_activation_fields')}>
-                  <Ltr>{chosen.requiredActivationFields.join(', ')}</Ltr>
+            {chosen !== undefined && (
+              <>
+                <Banner tone="info" title={t('web.panel_credential_shape')}>
+                  <Ltr>{chosen.credentialShape}</Ltr>
                 </Banner>
-              )}
-            </>
-          )}
+                {chosen.requiredActivationFields.length > 0 && (
+                  <Banner tone="warn" title={t('web.panel_activation_fields')}>
+                    <Ltr>{chosen.requiredActivationFields.join(', ')}</Ltr>
+                  </Banner>
+                )}
+              </>
+            )}
 
-          <Field label={t('web.username')} htmlFor="new-username">
-            <input
-              id="new-username"
-              className="input ltr mono"
-              autoComplete="off"
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-            />
-          </Field>
-          <Field label={t('web.password')} htmlFor="new-password">
-            <input
-              id="new-password"
-              className="input ltr mono"
-              type="password"
-              autoComplete="new-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-          </Field>
-          <Field label={t('web.api_token')} hint={t('web.api_token_hint')} htmlFor="new-token">
-            <input
-              id="new-token"
-              className="input ltr mono"
-              type="password"
-              autoComplete="off"
-              value={apiToken}
-              onChange={(event) => setApiToken(event.target.value)}
-            />
-          </Field>
+            {accepts('username') && (
+              <Field label={t('web.username')} htmlFor="new-username">
+                <input
+                  id="new-username"
+                  className="input ltr mono"
+                  autoComplete="off"
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                />
+              </Field>
+            )}
+            {accepts('password') && (
+              <Field label={t('web.password')} htmlFor="new-password">
+                <input
+                  id="new-password"
+                  className="input ltr mono"
+                  type="password"
+                  autoComplete="new-password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                />
+              </Field>
+            )}
+            {accepts('apiToken') && (
+              <Field label={t('web.api_token')} hint={t('web.api_token_hint')} htmlFor="new-token">
+                <input
+                  id="new-token"
+                  className="input ltr mono"
+                  type="password"
+                  autoComplete="off"
+                  value={apiToken}
+                  onChange={(event) => setApiToken(event.target.value)}
+                />
+              </Field>
+            )}
 
-          <div>
-            <button type="submit" className="btn primary" disabled={create.isPending}>
-              {create.isPending ? t('web.saving') : t('web.save')}
-            </button>
-          </div>
-        </form>
+            <div>
+              <button type="submit" className="btn primary" disabled={create.isPending}>
+                {create.isPending ? t('web.saving') : t('web.save')}
+              </button>
+            </div>
+          </form>
+        </StateSwitch>
       </Card>
     </>
   );

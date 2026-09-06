@@ -101,7 +101,12 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
    * stays (a second, exact endpoint does not exist), but a full page means the
    * card says what it actually covers.
    */
-  const truncated = (panels.data?.panels.length ?? 0) === DASHBOARD_PANEL_PAGE;
+  // The SERVER's cursor, not a length comparison. `length === limit` says
+  // "the page is full", which is a different question from "there are more":
+  // a tenant with exactly 200 panels got a partial-fleet warning over a
+  // complete aggregate. `nextCursor` is non-null only when a panel really was
+  // left out.
+  const truncated = panels.data?.nextCursor != null;
 
   return (
     <>

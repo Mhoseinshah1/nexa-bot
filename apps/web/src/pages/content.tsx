@@ -386,7 +386,14 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
             <button type="submit" disabled={save.isPending}>
               {save.isPending ? t('web.saving') : t('web.save')}
             </button>
-            {template.version !== null && (
+            {/*
+              `revertable`, not `template.version`. The payload is built from
+              the DRAFT BASIS, so if another administrator creates an override
+              between opening this card and its refetch, the button appeared
+              while `revertable` was null and pressing it returned silently —
+              no request, no error, no outcome.
+            */}
+            {revertable !== null && (
               <button
                 type="button"
                 onClick={() => {
