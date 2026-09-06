@@ -544,6 +544,11 @@ describe('the panel detail', () => {
    * — and archiving is now one press away on that card, which re-renders this
    * same page as ARCHIVED and leaves the operator looking at an enabled Save.
    * Restore first; that is what the card is for.
+   *
+   * The FIELDS are asserted, not only the button. Removing Save while leaving
+   * the two inputs enabled is a form an operator can type a new name into and
+   * never submit — the same untrue screen in a quieter form, and it is what
+   * the first version of this fix actually shipped.
    */
   it('offers no save on an archived panel, because the server refuses one', async () => {
     stubApi(detail({ status: 'ARCHIVED' }));
@@ -551,8 +556,27 @@ describe('the panel detail', () => {
     await screen.findByText('Frankfurt A');
 
     expect(screen.queryByRole('button', { name: 'ذخیره' })).toBeNull();
+    expect(screen.getByLabelText('نام')).toBeDisabled();
+    expect(screen.getByLabelText('نشانی پایه')).toBeDisabled();
     // The restore control is still there — the way out is not hidden too.
     expect(screen.getByRole('button', { name: 'بازگردانی از بایگانی' })).toBeInTheDocument();
+  });
+
+  /**
+   * The other side of the same rule: a LIVE panel must still be editable.
+   *
+   * Widening the gate from `mayEdit` to `mayEdit && not archived` is one
+   * character away from disabling the form for everybody, and the assertion
+   * above passes just as happily in that case.
+   */
+  it('leaves the identity fields editable on a live panel', async () => {
+    stubApi(detail());
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    expect(screen.getByLabelText('نام')).toBeEnabled();
+    expect(screen.getByLabelText('نشانی پایه')).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'ذخیره' })).toBeInTheDocument();
   });
 
   it('offers no credential write on an archived panel, but still shows what it holds', async () => {

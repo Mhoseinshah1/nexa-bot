@@ -258,3 +258,43 @@ change to a seam, and the seam is what needs reviewing.** Every one of the two
 regressions above was correct in the file it was written in. One was wrong
 about a ceiling in a different module; the other was wrong about a guard three
 hundred lines away. Neither would have been found by re-reading the diff.
+
+## Round 4 — two mutations, and one half-fixed rule
+
+Codex's fourth review reported ten findings against `aafebab`, and nine of them
+named work that was already in the tree when it read the branch. The tenth did
+not: _"Gate all edit and credential controls on the archived state, not just
+the test button."_ The fix written for round 3 removed the **Save button** on an
+ARCHIVED panel and left the **name and base-URL inputs enabled**.
+
+That is a smaller version of exactly the same untruth. An operator can still
+type a new name into a form that has no way to submit it, on a panel
+`PanelService.update` answers 412 for. The gate is now one `mayWrite`, and the
+two inputs and the button share it.
+
+The test that was supposed to protect this rule asserted only
+`queryByRole('button', { name: 'ذخیره' })` — so it passed on a half-fix, which
+is how the half-fix shipped. It now asserts the fields as well, and a second
+test asserts the opposite direction, because widening a gate is one character
+away from disabling the form for everybody.
+
+| #   | rule                                         | mutation                          | test that dies                                            |
+| --- | -------------------------------------------- | --------------------------------- | --------------------------------------------------------- |
+| W01 | the identity INPUTS follow the archived gate | inputs back to `!mayEdit`         | _offers no save on an archived panel_ (`toBeDisabled`)    |
+| W02 | ...and only on an archived panel             | invert to `status === 'ARCHIVED'` | _leaves the identity fields editable on a live panel_ + 3 |
+
+W01 was killed for its named reason (`expect(element).toBeDisabled()` on the
+name field, with the Save assertion above it still passing — the half-fix
+reproduced exactly). W02 killed five tests, the two above plus the three
+existing draft-basis tests, which is the correct blast radius for disabling the
+form outright. `apps/web/src/pages/panels.tsx` was restored to
+`b24b219e0362cc59cf49cf20266da62f024dc1b8a9eb6a7687e219e2c9b38d93` after each,
+and the suite returned to 35 passed.
+
+**The lesson, which is round 3's lesson applied to itself:** an assertion that
+names one control does not cover a rule about controls. Four review rounds have
+now each found their defect inside the fix written for the round before, and
+this one was found inside a fix whose own falsification record says "killed".
+A mutation test proves a rule is load-bearing. It cannot prove the rule is
+_wide enough_, because the mutation and the assertion are written from the same
+understanding.

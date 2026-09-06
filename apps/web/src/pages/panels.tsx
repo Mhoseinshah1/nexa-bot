@@ -384,6 +384,17 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
   /** The query has a row the draft was not based on. */
   const changedElsewhere = basis.name !== panel.name || basis.baseUrl !== panel.baseUrl;
 
+  /**
+   * Every identity control, not just the Save button.
+   *
+   * `PanelService.update` refuses an ARCHIVED panel with a 412, so hiding Save
+   * alone left two enabled text fields an operator can type a new name into
+   * and never submit — a control that asserts a capability the server does not
+   * have, which is the one thing this admin is not allowed to do. The inputs
+   * follow the same rule the button does.
+   */
+  const mayWrite = mayEdit && panel.status !== 'ARCHIVED';
+
   const adopt = (fresh: PanelSummaryResponse) => {
     setBasis(fresh);
     setName(fresh.name);
@@ -488,7 +499,7 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
               className="input"
               value={name}
               onChange={(event) => setName(event.target.value)}
-              disabled={!mayEdit}
+              disabled={!mayWrite}
             />
           </Field>
           <Field
@@ -501,7 +512,7 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
               className="input ltr mono"
               value={baseUrl}
               onChange={(event) => setBaseUrl(event.target.value)}
-              disabled={!mayEdit}
+              disabled={!mayWrite}
             />
           </Field>
           {/* The provider type is deliberately not editable. Changing it would
@@ -523,12 +534,12 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
             </p>
           )}
           {/*
-            `PanelService.update` refuses an ARCHIVED panel with a 412, so an
-            enabled Save here is a control that cannot work — and archiving is
-            now one press away on the card below, which lands the operator on
-            exactly this form. Restore first; the lifecycle card says so.
+            Archiving is one press away on the card below, which lands the
+            operator on exactly this form; `mayWrite` is why neither this
+            button nor the two fields above survive it. Restore first — the
+            lifecycle card says so.
           */}
-          {mayEdit && panel.status !== 'ARCHIVED' && (
+          {mayWrite && (
             <div>
               <button type="submit" className="btn primary" disabled={save.isPending}>
                 {save.isPending ? t('web.saving') : t('web.save')}
