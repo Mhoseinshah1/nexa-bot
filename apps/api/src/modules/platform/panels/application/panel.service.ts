@@ -55,6 +55,7 @@ import type {
   ProbeBudget,
   PanelView,
   PanelCursor,
+  PanelArchiveScope,
 } from './ports.js';
 import { attemptProbe, persistProbeResult, type ProbeCoreDeps } from './probe-core.js';
 import {
@@ -289,12 +290,21 @@ export class PanelService {
   async list(
     scope: ScopeContext,
     actor: ActorContext,
-    page: { limit?: number; cursor?: PanelCursor | null } = {},
+    page: {
+      limit?: number;
+      cursor?: PanelCursor | null;
+      /**
+       * Which side of the archive. `LIVE` unless the caller asks otherwise, so
+       * every existing reader keeps the working fleet it already had, and the
+       * archive browser is the one place that opts in.
+       */
+      archived?: PanelArchiveScope;
+    } = {},
   ): Promise<{ panels: PanelView[]; nextCursor: PanelCursor | null }> {
     const tenant = this.tenant(scope);
     await this.deps.guard.check(scope, actor, PANELS_VIEW);
     return this.deps.repository.list(tenant, {
-      includeArchived: false,
+      archived: page.archived ?? 'LIVE',
       ...(page.limit === undefined ? {} : { limit: page.limit }),
       ...(page.cursor === undefined ? {} : { cursor: page.cursor }),
     });
@@ -855,7 +865,7 @@ export class PanelService {
       entityType: 'Panel',
       entityId: panelId,
     });
-    const requestHash = hashRequest({ panelId, status });
+    const requestHash = hashRequest({ panelId, status, name: parsed.name ?? null });
     const existing = await this.deps.idempotency.find<{ panelId: string }>(
       scope,
       actor.surface,
@@ -880,9 +890,57 @@ export class PanelService {
         // was the first read; the rule is explicit now that it is not.
         await this.deps.repository.lockPanel(tenant, this.panelId(panelId), tx);
         const before = await this.require(tenant, panelId, tx);
+        const leavingArchive = before.panel.status === 'ARCHIVED' && status !== 'ARCHIVED';
+
+        /**
+         * A name may travel with a restore, and ONLY with a restore.
+         *
+         * `panels_tenant_name_live_key` is UNIQUE `(tenant_id, name) WHERE
+         * status <> 'ARCHIVED'`. Archiving therefore RELEASES the name, another
+         * panel may take it, and restoring puts the old row back under that
+         * partial index — a 23505 nobody modelled, on a request that had no
+         * name check at all. `update` refuses every edit to an archived panel,
+         * so the operator could not rename it out of the way either: the panel
+         * was unrestorable by any sequence of requests.
+         *
+         * Refused outside that transition rather than ignored, because a
+         * silently dropped rename is a write the operator believes happened.
+         */
+        if (parsed.name !== undefined && !leavingArchive) {
+          throw errors.validation(
+            PANEL_ERROR_CODES.PANEL_REQUEST_INVALID,
+            'A replacement name is accepted only when restoring an archived panel.',
+            { status, from: before.panel.status },
+          );
+        }
+
+        const restoredName = parsed.name ?? before.panel.name;
+        /**
+         * Checked HERE, inside the lock, for the transition that re-enters the
+         * index — including the plain restore that carries no new name, which
+         * is exactly the case that used to reach PostgreSQL as a raw conflict.
+         */
+        if (
+          leavingArchive &&
+          (await this.deps.repository.nameTaken(tenant, restoredName, panelId, tx))
+        ) {
+          throw errors.conflict(
+            PANEL_ERROR_CODES.PANEL_NAME_TAKEN,
+            parsed.name === undefined
+              ? 'Another panel took this name while it was archived. Restore it under a different name.'
+              : 'Another panel of this tenant already uses that name.',
+          );
+        }
+
         const updated = await this.deps.repository.setStatus(tenant, panelId, status, now, tx);
         if (updated === null) {
           throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
+        }
+        // The rename lands in the same transaction as the status change, so the
+        // row is never an ARCHIVED panel with an edited name — which is what
+        // keeps this from contradicting the archived-edit rule above.
+        if (parsed.name !== undefined) {
+          await this.deps.repository.update(tenant, panelId, { name: parsed.name }, now, tx);
         }
         // This is the monitor's status filter, and it is why the discovery scan
         // needs no status predicate to be correct: a panel that is not ACTIVE

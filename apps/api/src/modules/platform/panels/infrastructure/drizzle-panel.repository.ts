@@ -35,6 +35,7 @@ import type {
   ProbeBudget,
   UpdatePanelInput,
   PanelCursor,
+  PanelArchiveScope,
 } from '../application/ports.js';
 
 /**
@@ -107,9 +108,19 @@ export class DrizzlePanelRepository implements PanelRepository {
    */
   static pageKeysQuery(
     scope: TenantContext,
-    options: { includeArchived: boolean; limit: number; cursor: PanelCursor | null },
+    options: { archived: PanelArchiveScope; limit: number; cursor: PanelCursor | null },
   ): SQL {
-    const live = options.includeArchived ? sql`TRUE` : sql`${panels.status} <> 'ARCHIVED'`;
+    // Three predicates, one per scope, each matching an index that exists.
+    // `ARCHIVED` has its own partial index rather than reusing the live one:
+    // `panels_tenant_created_page_idx` is `WHERE status <> 'ARCHIVED'`, so the
+    // archive browser would have had no index at all and paged by sequential
+    // scan over the whole table.
+    const live =
+      options.archived === 'ALL'
+        ? sql`TRUE`
+        : options.archived === 'ARCHIVED'
+          ? sql`${panels.status} = 'ARCHIVED'`
+          : sql`${panels.status} <> 'ARCHIVED'`;
     const after =
       options.cursor === null
         ? sql`TRUE`
@@ -176,14 +187,14 @@ export class DrizzlePanelRepository implements PanelRepository {
    */
   async list(
     scope: TenantContext,
-    options: { includeArchived: boolean; limit?: number; cursor?: PanelCursor | null },
+    options: { archived: PanelArchiveScope; limit?: number; cursor?: PanelCursor | null },
     tx?: TransactionScope,
   ): Promise<{ panels: PanelView[]; nextCursor: PanelCursor | null }> {
     const executor = executorOf(this.db, tx);
     const limit = options.limit ?? PANEL_PAGE_DEFAULT;
     const keys = await executor.execute<{ id: string; created_at: string }>(
       DrizzlePanelRepository.pageKeysQuery(scope, {
-        includeArchived: options.includeArchived,
+        archived: options.archived,
         limit,
         cursor: options.cursor ?? null,
       }),

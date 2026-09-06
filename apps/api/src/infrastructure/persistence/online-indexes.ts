@@ -40,6 +40,17 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
     definition:
       'ON "panels" USING btree ("tenant_id","created_at","id") WHERE status <> \'ARCHIVED\'',
   },
+  {
+    // The same keyset for the OTHER side of the archive. The live index above
+    // is partial on `status <> 'ARCHIVED'`, so the archive browser — added so a
+    // retired panel can be found and restored — matched no index at all and
+    // paged by sequential scan over the whole table. Its own partial index
+    // costs nothing on the live path and is small, because the archive is
+    // where panels go to stop being many.
+    name: 'panels_tenant_archived_page_idx',
+    definition:
+      'ON "panels" USING btree ("tenant_id","created_at","id") WHERE status = \'ARCHIVED\'',
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */

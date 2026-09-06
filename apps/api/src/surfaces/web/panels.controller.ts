@@ -144,10 +144,14 @@ export class PanelsController {
     const page = panelListQuerySchema.parse({
       ...(query.limit === undefined ? {} : { limit: query.limit }),
       ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+      ...(query.archived === undefined ? {} : { archived: query.archived }),
     });
     const { panels, nextCursor } = await this.container.panels.list(scope, actor, {
       ...(page.limit === undefined ? {} : { limit: page.limit }),
       ...(page.cursor === undefined ? {} : { cursor: decodeCursor(page.cursor) }),
+      // `only` is the archive browser; anything else is the working fleet. The
+      // wire deliberately cannot ask for both at once — see the contract.
+      archived: page.archived === 'only' ? 'ARCHIVED' : 'LIVE',
     });
     return {
       panels: panels.map((view) => this.toSummary(view)),
