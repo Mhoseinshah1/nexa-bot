@@ -82,6 +82,32 @@ function redactValue(value: unknown, depth: number, seen: WeakSet<object>): unkn
     return value.map((item) => redactValue(item, depth + 1, seen));
   }
 
+  // An Error keeps `message` and `stack` as NON-ENUMERABLE own properties, so
+  // the `Object.entries` rebuild below drops both and returns `{}`.
+  //
+  // That is not a cosmetic loss. Every unattended failure in this codebase is
+  // reported by logging the error object — `panel monitor tick failed`,
+  // `panel monitor probe failed`, the retention sweeper — and each of them was
+  // reaching the operator as `"err":{}`. The heartbeat correctly went stale and
+  // the container correctly went unhealthy; the one line that said WHY had been
+  // emptied on the way out. A `NexaError` fared slightly better and still lost
+  // its message, because `name`, `kind` and `code` happen to be enumerable.
+  //
+  // The copied fields are then redacted like anything else: a message is the
+  // most likely place for a secret to appear by accident.
+  if (value instanceof Error) {
+    const out: Record<string, unknown> = {
+      name: value.name,
+      message: redactValue(value.message, depth + 1, seen),
+      stack: value.stack,
+    };
+    for (const [key, item] of Object.entries(value)) {
+      out[key] = isSensitiveKey(key) ? REDACTED : redactValue(item, depth + 1, seen);
+    }
+    if (value.cause !== undefined) out['cause'] = redactValue(value.cause, depth + 1, seen);
+    return out;
+  }
+
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
     out[key] = isSensitiveKey(key) ? REDACTED : redactValue(item, depth + 1, seen);

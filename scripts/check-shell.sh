@@ -29,6 +29,14 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.." || exit 1
 
+if [ "${CI:-}" = "true" ] && ! command -v shellcheck >/dev/null 2>&1; then
+  printf '\033[31mFAIL\033[0m  shellcheck is required in CI and is not installed.\n'
+  printf '      The skip below exists for a laptop. Reaching it here would mean\n'
+  printf '      the privileged installer and updater shell went unchecked while\n'
+  printf '      this job reported success.\n'
+  exit 1
+fi
+
 if ! command -v shellcheck >/dev/null 2>&1; then
   printf '\033[33mskip\033[0m  shellcheck is not installed; the CI job runs it.\n'
   printf '      install it locally with: apt-get install shellcheck\n'

@@ -1,12 +1,24 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, sql, type SQL } from 'drizzle-orm';
 import {
   auditLogs,
   panelCredentials,
+  panelHealth,
+  panelMonitorSchedule,
   panels,
+  requestIdempotency,
+  tenants,
 } from '../../apps/api/src/infrastructure/persistence/schema';
-import type { ProviderProbeOutcome, ProviderType } from '@nexa/contracts';
+import {
+  PANEL_PAGE_DEFAULT,
+  PANEL_PAGE_MAX,
+  panelListQuerySchema,
+  type ActorContext,
+  type ProviderProbeOutcome,
+  type ProviderType,
+} from '@nexa/contracts';
 import { DrizzlePanelCredentialStore } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-credentials';
+import type { PanelCursor } from '../../apps/api/src/modules/platform/panels/application/ports';
 import { PanelService } from '../../apps/api/src/modules/platform/panels/application/panel.service';
 import {
   IMPLEMENTED_PROVIDER_TYPES,
@@ -28,6 +40,7 @@ import {
   type SeededAdmin,
   type TestContext,
 } from './harness';
+import { DrizzleOperationalConditionReader } from '../../apps/api/src/modules/platform/opslog/infrastructure/drizzle-operational-event.reader';
 
 /**
  * Panels, credentials and health against a real database.
@@ -106,6 +119,193 @@ describe('panels', () => {
     });
 
   // -------------------------------------------------------------------------
+  // A scope that has stopped accepting work
+  // -------------------------------------------------------------------------
+
+  describe('a tenant this installation has stopped', () => {
+    // S2. Settings, templates, feature flags and the ping recorder have all
+    // checked scope activity INSIDE the write transaction since Phase 2. The
+    // panels module did not, which made it the one place where a tenant an
+    // operator had stopped could still have panels created, edited,
+    // re-credentialled and re-statused — writing audit, idempotency and outbox
+    // rows for an installation somebody had already switched off, and arming
+    // the background monitor to dial that tenant's machines.
+    const stop = async () => {
+      await ctx.container.database.db
+        .update(tenants)
+        .set({ status: 'STOPPED' })
+        .where(eq(tenants.id, tenantA.tenantId));
+    };
+
+    it('refuses to create a panel', async () => {
+      await stop();
+      await expect(create(owner, tenantA)).rejects.toMatchObject({
+        code: 'platform.tenant_not_found',
+      });
+      expect(await ctx.container.database.db.select().from(panels)).toHaveLength(0);
+    });
+
+    it('refuses to edit, re-credential or re-status an existing panel', async () => {
+      const { view } = await create(owner, tenantA, {
+        credentials: { username: USERNAME, password: PASSWORD },
+      });
+      const panelId = view.panel.id;
+      await stop();
+
+      await expect(
+        ctx.container.panels.update(tenantA, adminActorFor(owner), panelId, {
+          name: 'Renamed',
+          idempotencyKey: key(),
+        }),
+      ).rejects.toMatchObject({ code: 'platform.tenant_not_found' });
+
+      await expect(
+        ctx.container.panels.setCredentials(tenantA, adminActorFor(owner), panelId, {
+          credentials: { password: 'another-password' },
+          idempotencyKey: key(),
+        }),
+      ).rejects.toMatchObject({ code: 'platform.tenant_not_found' });
+
+      await expect(
+        ctx.container.panels.setStatus(tenantA, adminActorFor(owner), panelId, {
+          status: 'DISABLED',
+          idempotencyKey: key(),
+        }),
+      ).rejects.toMatchObject({ code: 'platform.tenant_not_found' });
+
+      // Nothing moved. A refusal that had already written its audit or
+      // idempotency row would be the defect wearing a different hat — so both
+      // are ASSERTED rather than described. The check runs inside the
+      // transaction, so a refusal rolls back whatever preceded it; a check
+      // moved after the first write would leave rows here.
+      const [row] = await ctx.container.database.db.select().from(panels);
+      expect(row!.name).toBe('Frankfurt');
+      expect(row!.status).toBe('ACTIVE');
+
+      const audits = await ctx.container.database.db
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.tenantId, tenantA.tenantId));
+      expect(audits.map((a) => a.action)).toEqual(['panel.create']);
+      const keys = await ctx.container.database.db
+        .select()
+        .from(requestIdempotency)
+        .where(eq(requestIdempotency.tenantId, tenantA.tenantId));
+      expect(keys).toHaveLength(1);
+    });
+
+    it('refuses an operator connection test, which dials somebody else’s machine', async () => {
+      const { view } = await create(owner, tenantA, {
+        credentials: { username: USERNAME, password: PASSWORD },
+      });
+      await stop();
+      await expect(
+        ctx.container.panels.testConnection(tenantA, adminActorFor(owner), view.panel.id, {
+          idempotencyKey: key(),
+        }),
+      ).rejects.toMatchObject({ code: 'platform.tenant_not_found' });
+    });
+
+    it('refuses to RECORD a probe when the stop lands while it is on the wire', async () => {
+      // The window the check before the socket cannot close, and the reason
+      // that check is not the only one. A probe takes up to the HTTP timeout;
+      // a stop committed during it would otherwise land a health row, a
+      // schedule row, an audit row and an idempotency row afterwards — the
+      // whole of what the four write paths above refuse, arriving late.
+      //
+      // The stop is committed from INSIDE the probe, so the ordering is the
+      // real one rather than a simulated one.
+      const { view } = await create(owner, tenantA, {
+        credentials: { username: USERNAME, password: PASSWORD },
+      });
+      const panelId = view.panel.id;
+
+      const service = new PanelService({
+        repository: new DrizzlePanelRepository(ctx.container.database.db),
+        credentials: new DrizzlePanelCredentialStore(
+          ctx.container.database.db,
+          ctx.container.cipher,
+        ),
+        guard: ctx.container.guard,
+        scopeActivity: ctx.container.tenants,
+        audit: ctx.container.audit,
+        opsLog: ctx.container.opsLog,
+        conditions: new DrizzleOperationalConditionReader(ctx.container.database.db),
+        sessions: ctx.container.sessions,
+        uow: ctx.container.uow,
+        idempotency: ctx.container.idempotency,
+        clock: ctx.container.clock,
+        ids: ctx.container.ids,
+        http: new SafeHttpClient({
+          allowLoopback: true,
+          totalTimeoutMs: 1_000,
+          maxResponseBytes: 1_024,
+          maxRetries: 0,
+        }),
+        urlPolicy: { allowLoopback: true },
+        probeCooldownMs: 0,
+        probeBudget: { capacity: 10_000, refillPerMs: 1 },
+        adapters: (type: ProviderType) => ({
+          ...providerAdapter(type),
+          // The stop commits WHILE the probe is on the wire, which is the
+          // real ordering rather than a simulated one.
+          probe: async () => {
+            await stop();
+            return { ok: true, providerVersion: '1.0.0', degraded: false };
+          },
+        }),
+        cadence: {
+          healthyIntervalMs: 10 * 60 * 1000,
+          retryableIntervalMs: 2 * 60 * 1000,
+          nonRetryableIntervalMs: 60 * 60 * 1000,
+        },
+      });
+
+      await expect(
+        service.testConnection(tenantA, adminActorFor(owner), panelId, {
+          idempotencyKey: key(),
+        }),
+      ).rejects.toMatchObject({ code: 'platform.tenant_not_found' });
+
+      // The probe happened — that cannot be undone — but nothing it produced
+      // was recorded.
+      expect(await ctx.container.database.db.select().from(panelHealth)).toHaveLength(0);
+      const audits = await ctx.container.database.db
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.tenantId, tenantA.tenantId));
+      expect(audits.map((a) => a.action)).toEqual(['panel.create']);
+    });
+
+    it('still lets an operator READ, which is how they diagnose the stop', async () => {
+      const { view } = await create(owner, tenantA);
+      await stop();
+
+      // Deliberately not symmetric with the writes above, and it matches what
+      // the four control-plane services do: they gate mutations and leave
+      // reads open. An operator who cannot list the panels of a tenant they
+      // have just stopped cannot see what they stopped.
+      const page = await ctx.container.panels.list(tenantA, adminActorFor(owner));
+      expect(page.panels.map((p) => p.panel.id)).toEqual([view.panel.id]);
+      const one = await ctx.container.panels.get(tenantA, adminActorFor(owner), view.panel.id);
+      expect(one.panel.id).toBe(view.panel.id);
+    });
+
+    it('serves the tenant again once it is active', async () => {
+      await stop();
+      await expect(create(owner, tenantA)).rejects.toMatchObject({
+        code: 'platform.tenant_not_found',
+      });
+      await ctx.container.database.db
+        .update(tenants)
+        .set({ status: 'ACTIVE' })
+        .where(eq(tenants.id, tenantA.tenantId));
+      const { view } = await create(owner, tenantA);
+      expect(view.panel.status).toBe('ACTIVE');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // The ordinary path
   // -------------------------------------------------------------------------
 
@@ -170,7 +370,7 @@ describe('panels', () => {
       // And in a list, which is a different query with the same projection.
       const listed = await ctx.container.panels.list(tenantA, adminActorFor(owner));
       expect(
-        listed.find((v) => v.panel.id === view.panel.id)?.credentials[timestamp],
+        listed.panels.find((v) => v.panel.id === view.panel.id)?.credentials[timestamp],
       ).toBeInstanceOf(Date);
     });
   }
@@ -470,8 +670,8 @@ describe('panels', () => {
     const listA = await ctx.container.panels.list(tenantA, adminActorFor(owner));
     const listB = await ctx.container.panels.list(tenantB, adminActorFor(ownerB));
 
-    expect(listA.map((view) => view.panel.name)).toEqual(['A only']);
-    expect(listB.map((view) => view.panel.name)).toEqual(['B only']);
+    expect(listA.panels.map((view) => view.panel.name)).toEqual(['A only']);
+    expect(listB.panels.map((view) => view.panel.name)).toEqual(['B only']);
   });
 
   it('refuses to update, re-credential, restatus or test another tenant panel', async () => {
@@ -694,7 +894,7 @@ describe('panels', () => {
       idempotencyKey: key(),
     });
 
-    expect(await ctx.container.panels.list(tenantA, actor)).toEqual([]);
+    expect((await ctx.container.panels.list(tenantA, actor)).panels).toEqual([]);
     // Still addressable by id: archiving hides it, it does not destroy the
     // record, and a later phase needs the row to explain a service that was
     // provisioned through it.
@@ -1003,8 +1203,10 @@ describe('panels', () => {
       repository: new DrizzlePanelRepository(ctx.container.database.db),
       credentials: new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher),
       guard: ctx.container.guard,
+      scopeActivity: ctx.container.tenants,
       audit: ctx.container.audit,
       opsLog: ctx.container.opsLog,
+      conditions: new DrizzleOperationalConditionReader(ctx.container.database.db),
       sessions: ctx.container.sessions,
       uow: ctx.container.uow,
       idempotency: ctx.container.idempotency,
@@ -1027,6 +1229,13 @@ describe('panels', () => {
       // hit the tenant-wide bound. Its own suite pins it low.
       probeBudget: { capacity: 10_000, refillPerMs: 1 },
       adapters: (type: ProviderType) => ({ ...providerAdapter(type), probe: async () => outcome }),
+      // Every probe writes the panel's next background probe time, so the
+      // service needs a cadence even where these tests never read one.
+      cadence: {
+        healthyIntervalMs: 10 * 60 * 1000,
+        retryableIntervalMs: 2 * 60 * 1000,
+        nonRetryableIntervalMs: 60 * 60 * 1000,
+      },
     });
     return scripted.testConnection(tenantA, adminActorFor(owner), panelId, {
       idempotencyKey: key(),
@@ -1300,5 +1509,391 @@ describe('panels — this installation’s own network', () => {
     for (const leak of [databaseHost, '10.77', 'subnet', 'postgres', 'redis', '5432', '6379']) {
       expect(text, `the refusal leaks ${leak}`).not.toContain(leak.toLowerCase());
     }
+  });
+});
+
+describe('the panel list is a bounded, stable traversal', () => {
+  let ctx: TestContext;
+  let owner: ActorContext;
+  let ownerB: ActorContext;
+
+  beforeEach(async () => {
+    ctx ??= await createTestContext();
+    await ctx.reset();
+    owner = adminActorFor(
+      await createAdmin(ctx.container, tenantA, { username: 'pager', roleKeys: ['owner'] }),
+    );
+    ownerB = adminActorFor(
+      await createAdmin(ctx.container, tenantB, { username: 'pager-b', roleKeys: ['owner'] }),
+    );
+  });
+
+  afterAll(async () => {
+    await ctx?.close();
+  });
+
+  let pageKeyCounter = 0;
+  const pageKey = () => `page-idem-${(pageKeyCounter += 1)}`;
+  const service = () => ctx.container.panels;
+
+  const make = async (actor: ActorContext, scope: typeof tenantA, name: string) =>
+    (
+      await service().create(scope, actor, {
+        name,
+        providerType: 'marzban',
+        baseUrl: 'https://panel.example.test',
+        credentials: { username: 'u'.repeat(6), password: 'p'.repeat(12) },
+        idempotencyKey: pageKey(),
+      })
+    ).view.panel.id;
+
+  const walk = async (actor: ActorContext, scope: typeof tenantA, limit: number) => {
+    const seen: string[] = [];
+    let cursor: PanelCursor | null | undefined = undefined;
+    for (let guard = 0; guard < 100; guard += 1) {
+      const page = await service().list(scope, actor, {
+        limit,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      expect(page.panels.length).toBeLessThanOrEqual(limit);
+      seen.push(...page.panels.map((view) => view.panel.id));
+      if (page.nextCursor === null) return seen;
+      cursor = page.nextCursor;
+    }
+    throw new Error('traversal did not terminate');
+  };
+
+  it('walks the whole collection with no duplicates and no omissions', async () => {
+    const created: string[] = [];
+    for (let i = 0; i < 25; i += 1) {
+      created.push(await make(owner, tenantA, `panel-${String(i).padStart(3, '0')}`));
+    }
+    const seen = await walk(owner, tenantA, 7);
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(seen.slice().sort()).toEqual(created.slice().sort());
+  });
+
+  it('is stable when panels share a creation timestamp', async () => {
+    // `created_at` is the ordering's first key, so a tie must be broken by
+    // something total or a keyset walk skips and repeats rows. Two panels
+    // created inside one clock tick — a restore, a bulk import, a seed — share
+    // it, so the tiebreaker is not defensive.
+    const repo = new DrizzlePanelRepository(ctx.container.database.db);
+    const created: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      created.push(await make(owner, tenantA, `tied-${i}`));
+    }
+    // Forced rather than raced: a test that hoped five inserts landed in the
+    // same microsecond would pass for the wrong reason on a slow machine.
+    await ctx.container.database.withClient((client) =>
+      client.query(`UPDATE panels SET created_at = '2020-01-01T00:00:00Z' WHERE tenant_id = $1`, [
+        tenantA.tenantId,
+      ]),
+    );
+
+    const seen: string[] = [];
+    let cursor: PanelCursor | null = null;
+    for (let guard = 0; guard < 20; guard += 1) {
+      const page = await repo.list(tenantA, { includeArchived: true, limit: 2, cursor });
+      seen.push(...page.panels.map((view) => view.panel.id));
+      if (page.nextCursor === null) break;
+      cursor = page.nextCursor;
+    }
+    // Five rows sharing one timestamp, walked two at a time: every one once.
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(seen.slice().sort()).toEqual(created.slice().sort());
+  });
+
+  it('does not repeat a row whose timestamp carries microseconds', async () => {
+    // `timestamptz` keeps microseconds; a JavaScript Date keeps milliseconds
+    // and the driver TRUNCATES. A cursor built from a Date is therefore
+    // strictly BELOW the row it names, and the tuple comparison lets that row
+    // back in — one duplicate per page boundary, and at `limit=1` a walk that
+    // never ends because every page returns the same row and hands back the
+    // same cursor.
+    //
+    // The service passes a millisecond `Clock.now()` today, so the rows that
+    // have microseconds are the ones a restore, an import or a fixture made:
+    // exactly the set nobody would think to test. Forced here.
+    const repo = new DrizzlePanelRepository(ctx.container.database.db);
+    const created: string[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      created.push(await make(owner, tenantA, `micro-${i}`));
+    }
+    await ctx.container.database.withClient((client) =>
+      client.query(
+        `UPDATE panels
+            SET created_at = timestamptz '2021-03-04 05:06:07+00'
+                             + (row_number * interval '1 microsecond')
+           FROM (SELECT id, row_number() OVER (ORDER BY id) AS row_number
+                   FROM panels WHERE tenant_id = $1::uuid) AS ordered
+          WHERE panels.id = ordered.id`,
+        [tenantA.tenantId],
+      ),
+    );
+    // Microseconds a millisecond cursor cannot represent.
+    const stored = await ctx.container.database.withClient(async (client) =>
+      (
+        await client.query<{ micros: string }>(
+          `SELECT to_char(created_at, 'US') AS micros FROM panels WHERE tenant_id = $1::uuid`,
+          [tenantA.tenantId],
+        )
+      ).rows.map((row) => row.micros),
+    );
+    expect(stored.every((micros) => Number(micros) % 1000 !== 0)).toBe(true);
+
+    // ONE per page: the page size at which a repeat is also a walk that never
+    // terminates, so this cannot pass by looping the guard out.
+    const seen: string[] = [];
+    let cursor: PanelCursor | null = null;
+    for (let guard = 0; guard < 20; guard += 1) {
+      const page = await repo.list(tenantA, { includeArchived: true, limit: 1, cursor });
+      seen.push(...page.panels.map((view) => view.panel.id));
+      if (page.nextCursor === null) break;
+      cursor = page.nextCursor;
+    }
+    expect(new Set(seen).size, 'a panel was returned twice').toBe(seen.length);
+    expect(seen.slice().sort()).toEqual(created.slice().sort());
+  });
+
+  it('does nothing at all for an edit that names no field', async () => {
+    // The frozen request schema permits a body carrying only an idempotency
+    // key. This used to advance `updated_at`, make the panel immediately
+    // probe-eligible and record a SUCCESS audit row — so repeated empty edits
+    // with fresh keys drove background probes at the caller's chosen rate and
+    // filled the audit trail with changes that never happened.
+    //
+    // The guard was in production code with no test at all, which is how a
+    // rule gets silently reverted. This is that test.
+    const panelId = await make(owner, tenantA, 'untouched');
+    const scheduleOf = async () =>
+      (
+        await ctx.container.database.db
+          .select()
+          .from(panelMonitorSchedule)
+          .where(eq(panelMonitorSchedule.panelId, panelId))
+      )[0];
+    const auditCount = async () =>
+      (
+        await ctx.container.database.db
+          .select()
+          .from(auditLogs)
+          .where(and(eq(auditLogs.tenantId, tenantA.tenantId), eq(auditLogs.entityId, panelId)))
+      ).length;
+
+    // Push the panel out, so "made eligible" is observable as a change.
+    const later = new Date(Date.now() + 60 * 60 * 1000);
+    await ctx.container.database.db
+      .update(panelMonitorSchedule)
+      .set({ nextEligibleAt: later })
+      .where(eq(panelMonitorSchedule.panelId, panelId));
+    const before = await service().get(tenantA, owner, panelId);
+    const auditsBefore = await auditCount();
+
+    const after = await service().update(tenantA, owner, panelId, {
+      idempotencyKey: pageKey(),
+    });
+
+    // It SUCCEEDS — the contract is unchanged — and it does nothing.
+    expect(after.panel.id).toBe(panelId);
+    expect(after.panel.updatedAt.getTime()).toBe(before.panel.updatedAt.getTime());
+    expect((await scheduleOf())!.nextEligibleAt.getTime()).toBe(later.getTime());
+    expect(await auditCount(), 'an edit that changed nothing was audited').toBe(auditsBefore);
+  });
+
+  it('is not disturbed by a rename between two pages', async () => {
+    // The keyset used to be ordered by `name`, which an operator can edit.
+    // Renaming a panel already returned to a value AFTER the cursor brought it
+    // back on a later page; renaming one not yet reached to a value BEFORE the
+    // cursor removed it from the traversal entirely. No malformed cursor and no
+    // concurrency — an ordinary rename between two page fetches did it.
+    const created: string[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      created.push(await make(owner, tenantA, `walk-${String(i).padStart(2, '0')}`));
+    }
+
+    const seen: string[] = [];
+    const first = await service().list(tenantA, owner, { limit: 2 });
+    seen.push(...first.panels.map((view) => view.panel.id));
+    expect(first.nextCursor).not.toBeNull();
+
+    // One panel already returned, renamed to the END of the alphabet; one not
+    // yet reached, renamed to the START of it.
+    const returned = seen[0]!;
+    const unseen = created.find((id) => !seen.includes(id))!;
+    await service().update(tenantA, owner, returned, {
+      name: 'zzz-renamed-after-the-cursor',
+      idempotencyKey: pageKey(),
+    });
+    await service().update(tenantA, owner, unseen, {
+      name: 'aaa-renamed-before-the-cursor',
+      idempotencyKey: pageKey(),
+    });
+
+    let cursor = first.nextCursor;
+    for (let guard = 0; guard < 20 && cursor !== null; guard += 1) {
+      const page = await service().list(tenantA, owner, { limit: 2, cursor });
+      seen.push(...page.panels.map((view) => view.panel.id));
+      cursor = page.nextCursor;
+    }
+
+    expect(new Set(seen).size, 'a panel was returned twice').toBe(seen.length);
+    expect(seen.slice().sort(), 'a panel was skipped').toEqual(created.slice().sort());
+  });
+
+  it('reads only the page it returns, not the whole collection', async () => {
+    // The finding was that one request materialises every live panel with both
+    // child rows joined. Three things this has to prove, and the first version
+    // proved none of them:
+    //
+    //   - the ACTUAL query. It asserted a hand-written `SELECT p.id FROM
+    //     panels` while production also joined credentials and health, so a
+    //     green plan described a statement nobody issues. It now runs the
+    //     exported `pageKeysQuery` the repository itself calls.
+    //   - at a size where the planner's choice is the interesting one. Sixty
+    //     rows is small enough that a sequential scan is genuinely cheaper and
+    //     the planner is right to take it — which is why this passed locally
+    //     and failed on CI reading all sixty.
+    //   - the CHILD joins too, which are the expensive half.
+    const bulk = 4_000;
+    await ctx.container.database.withClient(async (client) => {
+      await client.query(
+        `INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+         SELECT gen_random_uuid(), $1::uuid, 'bulk-' || lpad(g::text, 7, '0'),
+                'marzban', 'https://panel.example.test', 'ACTIVE'
+           FROM generate_series(1, $2::int) AS g`,
+        [tenantA.tenantId, bulk],
+      );
+      await client.query('ANALYZE panels');
+    });
+    // A cursor three thousand rows INTO the collection, read back rather than
+    // constructed. The first version of this passed `{ createdAt: <the one
+    // timestamp all four thousand bulk rows share>, id: <the zero uuid> }`,
+    // which sorts before every real row — so the "deep" scan was the same scan
+    // as the `cursor: null` one asserted above and the assertion could not
+    // fail. All the bulk rows share one `created_at` (one INSERT … SELECT), so
+    // this is also the tie case: the seek has to continue on `id` INSIDE that
+    // timestamp, which is the part an index can only do as an Index Cond.
+    const deepCursor = await ctx.container.database.withClient(async (client) => {
+      const { rows } = await client.query<{ created_at: string; id: string }>(
+        `SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at,
+                id::text AS id
+           FROM panels
+          WHERE tenant_id = $1::uuid AND status <> 'ARCHIVED'
+          ORDER BY created_at, id
+         OFFSET 3000 LIMIT 1`,
+        [tenantA.tenantId],
+      );
+      const row = rows[0];
+      if (row === undefined) throw new Error('the bulk insert did not produce 3000 live panels');
+      return { createdAt: row.created_at, id: row.id };
+    });
+
+    const rowsRead = async (statement: SQL, relation: string): Promise<number> => {
+      const explained = await ctx.container.database.db.execute<{
+        'QUERY PLAN': [{ Plan: Record<string, unknown> }];
+      }>(sql`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${statement}`);
+      let read = 0;
+      const walkPlan = (node: Record<string, unknown>): void => {
+        if (node['Relation Name'] === relation) read += Number(node['Actual Rows'] ?? 0);
+        for (const child of (node['Plans'] as Record<string, unknown>[] | undefined) ?? []) {
+          walkPlan(child);
+        }
+      };
+      walkPlan(explained.rows[0]!['QUERY PLAN'][0]!.Plan);
+      return read;
+    };
+
+    // Stage one: the page keys, the statement the repository issues.
+    const first = DrizzlePanelRepository.pageKeysQuery(tenantA, {
+      includeArchived: false,
+      limit: 50,
+      cursor: null,
+    });
+    const firstRead = await rowsRead(first, 'panels');
+    expect(firstRead).toBeLessThanOrEqual(51);
+
+    // And it does not grow with the collection: continue deep into it.
+    const deep = DrizzlePanelRepository.pageKeysQuery(tenantA, {
+      includeArchived: false,
+      limit: 50,
+      cursor: deepCursor,
+    });
+    expect(await rowsRead(deep, 'panels')).toBeLessThanOrEqual(51);
+
+    // Stage two: the child joins, explained as the REPOSITORY issues them —
+    // `.toSQL()` on the exported builder, not a retyped facsimile. Removing the
+    // page bound from that query is invisible to a result-shaped assertion,
+    // because the extra rows are simply ignored when the page is assembled.
+    const page = await new DrizzlePanelRepository(ctx.container.database.db).list(tenantA, {
+      includeArchived: false,
+      limit: 50,
+    });
+    expect(page.panels).toHaveLength(50);
+    expect(page.nextCursor).not.toBeNull();
+
+    const built = DrizzlePanelRepository.pageRowsQuery(
+      ctx.container.database.db,
+      tenantA,
+      page.panels.map((view) => view.panel.id),
+    ).toSQL();
+    const childRows = await ctx.container.database.withClient(async (client) => {
+      const explained = await client.query<{ 'QUERY PLAN': [{ Plan: Record<string, unknown> }] }>(
+        `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${built.sql}`,
+        built.params as unknown[],
+      );
+      const counts: Record<string, number> = {};
+      const walkPlan = (node: Record<string, unknown>): void => {
+        const relation = node['Relation Name'];
+        if (typeof relation === 'string') {
+          counts[relation] = (counts[relation] ?? 0) + Number(node['Actual Rows'] ?? 0);
+        }
+        for (const child of (node['Plans'] as Record<string, unknown>[] | undefined) ?? []) {
+          walkPlan(child);
+        }
+      };
+      walkPlan(explained.rows[0]!['QUERY PLAN'][0]!.Plan);
+      return counts;
+    });
+    // Every relation the join touches is bounded by the page, not the fleet.
+    expect(childRows['panels'] ?? 0).toBeLessThanOrEqual(50);
+    expect(childRows['panel_credentials'] ?? 0).toBeLessThanOrEqual(50);
+    expect(childRows['panel_health'] ?? 0).toBeLessThanOrEqual(50);
+
+    // Anti-vacuity: the collection really is large, so "50" is a bound and not
+    // the whole table.
+    expect(bulk).toBeGreaterThan(1_000);
+  });
+
+  it('never returns another tenant a page of its panels', async () => {
+    await make(owner, tenantA, 'mine');
+    await make(ownerB, tenantB, 'theirs');
+    const mine = await walk(owner, tenantA, 1);
+    const theirs = await walk(ownerB, tenantB, 1);
+    expect(mine).toHaveLength(1);
+    expect(theirs).toHaveLength(1);
+    expect(mine[0]).not.toBe(theirs[0]);
+  });
+
+  it('keeps archived panels out of the pages, as the unpaginated list did', async () => {
+    const live = await make(owner, tenantA, 'still-here');
+    const gone = await make(owner, tenantA, 'archived-away');
+    await service().setStatus(tenantA, owner, gone, {
+      status: 'ARCHIVED',
+      idempotencyKey: pageKey(),
+    });
+    expect(await walk(owner, tenantA, 10)).toEqual([live]);
+  });
+
+  it('bounds the page even when the caller asks for everything', async () => {
+    for (let i = 0; i < 3; i += 1) await make(owner, tenantA, `bounded-${i}`);
+    const page = await service().list(tenantA, owner, {});
+    // The default applies when no limit is given; the schema refuses anything
+    // above PANEL_PAGE_MAX at the boundary.
+    expect(page.panels.length).toBeLessThanOrEqual(PANEL_PAGE_DEFAULT);
+    expect(panelListQuerySchema.safeParse({ limit: String(PANEL_PAGE_MAX + 1) }).success).toBe(
+      false,
+    );
+    expect(panelListQuerySchema.safeParse({ limit: '0' }).success).toBe(false);
   });
 });

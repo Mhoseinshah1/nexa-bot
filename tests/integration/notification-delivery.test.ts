@@ -340,7 +340,12 @@ describe('notification delivery', () => {
       expect(transport.messages).toHaveLength(1);
 
       const all = await ctx.container.notifications.list(tenantA, owner);
-      const poison = all.find((n) => n.templateKey === 'bot.no_such_key');
+      // Compared as a STRING, and deliberately. This test seeds a row whose
+      // template key is not in the catalogue — that is the poison it exists to
+      // exercise — so the value is one the contract type says cannot occur.
+      // Typed against the union the comparison is always false, `poison` is
+      // always undefined, and every assertion below it is about nothing.
+      const poison = all.find((n) => (n.templateKey as string) === 'bot.no_such_key');
       expect(poison?.status).toBe('FAILED');
 
       const detail = await ctx.container.notifications.get(tenantA, owner, poison!.id);

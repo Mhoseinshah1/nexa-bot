@@ -167,6 +167,15 @@ export class DrizzleOperationalEventRecorder implements OperationalEventRecorder
           and(
             eq(operationalEvents.dedupeScope, values.dedupeScope),
             eq(operationalEvents.code, event.recoversCode),
+            // Narrowed to one SUBJECT when the caller names one. Without this
+            // a recovery resolves every open row of that code in the tenant,
+            // which is right for "this installation cannot reach Telegram" and
+            // wrong for anything that is about a particular setting or panel —
+            // repairing one setting was marking every other setting's open
+            // complaint resolved.
+            ...(event.recoversDedupeKey === undefined
+              ? []
+              : [eq(operationalEvents.dedupeKey, event.recoversDedupeKey)]),
             isNull(operationalEvents.resolvedAt),
           ),
         );

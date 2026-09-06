@@ -69,8 +69,7 @@ export class AdminsController {
     const { scope, actor } = await this.authenticate(request, { write: true });
     const targetId = uuidV7Schema.parse(id) as AdminId;
     const updated = await this.container.adminManagement.setStatus(scope, actor, targetId, body);
-    const roleKeys = await this.container.admins.roleKeysFor(scope, targetId);
-    return toSummary(updated, roleKeys);
+    return toSummary(updated.admin, updated.roleKeys);
   }
 
   @Post('admins/:id/roles')

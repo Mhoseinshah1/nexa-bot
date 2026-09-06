@@ -5,7 +5,10 @@ import {
   settingValues,
   templateOverrides,
 } from '../../apps/api/src/infrastructure/persistence/schema';
-import { TemplateResolver } from '../../apps/api/src/modules/control/templates/application/template-resolver';
+import {
+  TemplateResolver,
+  type Locale,
+} from '../../apps/api/src/modules/control/templates/application/template-resolver';
 import {
   adminActorFor,
   createAdmin,
@@ -437,9 +440,15 @@ describe('control-plane isolation and concurrency', () => {
         },
       );
 
-      expect(await resolver.render(tenantA, 'bot.ping.reply', { correlationId: 'x' }, 'en')).toBe(
-        '[en] bot.ping.reply x',
-      );
+      // `'en'` is deliberately NOT in `SUPPORTED_LOCALES`, and the cast says
+      // so rather than hiding it. That union has exactly one member today; the
+      // whole point of this test is that the RESOLVER does not hardcode it, so
+      // the only way to express the assertion is to hand it a locale the union
+      // does not yet contain. When a second locale is added, this cast goes.
+      const secondLocale = 'en' as unknown as Locale;
+      expect(
+        await resolver.render(tenantA, 'bot.ping.reply', { correlationId: 'x' }, secondLocale),
+      ).toBe('[en] bot.ping.reply x');
     });
   });
 

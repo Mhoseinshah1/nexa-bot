@@ -17,6 +17,7 @@ import {
   type SeededAdmin,
   type TestContext,
 } from './harness';
+import { DrizzleOperationalConditionReader } from '../../apps/api/src/modules/platform/opslog/infrastructure/drizzle-operational-event.reader';
 
 /**
  * The connection-test throttle.
@@ -93,8 +94,10 @@ describe('the panel connection-test throttle', () => {
       repository,
       credentials: new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher),
       guard: ctx.container.guard,
+      scopeActivity: ctx.container.tenants,
       audit: ctx.container.audit,
       opsLog: ctx.container.opsLog,
+      conditions: new DrizzleOperationalConditionReader(ctx.container.database.db),
       sessions: ctx.container.sessions,
       uow: ctx.container.uow,
       idempotency: ctx.container.idempotency,
@@ -118,6 +121,11 @@ describe('the panel connection-test throttle', () => {
           return answer();
         },
       }),
+      cadence: {
+        healthyIntervalMs: 10 * 60 * 1000,
+        retryableIntervalMs: 2 * 60 * 1000,
+        nonRetryableIntervalMs: 60 * 60 * 1000,
+      },
     });
 
   const panelFor = async (admin: SeededAdmin, scope: typeof tenantA, name: string) => {
@@ -170,9 +178,13 @@ describe('the panel connection-test throttle', () => {
       ...real,
       list: real.list.bind(real),
       find: real.find.bind(real),
+      lockPanel: real.lockPanel.bind(real),
       create: real.create.bind(real),
       update: real.update.bind(real),
       setStatus: real.setStatus.bind(real),
+      readSchedule: real.readSchedule.bind(real),
+      scheduleNext: real.scheduleNext.bind(real),
+      setScheduleEligibility: real.setScheduleEligibility.bind(real),
       nameTaken: real.nameTaken.bind(real),
       recordHealth: real.recordHealth.bind(real),
       takeProbeBudget: real.takeProbeBudget.bind(real),

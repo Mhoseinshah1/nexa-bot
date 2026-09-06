@@ -21,6 +21,8 @@ import {
   type TemplateWriteResponse,
   type SystemReadinessResponse,
   type TenantContext,
+  uuidV7Schema,
+  notificationListQuerySchema,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { ReadinessProbe } from './readiness.probe.js';
@@ -273,8 +275,16 @@ export class ControlController {
     @Query() query: Record<string, string | undefined>,
   ): Promise<NotificationListResponse> {
     const { scope, actor } = await this.authenticate(request);
+    // Parsed, not coerced-then-clamped. `Number('abc')` is NaN, and the
+    // service's `Math.min(Math.max(NaN, 1), 200)` is still NaN, which reached
+    // the SQL LIMIT and came back as an internal error instead of a bad
+    // request; fractional, infinite, zero and negative spellings were silently
+    // rewritten rather than refused.
+    const { limit } = notificationListQuerySchema.parse({
+      ...(query.limit === undefined ? {} : { limit: query.limit }),
+    });
     const found = await this.container.notifications.list(scope, actor, {
-      ...(query.limit ? { limit: Number(query.limit) } : {}),
+      ...(limit === undefined ? {} : { limit }),
     });
     return { notifications: found.map(toNotificationResponse) };
   }
@@ -285,10 +295,14 @@ export class ControlController {
     @Param('id') id: string,
   ): Promise<NotificationDetailResponse> {
     const { scope, actor } = await this.authenticate(request);
+    // Validated before it can reach a UUID column. An arbitrary string was
+    // compared against `notifications.id`, PostgreSQL rejected it with 22P02,
+    // and a malformed identifier surfaced as a 500 rather than a bad request.
+    const notificationId = uuidV7Schema.parse(id);
     const { intent, attempts, releasedClaims } = await this.container.notifications.get(
       scope,
       actor,
-      id,
+      notificationId,
     );
     return {
       notification: toNotificationResponse(intent),

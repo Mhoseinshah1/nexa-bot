@@ -72,24 +72,38 @@ export class DrizzleTenantRepository implements TenantRepository {
    *
    * A system scope has no tenant to be inactive, so it passes.
    */
+  /**
+   * Whether this scope is still accepting work.
+   *
+   * `FOR SHARE` ONLY inside a caller's transaction, and that distinction is
+   * the point. In a transaction the lock is what makes the answer hold until
+   * the caller commits: a stop cannot slip in between the check and the write.
+   * In autocommit the same lock is taken and released within the statement, so
+   * it guarantees nothing at all — and it is a row lock on `tenants`, which is
+   * this installation's single busiest row. The monitor reads this once per
+   * DUE PANEL before it dials, so an unqualified `FOR SHARE` put a batch of
+   * those behind every `FOR UPDATE` an administrator takes, to buy a
+   * guarantee the call could not have.
+   */
   async scopeIsActive(scope: ScopeContext, tx?: unknown): Promise<boolean> {
     if (isSystemContext(scope)) return true;
     const executor = executorOf(this.db, tx);
+    const held = tx !== undefined;
 
-    const [tenant] = await executor
+    const tenantQuery = executor
       .select({ status: tenants.status })
       .from(tenants)
-      .where(eq(tenants.id, scope.tenantId))
-      .for('share');
+      .where(eq(tenants.id, scope.tenantId));
+    const [tenant] = await (held ? tenantQuery.for('share') : tenantQuery);
     if (tenant?.status !== 'ACTIVE') return false;
 
     if (scope.botInstanceId === null) return true;
 
-    const [bot] = await executor
+    const botQuery = executor
       .select({ status: botInstances.status })
       .from(botInstances)
-      .where(eq(botInstances.id, scope.botInstanceId))
-      .for('share');
+      .where(eq(botInstances.id, scope.botInstanceId));
+    const [bot] = await (held ? botQuery.for('share') : botQuery);
     return bot?.status === 'ACTIVE';
   }
 

@@ -77,7 +77,20 @@
 	handle @assets {
 		header Cache-Control "public, max-age=31536000, immutable"
 		header X-Content-Type-Options "nosniff"
-		root * /srv/web
+		# The POOL, not the activated release, and that is the whole point of
+		# there being a pool. Loading the Web Admin is index.html and then the
+		# assets it names; a browser that fetched index.html a millisecond
+		# before a deployment asks for those assets a millisecond after it.
+		# Rooted at the activated release they would be gone — a blank page for
+		# exactly the operator watching the deployment. The pool holds the
+		# union over the retained releases, so both the release being left and
+		# the release being entered load through the whole swap.
+		#
+		# Safe to point at a directory that is written while it is served for
+		# one reason only: every file in it arrives by rename(2), under a name
+		# the build derived from its content. See
+		# deploy/bin/publish-web-assets.mjs.
+		root * /srv/web/pool
 		file_server
 	}
 
@@ -102,7 +115,11 @@
 			# operator and something mildly useful to everyone else.
 			-Server
 		}
-		root * /srv/web
+		# The activated release. `current` is a SYMLINK replaced by one
+		# rename(2) per publication, and Caddy resolves it when it opens the
+		# file — so a request is served entirely out of one release, and never
+		# out of a directory a publisher is part-way through writing.
+		root * /srv/web/current
 		try_files {path} /index.html
 		file_server
 	}

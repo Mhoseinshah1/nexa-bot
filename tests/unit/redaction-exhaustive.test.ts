@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { redactSecretText } from '../../apps/api/src/infrastructure/redaction';
+import { errors } from '@nexa/contracts';
+import { redactSecretText, redactSecrets } from '../../apps/api/src/infrastructure/redaction';
 
 /**
  * The redactor, checked by CONSTRUCTION rather than by example.
@@ -193,5 +194,44 @@ describe('ordinary operational text is left alone', () => {
 
   it.each(untouched)('leaves %j unchanged', (line) => {
     expect(redactSecretText(line)).toBe(line);
+  });
+});
+
+describe('an error survives redaction with the part that says what went wrong', () => {
+  // `message` and `stack` are non-enumerable own properties, so an
+  // `Object.entries` rebuild returns `{}`. Every unattended failure in this
+  // codebase is reported by logging the error object, and each of them was
+  // reaching the operator as `"err":{}` — the heartbeat went stale and the
+  // container went unhealthy, and the one line that said why had been emptied.
+  it('keeps the message and the stack of a plain Error', () => {
+    const redacted = redactSecrets({ err: new Error('panel_monitor_tenants does not exist') }) as {
+      err: { name: string; message: string; stack: string };
+    };
+    expect(redacted.err.name).toBe('Error');
+    expect(redacted.err.message).toBe('panel_monitor_tenants does not exist');
+    expect(redacted.err.stack).toContain('panel_monitor_tenants does not exist');
+  });
+
+  it("keeps a NexaError's message beside the fields that were already kept", () => {
+    const err = errors.conflict('panel.configuration_changed', 'The panel changed mid-probe.');
+    const redacted = redactSecrets({ err }) as {
+      err: { kind: string; code: string; message: string };
+    };
+    expect(redacted.err.kind).toBe('CONFLICT');
+    expect(redacted.err.code).toBe('panel.configuration_changed');
+    expect(redacted.err.message).toBe('The panel changed mid-probe.');
+  });
+
+  it('still redacts a secret that reached an error', () => {
+    const err = new Error('boom') as Error & { password?: string };
+    err.password = 'hunter2-should-not-appear';
+    const redacted: unknown = redactSecrets({ err });
+    expect(JSON.stringify(redacted)).not.toContain('hunter2-should-not-appear');
+  });
+
+  it('follows a cause, which is where the real reason usually is', () => {
+    const err = new Error('probe failed', { cause: new Error('ECONNREFUSED 10.0.0.7:443') });
+    const redacted = redactSecrets({ err }) as { err: { cause: { message: string } } };
+    expect(redacted.err.cause.message).toBe('ECONNREFUSED 10.0.0.7:443');
   });
 });

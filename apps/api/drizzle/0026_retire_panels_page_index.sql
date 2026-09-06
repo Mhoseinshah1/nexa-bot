@@ -1,0 +1,1 @@
+DROP INDEX "panels_tenant_page_idx";

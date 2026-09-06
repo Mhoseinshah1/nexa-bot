@@ -402,6 +402,66 @@ carry a customer, and nothing here claims it has passed.
   would persist an empty dataset and imply a guarantee nothing relies on. The
   compose file says where that has to be revisited.
 
-## Phases 3–8
+## Phase 3 — Providers, panels and health
+
+Three slices, of which two are merged and the third is this branch.
+
+### What exists
+
+**3A — providers, panels, credentials, health.** A provider type is code rather
+than a row: the adapter is resolved before the panel is written, so a panel
+nobody can operate never becomes one. A panel's credential travels one way — the
+repository projection selects three set-at timestamps and never a ciphertext, so
+no response builder can acquire a value, and there is deliberately no masked
+stand-in either, because `********` can be resubmitted as a real password.
+Health is latest state only; `DISABLED` and `UNCHECKED` are projected rather
+than stored, and a probe result changes health and nothing else. Outbound
+requests go through `SafeHttpClient`, which refuses only destinations that are
+never a panel, never follows a redirect, and pins the socket to a
+pre-validated address — which is why it is written on `node:http` rather than
+`fetch`.
+
+**3B — the MHSanaei/3x-ui v3.7.0 adapter.** Bearer token when one is
+configured, session cookie and CSRF otherwise, and a wrong token does not fall
+back to a username and password. Verified against a deterministic real-socket
+fake server rather than a mocked client.
+
+**3C — the monitor process role (this branch).** A third entrypoint over the
+same module graph keeps panel health current on a schedule. Discovery is two
+bounded index range scans — a rotation claim over tenants, then one `LATERAL`
+per claimed tenant — so a tick's work does not grow with the due population,
+measured with `EXPLAIN (ANALYZE, BUFFERS)` rather than argued. Scheduling state
+lives in its own table, separate from health, which is what lets a panel with no
+usable credential be deferred without inventing a provider state it never
+reported. Authorization precedes every side effect. Liveness is progress, not
+uptime.
+
+### What was found rather than built
+
+The two-phase scan replaced a `row_number()` ranking that returned a bounded
+number of rows while doing work proportional to every due panel. `LIMIT 50` in
+the SQL is not a bound on the database's work, and reading fifty rows back in a
+test does not measure one. Two further design changes — dropping a `panels`
+join that made the planner abandon the bounded path, and adding `panel_id` as
+the index's third column so a tie group is not sorted — came out of the
+measurement rather than out of reasoning about it.
+
+Falsification found one test that could not reach the code it named: it drove a
+back-dated probe, which the per-panel claim refuses long before the rule under
+test runs. Rewriting it as the interleaving that actually happens showed the
+guard was in the wrong place, so a result the storage had refused still rewrote
+the panel's schedule.
+
+One defect outside Phase 3 was found and fixed on the way: an operational-event
+recovery resolved open rows by `(scope, code)` across a whole tenant, so
+repairing one setting resolved every other setting's open complaint.
+
+### Deliberately absent
+
+Nothing consumes a panel yet. There are no purchases, payments, wallet,
+resellers or customer-facing Telegram operations, and no product feature reads a
+panel's health.
+
+## Phases 4–8
 
 Not started. Scope in `docs/architecture.md`.

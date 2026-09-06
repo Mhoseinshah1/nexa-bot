@@ -283,7 +283,7 @@ export class AdminManagementService {
     actor: ActorContext,
     targetId: AdminId,
     input: unknown,
-  ): Promise<Admin> {
+  ): Promise<{ admin: Admin; roleKeys: string[] }> {
     // A cheap rejection, NOT the authorization. It is read on the pool, so by
     // the time this request reaches the lock the actor may have been disabled
     // or demoted. The authoritative check is inside the transaction.
@@ -337,7 +337,12 @@ export class AdminManagementService {
         // that does not depend on it having: whatever row we are about to write
         // is the row the guard now sees.
         assertNotSelf(adminIdOf(actor), target.id);
-        if (target.status === command.status) return target;
+        if (target.status === command.status) {
+          // The no-op path returns the same projection as the change path, read
+          // under the same lock — so the response shape does not depend on
+          // whether the status happened to differ.
+          return { admin: target, roleKeys: await this.admins.roleKeysFor(scope, target.id, tx) };
+        }
 
         // Changing an OWNER's status is a change to privilege, so it takes the
         // permission that governs privilege — the same gate `setRoles` applies
@@ -403,7 +408,16 @@ export class AdminManagementService {
           payload: { from: target.status, to: command.status },
         });
 
-        return { ...target, status: command.status as AdminStatus };
+        // The role keys come back with the status, read under the same lock
+        // in the same transaction. The controller used to fetch them itself
+        // afterwards, straight off the repository — outside this transaction,
+        // so a concurrent role change made the response combine a status from
+        // one moment with roles from another, and a web surface was reaching
+        // past the application layer to finish a business response.
+        return {
+          admin: { ...target, status: command.status as AdminStatus },
+          roleKeys: targetRoleKeys,
+        };
       },
     );
 

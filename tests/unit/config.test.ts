@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { isNexaError } from '@nexa/contracts';
 import { loadConfig } from '../../apps/api/src/infrastructure/config/load-config';
+import {
+  schedulerFreshPanelUpperBound,
+  slowProbeLatencyModelFigure,
+  tenantBudgetFreshPanelUpperBound,
+} from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
 
 const KEK = Buffer.alloc(32, 7).toString('base64');
 
@@ -309,5 +314,179 @@ describe('deployment topology and trusted proxies', () => {
   it('accepts the shapes an operator actually writes', () => {
     const config = loadConfig({ ...valid, TRUSTED_PROXY_IPS: '127.0.0.1, ::1, 10.0.0.0/8' });
     expect(config.TRUSTED_PROXY_IPS).toEqual(['127.0.0.1', '::1', '10.0.0.0/8']);
+  });
+
+  describe('background monitoring safety', () => {
+    // Both of these are cross-field rules, and both are refusals rather than
+    // clamps. A configuration that would defeat the reason a protection exists
+    // should stop the process at boot, where somebody is reading the message.
+
+    it('refuses a cadence that would let healthy panels go stale', () => {
+      // Twelve minutes is fine at a thirty-second tick. The SAME twelve minutes
+      // with a ten-minute tick is not, because worst-case refresh is the
+      // interval plus the spread plus one tick of scheduling delay — which is
+      // exactly why neither field alone can express the rule.
+      expect(
+        loadConfig({
+          ...valid,
+          PANEL_MONITOR_HEALTHY_INTERVAL_MS: String(12 * 60 * 1000),
+          PANEL_MONITOR_TICK_MS: '30000',
+        }).PANEL_MONITOR_HEALTHY_INTERVAL_MS,
+      ).toBe(12 * 60 * 1000);
+
+      expect(() =>
+        loadConfig({
+          ...valid,
+          PANEL_MONITOR_HEALTHY_INTERVAL_MS: String(12 * 60 * 1000),
+          PANEL_MONITOR_TICK_MS: String(10 * 60 * 1000),
+        }),
+      ).toThrowError(/would let a healthy panel's health go stale/);
+    });
+
+    it('accepts a long tick with a cadence that leaves room for it', () => {
+      const config = loadConfig({
+        ...valid,
+        PANEL_MONITOR_HEALTHY_INTERVAL_MS: String(4 * 60 * 1000),
+        PANEL_MONITOR_TICK_MS: String(10 * 60 * 1000),
+      });
+      expect(config.PANEL_MONITOR_TICK_MS).toBe(10 * 60 * 1000);
+    });
+
+    it('refuses a retry interval short enough to hammer a rejected credential', () => {
+      // A minute-scale first retry that doubles still spends four or five
+      // attempts against the operator's own panel before it slows down, and
+      // both providers this release speaks to lock an account for fewer.
+      expect(() =>
+        loadConfig({ ...valid, PANEL_MONITOR_NONRETRYABLE_INTERVAL_MS: '60000' }),
+      ).toThrowError(/PANEL_MONITOR_NONRETRYABLE_INTERVAL_MS/);
+      expect(
+        loadConfig({ ...valid, PANEL_MONITOR_NONRETRYABLE_INTERVAL_MS: String(30 * 60 * 1000) })
+          .PANEL_MONITOR_NONRETRYABLE_INTERVAL_MS,
+      ).toBe(30 * 60 * 1000);
+    });
+
+    it('refuses a zero background reserve while monitoring is enabled', () => {
+      // The invariant is that an operator always outranks the background loop
+      // for a tenant's last outbound probe. A zero reserve is that invariant
+      // switched off, so it is refused rather than quietly rounded.
+      expect(() =>
+        loadConfig({ ...valid, PANEL_MONITOR_BUDGET_RESERVE_PERCENT: '0' }),
+      ).toThrowError(/PANEL_MONITOR_BUDGET_RESERVE_PERCENT=0/);
+
+      // With monitoring off there is no background lane to reserve against, so
+      // the same value is fine.
+      expect(
+        loadConfig({
+          ...valid,
+          PANEL_MONITOR_ENABLED: 'false',
+          PANEL_MONITOR_BUDGET_RESERVE_PERCENT: '0',
+        }).PANEL_MONITOR_BUDGET_RESERVE_PERCENT,
+      ).toBe(0);
+    });
+  });
+});
+
+describe('the monitor cannot claim more tenants than a tick can serve', () => {
+  it('refuses a tenants-per-tick above the batch size', () => {
+    // `claimTenants` spends every claimed tenant's turn, and the due scan is
+    // capped globally by the batch. Two hundred tenants for a batch of one
+    // marks two hundred as served while one panel is probed, so the documented
+    // ceil(d / t) fairness bound is simply false.
+    expect(() =>
+      loadConfig({
+        ...valid,
+        PANEL_MONITOR_ENABLED: 'true',
+        PANEL_MONITOR_TENANTS_PER_TICK: '200',
+        PANEL_MONITOR_BATCH_SIZE: '1',
+      }),
+    ).toThrow(/PANEL_MONITOR_TENANTS_PER_TICK/);
+  });
+
+  it('accepts them equal, which is the tightest honest configuration', () => {
+    const config = loadConfig({
+      ...valid,
+      PANEL_MONITOR_ENABLED: 'true',
+      PANEL_MONITOR_TENANTS_PER_TICK: '10',
+      PANEL_MONITOR_BATCH_SIZE: '10',
+    });
+    expect(config.PANEL_MONITOR_TENANTS_PER_TICK).toBe(10);
+  });
+});
+
+describe('the reserve must leave the monitor a token it can reach', () => {
+  it('refuses a bucket that reserves everything for manual tests', () => {
+    // The floor rounds UP so a positive reserve is never silently zero — that
+    // keeps an operator's last manual probe available at small capacities. The
+    // other side was unchecked: at a limit of 1 the floor is the whole bucket,
+    // so every background attempt is refused AFTER claiming its panel and no
+    // panel of that tenant is ever monitored, while the process reports itself
+    // perfectly healthy.
+    expect(() =>
+      loadConfig({
+        ...valid,
+        PANEL_MONITOR_ENABLED: 'true',
+        PANEL_PROBE_TENANT_LIMIT: '1',
+        PANEL_MONITOR_BUDGET_RESERVE_PERCENT: '40',
+      }),
+    ).toThrow(/PANEL_PROBE_TENANT_LIMIT/);
+  });
+
+  it('accepts a bucket of two, where each lane gets one', () => {
+    const config = loadConfig({
+      ...valid,
+      PANEL_MONITOR_ENABLED: 'true',
+      PANEL_PROBE_TENANT_LIMIT: '2',
+      PANEL_MONITOR_BUDGET_RESERVE_PERCENT: '40',
+    });
+    expect(config.PANEL_PROBE_TENANT_LIMIT).toBe(2);
+  });
+
+  it('allows a capacity of one when monitoring is deliberately off', () => {
+    // The contradiction is between the two lanes, not in the number itself.
+    const config = loadConfig({
+      ...valid,
+      PANEL_MONITOR_ENABLED: 'false',
+      PANEL_PROBE_TENANT_LIMIT: '1',
+    });
+    expect(config.PANEL_PROBE_TENANT_LIMIT).toBe(1);
+  });
+});
+
+describe('the fresh-panel bounds are separate, and neither is a promise', () => {
+  it('derives the PER-TENANT budget ceiling from the refill rate', () => {
+    // 30 tokens per 5 minutes is six a minute; ten minutes of those is sixty.
+    expect(tenantBudgetFreshPanelUpperBound(30, 300_000, 10 * 60 * 1000)).toBe(60);
+    expect(tenantBudgetFreshPanelUpperBound(300, 300_000, 10 * 60 * 1000)).toBe(600);
+    // A shorter interval needs more probes per panel, so it supports fewer.
+    expect(tenantBudgetFreshPanelUpperBound(30, 300_000, 5 * 60 * 1000)).toBe(30);
+  });
+
+  it('derives the INSTALLATION-WIDE scheduler ceiling from the batch and tick', () => {
+    // 50 candidates every 30s is 1000 starts across a 10-minute interval — for
+    // the whole installation, not for each tenant. Dividing it by a tenant
+    // count would invent a per-tenant guarantee the fairness rotation does not
+    // make: the share any tenant gets depends on who else is due.
+    expect(schedulerFreshPanelUpperBound(50, 30_000, 10 * 60 * 1000)).toBe(1000);
+    expect(schedulerFreshPanelUpperBound(1, 60_000, 10 * 60 * 1000)).toBe(10);
+  });
+
+  it('does not let a per-tenant check answer an installation-wide question', () => {
+    // Codex's example: a hundred tenants of twenty panels each. Every tenant is
+    // comfortably under its own budget ceiling...
+    const budgetBound = tenantBudgetFreshPanelUpperBound(30, 300_000, 10 * 60 * 1000);
+    expect(20).toBeLessThan(budgetBound);
+    // ...and the installation asks the scheduler for two thousand starts per
+    // interval when it can manage a thousand. Two different questions, and only
+    // the second one catches this.
+    const schedulerBound = schedulerFreshPanelUpperBound(50, 30_000, 10 * 60 * 1000);
+    expect(100 * 20).toBeGreaterThan(schedulerBound);
+  });
+
+  it('labels the latency figure as a model, not a completion count', () => {
+    // Four in flight, each running to a 10s timeout, across ten minutes. The
+    // real loop does not overlap ticks and spends time on discovery, claims,
+    // budget and writes, so its actual throughput is lower — this exists to
+    // make the point that latency matters, not to put an SLA on it.
+    expect(slowProbeLatencyModelFigure(4, 10_000, 10 * 60 * 1000)).toBe(240);
   });
 });

@@ -147,6 +147,83 @@ describe('the Sanaei adapter — Bearer API token', () => {
     expect(outcome).not.toMatchObject({ failure: 'AUTHENTICATION_FAILED' });
   });
 
+  it('5d. a rate limit is its own kind, not the panel being broken', async () => {
+    // 429 used to be PROVIDER_ERROR, which is retryable — so the monitor
+    // answered "you are calling me too often" with its SHORTEST failure
+    // cadence, and told the operator to go and look at a panel that is fine.
+    const server = await panel({ tokens: TOKENS, behaviour: 'status-429' });
+    const outcome = await probe(server, withToken(CANARY.token));
+    expect(outcome).toEqual({ ok: false, failure: 'RATE_LIMITED', status: 429 });
+    // Not a credential problem: rotating a working token on a panel with a
+    // login limiter is how a rate limit becomes a lockout.
+    expect(outcome).not.toMatchObject({ failure: 'AUTHENTICATION_FAILED' });
+    // And the panel's own body is not repeated to the operator.
+    expect(asText(outcome)).not.toContain('Too Many Requests');
+  });
+
+  it('5e. a rate limit is its own kind at EVERY session step, not only the token read', async () => {
+    // The finding. The 429 rule was added to `fromApiStatus`, which only the
+    // UNAUTHENTICATED status read goes through. The session flow is four
+    // requests, and a limiter in front of the panel answers whichever one
+    // arrives while its window is full — so csrf-token, the two-factor
+    // question and the login each had their own branch mapping every non-2xx
+    // to PROVIDER_ERROR. That is retryable, and the monitor answered "you are
+    // calling me too often" with its SHORTEST failure cadence.
+    for (const behaviour of ['csrf-429', 'twofactor-429', 'login-429'] as const) {
+      const server = await panel({ tokens: TOKENS, behaviour });
+      const outcome = await probe(server, withPassword());
+      expect(outcome, `${behaviour} was not reported as a rate limit`).toEqual({
+        ok: false,
+        failure: 'RATE_LIMITED',
+        status: 429,
+      });
+      // Never a credential problem: rotating a working password on a panel
+      // with a login limiter is how a rate limit becomes a lockout.
+      expect(outcome).not.toMatchObject({ failure: 'AUTHENTICATION_FAILED' });
+      // Nor the panel's own body, which is a proxy's HTML.
+      expect(asText(outcome)).not.toContain('Too Many Requests');
+      await fake?.close();
+      fake = null;
+    }
+  });
+
+  it('5f. a rate limit AFTER a good login is not a degraded panel', async () => {
+    // The worst of the four, because it fails in the opposite direction.
+    // Everything after a successful login is DEGRADED on purpose — the panel
+    // is up and the credentials are right, so an authentication failure there
+    // would send an operator to replace a password that just worked. But
+    // DEGRADED is `ok: true`, so it earns the HEALTHY cadence: the one answer
+    // a limiter must not get.
+    const server = await panel({ tokens: TOKENS, behaviour: 'status-429' });
+    const outcome = await probe(server, withPassword());
+    expect(outcome).toEqual({ ok: false, failure: 'RATE_LIMITED', status: 429 });
+    expect(outcome).not.toMatchObject({ ok: true });
+    // The login DID happen and DID succeed, so this is the authenticated path
+    // rather than a flow that stopped earlier.
+    expect(server.requests.map((request) => request.path.split('/').pop())).toContain('login');
+  });
+
+  it('5g. a 403 on login is still the CSRF reading, and 2FA is still terminal', async () => {
+    // The 429 rule is inserted into the same branches as those two, so both
+    // are re-asserted here rather than assumed: a fix that mapped every
+    // non-2xx login answer to RATE_LIMITED would pass 5e and break these.
+    const csrfBroken = await panel({ tokens: TOKENS, behaviour: 'login-403' });
+    expect(await probe(csrfBroken, withPassword())).toEqual({
+      ok: false,
+      failure: 'MALFORMED_RESPONSE',
+      status: 403,
+    });
+    await fake?.close();
+    fake = null;
+
+    const twoFactor = await panel({ tokens: TOKENS, twoFactorEnabled: true });
+    expect(await probe(twoFactor, withPassword())).toEqual({
+      ok: false,
+      failure: 'AUTHENTICATION_REQUIRES_INTERACTION',
+      status: null,
+    });
+  });
+
   it('5c. a reachable panel at the WRONG configured base path is not a credential problem', async () => {
     // The same rule reached the way an operator actually reaches it: the panel
     // is served under one base path and configured under another, so every
@@ -330,6 +407,95 @@ describe('the Sanaei adapter — session compatibility mode', () => {
     expect(asText(server.requests)).not.toContain(CANARY.password);
     expect(asText(server.requests)).not.toContain(CANARY.extraCookie);
     expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+  });
+
+  it('16d. P7: refuses a csrf token too large to be one, submitting no credential', async () => {
+    // Bounded only by `maxResponseBytes` — half a megabyte at the shipped
+    // default — and then written into the headers of every request that
+    // follows, on every probe, for ever. Same structural claim first: the flow
+    // must STOP at the mint.
+    const server = await panel({ behaviour: 'csrf-enormous-token' });
+    const outcome = await probe(server, withPassword());
+
+    expect(server.requests.map((r) => r.path.replace(/^\//, ''))).toEqual(['csrf-token']);
+    expect(asText(server.requests)).not.toContain(CANARY.password);
+    expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+  });
+
+  it('16e. P7: refuses a csrf token carrying CRLF rather than throwing on it', async () => {
+    // Node rejects a header value containing a control character by THROWING,
+    // so a panel answering with one turned a probe into an exception the caller
+    // has to recover from. What actually happened is a panel that is not
+    // speaking this contract, and that has a name.
+    const server = await panel({ behaviour: 'csrf-token-with-crlf' });
+    const outcome = await probe(server, withPassword());
+
+    expect(server.requests.map((r) => r.path.replace(/^\//, ''))).toEqual(['csrf-token']);
+    expect(asText(server.requests)).not.toContain(CANARY.password);
+    expect(asText(server.requests)).not.toContain('X-Injected');
+    expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+  });
+
+  it('16f. P7: refuses a session cookie too large to be one, submitting no credential', async () => {
+    // The cookie is as provider-supplied as the token, and it is rotated by the
+    // login and 2FA responses as well as minted here, so the bound is applied
+    // where the value is read rather than only where it is first seen.
+    const server = await panel({ behaviour: 'csrf-enormous-cookie' });
+    const outcome = await probe(server, withPassword());
+
+    expect(server.requests.map((r) => r.path.replace(/^\//, ''))).toEqual(['csrf-token']);
+    expect(asText(server.requests)).not.toContain(CANARY.password);
+    expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+  });
+
+  it('16g. P7: a LOGIN that rotates the session to something unusable is reported', async () => {
+    // The defect this pins is the one a `?? session` fallback creates: an
+    // unusable rotation was indistinguishable from no rotation, so the adapter
+    // kept sending the cookie the panel had just replaced. The panel then
+    // rejected the stale cookie with a 401, which this adapter maps to
+    // DEGRADED — an operator told the credentials are fine and something else
+    // is wrong, about a panel Nexa can never read.
+    const server = await panel({ behaviour: 'login-enormous-cookie' });
+    const outcome = await probe(server, withPassword());
+
+    // It got as far as the login and stopped there: no status read with a
+    // stale cookie.
+    expect(server.requests.map((r) => r.path.replace(/^\//, ''))).toEqual([
+      'csrf-token',
+      'getTwoFactorEnable',
+      'login',
+    ]);
+    expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+    // Emphatically NOT degraded: that is the outcome the old fallback produced.
+    expect(outcome).not.toMatchObject({ ok: true });
+  });
+
+  it('16h. P7: a 2FA response that rotates the session the same way is reported', async () => {
+    const server = await panel({ behaviour: 'twofactor-enormous-cookie' });
+    const outcome = await probe(server, withPassword());
+
+    expect(server.requests.map((r) => r.path.replace(/^\//, ''))).toEqual([
+      'csrf-token',
+      'getTwoFactorEnable',
+    ]);
+    // And no credential was submitted, because the flow stopped before login.
+    expect(asText(server.requests)).not.toContain(CANARY.password);
+    expect(outcome).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+  });
+
+  it('16i. P7: a response that sets NO session cookie keeps the one in hand', async () => {
+    // The other half of the distinction, and the reason it cannot simply be
+    // "any absent value is a failure": v3.7.0 does not rotate the session on
+    // every response, and a probe that demanded one would fail against a
+    // perfectly healthy panel. The ordinary path is the assertion.
+    const server = await panel();
+    const outcome = await probe(server, withPassword());
+
+    expect(outcome).toMatchObject({ ok: true });
+    // Every authenticated request carried the cookie minted at csrf-token.
+    for (const request of server.requests.filter((r) => !r.path.endsWith('csrf-token'))) {
+      expect(request.headers['cookie'], request.path).toMatch(/^3x-ui=/);
+    }
   });
 
   it('16. never sends a twoFactorCode field', async () => {

@@ -3,9 +3,15 @@ import { RecordingTransport } from '../../apps/api/src/modules/control/notificat
 import type { OutboundMessage } from '../../apps/api/src/modules/control/notifications/application/ports';
 
 const message: OutboundMessage = {
-  transport: 'RECORDING',
-  destination: { kind: 'TELEGRAM_CHAT', chatId: '-100999' },
+  // The real destination union is discriminated on `transport`, and carries a
+  // topic because the destination group may use forum topics. The fixture had
+  // drifted to a `kind: 'TELEGRAM_CHAT'` shape that no longer exists, and a
+  // top-level `transport` that the message itself does not carry — neither of
+  // which anything checked, because this file was outside the test typecheck.
+  destination: { transport: 'TELEGRAM', chatId: '-100999', topicId: null },
   text: 'the panel did not answer',
+  html: false,
+  tenantId: '01a06426-4d8d-741f-9985-656d51b61001',
 };
 
 /**
@@ -74,7 +80,9 @@ describe('RecordingTransport hold', () => {
       outcome: 'FAILED_PERMANENT',
       errorCode: 'telegram.rejected.400',
       errorMessage: 'chat not found',
-      retryAfterMs: null,
+      // No `retryAfterMs`: a permanent failure has nothing to wait for, and
+      // the union says so. Passing one here asserted a field the outcome does
+      // not have.
     });
     const send = transport.send(message);
     await hold.entered;

@@ -309,6 +309,93 @@ describe('panel HTTP surface', () => {
     }
   });
 
+  it('answers a malformed cursor by restarting the traversal, not with a 500', async () => {
+    // The cursor decodes to `<id>:<created_at>` and the id goes into a query
+    // that casts it to `uuid`. Nothing validated it, so any text a caller
+    // base64url-encoded reached PostgreSQL as 22P02 and came back as an
+    // internal error — a caller could turn `not-a-uuid:x` into a 500.
+    //
+    // The documented behaviour for a cursor this code cannot read is to
+    // restart the traversal, so each of these answers the FIRST page.
+    const created = panelResponseSchema.parse((await createPanel(ownerCookie)).json());
+    // TWO panels, so page one has a successor and the honoured-cursor
+    // assertion at the end is not vacuous.
+    await createPanel(ownerCookie, { name: 'Second panel for the cursor walk' });
+    const firstPage = panelListResponseSchema.parse(
+      (await get(`${PANEL_ROUTES.list}?limit=1`, ownerCookie)).json(),
+    );
+    expect(firstPage.panels).toHaveLength(1);
+
+    const b64 = (text: string) => Buffer.from(text, 'utf8').toString('base64url');
+    const cursors = [
+      // Not base64url at all.
+      '!!!not base64!!!',
+      // Decodes, but has no separator.
+      b64('nothing-to-split-on'),
+      // An empty id.
+      b64(':2024-01-01T00:00:00.000Z'),
+      // The shape of the bug: an id that is not a uuid.
+      b64('not-a-uuid:2024-01-01T00:00:00.000Z'),
+      b64(`../../etc/passwd:2024-01-01T00:00:00.000Z`),
+      // A real uuid with a timestamp that is not one.
+      b64(`${created.panel.id}:not-a-time`),
+      b64(`${created.panel.id}:`),
+      // In range for a JavaScript Date and OUT of range for `timestamptz`,
+      // which raises 22008 at the cast — the same 500 by another route.
+      b64(`${created.panel.id}:-005000-01-01T00:00:00.000000Z`),
+      b64(`${created.panel.id}:275760-09-13T00:00:00.000000Z`),
+      // A date JavaScript rolls over and PostgreSQL refuses.
+      b64(`${created.panel.id}:2026-02-30T00:00:00.000000Z`),
+      b64(`${created.panel.id}:2026-13-01T00:00:00.000000Z`),
+      // The right shape, the wrong precision: this API issues microseconds.
+      b64(`${created.panel.id}:2026-01-01T00:00:00.000Z`),
+      // Empty.
+      '',
+    ];
+
+    for (const cursor of cursors) {
+      const response = await get(
+        `${PANEL_ROUTES.list}?limit=1&cursor=${encodeURIComponent(cursor)}`,
+        ownerCookie,
+      );
+      // 200 exactly, not merely "under 500": the documented behaviour for a
+      // cursor this code cannot read is to RESTART the traversal, and a guard
+      // that only ran the assertion when the status happened to be 200 would
+      // stay green if a future change started refusing instead.
+      expect(response.statusCode, `cursor ${cursor.slice(0, 40)} was not restarted`).toBe(200);
+      const body = panelListResponseSchema.parse(response.json());
+      expect(body.panels.map((panel) => panel.id)).toEqual(
+        firstPage.panels.map((panel) => panel.id),
+      );
+    }
+
+    // An OVERSIZED cursor is the one that does not restart, and that is a
+    // different rule for a different reason: the request schema bounds the
+    // string at 512 characters before this code ever sees it, so what is
+    // refused is the request rather than the bookmark. Asserted rather than
+    // folded into the loop above, because a test that accepted either answer
+    // would not notice if the two rules swapped.
+    expect(
+      (await get(`${PANEL_ROUTES.list}?limit=1&cursor=${'A'.repeat(4_096)}`, ownerCookie))
+        .statusCode,
+    ).toBe(400);
+
+    // A cursor this API issued is still honoured, so the validation did not
+    // simply refuse everything.
+    expect(firstPage.nextCursor).not.toBeNull();
+    const second = panelListResponseSchema.parse(
+      (
+        await get(
+          `${PANEL_ROUTES.list}?limit=1&cursor=${encodeURIComponent(firstPage.nextCursor!)}`,
+          ownerCookie,
+        )
+      ).json(),
+    );
+    expect(second.panels.map((panel) => panel.id)).not.toEqual(
+      firstPage.panels.map((panel) => panel.id),
+    );
+  });
+
   it('refuses an unprivileged but authenticated caller', async () => {
     const created = panelResponseSchema.parse((await createPanel(ownerCookie)).json());
 

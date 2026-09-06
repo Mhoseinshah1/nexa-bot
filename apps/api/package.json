@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start:api": "node dist/main.js",
     "start:worker": "node dist/main.worker.js",
+    "start:monitor": "node dist/main.monitor.js",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node dist/infrastructure/persistence/migrate.js",
     "db:check": "bash ../../scripts/check-migration-drift.sh",

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { Logger } from '@nexa/contracts';
 import { RetentionSweeper } from '../../apps/api/src/modules/platform/identity/application/retention-sweeper';
 
 /**
@@ -10,13 +11,14 @@ import { RetentionSweeper } from '../../apps/api/src/modules/platform/identity/a
  */
 
 const clock = { now: () => new Date('2026-09-01T00:00:00.000Z') };
-const logger = {
+const logger: Logger = {
+  trace: () => {},
   info: () => {},
   warn: () => {},
   error: () => {},
   debug: () => {},
   child: () => logger,
-} as never;
+};
 
 /** A table holding `total` eligible rows, deleted `limit` at a time. */
 function backlog(total: number) {
@@ -73,7 +75,7 @@ describe('RetentionSweeper', () => {
     const sweeper = new RetentionSweeper(
       { name: 'login-throttle', purge: table.purge },
       clock,
-      { ...logger, warn } as never,
+      { ...logger, warn },
       { intervalMs: 3_600_000, initialDelayMs: 3_600_000, batchSize: 10, maxBatchesPerTick: 2 },
     );
 
@@ -118,16 +120,20 @@ describe('RetentionSweeper', () => {
   it('does not overlap two sweeps', async () => {
     let inFlight = 0;
     let overlapped = false;
-    let release: (() => void) | null = null;
+    // Held eagerly: assigning the resolver inside the executor and calling it
+    // through a `let` leaves the binding narrowed to its initial `null`, so the
+    // release below would not typecheck.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const sweeper = new RetentionSweeper(
       {
         name: 't',
         purge: async () => {
           inFlight += 1;
           if (inFlight > 1) overlapped = true;
-          await new Promise<void>((resolve) => {
-            release = resolve;
-          });
+          await held;
           inFlight -= 1;
           return 0;
         },
@@ -139,7 +145,7 @@ describe('RetentionSweeper', () => {
 
     sweeper.start();
     await new Promise((resolve) => setTimeout(resolve, 30));
-    release?.();
+    release();
     await sweeper.stop();
     expect(overlapped).toBe(false);
   });

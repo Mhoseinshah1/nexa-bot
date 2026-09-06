@@ -8,7 +8,11 @@ import {
   type ActorRef,
   type ScopeContext,
 } from '@nexa/contracts';
-import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
+import type {
+  Database,
+  DatabaseHandle,
+  Executor,
+} from '../../../../infrastructure/persistence/database.js';
 import {
   outboxMessages,
   processedMessages,
@@ -71,6 +75,15 @@ export class OutboxRelay {
     private readonly clock: Clock,
     private readonly logger: Logger,
     private readonly options: OutboxRelayOptions,
+    /**
+     * The pool handle, needed only for `lagMsWithin`.
+     *
+     * Optional because the relay's own loop runs on `db` and has no use for a
+     * second checkout; the readiness probe is the only caller that needs its
+     * statements bounded by a deadline, and it is a surface, so the checkout
+     * has to be opened on this side of the boundary.
+     */
+    private readonly database?: DatabaseHandle,
   ) {}
 
   start(): void {
@@ -243,6 +256,18 @@ export class OutboxRelay {
    * indefinitely, and be pulled out of service. The relay is healthy; it is
    * waiting, which is what it was told to do.
    */
+  /**
+   * `lagMs` on a checkout whose statements PostgreSQL will cancel at `deadlineAt`.
+   *
+   * Here rather than in the readiness probe because opening a checkout is
+   * database access, and the probe is a surface. The probe asks for the lag; it
+   * does not hold a connection to get it.
+   */
+  async lagMsWithin(deadlineAt: number): Promise<number> {
+    if (this.database === undefined) return this.lagMs();
+    return this.database.withExecutor((executor) => this.lagMs(executor), { deadlineAt });
+  }
+
   async lagMs(executor: Executor = this.db): Promise<number> {
     // The executor is a parameter so the readiness probe can run this on a
     // connection whose statement timeout it has bounded; on the pool it would

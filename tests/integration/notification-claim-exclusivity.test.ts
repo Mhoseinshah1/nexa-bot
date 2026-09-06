@@ -154,7 +154,7 @@ describe('notification claim exclusivity (0014, serialised by 0016)', () => {
       const { rows: pidRows } = await b.query<{ pid: number }>(
         'SELECT pg_backend_pid()::int AS pid',
       );
-      const secondPid = pidRows[0].pid;
+      const secondPid = pidRows[0]!.pid;
 
       await a.query('BEGIN');
       await b.query('BEGIN');

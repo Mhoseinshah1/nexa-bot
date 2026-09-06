@@ -44,8 +44,34 @@ rather than aspirational: `botctl update` runs the target image's own
 the incoming code expects, by construction.
 
 The Web Admin is not a process. It is a static bundle, built in the same image
-build and copied out to a volume the edge serves from, so there is no Node
+build and published into a volume the edge serves from, so there is no Node
 process in the request path for a file that never changes between releases.
+
+**Publishing it is an activation, not a copy.** The volume is being read by a
+running Caddy at the moment the incoming release writes into it. A one-shot
+that clears the served directory and then copies into it — which is what
+shipped first — leaves a window on every single update where the edge answers
+404 for `index.html`, and then serves an `index.html` naming hashed assets that
+have not been copied yet. So `deploy/bin/publish-web-assets.mjs` writes a
+complete release into `releases/<bundle-id>/` off to one side and activates it
+with one `rename(2)` of the `current` symlink; Caddy roots the SPA at
+`/srv/web/current` and resolves that link when it opens the file, so a request
+is served entirely out of one release or entirely out of the other.
+
+A release is named after its bundle's own content rather than after the image
+digest, which makes publishing the same bundle twice free — and a rollback IS
+publishing the same bundle twice. The release being replaced is retained, so a
+rollback re-activates a directory that is already on disk and complete.
+
+The swap alone is not enough, and the reason is worth stating because it is
+easy to declare victory one step early: loading the Web Admin is `index.html`
+and then the assets `index.html` names. A browser that fetched the document a
+millisecond before the swap asks for those scripts a millisecond after it, and
+under the activated release alone they are gone — a blank page for exactly the
+operator watching their own deployment. `/assets/*` is therefore served from a
+POOL holding the union over the retained releases, so both sides of a swap
+load. Two deployments later the release is pruned and so are its assets;
+`index.html` is `no-store`, so a reload resolves it.
 
 ### Packaging: `pnpm deploy --prod --legacy`, then copy only the artefacts
 

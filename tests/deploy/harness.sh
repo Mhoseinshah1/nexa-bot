@@ -457,6 +457,22 @@ case "${1:-}" in
       esac
     done
     case "${1:-}" in
+      config)
+        # `compose config --services`, which readiness uses to learn which of
+        # the services it requires this TOPOLOGY actually defines.
+        #
+        # State-driven, because the interesting case is a rollback: the target
+        # release's compose.yml is activated before the wait, and a release
+        # that predates the monitor does not define one. `compose_services` is
+        # how a test says which topology is live.
+        case "$*" in
+          *--services*)
+            printf '%s\n' $(read_state compose_services "api worker monitor postgres redis caddy")
+            ;;
+          *) : ;;
+        esac
+        exit 0
+        ;;
       ps)
         # A `case` rather than `printf | grep -q`: the pipeline form takes the
         # WRONG BRANCH if printf is killed by SIGPIPE when grep matches early,
@@ -521,6 +537,45 @@ case "${1:-}" in
                 ;;
               absent) ;;
               *) printf '{"Service":"worker","State":"%s"}\n' "$_worker_state" ;;
+            esac
+            # The monitor, modelled exactly like the worker. It is the third
+            # required service: panel health is written by that process and
+            # nowhere else, so a release whose monitor is dead reports every
+            # panel's health frozen at whatever it last was.
+            _monitor_state="$(read_state "monitor_state_${NEXA_IMAGE##*@}" "$(read_state monitor_state running)")"
+            case "$_monitor_state" in
+              running)
+                printf '{"Service":"monitor","State":"running","Health":"%s"}\n' \
+                  "$(read_state "monitor_health_${NEXA_IMAGE##*@}" "$(read_state monitor_health healthy)")"
+                ;;
+              exited | dead)
+                case "$*" in
+                  *--all*) printf '{"Service":"monitor","State":"%s"}\n' "$_monitor_state" ;;
+                esac
+                ;;
+              absent) ;;
+              *) printf '{"Service":"monitor","State":"%s"}\n' "$_monitor_state" ;;
+            esac
+            # And the EDGE, modelled the same way. It is the only container
+            # that publishes a port, so an installation whose api, worker and
+            # monitor are all healthy behind an edge that never started is one
+            # nobody can reach — and readiness used not to ask. The edge also
+            # depends on the Web Admin publisher completing successfully, so a
+            # failed asset publication produces exactly this shape and has no
+            # other symptom.
+            _caddy_state="$(read_state "caddy_state_${NEXA_IMAGE##*@}" "$(read_state caddy_state running)")"
+            case "$_caddy_state" in
+              running)
+                printf '{"Service":"caddy","State":"running","Health":"%s"}\n' \
+                  "$(read_state "caddy_health_${NEXA_IMAGE##*@}" "$(read_state caddy_health healthy)")"
+                ;;
+              exited | dead)
+                case "$*" in
+                  *--all*) printf '{"Service":"caddy","State":"%s"}\n' "$_caddy_state" ;;
+                esac
+                ;;
+              absent) ;;
+              *) printf '{"Service":"caddy","State":"%s"}\n' "$_caddy_state" ;;
             esac
             ;;
           *)

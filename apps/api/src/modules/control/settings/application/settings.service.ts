@@ -357,6 +357,10 @@ export class SettingsService {
               message: `The stored value for ${key} parses again.`,
               context: { key },
               recoversCode: INVALID_STORED_SETTING_CODE,
+              // THIS setting's open complaint, not every setting's. The
+              // failure event keys on the setting; the recovery has to as
+              // well, or repairing one key silently clears the rest.
+              recoversDedupeKey: `${INVALID_STORED_SETTING_CODE}:${key}`,
             },
             tx,
           );

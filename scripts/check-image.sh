@@ -27,6 +27,7 @@ run() { docker run --rm --network none --entrypoint "$1" "$IMAGE" "${@:2}"; }
 ENTRYPOINTS=(
   dist/main.js
   dist/main.worker.js
+  dist/main.monitor.js
   dist/infrastructure/persistence/migrate.js
   dist/infrastructure/persistence/seed.js
   dist/bootstrap-owner.cli.js

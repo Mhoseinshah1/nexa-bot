@@ -9,7 +9,7 @@
   },
   "scripts": {
     "typecheck": "pnpm -r --workspace-concurrency=1 typecheck && pnpm typecheck:tests",
-    "typecheck:tests": "tsc -p tsconfig.tests.json",
+    "typecheck:tests": "tsc -p tsconfig.tests.json && tsc -p tsconfig.tests.web.json",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

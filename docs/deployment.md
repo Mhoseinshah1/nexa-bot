@@ -6,16 +6,25 @@ reasoning behind these choices is in
 
 ## What is supported
 
-|                  |                                        |
-| ---------------- | -------------------------------------- |
-| Operating system | Ubuntu **22.04 LTS** or **24.04 LTS**  |
-| Architecture     | `x86_64` (amd64) or `aarch64` (arm64)  |
-| Disk             | at least 8 GB free on `/var`           |
-| Ports            | 80 and 443 reachable from the internet |
-| DNS              | a name already pointing at the host    |
+|                  |                                                 |
+| ---------------- | ----------------------------------------------- |
+| Operating system | Ubuntu **22.04 LTS** or **24.04 LTS**           |
+| Architecture     | `x86_64` (amd64) or `aarch64` (arm64)           |
+| Disk             | at least 8 GB free on `/var`                    |
+| Ports            | 80 and 443/tcp, and 443/udp, free and reachable |
+| DNS              | a name already pointing at the host             |
 
 The installer checks every one of these before it changes anything, and stops
-with the specific problem if one fails.
+with the specific problem if one fails. The port check covers **443/udp** as
+well as TCP, because the edge publishes it for HTTP/3 and a service holding it
+would let Caddy fail to bind after the install had otherwise succeeded. A rerun
+on a host where Nexa's own edge already holds a port is not a conflict — but
+that is established by asking Docker which containers PUBLISH the port and
+whether every one of them carries this installation's own Compose project and
+service labels. Not by a container name: a name is the operator's, so
+`nexa-caddy-foreign` and a `nexa-caddy-old` left by a rename both satisfied the
+prefix match this replaced. A preflight that cannot establish the holder
+refuses.
 
 ## Architecture
 
@@ -31,13 +40,13 @@ Five containers on one host, behind Compose.
                  └─────┬─────┘
                        │  edge network
                  ┌─────┴─────┐
-                 │    api    │──────────────┐
-                 └─────┬─────┘              │
-                       │                    │  edge (egress to Telegram)
-   data network ┌──────┴──────┐      ┌──────┴──────┐
-                │             │      │   worker    │
-          ┌─────┴─────┐ ┌─────┴────┐ └──────┬──────┘
-          │ postgres  │ │  redis   │◄───────┘
+                 │    api    │──────────────┬───────────────┐
+                 └─────┬─────┘              │               │
+                       │                    │  edge (Telegram, panels)
+   data network ┌──────┴──────┐      ┌──────┴──────┐ ┌──────┴──────┐
+                │             │      │   worker    │ │   monitor   │
+          ┌─────┴─────┐ ┌─────┴────┐ └──────┬──────┘ └──────┬──────┘
+          │ postgres  │ │  redis   │◄───────┴───────────────┘
           └───────────┘ └──────────┘
 ```
 
@@ -54,9 +63,19 @@ Five containers on one host, behind Compose.
 - **PostgreSQL and Redis publish nothing.** They are on an internal network
   that Caddy is not attached to, so the internet-facing container has no route
   to the database at all.
-- **api** and **worker** are the same image with different commands. Both reach
-  the internet through the edge network — the worker needs it, because the
-  notification dispatcher runs there and calls Telegram.
+- **api**, **worker** and **monitor** are the same image with different
+  commands — `dist/main.js`, `dist/main.worker.js`, `dist/main.monitor.js`. All
+  three reach the internet through the edge network: the worker because the
+  notification dispatcher calls Telegram, the monitor because it probes
+  operators' panels.
+- **monitor** is a third role rather than a timer inside one of the other two.
+  A panel probe is an outbound call to somebody else's machine with a timeout
+  measured in seconds; on the API's event loop a fleet of slow panels becomes
+  slow Telegram replies, and inside the worker it delays notification delivery.
+  Panel health is written by this process and nowhere else, which is why
+  readiness requires it: an installation whose monitor is dead serves every
+  request correctly and reports every panel's health frozen at whatever it last
+  was.
 - Redis stores nothing yet (see ADR-0022) and runs without persistence.
 
 ## Filesystem layout
@@ -209,13 +228,104 @@ The section names the exact next commands for its state — `migrate-config`,
 token. When the shutdown is complete it repeats the caveat that matters then:
 backups taken before the re-encryption still hold v1 ciphertext.
 
-Readiness, for `status`, for `update` and for `rollback`, means **both**
-application containers healthy. The API's check is its own `/health/ready`;
-the worker serves no HTTP, so its check reads a heartbeat file the worker
-writes every ten seconds, and only after a round trip to the database
-succeeds. A worker in a crash loop, alive with a blocked event loop, or alive
-and cut off from PostgreSQL goes unhealthy within a check or two, and a release
-in that state is backed out exactly as one whose API never answered.
+Readiness, for `status`, for `update` and for `rollback`, means **all three**
+application containers healthy. The API's check is its own `/health/ready`.
+Neither the worker nor the monitor serves HTTP, so each writes a heartbeat file
+its container check reads — the worker's every ten seconds and only after a
+round trip to the database succeeds; the monitor's under the same rule plus one
+more, that its scheduling loop has made PROGRESS recently. A process whose timer
+still fires while every tick throws is not monitoring anything, and a heartbeat
+that only proved the process existed would report it healthy for ever — so
+there is no startup grace either: before the first successful discovery the
+monitor is not healthy, because it has not yet done the thing it exists to do.
+Progress is marked as each panel in a sweep is finished with rather than only at
+the end of one, so a bounded batch of slow provider calls stays healthy while it
+works. A deliberately disabled monitor (`PANEL_MONITOR_ENABLED=false`) stays
+healthy: it is a process doing nothing on purpose, not a broken one.
+
+Any of the three in a crash loop, alive with a blocked event loop, or alive and
+cut off from PostgreSQL goes unhealthy within a check or two, and a release in
+that state is backed out exactly as one whose API never answered.
+
+The required set is intersected with what the ACTIVE compose file defines, and
+that is what keeps rolling back to an older release valid. Host assets are
+release-versioned: a rollback activates the target's `compose.yml` and then
+waits for readiness while the new library is still in memory. A release that
+predates the monitor defines no such service, and demanding one would time out
+every rollback to it — after the assets had already moved. The relaxation is
+exactly one service wide; a monitor-less topology still requires its API and its
+worker.
+
+## What one installation can keep fresh
+
+Panel health carries a freshness window (`PANEL_HEALTH_FRESH_FOR_MS`, fifteen
+minutes), and meeting it takes more than a cadence that fits. The cadence check
+at boot proves a panel that IS probed is refreshed in time; it says nothing
+about whether every panel gets probed. That is throughput, and it has two
+ceilings that live at different levels.
+
+**Per tenant — the probe bucket.** Background probes spend the same bucket as an
+operator's manual tests, so the long-run background rate cannot exceed its
+refill rate:
+
+    (PANEL_PROBE_TENANT_LIMIT / PANEL_PROBE_TENANT_WINDOW_MS)
+      x PANEL_MONITOR_HEALTHY_INTERVAL_MS
+
+Defaults: 30 tokens per 5 minutes over a 10-minute interval = **60 panels per
+tenant**.
+
+**Installation-wide — the scheduler.** A tick discovers at most
+`PANEL_MONITOR_BATCH_SIZE` candidates IN TOTAL, shared out among the tenants
+claimed that tick, so across one interval the loop can start at most
+
+    PANEL_MONITOR_BATCH_SIZE x (PANEL_MONITOR_HEALTHY_INTERVAL_MS / PANEL_MONITOR_TICK_MS)
+
+Defaults: 50 x 20 = **1000 panels for the whole installation**.
+
+These are different questions and the second is not a per-tenant number. A
+hundred tenants of twenty panels each is comfortably inside every per-tenant
+bound and asks the scheduler for two thousand starts an interval when it can
+manage a thousand — an overload no per-tenant check can see. What share of the
+global ceiling any one tenant gets is decided by the fairness rotation against
+whoever is due at that moment, so it changes minute to minute and is
+deliberately not modelled as a constant.
+
+Neither number is a guarantee:
+
+- **Latency is not modelled.** Throughput also depends on how long a probe
+  takes, and that is a round trip to somebody else's server: a fleet answering
+  in 40ms and one answering in 9s have identical configuration and very
+  different capacity. `slowProbeLatencyModelFigure` exists to make that point
+  and is explicitly not a completion count — the real loop does not overlap
+  ticks and spends time on discovery, claims, budget and writes between probes.
+- **The operator is not assumed idle.** Manual "Test connection" probes come out
+  of the same bucket one for one, so sustained manual traffic lowers what is
+  left for the monitor.
+
+A population ABOVE either bound certainly cannot be kept fresh, which is what
+makes it worth reporting; one below is not thereby guaranteed. The monitor
+re-assesses on `PANEL_MONITOR_CAPACITY_INTERVAL_MS` (ten minutes by default) —
+not once at startup, because the population an operator grows into is exactly
+the one that matters — and records operational conditions rather than log
+lines, so repeated unchanged overload collapses onto one row with an occurrence
+count and the condition resolves when the population comes back under:
+
+| condition                                   | scope                        | resolved by                           |
+| ------------------------------------------- | ---------------------------- | ------------------------------------- |
+| `panel.monitor.tenant_budget_exceeded`      | the tenant                   | `panel.monitor.tenant_budget_ok`      |
+| `panel.monitor.scheduler_capacity_exceeded` | the installation (no tenant) | `panel.monitor.scheduler_capacity_ok` |
+
+The pair is mutually exclusive: each closes the other, so a population that
+crosses a bound twice produces two overloads and two recoveries rather than one
+of each with a stale row left open beside it. Which of the four is open is read
+from the rows on every assessment, so a monitor that restarts between the
+overload and the recovery still resolves what the process before it opened.
+
+Raising either bound is a deliberate act whose cost lands on somebody else's
+server: `PANEL_PROBE_TENANT_LIMIT` is an outbound rate against a customer's
+panels. `docs/vps-acceptance.md` is where a measured figure for a real
+installation belongs. The monitor will not widen it on the installation's
+behalf.
 
 ## Backups
 
@@ -364,6 +474,23 @@ recorded set before starting its image. The alternative — leaving the newer
 tooling to operate the older image — would be a compatibility contract, and
 nothing here proves one.
 
+A rollback that does not work out backs out in full, exactly as a failed update
+does: the current release's assets go back **and its containers are started
+again**, and the message says whether that worked. Restoring only the assets was
+not enough. On the readiness path `compose up -d` has already succeeded, so the
+containers are running the previous release — while the recorded release and
+`deploy.env` both still name the current one and agree with each other, which is
+what the divergence check compares. It saw nothing wrong, and `botctl status`
+named a release that was not running.
+
+Neither back-out can be aborted by its own failure. The two helpers involved
+report through `nexa_die`, which exits, so a restore that could not finish used
+to replace the message telling the operator which release had started; they are
+now called so that the caller survives them. For the same reason, recording the
+outgoing release's assets is best effort on a rollback: a rollback whose target
+is sound is never refused for the sake of its own undo, and the operator is
+warned instead.
+
 ### A set that was never recorded is recovered from the image, by digest
 
 An installation whose last update was performed by a `botctl` that keyed
@@ -432,24 +559,25 @@ roll back to.
 
 ### What happens when it fails
 
-| Failure                             | Result                                                                                                    |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| The version cannot be resolved      | Current release untouched. Nothing pulled.                                                                |
-| The image cannot be pulled          | Current release untouched. No backup, no migration.                                                       |
-| The backup fails                    | **The update does not proceed.** Nothing is migrated.                                                     |
-| The pre-migration check fails       | **The update stops before migrating.** Host assets untouched; the check's own message says what to fix.   |
-| The image carries no host assets    | Refused before anything on the host changes.                                                              |
-| The outgoing set cannot be recorded | Refused: a failed update would have nothing to put back.                                                  |
-| The migration fails                 | Host assets restored. The target does not become current. The pre-migration backup is named in the error. |
-| The target does not start           | Host assets restored, then the previous release is restarted; it remains current.                         |
-| The target is never ready           | Host assets restored, then the previous release is restarted; it remains current.                         |
-| The target's worker is not healthy  | Treated as "never ready": a healthy API beside a dead or crash-looping worker is not a working release.   |
-| Activation fails part-way           | Every file already replaced is put back from the saved copy; nothing else has changed.                    |
-| The rollback is not healthy         | Reported loudly. **Neither release is deleted.**                                                          |
-| The previous set was never recorded | Recovered from the previous release's image, by the digest in its manifest; the version tag is not read.  |
-| The previous image cannot be pulled | Rollback refused before anything changes. The current release is untouched.                               |
-| The previous image has no assets    | Rollback refused before anything changes. No partial set is left under its digest.                        |
-| The image's commit disagrees        | Rollback refused: the image was built from a commit the manifest does not record.                         |
+| Failure                             | Result                                                                                                                                  |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| The version cannot be resolved      | Current release untouched. Nothing pulled.                                                                                              |
+| The image cannot be pulled          | Current release untouched. No backup, no migration.                                                                                     |
+| The backup fails                    | **The update does not proceed.** Nothing is migrated.                                                                                   |
+| The pre-migration check fails       | **The update stops before migrating.** Host assets untouched; the check's own message says what to fix.                                 |
+| The image carries no host assets    | Refused before anything on the host changes.                                                                                            |
+| The outgoing set cannot be recorded | Refused: a failed update would have nothing to put back.                                                                                |
+| The migration fails                 | Host assets restored. The target does not become current. The pre-migration backup is named in the error.                               |
+| The target does not start           | Host assets restored, then the previous release is restarted; it remains current.                                                       |
+| The target is never ready           | Host assets restored, then the previous release is restarted; it remains current.                                                       |
+| The target's worker is not healthy  | Treated as "never ready": a healthy API beside a dead or crash-looping worker is not a working release.                                 |
+| The target's monitor is not healthy | Treated as "never ready" too: panel health has one writer, and a release that stops writing it looks perfectly well from every request. |
+| Activation fails part-way           | Every file already replaced is put back from the saved copy; nothing else has changed.                                                  |
+| The rollback is not healthy         | Reported loudly. **Neither release is deleted.**                                                                                        |
+| The previous set was never recorded | Recovered from the previous release's image, by the digest in its manifest; the version tag is not read.                                |
+| The previous image cannot be pulled | Rollback refused before anything changes. The current release is untouched.                                                             |
+| The previous image has no assets    | Rollback refused before anything changes. No partial set is left under its digest.                                                      |
+| The image's commit disagrees        | Rollback refused: the image was built from a commit the manifest does not record.                                                       |
 
 The previous release is never deleted by the update that replaced it. Manifests
 are pruned to the five most recent by an update — a rollback prunes nothing —
@@ -517,6 +645,28 @@ operations named in it, not every operation the previous release could perform.
 It is evidence for this transition and a gate for the next one, which is more
 than a documented rule and less than a mechanical guarantee.
 
+**Indexes that must not lock the table they are built on are not migrations.**
+Drizzle runs every pending migration inside one transaction, and PostgreSQL
+refuses `CREATE INDEX CONCURRENTLY` there; an ordinary `CREATE INDEX` takes a
+SHARE lock for the whole build, and a DDL statement waiting for that lock sits
+at the head of the queue, so every operator write arriving behind it waits too.
+Migrations run while the OUTGOING release is still serving, so that queue is an
+operator's panel edits.
+
+Such indexes are declared in
+`apps/api/src/infrastructure/persistence/online-indexes.ts` and applied by
+`runMigrations` after the migrator, on their own connection. The step is
+idempotent — an index that is already valid costs one catalogue lookup — and it
+recovers the state a cancelled build leaves behind: an index whose
+`indisvalid` is false is dropped concurrently and rebuilt, rather than being
+left to look healthy while the planner ignores it.
+
+They are deliberately absent from `schema.ts`, so `pnpm db:check` cannot see
+them. `tests/integration/online-indexes.test.ts` is what does: it asserts each
+one exists and is valid after migrating, that a repeat run rebuilds nothing,
+that an invalid one is repaired to the right definition, and that an operator
+write is not queued behind the build.
+
 There is no automated destructive schema rollback and there will not be one: a
 down-migration that drops a column is a data-loss button beside a panic button.
 
@@ -535,7 +685,57 @@ reseed, not to reconcile.
 Every long-running service has `restart: unless-stopped`, so Docker brings the
 installation back after a host reboot with no operator action and no systemd
 unit. The one-shot that publishes the Web Admin bundle does **not** restart —
-the volume it wrote still holds the assets.
+the volume it wrote still holds the activated release.
+
+## The Web Admin bundle in the volume
+
+Caddy is reading the asset volume while the incoming release writes into it, so
+publishing is an activation rather than a copy. `deploy/bin/publish-web-assets.mjs`
+runs once per `up`, from the release's own image, and leaves the volume in this
+shape:
+
+```
+/srv/web/releases/<bundle-id>/     a complete published release
+/srv/web/current -> releases/<id>  what Caddy serves index.html from
+/srv/web/pool/assets/<file>        the union of the retained releases' assets
+```
+
+Four rules, and each closes a failure an operator would meet on a routine
+update:
+
+- **A release is written off to one side and activated by one `rename(2)`.**
+  The shell one-shot this replaced cleared the served directory and then copied
+  into it: every request in that window got a 404 for `index.html`, or an
+  `index.html` naming assets that were not there yet. Nothing is ever activated
+  half written, and a publication that fails leaves the previous release
+  activated and untouched.
+- **A release is named after its bundle's content.** Publishing the same bundle
+  twice copies nothing — and a rollback IS publishing the same bundle twice, so
+  `botctl rollback` re-activates a directory that is already on disk and
+  complete.
+- **`/assets/*` is served from the pool, not from the activated release.** A
+  browser that fetched `index.html` a millisecond before a swap asks for its
+  scripts a millisecond after it. The pool spans the retained releases, so both
+  sides of a swap load. Two deployments later the older release is pruned along
+  with its assets; `index.html` is `no-store`, so a reload resolves it.
+- **One publisher mutates the volume at a time.** Publication is a sequence —
+  read what is current, stage, fill the pool, swap, prune what the two retained
+  releases do not own — and two publishers interleaving through it can each
+  read the same previous release and have the loser's prune delete the winner's
+  just-activated one. `current` then names a directory that is not there, which
+  is a 404 for the whole Web Admin rather than a stale page. `.publish.lock` is
+  a `mkdir(2)` lock over the whole sequence. A holder in this container that is
+  no longer running is taken over at once; one in a container that is gone is
+  waited out to two minutes, so a publisher killed by a host that went down
+  costs an update that starts slowly rather than an installation that can never
+  publish again.
+
+Rolling back to a release older than this layout is safe in both directions:
+that release's compose file and its publisher travel with its image, and its
+own one-shot rewrites the volume flat. The reverse — the update that introduces
+the layout — deliberately leaves the flat tree in place, because the Caddy
+still running at that moment is the outgoing release's and is still serving out
+of it. The publication after that removes it.
 
 ## Releases
 

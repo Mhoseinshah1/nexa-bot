@@ -177,11 +177,43 @@ function fromTransport(result: Extract<ProviderHttpResult, { ok: false }>): Prov
  * It becomes `PROVIDER_ERROR`: the panel answered, so it is reachable, and the
  * problem is on its side. `MALFORMED_RESPONSE` would be the wrong half of the
  * taxonomy — nothing was malformed, a route was absent.
+ *
+ * **429 is not the panel's fault at all**, and it is the one status where the
+ * remedy is ours rather than the operator's: call it less often.
  */
+/**
+ * 429 at ANY stage, checked before that stage reads the status for itself.
+ *
+ * The session flow is four requests — csrf-token, the 2FA question, login, then
+ * the status read — and each had its own non-2xx branch mapping everything to
+ * `PROVIDER_ERROR` or, after a good login, to DEGRADED. A limiter in front of
+ * the panel answers 429 to whichever of them arrives first, and only the
+ * unauthenticated status read routed through `fromApiStatus`. So a rate-limited
+ * login was persisted as a retryable provider fault and re-probed on the SHORT
+ * cadence: answering "too many requests" by asking again sooner, which is what
+ * a limiter exists to punish. A rate-limited status read after a good login was
+ * worse — DEGRADED is `ok: true`, so it earned the HEALTHY cadence.
+ *
+ * Deliberately NOT read: the `Retry-After` header. The cadence already gives
+ * `RATE_LIMITED` the long interval with doubling backoff on top, which is a
+ * bound this installation controls; honouring a number from the far end would
+ * let a misconfigured or hostile panel choose how long Nexa stops looking at
+ * it, and would have to be clamped to something like the cadence anyway.
+ */
+function rateLimited(status: number): ProviderProbeOutcome | null {
+  return status === 429 ? { ok: false, failure: 'RATE_LIMITED', status } : null;
+}
+
 function fromApiStatus(status: number): ProviderProbeOutcome {
   if (status === 401 || status === 403) {
     return { ok: false, failure: 'AUTHENTICATION_FAILED', status };
   }
+  // 429 is the panel, or something in front of it, saying this installation is
+  // calling too often. As `PROVIDER_ERROR` it read as "the panel is broken" and
+  // earned the monitor's SHORTEST failure cadence — answering "too many
+  // requests" by asking again sooner than for any other fault. It is its own
+  // kind so the operator is told the true remedy and the cadence backs off.
+  if (status === 429) return { ok: false, failure: 'RATE_LIMITED', status };
   return { ok: false, failure: 'PROVIDER_ERROR', status };
 }
 
@@ -190,6 +222,39 @@ function fromApiStatus(status: number): ProviderProbeOutcome {
  * replays. `sessions.Sessions("3x-ui", store)` in `internal/web/web.go`.
  */
 const SESSION_COOKIE = '3x-ui';
+
+/**
+ * The longest a session cookie value or a CSRF token may be before this adapter
+ * stops believing it is one.
+ *
+ * A kilobyte, chosen as a bound rather than as a measurement. The sizes v3.7.0
+ * actually mints are not recorded in `docs/research/`, and this comment used to
+ * assert them as fact — see `UNK-SANAEI-COOKIE-SIZE` in `docs/open-questions.md`.
+ * What the number has to be is large enough that no plausible session id or
+ * CSRF token reaches it and small enough to bound a header, and a kilobyte is
+ * both by a wide margin whichever the panel mints. Without a
+ * bound the only limit was `maxResponseBytes` — half a megabyte by default —
+ * and both values are written straight into the headers of the two or three
+ * requests that follow, on every probe, for ever.
+ *
+ * The character set matters more than the length. A value carrying CR or LF
+ * makes Node reject the header and THROW, so a panel answering with one turned
+ * a probe into an exception the caller has to recover from rather than into the
+ * `MALFORMED_RESPONSE` that describes exactly what happened. A panel that
+ * answers with something outside this shape is not speaking the v3.7.0
+ * contract, which is a compatibility answer, not an error.
+ */
+const MAX_CREDENTIAL_TOKEN_BYTES = 1024;
+
+/** Whether a provider-supplied string is safe to put in a header, and small. */
+function usableHeaderValue(value: string): boolean {
+  if (value.length === 0 || value.length > MAX_CREDENTIAL_TOKEN_BYTES) return false;
+  // Node's own rule for a header value: no control characters at all. Written
+  // as an allow-list of the printable range plus tab, because an exclusion list
+  // of the characters that happen to matter today is the kind that gets a new
+  // exception added to it later.
+  return /^[\t\x20-\x7e\u0080-\u00ff]+$/.test(value);
+}
 
 /**
  * The session cookie's new value, if this response set one.
@@ -211,16 +276,31 @@ const SESSION_COOKIE = '3x-ui';
  * passed forward through the requests of a single session flow, and goes out of
  * scope with them. Nothing writes it to a row, a log or an error.
  */
-function sessionCookieFrom(setCookie: readonly string[]): string | null {
+type SessionCookieRead =
+  /** This response set no `3x-ui` cookie. Keep whatever the flow already holds. */
+  | { readonly found: false }
+  /** It set one. `null` means this adapter will not put that value in a header. */
+  | { readonly found: true; readonly value: string | null };
+
+function sessionCookieFrom(setCookie: readonly string[]): SessionCookieRead {
   for (const header of setCookie) {
     const pair = header.split(';', 1)[0] ?? '';
     const equals = pair.indexOf('=');
     if (equals <= 0) continue;
     if (pair.slice(0, equals).trim() !== SESSION_COOKIE) continue;
     const value = pair.slice(equals + 1).trim();
-    if (value.length > 0) return value;
+    // FOUND is reported separately from USABLE, and that distinction is the
+    // whole reason this returns a pair. Collapsing them to `string | null` made
+    // "the panel rotated the session to something unusable" and "the panel did
+    // not rotate the session" the same answer, and the callers below read that
+    // answer as `?? session` — so an unusable rotation silently kept the cookie
+    // it replaced. The panel then rejected the stale cookie with a 401, which
+    // this adapter maps to DEGRADED: an operator told the credentials are fine
+    // and something else is wrong, about a panel Nexa can never read, with
+    // `lastHealthyAt` ticking forward for ever.
+    return { found: true, value: usableHeaderValue(value) ? value : null };
   }
-  return null;
+  return { found: false };
 }
 
 export class SanaeiAdapter implements ProviderConnectionAdapter {
@@ -270,23 +350,47 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
     const csrf = await http.send({ method: 'GET', path: CSRF_PATH, headers: XHR_HEADER });
     if (!csrf.ok) return fromTransport(csrf);
     if (csrf.status < 200 || csrf.status >= 300) {
-      return { ok: false, failure: 'PROVIDER_ERROR', status: csrf.status };
+      return (
+        rateLimited(csrf.status) ?? { ok: false, failure: 'PROVIDER_ERROR', status: csrf.status }
+      );
     }
     const minted = parseEnvelope(csrf.bodyText);
     if (minted === null || !minted.success || typeof minted.obj !== 'string') {
       return { ok: false, failure: 'MALFORMED_RESPONSE', status: csrf.status };
     }
     const csrfToken = minted.obj;
-    let session = sessionCookieFrom(csrf.setCookie);
-    if (session === null || csrfToken.length === 0) {
+    const minting = sessionCookieFrom(csrf.setCookie);
+    if (!minting.found || minting.value === null || !usableHeaderValue(csrfToken)) {
       // v3.7.0 binds the token to the session it was minted in. Without the
       // `3x-ui` cookie there is no session to bind to, so a login would be
       // refused for a reason that has nothing to do with the operator's
       // credentials — and a panel that set some OTHER cookie instead is not
       // speaking this contract, which is a compatibility answer rather than an
       // invitation to submit a password and find out.
+      //
+      // The same answer covers a token or a cookie this adapter will not put in
+      // a header: too long, or carrying a control character. Reported as the
+      // compatibility failure it is, rather than sent onward to make Node throw
+      // on the next request.
       return { ok: false, failure: 'MALFORMED_RESPONSE', status: csrf.status };
     }
+    let session: string = minting.value;
+
+    /**
+     * Adopt a rotated session, or report that it cannot be adopted.
+     *
+     * Returns the outcome to return, or null to carry on. A rotation the
+     * adapter will not send is the same compatibility failure as a mint it
+     * will not send — NOT a reason to keep sending the value the panel just
+     * replaced.
+     */
+    const adoptSession = (read: SessionCookieRead, status: number): ProviderProbeOutcome | null => {
+      if (!read.found) return null;
+      if (read.value === null) return { ok: false, failure: 'MALFORMED_RESPONSE', status };
+      session = read.value;
+      return null;
+    };
+
     const authHeaders = (): Record<string, string> => ({
       ...XHR_HEADER,
       'x-csrf-token': csrfToken,
@@ -304,7 +408,13 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
     });
     if (!twoFactor.ok) return fromTransport(twoFactor);
     if (twoFactor.status < 200 || twoFactor.status >= 300) {
-      return { ok: false, failure: 'PROVIDER_ERROR', status: twoFactor.status };
+      return (
+        rateLimited(twoFactor.status) ?? {
+          ok: false,
+          failure: 'PROVIDER_ERROR',
+          status: twoFactor.status,
+        }
+      );
     }
     const twoFactorBody = parseEnvelope(twoFactor.bodyText);
     if (twoFactorBody === null || !twoFactorBody.success) {
@@ -327,7 +437,11 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
       // so there is nothing to try; retrying would only feed the login limiter.
       return { ok: false, failure: 'AUTHENTICATION_REQUIRES_INTERACTION', status: null };
     }
-    session = sessionCookieFrom(twoFactor.setCookie) ?? session;
+    const rotatedByTwoFactor = adoptSession(
+      sessionCookieFrom(twoFactor.setCookie),
+      twoFactor.status,
+    );
+    if (rotatedByTwoFactor !== null) return rotatedByTwoFactor;
 
     const login = await http.send({
       method: 'POST',
@@ -340,6 +454,12 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
       body: { kind: 'json', value: { username, password } },
     });
     if (!login.ok) return fromTransport(login);
+    // BEFORE the 403 rule and before the generic non-2xx one. The two are
+    // disjoint statuses, and the order says which reading wins if that ever
+    // stops being true: a limiter's answer is never a statement about the
+    // operator's password.
+    const limited = rateLimited(login.status);
+    if (limited !== null) return limited;
     if (login.status === 403) {
       // v3.7.0's CSRF middleware aborts with exactly this and no body. It means
       // the token and cookie did not line up, which is a Nexa-side protocol
@@ -359,8 +479,10 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
       return { ok: false, failure: 'AUTHENTICATION_FAILED', status: login.status };
     }
     // A login that rotates the session replaces it; one that does not keeps
-    // the cookie the flow already holds.
-    session = sessionCookieFrom(login.setCookie) ?? session;
+    // the cookie the flow already holds; one that rotates it to something this
+    // adapter will not send is reported rather than ignored.
+    const rotatedByLogin = adoptSession(sessionCookieFrom(login.setCookie), login.status);
+    if (rotatedByLogin !== null) return rotatedByLogin;
 
     const status = await http.send({
       method: 'GET',
@@ -402,7 +524,14 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
 
     if (!result.ok) return authenticated ? degraded() : fromTransport(result);
     if (result.status < 200 || result.status >= 300) {
-      return authenticated ? degraded() : fromApiStatus(result.status);
+      // The 429 check precedes the authenticated shortcut deliberately. After a
+      // good login every other bad status is DEGRADED — the panel is up and the
+      // credentials are right, so something else is wrong — but DEGRADED is
+      // `ok: true` and earns the HEALTHY cadence, which is the one answer a
+      // limiter must not get.
+      return (
+        rateLimited(result.status) ?? (authenticated ? degraded() : fromApiStatus(result.status))
+      );
     }
     const body = parseEnvelope(result.bodyText);
     if (body === null || !body.success) {

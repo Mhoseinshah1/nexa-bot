@@ -97,7 +97,7 @@ botctl — operate a Nexa installation
   botctl status              what is running, and whether it is ready
   botctl version             installed version, source commit, image digest
   botctl backup              a consistent PostgreSQL dump, timestamped
-  botctl update [VERSION]    update to VERSION (default: latest release tag)
+  botctl update VERSION      update to VERSION, by digest
   botctl rollback            return to the previous release's image
   botctl logs [SERVICE]      follow logs
   botctl restart             restart the stack
@@ -603,15 +603,36 @@ cmd_update() {
   nexa_ok "host assets are ${target}'s"
 
   # Put the outgoing release's assets back. Used by every failure path below.
+  #
+  # In a SUBSHELL, for the reason the backup above is: `nexa_activate_release_assets`
+  # reports its failures through `nexa_die`, which EXITS. Called directly, a
+  # restore that could not finish would terminate the update before the `||`
+  # below could run and before the `nexa_die` that follows every call site could
+  # say which release is running — so the operator would read an internal
+  # message about a staged file instead of "the migration FAILED". The back-out's
+  # own failure must never replace the diagnosis of the failure it is backing out.
+  #
+  # It REPORTS whether the assets are back, and that status is part of the
+  # back-out's verdict rather than advice. Subshelling it without that was an
+  # inversion: `nexa_die` used to terminate botctl here, so a failed restore
+  # could not reach the restart below — once it could, a failed restore fell
+  # through to `nexa_compose up -d`, which is precisely what the comment at the
+  # first call site forbids, and the operator was then told the installation
+  # was consistent. A back-out that cannot put the tooling back must not start
+  # anything under the tooling that is there.
   restore_host_assets() {
-    nexa_activate_release_assets "$current_digest" ||
-      nexa_warn "could not restore ${current}'s host assets; $(nexa_assets_path "$current_digest") holds them."
+    ( nexa_activate_release_assets "$current_digest" ) && return 0
+    nexa_warn "could not restore ${current}'s host assets; $(nexa_assets_path "$current_digest") holds them."
+    nexa_warn "NOT restarting ${current}: ${target}'s compose file is still on the host, and starting ${current} under it would run it in a topology it was never released with."
+    return 1
   }
 
   nexa_step "migrating with ${target}'s own migrator"
   if ! NEXA_IMAGE="$target_image" nexa_compose run --rm --no-deps \
     --entrypoint node api dist/infrastructure/persistence/migrate.js; then
-    restore_host_assets
+    # Nothing was restarted on this path, so ${current} is still running
+    # whether or not its assets went back; the warnings above say which.
+    restore_host_assets || true
     nexa_die "the migration FAILED. ${target} did not become current and ${current} is still running. The pre-migration backup is in ${NEXA_BACKUP_DIR}."
   fi
   nexa_ok "migrations applied"
@@ -624,11 +645,12 @@ cmd_update() {
     # the target's until this puts the outgoing release's back. Restarting
     # ${current} under ${target}'s compose file would bring it up under a
     # topology it was never released with.
-    restore_host_assets
     # `up -d` returning zero says the containers were created, not that the
     # application works. Saying "is running again" without checking is how an
     # operator reads a reassuring message about an installation that is down.
-    if nexa_compose up -d --remove-orphans && nexa_wait_ready; then
+    # And the ASSET restore is the first term: starting ${current} under
+    # ${target}'s compose file is not "coming back cleanly".
+    if restore_host_assets && nexa_compose up -d --remove-orphans && nexa_wait_ready; then
       post_migration_reverted
       nexa_die "${target} failed to start. ${current} is running again, is ready, and is still the current release."
     fi
@@ -640,8 +662,7 @@ cmd_update() {
   nexa_step "waiting for readiness"
   if ! NEXA_IMAGE="$target_image" nexa_wait_ready; then
     nexa_warn "${target} started but never became ready; returning to ${current}."
-    restore_host_assets
-    if nexa_compose up -d --remove-orphans && nexa_wait_ready; then
+    if restore_host_assets && nexa_compose up -d --remove-orphans && nexa_wait_ready; then
       post_migration_reverted
       nexa_die "${target} failed its readiness check. ${current} is running again and is still the current release."
     fi
@@ -760,19 +781,81 @@ cmd_rollback() {
       nexa_capture_live_assets "$current_digest" "$current" ||
       nexa_warn "${current}'s host assets could not be recorded; a failed rollback will not be able to put them back."
   fi
+  # Put ${current}'s assets back if this rollback does not work out.
+  #
+  # In a SUBSHELL, like the update's: `nexa_activate_release_assets` reports
+  # through `nexa_die`, so called directly a failed restore would exit before
+  # the `nexa_die` below could tell the operator which release started. A
+  # back-out that fails must still let the original diagnosis be printed.
+  #
+  # REPORTS whether the assets are back. Returning 0 for "there was nothing to
+  # put back" made the caller's verdict purely "did the containers come up",
+  # so a rollback that had already activated ${previous}'s tooling could start
+  # ${current}'s image under it and report the installation consistent — the
+  # image-from-one-release, tooling-from-another state this whole mechanism
+  # exists to prevent.
+  restore_current_assets() {
+    if ! nexa_assets_staged "$current_digest"; then
+      nexa_warn "${current}'s host assets are not recorded, so they cannot be put back; ${previous}'s are on the host."
+      return 1
+    fi
+    ( nexa_activate_release_assets "$current_digest" ) && return 0
+    nexa_warn "could not restore ${current}'s host assets; $(nexa_assets_path "$current_digest") holds them."
+    return 1
+  }
+
   nexa_activate_release_assets "$digest"
 
+  # Both failure paths below do the same thing an UPDATE's do, and for the same
+  # reason: put the outgoing release's assets back, then bring its CONTAINERS
+  # back, then say which of those two worked.
+  #
+  # Restoring only the assets was not enough, and the readiness path is where
+  # that showed. `up -d` has already succeeded by then, so the containers ARE
+  # running ${previous} — while `nexa_commit_release` is never reached, so the
+  # recorded release and deploy.env both still say ${current} and AGREE with
+  # each other. `nexa_check_divergence` compares exactly those two, so it sees
+  # nothing wrong, and every later `botctl status` names a release that is not
+  # what is running. An installation must not be left in a state its own tools
+  # describe incorrectly.
+  #
+  # The bare `nexa_compose up -d` is deliberate: with the assets restored,
+  # deploy.env still names ${current}'s image, because the commit has not
+  # happened. It is the same call the update's back-out makes.
+  restore_current_release() {
+    if ! restore_current_assets; then
+      nexa_warn "NOT restarting ${current}: ${previous}'s compose file is still on the host, and starting ${current} under it would run it in a topology it was never released with."
+      return 1
+    fi
+    # ${current}'s image BY NAME, from its own manifest — not whatever
+    # deploy.env happens to name. `cmd_restart` refuses to act while those two
+    # disagree, and a bare `up -d` here is that restart: it would start
+    # deploy.env's image and the message below would call it ${current}. A
+    # rollback tolerates a divergence that an update refuses outright, so this
+    # is the one path that has to resolve it rather than inherit it.
+    local current_image
+    if ! current_image="$(nexa_release_image "$current")"; then
+      nexa_warn "cannot tell which image ${current} is, so it cannot be started again by name."
+      return 1
+    fi
+    NEXA_IMAGE="$current_image" nexa_compose up -d --remove-orphans &&
+      NEXA_IMAGE="$current_image" nexa_wait_ready
+  }
+
   if ! NEXA_IMAGE="$previous_image" nexa_compose up -d --remove-orphans; then
-    # Put ${current}'s assets back: the rollback did not happen, so the
-    # installation is still on ${current} and must still be operated as such.
-    # ${current} is non-empty here — the guard above refuses otherwise.
-    ! nexa_assets_staged "$current_digest" || nexa_activate_release_assets "$current_digest"
-    nexa_die "${previous} did not start. NEITHER release has been deleted; run 'botctl logs'."
+    nexa_warn "${previous} did not start; returning to ${current}."
+    if restore_current_release; then
+      nexa_die "${previous} did not start. ${current} is running again, is ready, and is still the current release. NEITHER release has been deleted; run 'botctl logs'."
+    fi
+    nexa_die "${previous} did not start AND ${current} did not come back cleanly. NEITHER release has been deleted, and the installation may be down. Run 'botctl logs' and 'botctl version' — the latter names the image that would actually start."
   fi
 
   if ! NEXA_IMAGE="$previous_image" nexa_wait_ready; then
-    ! nexa_assets_staged "$current_digest" || nexa_activate_release_assets "$current_digest"
-    nexa_die "${previous} started but is NOT ready. Nothing has been deleted, and the current-release pointer still says ${current:-unknown}. Read 'botctl logs api' before doing anything else."
+    nexa_warn "${previous} started but never became ready; returning to ${current}."
+    if restore_current_release; then
+      nexa_die "${previous} started but is NOT ready. ${current} is running again, is ready, and is still the current release. Nothing has been deleted; read 'botctl logs api' before retrying."
+    fi
+    nexa_die "${previous} started but is NOT ready AND ${current} did not come back cleanly. The containers may still be running ${previous} while the recorded release says ${current:-unknown}; 'botctl version' names the image that would actually start. Nothing has been deleted. Read 'botctl logs api' before doing anything else."
   fi
 
   # The pointers swap: the release just left becomes the rollback target, so a
@@ -791,8 +874,16 @@ cmd_logs() {
   require_installed
   if [ $# -gt 0 ]; then
     case "$1" in
-      api | worker | postgres | redis | caddy | web-assets) nexa_compose logs -f --tail 200 "$1" ;;
-      *) nexa_die "unknown service \"$1\". One of: api worker postgres redis caddy web-assets." ;;
+      api | worker | monitor | postgres | redis | caddy | web-assets)
+        nexa_compose logs -f --tail 200 "$1"
+        ;;
+      # `monitor` was missing from this list for the whole of Phase 3C, which
+      # is the one service an operator reaches for here: it is the process
+      # role with no request path, so its log is the only place its behaviour
+      # is visible at all. The answer was `unknown service "monitor"`.
+      *)
+        nexa_die "unknown service \"$1\". One of: api worker monitor postgres redis caddy web-assets."
+        ;;
     esac
   else
     nexa_compose logs -f --tail 200

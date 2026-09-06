@@ -1,6 +1,8 @@
-import { Body, Controller, Get, Inject, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Query, Inject, Param, Post, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
+import type { PanelCursor } from '../../modules/platform/panels/application/ports.js';
 import {
+  panelListQuerySchema,
   API_PREFIX,
   PANEL_HEALTH_FRESH_FOR_MS,
   PANEL_ROUTES,
@@ -35,6 +37,76 @@ import type { PanelView } from '../../modules/platform/panels/application/ports.
  * path from a stored credential to its output: the view type it receives has no
  * credential value on it, because the repository never selects one.
  */
+/**
+ * The cursor, opaque across the wire.
+ *
+ * Base64url of `(id, created_at)`. Opaque on purpose: a caller that parsed it
+ * would be depending on an ordering this API has not promised, and would break
+ * the day the list is ordered differently. A cursor that does not decode is
+ * treated as no cursor rather than an error — the worst it can do is restart
+ * the traversal, and refusing would turn a stale bookmark into a failed
+ * request.
+ *
+ * EVERY component is validated, and that is the point rather than tidiness.
+ * The decoded id goes into a query that casts it to `uuid`, so `not-a-uuid`
+ * reached PostgreSQL as 22P02 and came back as a 500 — a caller could turn any
+ * text into an internal error by base64ing it. Restarting the traversal is the
+ * documented behaviour for a cursor this code cannot read, and a cursor whose
+ * id is not a uuid is one of those.
+ */
+const CURSOR_MAX_LENGTH = 512;
+const CURSOR_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * The exact rendering `pageKeysQuery` produces, and nothing else.
+ *
+ * The four-digit year is load-bearing: it is what keeps the value inside
+ * `timestamptz`'s range. A JavaScript `Date` spans ±271821 years, so
+ * `-005000-01-01T00:00:00.000Z` is a perfectly good Date, serialises as
+ * `5001-01-01 BC`, and raises `22008` at the `::timestamptz` cast — reaching
+ * the caller as the same 500 the uuid check was added to close.
+ */
+const CURSOR_INSTANT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.\d{6}Z$/;
+
+function encodeCursor(cursor: PanelCursor): string {
+  return Buffer.from(`${cursor.id}:${cursor.createdAt}`, 'utf8').toString('base64url');
+}
+
+/** The timestamp half, or null if PostgreSQL would refuse it. */
+function decodeInstant(text: string): string | null {
+  const parts = CURSOR_INSTANT.exec(text);
+  if (parts === null) return null;
+  const at = new Date(
+    `${parts[1]}-${parts[2]}-${parts[3]}T${parts[4]}:${parts[5]}:${parts[6]}.000Z`,
+  );
+  if (Number.isNaN(at.getTime())) return null;
+  // A date JavaScript silently ROLLS OVER — `2026-02-30` becomes 2 March —
+  // and PostgreSQL refuses outright. The regex cannot see that, so the value
+  // is compared with what it parsed to.
+  if (at.toISOString().slice(0, 19) !== text.slice(0, 19)) return null;
+  return text;
+}
+
+function decodeCursor(raw: string): PanelCursor | null {
+  // Bounded before it is decoded: a megabyte of base64 is a megabyte this
+  // process would otherwise allocate and scan to reject.
+  if (raw.length === 0 || raw.length > CURSOR_MAX_LENGTH) return null;
+  try {
+    const decoded = Buffer.from(raw, 'base64url').toString('utf8');
+    const separator = decoded.indexOf(':');
+    if (separator === -1) return null;
+    const id = decoded.slice(0, separator);
+    // Any UUID version, not v7 specifically. The only thing this value has to
+    // be is a legal `uuid` literal; refusing a legal one would restart the
+    // traversal for ever rather than fail it, which is the worse outcome.
+    if (!CURSOR_UUID.test(id)) return null;
+    const createdAt = decodeInstant(decoded.slice(separator + 1));
+    if (createdAt === null) return null;
+    return { id: id.toLowerCase(), createdAt };
+  } catch {
+    return null;
+  }
+}
+
 @Controller(`${API_PREFIX}`)
 export class PanelsController {
   constructor(@Inject(CONTAINER) private readonly container: Container) {}
@@ -64,10 +136,23 @@ export class PanelsController {
   }
 
   @Get(PANEL_ROUTES.list)
-  async list(@Req() request: FastifyRequest): Promise<PanelListResponse> {
+  async list(
+    @Req() request: FastifyRequest,
+    @Query() query: Record<string, string | undefined>,
+  ): Promise<PanelListResponse> {
     const { scope, actor } = await this.authenticate(request);
-    const views = await this.container.panels.list(scope, actor);
-    return { panels: views.map((view) => this.toSummary(view)) };
+    const page = panelListQuerySchema.parse({
+      ...(query.limit === undefined ? {} : { limit: query.limit }),
+      ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+    });
+    const { panels, nextCursor } = await this.container.panels.list(scope, actor, {
+      ...(page.limit === undefined ? {} : { limit: page.limit }),
+      ...(page.cursor === undefined ? {} : { cursor: decodeCursor(page.cursor) }),
+    });
+    return {
+      panels: panels.map((view) => this.toSummary(view)),
+      nextCursor: nextCursor === null ? null : encodeCursor(nextCursor),
+    };
   }
 
   @Get('panels/:id')

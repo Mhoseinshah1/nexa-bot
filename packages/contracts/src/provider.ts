@@ -191,6 +191,7 @@ export interface CreateProviderUserInput {
  *   `TIMEOUT`                it answered too slowly, or not at all in time
  *   `TLS_FAILED`             certificate or handshake — check the certificate
  *   `BLOCKED_TARGET`         the URL resolves somewhere this installation refuses to call
+ *   `RATE_LIMITED`           it answered "too many requests" — call it less often
  *   `MALFORMED_RESPONSE`     it answered, and the answer was not what this provider returns
  *   `PROVIDER_ERROR`         it answered with its own failure
  *   `UNSUPPORTED_CAPABILITY` this provider cannot do what was asked
@@ -214,6 +215,23 @@ export const PROVIDER_FAILURE_KINDS = [
   'TIMEOUT',
   'TLS_FAILED',
   'BLOCKED_TARGET',
+  /**
+   * The panel said this installation is calling it too often.
+   *
+   * Folded into `PROVIDER_ERROR` until now, and that conflation is exactly
+   * backwards for the one thing an operator needs to do about it. Both are
+   * retryable, so both are retried — but `PROVIDER_ERROR` means "the panel is
+   * broken, look at the panel", while this means "the panel is fine and WE are
+   * the problem". An operator sent to debug a healthy panel changes nothing,
+   * the calls continue at the same rate, and several panels escalate from a
+   * 429 to a block.
+   *
+   * It is deliberately not `AUTHENTICATION_FAILED` either, whatever the status
+   * code a particular panel chooses: nothing is wrong with the credential, and
+   * telling somebody to rotate one is how a rate limit becomes a lockout on a
+   * panel that limits logins.
+   */
+  'RATE_LIMITED',
   'MALFORMED_RESPONSE',
   'PROVIDER_ERROR',
   'UNSUPPORTED_CAPABILITY',
@@ -236,6 +254,12 @@ export const PROVIDER_FAILURE_RETRYABLE: Readonly<Record<ProviderFailureKind, bo
   TIMEOUT: true,
   TLS_FAILED: false,
   BLOCKED_TARGET: false,
+  // Retryable, because the limit is by definition temporary — but the CADENCE
+  // is the remedy, not the retry. The monitor names this kind explicitly and
+  // waits its LONG interval for it rather than its retryable one: calling a
+  // rate limiter back sooner than any other failure is the behaviour it exists
+  // to punish. See `baseIntervalMs`.
+  RATE_LIMITED: true,
   MALFORMED_RESPONSE: false,
   PROVIDER_ERROR: true,
   UNSUPPORTED_CAPABILITY: false,

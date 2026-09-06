@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { NexaError, PLATFORM_ERROR_CODES } from '@nexa/contracts';
 import { createDatabase } from './database.js';
+import { ensureOnlineIndexes } from './online-indexes.js';
 import { MigrationPreflightError, preflightMigrations } from './preflight.js';
 
 /**
@@ -32,6 +33,12 @@ export async function runMigrations(databaseUrl: string): Promise<void> {
   const handle = createDatabase(databaseUrl, 1);
   try {
     await migrate(handle.db, { migrationsFolder: migrationsFolder() });
+    // AFTER the migrator, deliberately, and outside its transaction. See
+    // `online-indexes.ts`: these are the indexes that must not lock the table
+    // they are built on, and drizzle runs every migration inside one
+    // transaction, where PostgreSQL refuses a concurrent build.
+    const built = await ensureOnlineIndexes(handle);
+    for (const name of built) console.warn(`Built index ${name} concurrently`);
   } finally {
     await handle.close();
   }

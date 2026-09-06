@@ -4,6 +4,7 @@ import { rootCertificates } from 'node:tls';
 import { request as httpRequest, type ClientRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { LookupAddress } from 'node:dns';
+import { PROVIDER_FAILURE_RETRYABLE } from '@nexa/contracts';
 import type {
   ProviderFailureKind,
   ProviderHttpClient,
@@ -95,11 +96,22 @@ export const DEFAULT_SAFE_HTTP: Omit<SafeHttpOptions, 'allowLoopback'> = {
   maxRetries: 0,
 };
 
-/** Failures where another attempt could plausibly land differently. */
-const TRANSIENT: ReadonlySet<ProviderFailureKind> = new Set<ProviderFailureKind>([
-  'UNREACHABLE',
-  'TIMEOUT',
-]);
+/**
+ * Failures where another attempt could plausibly land differently.
+ *
+ * READ FROM THE CONTRACT, never restated. This was a local set of two kinds,
+ * and `PROVIDER_FAILURE_RETRYABLE` already disagreed with it about two more —
+ * `RATE_LIMITED`, added on this branch, and `PROVIDER_ERROR`. Nothing failed,
+ * because the shipped `maxRetries` is 0 and the loop below never reaches a
+ * second attempt: a divergence from a frozen specification, held dormant by a
+ * constant. The next person to raise that constant would have inherited it.
+ *
+ * A kind added to the contract is now covered here the moment it is added,
+ * which is the property a restatement cannot have.
+ */
+function isTransient(failure: ProviderFailureKind): boolean {
+  return PROVIDER_FAILURE_RETRYABLE[failure];
+}
 
 /**
  * A Node error code, as one of our kinds.
@@ -258,9 +270,27 @@ export class SafeHttpClient {
     }
 
     let target: URL;
+    let base: URL;
     try {
+      base = new URL(baseUrl);
       target = new URL(request.path, baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`);
     } catch {
+      return { ok: false, failure: 'BLOCKED_TARGET', status: null };
+    }
+
+    // And the ORIGIN is asserted, rather than inferred from the prefix test
+    // above having refused everything that could change it.
+    //
+    // It could not. WHATWG URL treats a backslash as a slash for special
+    // schemes, so `\\evil.com/x`, `\/evil.com` and `/\evil.com` all resolve
+    // to another host while matching neither `^scheme:` nor a leading `//`.
+    // Nothing reaches this with a path built from provider data today — both
+    // adapters use module constants — but `forBase`'s whole contract is
+    // "cannot address another host", and a contract enforced by a prefix test
+    // over a parser with its own opinions is a contract enforced by luck. The
+    // credential travels with the request: a Bearer token, a session cookie, or
+    // the operator's panel password.
+    if (target.origin !== base.origin) {
       return { ok: false, failure: 'BLOCKED_TARGET', status: null };
     }
 
@@ -278,7 +308,7 @@ export class SafeHttpClient {
       if (outcome.ok) return outcome;
       failure = outcome.failure;
       status = outcome.status;
-      if (!TRANSIENT.has(outcome.failure)) break;
+      if (!isTransient(outcome.failure)) break;
     }
     return { ok: false, failure, status };
   }

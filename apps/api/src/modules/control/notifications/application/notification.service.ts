@@ -4,6 +4,7 @@ import {
   isMoneyValue,
   sendTestNotificationRequestSchema,
   templateDefinition,
+  uuidV7Schema,
   type ActorContext,
   type AuditWriter,
   type Clock,
@@ -151,23 +152,42 @@ export class NotificationService {
     releasedClaims: ReleasedClaimRecord[];
   }> {
     await this.guard.check(scope, actor, NOTIFICATIONS_VIEW);
-    const intent = await this.notifications.findById(scope, id);
-    if (intent === null) {
+    // Validated HERE, not only at the HTTP boundary: this service is the
+    // application-layer entry point and a second surface would otherwise have
+    // to remember the same rule. An arbitrary string reached
+    // `notifications.id`, PostgreSQL rejected it with 22P02, and a caller who
+    // mistyped an id was told the server was broken. A well-formed id that
+    // names nothing is still an ordinary not-found.
+    if (!uuidV7Schema.safeParse(id).success) {
       throw errors.notFound(
         CONTROL_ERROR_CODES.NOTIFICATION_NOT_FOUND,
         'No such notification in this tenant.',
       );
     }
-    // The intent says what we meant to say; the attempts say what happened;
-    // the released claims say where the rest of the claims went. Returning the
-    // three together is the whole point of keeping them apart — and without
-    // the third, a withdrawn sweep reads as a permanent failure on an intent
-    // that is somehow pending again.
-    return {
-      intent,
-      attempts: await this.notifications.attempts(scope, id),
-      releasedClaims: await this.notifications.releasedClaims(scope, id),
-    };
+    // One snapshot, exactly as the replay path already does and for the same
+    // reason. Three autocommit reads let the dispatcher commit between them, so
+    // the response could pair a PENDING intent with a SUCCEEDED attempt — a
+    // combination the database never held. Under REPEATABLE READ all three see
+    // one state.
+    return this.uow.runSnapshot(scope, async (tx) => {
+      const intent = await this.notifications.findById(scope, id, tx);
+      if (intent === null) {
+        throw errors.notFound(
+          CONTROL_ERROR_CODES.NOTIFICATION_NOT_FOUND,
+          'No such notification in this tenant.',
+        );
+      }
+      // The intent says what we meant to say; the attempts say what happened;
+      // the released claims say where the rest of the claims went. Returning
+      // the three together is the whole point of keeping them apart — and
+      // without the third, a withdrawn sweep reads as a permanent failure on an
+      // intent that is somehow pending again.
+      return {
+        intent,
+        attempts: await this.notifications.attempts(scope, id, tx),
+        releasedClaims: await this.notifications.releasedClaims(scope, id, tx),
+      };
+    });
   }
 
   /**
