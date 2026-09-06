@@ -253,9 +253,15 @@ export function AlertsPage({ denied }: { denied: boolean }) {
               may not produce, and that was silence with a reassurance on top.
 
               Only the unfiltered open-only view can claim the strong thing,
-              because only it actually asked the question.
+              because only it actually asked the question — and only on its
+              FIRST page. An empty page three says nothing about pages one and
+              two, which had rows; the pager only offers "older" when the
+              server sent a cursor, but a condition resolved between the two
+              requests makes an empty older page reachable, and "there is no
+              open alert" would then be printed by a view that had just shown
+              several.
             */
-            openOnly && severity === '' ? (
+            openOnly && severity === '' && cursor === undefined ? (
               <Empty title={t('web.alerts_empty')} hint={t('web.alerts_empty_hint')} icon="check" />
             ) : (
               <Empty

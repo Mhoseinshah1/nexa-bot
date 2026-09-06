@@ -411,6 +411,7 @@ was prose (`the sweep, on /panels/:id`) naming no test at all. The count is now
 | Y4  | the banner promises no alert class the scope cannot return  | put the notification clause back       | `settings-and-alerts.test.tsx` › promises no alert class the management scope cannot return                  |
 | Y5  | the ceiling note says which ceilings have no alarm          | delete the exception clause            | `settings-and-alerts.test.tsx` › says which ceilings have an alarm behind them and which does not            |
 | Y6  | `panel.probe.limited` is excluded from the management scope | add it to the failure list             | `web-money-and-scope.test.ts` › keeps the routine operational stream out                                     |
+| Y7  | ...and only on the FIRST page                               | drop `cursor === undefined`            | `settings-and-alerts.test.tsx` › does not deny that anything is open from a page after the first             |
 
 Y3 killed four tests and Y6 three — Y6 taking the failure/recovery pairing and
 the every-code-has-a-recorder invariants with it, which is the correct blast
@@ -426,6 +427,21 @@ fix. This one found its defect inside the previous round's **verification** —
 one level up. The check was correct about everything it examined and wrong about
 what it examined, and no amount of reviewing its output would have shown that,
 because its output was a number that looked right.
+
+## Y7, which is this round's fix containing this round's defect
+
+Row Y7 was not one of the seven findings. It came from re-reading the round-5
+fixes with the branch's own question — _what does this now do that it did not do
+before, and in which state is that wrong?_ — and the answer was that the
+empty-state condition `openOnly && severity === ''` is true on page three as
+well as page one. The pager only offers "older" when the server sent a cursor,
+so an empty older page needs a condition to resolve between two requests; but it
+is reachable, and the claim it printed was the strong one, from a view that had
+just shown several open conditions.
+
+Five rounds, five times a fix contained the next defect. This is the first time
+it was caught inside the same round rather than by the next reviewer, which
+says the QUESTION is doing the work rather than the reviewer.
 
 The lesson is narrow and worth stating exactly: **a check that skips is a check
 that must say what it skipped.** Silence in a verifier is indistinguishable from

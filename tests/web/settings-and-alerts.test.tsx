@@ -487,6 +487,39 @@ describe('management alerts', () => {
   });
 
   /**
+   * An empty page three says nothing about pages one and two.
+   *
+   * The pager only offers "older" when the server sent a cursor, so an empty
+   * older page needs a condition to resolve between the two requests — but it
+   * is reachable, and the claim it produced was the strong one: "there is no
+   * open alert", printed by a view that had just shown several.
+   */
+  it('does not deny that anything is open from a page after the first', async () => {
+    stubApi([
+      {
+        url: '/ops-log',
+        body: {
+          events: [event({ message: 'A budget filled up.' })],
+          nextCursor: {
+            at: '2026-09-06T08:00:00.000Z',
+            id: '01a05e35-c9ad-7e93-bef3-1ed9b55292c9',
+          },
+        },
+      },
+    ]);
+    renderPage(<AlertsPage denied={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'باز' }));
+    await screen.findByText('A budget filled up.');
+
+    // Page two, and by then the condition has been resolved elsewhere.
+    stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
+    fireEvent.click(screen.getByRole('button', { name: 'قدیمی‌تر' }));
+
+    expect(await screen.findByText('چیزی با این پالایه‌ها پیدا نشد.')).toBeInTheDocument();
+    expect(screen.queryByText('هشدار بازی وجود ندارد.')).toBeNull();
+  });
+
+  /**
    * The banner may not promise a class of alert this scope cannot return.
    *
    * It listed «ازکارافتادن کانال اعلان» — the notification channel failing —
