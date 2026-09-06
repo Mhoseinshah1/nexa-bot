@@ -277,3 +277,33 @@ here so the question and its answer stay together.
 | `ADR-0009` §1            | Telegram Login Widget, local credentials, or both, for the Web Admin?            | Username and password. The Login Widget makes Telegram an availability dependency of fixing Telegram, and account recovery becomes unrecoverable locally. `admins.telegram_user_id` is a link, not a credential. | [ADR-0013](adr/0013-web-admin-authentication.md)  |
 | `ADR-0009` §3            | Does a role change take effect next request, or invalidate in-flight sessions?   | Next request. Sessions carry identity, never authority — permissions are resolved per request. Disabling an administrator additionally revokes their live sessions on the spot.                                  | [ADR-0013](adr/0013-web-admin-authentication.md)  |
 | `UNK-ADM-005`            | Can a restricted admin reach admin management and escalate their own privileges? | Not here, whatever they hold: an administrator can never change their own roles or status. The question about the LEGACY system stays unanswered; the answer for ours is settled.                                | [ADR-0014](adr/0014-rbac-model.md)                |
+
+## OQ-3D-01 — is an operator's own probe rate limit management-facing?
+
+**Status: UNRESOLVED. Recorded rather than guessed.**
+
+`panel.probe.limited` / `panel.probe.ok` (`PanelService`) and
+`panel.monitor.tenant_budget_exceeded` / `_ok` (`PanelMonitorService`) are
+structurally twins: tenant-scoped, deduped, opening and closing, over the _same_
+token bucket. The monitor's pair is in `MANAGEMENT_EVENT_CODES`; the operator's
+pair is not.
+
+The asymmetry is deliberate and is argued in `packages/contracts/src/ports.ts`
+and pinned by a test: the monitor's exhaustion is nobody's doing and nobody is
+watching, whereas an operator who presses "test connection" too often is told so
+synchronously, in the response, with a retry-after. Promoting the second would
+put a self-inflicted, self-explaining refusal on the page reserved for things
+nobody has seen yet.
+
+**What is genuinely unknown** is whether an operator would want the _pattern_ —
+a tenant whose manual testing repeatedly exhausts its budget — surfaced as a
+management condition rather than only as individual synchronous refusals and a
+Telegram projection. That is a product question about what the alerts page is
+for, and the owner's revision 21 and 25 answer the general shape of it without
+answering this case.
+
+**Trigger to revisit:** the first report of an operator being surprised that
+repeated probe limiting left no trace on the alerts page, or the first tenant
+large enough that manual testing competes with the monitor for the budget.
+Whoever revisits it changes the comment in `ports.ts` and the exclusion test in
+`tests/unit/web-money-and-scope.test.ts` together.

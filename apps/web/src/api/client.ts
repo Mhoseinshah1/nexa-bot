@@ -341,13 +341,14 @@ export function fetchOpsLog(query: {
   /**
    * Sent EXPLICITLY, even when it matches the server default.
    *
-   * `GET /ops-log` answers with rows and no `nextCursor`, so the only way a
-   * caller can tell a full page from the last one is to know the page size it
-   * asked for. Relying on the server's default meant the pager could not tell
-   * them apart and enabled "older" whenever the page had any row at all — one
-   * press past the end rendered "there are no open alerts" over an alert that
-   * existed, in the subsystem whose stated rule is that silence is the one
-   * outcome it may not produce.
+   * `GET /ops-log` now answers with a `nextCursor`, which is what actually
+   * decides whether an "older" page exists — the pager reads that, not the row
+   * count. This is still sent explicitly because the server's default and the
+   * page size the caller renders must be the SAME number: two spellings of
+   * "50" would make the pager offer a page that is not there, or hide one that
+   * is. The comment that used to sit here described the pre-cursor server and
+   * told the next reader to compare lengths, which is the bug the cursor
+   * replaced.
    */
   limit?: number;
 }): Promise<OperationalEventListResponse> {

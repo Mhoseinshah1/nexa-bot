@@ -38,8 +38,15 @@ const SEVERITIES: readonly OperationalSeverity[] = ['DEBUG', 'INFO', 'WARN', 'ER
  *
  * Owner revision 21: this page is NOT an operational history. It shows the
  * codes that want a person's attention — an administrator was added, a role
- * changed, the installation ran out of monitoring capacity, the notification
- * channel gave up, a stored setting stopped parsing, somebody was locked out.
+ * changed, a tenant ran out of monitoring budget, a stored setting stopped
+ * parsing, somebody was locked out, somebody was refused.
+ *
+ * NOT the notification channel giving up. `notification.attempts_exhausted` is
+ * a delivery-attempt `errorCode`, never an `operational_events.code`, and the
+ * one real notification code — `notification.sweep_withdrawn` — is deliberately
+ * excluded and pinned out by a test. This sentence said otherwise for one
+ * commit longer than the contract did, and so did the Persian copy the operator
+ * actually reads.
  * The routine stream — every probe, every health transition, every delivery
  * attempt — belongs in the Telegram report group, and revision 25 removes the
  * general log browser from the Web Admin entirely. Neither exists here.
@@ -235,7 +242,28 @@ export function AlertsPage({ denied }: { denied: boolean }) {
           state={denied ? 'denied' : queryState(events, rows.length === 0)}
           onRetry={() => void events.refetch()}
           empty={
-            <Empty title={t('web.alerts_empty')} hint={t('web.alerts_empty_hint')} icon="check" />
+            /*
+              Which emptiness this is. The page defaults to HISTORY and carries
+              a severity select, so a zero-row result usually means "nothing
+              matched these filters" — and printing "there is no open alert"
+              over it is a false statement the operator has no way to check.
+              Concretely: an open `settings.stored_value_invalid` is a WARN, so
+              choosing ERROR emptied the table and the page then declared no
+              open condition existed. Silence is the one outcome this subsystem
+              may not produce, and that was silence with a reassurance on top.
+
+              Only the unfiltered open-only view can claim the strong thing,
+              because only it actually asked the question.
+            */
+            openOnly && severity === '' ? (
+              <Empty title={t('web.alerts_empty')} hint={t('web.alerts_empty_hint')} icon="check" />
+            ) : (
+              <Empty
+                title={t('web.alerts_empty_filtered')}
+                hint={t('web.alerts_empty_filtered_hint')}
+                icon="inbox"
+              />
+            )
           }
         >
           <DataTable

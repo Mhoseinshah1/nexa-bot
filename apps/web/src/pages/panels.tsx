@@ -10,6 +10,7 @@ import {
   type ProviderType,
   providerDescriptor,
   shapeAcceptsCredential,
+  shapeIsSatisfiedBy,
 } from '@nexa/contracts';
 import {
   createPanel,
@@ -247,6 +248,30 @@ type DetailTab = 'overview' | 'health' | 'credentials' | 'capabilities';
 type CredentialField = 'username' | 'password' | 'apiToken';
 const FIELDS: readonly CredentialField[] = ['username', 'password', 'apiToken'];
 
+/**
+ * Whether a probe of this panel could get as far as a request.
+ *
+ * The server's answer, asked of what the response already carries: three
+ * `configured` booleans and the provider's declared shape. `shapeIsSatisfiedBy`
+ * is the contract's mirror of `toProviderCredentials`, so the surface and the
+ * probe core cannot disagree about it.
+ *
+ * An UNKNOWN provider is not probeable either: this build carries no adapter
+ * for it, so `PROVIDER_TYPE_UNSUPPORTED` is the refusal rather than a missing
+ * credential, and either way the button cannot work.
+ */
+function probeable(panel: PanelSummaryResponse): boolean {
+  const shape = providerDescriptor(panel.providerType)?.credentialShape;
+  return (
+    shape !== undefined &&
+    shapeIsSatisfiedBy(shape, {
+      username: panel.credentials.username.configured,
+      password: panel.credentials.password.configured,
+      apiToken: panel.credentials.apiToken.configured,
+    })
+  );
+}
+
 export function PanelDetailPage({
   id,
   mayEdit,
@@ -311,7 +336,19 @@ export function PanelDetailPage({
           // never work would manufacture the very noise the alerts page exists
           // to keep clear. Every other write control on this surface is gated
           // the same way; this was the one that was not.
-          !mayEdit || data === undefined || data.status === 'ARCHIVED' ? undefined : (
+          //
+          // `probeable` is the third condition, and it is the same rule for the
+          // same reason. `attemptProbe` calls `toProviderCredentials`, which
+          // returns null — 412 `panel.credentials_missing` — when the stored
+          // credentials do not satisfy the provider's shape. An actor holding
+          // `panels.edit` but not `panels.credentials.rotate` creates a panel
+          // with NO credentials (that boundary is enforced now) and lands
+          // straight on this page, where this button was the only thing to
+          // press and could only ever fail.
+          !mayEdit ||
+          data === undefined ||
+          data.status === 'ARCHIVED' ||
+          !probeable(data) ? undefined : (
             <button
               type="button"
               className="btn sm"
@@ -639,6 +676,15 @@ function HealthTab({ panel }: { panel: PanelSummaryResponse }) {
       <Banner tone="info" title={t('web.panel_health_latest_title')}>
         {t('web.panel_health_latest_body')}
       </Banner>
+
+      {/*
+        Said, not merely not-offered. Removing the test button from a panel
+        whose credentials cannot authenticate stops the screen making a false
+        promise, but an absent control explains nothing — and the monitor is
+        equally unable to probe this panel, so its health will stay UNCHECKED
+        with no visible cause. This is the one screen where that has an answer.
+      */}
+      {!probeable(panel) && <Banner tone="warn">{t('web.panel_not_probeable')}</Banner>}
 
       <Card title={t('web.panel_tab_health')}>
         <KV

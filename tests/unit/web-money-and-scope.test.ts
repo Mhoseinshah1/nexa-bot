@@ -287,6 +287,19 @@ describe('the management event scope', () => {
       'http.error',
       'request.invalid',
       'notification.sweep_withdrawn',
+      // The one that is NOT obvious, which is why it is here.
+      //
+      // `panel.probe.limited` / `panel.probe.ok` is structurally a twin of
+      // `panel.monitor.tenant_budget_*` — tenant-scoped, deduped, opening and
+      // closing over the same token bucket — and that twin IS in the scope. An
+      // asymmetry that nothing states reads as an oversight, and the next
+      // person to notice it will either "fix" it or file it again. It is
+      // excluded on purpose: this pair is caused by an operator pressing "test
+      // connection", and they are told synchronously in the response, with a
+      // retry-after. The monitor's version is nobody's doing and nobody sees
+      // it, which is what makes that one management-facing.
+      'panel.probe.limited',
+      'panel.probe.ok',
     ]) {
       expect(declared.has(code), code).toBe(false);
     }

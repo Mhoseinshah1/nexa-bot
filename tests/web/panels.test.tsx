@@ -347,6 +347,75 @@ describe('the panel detail', () => {
    * Saying "tested" for that is the legacy "✅ updated" for a write that did
    * nothing — the pattern this codebase exists to end.
    */
+  /**
+   * A panel whose stored credentials cannot authenticate offers no test.
+   *
+   * `attemptProbe` calls `toProviderCredentials`, which returns null for a
+   * `USERNAME_PASSWORD` panel missing either half — so the request answers 412
+   * `panel.credentials_missing` every time. Pressing a button that can only
+   * fail is not free either: the refusal is recorded.
+   *
+   * The state is reachable by an ordinary route, not a contrived one. An actor
+   * holding `panels.edit` but NOT `panels.credentials.rotate` creates a panel
+   * — the create form correctly offers them no credential fields — and lands
+   * straight on this page, where this button was the only thing to press.
+   */
+  it('offers no connection test when the stored credentials cannot authenticate', async () => {
+    stubApi(
+      detail({
+        providerType: 'marzban',
+        providerName: 'Marzban',
+        credentials: {
+          username: { configured: true, lastReplacedAt: '2026-01-01T00:00:00.000Z' },
+          password: { configured: false, lastReplacedAt: null },
+          apiToken: { configured: false, lastReplacedAt: null },
+        },
+      }),
+    );
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    expect(screen.queryByRole('button', { name: 'تست اتصال' })).toBeNull();
+    // And it SAYS why, on the health tab where the consequence shows up: the
+    // monitor cannot probe it either, so its health stays unchecked with no
+    // visible cause. An absent control on its own explains nothing.
+    screen.getByRole('tab', { name: 'سلامت' }).click();
+    expect(
+      await screen.findByText(/اعتبارنامه‌های ذخیره‌شده برای این نوع پنل کامل نیستند/),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * The other direction, at the shape where it is easiest to get wrong.
+   *
+   * Sanaei is `TOKEN_OR_USERNAME_PASSWORD`: a token ALONE is enough, and a
+   * gate written as "all three configured" would refuse a perfectly probeable
+   * panel. The test above passes just as happily against that mistake.
+   */
+  it('offers the connection test when either half of an either/or shape is set', async () => {
+    stubApi(
+      detail({
+        providerType: 'sanaei',
+        providerName: 'Sanaei (3X-UI)',
+        credentials: {
+          username: { configured: false, lastReplacedAt: null },
+          password: { configured: false, lastReplacedAt: null },
+          apiToken: { configured: true, lastReplacedAt: '2026-01-01T00:00:00.000Z' },
+        },
+      }),
+    );
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    expect(screen.getByRole('button', { name: 'تست اتصال' })).toBeInTheDocument();
+    screen.getByRole('tab', { name: 'سلامت' }).click();
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/اعتبارنامه‌های ذخیره‌شده برای این نوع پنل کامل نیستند/),
+      ).toBeNull();
+    });
+  });
+
   it('says a replayed test was a replay', async () => {
     stubApi([
       { url: '/panels/p1/test', body: { panel: panel(), probed: false } },

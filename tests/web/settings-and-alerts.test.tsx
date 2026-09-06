@@ -4,6 +4,8 @@ import { SettingsPage } from '../../apps/web/src/pages/settings';
 import { AlertsPage } from '../../apps/web/src/pages/alerts';
 import { SystemPage } from '../../apps/web/src/pages/system';
 import { event, renderPage, setting, stubApi } from './harness';
+import { MANAGEMENT_EVENT_CODES } from '@nexa/contracts';
+import { t } from '../../apps/web/src/i18n/web.fa';
 
 const settings = (rows: unknown[]) => [{ url: '/settings', body: { settings: rows } }];
 
@@ -427,13 +429,94 @@ describe('management alerts', () => {
   it('defaults to the management history and can be narrowed to open items', async () => {
     const api = stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
     renderPage(<AlertsPage denied={false} />);
-    await screen.findByText('هشدار بازی وجود ندارد.');
+    // The FILTERED empty state, because the default view is history and did not
+    // ask whether anything is open. This assertion used to name the open-alert
+    // copy, which pinned the wrong string in place: the page said "there is no
+    // open alert" over a view that had not asked the question.
+    await screen.findByText('چیزی با این پالایه‌ها پیدا نشد.');
+    expect(screen.queryByText('هشدار بازی وجود ندارد.')).toBeNull();
     expect(api.calls[0]?.url).not.toContain('open=');
 
     fireEvent.click(screen.getByRole('button', { name: 'باز' }));
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('open=true'))).toBe(true);
     });
+  });
+
+  /**
+   * The strong claim is made only by the view that earns it.
+   *
+   * "There is no open alert" is a statement about the whole management
+   * condition set. The page can only make it from the unfiltered open-only
+   * view, because that is the only one that asked.
+   */
+  it('claims that nothing is open only from the unfiltered open view', async () => {
+    stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
+    renderPage(<AlertsPage denied={false} />);
+    await screen.findByText('چیزی با این پالایه‌ها پیدا نشد.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'باز' }));
+    // Now it has asked, so now it may answer.
+    await screen.findByText('هشدار بازی وجود ندارد.');
+    expect(screen.queryByText('چیزی با این پالایه‌ها پیدا نشد.')).toBeNull();
+  });
+
+  /**
+   * The concrete falsehood, at the state that produced it.
+   *
+   * `settings.stored_value_invalid` is a WARN. An operator on the open view who
+   * selects severity ERROR empties the table — and the page then declared that
+   * no open management condition had been recorded, over one that was open and
+   * merely filtered out. Silence is the one outcome this subsystem may not
+   * produce, and that was silence with a reassurance printed on top.
+   */
+  it('does not deny that anything is open when a severity filter emptied the page', async () => {
+    stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
+    renderPage(<AlertsPage denied={false} />);
+    await screen.findByText('چیزی با این پالایه‌ها پیدا نشد.');
+    fireEvent.click(screen.getByRole('button', { name: 'باز' }));
+    await screen.findByText('هشدار بازی وجود ندارد.');
+
+    fireEvent.change(screen.getByLabelText('شدت'), { target: { value: 'ERROR' } });
+
+    // `findBy`, not `getBy`: the filter change refetches, and asserting during
+    // the skeleton would pass for any implementation — the strong copy is
+    // absent while loading too.
+    expect(await screen.findByText('چیزی با این پالایه‌ها پیدا نشد.')).toBeInTheDocument();
+    expect(screen.queryByText('هشدار بازی وجود ندارد.')).toBeNull();
+  });
+
+  /**
+   * The banner may not promise a class of alert this scope cannot return.
+   *
+   * It listed «ازکارافتادن کانال اعلان» — the notification channel failing —
+   * and no management code is notification-related.
+   * `notification.attempts_exhausted` is a delivery-attempt `errorCode`, never
+   * an `operational_events.code`, and the one real notification code is
+   * deliberately excluded. An operator whose Telegram destination was
+   * misconfigured would have opened this page on the banner's promise, seen
+   * their admin history, and concluded the channel was fine.
+   *
+   * Joined to the codes rather than asserted as a string: the first assertion
+   * is the fact that makes the second one required, so if a notification code
+   * is ever admitted to the scope, this test is where the copy gets revisited.
+   */
+  it('promises no alert class the management scope cannot return', () => {
+    const notificationCodes = MANAGEMENT_EVENT_CODES.filter((code) =>
+      code.startsWith('notification.'),
+    );
+    expect(notificationCodes).toEqual([]);
+
+    // The banner has two clauses: what arrives HERE, and what goes to the
+    // Telegram report group instead. Only the first is a promise this page has
+    // to keep, and asserting over the whole string would forbid naming the
+    // notification channel at all — which would make the banner less useful,
+    // not more honest.
+    const body = t('web.alerts_scope_body');
+    const [arrivesHere, goesElsewhere] = body.split('جریان روتین');
+    expect(goesElsewhere, 'the banner no longer says where the routine stream goes').toBeDefined();
+    expect(arrivesHere).not.toContain('کانال اعلان');
+    expect(goesElsewhere).toContain('کانال اعلان');
   });
 
   /**
@@ -450,7 +533,8 @@ describe('management alerts', () => {
   it('asks for the conditions scope when narrowed to open items', async () => {
     const api = stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
     renderPage(<AlertsPage denied={false} />);
-    await screen.findByText('هشدار بازی وجود ندارد.');
+    // The default view is history, so this is the filtered empty state.
+    await screen.findByText('چیزی با این پالایه‌ها پیدا نشد.');
 
     const scopeOf = (url: string) =>
       new URL(url, 'https://admin.example.test').searchParams.get('scope');
@@ -476,6 +560,32 @@ describe('management alerts', () => {
 });
 
 describe('system and operations', () => {
+  /**
+   * The capacity note may not claim an alarm that does not exist.
+   *
+   * Two of the three ceilings have a condition behind them —
+   * `tenantFreshPanelCeiling` raises `panel.monitor.tenant_budget_exceeded`,
+   * `installationFreshPanelCeiling` raises the scheduler condition. The third,
+   * `tenantTurnCeiling`, has exactly one production caller: this response. The
+   * number of tenants is not configuration — it grows — so nothing can refuse a
+   * fleet that outgrows the rotation, and no condition fires on it.
+   *
+   * The note said the server computes "these numbers" with the same functions
+   * that issue the capacity warnings, over all three. An installation with 140
+   * single-panel tenants sits far under the 900-panel scheduler ceiling, shows a
+   * green within-capacity badge beside it, and silently never rotates eighty of
+   * them inside the freshness window.
+   */
+  it('says which ceilings have an alarm behind them and which does not', () => {
+    const note = t('web.monitor_capacity_ceiling_note');
+    // Named, so the reader knows which two the claim covers.
+    expect(note).toContain(t('web.monitor_tenant_ceiling'));
+    expect(note).toContain(t('web.monitor_installation_ceiling'));
+    // And the third is excluded from it explicitly, not by omission.
+    expect(note).toContain(t('web.monitor_tenant_turn_ceiling'));
+    expect(note).toContain('هیچ هشداری پشت آن نیست');
+  });
+
   const route = { path: '/system', query: new URLSearchParams() };
 
   /** Owner revision 25 — the general logs surface does not exist. */

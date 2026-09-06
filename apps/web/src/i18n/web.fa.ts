@@ -392,6 +392,11 @@ export const WEB_FA = {
   'web.panel_tab_health': 'سلامت',
   'web.panel_tab_credentials': 'اعتبارنامه‌ها',
   'web.panel_tab_capabilities': 'قابلیت‌ها',
+  // Why no connection test is offered, and why the monitor will not probe it
+  // either: the stored credentials do not satisfy the provider's shape, so
+  // every probe would answer 412 `panel.credentials_missing`.
+  'web.panel_not_probeable':
+    'اعتبارنامه‌های ذخیره‌شده برای این نوع پنل کامل نیستند، بنابراین نه تست اتصال ممکن است و نه پایش خودکار. از زبانهٔ اعتبارنامه‌ها آن‌ها را کامل کنید.',
   'web.panel_health_latest_title': 'فقط آخرین وضعیت',
   'web.panel_health_latest_body':
     'سلامت پنل تنها به صورت «آخرین وضعیت» ذخیره می‌شود؛ تاریخچه یا نمودار روند وجود ندارد، چون چنین چیزی ذخیره نمی‌شود.',
@@ -427,9 +432,16 @@ export const WEB_FA = {
   'web.alerts_intro': 'مواردی که واقعاً به رسیدگی یک نفر نیاز دارند.',
   'web.alerts_scope_title': 'این صفحه تاریخچهٔ عملیاتی نیست',
   'web.alerts_scope_body':
-    'تنها رویدادهای مدیریتی اینجا می‌آیند: تغییر مدیران و نقش‌ها، قفل‌شدن حساب، رد دسترسی، پرشدن ظرفیت پایش، ازکارافتادن کانال اعلان، و تنظیمی که دیگر خوانده نمی‌شود. جریان روتین — هر بررسی سلامت، هر تلاش ارسال — به گروه گزارش تلگرام می‌رود.',
+    'تنها رویدادهای مدیریتی اینجا می‌آیند: تغییر مدیران و نقش‌ها، قفل‌شدن حساب، رد دسترسی، پرشدن سهمیهٔ پایش یک مستأجر، و تنظیمی که دیگر خوانده نمی‌شود. جریان روتین — هر بررسی سلامت، هر تلاش ارسال، و ازکارافتادن کانال اعلان — به گروه گزارش تلگرام می‌رود.',
+  // Two empty states, because there are two questions and only one of them was
+  // being answered. The page defaults to HISTORY and carries a severity filter,
+  // so "there is no open alert" was printed over filtered-out rows and, worse,
+  // over conditions that really were open.
   'web.alerts_empty': 'هشدار بازی وجود ندارد.',
   'web.alerts_empty_hint': 'هیچ شرط مدیریتی بازی ثبت نشده است.',
+  'web.alerts_empty_filtered': 'چیزی با این پالایه‌ها پیدا نشد.',
+  'web.alerts_empty_filtered_hint':
+    'این نتیجه فقط دربارهٔ پالایه‌های کنونی است و نمی‌گوید هشدار بازی وجود ندارد. برای دیدن همهٔ شرط‌های باز، شدت را روی «همه» و نما را روی «حل‌نشده» بگذارید.',
 
   // --- System --------------------------------------------------------------
   'web.system_title': 'سامانه و عملیات',
@@ -463,7 +475,7 @@ export const WEB_FA = {
   'web.monitor_capacity': 'ظرفیت',
   'web.monitor_capacity_hint': 'چند پنل را می‌توان در مهلت کهنه‌شدن تازه نگه داشت.',
   'web.monitor_capacity_ceiling_note':
-    'این‌ها سقف هستند، نه تضمین: تست‌های دستی از همین سهم خرج می‌کنند و تأخیر پنل‌ها در این محاسبه نیست. همین اعداد را سرور با همان توابعی حساب می‌کند که هشدار ظرفیت را صادر می‌کنند.',
+    'این‌ها سقف هستند، نه تضمین: تست‌های دستی از همین سهم خرج می‌کنند و تأخیر پنل‌ها در این محاسبه نیست. سقف هر مستأجر و سقف کل نصب را سرور با همان توابعی حساب می‌کند که هشدار ظرفیت را صادر می‌کنند؛ اما «بیشترین مستأجر در یک بازهٔ تازگی» فقط گزارش می‌شود و هیچ هشداری پشت آن نیست — تعداد مستأجرها پیکربندی نیست و رشد می‌کند، پس چیزی نمی‌تواند از عبور از آن جلوگیری کند.',
   'web.monitor_tenant_ceiling': 'سقف هر مستأجر',
   'web.monitor_installation_ceiling': 'سقف کل نصب',
   'web.monitor_probe_budget': 'سهم بررسی هر مستأجر',
