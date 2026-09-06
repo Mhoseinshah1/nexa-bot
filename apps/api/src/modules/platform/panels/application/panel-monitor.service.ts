@@ -23,6 +23,7 @@ import {
 } from '../../access/application/authorized-mutation.js';
 import type { SessionRepository } from '../../identity/application/ports.js';
 import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
+import type { OperationalConditionReader } from '../../opslog/application/ports.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   attemptProbe,
@@ -51,17 +52,10 @@ import type { DuePanel, PanelHealthRecord, PanelMonitorRepository, PanelView } f
  */
 const MAINTENANCE_RUN = 'maintenance.run' as const;
 
-/**
- * The stable job identity every background probe acts as.
- *
- * Stable across ticks, restarts and replicas, so an operator reading the audit
- * log sees one actor doing this work rather than a new one per process. The
- * correlation id is per tick, which is the part that should vary: it is what
- * ties one sweep's rows together.
- */
-export /** Operational conditions this loop reports about its own capacity. */
-const RECOVERED_CODE = 'panel.health.recovered';
+/** The code a panel-health recovery is recorded under. */
+export const RECOVERED_CODE = 'panel.health.recovered';
 
+/** Operational conditions this loop reports about its own capacity. */
 const TENANT_BUDGET_CONDITION = 'panel.monitor.tenant_budget_exceeded';
 const TENANT_BUDGET_RESOLVED = 'panel.monitor.tenant_budget_ok';
 const SCHEDULER_CONDITION = 'panel.monitor.scheduler_capacity_exceeded';
@@ -70,6 +64,14 @@ const SCHEDULER_RESOLVED = 'panel.monitor.scheduler_capacity_ok';
 /** The installation's own scope: this condition belongs to no single tenant. */
 const SYSTEM_SCOPE = systemContext('panel monitor capacity assessment');
 
+/**
+ * The stable job identity every background probe acts as.
+ *
+ * Stable across ticks, restarts and replicas, so an operator reading the audit
+ * log sees one actor doing this work rather than a new one per process. The
+ * correlation id is per tick, which is the part that should vary: it is what
+ * ties one sweep's rows together.
+ */
 export const PANEL_MONITOR_JOB_ID = 'panel-health-monitor';
 
 export interface PanelMonitorDeps {
@@ -92,6 +94,16 @@ export interface PanelMonitorDeps {
    * was in flight prevents the record of it.
    */
   readonly scopeActivity: ScopeActivityReader;
+  /**
+   * Which capacity conditions are OPEN, read from the rows.
+   *
+   * The overload and recovery pair are durable rows; deciding whether to record
+   * a recovery from a field initialised on startup meant a monitor that opened
+   * a warning, restarted, and then saw the population back under the bound
+   * emitted nothing at all — and the warning stayed open for ever, describing
+   * an overload that had ended.
+   */
+  readonly conditions: OperationalConditionReader;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
   readonly sessions: SessionRepository;
@@ -236,12 +248,6 @@ export class PanelMonitorService {
 
   /** When capacity was last assessed. See `assessCapacity`. */
   private lastCapacityAssessmentAt: number | null = null;
-
-  /** Tenants this process has an open budget condition for. */
-  private tenantsOverBudget: ReadonlySet<string> = new Set();
-
-  /** Whether this process has an open installation-wide scheduler condition. */
-  private installationOverScheduler = false;
 
   constructor(
     private readonly deps: PanelMonitorDeps,
@@ -621,7 +627,6 @@ export class PanelMonitorService {
     }
   }
 
-  /** Steps a panel back without inventing anything about the provider. */
   /**
    * Says out loud what this installation cannot keep fresh, on a slow timer.
    *
@@ -658,6 +663,11 @@ export class PanelMonitorService {
 
     const over = await this.deps.discovery.overBudgetTenants(this.deps.tenantBudgetUpperBound);
     const overNow = new Set(over.map((row: { tenantId: string }) => row.tenantId));
+    // Which tenants are ALREADY complaining, read from the rows. A field this
+    // process initialised on startup would answer "none" after every restart,
+    // so a warning opened before the restart could never be resolved by the
+    // process that came back.
+    const openBudget = await this.deps.conditions.openTenantConditions(TENANT_BUDGET_CONDITION);
 
     for (const row of over) {
       const tenant: TenantContext = {
@@ -673,16 +683,23 @@ export class PanelMonitorService {
             message: `has ${row.panels} active panels, more than the ${this.deps.tenantBudgetUpperBound} its probe budget can keep fresh`,
             dedupeKey: TENANT_BUDGET_CONDITION,
             context: { panels: row.panels, upperBound: this.deps.tenantBudgetUpperBound },
+            // An overload closes the recovery it contradicts. Without this the
+            // "back within budget" row stays open next to the warning that says
+            // the opposite, and the NEXT recovery collapses into that stale row
+            // instead of being a recovery in its own right — so an operator
+            // watching a population that crosses the bound twice sees one
+            // recovery for two of them.
+            recoversCode: TENANT_BUDGET_RESOLVED,
+            recoversDedupeKey: TENANT_BUDGET_RESOLVED,
           },
           tx,
         ),
       );
     }
 
-    // Only tenants THIS process reported are resolved by it. A tenant whose
-    // condition another replica opened is resolved by that replica's own
-    // assessment, which reaches the same conclusion from the same rows.
-    for (const tenantId of this.tenantsOverBudget) {
+    // Whichever replica observes a tenant back under the bound resolves it,
+    // including one that did not open the row and one that has just started.
+    for (const tenantId of openBudget) {
       if (overNow.has(tenantId)) continue;
       const tenant: TenantContext = {
         tenantId: tenantId as TenantContext['tenantId'],
@@ -703,11 +720,11 @@ export class PanelMonitorService {
         ),
       );
     }
-    this.tenantsOverBudget = overNow;
 
     const total = await this.deps.discovery.activePanelCount();
     const overGlobal = total > this.deps.schedulerUpperBound;
-    if (overGlobal || this.installationOverScheduler) {
+    const schedulerOpen = await this.deps.conditions.systemConditionIsOpen(SCHEDULER_CONDITION);
+    if (overGlobal || schedulerOpen) {
       // SYSTEM scope: this is the installation's condition, not any tenant's,
       // and `scopeTenantId` writes a null tenant for it.
       await this.deps.uow.run(SYSTEM_SCOPE, (tx) =>
@@ -720,6 +737,8 @@ export class PanelMonitorService {
                 message: `the installation has ${total} active panels, more than the ${this.deps.schedulerUpperBound} this scheduler can start within one freshness window`,
                 dedupeKey: SCHEDULER_CONDITION,
                 context: { panels: total, upperBound: this.deps.schedulerUpperBound },
+                recoversCode: SCHEDULER_RESOLVED,
+                recoversDedupeKey: SCHEDULER_RESOLVED,
               }
             : {
                 code: SCHEDULER_RESOLVED,
@@ -733,7 +752,6 @@ export class PanelMonitorService {
         ),
       );
     }
-    this.installationOverScheduler = overGlobal;
   }
 
   /**

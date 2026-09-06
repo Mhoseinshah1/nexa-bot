@@ -4,6 +4,7 @@ import type { Database } from '../../../../infrastructure/persistence/database.j
 import { operationalEvents } from '../../../../infrastructure/persistence/schema.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
+  OperationalConditionReader,
   OperationalEventQuery,
   OperationalEventReader,
   OperationalEventRow,
@@ -75,5 +76,46 @@ export class DrizzleOperationalEventReader implements OperationalEventReader {
       resolvedAt: row.resolvedAt,
       resolvedByEventId: row.resolvedByEventId,
     }));
+  }
+}
+
+/**
+ * The open-condition reader, over the same rows the operations view reads.
+ *
+ * Two narrow queries on `operational_events`, both filtered by `resolved_at IS
+ * NULL` and both bounded by the code they are asked about. There is an index on
+ * `code`; the open set of any one condition is small by construction, because a
+ * condition dedupes onto one row per scope.
+ */
+export class DrizzleOperationalConditionReader implements OperationalConditionReader {
+  constructor(private readonly db: Database) {}
+
+  async openTenantConditions(code: string): Promise<string[]> {
+    const rows = await this.db
+      .selectDistinct({ tenantId: operationalEvents.tenantId })
+      .from(operationalEvents)
+      .where(
+        and(
+          eq(operationalEvents.code, code),
+          isNull(operationalEvents.resolvedAt),
+          isNotNull(operationalEvents.tenantId),
+        ),
+      );
+    return rows.flatMap((row) => (row.tenantId === null ? [] : [row.tenantId]));
+  }
+
+  async systemConditionIsOpen(code: string): Promise<boolean> {
+    const rows = await this.db
+      .select({ id: operationalEvents.id })
+      .from(operationalEvents)
+      .where(
+        and(
+          eq(operationalEvents.code, code),
+          isNull(operationalEvents.resolvedAt),
+          isNull(operationalEvents.tenantId),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
   }
 }

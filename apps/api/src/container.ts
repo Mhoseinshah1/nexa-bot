@@ -63,7 +63,10 @@ import { BootstrapOwnerService } from './modules/platform/identity/application/b
 import { RetentionSweeper } from './modules/platform/identity/application/retention-sweeper.js';
 import { RecordPingService } from './modules/platform/system/application/record-ping.service.js';
 import { PingLogConsumer } from './modules/platform/opslog/application/ping-log.consumer.js';
-import { DrizzleOperationalEventReader } from './modules/platform/opslog/infrastructure/drizzle-operational-event.reader.js';
+import {
+  DrizzleOperationalConditionReader,
+  DrizzleOperationalEventReader,
+} from './modules/platform/opslog/infrastructure/drizzle-operational-event.reader.js';
 import { OpsLogService } from './modules/platform/opslog/application/opslog.service.js';
 import { DrizzleSettingRepository } from './modules/control/settings/infrastructure/drizzle-settings.repository.js';
 import { SettingsResolver } from './modules/control/settings/application/settings-resolver.js';
@@ -512,6 +515,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // The tenant kill switch the monitor reads before it dials and again
       // before it writes. Same reader the control-plane services use.
       scopeActivity: tenants,
+      // Which capacity conditions are open, read from the rows rather than
+      // from process memory, so a restart does not strand one open for ever.
+      conditions: new DrizzleOperationalConditionReader(database.db),
       probe: probeCore,
       guard,
       audit,

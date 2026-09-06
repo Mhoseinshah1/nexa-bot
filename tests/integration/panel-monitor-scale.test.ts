@@ -15,6 +15,7 @@ import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http'
 import { DrizzlePanelCredentialStore } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-credentials';
 import type { TenantContext } from '@nexa/contracts';
 import { createTestContext, SEED_IDS, type TestContext } from './harness';
+import { DrizzleOperationalConditionReader } from '../../apps/api/src/modules/platform/opslog/infrastructure/drizzle-operational-event.reader';
 
 /**
  * The scheduler at a size no unit test can express.
@@ -197,6 +198,7 @@ describe('the panel monitor scheduler at scale', () => {
         },
         guard: ctx.container.guard,
         scopeActivity: ctx.container.tenants,
+        conditions: new DrizzleOperationalConditionReader(ctx.container.database.db),
         audit: ctx.container.audit,
         opsLog: ctx.container.opsLog,
         sessions: ctx.container.sessions,

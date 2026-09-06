@@ -33,3 +33,24 @@ export interface OperationalEventQuery {
 export interface OperationalEventReader {
   list(scope: ScopeContext, query: OperationalEventQuery): Promise<OperationalEventRow[]>;
 }
+
+/**
+ * Which conditions are OPEN right now, from the rows rather than from memory.
+ *
+ * A condition is a durable row and its recovery is a durable row. A process
+ * that decides whether to record a recovery from a field it initialised on
+ * startup cannot resolve anything it did not itself open: the monitor opened a
+ * capacity warning, restarted, saw the population back under the bound, and
+ * emitted nothing — the warning stayed open for ever, describing an overload
+ * that had ended.
+ *
+ * Reading the open set instead also removes the multi-replica caveat that came
+ * with the process-local version: any replica that observes the population back
+ * under the bound resolves the condition, whichever one opened it.
+ */
+export interface OperationalConditionReader {
+  /** Tenant ids with an unresolved condition of this code. */
+  openTenantConditions(code: string): Promise<string[]>;
+  /** Whether the installation-wide (tenant-less) condition of this code is open. */
+  systemConditionIsOpen(code: string): Promise<boolean>;
+}

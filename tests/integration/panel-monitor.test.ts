@@ -24,6 +24,7 @@ import {
   DrizzlePanelMonitorRepository,
   DrizzlePanelRepository,
 } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel.repository';
+import { DrizzleOperationalConditionReader } from '../../apps/api/src/modules/platform/opslog/infrastructure/drizzle-operational-event.reader';
 import { DrizzlePanelCredentialStore } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-credentials';
 import { providerAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
@@ -182,6 +183,7 @@ describe('the panel health monitor', () => {
         probe: probeDeps(options.probe ?? {}),
         guard: ctx.container.guard,
         scopeActivity: ctx.container.tenants,
+        conditions: new DrizzleOperationalConditionReader(ctx.container.database.db),
         audit: ctx.container.audit,
         opsLog: ctx.container.opsLog,
         sessions: ctx.container.sessions,
@@ -354,6 +356,7 @@ describe('the panel health monitor', () => {
         {
           discovery: new DrizzlePanelMonitorRepository(ctx.container.database.db),
           scopeActivity: ctx.container.tenants,
+          conditions: new DrizzleOperationalConditionReader(ctx.container.database.db),
           probe: watched,
           // A guard that denies everything, standing in for a job whose
           // permission has been narrowed or revoked.
@@ -1034,6 +1037,161 @@ describe('the panel health monitor', () => {
       // E. the condition resolves.
       const resolved = await opsFor('panel.monitor.tenant_budget_exceeded');
       expect(resolved[0]!.resolvedAt).not.toBeNull();
+    });
+
+    /** Archives every ACTIVE panel of tenant A but `keep` of them. */
+    async function shrinkTenantATo(keep: number): Promise<void> {
+      const live = await ctx.container.database.db
+        .select({ id: panels.id })
+        .from(panels)
+        .where(and(eq(panels.tenantId, tenantA.tenantId), eq(panels.status, 'ACTIVE')));
+      for (const row of live.slice(keep)) {
+        await service().setStatus(tenantA, adminActorFor(ownerA), row.id, {
+          status: 'ARCHIVED',
+          idempotencyKey: key(),
+        });
+      }
+    }
+
+    /** A monitor that assesses capacity every tick and probes nothing. */
+    function capacityMonitor(bounds: {
+      tenantBudgetUpperBound: number;
+      schedulerUpperBound: number;
+    }): PanelMonitorService {
+      const real = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+      return monitor({
+        ...bounds,
+        capacityAssessmentIntervalMs: 0,
+        discovery: {
+          claimTenants: async () => [],
+          dueForTenants: async () => [],
+          refreshTenantBounds: async () => {},
+          reconcileSchedules: async () => 0,
+          overBudgetTenants: real.overBudgetTenants.bind(real),
+          activePanelCount: real.activePanelCount.bind(real),
+        },
+      });
+    }
+
+    it("does not count a stopped tenant's panels toward either bound", async () => {
+      // `claimTenants` refuses a stopped tenant, so its panels consume no
+      // scheduler turn and no probe token. Counting them anyway had the monitor
+      // report an overload made entirely of work it will never do — and keep
+      // reporting it, because archiving is the operator's only way out and a
+      // stopped tenant is exactly the one nobody is administering.
+      await createPanel(ownerB, tenantB, 'stopped-1');
+      await createPanel(ownerB, tenantB, 'stopped-2');
+      await createPanel(ownerB, tenantB, 'stopped-3');
+      await createPanel(ownerA, tenantA, 'served-1');
+      await ctx.container.database.db
+        .update(tenants)
+        .set({ status: 'STOPPED' })
+        .where(eq(tenants.id, tenantB.tenantId));
+
+      await capacityMonitor({ tenantBudgetUpperBound: 2, schedulerUpperBound: 2 }).tick();
+
+      expect(await opsFor('panel.monitor.tenant_budget_exceeded')).toHaveLength(0);
+      expect(await opsFor('panel.monitor.scheduler_capacity_exceeded')).toHaveLength(0);
+    });
+
+    it('resolves a condition a previous process opened', async () => {
+      // The open set is a property of the ROWS, not of a field a process
+      // initialised on startup. A monitor that opened a warning, restarted, and
+      // then saw the population back under the bound emitted nothing at all,
+      // and the warning stayed open for ever describing an overload that had
+      // ended. Every rolling update is such a restart.
+      const before = capacityMonitor({ tenantBudgetUpperBound: 2, schedulerUpperBound: 2 });
+      await createPanel(ownerA, tenantA, 'restart-1');
+      await createPanel(ownerA, tenantA, 'restart-2');
+      await createPanel(ownerA, tenantA, 'restart-3');
+      await before.tick();
+
+      expect((await opsFor('panel.monitor.tenant_budget_exceeded'))[0]!.resolvedAt).toBeNull();
+      expect((await opsFor('panel.monitor.scheduler_capacity_exceeded'))[0]!.resolvedAt).toBeNull();
+
+      // The process ends. A NEW instance comes up with no memory of either
+      // condition — which is the whole point of the fixture.
+      const after = capacityMonitor({ tenantBudgetUpperBound: 2, schedulerUpperBound: 2 });
+      await shrinkTenantATo(1);
+      now = new Date(now.getTime() + 60_000);
+      await after.tick();
+
+      expect((await opsFor('panel.monitor.tenant_budget_exceeded'))[0]!.resolvedAt).not.toBeNull();
+      expect(await opsFor('panel.monitor.tenant_budget_ok')).toHaveLength(1);
+      expect(
+        (await opsFor('panel.monitor.scheduler_capacity_exceeded'))[0]!.resolvedAt,
+      ).not.toBeNull();
+      expect(await opsFor('panel.monitor.scheduler_capacity_ok')).toHaveLength(1);
+    });
+
+    it('gives a second overload a second recovery, and a stable population none', async () => {
+      // OVER -> OK -> OVER -> OK. The two recoveries are two DISTINCT
+      // recoveries, which they only are if the overload closes the recovery it
+      // contradicts: otherwise the "back within budget" row stays open beside
+      // the warning that says the opposite, and the second recovery collapses
+      // into the first one's still-open row.
+      const m = capacityMonitor({ tenantBudgetUpperBound: 2, schedulerUpperBound: 2 });
+      const tick = async () => {
+        now = new Date(now.getTime() + 60_000);
+        await m.tick();
+      };
+
+      const budgetOver = async () => (await opsFor('panel.monitor.tenant_budget_exceeded'))[0];
+      const budgetOk = async () => (await opsFor('panel.monitor.tenant_budget_ok'))[0];
+      const schedulerOver = async () =>
+        (await opsFor('panel.monitor.scheduler_capacity_exceeded'))[0];
+      const schedulerOk = async () => (await opsFor('panel.monitor.scheduler_capacity_ok'))[0];
+
+      // 1. OVER.
+      await createPanel(ownerA, tenantA, 'cycle-1');
+      await createPanel(ownerA, tenantA, 'cycle-2');
+      await createPanel(ownerA, tenantA, 'cycle-3');
+      await tick();
+      expect((await budgetOver())!.resolvedAt).toBeNull();
+      expect((await schedulerOver())!.resolvedAt).toBeNull();
+      expect(await budgetOk()).toBeUndefined();
+      expect(await schedulerOk()).toBeUndefined();
+
+      // Stable OVER: one row each, occurrence advancing, still no recovery.
+      await tick();
+      expect((await budgetOver())!.occurrenceCount).toBe(2);
+      expect((await schedulerOver())!.occurrenceCount).toBe(2);
+      expect(await budgetOk()).toBeUndefined();
+      expect(await schedulerOk()).toBeUndefined();
+
+      // 2. OK — the first recovery.
+      await shrinkTenantATo(1);
+      await tick();
+      expect((await budgetOk())!.occurrenceCount).toBe(1);
+      expect((await budgetOk())!.resolvedAt).toBeNull();
+      expect((await budgetOver())!.resolvedAt).not.toBeNull();
+      expect((await schedulerOk())!.occurrenceCount).toBe(1);
+      expect((await schedulerOver())!.resolvedAt).not.toBeNull();
+
+      // Stable OK: nothing is recorded at all. A recovery is not re-announced
+      // every assessment for as long as the population stays healthy.
+      await tick();
+      expect((await budgetOk())!.occurrenceCount).toBe(1);
+      expect((await schedulerOk())!.occurrenceCount).toBe(1);
+
+      // 3. OVER again — and the recovery it contradicts is closed.
+      await createPanel(ownerA, tenantA, 'cycle-4');
+      await createPanel(ownerA, tenantA, 'cycle-5');
+      await tick();
+      expect((await budgetOver())!.resolvedAt).toBeNull();
+      expect((await budgetOk())!.resolvedAt).not.toBeNull();
+      expect((await schedulerOver())!.resolvedAt).toBeNull();
+      expect((await schedulerOk())!.resolvedAt).not.toBeNull();
+
+      // 4. OK again — a SECOND recovery, not a re-count of the first.
+      await shrinkTenantATo(1);
+      await tick();
+      expect((await budgetOk())!.occurrenceCount).toBe(2);
+      expect((await budgetOk())!.resolvedAt).toBeNull();
+      expect((await budgetOver())!.resolvedAt).not.toBeNull();
+      expect((await schedulerOk())!.occurrenceCount).toBe(2);
+      expect((await schedulerOk())!.resolvedAt).toBeNull();
+      expect((await schedulerOver())!.resolvedAt).not.toBeNull();
     });
 
     it('reports the installation-wide scheduler bound separately from any tenant', async () => {

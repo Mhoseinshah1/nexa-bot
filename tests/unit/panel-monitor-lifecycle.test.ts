@@ -106,6 +106,7 @@ describe('the panel monitor timer lifecycle', () => {
       probe: unreachable('the probe core'),
       guard: unreachable('the permission guard'),
       scopeActivity: { scopeIsActive: async () => true },
+      conditions: { openTenantConditions: async () => [], systemConditionIsOpen: async () => false },
       audit: unreachable('the audit writer'),
       opsLog: unreachable('the operational log'),
       sessions: unreachable('the session repository'),

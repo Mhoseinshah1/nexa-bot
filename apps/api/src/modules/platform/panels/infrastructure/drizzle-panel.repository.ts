@@ -946,8 +946,16 @@ export class DrizzlePanelMonitorRepository implements PanelMonitorRepository {
   }
 
   async activePanelCount(): Promise<number> {
+    // ACTIVE panels of ACTIVE tenants. `claimTenants` gives a stopped tenant no
+    // turn at all, so its panels consume no scheduler capacity — counting them
+    // here measured a population the scheduler never starts, and could hold the
+    // installation-wide warning open on the strength of panels nothing will
+    // ever probe.
     const result = await this.db.execute<{ n: number }>(
-      sql`SELECT count(*)::int AS n FROM ${panels} WHERE status = 'ACTIVE'`,
+      sql`SELECT count(*)::int AS n
+            FROM ${panels} p
+            JOIN ${tenants} t ON t.id = p.tenant_id
+           WHERE p.status = 'ACTIVE' AND t.status = 'ACTIVE'`,
     );
     return result.rows[0]?.n ?? 0;
   }
@@ -955,11 +963,15 @@ export class DrizzlePanelMonitorRepository implements PanelMonitorRepository {
   async overBudgetTenants(
     tenantBudgetUpperBound: number,
   ): Promise<{ tenantId: string; panels: number }[]> {
+    // Same predicate as the count above and as `claimTenants`: a tenant this
+    // installation has stopped serving spends no probe budget, so it cannot be
+    // over it.
     const result = await this.db.execute<{ tenant_id: string; panels: string }>(sql`
-      SELECT tenant_id, count(*)::text AS panels
-        FROM ${panels}
-       WHERE status = 'ACTIVE'
-       GROUP BY tenant_id
+      SELECT p.tenant_id, count(*)::text AS panels
+        FROM ${panels} p
+        JOIN ${tenants} t ON t.id = p.tenant_id
+       WHERE p.status = 'ACTIVE' AND t.status = 'ACTIVE'
+       GROUP BY p.tenant_id
       HAVING count(*) > ${tenantBudgetUpperBound}
        ORDER BY count(*) DESC
     `);

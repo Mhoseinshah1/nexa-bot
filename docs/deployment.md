@@ -307,10 +307,16 @@ the one that matters — and records operational conditions rather than log
 lines, so repeated unchanged overload collapses onto one row with an occurrence
 count and the condition resolves when the population comes back under:
 
-| condition                                   | scope                        |
-| ------------------------------------------- | ---------------------------- |
-| `panel.monitor.tenant_budget_exceeded`      | the tenant                   |
-| `panel.monitor.scheduler_capacity_exceeded` | the installation (no tenant) |
+| condition                                   | scope                        | resolved by                           |
+| ------------------------------------------- | ---------------------------- | ------------------------------------- |
+| `panel.monitor.tenant_budget_exceeded`      | the tenant                   | `panel.monitor.tenant_budget_ok`      |
+| `panel.monitor.scheduler_capacity_exceeded` | the installation (no tenant) | `panel.monitor.scheduler_capacity_ok` |
+
+The pair is mutually exclusive: each closes the other, so a population that
+crosses a bound twice produces two overloads and two recoveries rather than one
+of each with a stale row left open beside it. Which of the four is open is read
+from the rows on every assessment, so a monitor that restarts between the
+overload and the recovery still resolves what the process before it opened.
 
 Raising either bound is a deliberate act whose cost lands on somebody else's
 server: `PANEL_PROBE_TENANT_LIMIT` is an outbound rate against a customer's
