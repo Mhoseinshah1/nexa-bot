@@ -147,3 +147,114 @@ intended test.
 
 Both are the same lesson from the other side: a mutation that fails is not
 evidence until you have read WHY it failed.
+
+---
+
+# Round 3 — reviewing the fixes as hard as the bugs
+
+Round 2 closed 34 findings and was verified green. Two independent reviews of
+those 34 fixes then found **23 more**: thirteen from a fresh-context
+adversarial pass over the five remediation commits, ten from Codex, four of
+them the same defect seen twice.
+
+The number that matters is not 23. It is **two**: two of the findings were
+regressions that round 2's own fixes introduced, and a third was a rule that
+round 2 certified as falsified and that was nonetheless wrong. That is the
+third time on this branch that a fix has needed a fix, and it is the reason
+this file exists rather than a summary in a commit message.
+
+## The two regressions
+
+**The over-fetch made the maximum page unreachable.** Round 2 changed both list
+endpoints to ask for `size + 1` so `nextCursor` could mean what it says. The
+ops-log service ceiling was raised to 201 to leave room; the notification
+service ceiling was left at 200 — the wire maximum. So `GET /notifications?limit=200`
+asked for 201, got 200, computed `found.length > size` as `200 > 200`, and
+answered `nextCursor: null` with rows still behind it. The fix traded a false
+cursor for an unreachable page, which is the worse of the two: an empty page
+can be navigated away from.
+
+**The restore control orphaned the retirement row.** Round 2 gave the Web Admin
+an archive/restore pair and chose to restore to `DISABLED` rather than `ACTIVE`,
+so that nothing silently resumes dialling a machine an operator archived. That
+choice is right and it broke `RESTORED_CODE`, which was keyed on
+`status === 'ACTIVE'`: the transition closed nothing, and the later
+`DISABLED -> ACTIVE` step saw a `before` that was no longer archived and did not
+close it either. The retirement row was then open for the life of the
+installation with no path that could ever close it — and the panel was being
+probed while the operations log said it was archived and unmonitored, which is
+verbatim the state that code exists to prevent. Reached through the only
+control that offers a restore.
+
+Both were invisible to a green suite, and neither was a mistake in the change
+that was reviewed. They were mistakes in the seam between that change and the
+code around it.
+
+## Three of round 3's own tests could not fail
+
+Caught by the harness before they were committed, which is the whole point of
+running it rather than citing it.
+
+| test                              | why it could not fail                                                                                                              | what it is now                                                                                                                        |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| the concurrent-rename regression  | it re-rendered with the same query key, so the cache served the old row and the "concurrent" change never arrived                  | driven through a real refetch — a status change invalidates the panel query, which is how the row actually arrives under an open form |
+| the CSP dashboard stub            | removing `nextCursor` again left it green: the card rendered its error state and the `[style]` assertion passed over a broken page | asserts no skeleton and no error state before asserting anything about style attributes                                               |
+| the credentials stale-value guard | see below — it was testing something that cannot happen                                                                            |
+
+## A finding that was real in shape and not reachable
+
+The review held that `PanelDetailPage`, not being keyed by panel id, could carry
+a typed API token from one panel to another whose provider does not accept it.
+The guard was added; the test written for it passed with the guard removed.
+
+The reason is that the scenario cannot occur: changing the id changes the query
+key, the query goes pending, `StateSwitch` renders a skeleton, and the whole tab
+subtree unmounts with its draft state. A probe established this rather than an
+argument.
+
+So the guard stays — it costs nothing and it is correct — and **no test claims
+to falsify it**. What is committed instead is a test that pins the fact the
+guard depends on: if a future change keeps previous data across the id, or drops
+the loading branch, that test fails and the guard stops being redundant. A
+guard whose justification is a behaviour elsewhere should fail when that
+behaviour changes, not when it does not.
+
+## The 21 mutations
+
+All killed, each requiring a failure for the named reason, a byte-for-byte
+restore, and a pass afterwards.
+
+| #    | rule                                                            | mutation                           | test that dies                                                             |
+| ---- | --------------------------------------------------------------- | ---------------------------------- | -------------------------------------------------------------------------- |
+| V01  | the notification service ceiling leaves room for the over-fetch | 201 -> 200                         | _still reports a next cursor at the maximum page size_                     |
+| V02  | retirement closes on any exit from ARCHIVED                     | back to `status === 'ACTIVE'`      | _closes the retirement when an archived panel is restored to DISABLED_     |
+| V03  | the one-shot list is DERIVED from the admin codes               | re-type four literals, drop one    | _carries every administrator code the recorder can write_                  |
+| V04  | an archived panel offers no save                                | drop the status guard              | _offers no save on an archived panel_                                      |
+| V04b | an archived panel offers no credential write                    | `mayWrite = mayRotate`             | _offers no credential write on an archived panel_                          |
+| V05  | failures and recoveries are disjoint and paired                 | add a recovery to the failure list | _the condition lifecycle_                                                  |
+| V06  | "open" narrows to the conditions scope                          | back to a fixed `MANAGEMENT`       | _asks for the conditions scope when narrowed to open items_                |
+| V07  | the CSP dashboard test detects a broken card                    | drop `nextCursor` from the stub    | _renders a dashboard with no style attribute_                              |
+| V07b | the route sweep detects a broken card                           | drop the panel-detail stub         | the sweep, on `/panels/:id`                                                |
+| U02  | a recovery renders as recovered                                 | drop the recovery branch           | _marks a recovery as recovered rather than unresolved_                     |
+| U04  | half a cursor is a 400                                          | `if (false)`                       | _refuses half an ops-log cursor_                                           |
+| U04b | ...and on the contract side                                     | neutralise the refinement          | _refuses half a notification cursor_                                       |
+| U05  | the style scan sees computed access                             | add `node['style'].width = …`      | _has no source that sets a style attribute, by any spelling_               |
+| U07  | initial credentials need the rotate permission                  | `if (false)`                       | _refuses initial credentials from an actor who may not rotate them_        |
+| U07b | ...and the form does not offer them                             | drop `mayRotate` from `accepts`    | _offers no credential field to an actor who may not rotate credentials_    |
+| U08  | the edit compares against the draft basis                       | back to the live prop              | _does not revert a concurrent rename when only the other field was edited_ |
+| U09  | an unusable stored credential stays visible                     | `shows = accepts`                  | _keeps an unusable stored credential visible and removable_                |
+| U13  | the loading state unmounts the credentials draft                | render children while loading      | _unmounts the credentials draft when the panel changes_                    |
+
+Plus V07b, which earned its place immediately: the panel-detail stub in the
+route sweep was returning the LIST shape, so that route had been rendering its
+error state throughout the sweep and nobody had looked. The assertion added to
+catch a hypothetical caught a real one on its first run.
+
+## What this round changes about the method
+
+Round 2's record already said that a mutation test tells you a rule is
+load-bearing, not that it is right. Round 3 adds the other half: **a fix is a
+change to a seam, and the seam is what needs reviewing.** Every one of the two
+regressions above was correct in the file it was written in. One was wrong
+about a ceiling in a different module; the other was wrong about a guard three
+hundred lines away. Neither would have been found by re-reading the diff.

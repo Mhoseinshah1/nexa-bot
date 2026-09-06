@@ -358,6 +358,44 @@ describe('panel HTTP surface', () => {
       expect(after.panel.credentials.password.configured).toBe(true);
     });
 
+    /**
+     * Initial credentials are a CREDENTIAL write.
+     *
+     * `setCredentials` is guarded by `panels.credentials.rotate`, which is
+     * CRITICAL and separate from `panels.edit`. Create wrote
+     * `command.credentials` under `panels.edit` alone — so an operator refused
+     * when replacing a panel's password could set one by creating a panel. A
+     * boundary one endpoint enforces and another does not is not a boundary.
+     */
+    it('refuses initial credentials from an actor who may not rotate them', async () => {
+      // `technical` holds panels.view and panels.edit, not panels.credentials.rotate.
+      const response = await post(PANEL_ROUTES.create, technicalCookie, {
+        name: 'Created with secrets',
+        providerType: 'marzban',
+        baseUrl: 'https://panel.example.test',
+        credentials: { username: USERNAME, password: PASSWORD },
+        idempotencyKey: idempotencyKey(),
+      });
+      expect(response.statusCode).toBe(403);
+      // And nothing was written: the refusal is not a partial create.
+      const list = panelListResponseSchema.parse(
+        (await get(PANEL_ROUTES.list, ownerCookie)).json(),
+      );
+      expect(list.panels.map((one) => one.name)).not.toContain('Created with secrets');
+    });
+
+    it('lets the same actor create a panel WITHOUT credentials', async () => {
+      // The other direction: creating a panel and leaving its secrets to
+      // somebody who holds the permission stays a `panels.edit` operation.
+      const response = await post(PANEL_ROUTES.create, technicalCookie, {
+        name: 'Created without secrets',
+        providerType: 'marzban',
+        baseUrl: 'https://panel.example.test',
+        idempotencyKey: idempotencyKey(),
+      });
+      expect([200, 201], response.body).toContain(response.statusCode);
+    });
+
     it('still allows REMOVING a credential outside the shape', async () => {
       // `null` means remove, and removing something the provider cannot use is
       // not a claim that it is usable — refusing it would strand a value stored

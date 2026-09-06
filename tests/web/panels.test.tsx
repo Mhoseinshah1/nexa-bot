@@ -182,6 +182,57 @@ describe('the panel detail', () => {
     ).toBeInTheDocument();
   });
 
+  /**
+   * Why the credentials form's `accepts` guard on submit is DEFENCE, not a
+   * load-bearing rule — recorded because a review raised the opposite.
+   *
+   * The concern was real in shape: `PanelDetailPage` is not keyed by panel id,
+   * so navigating between two detail routes reuses the component, and a token
+   * typed against a Sanaei panel could in principle be submitted to a Marzban
+   * one whose field is hidden. The guard was added to `CredentialsTab.onSubmit`
+   * to match the create form.
+   *
+   * It is not reachable through this shell, and this test is what establishes
+   * that rather than a claim: changing the id changes the query key, the panel
+   * query goes pending, `StateSwitch` renders a skeleton, and the whole tab
+   * subtree — with its draft state — unmounts. It remounts empty against the
+   * new panel.
+   *
+   * So the guard cannot be falsified by a test, and no test pretending to
+   * falsify it is committed. What IS pinned is the fact the guard depends on:
+   * if a future change keeps previous data across the id (React Query's
+   * `placeholderData`, say) or drops the loading branch, this test fails and
+   * the guard stops being redundant.
+   */
+  it('unmounts the credentials draft when the panel changes, so no value can cross', async () => {
+    stubApi([
+      {
+        url: '/panels/p1',
+        body: { panel: panel({ providerType: 'sanaei', providerName: 'Sanaei (3X-UI)' }) },
+      },
+      { url: '/panels/p2', body: { panel: panel({ name: 'Frankfurt B' }) } },
+    ]);
+    const { rerender } = renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
+    await screen.findByText('جایگزینی اعتبارنامه');
+    fireEvent.change(screen.getByLabelText('توکن API'), { target: { value: 'a-real-token' } });
+
+    rerender(<PanelDetailPage id="p2" mayEdit mayRotate denied={false} />);
+
+    // The loading state replaces the whole subtree: the tab is gone, so the
+    // draft it held is gone with it.
+    expect(document.querySelectorAll('.skel').length).toBeGreaterThan(0);
+    expect(screen.queryByText('جایگزینی اعتبارنامه')).toBeNull();
+
+    // And when it comes back for the new panel it is a fresh mount, with the
+    // overview tab selected and nothing carried over.
+    await screen.findByText('Frankfurt B');
+    screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
+    await screen.findByText('جایگزینی اعتبارنامه');
+    expect((screen.getByLabelText('نام کاربری') as HTMLInputElement).value).toBe('');
+  });
+
   it('offers all three fields for a provider whose shape accepts either', async () => {
     stubApi(detail({ providerType: 'sanaei', providerName: 'Sanaei (3X-UI)' }));
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
@@ -387,6 +438,66 @@ describe('the panel detail', () => {
   });
 
   /**
+   * The edit is compared against the DRAFT BASIS, not the latest query result.
+   *
+   * `name` is initialised once and the `panel` prop refetches — same query key,
+   * so no unmount and no skeleton, the new row simply arrives underneath the
+   * open form. Comparing against the live prop turned another administrator's
+   * rename into a change THIS operator appears to have made: editing only the
+   * base URL sent the stale name too and silently reverted them, and
+   * `POST /panels/:id` carries no expected version for the server to refuse it
+   * with.
+   *
+   * A regression the changed-fields-only fix introduced. Before it the form
+   * always sent both fields, which reverted them just as surely but did not
+   * claim in a comment to send only what changed.
+   *
+   * Driven through the real refetch: a status change invalidates the panel
+   * query, which is exactly how the row arrives while the form is open.
+   */
+  it('does not revert a concurrent rename when only the other field was edited', async () => {
+    // The route parameter IS the panel id in production — `/panels/:id` is the
+    // only route that reaches this page, and every link is built from
+    // `panel.id`. Using it here rather than a stand-in is what makes the
+    // refetch below behave as it does in the browser.
+    const id = panel().id as string;
+    const route = { url: `/panels/${id}`, body: { panel: panel() } as unknown };
+    // The WRITE routes are keyed by the panel's own id, which is what the API
+    // client puts in the path — not the route parameter this page was given.
+    const api = stubApi([route, { url: `/panels/${id}/status`, body: { panel: panel() } }]);
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    // The operator edits the base URL and leaves the name alone.
+    fireEvent.change(screen.getByLabelText('نشانی پایه'), {
+      target: { value: 'https://panel.example/v2' },
+    });
+
+    // Meanwhile somebody else renames the panel...
+    route.body = { panel: panel({ name: 'Renamed by somebody else' }) };
+    // ...and a status change refetches the row into this open form.
+    fireEvent.click(screen.getByRole('button', { name: 'غیرفعال‌سازی' }));
+    // The page says the row changed underneath, rather than resolving it
+    // silently — nothing on the server can arbitrate, so the operator must.
+    expect(await screen.findByText(/جای دیگری تغییر کرده/)).toBeInTheDocument();
+    // The form still holds what the operator typed, not the refetched name.
+    expect((screen.getByLabelText('نام') as HTMLInputElement).value).toBe('Frankfurt A');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+    await waitFor(() => {
+      const write = api.calls.find(
+        (call) => call.method === 'POST' && call.url.endsWith(`/panels/${id}`),
+      );
+      expect(write?.body).toBeDefined();
+      const body = write?.body as Record<string, unknown>;
+      expect(body['baseUrl']).toBe('https://panel.example/v2');
+      // The name the operator never touched is ABSENT — not resent as the
+      // stale value, which is what would overwrite the other administrator.
+      expect(Object.keys(body)).not.toContain('name');
+    });
+  });
+
+  /**
    * T20 — the lifecycle the status API supports, offered by the surface.
    *
    * The card disappeared entirely for an ARCHIVED panel and offered only
@@ -423,6 +534,40 @@ describe('the panel detail', () => {
       // dialled by the monitor.
       expect(write?.body).toMatchObject({ status: 'DISABLED' });
     });
+  });
+
+  /**
+   * An ARCHIVED panel refuses every write, so it must offer none.
+   *
+   * `PanelService.update` and `setCredentials` both answer 412 `panel.archived`.
+   * The lifecycle card was gated correctly and the two forms above it were not
+   * — and archiving is now one press away on that card, which re-renders this
+   * same page as ARCHIVED and leaves the operator looking at an enabled Save.
+   * Restore first; that is what the card is for.
+   */
+  it('offers no save on an archived panel, because the server refuses one', async () => {
+    stubApi(detail({ status: 'ARCHIVED' }));
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    expect(screen.queryByRole('button', { name: 'ذخیره' })).toBeNull();
+    // The restore control is still there — the way out is not hidden too.
+    expect(screen.getByRole('button', { name: 'بازگردانی از بایگانی' })).toBeInTheDocument();
+  });
+
+  it('offers no credential write on an archived panel, but still shows what it holds', async () => {
+    stubApi(detail({ status: 'ARCHIVED', providerType: 'sanaei', providerName: 'Sanaei (3X-UI)' }));
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }).click();
+
+    await waitFor(() => {
+      expect(screen.queryByText('جایگزینی اعتبارنامه')).toBeNull();
+    });
+    expect(screen.queryAllByRole('button', { name: /^حذف — / })).toHaveLength(0);
+    // The presence rows stay: knowing which credentials a retired panel still
+    // holds is exactly what an operator needs before restoring it.
+    expect(screen.getAllByText('تنظیم شده').length).toBeGreaterThan(0);
   });
 
   it('offers no lifecycle control at all to an actor who may only view', async () => {
@@ -482,7 +627,7 @@ describe('the new-panel form', () => {
         503,
       ),
     ]);
-    renderPage(<NewPanelPage denied={false} />);
+    renderPage(<NewPanelPage denied={false} mayRotate />);
 
     // A retry, which the silent form never offered.
     expect(await screen.findByRole('button', { name: 'تلاش دوباره' })).toBeInTheDocument();
@@ -492,9 +637,32 @@ describe('the new-panel form', () => {
 
   it('distinguishes an empty catalogue from a failed one', async () => {
     stubApi([providersRoute({ providers: [] })]);
-    renderPage(<NewPanelPage denied={false} />);
+    renderPage(<NewPanelPage denied={false} mayRotate />);
     expect(await screen.findByText('هیچ ارائه‌دهنده‌ای در دسترس نیست.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'ذخیره' })).toBeNull();
+  });
+
+  /**
+   * Initial credentials are a CREDENTIAL write, and the form says so.
+   *
+   * `PanelService.create` now authorizes `panels.credentials.rotate` whenever
+   * the request carries credentials, because writing a panel's first password
+   * is the same act as replacing it and was going through the door beside the
+   * locked one. Offering the fields to an actor who lacks the permission would
+   * draw a control whose only outcome is a denial — and a denial is not free:
+   * it writes an audit row and an unresolvable operational event.
+   */
+  it('offers no credential field to an actor who may not rotate credentials', async () => {
+    stubApi([providersRoute(CATALOGUE)]);
+    renderPage(<NewPanelPage denied={false} mayRotate={false} />);
+    await screen.findByLabelText('ارائه‌دهنده');
+
+    fireEvent.change(screen.getByLabelText('ارائه‌دهنده'), { target: { value: 'sanaei' } });
+    for (const label of ['نام کاربری', 'گذرواژه', 'توکن API']) {
+      expect(screen.queryByLabelText(label), label).toBeNull();
+    }
+    // The panel itself can still be created — that is `panels.edit`.
+    expect(screen.getByRole('button', { name: 'ذخیره' })).toBeInTheDocument();
   });
 
   /**
@@ -504,7 +672,7 @@ describe('the new-panel form', () => {
    */
   it('offers only the credential fields the chosen provider accepts', async () => {
     stubApi([providersRoute(CATALOGUE)]);
-    renderPage(<NewPanelPage denied={false} />);
+    renderPage(<NewPanelPage denied={false} mayRotate />);
     await screen.findByLabelText('ارائه‌دهنده');
 
     // Nothing is known before a provider is chosen, so nothing is offered.
@@ -522,7 +690,7 @@ describe('the new-panel form', () => {
 
   it('never sends a credential the chosen provider cannot use', async () => {
     const api = stubApi([providersRoute(CATALOGUE), { url: '/panels', body: { panel: panel() } }]);
-    renderPage(<NewPanelPage denied={false} />);
+    renderPage(<NewPanelPage denied={false} mayRotate />);
     await screen.findByLabelText('ارائه‌دهنده');
 
     // Choose the provider that HAS a token field, fill it, then switch away.

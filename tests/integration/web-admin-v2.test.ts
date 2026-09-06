@@ -670,6 +670,79 @@ describe('the Web Admin V2 surface', () => {
       expect(body.nextCursor).toBeNull();
     });
 
+    /**
+     * The MAXIMUM page size, which the over-fetch nearly made unreachable.
+     *
+     * The controller asks the service for `size + 1`, and the service clamped
+     * at 200 — the wire maximum — so at `limit=200` the extra row was eaten,
+     * `found.length > size` was `200 > 200`, and `nextCursor` came back null
+     * with rows still behind it. That is a worse failure than the false cursor
+     * the over-fetch removed: an empty page can be navigated away from, an
+     * unreachable one cannot. The ops-log path was raised to 201 for this and
+     * the notification path was missed.
+     */
+    it('still reports a next cursor at the maximum page size', async () => {
+      // One more than the ceiling, so the ceiling page has something behind it.
+      await recordIntents(201);
+      const body = notificationListResponseSchema.parse(
+        (await get(`${CONTROL_ROUTES.notifications}?limit=200`, ownerCookie)).json(),
+      );
+      expect(body.notifications).toHaveLength(200);
+      expect(body.nextCursor, 'the 201st intent is unreachable').not.toBeNull();
+    });
+
+    it('reports no next cursor at the maximum page size when the page is the last', async () => {
+      // Exactly the ceiling: full, and final. The other direction, so the fix
+      // is not "always return a cursor at the ceiling".
+      await recordIntents(200);
+      const body = notificationListResponseSchema.parse(
+        (await get(`${CONTROL_ROUTES.notifications}?limit=200`, ownerCookie)).json(),
+      );
+      expect(body.notifications).toHaveLength(200);
+      expect(body.nextCursor).toBeNull();
+    });
+
+    /**
+     * Half a cursor is a bad request, not the first page.
+     *
+     * A lone `before` walked the keyset with no tie-break — the defect the pair
+     * exists to prevent — and a lone `beforeId` was dropped entirely and
+     * answered 200 with the NEWEST page, so a client whose cursor was truncated
+     * looped on page one with no way to tell.
+     */
+    it('refuses half a notification cursor', async () => {
+      const id = '01a05e35-c9ad-7e93-bef3-1ed9b55292c8';
+      expect(
+        (await get(`${CONTROL_ROUTES.notifications}?before=2026-09-06T08:00:00.000Z`, ownerCookie))
+          .statusCode,
+        'a timestamp with no tie-break',
+      ).toBe(400);
+      expect(
+        (await get(`${CONTROL_ROUTES.notifications}?beforeId=${id}`, ownerCookie)).statusCode,
+        'a tie-break with no timestamp',
+      ).toBe(400);
+      // Neither half is still fine — that is the newest page, asked for plainly.
+      expect((await get(CONTROL_ROUTES.notifications, ownerCookie)).statusCode).toBe(200);
+    });
+
+    it('refuses half an ops-log cursor', async () => {
+      const id = '01a05e35-c9ad-7e93-bef3-1ed9b55292c8';
+      expect(
+        (await get(`${CONTROL_ROUTES.opsLog}?before=2026-09-06T08:00:00.000Z`, ownerCookie))
+          .statusCode,
+      ).toBe(400);
+      expect((await get(`${CONTROL_ROUTES.opsLog}?beforeId=${id}`, ownerCookie)).statusCode).toBe(
+        400,
+      );
+      expect((await get(CONTROL_ROUTES.opsLog, ownerCookie)).statusCode).toBe(200);
+    });
+
+    it('refuses a page size past the wire maximum rather than clamping it', async () => {
+      expect((await get(`${CONTROL_ROUTES.notifications}?limit=201`, ownerCookie)).statusCode).toBe(
+        400,
+      );
+    });
+
     it('refuses a notification cursor id that is not an identifier', async () => {
       const response = await get(
         `${CONTROL_ROUTES.notifications}?before=2026-09-06T08:00:00.000Z&beforeId=not-a-uuid`,

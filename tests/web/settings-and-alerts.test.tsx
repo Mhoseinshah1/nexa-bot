@@ -226,7 +226,14 @@ describe('management alerts', () => {
     renderPage(<AlertsPage denied={false} />);
     await screen.findByText('Roles changed.');
 
-    expect(api.calls[0]?.url).toContain('scope=MANAGEMENT');
+    // The EXACT scope, parsed. `toContain('scope=MANAGEMENT')` is satisfied by
+    // `scope=MANAGEMENT_CONDITIONS` too, so it could not tell this page's
+    // history view from the dashboard's narrower card — the same defect that
+    // was fixed on the dashboard assertion and left here.
+    const params = new URL(api.calls[0]?.url ?? '', 'https://admin.example.test').searchParams;
+    expect(params.get('scope')).toBe('MANAGEMENT');
+    // The default view is history, so no open filter is sent at all.
+    expect(params.get('open')).toBeNull();
   });
 
   it('pages with the SERVER cursor pair rather than an offset', async () => {
@@ -334,6 +341,50 @@ describe('management alerts', () => {
     expect(stateOf(rows[1] as Element)).toBe('باز');
   });
 
+  /**
+   * THREE kinds, not two — and this is the third.
+   *
+   * A recovery row is inserted with its own `resolvedAt` null: it closes the
+   * failure above it and nothing ever closes a recovery. Treating every
+   * non-one-shot null as an open failure therefore put a warning "unresolved"
+   * badge on the row whose message announces the problem ended. Same defect as
+   * the one-shot case, one classification along.
+   */
+  it('marks a recovery as recovered rather than unresolved', async () => {
+    stubApi([
+      {
+        url: '/ops-log',
+        body: {
+          nextCursor: null,
+          events: [
+            event({
+              code: 'settings.stored_value_valid',
+              severity: 'INFO',
+              message: 'A recovery.',
+              resolvedAt: null,
+            }),
+            event({
+              id: '01a05e35-c9ad-7e93-bef3-1ed9b55292d1',
+              code: 'settings.stored_value_invalid',
+              message: 'An open failure.',
+              resolvedAt: null,
+            }),
+          ],
+        },
+      },
+    ]);
+    const { container } = renderPage(<AlertsPage denied={false} />);
+    await screen.findByText('A recovery.');
+
+    const rows = Array.from(container.querySelectorAll('tbody tr'));
+    const stateOf = (row: Element) => (row.querySelectorAll('td')[6]?.textContent ?? '').trim();
+    // The recovery: over, not outstanding.
+    expect(stateOf(rows[0] as Element)).toBe('برطرف شد');
+    // The failure beside it, with the identical null `resolvedAt`, still open —
+    // so this is not "the badge was removed".
+    expect(stateOf(rows[1] as Element)).toBe('باز');
+  });
+
   it('still marks a RESOLVED condition resolved', async () => {
     stubApi([
       {
@@ -382,6 +433,44 @@ describe('management alerts', () => {
     fireEvent.click(screen.getByRole('button', { name: 'باز' }));
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('open=true'))).toBe(true);
+    });
+  });
+
+  /**
+   * The SCOPE follows the filter, which was the unimplemented half of the
+   * one-shot rule.
+   *
+   * A denial, a lockout and an administrator change have a permanently null
+   * `resolvedAt` by design. Asking the WIDE scope for `open=true` therefore
+   * returned every one of them ever recorded, framed as outstanding work — and
+   * the page then rendered each with the neutral "recorded" badge the other
+   * half of the fix had added, contradicting itself in that one state. "Open"
+   * narrows to the codes something can actually close.
+   */
+  it('asks for the conditions scope when narrowed to open items', async () => {
+    const api = stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
+    renderPage(<AlertsPage denied={false} />);
+    await screen.findByText('هشدار بازی وجود ندارد.');
+
+    const scopeOf = (url: string) =>
+      new URL(url, 'https://admin.example.test').searchParams.get('scope');
+    expect(scopeOf(api.calls[0]?.url ?? '')).toBe('MANAGEMENT');
+
+    fireEvent.click(screen.getByRole('button', { name: 'باز' }));
+    await waitFor(() => {
+      const open = api.calls.find((call) => call.url.includes('open=true'));
+      expect(open, 'no open request was made').toBeDefined();
+      // The exact value, parsed: `MANAGEMENT` is a substring of this one, and
+      // that is how the same defect went unnoticed on the dashboard.
+      expect(scopeOf(open?.url ?? '')).toBe('MANAGEMENT_CONDITIONS');
+    });
+
+    // ...and going back to history restores the wide scope, so the narrowing
+    // is a filter rather than a one-way door.
+    fireEvent.click(screen.getByRole('button', { name: 'همه' }));
+    await waitFor(() => {
+      const last = api.calls[api.calls.length - 1];
+      expect(scopeOf(last?.url ?? '')).toBe('MANAGEMENT');
     });
   });
 });

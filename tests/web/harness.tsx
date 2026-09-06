@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, type RenderResult } from '@testing-library/react';
 import { vi } from 'vitest';
-import type { ReactElement } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 import { ToastProvider } from '../../apps/web/src/ui/kit';
 
 /**
@@ -89,11 +89,21 @@ export function renderPage(element: ReactElement): RenderResult {
       mutations: { retry: false },
     },
   });
-  return render(
+  const wrap = (node: ReactNode) => (
     <QueryClientProvider client={client}>
-      <ToastProvider>{element}</ToastProvider>
-    </QueryClientProvider>,
+      <ToastProvider>{node}</ToastProvider>
+    </QueryClientProvider>
   );
+  const result = render(wrap(element));
+  return {
+    ...result,
+    // Re-wraps. Testing Library's own `rerender` replaces the WHOLE tree, so
+    // calling it with a bare page drops the providers and the component throws
+    // "No QueryClient set" — which looks like a defect in the page. Re-rendering
+    // the same instance with new props is how a test reaches the state SPA
+    // navigation produces, so it has to work.
+    rerender: (node: ReactNode) => result.rerender(wrap(node)),
+  };
 }
 
 // ---------------------------------------------------------------------------

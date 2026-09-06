@@ -6,6 +6,7 @@ import type { ReactElement } from 'react';
 import { screen, waitFor } from '@testing-library/react';
 import { PERMISSION_KEYS } from '@nexa/contracts';
 import { NAV, resolve } from '../../apps/web/src/app';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { DashboardPage } from '../../apps/web/src/pages/dashboard';
 import { PanelsPage } from '../../apps/web/src/pages/panels';
 import { panel, renderPage, stubApi } from './harness';
@@ -56,6 +57,11 @@ const GENEROUS_ROUTES = [
     },
   },
   { url: '/panels', body: { panels: [panel()], nextCursor: null } },
+  // The DETAIL shape, which is not the list shape. `/panels/<id>` matches the
+  // list route by substring, so without this the panel detail route rendered
+  // its error state throughout the sweep below — which is exactly what the
+  // error-state assertion there caught on its first run.
+  { url: `/panels/${panel().id as string}`, body: { panel: panel() } },
   { url: '/providers', body: { providers: [] } },
   { url: '/ops-log', body: { events: [], nextCursor: null } },
   { url: '/notifications', body: { notifications: [], nextCursor: null } },
@@ -90,15 +96,23 @@ describe('the production content-security policy', () => {
   });
 
   /**
-   * T27 — every way a `style` attribute can be set, not one spelling of one.
+   * T27 — the ways a `style` attribute is actually set in code like this,
+   * rather than one spelling of one.
    *
    * The scan recognised the literal text `style={{` and nothing else, so an
    * unrendered component could reintroduce the defect through `style={value}`,
    * `<div {...{ style }} />`, `element.style.cssText = …`,
    * `style.setProperty(…)` or `setAttribute('style', …)` and stay invisible to
-   * both this scan and the two rendered checks, which cover two routes out of
-   * the shell's twenty-odd. Each pattern below is a real way to set the
-   * attribute the deployed policy discards.
+   * both this scan and the two rendered checks, which covered two routes out
+   * of the shell's twenty-odd.
+   *
+   * NOT exhaustive, and the word matters: this is a pattern list, not an AST
+   * rule. The three shapes a review named — `Object.assign(node.style, …)`, an
+   * aliased `const s = el.style`, and `el['style'].width = …` — now have their
+   * own entries and their own samples, but the self-check below can only feed
+   * the table what the table was written for, so it can never establish that
+   * nothing is missing. An ESLint rule over the JSX props and the DOM style
+   * APIs is the form that would close it, and is not what this ships.
    */
   const STYLE_WRITES: readonly { readonly name: string; readonly pattern: RegExp }[] = [
     // Any JSX `style` prop, whatever the expression: object literal,
@@ -113,6 +127,13 @@ describe('the production content-security policy', () => {
     // The DOM APIs. `.style.` covers `cssText`, `setProperty` and every direct
     // property assignment in one.
     { name: 'a DOM style write', pattern: /\.style\s*(\.|\[)/ },
+    // `node['style']` reaches the same property by another spelling, and
+    // `Object.assign(node.style, …)` and an aliased `const s = el.style` set it
+    // without any of the punctuation above ever following `.style`.
+    { name: 'a computed style property access', pattern: /\[\s*['"`]style['"`]\s*\]/ },
+    // `.style` that is READ rather than walked: passed as an argument, or
+    // aliased to a local that is written through afterwards.
+    { name: 'a style object taken by reference', pattern: /\.style\s*[,;)\]]/ },
     { name: "setAttribute('style')", pattern: /setAttribute\s*\(\s*['"`]style['"`]/ },
     { name: 'a cssText write', pattern: /cssText/ },
   ];
@@ -170,6 +191,10 @@ describe('the production content-security policy', () => {
       ['a DOM style write', "node.style.setProperty('--w', '10px');"],
       ["setAttribute('style')", "node.setAttribute('style', 'width:10px');"],
       ['a cssText write', "node.style.cssText = 'width:10px';"],
+      ['a computed style property access', "node['style'].width = '10px';"],
+      ['a style object taken by reference', 'Object.assign(node.style, { width });'],
+      ['a style object taken by reference', 'const s = el.style;'],
+      ['a style object taken by reference', 'paint(el.style);'],
     ];
     for (const [name, line] of samples) {
       const caught = STYLE_WRITES.some((rule) => rule.pattern.test(line));
@@ -194,7 +219,12 @@ describe('the production content-security policy', () => {
     stubApi([
       { url: '/system/readiness', body: { status: 'ok', dependencies: [] } },
       { url: '/panels', body: { panels: [panel()], nextCursor: null } },
-      { url: '/ops-log', body: { events: [] } },
+      // `nextCursor` is REQUIRED by `operationalEventListResponseSchema`.
+      // Without it the client rejects at parse, the needs-attention card
+      // renders its error state, and the assertions below photograph a page
+      // with a broken card — passing for the wrong reason, which is the exact
+      // defect this round set out to remove.
+      { url: '/ops-log', body: { events: [], nextCursor: null } },
     ]);
     const { container } = renderPage(
       <DashboardPage permissions={['panels.view', 'opslog.view']} />,
@@ -204,6 +234,13 @@ describe('the production content-security policy', () => {
     // skeleton — which is how the first version of this test found no SVG and
     // no style attribute, and passed the second half for the wrong reason.
     await screen.findByText('سالم');
+    // EVERY card loaded, not just the one this assertion waits on. A fixture
+    // that drifts from a frozen schema puts one card into its error state and
+    // leaves the rest of the page — and the assertion below — looking fine, so
+    // the test would go on passing for the wrong reason. That is the failure
+    // this whole round exists to remove, and it was in this very test.
+    expect(container.querySelectorAll('.skel')).toHaveLength(0);
+    expect(screen.queryByText(t('web.error'))).toBeNull();
 
     expect(container.querySelectorAll('[style]')).toHaveLength(0);
     // And the bar still carries its magnitude — as an SVG geometry attribute,
@@ -225,29 +262,41 @@ describe('the production content-security policy', () => {
   });
 
   /**
-   * The other half of T27: EVERY route the shell serves, not the two above.
+   * The other half of T27: every route the shell serves, rather than the two
+   * above.
    *
    * A `style` attribute introduced on `/content`, `/settings` or `/system`
    * broke only in the deployment and passed everything here, because no
    * rendered check ever reached those routes. Driven through `resolve`, so
-   * this walks the same table the sidebar links into.
+   * this walks the same table the sidebar links into, plus the two panel
+   * routes `resolve` serves outside it.
+   *
+   * Honest about its own strength: about half of these are planned surfaces
+   * that render statically, where the assertion is nearly free. The cases that
+   * carry weight are the loaded data routes.
    */
-  it.each(NAV.map((entry) => entry.path))(
-    'renders %s with no style attribute the policy would drop',
-    async (path) => {
-      stubApi(GENEROUS_ROUTES);
-      const resolved = resolve({ path, query: new URLSearchParams() }, PERMISSION_KEYS);
-      const { container } = renderPage(resolved.element as ReactElement);
-      // Let the queries settle, so this photographs the LOADED page rather
-      // than a skeleton — the failure mode the dashboard case above records,
-      // and one that would make every assertion below pass for nothing.
-      await waitFor(() => {
-        expect(container.querySelectorAll('.skel')).toHaveLength(0);
-      });
+  it.each([
+    ...NAV.map((entry) => entry.path),
+    // `resolve` serves these two outside the navigation table, and they are the
+    // largest new surface on this branch. Iterating NAV alone missed them.
+    '/panels/01a05e35-c9ad-7e93-bef3-1ed9b55292c8',
+    '/panels/new',
+  ])('renders %s with no style attribute the policy would drop', async (path) => {
+    stubApi(GENEROUS_ROUTES);
+    const resolved = resolve({ path, query: new URLSearchParams() }, PERMISSION_KEYS);
+    const { container } = renderPage(resolved.element as ReactElement);
+    // Let the queries settle, so this photographs the LOADED page rather
+    // than a skeleton — the failure mode the dashboard case above records,
+    // and one that would make every assertion below pass for nothing.
+    await waitFor(() => {
+      expect(container.querySelectorAll('.skel')).toHaveLength(0);
+    });
+    // And no card fell back to its error state, which a drifted fixture
+    // produces and which would make the assertion below meaningless.
+    expect(screen.queryByText(t('web.error'))).toBeNull();
 
-      expect(
-        Array.from(container.querySelectorAll('[style]')).map((node) => node.outerHTML),
-      ).toEqual([]);
-    },
-  );
+    expect(Array.from(container.querySelectorAll('[style]')).map((node) => node.outerHTML)).toEqual(
+      [],
+    );
+  });
 });

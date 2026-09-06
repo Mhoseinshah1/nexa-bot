@@ -3,11 +3,16 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  MANAGEMENT_ADMIN_EVENT_CODES,
   MANAGEMENT_CONDITION_CODES,
+  MANAGEMENT_CONDITION_FAILURE_CODES,
+  MANAGEMENT_CONDITION_RECOVERY_CODES,
   MANAGEMENT_EVENT_CODES,
+  MANAGEMENT_ONE_SHOT_CODES,
   SETTINGS,
-  settingDefinition,
+  isOneShotManagementCode,
   parseSettingValue,
+  settingDefinition,
 } from '@nexa/contracts';
 import {
   CURRENCY_LABEL_FOR_TEST,
@@ -177,6 +182,98 @@ describe('the management event scope', () => {
     // scope dropped.
     const declared = new Set<string>(MANAGEMENT_EVENT_CODES);
     for (const code of Object.keys(RECORDED_BY)) expect(declared.has(code), code).toBe(true);
+  });
+
+  /**
+   * The condition lifecycle, asserted as the two lists rather than the union.
+   *
+   * `ports.ts` claimed this test held these properties before this test
+   * existed: its condition assertions looped over `MANAGEMENT_CONDITION_CODES`
+   * and never imported either half, so re-adding a recovery code to the
+   * failure list — the exact regression that made the dashboard's
+   * needs-attention card fill with the rows saying attention was over — left
+   * the file entirely green. The claim came first; this is the claim made
+   * true.
+   */
+  describe('the condition lifecycle', () => {
+    it('keeps failures and recoveries disjoint', () => {
+      for (const code of MANAGEMENT_CONDITION_FAILURE_CODES) {
+        expect(
+          (MANAGEMENT_CONDITION_RECOVERY_CODES as readonly string[]).includes(code),
+          `${code} is in BOTH lists`,
+        ).toBe(false);
+      }
+      // And the union is exactly the two, with nothing invented in between.
+      expect([...MANAGEMENT_CONDITION_CODES].sort()).toEqual(
+        [...MANAGEMENT_CONDITION_FAILURE_CODES, ...MANAGEMENT_CONDITION_RECOVERY_CODES].sort(),
+      );
+    });
+
+    it('pairs every failure with a recovery, and every recovery with a failure', () => {
+      // The naming convention IS the pairing, and both directions are walked so
+      // neither a failure without a recovery nor an orphan recovery can be
+      // added. `_exceeded` -> `_ok`, `_invalid` -> `_valid`.
+      const recoveryFor = (code: string): string | null =>
+        code.endsWith('_exceeded')
+          ? code.replace('_exceeded', '_ok')
+          : code.endsWith('_invalid')
+            ? code.replace('_invalid', '_valid')
+            : null;
+
+      const recoveries = new Set<string>(MANAGEMENT_CONDITION_RECOVERY_CODES);
+      for (const failure of MANAGEMENT_CONDITION_FAILURE_CODES) {
+        const recovery = recoveryFor(failure);
+        expect(recovery, `${failure} follows no recognised failure-code shape`).not.toBeNull();
+        expect(recoveries.has(recovery as string), `${failure} has no recovery`).toBe(true);
+      }
+      // The other direction: nothing in the recovery list is a failure shape,
+      // and every recovery is reachable from some failure.
+      const reachable = new Set(
+        MANAGEMENT_CONDITION_FAILURE_CODES.map((code) => recoveryFor(code)).filter(
+          (code): code is string => code !== null,
+        ),
+      );
+      for (const recovery of MANAGEMENT_CONDITION_RECOVERY_CODES) {
+        expect(reachable.has(recovery), `${recovery} closes no declared failure`).toBe(true);
+        expect(recoveryFor(recovery), `${recovery} is shaped like a failure`).toBeNull();
+      }
+    });
+
+    it('admits only failures to the conditions scope', () => {
+      // What the reader filters on. A recovery here is the defect.
+      for (const recovery of MANAGEMENT_CONDITION_RECOVERY_CODES) {
+        expect(
+          (MANAGEMENT_CONDITION_FAILURE_CODES as readonly string[]).includes(recovery),
+          `${recovery} would be returned as an open condition`,
+        ).toBe(false);
+      }
+    });
+
+    it('carries every administrator code the recorder can write', () => {
+      // `MANAGEMENT_ONE_SHOT_CODES` spreads `MANAGEMENT_ADMIN_EVENT_CODES`, and
+      // this is the assertion that keeps that a guarantee rather than a
+      // coincidence: the admin list types `recordAdminChange`, so a code it can
+      // record and this scope does not carry is a code the alerts page silently
+      // never shows.
+      for (const code of MANAGEMENT_ADMIN_EVENT_CODES) {
+        expect(
+          (MANAGEMENT_ONE_SHOT_CODES as readonly string[]).includes(code),
+          `${code} is recordable and not in the management scope`,
+        ).toBe(true);
+        expect((MANAGEMENT_EVENT_CODES as readonly string[]).includes(code), code).toBe(true);
+      }
+    });
+
+    it('classifies every management code as exactly one of one-shot or condition', () => {
+      const oneShot = new Set<string>(MANAGEMENT_ONE_SHOT_CODES);
+      const conditions = new Set<string>(MANAGEMENT_CONDITION_CODES);
+      for (const code of MANAGEMENT_EVENT_CODES) {
+        const kinds = [oneShot.has(code), conditions.has(code)].filter(Boolean).length;
+        expect(kinds, `${code} is in ${kinds} of the two kinds`).toBe(1);
+        // And the predicate the surface uses agrees with the lists.
+        expect(isOneShotManagementCode(code), code).toBe(oneShot.has(code));
+      }
+    });
   });
 
   it('keeps the routine operational stream out', () => {
