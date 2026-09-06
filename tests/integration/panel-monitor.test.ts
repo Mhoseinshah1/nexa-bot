@@ -1096,6 +1096,44 @@ describe('the panel health monitor', () => {
       expect(await opsFor('panel.monitor.scheduler_capacity_exceeded')).toHaveLength(0);
     });
 
+    it("resolves a stopped tenant's warning rather than stranding it", async () => {
+      // The capacity queries count only tenants this installation still
+      // serves, so stopping a tenant takes it out of the over-budget set. If
+      // the recovery skipped stopped tenants too, its warning would be
+      // unresolvable for ever: the monitor gives a stopped tenant no turn, so
+      // no later assessment could find it back under the bound.
+      await createPanel(ownerB, tenantB, 'stranded-1');
+      await createPanel(ownerB, tenantB, 'stranded-2');
+      await createPanel(ownerB, tenantB, 'stranded-3');
+      const m = capacityMonitor({ tenantBudgetUpperBound: 2, schedulerUpperBound: 1_000 });
+      await m.tick();
+      const warning = async () =>
+        (
+          await ctx.container.database.db
+            .select()
+            .from(operationalEvents)
+            .where(
+              and(
+                eq(operationalEvents.tenantId, tenantB.tenantId),
+                eq(operationalEvents.code, 'panel.monitor.tenant_budget_exceeded'),
+              ),
+            )
+        )[0];
+      expect((await warning())!.resolvedAt).toBeNull();
+
+      await ctx.container.database.db
+        .update(tenants)
+        .set({ status: 'STOPPED' })
+        .where(eq(tenants.id, tenantB.tenantId));
+      now = new Date(now.getTime() + 60_000);
+      await m.tick();
+
+      expect(
+        (await warning())!.resolvedAt,
+        "a stopped tenant's warning was left open with nothing able to close it",
+      ).not.toBeNull();
+    });
+
     it('resolves a condition a previous process opened', async () => {
       // The open set is a property of the ROWS, not of a field a process
       // initialised on startup. A monitor that opened a warning, restarted, and
@@ -2730,6 +2768,54 @@ describe('the panel health monitor', () => {
         idempotencyKey: key(),
       });
       expect(await openRows()).toEqual(['panel.health.retired']);
+    });
+
+    it('closes the retirement when an archived panel is restored', async () => {
+      // Retirement is not permanent — restoring an archived panel is a
+      // supported operation — and nothing in the health transitions names
+      // `panel.health.retired`. Without a closing event the installation goes
+      // back to monitoring a panel while its operations log still says the
+      // panel was archived and is no longer monitored.
+      const panelId = await createPanel(ownerA, tenantA, 'retired-then-restored');
+      await probeWith(panelId, TIMED_OUT);
+      /** The retirement marker's row, whatever its state. */
+      const retirement = async () =>
+        (
+          await ctx.container.database.db
+            .select()
+            .from(operationalEvents)
+            .where(
+              and(
+                eq(operationalEvents.tenantId, tenantA.tenantId),
+                eq(operationalEvents.code, 'panel.health.retired'),
+              ),
+            )
+        )[0];
+
+      await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
+        status: 'ARCHIVED',
+        idempotencyKey: key(),
+      });
+      expect((await retirement())!.resolvedAt).toBeNull();
+      expect(await openConditions(tenantA.tenantId)).toEqual([]);
+
+      await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
+        status: 'ACTIVE',
+        idempotencyKey: key(),
+      });
+      expect(
+        (await retirement())!.resolvedAt,
+        'a restored panel still says it is no longer monitored',
+      ).not.toBeNull();
+
+      // And it reopens on the next retirement, so the marker tracks the panel
+      // rather than only its first archive.
+      await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
+        status: 'ARCHIVED',
+        idempotencyKey: key(),
+      });
+      expect((await retirement())!.resolvedAt).toBeNull();
+      expect((await retirement())!.occurrenceCount).toBe(2);
     });
 
     it('announces UNREACHABLE to AUTH_FAILED as a change of remedy', async () => {

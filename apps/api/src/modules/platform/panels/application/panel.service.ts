@@ -33,7 +33,12 @@ import { rememberOnce } from '../../idempotency/application/remember-once.js';
 import type { SessionRepository } from '../../identity/application/ports.js';
 import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
 import type { OperationalConditionReader } from '../../opslog/application/ports.js';
-import { closesPanelCondition, panelConditionKey, RETIRED_CODE } from './panel-monitor.service.js';
+import {
+  closesPanelCondition,
+  panelConditionKey,
+  RESTORED_CODE,
+  RETIRED_CODE,
+} from './panel-monitor.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   checkUrl,
@@ -815,6 +820,26 @@ export class PanelService {
           now,
           tx,
         );
+        if (status === 'ACTIVE' && before.panel.status === 'ARCHIVED') {
+          // Retirement is not permanent, so its row must not be. Nothing in
+          // the health transitions names `panel.health.retired`, so without
+          // this the installation goes back to monitoring a panel while the
+          // operations log still says it was archived and is not monitored.
+          await this.deps.opsLog.record(
+            scope,
+            {
+              code: RESTORED_CODE,
+              severity: 'INFO',
+              message: `Panel "${before.panel.name}" was restored and is monitored again.`,
+              // No dedupe key: see `RESTORED_CODE`. This closes the
+              // retirement and keeps no row of its own to be closed later.
+              recoversCode: RETIRED_CODE,
+              recoversDedupeKey: panelConditionKey(RETIRED_CODE, panelId),
+              context: { panelId, panelName: before.panel.name },
+            },
+            tx,
+          );
+        }
         if (status === 'ARCHIVED') {
           // Archiving is retirement, and a retired panel can never produce a
           // recovery: nothing probes it again. Whatever condition the monitor
@@ -833,7 +858,8 @@ export class PanelService {
               dedupeKey: panelConditionKey(RETIRED_CODE, panelId),
               // Closes whichever health row this panel has open: its condition,
               // or — when it was healthy — its own recovery row, which is a row
-              // about a panel that no longer exists either.
+              // about a panel that no longer exists either. A previous
+              // restoration is closed by the archive that follows it, below.
               ...closesPanelCondition(panelId, before.health),
               context: {
                 panelId,

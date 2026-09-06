@@ -68,6 +68,26 @@ export const RECOVERED_CODE = 'panel.health.recovered';
 export const RETIRED_CODE = 'panel.health.retired';
 
 /**
+ * The code that says a retired panel is being monitored again.
+ *
+ * Retirement is not permanent — restoring an archived panel is a supported
+ * operation — and nothing in the health transitions ever names
+ * `panel.health.retired`, so without this it would stay open for ever: an
+ * installation monitoring a panel while its operations log says the panel was
+ * archived and is not monitored.
+ *
+ * Deliberately NOT deduplicated. Its whole job is to close the retirement, and
+ * a row of its own would need closing in turn — by the next archive, which
+ * already has its one `recoversCode` spent on the panel's health row. So this
+ * is a point-in-time announcement, like an audit line, and the durable marker
+ * is the retirement it resolves.
+ *
+ * The pair is introduced together, in the release that introduces the code,
+ * because `operational_events` can never rewrite a row's code.
+ */
+export const RESTORED_CODE = 'panel.health.restored';
+
+/**
  * The dedupe key a panel-health row uses: one per PANEL and CONDITION.
  *
  * Shared by everything that writes one, because the format IS the identity: a
@@ -747,6 +767,17 @@ export class PanelMonitorService {
 
     // Whichever replica observes a tenant back under the bound resolves it,
     // including one that did not open the row and one that has just started.
+    //
+    // A STOPPED tenant is in this set and not in `overNow`, because
+    // `overBudgetTenants` counts only tenants this installation still serves.
+    // So stopping a tenant resolves its budget warning, and that is deliberate:
+    // the warning says its panels cannot be kept fresh, which stopped being
+    // true, and nothing else would ever close it — the monitor gives a stopped
+    // tenant no turn, so no later assessment could find it under the bound.
+    //
+    // It is the one write in this module that is not refused for a stopped
+    // scope, and the reason is that it is not work FOR the tenant: it is this
+    // installation's own bookkeeping about a warning it raised.
     for (const tenantId of openBudget) {
       if (overNow.has(tenantId)) continue;
       const tenant: TenantContext = {

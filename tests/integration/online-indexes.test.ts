@@ -119,6 +119,36 @@ describe('the online index build', () => {
     expect(await definitionOf(index.name)).toBe(expected);
   });
 
+  it('is safe when two migrators run at once', async () => {
+    // `botctl update` retries are meant to be safe, and two migrators is what
+    // a retry started before the first finished looks like. `IF NOT EXISTS`
+    // resolves at statement start, so both builders proceed and the loser gets
+    // a duplicate name — reported, before this, as a failed migration run on a
+    // database whose migrations had all applied.
+    const index = ONLINE_INDEXES[0]!;
+    await bulkPanels(2_000);
+    await ctx.container.database.withClient((client) => client.query(`DROP INDEX "${index.name}"`));
+
+    const first = createDatabase(testConfig().DATABASE_URL, 2);
+    const second = createDatabase(testConfig().DATABASE_URL, 2);
+    try {
+      const outcomes = await Promise.allSettled([
+        ensureOnlineIndexes(first),
+        ensureOnlineIndexes(second),
+      ]);
+      for (const [i, outcome] of outcomes.entries()) {
+        expect(
+          outcome.status,
+          `migrator ${i}: ${outcome.status === 'rejected' ? String(outcome.reason) : ''}`,
+        ).toBe('fulfilled');
+      }
+    } finally {
+      await first.close();
+      await second.close();
+    }
+    expect(await state(index.name)).toBe('VALID');
+  });
+
   it('does not put an operator write behind the build', async () => {
     // The finding. An ordinary `CREATE INDEX` needs a SHARE lock, which
     // conflicts with the ROW EXCLUSIVE every insert and update holds — and a

@@ -92,24 +92,93 @@ export async function ensureOnlineIndexes(handle: DatabaseHandle): Promise<strin
     // large table legitimately outlasts any bound the application uses for its
     // own queries.
     await handle.withClient(async (client) => {
-      let state = await indexState(client, index.name);
-      if (state === 'INVALID') {
-        await client.query(`DROP INDEX CONCURRENTLY IF EXISTS "${index.name}"`);
-        state = 'MISSING';
+      // One builder at a time, across processes.
+      //
+      // Two migrators is what a `botctl update` retried before the first
+      // finished looks like, and two `CREATE INDEX CONCURRENTLY` on one table
+      // do not merely race: each waits for the other and PostgreSQL reports a
+      // DEADLOCK, failing a migration run whose migrations had all applied.
+      //
+      // TRY and poll, never a blocking `pg_advisory_lock`. A blocking wait is
+      // itself an open transaction, and a concurrent build waits for every
+      // transaction that can see the table — so the waiter waits for the
+      // builder's lock while the builder waits for the waiter's transaction,
+      // which is the same deadlock by another route. It was measured, not
+      // reasoned about: the blocking version deadlocked on every run of the
+      // test below. Each attempt here is its own instantaneous statement.
+      const lockKey = `nexa.online-index.${index.name}`;
+      const held = await pollForLock(client, lockKey);
+      if (!held) {
+        throw new Error(
+          `another migrator has been building ${index.name} for longer than ${BUILD_LOCK_WAIT_MS}ms.`,
+        );
       }
-      if (state === 'VALID') return;
-      await client.query(
-        `CREATE INDEX CONCURRENTLY IF NOT EXISTS "${index.name}" ${index.definition}`,
-      );
-      const after = await indexState(client, index.name);
-      if (after !== 'VALID') {
-        // The build finished without throwing and left something the planner
-        // will not use. Loud, because the alternative is an update that reports
-        // success and an installation that silently scans.
-        throw new Error(`${index.name} was built but is not valid; re-run the migration.`);
+      try {
+        await buildIfNeeded(client, index, built);
+      } finally {
+        await client.query(`SELECT pg_advisory_unlock(hashtext($1)::bigint)`, [lockKey]);
       }
-      built.push(index.name);
     });
   }
   return built;
+}
+
+/**
+ * How long to wait for another migrator's build before giving up.
+ *
+ * Generous: what is being waited for is a concurrent index build on a table
+ * that may be large, and the alternative to waiting is two builders
+ * deadlocking.
+ */
+const BUILD_LOCK_WAIT_MS = 30 * 60 * 1000;
+const BUILD_LOCK_POLL_MS = 250;
+
+/** Takes the build lock without ever holding a transaction open to wait. */
+async function pollForLock(client: PoolClient, key: string): Promise<boolean> {
+  const deadline = Date.now() + BUILD_LOCK_WAIT_MS;
+  for (;;) {
+    const result = await client.query<{ locked: boolean }>(
+      `SELECT pg_try_advisory_lock(hashtext($1)::bigint) AS locked`,
+      [key],
+    );
+    if (result.rows[0]?.locked === true) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, BUILD_LOCK_POLL_MS));
+  }
+}
+
+/** The build itself, with the advisory lock already held. */
+async function buildIfNeeded(
+  client: PoolClient,
+  index: OnlineIndex,
+  built: string[],
+): Promise<void> {
+  let state = await indexState(client, index.name);
+  if (state === 'INVALID') {
+    await client.query(`DROP INDEX CONCURRENTLY IF EXISTS "${index.name}"`);
+    state = 'MISSING';
+  }
+  if (state === 'VALID') return;
+  try {
+    await client.query(
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS "${index.name}" ${index.definition}`,
+    );
+  } catch (error) {
+    // `IF NOT EXISTS` resolves at statement start, so two builders that
+    // begin before either has its catalogue entry both proceed and the
+    // loser gets a duplicate name. That is somebody else building the same
+    // index, not a failure — `botctl update` retries are meant to be safe,
+    // and reporting it would fail a migration run whose migrations all
+    // applied. The validity check below is what decides either way.
+    const code = (error as { code?: string }).code;
+    if (code !== '42P07' && code !== '23505') throw error;
+  }
+  const after = await indexState(client, index.name);
+  if (after !== 'VALID') {
+    // The build finished without throwing and left something the planner
+    // will not use. Loud, because the alternative is an update that reports
+    // success and an installation that silently scans.
+    throw new Error(`${index.name} was built but is not valid; re-run the migration.`);
+  }
+  built.push(index.name);
 }
