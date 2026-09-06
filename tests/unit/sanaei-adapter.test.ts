@@ -161,6 +161,69 @@ describe('the Sanaei adapter — Bearer API token', () => {
     expect(asText(outcome)).not.toContain('Too Many Requests');
   });
 
+  it('5e. a rate limit is its own kind at EVERY session step, not only the token read', async () => {
+    // The finding. The 429 rule was added to `fromApiStatus`, which only the
+    // UNAUTHENTICATED status read goes through. The session flow is four
+    // requests, and a limiter in front of the panel answers whichever one
+    // arrives while its window is full — so csrf-token, the two-factor
+    // question and the login each had their own branch mapping every non-2xx
+    // to PROVIDER_ERROR. That is retryable, and the monitor answered "you are
+    // calling me too often" with its SHORTEST failure cadence.
+    for (const behaviour of ['csrf-429', 'twofactor-429', 'login-429'] as const) {
+      const server = await panel({ tokens: TOKENS, behaviour });
+      const outcome = await probe(server, withPassword());
+      expect(outcome, `${behaviour} was not reported as a rate limit`).toEqual({
+        ok: false,
+        failure: 'RATE_LIMITED',
+        status: 429,
+      });
+      // Never a credential problem: rotating a working password on a panel
+      // with a login limiter is how a rate limit becomes a lockout.
+      expect(outcome).not.toMatchObject({ failure: 'AUTHENTICATION_FAILED' });
+      // Nor the panel's own body, which is a proxy's HTML.
+      expect(asText(outcome)).not.toContain('Too Many Requests');
+      await fake?.close();
+      fake = null;
+    }
+  });
+
+  it('5f. a rate limit AFTER a good login is not a degraded panel', async () => {
+    // The worst of the four, because it fails in the opposite direction.
+    // Everything after a successful login is DEGRADED on purpose — the panel
+    // is up and the credentials are right, so an authentication failure there
+    // would send an operator to replace a password that just worked. But
+    // DEGRADED is `ok: true`, so it earns the HEALTHY cadence: the one answer
+    // a limiter must not get.
+    const server = await panel({ tokens: TOKENS, behaviour: 'status-429' });
+    const outcome = await probe(server, withPassword());
+    expect(outcome).toEqual({ ok: false, failure: 'RATE_LIMITED', status: 429 });
+    expect(outcome).not.toMatchObject({ ok: true });
+    // The login DID happen and DID succeed, so this is the authenticated path
+    // rather than a flow that stopped earlier.
+    expect(server.requests.map((request) => request.path.split('/').pop())).toContain('login');
+  });
+
+  it('5g. a 403 on login is still the CSRF reading, and 2FA is still terminal', async () => {
+    // The 429 rule is inserted into the same branches as those two, so both
+    // are re-asserted here rather than assumed: a fix that mapped every
+    // non-2xx login answer to RATE_LIMITED would pass 5e and break these.
+    const csrfBroken = await panel({ tokens: TOKENS, behaviour: 'login-403' });
+    expect(await probe(csrfBroken, withPassword())).toEqual({
+      ok: false,
+      failure: 'MALFORMED_RESPONSE',
+      status: 403,
+    });
+    await fake?.close();
+    fake = null;
+
+    const twoFactor = await panel({ tokens: TOKENS, twoFactorEnabled: true });
+    expect(await probe(twoFactor, withPassword())).toEqual({
+      ok: false,
+      failure: 'AUTHENTICATION_REQUIRES_INTERACTION',
+      status: null,
+    });
+  });
+
   it('5c. a reachable panel at the WRONG configured base path is not a credential problem', async () => {
     // The same rule reached the way an operator actually reaches it: the panel
     // is served under one base path and configured under another, so every

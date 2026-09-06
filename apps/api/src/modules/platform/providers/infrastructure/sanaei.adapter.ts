@@ -181,6 +181,29 @@ function fromTransport(result: Extract<ProviderHttpResult, { ok: false }>): Prov
  * **429 is not the panel's fault at all**, and it is the one status where the
  * remedy is ours rather than the operator's: call it less often.
  */
+/**
+ * 429 at ANY stage, checked before that stage reads the status for itself.
+ *
+ * The session flow is four requests — csrf-token, the 2FA question, login, then
+ * the status read — and each had its own non-2xx branch mapping everything to
+ * `PROVIDER_ERROR` or, after a good login, to DEGRADED. A limiter in front of
+ * the panel answers 429 to whichever of them arrives first, and only the
+ * unauthenticated status read routed through `fromApiStatus`. So a rate-limited
+ * login was persisted as a retryable provider fault and re-probed on the SHORT
+ * cadence: answering "too many requests" by asking again sooner, which is what
+ * a limiter exists to punish. A rate-limited status read after a good login was
+ * worse — DEGRADED is `ok: true`, so it earned the HEALTHY cadence.
+ *
+ * Deliberately NOT read: the `Retry-After` header. The cadence already gives
+ * `RATE_LIMITED` the long interval with doubling backoff on top, which is a
+ * bound this installation controls; honouring a number from the far end would
+ * let a misconfigured or hostile panel choose how long Nexa stops looking at
+ * it, and would have to be clamped to something like the cadence anyway.
+ */
+function rateLimited(status: number): ProviderProbeOutcome | null {
+  return status === 429 ? { ok: false, failure: 'RATE_LIMITED', status } : null;
+}
+
 function fromApiStatus(status: number): ProviderProbeOutcome {
   if (status === 401 || status === 403) {
     return { ok: false, failure: 'AUTHENTICATION_FAILED', status };
@@ -327,7 +350,9 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
     const csrf = await http.send({ method: 'GET', path: CSRF_PATH, headers: XHR_HEADER });
     if (!csrf.ok) return fromTransport(csrf);
     if (csrf.status < 200 || csrf.status >= 300) {
-      return { ok: false, failure: 'PROVIDER_ERROR', status: csrf.status };
+      return (
+        rateLimited(csrf.status) ?? { ok: false, failure: 'PROVIDER_ERROR', status: csrf.status }
+      );
     }
     const minted = parseEnvelope(csrf.bodyText);
     if (minted === null || !minted.success || typeof minted.obj !== 'string') {
@@ -383,7 +408,13 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
     });
     if (!twoFactor.ok) return fromTransport(twoFactor);
     if (twoFactor.status < 200 || twoFactor.status >= 300) {
-      return { ok: false, failure: 'PROVIDER_ERROR', status: twoFactor.status };
+      return (
+        rateLimited(twoFactor.status) ?? {
+          ok: false,
+          failure: 'PROVIDER_ERROR',
+          status: twoFactor.status,
+        }
+      );
     }
     const twoFactorBody = parseEnvelope(twoFactor.bodyText);
     if (twoFactorBody === null || !twoFactorBody.success) {
@@ -423,6 +454,12 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
       body: { kind: 'json', value: { username, password } },
     });
     if (!login.ok) return fromTransport(login);
+    // BEFORE the 403 rule and before the generic non-2xx one. The two are
+    // disjoint statuses, and the order says which reading wins if that ever
+    // stops being true: a limiter's answer is never a statement about the
+    // operator's password.
+    const limited = rateLimited(login.status);
+    if (limited !== null) return limited;
     if (login.status === 403) {
       // v3.7.0's CSRF middleware aborts with exactly this and no body. It means
       // the token and cookie did not line up, which is a Nexa-side protocol
@@ -487,7 +524,14 @@ export class SanaeiAdapter implements ProviderConnectionAdapter {
 
     if (!result.ok) return authenticated ? degraded() : fromTransport(result);
     if (result.status < 200 || result.status >= 300) {
-      return authenticated ? degraded() : fromApiStatus(result.status);
+      // The 429 check precedes the authenticated shortcut deliberately. After a
+      // good login every other bad status is DEGRADED — the panel is up and the
+      // credentials are right, so something else is wrong — but DEGRADED is
+      // `ok: true` and earns the HEALTHY cadence, which is the one answer a
+      // limiter must not get.
+      return (
+        rateLimited(result.status) ?? (authenticated ? degraded() : fromApiStatus(result.status))
+      );
     }
     const body = parseEnvelope(result.bodyText);
     if (body === null || !body.success) {

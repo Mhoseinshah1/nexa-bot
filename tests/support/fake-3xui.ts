@@ -106,6 +106,28 @@ export type Behaviour =
    * wrong with the panel.
    */
   | 'status-429'
+  /**
+   * The limiter answers 429 to the csrf-token request, before any session.
+   *
+   * A limiter or WAF in front of the panel does not wait for the interesting
+   * request; it refuses whichever one arrives while the window is full. Each of
+   * the three session steps therefore gets its own behaviour, because each had
+   * its own status branch in the adapter.
+   */
+  | 'csrf-429'
+  /** The limiter answers 429 to the two-factor question. */
+  | 'twofactor-429'
+  /** The limiter answers 429 to the login itself. */
+  | 'login-429'
+  /**
+   * The login is refused by the CSRF middleware: 403, no body.
+   *
+   * v3.7.0 aborts exactly this way when the token and the cookie do not line
+   * up. It is a Nexa-side protocol failure and says nothing about the
+   * operator's password, which is why the adapter reads it as a compatibility
+   * failure rather than a rejected credential.
+   */
+  | 'login-403'
   /** csrf-token sets an unrelated cookie ALONGSIDE the session cookie. */
   | 'csrf-extra-cookie'
   /** csrf-token sets ONLY an unrelated cookie — no `3x-ui` at all. */
@@ -219,8 +241,16 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
         return;
       }
 
+      // A limiter in front of the panel, refusing whichever session step
+      // arrives while its window is full.
+      const limited = (): void => {
+        response.writeHead(429, { 'content-type': 'text/html', 'retry-after': '120' });
+        response.end('<html><body>Too Many Requests</body></html>');
+      };
+
       // --- csrf-token (v3.7.0 index.go: public, GET, mints and binds) --------
       if (route === 'csrf-token') {
+        if (behaviour === 'csrf-429') return void limited();
         issued += 1;
         const id = `${CANARY.cookie}-${issued}`;
         const csrf = `${CANARY.csrf}-${issued}`;
@@ -289,6 +319,7 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
 
       if (route === 'getTwoFactorEnable') {
         if (request.method !== 'POST') return void json(404, envelope(false, null));
+        if (behaviour === 'twofactor-429') return void limited();
         if (!csrfOk()) {
           response.writeHead(403);
           response.end();
@@ -318,6 +349,11 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
       }
 
       if (route === 'login') {
+        if (behaviour === 'login-429') return void limited();
+        if (behaviour === 'login-403') {
+          response.writeHead(403);
+          return void response.end();
+        }
         if (request.method !== 'POST') return void json(404, envelope(false, null));
         if (!csrfOk()) {
           // v3.7.0's CSRFMiddleware: AbortWithStatus(403), no body.
