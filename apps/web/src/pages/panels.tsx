@@ -42,6 +42,7 @@ import {
   MaturityBadge,
   Num,
   PageHead,
+  Pills,
   Secret,
   StateSwitch,
   Tabs,
@@ -50,6 +51,15 @@ import {
   type Column,
   type Tone,
 } from '../ui/kit';
+
+/**
+ * How often an open panel detail re-reads its own row.
+ *
+ * The monitor's shipped cadence is three minutes; this is half of that, so a
+ * new health result is on screen within one interval of being written without
+ * the page out-polling the writer.
+ */
+const PANEL_DETAIL_REFRESH_MS = 90_000;
 
 /**
  * Panels — the one product surface this release genuinely operates.
@@ -128,10 +138,26 @@ export function PanelsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bool
    */
   const [trail, setTrail] = useState<readonly string[]>([]);
   const cursor = trail.length > 0 ? trail[trail.length - 1] : undefined;
+  /**
+   * Which side of the archive this list is showing.
+   *
+   * Archiving used to remove a panel from the only browser the Web Admin has,
+   * so the Restore control on its detail page was reachable only by an operator
+   * who had kept the UUID. A lifecycle with an exit and no route back to the
+   * door is a dead end; the server could always answer this and nothing asked.
+   */
+  const [archived, setArchived] = useState(false);
 
   const panels = useQuery({
-    queryKey: ['panels', cursor ?? null],
-    queryFn: () => fetchPanels(cursor === undefined ? {} : { cursor }),
+    // The mode is part of the key. Sharing one key across both lists would
+    // serve the live page's rows under the archived heading for a frame, which
+    // is the sort of thing an operator acts on before it corrects itself.
+    queryKey: ['panels', archived ? 'archived' : 'live', cursor ?? null],
+    queryFn: () =>
+      fetchPanels({
+        ...(cursor === undefined ? {} : { cursor }),
+        ...(archived ? { archived: 'only' as const } : {}),
+      }),
     enabled: !denied,
   });
 
@@ -211,11 +237,35 @@ export function PanelsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bool
       />
 
       <Card>
+        <div className="toolbar">
+          <Pills
+            value={archived ? 'archived' : 'live'}
+            onChange={(next) => {
+              // The cursor belongs to the list it was minted from. Carrying it
+              // across would ask the archive for a page of the live keyset.
+              setTrail([]);
+              setArchived(next === 'archived');
+            }}
+            items={[
+              { id: 'live', label: t('web.panels_live') },
+              { id: 'archived', label: t('web.panels_archived') },
+            ]}
+          />
+        </div>
+
         <StateSwitch
           state={denied ? 'denied' : queryState(panels, rows.length === 0)}
           onRetry={() => void panels.refetch()}
           empty={
-            <Empty title={t('web.panels_empty')} hint={t('web.panels_empty_hint')} icon="panels" />
+            archived ? (
+              <Empty title={t('web.panels_archived_empty')} icon="inbox" />
+            ) : (
+              <Empty
+                title={t('web.panels_empty')}
+                hint={t('web.panels_empty_hint')}
+                icon="panels"
+              />
+            )
           }
         >
           <DataTable
@@ -291,6 +341,18 @@ export function PanelDetailPage({
     queryKey: ['panel', id],
     queryFn: () => fetchPanel(id),
     enabled: !denied,
+    /**
+     * Health is written by the BACKGROUND monitor, not by anything this page
+     * does, so a detail left open showed one probe's result for ever: the same
+     * state, failure, latency and check time, while the monitor went on probing
+     * every few minutes. `refetchOnWindowFocus` is off globally, so returning
+     * to the tab did not fix it either.
+     *
+     * Slower than the monitor's cadence on purpose. This is one operator
+     * watching one panel; polling faster than the thing that writes the data
+     * only adds requests that find the same row.
+     */
+    refetchInterval: PANEL_DETAIL_REFRESH_MS,
   });
 
   const refresh = async () => {
@@ -1031,8 +1093,17 @@ function CapabilitiesTab({ panel }: { panel: PanelSummaryResponse }) {
 export function NewPanelPage({
   denied,
   mayRotate,
+  mayView,
 }: {
   denied: boolean;
+  /**
+   * Whether this actor may open a panel's detail page.
+   *
+   * `panels.view` and `panels.edit` are separate, and the create form is open
+   * to the second alone. Navigating to the detail route on success would take
+   * such an actor to a permission-denied page they cannot navigate back from.
+   */
+  mayView: boolean;
   /**
    * Whether this actor may write a credential at all.
    *
@@ -1059,6 +1130,8 @@ export function NewPanelPage({
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [apiToken, setApiToken] = useState('');
+  /** The name of a panel created by an actor who cannot open its detail page. */
+  const [created, setCreated] = useState<string | null>(null);
   const submission = useSubmissionKey();
 
   const chosen = providers.data?.providers.find((provider) => provider.key === providerType);
@@ -1084,7 +1157,30 @@ export function NewPanelPage({
       submission.settle();
       toast({ tone: 'ok', message: t('web.saved') });
       await client.invalidateQueries({ queryKey: ['panels'] });
-      navigate(`/panels/${encodeURIComponent(result.panel.id)}`);
+      /**
+       * Only where the actor can actually go.
+       *
+       * `panels.edit` and `panels.view` are separate permissions and this form
+       * is deliberately open to `panels.edit` — the server accepts the create.
+       * The detail route requires `panels.view`, so an edit-only actor was
+       * taken from a working form to a permission-denied page, with no
+       * navigation back: the create route is not in the nav either. A usable
+       * screen led to a dead end on success, which is the worst moment to
+       * produce one.
+       *
+       * They stay here, told it worked and given the panel's name back, which
+       * is the only part of the detail page they were entitled to see.
+       */
+      if (mayView) {
+        navigate(`/panels/${encodeURIComponent(result.panel.id)}`);
+        return;
+      }
+      setCreated(result.panel.name);
+      setName('');
+      setBaseUrl('');
+      setUsername('');
+      setPassword('');
+      setApiToken('');
     },
     onError: (error: unknown) => {
       submission.settleOn(error);
@@ -1117,6 +1213,15 @@ export function NewPanelPage({
   return (
     <>
       <PageHead title={t('web.panel_new')} subtitle={t('web.panel_new_intro')} maturity="now" />
+
+      {/* The success an actor who cannot open the detail page still gets to
+          see. Naming the panel matters: it is the only confirmation that the
+          thing they typed is the thing that now exists. */}
+      {created !== null && (
+        <Banner tone="ok" title={t('web.panel_created_title')}>
+          {t('web.panel_created_body')} <span className="plain">{created}</span>
+        </Banner>
+      )}
 
       <Card>
         {/*

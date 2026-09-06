@@ -57,9 +57,36 @@ interface NavEntry {
   readonly path: string;
   readonly label: WebKey;
   readonly icon: IconName;
-  /** Null means everyone with a session. */
-  readonly permission: string | null;
+  /**
+   * What the entry needs to be worth showing. Null means everyone with a
+   * session; an ARRAY means ANY of them, because a page can serve more than one
+   * capability and gating it on the first one hides the others.
+   *
+   * `/notifications` is why this is not a single string. It carries two
+   * separate server capabilities — the delivery history (`opslog.view`) and the
+   * test send (`settings.edit`, which `POST /notifications/test` authorizes on
+   * its own and which the page already gates separately). Requiring only
+   * `opslog.view` meant an actor holding `settings.edit` alone had no link to a
+   * page that would have served them correctly: the UI hid an action the server
+   * permits, which is the same defect as offering one it refuses, in the
+   * direction nobody looks.
+   */
+  readonly permission: string | readonly string[] | null;
   readonly group: WebKey;
+}
+
+/**
+ * Whether an actor may see a navigation entry.
+ *
+ * Exported because the rule is worth asserting directly: an entry listing
+ * several permissions is satisfied by ANY of them, and the failure it exists to
+ * prevent — a page with two capabilities hidden from an actor who holds one —
+ * is invisible from the outside.
+ */
+export function navPermitted(entry: NavEntry, permissions: readonly string[]): boolean {
+  if (entry.permission === null) return true;
+  const needed = typeof entry.permission === 'string' ? [entry.permission] : entry.permission;
+  return needed.some((permission) => permissions.includes(permission));
 }
 
 /**
@@ -215,7 +242,8 @@ export const NAV: readonly NavEntry[] = [
     path: '/notifications',
     label: 'web.nav_notifications',
     icon: 'send',
-    permission: 'opslog.view',
+    // EITHER capability. See `NavEntry.permission`.
+    permission: ['opslog.view', 'settings.edit'],
     group: 'web.navgroup_system',
   },
   {
@@ -286,6 +314,9 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
       element: (
         <NewPanelPage
           denied={!may('panels.edit')}
+          // Where they may go afterwards, which is not the same permission as
+          // the one that let them fill the form in.
+          mayView={may('panels.view')}
           // Initial credentials are a credential write, guarded by the same
           // CRITICAL permission as a rotation. Without this the create form
           // was the way round the boundary the detail page enforces.
@@ -301,7 +332,26 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
   if (panel !== null) {
     return {
       element: (
+        // KEYED BY THE PANEL ID, and that is load-bearing rather than tidy.
+        //
+        // React reconciles by position and type, so navigating between two
+        // panel-detail URLs kept ONE `PanelDetailPage` instance mounted. The
+        // query key changes and the heading follows the new panel, but every
+        // `useState` initialiser in the subtree ran once, against the old one:
+        // `OverviewTab`'s `name`, `baseUrl` and `basis`, the credential draft
+        // fields, and the selected tab. Pressing Save then wrote panel B's name
+        // onto panel A — a cross-entity write, from a screen that looked
+        // entirely normal.
+        //
+        // It needed both panels cached to be reachable: a pending query renders
+        // a skeleton, which unmounts the subtree and hides it. Browser history
+        // between two visited panels is exactly that state.
+        //
+        // The key is the structural fix. Resetting the two fields by hand would
+        // leave the credential drafts and the tab, and would have to be
+        // remembered by every future piece of per-panel state.
         <PanelDetailPage
+          key={panel['id'] ?? ''}
           id={panel['id'] ?? ''}
           mayEdit={may('panels.edit')}
           mayRotate={may('panels.credentials.rotate')}
@@ -569,9 +619,7 @@ function SignedIn({
     },
   });
 
-  const visible = NAV.filter(
-    (entry) => entry.permission === null || permissions.includes(entry.permission),
-  );
+  const visible = NAV.filter((entry) => navPermitted(entry, permissions));
 
   return (
     <div className={`app ${collapsed ? 'collapsed' : ''}`}>

@@ -68,6 +68,10 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
     queryKey: ['panels', 'dashboard'],
     queryFn: () => fetchPanels({ limit: DASHBOARD_PANEL_PAGE }),
     enabled: mayViewPanels,
+    // The health distribution is written by the monitor too, and it sits beside
+    // a card that refreshes. One stale card next to a live one is worse than
+    // two stale cards, because nothing on screen says which is which.
+    refetchInterval: 60_000,
   });
 
   /**
@@ -88,6 +92,19 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
     queryKey: ['ops-log', 'management-conditions', 'open'],
     queryFn: () => fetchOpsLog({ scope: 'MANAGEMENT_CONDITIONS', open: true }),
     enabled: mayViewOps,
+    /**
+     * The card is headed "needs attention", so it is the one thing on this page
+     * that must not be a photograph. Without this it never ran again: readiness
+     * polls, this did not, and `refetchOnWindowFocus` is off globally — so a
+     * dashboard left open on a wall display kept saying nothing needed action
+     * throughout an incident, and kept showing a condition that had already
+     * recovered.
+     *
+     * Same interval as readiness, because they are read together and two
+     * cadences on one screen produce a card that disagrees with the one beside
+     * it.
+     */
+    refetchInterval: 15_000,
   });
 
   /**

@@ -48,6 +48,7 @@ import {
   providerListResponseSchema,
   testPanelResponseSchema,
   type PanelCredentialsInput,
+  type PanelListArchivedMode,
   type PanelListResponse,
   type PanelResponse,
   type PanelStatus,
@@ -425,11 +426,14 @@ export function fetchProviders(): Promise<ProviderListResponse> {
  * client-side cursor is a 400 rather than a subtle bug.
  */
 export function fetchPanels(
-  query: { limit?: number; cursor?: string } = {},
+  query: { limit?: number; cursor?: string; archived?: PanelListArchivedMode } = {},
 ): Promise<PanelListResponse> {
   const params = new URLSearchParams();
   if (query.limit !== undefined) params.set('limit', String(query.limit));
   if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  // Sent only for the archive browser. Omitted means the working fleet, which
+  // is the server's default too — one spelling of the default, not two.
+  if (query.archived !== undefined) params.set('archived', query.archived);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${PANEL_ROUTES.list}?${suffix}` : PANEL_ROUTES.list,

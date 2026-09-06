@@ -395,6 +395,14 @@ export const WEB_FA = {
   // Why no connection test is offered, and why the monitor will not probe it
   // either: the stored credentials do not satisfy the provider's shape, so
   // every probe would answer 412 `panel.credentials_missing`.
+  // Shown to an actor who may create a panel but not open its detail page.
+  'web.panel_created_title': 'پنل ساخته شد',
+  'web.panel_created_body':
+    'پنل ساخته شد. برای دیدن جزئیات آن به دسترسی «مشاهدهٔ پنل‌ها» نیاز است، که شما ندارید. نام پنل:',
+  // Filter labels for the panel list.
+  'web.panels_live': 'در سرویس',
+  'web.panels_archived': 'بایگانی‌شده',
+  'web.panels_archived_empty': 'پنل بایگانی‌شده‌ای نیست.',
   'web.panel_not_probeable':
     'اعتبارنامه‌های ذخیره‌شده برای این نوع پنل کامل نیستند، بنابراین نه تست اتصال ممکن است و نه پایش خودکار. از زبانهٔ اعتبارنامه‌ها آن‌ها را کامل کنید.',
   'web.panel_health_latest_title': 'فقط آخرین وضعیت',
