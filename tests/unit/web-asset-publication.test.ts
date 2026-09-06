@@ -14,6 +14,7 @@ import {
 } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 /**
@@ -35,6 +36,33 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
  */
 
 const publisher = join(__dirname, '../../deploy/bin/publish-web-assets.mjs');
+
+/**
+ * Acquire, prove nobody else holds it, release. Run eight at a time.
+ *
+ * The marker is written INSIDE the critical section and removed at the end of
+ * it, so a second holder finds it and exits non-zero. `wx` is the check: it is
+ * one atomic create that fails if the file is there.
+ */
+const CONTEND_FOR_LOCK = `
+  const { acquireLock, releaseLock } = await import(process.env.NEXA_PUBLISHER);
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const root = process.env.NEXA_ROOT, id = process.env.NEXA_ID;
+  const token = 'contender-' + id;
+  const lockDir = acquireLock(root, token);
+  const inside = path.join(root, 'inside');
+  try {
+    fs.writeFileSync(inside, id, { flag: 'wx' });
+  } catch (error) {
+    process.stderr.write('two holders at once: ' + String(error) + String.fromCharCode(10));
+    process.exit(1);
+  }
+  fs.mkdirSync(path.join(root, 'held'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'held', id), '');
+  fs.rmSync(inside);
+  releaseLock(lockDir, token);
+`;
 
 let workspace: string;
 
@@ -634,6 +662,88 @@ describe('publishing the Web Admin bundle', () => {
       expect(outcomes[1]!.status).toBe('rejected');
       assertCoherent(rootDir);
       expect(readServedTokens(rootDir)).toEqual(new Set(['good']));
+    });
+
+    it('never removes a lock that is not its own', async () => {
+      // A path is not a lock. The release was `rmSync(<the path>)`, so a
+      // publisher whose first phase — hashing the bundle, comparing the pool,
+      // copying the tree — outran the stale window would be taken over,
+      // finish, and then delete the lock of the process that took it over,
+      // letting a third publisher in while the second was mid-publication.
+      // The real module, by the same path `deploy/compose.yml` invokes.
+      const { acquireLock, releaseLock } = (await import(pathToFileURL(publisher).href)) as {
+        acquireLock: (rootDir: string, token: string) => string;
+        releaseLock: (lockDir: string, token: string) => void;
+      };
+      const rootDir = root();
+      const lockDir = join(rootDir, '.publish.lock');
+
+      acquireLock(rootDir, 'mine');
+      // What a takeover leaves at that path: somebody else's lock.
+      writeFileSync(
+        join(lockDir, 'holder'),
+        `${JSON.stringify({ token: 'theirs', pid: process.pid, host: hostname(), at: Date.now() })}\n`,
+      );
+
+      releaseLock(lockDir, 'mine');
+      expect(existsSync(lockDir), "another run's lock was removed").toBe(true);
+      expect(JSON.parse(readFileSync(join(lockDir, 'holder'), 'utf8')).token).toBe('theirs');
+
+      // And it does release its own.
+      releaseLock(lockDir, 'theirs');
+      expect(existsSync(lockDir)).toBe(false);
+    });
+
+    it('admits exactly one of many processes racing for an abandoned lock', async () => {
+      // Both waiters see the same dead holder and both enter the takeover: the
+      // first renames it away and acquires, and the second then renames away
+      // the FRESH lock the first is holding and acquires too. Two publishers
+      // inside the critical section is what dangles `current`.
+      //
+      // Asserted as mutual exclusion rather than as a simulated interleaving:
+      // every process writes a marker while it holds the lock and fails if one
+      // is already there, so an overlap of any shape is caught.
+      const rootDir = root();
+      const lockDir = join(rootDir, '.publish.lock');
+      mkdirSync(lockDir);
+      writeFileSync(
+        join(lockDir, 'holder'),
+        `${JSON.stringify({ token: 'dead', pid: 2 ** 22 - 1, host: hostname(), at: Date.now() })}\n`,
+      );
+
+      // CONCURRENTLY. The first version used `spawnSync` in a loop, which
+      // blocks — eight processes that never overlapped, and a race test that
+      // could not observe a race.
+      const contenders = await Promise.all(
+        Array.from({ length: 8 }, (_, i) => {
+          const child = spawn(process.execPath, ['-e', CONTEND_FOR_LOCK], {
+            env: {
+              ...process.env,
+              NEXA_PUBLISHER: publisher,
+              NEXA_ROOT: rootDir,
+              NEXA_ID: String(i),
+            },
+            stdio: ['ignore', 'ignore', 'pipe'],
+          });
+          let stderr = '';
+          child.stderr.on('data', (chunk: Buffer) => {
+            stderr += chunk.toString();
+          });
+          return new Promise<{ code: number; stderr: string }>((resolveExit) => {
+            child.on('exit', (code) => resolveExit({ code: code ?? -1, stderr }));
+            child.on('error', (error) => resolveExit({ code: -1, stderr: String(error) }));
+          });
+        }),
+      );
+      for (const [i, contender] of contenders.entries()) {
+        expect(contender.code, `contender ${i}: ${contender.stderr}`).toBe(0);
+      }
+      // Every one of them held it, one at a time, and the last one out left
+      // nothing behind.
+      expect(readdirSync(join(rootDir, 'held')).sort()).toEqual(
+        Array.from({ length: 8 }, (_, i) => String(i)).sort(),
+      );
+      expect(existsSync(lockDir)).toBe(false);
     });
 
     it('takes over a lock whose holder died and refuses one whose holder lives', () => {

@@ -180,13 +180,24 @@ function lockHolder(lockDir) {
  * this host that is no longer running is taken over immediately. A holder
  * elsewhere is waited out to `LOCK_STALE_MS` first.
  *
- * The takeover itself is a rename(2), so exactly one of several waiters can
- * perform it and the rest get ENOENT and re-enter the loop. What rename cannot
- * check is that the lock is still the one that was judged stale a moment
- * earlier; the staging and activation names are therefore unique per run, so
- * even in that window two publishers cannot write to each other's paths.
+ * A lock has an IDENTITY, and every operation on it checks that identity. The
+ * first version of this held only a path, and a path is not a lock:
+ *
+ *   - the release was `rmSync(lockDir)`, which deletes whatever is at that
+ *     path. A holder whose first phase — hashing the bundle, comparing the
+ *     pool, copying — outran `LOCK_STALE_MS` would be taken over, finish, and
+ *     then delete the LOCK OF THE PROCESS THAT TOOK OVER, letting a third in
+ *     while the second was still publishing.
+ *   - the takeover was `rename(lockDir, grave)`, which renames whatever is at
+ *     that path. Two waiters that both judged one dead holder stale would each
+ *     perform it: the first takes over and acquires, and the second then
+ *     renames away the FRESH lock the first is holding, and acquires too.
+ *
+ * Both are closed by the token below: the holder file names the run, the
+ * release only removes a lock that still carries its own token, and a takeover
+ * only removes the exact lock it judged stale.
  */
-function acquireLock(rootDir) {
+export function acquireLock(rootDir, token) {
   const lockDir = join(rootDir, LOCK);
   const deadline = Date.now() + LOCK_WAIT_MS;
   for (;;) {
@@ -194,8 +205,12 @@ function acquireLock(rootDir) {
       mkdirSync(lockDir);
       writeFileSync(
         join(lockDir, 'holder'),
-        `${JSON.stringify({ pid: process.pid, host: hostname(), at: Date.now() })}\n`,
+        `${JSON.stringify({ token, pid: process.pid, host: hostname(), at: Date.now() })}\n`,
       );
+      // Read back, so a lock this run believes it holds is one that carries
+      // its own token. Anything else means somebody took it over between the
+      // mkdir and the write, and this run does not hold it.
+      if (lockHolder(lockDir)?.token !== token) continue;
       return lockDir;
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
@@ -221,6 +236,19 @@ function acquireLock(rootDir) {
         if (error.code !== 'ENOENT') throw error;
         continue;
       }
+      // The rename moved WHATEVER was at that path, which is not necessarily
+      // the lock that was judged stale: another waiter may have taken over and
+      // acquired in between. Put it back if so, rather than destroying a lock
+      // somebody is holding.
+      const moved = lockHolder(grave);
+      if (holder !== null && moved !== null && moved.token !== holder.token) {
+        try {
+          renameSync(grave, lockDir);
+          continue;
+        } catch (error) {
+          if (error.code !== 'ENOTEMPTY' && error.code !== 'EEXIST') throw error;
+        }
+      }
       rmSync(grave, { recursive: true, force: true });
       continue;
     }
@@ -232,6 +260,12 @@ function acquireLock(rootDir) {
     }
     sleepSync(LOCK_POLL_MS);
   }
+}
+
+/** Releases the lock, and ONLY if it is still this run's. */
+export function releaseLock(lockDir, token) {
+  if (lockHolder(lockDir)?.token !== token) return;
+  rmSync(lockDir, { recursive: true, force: true });
 }
 
 /** Every file under `dir`, as paths relative to it, in a stable order. */
@@ -381,21 +415,31 @@ export function publish({ sourceDir, rootDir }) {
 
   // Everything that follows mutates the shared root, and none of it is one
   // atomic step. See `acquireLock`.
-  const lockDir = acquireLock(rootDir);
+  // The token this run's lock carries. Both the release and any takeover
+  // check it, so neither can touch a lock that belongs to somebody else.
+  const token = randomUUID();
+  const lockDir = acquireLock(rootDir, token);
   try {
-    return publishLocked({ sourceDir, rootDir, releasesDir, lockDir });
+    return publishLocked({ sourceDir, rootDir, releasesDir, lockDir, token });
   } finally {
-    rmSync(lockDir, { recursive: true, force: true });
+    releaseLock(lockDir, token);
   }
 }
 
 /** The publication itself, with the root lock held for its whole duration. */
-function publishLocked({ sourceDir, rootDir, releasesDir, lockDir }) {
+function publishLocked({ sourceDir, rootDir, releasesDir, lockDir, token }) {
   // Unique to this run. Two publishers are serialised by the lock, so this is
   // not what makes them safe — it is what keeps them from writing to each
   // other's paths in the one window the lock cannot close, a takeover of a lock
   // judged abandoned by a holder that then turns out to be alive.
-  const nonce = randomUUID().replaceAll('-', '').slice(0, 16);
+  const nonce = token.replaceAll('-', '').slice(0, 16);
+
+  // BEFORE the first long phase, not only after it. Hashing every file of the
+  // bundle, comparing the pool and copying the tree is the longest stretch of
+  // this function, and it used to run with no refresh at all in front of it —
+  // so the run most likely to be judged abandoned was the one that had just
+  // started work.
+  touchLock(lockDir);
 
   const releaseId = bundleId(sourceDir);
   const releaseDir = join(releasesDir, releaseId);
