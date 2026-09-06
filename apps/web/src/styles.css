@@ -490,6 +490,20 @@ textarea {
   overflow: auto;
   padding: 20px 24px 40px;
   scrollbar-width: thin;
+  /*
+   * A containing block, so that `overflow: auto` above actually clips
+   * everything inside it.
+   *
+   * `overflow` does not clip an absolutely positioned descendant unless the
+   * clipping element is also its containing block, and a static element is
+   * nobody's containing block. The screen-reader-only labels in the settings
+   * editors are `position: absolute`, so on a page taller than the viewport
+   * they escaped to the initial containing block, extended the document, and
+   * gave the WINDOW a scrollbar — which carried the sidebar and the topbar off
+   * the top of the screen while this element never scrolled at all. Every box
+   * in the chain measured correct; only the clipping was not.
+   */
+  position: relative;
 }
 .content-inner {
   max-width: 1440px;
