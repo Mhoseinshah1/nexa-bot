@@ -642,6 +642,28 @@ operations named in it, not every operation the previous release could perform.
 It is evidence for this transition and a gate for the next one, which is more
 than a documented rule and less than a mechanical guarantee.
 
+**Indexes that must not lock the table they are built on are not migrations.**
+Drizzle runs every pending migration inside one transaction, and PostgreSQL
+refuses `CREATE INDEX CONCURRENTLY` there; an ordinary `CREATE INDEX` takes a
+SHARE lock for the whole build, and a DDL statement waiting for that lock sits
+at the head of the queue, so every operator write arriving behind it waits too.
+Migrations run while the OUTGOING release is still serving, so that queue is an
+operator's panel edits.
+
+Such indexes are declared in
+`apps/api/src/infrastructure/persistence/online-indexes.ts` and applied by
+`runMigrations` after the migrator, on their own connection. The step is
+idempotent — an index that is already valid costs one catalogue lookup — and it
+recovers the state a cancelled build leaves behind: an index whose
+`indisvalid` is false is dropped concurrently and rebuilt, rather than being
+left to look healthy while the planner ignores it.
+
+They are deliberately absent from `schema.ts`, so `pnpm db:check` cannot see
+them. `tests/integration/online-indexes.test.ts` is what does: it asserts each
+one exists and is valid after migrating, that a repeat run rebuilds nothing,
+that an invalid one is repaired to the right definition, and that an operator
+write is not queued behind the build.
+
 There is no automated destructive schema rollback and there will not be one: a
 down-migration that drops a column is a data-loss button beside a panic button.
 

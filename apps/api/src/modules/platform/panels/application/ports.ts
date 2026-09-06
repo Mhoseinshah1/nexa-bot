@@ -126,8 +126,24 @@ export interface UpdatePanelInput {
  * the HTTP boundary so a caller cannot come to depend on an ordering the API
  * has not promised.
  */
+/**
+ * The keyset position, on an IMMUTABLE key.
+ *
+ * `(created_at, id)`, not `(name, id)`. A cursor ordered by a column an
+ * operator can edit is not a stable traversal: rename a panel already returned
+ * to a value after the cursor and it comes back on a later page; rename one not
+ * yet reached to a value before it and it is never returned at all. Neither
+ * needs a malformed cursor or a concurrent request — an ordinary rename between
+ * two page fetches does it.
+ *
+ * `created_at` is set once by the database default and no code path writes it
+ * again; `id` breaks ties, so the order is total. The list is therefore in
+ * creation order rather than alphabetical, which is a deliberate trade: the API
+ * has never promised an ordering, and a caller that needs alphabetical wants a
+ * sort over a page rather than a cursor over a mutable column.
+ */
 export interface PanelCursor {
-  readonly name: string;
+  readonly createdAt: Date;
   readonly id: string;
 }
 

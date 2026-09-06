@@ -1131,26 +1131,20 @@ export const panels = pgTable(
     uniqueIndex('panels_tenant_name_live_key')
       .on(table.tenantId, table.name)
       .where(sql`status <> 'ARCHIVED'`),
-    /**
-     * The list's page-key traversal: `(tenant, name, id)` over live panels.
+    /*
+     * The list's page-key traversal is NOT declared here.
      *
-     * The unique index above nearly covers it and is NOT enough. It stops at
-     * `(tenant_id, name)`, so the total `(name, id)` order needs a sort on top
-     * and the keyset comparison becomes a filter rather than a seek; and with
-     * the id absent the scan cannot be index-only, so every page pays a heap
-     * fetch per row to read a column it already needs for the cursor.
+     * `panels_tenant_created_page_idx` — `(tenant_id, created_at, id)` over
+     * live panels — is built concurrently, outside the migrator's transaction,
+     * by `online-indexes.ts`. Declaring it here would have drizzle-kit generate
+     * an ordinary `CREATE INDEX` migration for it, which is the blocking build
+     * that arrangement exists to avoid, and the drift check would never come
+     * back clean while both existed.
      *
-     * Measured rather than assumed, on twenty thousand panels: with the unique
-     * index alone the plan is an Index Scan plus an Incremental Sort; with this
-     * one it is an Index Only Scan whose Index Cond carries the
-     * `ROW(name, id) > ROW(...)` continuation.
-     *
-     * Same partial predicate, because the list a caller pages through is the
-     * live one.
+     * `panels_tenant_page_idx` was that index on `(tenant_id, name, id)`, and
+     * it is retired by 0026: the keyset moved off `name`, which an operator can
+     * edit and which therefore cannot order a stable traversal.
      */
-    index('panels_tenant_page_idx')
-      .on(table.tenantId, table.name, table.id)
-      .where(sql`status <> 'ARCHIVED'`),
     check('panels_status_check', enumCheck('status', PANEL_STATUSES)),
     check('panels_provider_type_check', enumCheck('provider_type', PROVIDER_TYPES)),
     /** An archived panel has a time; a live one does not. Neither state can lie. */

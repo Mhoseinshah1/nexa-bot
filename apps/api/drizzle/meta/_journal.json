@@ -183,6 +183,13 @@
       "when": 1788635840843,
       "tag": "0025_widen_provider_failure_kinds",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1788673613284,
+      "tag": "0026_retire_panels_page_index",
+      "breakpoints": true
     }
   ]
 }

@@ -100,8 +100,10 @@ export class DrizzlePanelRepository implements PanelRepository {
    * `SELECT p.id FROM panels` while production also joined credentials and
    * health, so a green plan said nothing about the real request.
    *
-   * `(tenant_id, name, id) WHERE status <> 'ARCHIVED'` serves it as an index
-   * only scan with the keyset continuation inside the Index Cond.
+   * `(tenant_id, created_at, id) WHERE status <> 'ARCHIVED'` serves it as an
+   * index only scan with the keyset continuation inside the Index Cond. That
+   * index is built ONLINE rather than by a migration — see
+   * `infrastructure/persistence/online-indexes.ts`.
    */
   static pageKeysQuery(
     scope: TenantContext,
@@ -111,12 +113,12 @@ export class DrizzlePanelRepository implements PanelRepository {
     const after =
       options.cursor === null
         ? sql`TRUE`
-        : sql`(${panels.name}, ${panels.id}) > (${options.cursor.name}, ${options.cursor.id}::uuid)`;
+        : sql`(${panels.createdAt}, ${panels.id}) > (${options.cursor.createdAt}::timestamptz, ${options.cursor.id}::uuid)`;
     return sql`
-      SELECT ${panels.id} AS id, ${panels.name} AS name
+      SELECT ${panels.id} AS id, ${panels.createdAt} AS created_at
         FROM ${panels}
        WHERE ${panels.tenantId} = ${scope.tenantId} AND ${live} AND ${after}
-       ORDER BY ${panels.name} ASC, ${panels.id} ASC
+       ORDER BY ${panels.createdAt} ASC, ${panels.id} ASC
        LIMIT ${options.limit + 1}
     `;
   }
@@ -172,7 +174,7 @@ export class DrizzlePanelRepository implements PanelRepository {
   ): Promise<{ panels: PanelView[]; nextCursor: PanelCursor | null }> {
     const executor = executorOf(this.db, tx);
     const limit = options.limit ?? PANEL_PAGE_DEFAULT;
-    const keys = await executor.execute<{ id: string; name: string }>(
+    const keys = await executor.execute<{ id: string; created_at: Date }>(
       DrizzlePanelRepository.pageKeysQuery(scope, {
         includeArchived: options.includeArchived,
         limit,
@@ -202,7 +204,9 @@ export class DrizzlePanelRepository implements PanelRepository {
     return {
       panels: ordered,
       nextCursor:
-        keys.rows.length > limit && last !== undefined ? { name: last.name, id: last.id } : null,
+        keys.rows.length > limit && last !== undefined
+          ? { createdAt: new Date(last.created_at), id: last.id }
+          : null,
     };
   }
 

@@ -40,24 +40,43 @@ import type { PanelView } from '../../modules/platform/panels/application/ports.
 /**
  * The cursor, opaque across the wire.
  *
- * Base64url of `(name, id)`. Opaque on purpose: a caller that parsed it would
- * be depending on an ordering this API has not promised, and would break the
- * day the list is ordered differently. A cursor that does not decode is treated
- * as no cursor rather than an error — the worst it can do is restart the
- * traversal, and refusing would turn a stale bookmark into a failed request.
+ * Base64url of `(id, created_at)`. Opaque on purpose: a caller that parsed it
+ * would be depending on an ordering this API has not promised, and would break
+ * the day the list is ordered differently. A cursor that does not decode is
+ * treated as no cursor rather than an error — the worst it can do is restart
+ * the traversal, and refusing would turn a stale bookmark into a failed
+ * request.
+ *
+ * EVERY component is validated, and that is the point rather than tidiness.
+ * The decoded id goes into a query that casts it to `uuid`, so `not-a-uuid`
+ * reached PostgreSQL as 22P02 and came back as a 500 — a caller could turn any
+ * text into an internal error by base64ing it. Restarting the traversal is the
+ * documented behaviour for a cursor this code cannot read, and a cursor whose
+ * id is not a uuid is one of those.
  */
+const CURSOR_MAX_LENGTH = 512;
+const CURSOR_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function encodeCursor(cursor: PanelCursor): string {
-  return Buffer.from(`${cursor.id}:${cursor.name}`, 'utf8').toString('base64url');
+  return Buffer.from(`${cursor.id}:${cursor.createdAt.toISOString()}`, 'utf8').toString('base64url');
 }
 
 function decodeCursor(raw: string): PanelCursor | null {
+  // Bounded before it is decoded: a megabyte of base64 is a megabyte this
+  // process would otherwise allocate and scan to reject.
+  if (raw.length === 0 || raw.length > CURSOR_MAX_LENGTH) return null;
   try {
     const decoded = Buffer.from(raw, 'base64url').toString('utf8');
     const separator = decoded.indexOf(':');
     if (separator === -1) return null;
     const id = decoded.slice(0, separator);
-    const name = decoded.slice(separator + 1);
-    return id === '' ? null : { id, name };
+    // Any UUID version, not v7 specifically. The only thing this value has to
+    // be is a legal `uuid` literal; refusing a legal one would restart the
+    // traversal for ever rather than fail it, which is the worse outcome.
+    if (!CURSOR_UUID.test(id)) return null;
+    const createdAt = new Date(decoded.slice(separator + 1));
+    if (Number.isNaN(createdAt.getTime())) return null;
+    return { id: id.toLowerCase(), createdAt };
   } catch {
     return null;
   }

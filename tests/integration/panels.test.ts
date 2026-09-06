@@ -17,6 +17,7 @@ import {
   type ProviderType,
 } from '@nexa/contracts';
 import { DrizzlePanelCredentialStore } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-credentials';
+import type { PanelCursor } from '../../apps/api/src/modules/platform/panels/application/ports';
 import { PanelService } from '../../apps/api/src/modules/platform/panels/application/panel.service';
 import {
   IMPLEMENTED_PROVIDER_TYPES,
@@ -1544,7 +1545,7 @@ describe('the panel list is a bounded, stable traversal', () => {
 
   const walk = async (actor: ActorContext, scope: typeof tenantA, limit: number) => {
     const seen: string[] = [];
-    let cursor: { name: string; id: string } | null | undefined = undefined;
+    let cursor: PanelCursor | null | undefined = undefined;
     for (let guard = 0; guard < 100; guard += 1) {
       const page = await service().list(scope, actor, {
         limit,
@@ -1568,37 +1569,75 @@ describe('the panel list is a bounded, stable traversal', () => {
     expect(seen.slice().sort()).toEqual(created.slice().sort());
   });
 
-  it('is stable when panels sort equally by name', async () => {
-    // Names are the ordering's first key, so a tie must be broken by something
-    // total or a keyset walk skips and repeats rows.
-    //
-    // Among LIVE panels a tie cannot happen: `panels_tenant_name_live_key`
-    // makes the name unique. Archiving releases the name, so the ties are in
-    // the archived-inclusive listing — which is why this drives the repository
-    // directly. Testing only the live path would leave the tiebreaker
-    // defensive and unproven, which is how it was when first written.
+  it('is stable when panels share a creation timestamp', async () => {
+    // `created_at` is the ordering's first key, so a tie must be broken by
+    // something total or a keyset walk skips and repeats rows. Two panels
+    // created inside one clock tick — a restore, a bulk import, a seed — share
+    // it, so the tiebreaker is not defensive.
     const repo = new DrizzlePanelRepository(ctx.container.database.db);
     const created: string[] = [];
     for (let i = 0; i < 5; i += 1) {
-      const id = await make(owner, tenantA, 'the-same-name');
-      created.push(id);
-      await service().setStatus(tenantA, owner, id, {
-        status: 'ARCHIVED',
-        idempotencyKey: pageKey(),
-      });
+      created.push(await make(owner, tenantA, `tied-${i}`));
     }
+    // Forced rather than raced: a test that hoped five inserts landed in the
+    // same microsecond would pass for the wrong reason on a slow machine.
+    await ctx.container.database.withClient((client) =>
+      client.query(`UPDATE panels SET created_at = '2020-01-01T00:00:00Z' WHERE tenant_id = $1`, [
+        tenantA.tenantId,
+      ]),
+    );
 
     const seen: string[] = [];
-    let cursor: { name: string; id: string } | null = null;
+    let cursor: PanelCursor | null = null;
     for (let guard = 0; guard < 20; guard += 1) {
       const page = await repo.list(tenantA, { includeArchived: true, limit: 2, cursor });
       seen.push(...page.panels.map((view) => view.panel.id));
       if (page.nextCursor === null) break;
       cursor = page.nextCursor;
     }
-    // Five rows sharing one name, walked two at a time: every one exactly once.
+    // Five rows sharing one timestamp, walked two at a time: every one once.
     expect(new Set(seen).size).toBe(seen.length);
     expect(seen.slice().sort()).toEqual(created.slice().sort());
+  });
+
+  it('is not disturbed by a rename between two pages', async () => {
+    // The keyset used to be ordered by `name`, which an operator can edit.
+    // Renaming a panel already returned to a value AFTER the cursor brought it
+    // back on a later page; renaming one not yet reached to a value BEFORE the
+    // cursor removed it from the traversal entirely. No malformed cursor and no
+    // concurrency — an ordinary rename between two page fetches did it.
+    const created: string[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      created.push(await make(owner, tenantA, `walk-${String(i).padStart(2, '0')}`));
+    }
+
+    const seen: string[] = [];
+    const first = await service().list(tenantA, owner, { limit: 2 });
+    seen.push(...first.panels.map((view) => view.panel.id));
+    expect(first.nextCursor).not.toBeNull();
+
+    // One panel already returned, renamed to the END of the alphabet; one not
+    // yet reached, renamed to the START of it.
+    const returned = seen[0]!;
+    const unseen = created.find((id) => !seen.includes(id))!;
+    await service().update(tenantA, owner, returned, {
+      name: 'zzz-renamed-after-the-cursor',
+      idempotencyKey: pageKey(),
+    });
+    await service().update(tenantA, owner, unseen, {
+      name: 'aaa-renamed-before-the-cursor',
+      idempotencyKey: pageKey(),
+    });
+
+    let cursor = first.nextCursor;
+    for (let guard = 0; guard < 20 && cursor !== null; guard += 1) {
+      const page = await service().list(tenantA, owner, { limit: 2, cursor });
+      seen.push(...page.panels.map((view) => view.panel.id));
+      cursor = page.nextCursor;
+    }
+
+    expect(new Set(seen).size, 'a panel was returned twice').toBe(seen.length);
+    expect(seen.slice().sort(), 'a panel was skipped').toEqual(created.slice().sort());
   });
 
   it('reads only the page it returns, not the whole collection', async () => {
@@ -1625,6 +1664,15 @@ describe('the panel list is a bounded, stable traversal', () => {
         [tenantA.tenantId, bulk],
       );
       await client.query('ANALYZE panels');
+    });
+    // The timestamp the bulk rows share, read back rather than assumed: the
+    // default is the database's clock, not this process's.
+    const bulkCreatedAt = await ctx.container.database.withClient(async (client) => {
+      const { rows } = await client.query<{ created_at: Date }>(
+        `SELECT created_at FROM panels WHERE tenant_id = $1::uuid ORDER BY created_at DESC LIMIT 1`,
+        [tenantA.tenantId],
+      );
+      return rows[0]!.created_at;
     });
 
     const rowsRead = async (statement: SQL, relation: string): Promise<number> => {
@@ -1655,7 +1703,10 @@ describe('the panel list is a bounded, stable traversal', () => {
     const deep = DrizzlePanelRepository.pageKeysQuery(tenantA, {
       includeArchived: false,
       limit: 50,
-      cursor: { name: 'bulk-0003000', id: '00000000-0000-0000-0000-000000000000' },
+      // Deep into the collection on the IMMUTABLE key the cursor now uses.
+      // The bulk rows all share one `created_at`, so this is also the tie case:
+      // the seek has to continue on `id` inside the same timestamp.
+      cursor: { createdAt: bulkCreatedAt, id: '00000000-0000-0000-0000-000000000000' },
     });
     expect(await rowsRead(deep, 'panels')).toBeLessThanOrEqual(51);
 

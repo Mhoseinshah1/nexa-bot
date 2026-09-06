@@ -309,6 +309,77 @@ describe('panel HTTP surface', () => {
     }
   });
 
+  it('answers a malformed cursor by restarting the traversal, not with a 500', async () => {
+    // The cursor decodes to `<id>:<created_at>` and the id goes into a query
+    // that casts it to `uuid`. Nothing validated it, so any text a caller
+    // base64url-encoded reached PostgreSQL as 22P02 and came back as an
+    // internal error — a caller could turn `not-a-uuid:x` into a 500.
+    //
+    // The documented behaviour for a cursor this code cannot read is to
+    // restart the traversal, so each of these answers the FIRST page.
+    const created = panelResponseSchema.parse((await createPanel(ownerCookie)).json());
+    // TWO panels, so page one has a successor and the honoured-cursor
+    // assertion at the end is not vacuous.
+    await createPanel(ownerCookie, { name: 'Second panel for the cursor walk' });
+    const firstPage = panelListResponseSchema.parse(
+      (await get(`${PANEL_ROUTES.list}?limit=1`, ownerCookie)).json(),
+    );
+    expect(firstPage.panels).toHaveLength(1);
+
+    const b64 = (text: string) => Buffer.from(text, 'utf8').toString('base64url');
+    const cursors = [
+      // Not base64url at all.
+      '!!!not base64!!!',
+      // Decodes, but has no separator.
+      b64('nothing-to-split-on'),
+      // An empty id.
+      b64(':2024-01-01T00:00:00.000Z'),
+      // The shape of the bug: an id that is not a uuid.
+      b64('not-a-uuid:2024-01-01T00:00:00.000Z'),
+      b64(`../../etc/passwd:2024-01-01T00:00:00.000Z`),
+      // A real uuid with a timestamp that is not one.
+      b64(`${created.panel.id}:not-a-time`),
+      b64(`${created.panel.id}:`),
+      // Longer than any cursor this API issues.
+      'A'.repeat(4_096),
+      // Empty.
+      '',
+    ];
+
+    for (const cursor of cursors) {
+      const response = await get(
+        `${PANEL_ROUTES.list}?limit=1&cursor=${encodeURIComponent(cursor)}`,
+        ownerCookie,
+      );
+      expect(
+        response.statusCode,
+        `cursor ${cursor.slice(0, 40)} answered a server error`,
+      ).toBeLessThan(500);
+      // And it restarted rather than half-answering: the same first page.
+      if (response.statusCode === 200) {
+        const body = panelListResponseSchema.parse(response.json());
+        expect(body.panels.map((panel) => panel.id)).toEqual(
+          firstPage.panels.map((panel) => panel.id),
+        );
+      }
+    }
+
+    // A cursor this API issued is still honoured, so the validation did not
+    // simply refuse everything.
+    expect(firstPage.nextCursor).not.toBeNull();
+    const second = panelListResponseSchema.parse(
+      (
+        await get(
+          `${PANEL_ROUTES.list}?limit=1&cursor=${encodeURIComponent(firstPage.nextCursor!)}`,
+          ownerCookie,
+        )
+      ).json(),
+    );
+    expect(second.panels.map((panel) => panel.id)).not.toEqual(
+      firstPage.panels.map((panel) => panel.id),
+    );
+  });
+
   it('refuses an unprivileged but authenticated caller', async () => {
     const created = panelResponseSchema.parse((await createPanel(ownerCookie)).json());
 
