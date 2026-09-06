@@ -292,6 +292,7 @@ export const ROUTES = {
       freshForMs: 900000,
       tenantFreshPanelCeiling: 60,
       installationFreshPanelCeiling: 900,
+      tenantTurnCeiling: 60,
       schedulerCapacityExceeded: false,
     },
   },
@@ -402,7 +403,10 @@ export const ROUTES = {
       },
     ],
   },
-  '/ops-log': { events: EVENTS },
+  // `nextCursor` is part of the response contract; a fixture without it fails
+  // schema parsing in the real client and every capture of an ops-log surface
+  // renders the query error state instead of the page.
+  '/ops-log': { events: EVENTS, nextCursor: null },
   '/notifications': { notifications: NOTIFICATIONS, nextCursor: null },
   '/admins': {
     admins: [

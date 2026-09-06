@@ -70,6 +70,41 @@ describe('planned surfaces', () => {
     },
   );
 
+  /**
+   * T34 — the NEGATIVE cases, which are the only ones that can fail.
+   *
+   * `isCurrent(p, p)` proves identity and nothing else: a function that always
+   * returned true, or the bare `currentPath.startsWith(entryPath)` this
+   * replaced — which marks the dashboard current on every route, because every
+   * path starts with `/` — both leave it green while several sidebar entries
+   * expose `aria-current="page"` at once.
+   */
+  describe('the current-navigation rule', () => {
+    it('marks exactly one entry current on any given path', () => {
+      for (const entry of NAV) {
+        const current = NAV.filter((candidate) => isCurrent(candidate.path, entry.path));
+        expect(
+          current.map((one) => one.path),
+          entry.path,
+        ).toEqual([entry.path]);
+      }
+    });
+
+    it('does not mark the dashboard current on a nested route', () => {
+      // The whole `startsWith` trap: every path begins with '/'.
+      expect(isCurrent('/', '/panels')).toBe(false);
+      expect(isCurrent('/', '/panels/01a05e35-c9ad-7e93-bef3-1ed9b55292c8')).toBe(false);
+      expect(isCurrent('/', '/')).toBe(true);
+    });
+
+    it('marks a section current on its own detail routes and on nothing else', () => {
+      expect(isCurrent('/panels', '/panels/01a05e35-c9ad-7e93-bef3-1ed9b55292c8')).toBe(true);
+      // A sibling whose path merely SHARES a prefix is a different section.
+      expect(isCurrent('/panels', '/panels-archive')).toBe(false);
+      expect(isCurrent('/panels', '/settings')).toBe(false);
+    });
+  });
+
   it('serves the 404 for a path no entry claims', () => {
     stubApi([]);
     const resolved = resolve({ path: '/definitely-not-a-route', query: new URLSearchParams() }, []);

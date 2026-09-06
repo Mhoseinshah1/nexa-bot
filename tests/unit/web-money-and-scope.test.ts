@@ -296,6 +296,34 @@ describe('the settings the owner revisions add', () => {
     ).toBe(false);
   });
 
+  /**
+   * T08 — the SMALLEST accepted top-up cannot be negative.
+   *
+   * The key reused the generic `moneySchema`, whose signed pattern is right for
+   * a balance and a debit and wrong here: `-1` validated, stored, and was
+   * reported back as a legitimate minimum. Zero is the documented sentinel for
+   * "no minimum", so the floor is zero and the refinement lives on THIS key
+   * rather than on the shared money type.
+   */
+  it('refuses a negative top-up minimum, and keeps zero as the no-minimum sentinel', () => {
+    for (const amountMinor of ['-1', '-20000', '-9007199254740993']) {
+      const parsed = parseSettingValue('wallet.topup.minimum', { amountMinor, currency: 'IRT' });
+      expect(parsed.ok, amountMinor).toBe(false);
+    }
+    // Zero is not a refusal — it is the documented way to say there is no
+    // minimum, and refusing it would be a different bug.
+    expect(
+      parseSettingValue('wallet.topup.minimum', { amountMinor: '0', currency: 'IRT' }).ok,
+    ).toBe(true);
+    // And an amount past 2^53, which is the reason this is a string.
+    expect(
+      parseSettingValue('wallet.topup.minimum', {
+        amountMinor: '9007199254740993',
+        currency: 'IRT',
+      }).ok,
+    ).toBe(true);
+  });
+
   it('marks the four as having no consumer, and everything older as having one', () => {
     const planned = SETTINGS.filter((s) => s.consumer === 'PLANNED').map((s) => s.key);
     expect(planned.sort()).toEqual(

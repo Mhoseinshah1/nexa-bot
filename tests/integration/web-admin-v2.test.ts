@@ -1,11 +1,13 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  ADMIN_ROUTES,
   API_PREFIX,
   AUTH_ROUTES,
   CONTROL_ROUTES,
   monitorProfileResponseSchema,
   operationalEventListResponseSchema,
   SESSION_COOKIE_NAME,
+  systemContext,
   settingListResponseSchema,
   settingWriteResponseSchema,
   notificationListResponseSchema,
@@ -13,6 +15,7 @@ import {
 import {
   schedulerFreshPanelUpperBound,
   tenantBudgetFreshPanelUpperBound,
+  tenantTurnFreshTenantUpperBound,
 } from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
@@ -188,6 +191,156 @@ describe('the Web Admin V2 surface', () => {
     });
 
     /**
+     * T15 — a RECOVERY is not an open condition.
+     *
+     * This is the same defect as the denial above, arriving from the other
+     * direction, and it was introduced by the fix for it. A recovery row is
+     * INSERTED by the recorder with its own `resolvedAt` left null: it resolves
+     * the preceding failure, never itself, and nothing in this product ever
+     * resolves a recovery. So a conditions scope built from the whole lifecycle
+     * returned `settings.stored_value_valid` from `open=true` — and the card
+     * headed "needs attention" filled with the rows that say attention is no
+     * longer needed. Driven through the real recorder and the real HTTP
+     * endpoint, because the bug lives in the seam between them.
+     */
+    it('never returns a recovery as an open condition', async () => {
+      await api.container.opsLog.record(tenantA, {
+        code: 'settings.stored_value_invalid',
+        severity: 'ERROR',
+        message: 'a stored setting stopped parsing',
+        dedupeKey: 'settings.stored_value_invalid:ops.notifications.min_severity',
+      });
+      // The production recovery path: a row of its own that CLOSES the failure.
+      await api.container.opsLog.record(tenantA, {
+        code: 'settings.stored_value_valid',
+        severity: 'INFO',
+        message: 'the stored setting parses again',
+        recoversCode: 'settings.stored_value_invalid',
+      });
+
+      const open = operationalEventListResponseSchema.parse(
+        (
+          await get(`${CONTROL_ROUTES.opsLog}?scope=MANAGEMENT_CONDITIONS&open=true`, ownerCookie)
+        ).json(),
+      );
+      // The failure was closed by the recovery, so nothing is open...
+      expect(open.events).toEqual([]);
+
+      // ...and specifically NOT the recovery, whose own `resolvedAt` is null.
+      const all = operationalEventListResponseSchema.parse(
+        (await get(`${CONTROL_ROUTES.opsLog}?scope=MANAGEMENT`, ownerCookie)).json(),
+      );
+      const recovery = all.events.find((event) => event.code === 'settings.stored_value_valid');
+      expect(recovery, 'the recovery is still readable as history').toBeDefined();
+      expect(recovery?.resolvedAt, 'nothing resolves a recovery').toBeNull();
+
+      const conditions = operationalEventListResponseSchema.parse(
+        (await get(`${CONTROL_ROUTES.opsLog}?scope=MANAGEMENT_CONDITIONS`, ownerCookie)).json(),
+      );
+      expect(conditions.events.map((event) => event.code)).not.toContain(
+        'settings.stored_value_valid',
+      );
+    });
+
+    /**
+     * T14 — a malformed `open` is a 400, not the opposite answer.
+     *
+     * `query.open === 'true'` turned every other spelling into `false`, so
+     * `open=tru` answered 200 with the whole history where the caller asked for
+     * outstanding conditions only.
+     */
+    it('refuses an open filter that is neither true nor false', async () => {
+      for (const value of ['tru', 'TRUE', '1', 'yes', '']) {
+        const response = await get(
+          `${CONTROL_ROUTES.opsLog}?scope=MANAGEMENT_CONDITIONS&open=${value}`,
+          ownerCookie,
+        );
+        expect(response.statusCode, `open=${value}`).toBe(400);
+      }
+      // Both accepted spellings still work.
+      for (const value of ['true', 'false']) {
+        expect((await get(`${CONTROL_ROUTES.opsLog}?open=${value}`, ownerCookie)).statusCode).toBe(
+          200,
+        );
+      }
+    });
+
+    /**
+     * T18 — a malformed cursor id is a 400, not a 500.
+     *
+     * `beforeId` is compared against a `uuid` column, so a short string reached
+     * the driver as 22P02 and came back as an internal error on a request the
+     * caller got wrong.
+     */
+    it('refuses a cursor id that is not an identifier', async () => {
+      const response = await get(
+        `${CONTROL_ROUTES.opsLog}?before=2026-09-06T08:00:00.000Z&beforeId=not-a-uuid`,
+        ownerCookie,
+      );
+      expect(response.statusCode).toBe(400);
+    });
+
+    it('refuses a page size outside the bounds instead of coercing it', async () => {
+      for (const limit of ['0', '-1', '5000', 'many']) {
+        expect(
+          (await get(`${CONTROL_ROUTES.opsLog}?limit=${limit}`, ownerCookie)).statusCode,
+          `limit=${limit}`,
+        ).toBe(400);
+      }
+    });
+
+    /**
+     * T06 — `nextCursor` answers "is there another page", and a FULL last page
+     * is the case a length comparison gets wrong.
+     *
+     * With exactly `limit` matching rows the page is full and there is nothing
+     * behind it. The reader over-fetches one row so the server can tell the two
+     * apart, and the alerts pager reads that answer instead of guessing.
+     */
+    it('reports no next cursor on a page that is exactly full', async () => {
+      for (let index = 0; index < 3; index += 1) {
+        await api.container.opsLog.record(tenantA, {
+          code: 'access.permission_denied',
+          severity: 'WARN',
+          message: `denial ${index}`,
+        });
+      }
+
+      const exact = operationalEventListResponseSchema.parse(
+        (await get(`${CONTROL_ROUTES.opsLog}?scope=MANAGEMENT&limit=3`, ownerCookie)).json(),
+      );
+      expect(exact.events).toHaveLength(3);
+      // Full, and final. A `length === limit` test would have offered a page
+      // that does not exist.
+      expect(exact.nextCursor).toBeNull();
+
+      const first = operationalEventListResponseSchema.parse(
+        (await get(`${CONTROL_ROUTES.opsLog}?scope=MANAGEMENT&limit=2`, ownerCookie)).json(),
+      );
+      expect(first.events).toHaveLength(2);
+      expect(first.nextCursor).not.toBeNull();
+      // And the cursor points at the LAST row returned, so the next page
+      // continues rather than skipping one.
+      expect(first.nextCursor?.id).toBe(first.events[1]?.id);
+
+      const second = operationalEventListResponseSchema.parse(
+        (
+          await get(
+            `${CONTROL_ROUTES.opsLog}?scope=MANAGEMENT&limit=2` +
+              `&before=${encodeURIComponent(first.nextCursor?.at ?? '')}` +
+              `&beforeId=${first.nextCursor?.id ?? ''}`,
+            ownerCookie,
+          )
+        ).json(),
+      );
+      expect(second.events).toHaveLength(1);
+      expect(second.nextCursor).toBeNull();
+      // Every row seen exactly once across the two pages.
+      const ids = [...first.events, ...second.events].map((event) => event.id);
+      expect(new Set(ids).size).toBe(3);
+    });
+
+    /**
      * The `admin.` PREFIX that used to be in the contract matched nothing:
      * `admin.create` and friends are audit `action` values, not event codes.
      * The four codes below are what the identity service now records beside
@@ -232,6 +385,63 @@ describe('the Web Admin V2 surface', () => {
         (await get(`${CONTROL_ROUTES.opsLog}?scope=MANAGEMENT`, ownerCookie)).json(),
       );
       expect(after.events.map((event) => event.code)).not.toContain('admin.some_future_change');
+    });
+
+    /**
+     * T26 — the codes come from the REAL administrator operations.
+     *
+     * Every assertion above records its rows through `container.opsLog`
+     * directly, which proves the SQL can find them and nothing about whether
+     * anything writes them. Replacing `recordAdminChange`'s body with a no-op
+     * left the whole management scope green while creating an administrator,
+     * suspending one, changing their roles or their password produced nothing
+     * on the alerts page at all. So this block drives the four operations over
+     * real HTTP and reads back what the endpoint returns.
+     */
+    it('records an operational event for each real administrator change', async () => {
+      const created = await post(ADMIN_ROUTES.create, ownerCookie, {
+        username: 'newcomer',
+        displayName: 'Newcomer',
+        password: 'a-perfectly-fine-password',
+        roleKeys: ['support'],
+      });
+      expect([200, 201], created.body).toContain(created.statusCode);
+      const newcomerId = (created.json() as { id: string }).id;
+
+      const disabled = await post(ADMIN_ROUTES.status(newcomerId), ownerCookie, {
+        status: 'DISABLED',
+        reason: 'They have left.',
+      });
+      expect([200, 201], disabled.body).toContain(disabled.statusCode);
+
+      const reroled = await post(ADMIN_ROUTES.roles(newcomerId), ownerCookie, {
+        roleKeys: ['receipt_reviewer'],
+        reason: 'A different job now.',
+      });
+      expect([200, 201], reroled.body).toContain(reroled.statusCode);
+
+      // The owner's own password, through the auth surface — the fourth code.
+      const changed = await post(AUTH_ROUTES.password, ownerCookie, {
+        currentPassword: 'the-owners-real-password',
+        newPassword: 'an-entirely-different-password',
+      });
+      expect([200, 201], changed.body).toContain(changed.statusCode);
+
+      // A password change kills every session that administrator holds, which
+      // is itself the behaviour under test elsewhere — so sign in again.
+      const freshCookie = await cookieFor('owner', 'an-entirely-different-password');
+      const body = operationalEventListResponseSchema.parse(
+        (await get(`${CONTROL_ROUTES.opsLog}?scope=MANAGEMENT&limit=50`, freshCookie)).json(),
+      );
+      const codes = new Set(body.events.map((event) => event.code));
+      for (const code of [
+        'admin.created',
+        'admin.status_changed',
+        'admin.roles_changed',
+        'admin.password_changed',
+      ]) {
+        expect(codes.has(code), `${code} was not recorded by the real operation`).toBe(true);
+      }
     });
   });
 
@@ -441,6 +651,32 @@ describe('the Web Admin V2 surface', () => {
       expect(body.notifications).toHaveLength(2);
       expect(body.nextCursor).toBeNull();
     });
+
+    /**
+     * T17 — the case a short page cannot detect.
+     *
+     * `found.length === size` is true both for the last page and for a page
+     * with more behind it, so the surface was offered an "older" page that did
+     * not exist and one press past the end rendered an empty history over
+     * intents that were one page back. The reader asks for one row more than it
+     * returns.
+     */
+    it('reports no next cursor on a page that is exactly full', async () => {
+      await recordIntents(3);
+      const body = notificationListResponseSchema.parse(
+        (await get(`${CONTROL_ROUTES.notifications}?limit=3`, ownerCookie)).json(),
+      );
+      expect(body.notifications).toHaveLength(3);
+      expect(body.nextCursor).toBeNull();
+    });
+
+    it('refuses a notification cursor id that is not an identifier', async () => {
+      const response = await get(
+        `${CONTROL_ROUTES.notifications}?before=2026-09-06T08:00:00.000Z&beforeId=not-a-uuid`,
+        ownerCookie,
+      );
+      expect(response.statusCode).toBe(400);
+    });
   });
 
   describe('the monitor profile', () => {
@@ -475,10 +711,181 @@ describe('the Web Admin V2 surface', () => {
           config.PANEL_MONITOR_HEALTHY_INTERVAL_MS,
         ),
       );
+      // T21 — the THIRD bound, which nothing reported. The scheduler reaches
+      // `tenantsPerTick x (interval / tick)` tenants inside a freshness window;
+      // a tenant beyond that waits longer than the interval for its first probe
+      // and goes stale while both panel ceilings say the fleet fits.
+      expect(monitor.tenantTurnCeiling).toBe(
+        tenantTurnFreshTenantUpperBound(
+          config.PANEL_MONITOR_TENANTS_PER_TICK,
+          config.PANEL_MONITOR_TICK_MS,
+          config.PANEL_MONITOR_HEALTHY_INTERVAL_MS,
+        ),
+      );
       // The two are NOT interchangeable, which is what a swap would break.
       expect(monitor.tenantFreshPanelCeiling).not.toBe(monitor.installationFreshPanelCeiling);
       // Nothing is over capacity on a fresh installation with no panels.
       expect(monitor.schedulerCapacityExceeded).toBe(false);
+    });
+
+    /**
+     * T31 — the alarm, with a REAL condition open.
+     *
+     * `schedulerCapacityExceeded` was only ever asserted false, on an empty
+     * database, beside a unit test whose fake reader returned whatever the case
+     * wanted. So hard-coding `DrizzleOperationalEventReader.systemConditionIsOpen`
+     * to false, or breaking its null-tenant predicate, left every test green
+     * while the only Web Admin route for the installation-capacity alarm could
+     * never report it.
+     *
+     * The row is written the way the monitor writes it: under `SYSTEM_SCOPE`,
+     * with a null tenant — which is also why the tenant-scoped log reader can
+     * never see it and this endpoint has to answer.
+     */
+    it('reports an installation capacity condition that is really open', async () => {
+      const before = monitorProfileResponseSchema.parse(
+        (await get(CONTROL_ROUTES.systemMonitor, ownerCookie)).json(),
+      );
+      expect(before.monitor.schedulerCapacityExceeded).toBe(false);
+
+      await api.container.opsLog.record(systemContext('a capacity assessment, in a test'), {
+        code: 'panel.monitor.scheduler_capacity_exceeded',
+        severity: 'ERROR',
+        message: 'the installation asks for more starts than the scheduler can make',
+        dedupeKey: 'panel.monitor.scheduler_capacity_exceeded',
+      });
+
+      const during = monitorProfileResponseSchema.parse(
+        (await get(CONTROL_ROUTES.systemMonitor, ownerCookie)).json(),
+      );
+      expect(during.monitor.schedulerCapacityExceeded).toBe(true);
+
+      // And it CLOSES: the recovery resolves the failure row, and the alarm
+      // stops — so this is not merely "any row makes it true for ever".
+      await api.container.opsLog.record(systemContext('a capacity assessment, in a test'), {
+        code: 'panel.monitor.scheduler_capacity_ok',
+        severity: 'INFO',
+        message: 'the installation is back under its ceiling',
+        recoversCode: 'panel.monitor.scheduler_capacity_exceeded',
+      });
+
+      const after = monitorProfileResponseSchema.parse(
+        (await get(CONTROL_ROUTES.systemMonitor, ownerCookie)).json(),
+      );
+      expect(after.monitor.schedulerCapacityExceeded).toBe(false);
+    });
+
+    /**
+     * The null-tenant predicate itself: a row with the same code under a TENANT
+     * is not an installation condition, and must not raise the alarm.
+     */
+    it('does not mistake a tenant-scoped row for an installation condition', async () => {
+      await api.container.opsLog.record(tenantA, {
+        code: 'panel.monitor.scheduler_capacity_exceeded',
+        severity: 'ERROR',
+        message: 'recorded against a tenant, which the monitor never does',
+        dedupeKey: 'tenant-scoped-capacity',
+      });
+
+      const body = monitorProfileResponseSchema.parse(
+        (await get(CONTROL_ROUTES.systemMonitor, ownerCookie)).json(),
+      );
+      expect(body.monitor.schedulerCapacityExceeded).toBe(false);
+    });
+
+    /**
+     * T04 — the EFFECTIVE probe cooldown, over real HTTP, from a deployment
+     * whose two settings disagree.
+     *
+     * The probe core floors the cooldown at what one probe can actually spend
+     * on the wire — `max(PANEL_PROBE_COOLDOWN_MS, PANEL_HTTP_TIMEOUT_MS x (1 +
+     * retries))` — because a shorter window would let a second request start
+     * while the first is still open. The profile published the RAW setting, so
+     * a deployment configured at one second reported a one-second cooldown
+     * while every panel was held for the full HTTP budget. The endpoint's whole
+     * contract is that it describes what this installation is running.
+     *
+     * A second app, with its own configuration, because the defect is in what
+     * `createContainer` hands to two different objects and no test of either
+     * one alone can see it.
+     */
+    it('reports the cooldown the probes actually obey, not the raw setting', async () => {
+      const config = testConfig({
+        WEB_ADMIN_ORIGINS: ORIGIN,
+        PANEL_PROBE_COOLDOWN_MS: '1000',
+        PANEL_HTTP_TIMEOUT_MS: '20000',
+      });
+      const other = await createApiApp(config);
+      try {
+        const login = await other.app
+          .getHttpAdapter()
+          .getInstance()
+          .inject({
+            method: 'POST',
+            url: `${API_PREFIX}${AUTH_ROUTES.login}`,
+            headers: { origin: ORIGIN },
+            payload: { username: 'owner', password: 'the-owners-real-password' },
+          } as never);
+        const header = String(login.headers['set-cookie'] ?? '');
+        const cookie = `${SESSION_COOKIE_NAME}=${
+          new RegExp(`${SESSION_COOKIE_NAME}=([^;]+)`).exec(header)?.[1] ?? ''
+        }`;
+
+        const response = await other.app
+          .getHttpAdapter()
+          .getInstance()
+          .inject({
+            method: 'GET',
+            url: `${API_PREFIX}${CONTROL_ROUTES.systemMonitor}`,
+            headers: { cookie, origin: ORIGIN },
+          } as never);
+        const { monitor } = monitorProfileResponseSchema.parse(response.json());
+
+        // NOT the configured 1000.
+        expect(monitor.probeCooldownMs).not.toBe(config.PANEL_PROBE_COOLDOWN_MS);
+        expect(monitor.probeCooldownMs).toBe(20_000);
+      } finally {
+        await other.close();
+      }
+    });
+
+    it('reports the configured cooldown when it is above the HTTP floor', async () => {
+      // The other direction, so this is not "always report the floor": a
+      // constant would pass the case above and fail here.
+      const config = testConfig({
+        WEB_ADMIN_ORIGINS: ORIGIN,
+        PANEL_PROBE_COOLDOWN_MS: '600000',
+        PANEL_HTTP_TIMEOUT_MS: '10000',
+      });
+      const other = await createApiApp(config);
+      try {
+        const login = await other.app
+          .getHttpAdapter()
+          .getInstance()
+          .inject({
+            method: 'POST',
+            url: `${API_PREFIX}${AUTH_ROUTES.login}`,
+            headers: { origin: ORIGIN },
+            payload: { username: 'owner', password: 'the-owners-real-password' },
+          } as never);
+        const header = String(login.headers['set-cookie'] ?? '');
+        const cookie = `${SESSION_COOKIE_NAME}=${
+          new RegExp(`${SESSION_COOKIE_NAME}=([^;]+)`).exec(header)?.[1] ?? ''
+        }`;
+
+        const response = await other.app
+          .getHttpAdapter()
+          .getInstance()
+          .inject({
+            method: 'GET',
+            url: `${API_PREFIX}${CONTROL_ROUTES.systemMonitor}`,
+            headers: { cookie, origin: ORIGIN },
+          } as never);
+        const { monitor } = monitorProfileResponseSchema.parse(response.json());
+        expect(monitor.probeCooldownMs).toBe(600_000);
+      } finally {
+        await other.close();
+      }
     });
 
     it('refuses a caller without panels.view', async () => {

@@ -152,7 +152,11 @@ export function setting(overrides: Record<string, unknown> = {}): Record<string,
 export function event(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: '01a05e35-c9ad-7e93-bef3-1ed9b55292c9',
-    code: 'admin.roles_change',
+    // A code a production path actually writes. `admin.roles_change` was an
+    // invention — the audit ACTION is `admin.roles_change`, the operational
+    // event CODE is `admin.roles_changed` — so every assertion built on it was
+    // about a row nothing inserts.
+    code: 'admin.roles_changed',
     severity: 'WARN',
     message: 'Roles changed.',
     context: null,

@@ -346,15 +346,21 @@ describe('panels', () => {
    * and so no single ordering can hide the next version of this.
    */
   const soleCredential = [
-    ['username', USERNAME, 'usernameSetAt'],
-    ['password', PASSWORD, 'passwordSetAt'],
-    ['apiToken', TOKEN, 'apiTokenSetAt'],
+    // The PROVIDER travels with the field, because a credential outside a
+    // provider's declared shape is refused at the service: `marzban` has no
+    // API token, `sanaei` accepts all three. Writing `marzban` here anyway
+    // would have made the token case a test of the refusal, not of the
+    // projection it is named for.
+    ['username', USERNAME, 'usernameSetAt', 'marzban'],
+    ['password', PASSWORD, 'passwordSetAt', 'marzban'],
+    ['apiToken', TOKEN, 'apiTokenSetAt', 'sanaei'],
   ] as const;
 
-  for (const [field, value, timestamp] of soleCredential) {
+  for (const [field, value, timestamp, providerType] of soleCredential) {
     it(`reports ${field} as configured when it is the only credential set`, async () => {
       const { view } = await create(owner, tenantA, {
         name: `Only ${field}`,
+        providerType,
         credentials: { [field]: value },
       });
 
@@ -402,6 +408,10 @@ describe('panels', () => {
 
   it('stores a v2 envelope and no plaintext anywhere in the credential row', async () => {
     const { view } = await create(owner, tenantA, {
+      // `sanaei`, whose shape names all three. Marzban authenticates with a
+      // username and a password, and the service refuses a token it would
+      // store and never use.
+      providerType: 'sanaei',
       credentials: { username: USERNAME, password: PASSWORD, apiToken: TOKEN },
     });
 
@@ -426,6 +436,10 @@ describe('panels', () => {
 
   it('finds no plaintext credential anywhere in the database', async () => {
     await create(owner, tenantA, {
+      // `sanaei`, whose shape names all three. Marzban authenticates with a
+      // username and a password, and the service refuses a token it would
+      // store and never use.
+      providerType: 'sanaei',
       credentials: { username: USERNAME, password: PASSWORD, apiToken: TOKEN },
     });
 
@@ -529,6 +543,10 @@ describe('panels', () => {
 
   it('removes a credential only when explicitly told to', async () => {
     const { view } = await create(owner, tenantA, {
+      // `sanaei`, whose shape names all three. Marzban authenticates with a
+      // username and a password, and the service refuses a token it would
+      // store and never use.
+      providerType: 'sanaei',
       credentials: { username: USERNAME, password: PASSWORD, apiToken: TOKEN },
     });
 
@@ -555,6 +573,10 @@ describe('panels', () => {
 
   it('records a credential replacement as replaced and a removal as removed', async () => {
     const { view } = await create(owner, tenantA, {
+      // `sanaei`, whose shape names all three. Marzban authenticates with a
+      // username and a password, and the service refuses a token it would
+      // store and never use.
+      providerType: 'sanaei',
       credentials: { username: USERNAME, password: PASSWORD, apiToken: TOKEN },
     });
 

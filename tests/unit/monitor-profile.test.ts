@@ -9,6 +9,7 @@ import {
   maxHealthyIntervalMs,
   schedulerFreshPanelUpperBound,
   tenantBudgetFreshPanelUpperBound,
+  tenantTurnFreshTenantUpperBound,
 } from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
 
 /**
@@ -214,6 +215,17 @@ describe('the monitor profile service', () => {
       {} as never,
     );
     expect(calm.schedulerCapacityExceeded).toBe(false);
+  });
+
+  it('reports the tenant-turn ceiling beside the two panel ceilings', async () => {
+    const profile = await new MonitorProfileService(guard, config, quiet).read(
+      { tenantId: 't1' } as never,
+      {} as never,
+    );
+    expect(profile.tenantTurnCeiling).toBe(tenantTurnFreshTenantUpperBound(10, 30_000, 180_000));
+    // It is a TENANT count, not a panel count, so it is not interchangeable
+    // with either of the other two — which is what a copy-paste would break.
+    expect(profile.tenantTurnCeiling).not.toBe(profile.installationFreshPanelCeiling);
   });
 
   it('refuses a caller the permission guard rejects', async () => {

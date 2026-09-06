@@ -37,7 +37,7 @@ describe('the dashboard', () => {
         url: '/panels',
         body: { panels: [panel(), panel({ id: 'b', name: 'B' })], nextCursor: null },
       },
-      { url: '/ops-log', body: { events: [] } },
+      { url: '/ops-log', body: { events: [], nextCursor: null } },
     ]);
     renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
 
@@ -83,21 +83,68 @@ describe('the dashboard', () => {
     const api = stubApi([
       READINESS,
       { url: '/panels', body: { panels: [], nextCursor: null } },
-      { url: '/ops-log', body: { events: [] } },
+      { url: '/ops-log', body: { events: [], nextCursor: null } },
     ]);
     renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
     await screen.findByText('چیزی برای رسیدگی نیست.');
 
     const call = api.calls.find((entry) => entry.url.includes('/ops-log'));
-    expect(call?.url).toContain('scope=MANAGEMENT');
-    expect(call?.url).toContain('open=true');
+    // T28 — the EXACT scope. `toContain('scope=MANAGEMENT')` is also satisfied
+    // by `scope=MANAGEMENT`, the wider list that admits one-shot records
+    // nothing can ever resolve, so the assertion could not tell the card's
+    // whole point from its opposite. Parsed, not substring-matched.
+    const scope = new URL(call?.url ?? '', 'https://admin.example.test').searchParams;
+    expect(scope.get('scope')).toBe('MANAGEMENT_CONDITIONS');
+    expect(scope.get('open')).toBe('true');
+  });
+
+  /**
+   * T01 — a full page is not a truncated fleet.
+   *
+   * The card asks for `PANEL_PAGE_MAX` panels and warns when the aggregate
+   * covers only part of the fleet. Deriving that from `length === limit` made
+   * a tenant with EXACTLY 200 panels read a partial-fleet warning over a
+   * complete aggregate — the one case where the count is right and the caption
+   * says it is not. The server answers the question with `nextCursor`.
+   */
+  it('claims a partial fleet only when the server left a panel out', async () => {
+    const fullPage = Array.from({ length: 200 }, (_, index) =>
+      panel({ id: `0000000${index}`.slice(-8), name: `panel ${index}` }),
+    );
+
+    stubApi([
+      READINESS,
+      { url: '/panels', body: { panels: fullPage, nextCursor: null } },
+      { url: '/ops-log', body: { events: [], nextCursor: null } },
+    ]);
+    renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
+    // Waits for the AGGREGATE, not for the static card title: asserting an
+    // absence before the data lands passes for any implementation.
+    expect((await screen.findAllByText('سالم')).length).toBeGreaterThan(0);
+    // Full, and complete.
+    expect(screen.queryByText(/فقط ۲۰۰ پنل نخست/)).toBeNull();
+  });
+
+  it('says the aggregate is partial when the server has more panels', async () => {
+    stubApi([
+      READINESS,
+      { url: '/panels', body: { panels: [panel()], nextCursor: 'opaque-cursor-1' } },
+      { url: '/ops-log', body: { events: [], nextCursor: null } },
+    ]);
+    renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
+    // One row on the page and more behind it: a length comparison would have
+    // called this complete.
+    expect((await screen.findAllByText(/فقط ۲۰۰ پنل نخست/)).length).toBeGreaterThan(0);
   });
 
   it('shows an open management condition', async () => {
     stubApi([
       READINESS,
       { url: '/panels', body: { panels: [], nextCursor: null } },
-      { url: '/ops-log', body: { events: [event({ message: 'Roles changed for an owner.' })] } },
+      {
+        url: '/ops-log',
+        body: { events: [event({ message: 'Roles changed for an owner.' })], nextCursor: null },
+      },
     ]);
     renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
     expect(await screen.findByText('Roles changed for an owner.')).toBeInTheDocument();
@@ -115,7 +162,7 @@ describe('the dashboard', () => {
     stubApi([
       READINESS,
       { url: '/panels', body: { panels: [panel()], nextCursor: null } },
-      { url: '/ops-log', body: { events: [] } },
+      { url: '/ops-log', body: { events: [], nextCursor: null } },
     ]);
     const { container } = renderPage(
       <DashboardPage permissions={['panels.view', 'opslog.view']} />,
@@ -149,7 +196,7 @@ describe('the dashboard', () => {
         },
       },
       { url: '/panels', body: { panels: [], nextCursor: null } },
-      { url: '/ops-log', body: { events: [] } },
+      { url: '/ops-log', body: { events: [], nextCursor: null } },
     ]);
     const { container } = renderPage(<DashboardPage permissions={['opslog.view']} />);
     await screen.findByText('migrations');

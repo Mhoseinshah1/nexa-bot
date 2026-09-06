@@ -331,6 +331,9 @@ describe('a Sanaei panel is bound by the same probe orchestration as any other',
 
     let probes = 0;
     let limited = 0;
+    // The bucket REFILLS on the real clock, so how many probes the tenant is
+    // owed depends on how long this loop takes. See the assertion below.
+    const startedAt = Date.now();
     for (let round = 0; round < rounds; round += 1) {
       // Alternate the token, so every attempt is a fresh configuration.
       await ctx.container.panels.setCredentials(tenantA, adminActorFor(owner), panelId, {
@@ -346,9 +349,29 @@ describe('a Sanaei panel is bound by the same probe orchestration as any other',
       }
     }
 
-    // The bucket is `limit` real probes per window, and the clock does not move
-    // inside this test, so the refusals begin and never stop.
-    expect(probes).toBeLessThanOrEqual(limit);
+    /**
+     * The bound is the bucket's CAPACITY plus whatever refilled while the loop
+     * ran, and the second term is not zero.
+     *
+     * The previous version asserted `probes <= limit` under a comment claiming
+     * "the clock does not move inside this test". It does: `ProbeBudget` is a
+     * refilling token bucket on the real clock — at the shipped settings, one
+     * token every three seconds — and a hundred and ten rounds of real sockets
+     * take longer than that. So the test failed on a slow machine having found
+     * 101 probes against a limit of 100, which is the bucket behaving exactly
+     * as specified. A tighter number would be a test of this machine's speed.
+     *
+     * What still has teeth: the refusals happen, every round is accounted for,
+     * and the panel saw exactly what Nexa believes it permitted — none of which
+     * a broken limiter could satisfy, because it would probe all 110 times.
+     */
+    const refilled = Math.ceil(
+      ((Date.now() - startedAt) * limit) / ctx.container.config.PANEL_PROBE_TENANT_WINDOW_MS,
+    );
+    expect(probes).toBeLessThanOrEqual(limit + refilled);
+    // And the allowance is small: this must not become a bound that admits
+    // every round.
+    expect(limit + refilled).toBeLessThan(rounds);
     expect(limited).toBeGreaterThan(0);
     expect(probes + limited).toBe(rounds);
     // What the panel actually saw matches what Nexa believes it permitted.

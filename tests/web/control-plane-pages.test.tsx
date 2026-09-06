@@ -102,8 +102,15 @@ describe('the feature flags page', () => {
     await screen.findByText('ops_notifications');
 
     expect(screen.getByRole('button', { name: t('web.disable') })).toBeEnabled();
-    // No free-text or numeric entry anywhere on the flag itself.
-    expect(container.querySelectorAll('input[type="text"], input[type="number"]')).toHaveLength(0);
+    // T32 — NO input at all, not "no input carrying one of two type values".
+    // A plain `<input>` with no `type` attribute is a text field, so the
+    // selector-based version left the flag/setting conflation it names free to
+    // come back the most ordinary way there is. A flag is a boolean; its
+    // parameters are settings, and they live on the settings screen.
+    expect(container.querySelectorAll('input, textarea, select')).toHaveLength(0);
+    expect(screen.queryAllByRole('textbox')).toHaveLength(0);
+    expect(screen.queryAllByRole('spinbutton')).toHaveLength(0);
+    expect(screen.queryAllByRole('combobox')).toHaveLength(0);
   });
 
   it('draws no toggle at all for an actor who may only view', async () => {
@@ -139,6 +146,97 @@ describe('the content page', () => {
     renderPage(<ContentPage mayEdit={false} denied />);
     expect(await screen.findByText(NO_PERMISSION)).toBeInTheDocument();
   });
+
+  /**
+   * T30 — the editor's ACTUAL value, not a token found somewhere on the card.
+   *
+   * The placeholder token also appears in the placeholder table beside the
+   * editor, so `getAllByText(/{panel_name}/)` was satisfied by the
+   * documentation while the textarea rendered anything at all. Read off the
+   * control the operator types into.
+   */
+  it('puts the raw stored body in the editor itself', async () => {
+    stubApi([{ url: '/templates', body: { templates: [template()] } }]);
+    renderPage(<ContentPage mayEdit denied={false} />);
+    await screen.findAllByText('event.panel.unreachable');
+
+    const editor = document.getElementById('body-event.panel.unreachable');
+    expect(editor).toBeInstanceOf(HTMLTextAreaElement);
+    // The RAW body, character for character — never a rendered one.
+    expect((editor as HTMLTextAreaElement).value).toBe('پنل {panel_name} در دسترس نیست.');
+  });
+
+  /**
+   * T05 — the revert button's guard and its payload name the same row.
+   *
+   * The guard tested the freshly fetched `template` while the request carried
+   * the draft `basis`. So: open the card on a key with no override, let another
+   * administrator create one, and the refetch drew a revert button whose
+   * payload was a null version — refused as a 400 validation error rather than
+   * shown as the conflict it is, and to the operator simply a button that did
+   * nothing.
+   *
+   * Driven through the real production sequence: a save that conflicts
+   * invalidates the query, and the refetch is what brings the other
+   * administrator's row in.
+   */
+  it('offers no revert while the draft is based on no override', async () => {
+    const route = {
+      url: '/templates',
+      body: { templates: [template()] } as unknown,
+    };
+    stubApi([
+      route,
+      {
+        url: '/templates/event.panel.unreachable',
+        status: 409,
+        body: {
+          error: {
+            kind: 'conflict',
+            code: 'control.template_version_conflict',
+            message: 'somebody else changed it',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<ContentPage mayEdit denied={false} />);
+    await screen.findAllByText('event.panel.unreachable');
+
+    // No override yet, so nothing to revert.
+    expect(screen.queryByRole('button', { name: 'بازگرداندن به پیش‌فرض' })).toBeNull();
+
+    // Another administrator creates one while this card is open.
+    route.body = {
+      templates: [
+        template({
+          overrideBody: 'یک متن اختصاصی',
+          source: 'TENANT',
+          version: 3,
+          revision: 1,
+          updatedAt: '2026-09-06T09:00:00.000Z',
+          updatedByAdminId: 'a2',
+        }),
+      ],
+    };
+
+    // The production path that refetches: a conflicting save.
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+
+    // The refetch landed — the card says the row changed underneath.
+    expect(await screen.findByText(/گرفتن مقدار تازه/)).toBeInTheDocument();
+
+    // And STILL no revert button, because the draft is based on no override.
+    // The old guard read the refetched row and drew one whose payload was null.
+    expect(screen.queryByRole('button', { name: 'بازگرداندن به پیش‌فرض' })).toBeNull();
+
+    // Adopting the other administrator's row is what makes a revert meaningful,
+    // and only then is the button there.
+    fireEvent.click(screen.getByRole('button', { name: 'گرفتن مقدار تازه' }));
+    expect(
+      await screen.findByRole('button', { name: 'بازگرداندن به پیش‌فرض' }),
+    ).toBeInTheDocument();
+  });
 });
 
 describe('the notifications page', () => {
@@ -156,6 +254,15 @@ describe('the notifications page', () => {
    * that renders identically to a sent one is the legacy "✅ updated" for a
    * write that did nothing.
    */
+  /**
+   * T29 — the STATUS, asserted directly.
+   *
+   * The two fixtures used to differ in template key, attempt count, completion
+   * timestamp and id as well as status, so "the rows do not read the same" was
+   * true however the status column behaved: delete it, or render every failed
+   * intent as sent, and the inequality held. Everything but the status is
+   * identical below, and the states are read out of the cells.
+   */
   it('distinguishes an abandoned intent from a delivered one', async () => {
     stubApi([
       {
@@ -163,25 +270,27 @@ describe('the notifications page', () => {
         body: {
           nextCursor: null,
           notifications: [
-            notification(),
-            notification({
-              id: 'n2',
-              status: 'FAILED',
-              attemptCount: 5,
-              completedAt: null,
-              templateKey: 'event.monitor.capacity',
-            }),
+            notification({ id: 'n1', status: 'SENT' }),
+            // Identical in EVERY other respect, including the attempt count and
+            // the completion timestamp, so the status is the only thing that
+            // can make the two rows differ.
+            notification({ id: 'n2', status: 'FAILED' }),
           ],
         },
       },
     ]);
     const { container } = renderPage(<NotificationsPage mayTest denied={false} />);
-    await screen.findByText('event.monitor.capacity');
+    await screen.findAllByText('event.panel.unreachable');
 
-    // Two rows, and they do not read the same.
-    const rows = container.querySelectorAll('tbody tr');
+    const rows = Array.from(container.querySelectorAll('tbody tr'));
     expect(rows).toHaveLength(2);
-    expect(rows[0]?.textContent).not.toBe(rows[1]?.textContent);
+    const texts = rows.map((row) => row.textContent ?? '');
+
+    // Each state named, in the row that has it.
+    expect(texts[0]).toContain(t('web.status_sent'));
+    expect(texts[0]).not.toContain(t('web.status_failed'));
+    expect(texts[1]).toContain(t('web.status_failed'));
+    expect(texts[1]).not.toContain(t('web.status_sent'));
   });
 
   it('offers no test send to an actor without settings.edit', async () => {

@@ -251,9 +251,15 @@ describe('panel HTTP surface', () => {
   });
 
   it('never returns a credential on any read path', async () => {
+    // SANAEI, because all three credential kinds have to be stored for this to
+    // cover all three — and Marzban's shape does not name an API token, so the
+    // service now refuses one for it. A panel whose provider accepts every kind
+    // is the only fixture that can prove none of them comes back.
     const created = panelResponseSchema.parse(
       (
         await createPanel(ownerCookie, {
+          name: 'Frankfurt 3X',
+          providerType: 'sanaei',
           credentials: { username: USERNAME, password: PASSWORD, apiToken: 'tok-http-9182' },
         })
       ).json(),
@@ -281,6 +287,96 @@ describe('panel HTTP surface', () => {
         expect(response.body, `a credential reached ${response.statusCode}`).not.toContain(secret);
       }
     }
+  });
+
+  /**
+   * T12 — a credential the provider's shape cannot use is REFUSED, at the
+   * service, not merely hidden by the form.
+   *
+   * The descriptor was fetched, displayed and never acted on, so a Marzban
+   * panel accepted an API token: stored, encrypted, audited — and then ignored
+   * by `toProviderCredentials`, which reads only the fields the shape names. So
+   * every connection test afterwards reported credentials missing about a
+   * secret the operator had just successfully saved. Enforced on the server
+   * because the form is not the authority and an API client bypasses it.
+   */
+  describe('the provider credential shape', () => {
+    it('refuses an API token on a provider that authenticates with a password', async () => {
+      const response = await createPanel(ownerCookie, {
+        name: 'Marzban with a token',
+        providerType: 'marzban',
+        credentials: { username: USERNAME, password: PASSWORD, apiToken: 'tok-unusable-1' },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({
+        error: { code: 'panel.credential_unsupported' },
+      });
+      // And no panel was written: a refusal is not a partial create.
+      const list = panelListResponseSchema.parse(
+        (await get(PANEL_ROUTES.list, ownerCookie)).json(),
+      );
+      expect(list.panels.map((one) => one.name)).not.toContain('Marzban with a token');
+    });
+
+    it('accepts the same token on a provider whose shape names it', async () => {
+      // The other direction, so the rule is a shape check and not a blanket ban.
+      const response = await createPanel(ownerCookie, {
+        name: 'Sanaei with a token',
+        providerType: 'sanaei',
+        credentials: { apiToken: 'tok-usable-1' },
+      });
+      expect(response.statusCode).toBe(201);
+    });
+
+    it('refuses the same credential on the ROTATE path, not only on create', async () => {
+      const created = panelResponseSchema.parse(
+        (
+          await createPanel(ownerCookie, {
+            name: 'Marzban rotating',
+            providerType: 'marzban',
+            credentials: { username: USERNAME, password: PASSWORD },
+          })
+        ).json(),
+      );
+
+      const rotated = await post(PANEL_ROUTES.credentials(created.panel.id), ownerCookie, {
+        credentials: { apiToken: 'tok-unusable-2' },
+        idempotencyKey: idempotencyKey(),
+      });
+      expect(rotated.statusCode).toBe(400);
+      expect(rotated.json()).toMatchObject({
+        error: { code: 'panel.credential_unsupported' },
+      });
+
+      // Nothing was stored for it, so the refusal is real rather than cosmetic.
+      const after = panelResponseSchema.parse(
+        (await get(PANEL_ROUTES.detail(created.panel.id), ownerCookie)).json(),
+      );
+      expect(after.panel.credentials.apiToken.configured).toBe(false);
+      expect(after.panel.credentials.apiToken.lastReplacedAt).toBeNull();
+      // ...and the credentials that ARE in the shape are untouched.
+      expect(after.panel.credentials.password.configured).toBe(true);
+    });
+
+    it('still allows REMOVING a credential outside the shape', async () => {
+      // `null` means remove, and removing something the provider cannot use is
+      // not a claim that it is usable — refusing it would strand a value stored
+      // before this rule existed.
+      const created = panelResponseSchema.parse(
+        (
+          await createPanel(ownerCookie, {
+            name: 'Marzban clearing',
+            providerType: 'marzban',
+            credentials: { username: USERNAME, password: PASSWORD },
+          })
+        ).json(),
+      );
+      const cleared = await post(PANEL_ROUTES.credentials(created.panel.id), ownerCookie, {
+        credentials: { apiToken: null },
+        idempotencyKey: idempotencyKey(),
+      });
+      expect(cleared.statusCode).toBeLessThan(400);
+    });
   });
 
   it('answers a malformed panel identifier with a 4xx, not a 500', async () => {
