@@ -176,6 +176,7 @@ describe('the panel connection-test throttle', () => {
       ...real,
       list: real.list.bind(real),
       find: real.find.bind(real),
+      lockPanel: real.lockPanel.bind(real),
       create: real.create.bind(real),
       update: real.update.bind(real),
       setStatus: real.setStatus.bind(real),

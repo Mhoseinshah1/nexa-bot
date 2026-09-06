@@ -347,6 +347,25 @@ export class DrizzlePanelRepository implements PanelRepository {
     return row !== undefined;
   }
 
+  async lockPanel(scope: TenantContext, panelId: string, tx: TransactionScope): Promise<boolean> {
+    // `FOR UPDATE` and not `FOR NO KEY UPDATE`: this must conflict with the
+    // ordinary UPDATEs the operator's paths perform on the same row, which is
+    // the whole point. The row is released when the transaction ends.
+    //
+    // Built with the query builder and NOT a `${panelId}::uuid` cast. This is
+    // the FIRST statement of every panel mutation now, so a malformed
+    // identifier would reach PostgreSQL here and come back as `22P02` — a 500
+    // where the surface had always answered a validation error. Drizzle sends
+    // the parameter with the column's own type, which is what every other read
+    // on this table already does.
+    const held = await tx.tx
+      .select({ id: panels.id })
+      .from(panels)
+      .where(and(eq(panels.id, panelId), eq(panels.tenantId, scope.tenantId)))
+      .for('update');
+    return held.length > 0;
+  }
+
   async recordHealth(
     scope: TenantContext,
     panelId: string,

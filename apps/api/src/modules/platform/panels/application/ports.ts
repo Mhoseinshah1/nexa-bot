@@ -163,6 +163,27 @@ export interface PanelRepository {
     tx?: TransactionScope,
   ): Promise<{ panels: PanelView[]; nextCursor: PanelCursor | null }>;
   find(scope: TenantContext, panelId: string, tx?: TransactionScope): Promise<PanelView | null>;
+  /**
+   * Takes the panel's row lock for the rest of the transaction.
+   *
+   * THE serialization point for everything a probe's answer depends on. A
+   * probe reads the panel and its credentials, spends up to the HTTP timeout on
+   * the wire, and then writes health and a schedule; an operator can rotate a
+   * credential in between. Comparing the configuration again before writing is
+   * a check-then-write race unless the comparison and the write cannot be
+   * interleaved — so both sides take this lock FIRST, and there is exactly one
+   * of them, so there is no order in which to deadlock.
+   *
+   * Under READ COMMITTED a `SELECT ... FOR UPDATE` that waits on a concurrent
+   * writer re-reads the row once that writer commits, which is what makes the
+   * configuration comparison after this call see the rotation rather than the
+   * snapshot the probe started from.
+   *
+   * It also makes the health row read after it the row a write will actually
+   * replace: no other prober can be between this transaction's read and its
+   * write, because it is holding the lock they all queue on.
+   */
+  lockPanel(scope: TenantContext, panelId: string, tx: TransactionScope): Promise<boolean>;
   create(scope: TenantContext, input: CreatePanelInput, tx: TransactionScope): Promise<PanelRecord>;
   /** Returns null when no panel of this tenant has that id. */
   update(

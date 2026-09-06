@@ -196,6 +196,7 @@ describe('the panel monitor scheduler at scale', () => {
           },
         },
         guard: ctx.container.guard,
+        scopeActivity: ctx.container.tenants,
         audit: ctx.container.audit,
         opsLog: ctx.container.opsLog,
         sessions: ctx.container.sessions,

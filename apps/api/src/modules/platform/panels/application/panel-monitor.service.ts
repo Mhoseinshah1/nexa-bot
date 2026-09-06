@@ -22,6 +22,7 @@ import {
   runAuthorizedMutation,
 } from '../../access/application/authorized-mutation.js';
 import type { SessionRepository } from '../../identity/application/ports.js';
+import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   attemptProbe,
@@ -75,6 +76,22 @@ export interface PanelMonitorDeps {
   readonly discovery: PanelMonitorRepository;
   readonly probe: ProbeCoreDeps;
   readonly guard: PermissionGuard;
+  /**
+   * Whether this tenant is still accepting work.
+   *
+   * `claimTenants` refuses a stopped tenant when it SELECTS the work, and that
+   * is a snapshot: a tenant claimed while ACTIVE can be stopped during the
+   * probe, which takes up to the HTTP timeout. Without this the monitor went on
+   * to decrypt that tenant's credential, dial its machines, and commit health,
+   * a schedule, an audit row and an operational event for an installation
+   * somebody had already switched off.
+   *
+   * Read TWICE, and the two are different questions: once before any side
+   * effect, so a stop that has already committed prevents the socket; and again
+   * inside the transaction that writes, so a stop committed while the request
+   * was in flight prevents the record of it.
+   */
+  readonly scopeActivity: ScopeActivityReader;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
   readonly sessions: SessionRepository;
@@ -377,6 +394,10 @@ export class PanelMonitorService {
     // "fresh", because discovering the work counted as doing it. A monitor that
     // finds a hundred due panels and cannot probe any of them is not healthy.
     if (due.length === 0) {
+      // Their bounds are put back BEFORE returning, and this is the path that
+      // matters most for it: a tenant claimed with nothing due is exactly a
+      // tenant whose bound has drifted earlier than its schedule.
+      await this.refreshBounds(tenantIds);
       this.noteProgress();
       return { ...EMPTY_TICK, tenants: tenantIds.length };
     }
@@ -439,6 +460,12 @@ export class PanelMonitorService {
       Array.from({ length: Math.min(this.deps.concurrency, due.length) }, () => worker()),
     );
 
+    // AFTER every probe and deferral of this pass, never before: the bound is
+    // recomputed from the schedule, and the schedule is what those writes were
+    // still moving. Refreshing first would put back a value the pass then
+    // invalidated.
+    await this.refreshBounds(tenantIds);
+
     this.deps.logger.debug(
       { tenants: tenantIds.length, considered: due.length, probed, deferred, failed },
       'panel monitor tick complete',
@@ -468,6 +495,20 @@ export class PanelMonitorService {
     // uses, so a refused job leaves the same audit trail as a refused operator.
     if (!(await this.authorize(tenant, actor, candidate.panelId))) {
       await this.defer(tenant, candidate.panelId, 'NOT_AUTHORIZED');
+      return 'DEFERRED';
+    }
+
+    // The tenant's kill switch, re-read here and not inherited from the claim.
+    // `claimTenants` refuses a stopped tenant when it selects work; between
+    // that and this line an operator can stop the tenant, and everything below
+    // decrypts their credential and dials their machines.
+    //
+    // Deferred, not failed: a stopped tenant is an ordinary answer for a loop
+    // that walks every tenant, and `claimTenants` will not offer it again. It
+    // is NOT an internal error, which would count against the sweep and make a
+    // deliberate stop look like a broken monitor.
+    if (!(await this.deps.scopeActivity.scopeIsActive(tenant))) {
+      await this.defer(tenant, candidate.panelId, 'STATUS_NOT_PROBEABLE');
       return 'DEFERRED';
     }
 
@@ -540,6 +581,43 @@ export class PanelMonitorService {
         return false;
       }
       throw error;
+    }
+  }
+
+  /**
+   * Puts each claimed tenant's lower bound back where its own schedule says.
+   *
+   * The other half of the fairness bound, and it had no caller: `8875c3f` added
+   * it and `c662d89` removed the call, after which the only thing exercising it
+   * was a test that invoked the helper directly — coverage for code the loop
+   * never ran.
+   *
+   * Schedule writes move `panel_monitor_tenants.next_eligible_at` DOWN with
+   * `LEAST` and never up, so without this every tenant that has ever been due
+   * stays claimable for ever. A thousand idle tenants whose bounds have drifted
+   * into the past then share the rotation with the one tenant that is genuinely
+   * due, and at ten tenants per thirty-second tick that tenant waits about
+   * fifty minutes — past the freshness window the whole scheduler exists to
+   * hold.
+   *
+   * Bounded: one index-ordered `LIMIT 1` per CLAIMED tenant, never a scan of
+   * the whole table. Idempotent and derived only from stored rows, so two
+   * replicas refreshing the same tenant write the same value.
+   *
+   * A failure here must not fail the sweep — the probes already happened and
+   * the bound is repaired by the next pass that claims the tenant — but it is
+   * not silent either, because a bound that never gets put back is the defect
+   * this method is.
+   */
+  private async refreshBounds(tenantIds: readonly string[]): Promise<void> {
+    if (tenantIds.length === 0) return;
+    try {
+      await this.deps.discovery.refreshTenantBounds(tenantIds);
+    } catch (error) {
+      this.deps.logger.error(
+        { err: error, tenants: tenantIds.length },
+        'panel monitor could not refresh tenant bounds; they stay claimable until the next pass',
+      );
     }
   }
 
@@ -709,6 +787,15 @@ export class PanelMonitorService {
     const at = this.deps.clock.now();
     await this.deps.uow.run(tenant, async (tx) => {
       if (observed !== null) {
+        // The SAME lock the probe's persistence and the operator's mutations
+        // take, and for the same reason. Reading the configuration and then
+        // writing the deferral were two statements with nothing between them
+        // but hope: the operator sets the credential this refusal was about —
+        // which commits `ELIGIBLE_NOW` — and this write lands afterwards.
+        // Deferrals are monotonic (`GREATEST`), so the stale hour-long refusal
+        // beat the operator's immediate eligibility and the panel they had just
+        // fixed waited out the refusal for a problem that no longer existed.
+        if (!(await this.deps.probe.repository.lockPanel(tenant, panelId, tx))) return;
         const current = await this.deps.probe.repository.find(tenant, panelId, tx);
         if (current === null || configurationOf(current) !== observed) return;
       }
@@ -762,9 +849,20 @@ export class PanelMonitorService {
       MAINTENANCE_RUN,
       { action: 'panel.monitor.probe', entityType: 'Panel', entityId: candidate.panelId },
       async (tx) => {
+        // And again, in the transaction that commits. The probe took up to the
+        // HTTP timeout; a stop that landed while the request was in flight must
+        // still prevent the RECORD of it — the health row, the schedule, the
+        // audit row and the operational event — even though the socket has
+        // already been opened and cannot be un-opened.
+        if (!(await this.deps.scopeActivity.scopeIsActive(tenant, tx))) return;
+
         // A probe result changes health and NOTHING else. No status, no
         // credential, no address.
-        const { outcome } = await persistProbeResult(
+        const {
+          outcome,
+          previous,
+          view: locked,
+        } = await persistProbeResult(
           this.deps.probe,
           tenant,
           candidate.panelId,
@@ -786,8 +884,13 @@ export class PanelMonitorService {
         // The streak the NEXT probe builds on, read from stored health rather
         // than from the counter alone — see `effectivePreviousFailures`.
         const stored = await this.deps.probe.repository.readSchedule(tenant, candidate.panelId, tx);
+        // `previous`, never `before.health`. `before` is the view captured
+        // BEFORE the network call; `previous` is the row this write actually
+        // replaced, read under the panel's lock. A slow probe overtaken by a
+        // faster one sees the overtaker's row here, which is the only reading
+        // from which the transition below can be true.
         const previousStreak = effectivePreviousFailures(
-          before.health?.state ?? null,
+          previous?.state ?? null,
           stored?.consecutiveFailures ?? 0,
         );
         const schedule = scheduleAfterProbe(this.deps.probe.cadence, candidate.panelId, {
@@ -807,7 +910,12 @@ export class PanelMonitorService {
           tx,
         );
 
-        const event = transitionOf(before.health ?? null, health);
+        // The transition is FROM the row that was there, not from the row this
+        // probe saw before it dialled. A probe that starts HEALTHY, is
+        // overtaken by one storing AUTH_FAILED, and then lands its own newer
+        // HEALTHY used to compute HEALTHY -> HEALTHY, announce nothing, and
+        // leave the authentication condition open with the panel working.
+        const event = transitionOf(previous ?? null, health);
         if (event === null) return;
 
         await this.deps.audit.record(
@@ -818,8 +926,8 @@ export class PanelMonitorService {
             entityType: 'Panel',
             entityId: candidate.panelId,
             before: {
-              state: before.health?.state ?? null,
-              failure: before.health?.failure ?? null,
+              state: previous?.state ?? null,
+              failure: previous?.failure ?? null,
             },
             // The normalized outcome and nothing else. No provider message, no
             // header, no body.
@@ -828,7 +936,11 @@ export class PanelMonitorService {
           },
           tx,
         );
-        await this.deps.opsLog.record(tenant, buildEvent(before, event), tx);
+        // `locked`, not `before`: the panel's identity is read under the lock
+        // too, so a rename that commits during a probe is announced under the
+        // name the operator now sees rather than the one it had when the probe
+        // started.
+        await this.deps.opsLog.record(tenant, buildEvent(locked, event), tx);
       },
     );
   }

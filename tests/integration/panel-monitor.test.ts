@@ -1,7 +1,8 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { errors } from '@nexa/contracts';
 import type { ProviderProbeOutcome, ProviderType, TenantContext } from '@nexa/contracts';
+import type { PanelRepository } from '../../apps/api/src/modules/platform/panels/application/ports';
 import {
   auditLogs,
   operationalEvents,
@@ -180,6 +181,7 @@ describe('the panel health monitor', () => {
           options.discovery ?? new DrizzlePanelMonitorRepository(ctx.container.database.db),
         probe: probeDeps(options.probe ?? {}),
         guard: ctx.container.guard,
+        scopeActivity: ctx.container.tenants,
         audit: ctx.container.audit,
         opsLog: ctx.container.opsLog,
         sessions: ctx.container.sessions,
@@ -273,6 +275,51 @@ describe('the panel health monitor', () => {
   /** Runs one tick and reports what it did, for readability at the call sites. */
   const tick = async (m = monitor()) => m.tick();
 
+  /**
+   * Makes a panel due NOW, the way a real write does.
+   *
+   * The schedule row alone is not enough: production lowers the tenant's own
+   * bound with `LEAST` in the same write, and the sweep now puts that bound
+   * back at the end of every pass. A fixture that edits only
+   * `panel_monitor_schedule` leaves the tenant unclaimable and the panel
+   * therefore unprobed — which reads exactly like the rule under test failing.
+   */
+  const makeDueNow = async (panelId: string, tenantId: string, at: Date = now) => {
+    await ctx.container.database.db
+      .update(panelMonitorSchedule)
+      .set({ nextEligibleAt: at })
+      .where(eq(panelMonitorSchedule.panelId, panelId));
+    await ctx.container.database.db
+      .update(panelMonitorTenants)
+      .set({ nextEligibleAt: at })
+      .where(eq(panelMonitorTenants.tenantId, tenantId));
+  };
+
+  /** Discovery that offers exactly one panel of tenant A, and nothing else. */
+  const onePanel = (panelId: string): PanelMonitorRepository => ({
+    claimTenants: async () => [tenantA.tenantId],
+    dueForTenants: async () => [{ tenantId: tenantA.tenantId, panelId }],
+    refreshTenantBounds: async () => {},
+    reconcileSchedules: async () => 0,
+    overBudgetTenants: async () => [],
+    activePanelCount: async () => 0,
+  });
+
+  /** Every operational-event code recorded for a tenant, opened or resolved. */
+  const conditionCodes = async (scope: typeof tenantA) =>
+    (await eventCodes(scope.tenantId)).map((row) => row.code);
+
+  /** The codes whose row is still OPEN — the ones an operator is looking at. */
+  const openConditionCodes = async (scope: typeof tenantA) =>
+    (
+      await ctx.container.database.db
+        .select({ code: operationalEvents.code })
+        .from(operationalEvents)
+        .where(
+          and(eq(operationalEvents.tenantId, scope.tenantId), isNull(operationalEvents.resolvedAt)),
+        )
+    ).map((row) => row.code);
+
   // ===========================================================================
   // 1-4. Authorization happens BEFORE any side effect
   // ===========================================================================
@@ -306,6 +353,7 @@ describe('the panel health monitor', () => {
       const service = new PanelMonitorService(
         {
           discovery: new DrizzlePanelMonitorRepository(ctx.container.database.db),
+          scopeActivity: ctx.container.tenants,
           probe: watched,
           // A guard that denies everything, standing in for a job whose
           // permission has been narrowed or revoked.
@@ -596,9 +644,15 @@ describe('the panel health monitor', () => {
       expect(probed.map((row) => row.tenantId)).toEqual([tenantA.tenantId]);
 
       // And the claim itself refuses it, not merely the tick around it: this
-      // is the statement that spends the turn.
+      // is the statement that spends the turn. Asserted as ABSENCE, because
+      // whether tenant A is claimable here is a different fact — the sweep has
+      // just served it and put its bound back, so it is correctly not due.
       const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
-      expect(await discovery.claimTenants(clock.now(), 10)).toEqual([tenantA.tenantId]);
+      await makeDueNow(
+        (await ctx.container.database.db.select().from(panelMonitorSchedule))[0]!.panelId,
+        tenantB.tenantId,
+      );
+      expect(await discovery.claimTenants(clock.now(), 10)).not.toContain(tenantB.tenantId);
     });
 
     it('serves a stopped tenant again once it is active', async () => {
@@ -1151,6 +1205,352 @@ describe('the panel health monitor', () => {
       await m.tick();
 
       // The operator's panel is still due now, not in an hour.
+      const after = (await scheduleOf(panelId))!;
+      expect(after.deferredReason).toBe(null);
+      expect(after.nextEligibleAt.getTime()).toBeLessThanOrEqual(now.getTime());
+    });
+  });
+
+  describe('a tenant whose panels are all in the future stops taking turns', () => {
+    // Codex 5124096667 C01. `refreshTenantBounds` had no caller: 8875c3f added
+    // it, c662d89 removed the call, and the only thing left exercising it was a
+    // test that invoked the helper directly.
+    //
+    // Schedule writes move `panel_monitor_tenants.next_eligible_at` DOWN with
+    // `LEAST` and never up, so without the refresh every tenant that has ever
+    // been due stays claimable for ever, and a genuinely due tenant shares the
+    // rotation with all of them.
+    //
+    // Driven through the REAL loop and the REAL `claimTenants`, because a test
+    // that called `refreshTenantBounds` itself is exactly what let this go
+    // unnoticed.
+    const IDLE = 30;
+
+    async function buildDriftedTenants(): Promise<{ due: string; duePanel: string }> {
+      const ids = Array.from(
+        { length: IDLE },
+        (_, i) => `01a20000-0000-7000-8000-${String(i).padStart(12, '0')}`,
+      );
+      const duePanelId = await createPanel(ownerA, tenantA, 'genuinely-due');
+      await ctx.container.database.withClient(async (client) => {
+        await client.query(
+          `INSERT INTO tenants (id, kind, parent_tenant_id, slug, display_name)
+           SELECT id, 'RESELLER_BOT', $2::uuid, 'drift-' || ord, 'Drift ' || ord
+             FROM unnest($1::uuid[]) WITH ORDINALITY AS t(id, ord)`,
+          [ids, tenantA.tenantId],
+        );
+        await client.query(
+          `INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+           SELECT gen_random_uuid(), t.id, 'idle-' || t.id, 'marzban',
+                  'https://panel.example.test', 'ACTIVE'
+             FROM unnest($1::uuid[]) AS t(id)`,
+          [ids],
+        );
+        // Their panels are all FAR in the future: there is nothing to do for
+        // any of them.
+        await client.query(
+          `INSERT INTO panel_monitor_schedule
+             (panel_id, tenant_id, next_eligible_at, consecutive_failures, updated_at)
+           SELECT p.id, p.tenant_id, $1::timestamptz + interval '1 day', 0, $1::timestamptz
+             FROM panels p
+            WHERE p.tenant_id = ANY($2::uuid[])`,
+          [now, ids],
+        );
+        // Their BOUNDS have drifted into the past, which is the state `LEAST`
+        // leaves behind and nothing but the refresh puts back.
+        await client.query(
+          `INSERT INTO panel_monitor_tenants (tenant_id, next_eligible_at, last_served_at)
+           SELECT t.id, $1::timestamptz - interval '1 hour', to_timestamp(0)
+             FROM unnest($2::uuid[]) AS t(id)`,
+          [now, ids],
+        );
+      });
+      return { due: tenantA.tenantId, duePanel: duePanelId };
+    }
+
+    it('is not claimed again once its bound is put back, so a due tenant is not crowded out', async () => {
+      const { due, duePanel } = await buildDriftedTenants();
+      const discovery = new DrizzlePanelMonitorRepository(ctx.container.database.db);
+
+      // Every tenant is claimable at the start: that is the drifted state.
+      const claimableBefore = await discovery.claimTenants(now, IDLE + 5);
+      expect(claimableBefore.length).toBeGreaterThanOrEqual(IDLE);
+      // Put the turns back so the real rotation starts from level.
+      await ctx.container.database.db.execute(
+        sql`UPDATE panel_monitor_tenants SET last_served_at = to_timestamp(0)` as never,
+      );
+
+      // The REAL loop, with the REAL claim, ten tenants a tick.
+      const m = monitor({ tenantsPerTick: 10, batchSize: 50 });
+      const ticks: number[] = [];
+      for (let i = 0; i < Math.ceil((IDLE + 1) / 10); i += 1) {
+        const result = await m.tick();
+        ticks.push(result.tenants);
+      }
+
+      // The due tenant's panel was actually probed within the bound.
+      expect(probes.length).toBeGreaterThan(0);
+      expect((await healthOf(duePanel))!.state).toBe('HEALTHY');
+
+      // And the point: the idle tenants have been pushed back out, so the next
+      // rotation is not shared with them. Without the refresh every one of them
+      // is still claimable here, for ever.
+      const claimableAfter = await discovery.claimTenants(now, IDLE + 5);
+      expect(claimableAfter).not.toContain(
+        claimableBefore.find((id) => id !== due) ?? 'no-idle-tenant-was-claimable',
+      );
+      expect(claimableAfter.length).toBeLessThan(IDLE);
+    });
+
+    it('a tenant with no schedule rows at all is suspended rather than claimed for ever', async () => {
+      // The `COALESCE(..., SCHEDULE_SUSPENDED_AT)` half of the same refresh.
+      const orphan = '01a30000-0000-7000-8000-000000000001';
+      await ctx.container.database.withClient(async (client) => {
+        await client.query(
+          `INSERT INTO tenants (id, kind, parent_tenant_id, slug, display_name)
+           VALUES ($1::uuid, 'RESELLER_BOT', $2::uuid, 'orphan', 'Orphan')`,
+          [orphan, tenantA.tenantId],
+        );
+        await client.query(
+          `INSERT INTO panel_monitor_tenants (tenant_id, next_eligible_at, last_served_at)
+           VALUES ($1::uuid, $2::timestamptz - interval '1 hour', to_timestamp(0))`,
+          [orphan, now],
+        );
+      });
+
+      await monitor({ tenantsPerTick: 10 }).tick();
+
+      const [row] = await ctx.container.database.db
+        .select()
+        .from(panelMonitorTenants)
+        .where(eq(panelMonitorTenants.tenantId, orphan));
+      expect(row!.nextEligibleAt.getTime()).toBe(SCHEDULE_SUSPENDED_AT.getTime());
+    });
+  });
+
+  describe('a tenant stopped after it was claimed', () => {
+    // Codex 5124096667 C02. `claimTenants` refuses a stopped tenant when it
+    // SELECTS work, and that is a snapshot: the probe then takes up to the HTTP
+    // timeout, and an operator can stop the tenant during it. The monitor went
+    // on to decrypt the credential, dial the machines, and commit health, a
+    // schedule, an audit row and an operational event for an installation
+    // somebody had already switched off.
+    const stopTenantA = async () => {
+      await ctx.container.database.db
+        .update(tenants)
+        .set({ status: 'STOPPED' })
+        .where(eq(tenants.id, tenantA.tenantId));
+    };
+
+    it('is not dialled at all when the stop landed before the probe began', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'stopped-before');
+      // Claimed while ACTIVE, stopped before `probeOne` reaches the credential.
+      const m = monitor({
+        discovery: onePanel(panelId),
+        probe: {
+          credentials: {
+            read: async () => {
+              throw new Error('the credential must not be read for a stopped tenant');
+            },
+            write: probeDeps().credentials.write.bind(probeDeps().credentials),
+          },
+        },
+      });
+      await stopTenantA();
+      const result = await m.tick();
+
+      // No socket, no credential, and it is a DEFERRAL rather than a failure:
+      // a deliberate stop is not a broken monitor.
+      expect(probes).toHaveLength(0);
+      expect(result.failed).toBe(0);
+      expect(result.deferred).toBe(1);
+      expect(await healthOf(panelId)).toBeUndefined();
+    });
+
+    it('records nothing when the stop lands while the request is in flight', async () => {
+      // The probe HAS happened — a socket cannot be un-opened — but the record
+      // of it must not land: no health row, no schedule move, no audit row, no
+      // operational event.
+      const panelId = await createPanel(ownerA, tenantA, 'stopped-in-flight');
+      const scheduleBefore = (await scheduleOf(panelId))!;
+      const base = probeDeps();
+      const m = monitor({
+        discovery: onePanel(panelId),
+        probe: {
+          ...base,
+          adapters: (type: ProviderType) => ({
+            ...providerAdapter(type),
+            probe: async (target) => {
+              probes.push(target.baseUrl);
+              await stopTenantA();
+              return HEALTHY;
+            },
+          }),
+        },
+      });
+      await m.tick();
+
+      expect(probes).toHaveLength(1);
+      expect(await healthOf(panelId)).toBeUndefined();
+      const scheduleAfter = (await scheduleOf(panelId))!;
+      expect(scheduleAfter.nextEligibleAt.getTime()).toBe(scheduleBefore.nextEligibleAt.getTime());
+      const audits = await ctx.container.database.db
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.tenantId, tenantA.tenantId));
+      expect(audits.map((row) => row.action)).not.toContain('panel.monitor.probe');
+      expect(await conditionCodes(tenantA)).not.toContain('panel.health.recovered');
+    });
+  });
+
+  describe('the panel row is the serialization point', () => {
+    // Codex 5124096667 C03/C05/C06. Three defects with one cause: the probe
+    // read the panel, spent up to the HTTP timeout on the wire, compared the
+    // configuration, and then wrote — with nothing preventing an operator's
+    // write from committing between the comparison and the write. All three
+    // are closed by both sides taking the panel's row lock first.
+
+    /**
+     * The REAL repository with named methods intercepted.
+     *
+     * A Proxy and not a spread: `{ ...new DrizzlePanelRepository(db) }` copies
+     * own enumerable properties only, and every method of a class lives on the
+     * prototype — so the first version of these tests handed the monitor an
+     * object with no `claimProbe`, the probe threw before it began, and all
+     * three tests passed against code with the lock removed. Falsification is
+     * what said so.
+     */
+    function repositoryWith(hooks: Partial<Record<string, unknown>>): PanelRepository {
+      const real = new DrizzlePanelRepository(ctx.container.database.db);
+      return new Proxy(real, {
+        get(target, prop, receiver) {
+          const hook = hooks[prop as string];
+          if (typeof hook === 'function') return hook;
+          const value = Reflect.get(target, prop, receiver) as unknown;
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      }) as unknown as PanelRepository;
+    }
+
+    /** Starts the operator's rotation without awaiting it, then yields. */
+    function rotateDuring(panelId: string): { started: () => Promise<unknown> } {
+      let promise: Promise<unknown> | null = null;
+      return {
+        started: () => {
+          promise ??= service().setCredentials(tenantA, adminActorFor(ownerA), panelId, {
+            credentials: { password: 'a-corrected-password-9Q' },
+            idempotencyKey: key(),
+          });
+          return promise;
+        },
+      };
+    }
+
+    it('C03: an operator rotation cannot land between the check and the write', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'rotated-mid-probe');
+      outcome = REJECTED;
+      await tick(monitor({ discovery: onePanel(panelId) }));
+      expect((await healthOf(panelId))!.state).toBe('AUTH_FAILED');
+      const streak = (await scheduleOf(panelId))!.consecutiveFailures;
+      expect(streak).toBeGreaterThan(0);
+
+      // Hooked at `recordHealth`, which runs AFTER the configuration has been
+      // compared and BEFORE the schedule is written — the exact window. The
+      // rotation clears the streak and makes the panel due now; unlocked, the
+      // probe's own cadence then overwrote both.
+      const rotation = rotateDuring(panelId);
+      const real = new DrizzlePanelRepository(ctx.container.database.db);
+      const m = monitor({
+        discovery: onePanel(panelId),
+        probe: {
+          repository: repositoryWith({
+            recordHealth: async (...args: Parameters<PanelRepository['recordHealth']>) => {
+              void rotation.started();
+              await new Promise((resolve) => setTimeout(resolve, 150));
+              return real.recordHealth(...args);
+            },
+          }),
+        },
+      });
+      outcome = HEALTHY;
+      now = new Date(now.getTime() + 60_000);
+      await m.tick();
+      await rotation.started();
+
+      const schedule = (await scheduleOf(panelId))!;
+      expect(schedule.consecutiveFailures).toBe(0);
+      expect(schedule.nextEligibleAt.getTime()).toBeLessThanOrEqual(now.getTime());
+    });
+
+    it('C05: a probe overtaken mid-flight announces the transition it actually made', async () => {
+      // A starts from HEALTHY and is slow. B stores AUTH_FAILED while A is on
+      // the wire. A then lands its own NEWER healthy result, which the database
+      // accepts. Computing the transition from the view A captured before it
+      // dialled sees HEALTHY -> HEALTHY, announces nothing, and leaves B's
+      // authentication condition open on a panel that works.
+      const panelId = await createPanel(ownerA, tenantA, 'overtaken');
+      outcome = HEALTHY;
+      await tick(monitor({ discovery: onePanel(panelId) }));
+      expect((await healthOf(panelId))!.state).toBe('HEALTHY');
+
+      const base = probeDeps();
+      const slow = monitor({
+        discovery: onePanel(panelId),
+        probe: {
+          ...base,
+          adapters: (type: ProviderType) => ({
+            ...providerAdapter(type),
+            probe: async (target) => {
+              probes.push(target.baseUrl);
+              // B, entirely: a second probe that stores AUTH_FAILED and
+              // commits before A reaches its own persistence.
+              now = new Date(now.getTime() + 1_000);
+              outcome = REJECTED;
+              await tick(monitor({ discovery: onePanel(panelId) }));
+              // A finishes LATER, so the database accepts its write.
+              now = new Date(now.getTime() + 1_000);
+              return HEALTHY;
+            },
+          }),
+        },
+      });
+      await slow.tick();
+
+      expect((await healthOf(panelId))!.state).toBe('HEALTHY');
+      // The authentication condition B opened must be closed by A's recovery —
+      // not left standing because A compared against a view from before B.
+      expect(await openConditionCodes(tenantA)).not.toContain('panel.health.auth_failed');
+      expect(await conditionCodes(tenantA)).toContain('panel.health.recovered');
+    });
+
+    it('C06: a deferral cannot land on top of the fix for what it refused over', async () => {
+      // The same window on the refusal path. The monitor decides
+      // CREDENTIALS_MISSING; the operator sets the password, which commits
+      // ELIGIBLE_NOW; deferrals are monotonic, so a stale refusal landing
+      // afterwards beat the operator's immediate eligibility.
+      const panelId = await createPanel(ownerA, tenantA, 'deferral-race');
+      await service().setCredentials(tenantA, adminActorFor(ownerA), panelId, {
+        credentials: { password: null },
+        idempotencyKey: key(),
+      });
+
+      const rotation = rotateDuring(panelId);
+      const real = new DrizzlePanelRepository(ctx.container.database.db);
+      const m = monitor({
+        discovery: onePanel(panelId),
+        probe: {
+          repository: repositoryWith({
+            scheduleNext: async (...args: Parameters<PanelRepository['scheduleNext']>) => {
+              void rotation.started();
+              await new Promise((resolve) => setTimeout(resolve, 150));
+              return real.scheduleNext(...args);
+            },
+          }),
+        },
+      });
+      await m.tick();
+      await rotation.started();
+
       const after = (await scheduleOf(panelId))!;
       expect(after.deferredReason).toBe(null);
       expect(after.nextEligibleAt.getTime()).toBeLessThanOrEqual(now.getTime());
@@ -1725,10 +2125,7 @@ describe('the panel health monitor', () => {
       // Forward again. The next failure starts a NEW streak, because the stored
       // health says the panel worked since — truth beats bookkeeping.
       now = new Date(now.getTime() + 60_000);
-      await ctx.container.database.db
-        .update(panelMonitorSchedule)
-        .set({ nextEligibleAt: now })
-        .where(eq(panelMonitorSchedule.panelId, panelId));
+      await makeDueNow(panelId, tenantA.tenantId);
       outcome = TIMED_OUT;
       await tick();
 

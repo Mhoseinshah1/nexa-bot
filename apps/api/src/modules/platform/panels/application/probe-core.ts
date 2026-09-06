@@ -239,7 +239,22 @@ export async function persistProbeResult(
   configuration: string,
   health: PanelHealthRecord,
   tx: TransactionScope,
-): Promise<{ view: PanelView; outcome: HealthWriteOutcome }> {
+): Promise<ProbePersistence> {
+  // THE LOCK, before the read it decides on. Everything below was previously a
+  // check-then-write: an unlocked `find`, a comparison, and then a write, with
+  // an operator's credential rotation able to commit in between. The rotation
+  // also commits `ELIGIBLE_NOW`, so the losing ordering did not merely store a
+  // stale verdict — the schedule write that follows this replaced the
+  // operator's immediate eligibility with the old configuration's cadence, and
+  // the panel they had just fixed sat out the long interval showing the broken
+  // credential's answer.
+  //
+  // The operator's own write paths take the same lock first, so the two cannot
+  // interleave and there is only one lock to take, so there is no order in
+  // which to deadlock.
+  if (!(await deps.repository.lockPanel(tenant, panelId, tx))) {
+    throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
+  }
   const current = await deps.repository.find(tenant, panelId, tx);
   if (current === null) {
     throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
@@ -250,12 +265,33 @@ export async function persistProbeResult(
       'This panel changed while the connection test was running. Run the test again.',
     );
   }
-  // The outcome travels back to the caller because the caller announces
-  // transitions. The configuration recheck above catches a panel that CHANGED
-  // during the probe; this catches a probe that was simply overtaken by a
-  // newer one of the same configuration, which the recheck cannot see.
+  // Read UNDER the lock and returned to the caller, because this — not the view
+  // captured before the network call — is the row the write below replaces.
+  //
+  // The caller derives the failure streak, the operational transition and the
+  // audit's before-state from it. Deriving them from the pre-network view was
+  // wrong in a way a green suite could not see: a slow probe that starts from
+  // HEALTHY, is overtaken by one that stores AUTH_FAILED, and then lands its
+  // own newer HEALTHY sees HEALTHY -> HEALTHY, announces no recovery, and
+  // leaves the other probe's authentication condition open for ever.
+  const previous = current.health;
+  // The configuration recheck above catches a panel that CHANGED during the
+  // probe; this catches a probe that was simply overtaken by a newer one of the
+  // same configuration, which the recheck cannot see.
   const outcome = await deps.repository.recordHealth(tenant, panelId, health, tx);
-  return { view: current, outcome };
+  return { view: current, outcome, previous };
+}
+
+/**
+ * What a persisted probe result tells its caller.
+ *
+ * `previous` is the health row this write replaced, read under the panel's lock
+ * in the same transaction. It is null when the panel had never been probed.
+ */
+export interface ProbePersistence {
+  readonly view: PanelView;
+  readonly outcome: HealthWriteOutcome;
+  readonly previous: PanelHealthRecord | null;
 }
 
 /** Thrown inside the permission transaction to roll it back; never escapes this module. */

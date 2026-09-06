@@ -509,6 +509,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const panelMonitor = new PanelMonitorService(
     {
       discovery: new DrizzlePanelMonitorRepository(database.db),
+      // The tenant kill switch the monitor reads before it dials and again
+      // before it writes. Same reader the control-plane services use.
+      scopeActivity: tenants,
       probe: probeCore,
       guard,
       audit,

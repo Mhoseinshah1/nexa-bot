@@ -518,6 +518,12 @@ export class PanelService {
       { action: 'panel.update', entityType: 'Panel', entityId: panelId },
       async (tx) => {
         await this.requireActiveScope(scope, tx);
+        // Validated BEFORE the lock, which is now the first statement to touch
+        // the database: a malformed identifier would otherwise reach a `uuid`
+        // column and come back as 22P02 — a 500 where this has always answered
+        // a validation error. `require` below validated it incidentally when it
+        // was the first read; the rule is explicit now that it is not.
+        await this.deps.repository.lockPanel(tenant, this.panelId(panelId), tx);
         const before = await this.require(tenant, panelId, tx);
         if (before.panel.status === 'ARCHIVED') {
           throw errors.preconditionFailed(
@@ -645,6 +651,12 @@ export class PanelService {
       { action: 'panel.credentials.replace', entityType: 'Panel', entityId: panelId },
       async (tx) => {
         await this.requireActiveScope(scope, tx);
+        // Validated BEFORE the lock, which is now the first statement to touch
+        // the database: a malformed identifier would otherwise reach a `uuid`
+        // column and come back as 22P02 — a 500 where this has always answered
+        // a validation error. `require` below validated it incidentally when it
+        // was the first read; the rule is explicit now that it is not.
+        await this.deps.repository.lockPanel(tenant, this.panelId(panelId), tx);
         const before = await this.require(tenant, panelId, tx);
         if (before.panel.status === 'ARCHIVED') {
           throw errors.preconditionFailed(
@@ -724,6 +736,12 @@ export class PanelService {
       { action: 'panel.status', entityType: 'Panel', entityId: panelId },
       async (tx) => {
         await this.requireActiveScope(scope, tx);
+        // Validated BEFORE the lock, which is now the first statement to touch
+        // the database: a malformed identifier would otherwise reach a `uuid`
+        // column and come back as 22P02 — a 500 where this has always answered
+        // a validation error. `require` below validated it incidentally when it
+        // was the first read; the rule is explicit now that it is not.
+        await this.deps.repository.lockPanel(tenant, this.panelId(panelId), tx);
         const before = await this.require(tenant, panelId, tx);
         const updated = await this.deps.repository.setStatus(tenant, panelId, status, now, tx);
         if (updated === null) {
@@ -916,7 +934,7 @@ export class PanelService {
         // The probe itself has already happened; what this stops is the
         // record of it, which is what the operator and the monitor read.
         await this.requireActiveScope(scope, tx);
-        const { outcome } = await persistProbeResult(
+        const { outcome, previous } = await persistProbeResult(
           this.deps,
           tenant,
           panelId,
@@ -944,8 +962,10 @@ export class PanelService {
           const schedule = scheduleAfterProbe(this.deps.cadence, panelId, {
             checkedAt: health.checkedAt,
             failure: health.failure,
+            // The row the write actually replaced, read under the panel's
+            // lock — not the view captured before the probe went on the wire.
             previousConsecutiveFailures: effectivePreviousFailures(
-              before.health?.state ?? null,
+              previous?.state ?? null,
               stored?.consecutiveFailures ?? 0,
             ),
           });
@@ -968,7 +988,7 @@ export class PanelService {
             action: 'panel.test',
             entityType: 'Panel',
             entityId: panelId,
-            before: { state: before.health?.state ?? null },
+            before: { state: previous?.state ?? null },
             // The normalized outcome and nothing else. No provider message, no
             // header, no body — the probe result type has no field one could
             // be put in, which is what makes this hard to get wrong later.
@@ -1048,6 +1068,22 @@ export class PanelService {
    * services throw — a tenant an operator has stopped should look absent to a
    * writer, not present-but-refusing, and the message says which it is without
    * confirming the tenant to somebody who should not know it exists.
+   */
+  /**
+   * Why every mutation below takes `lockPanel` before its first read.
+   *
+   * A probe reads the panel and its credentials, spends up to the HTTP timeout
+   * on the wire, and then writes health and a schedule. An operator editing the
+   * panel or rotating a credential in between made that a check-then-write
+   * race: the probe's configuration comparison passed against a snapshot the
+   * rotation had already superseded, so it stored the OLD credential's verdict
+   * and — worse — its schedule write replaced the `ELIGIBLE_NOW` the rotation
+   * had just granted, leaving the panel the operator had fixed sitting out the
+   * long interval displaying the broken answer.
+   *
+   * The panel row is the serialization point for both sides. There is exactly
+   * one lock and it is always taken first, so there is no order in which to
+   * deadlock.
    */
   private async requireActiveScope(scope: ScopeContext, tx: TransactionScope): Promise<void> {
     if (await this.deps.scopeActivity.scopeIsActive(scope, tx)) return;
