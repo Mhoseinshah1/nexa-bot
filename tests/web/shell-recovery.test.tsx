@@ -224,14 +224,13 @@ describe('a session that expires under an open tab', () => {
 describe('the shell in the states a pure function cannot see', () => {
   afterEach(() => {
     vi.useRealTimers();
-    // RESTORED. Two tests here redefine it, and jsdom's document is shared for
-    // the whole file: leaving it stubbed is a landmine for the next test
-    // appended to this block, which would run against a tab that is
-    // permanently visible or permanently hidden without saying so.
-    Object.defineProperty(document, 'visibilityState', {
-      configurable: true,
-      get: () => 'visible',
-    });
+    // RESTORED — deleted, so jsdom's own accessor comes back, rather than
+    // pinned to a stub that merely agrees with it today. Two tests here
+    // redefine it and jsdom's document is shared for the whole file, so leaving
+    // it overridden is a landmine for the next test appended to this block: it
+    // would run against a tab that is permanently visible without saying so,
+    // and could never exercise real visibility tracking.
+    delete (document as unknown as { visibilityState?: unknown }).visibilityState;
   });
 
   const SIGNED_IN = [
@@ -273,6 +272,32 @@ describe('the shell in the states a pure function cannot see', () => {
     ]);
     await vi.advanceTimersByTimeAsync(300_000);
     expect(skewed.calls.filter((call) => call.url.includes('/auth/session')).length).toBe(0);
+    // A POSITIVE CONTROL for that zero, and it took a second attempt to find
+    // one. The obvious "some other request reached the stub" does not exist
+    // here: the unavailable screen unmounts `SignedIn`, so every page interval
+    // is gone and the stub sees NO traffic whatsoever — which means the bare
+    // `toBe(0)` above was equally satisfied by "the shell stopped asking" and
+    // by "this stub was never wired up".
+    //
+    // So the control is a deliberate trigger. Coming back to the tab must reach
+    // the stub — proving it is live and the tree is mounted — which leaves the
+    // zero above meaning only what it claims: the INTERVAL gave up.
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'hidden',
+    });
+    window.dispatchEvent(new Event('visibilitychange'));
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
+    window.dispatchEvent(new Event('visibilitychange'));
+    await waitFor(() => {
+      expect(
+        skewed.calls.filter((call) => call.url.includes('/auth/session')).length,
+        'the stub must be reachable for the zero above to mean anything',
+      ).toBeGreaterThan(0);
+    });
   });
 
   /**
@@ -440,5 +465,69 @@ describe('the shell in the states a pure function cannot see', () => {
     expect(
       returned.calls.filter((call) => call.url.includes('/auth/session')).length,
     ).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The harm the `data === null` rule is justified by, seen at the render level.
+ *
+ * `sessionView`'s comment and the commit that added it both say a failing focus
+ * refetch "unmounted the form mid-typing and lost the username already in it".
+ * That was covered only by two pure-function cases, which cannot see an
+ * unmount — and this branch's own ledger says a rule with no test is a rule
+ * that will be silently reverted. A later change that keeps `sessionView`
+ * honest but reintroduces the unmount on `App`'s side would restore the exact
+ * defect with the suite green.
+ */
+describe('a sign-in form during a failing lookup', () => {
+  it('keeps the form and the username already typed into it', async () => {
+    stubApi([
+      {
+        url: '/auth/session',
+        status: 401,
+        body: {
+          error: {
+            kind: 'UNAUTHENTICATED',
+            code: 'auth.required',
+            message: 'no session',
+            correlationId: 'c1',
+          },
+        },
+      },
+    ]);
+    renderShell();
+    const username = (await screen.findByLabelText('نام کاربری')) as HTMLInputElement;
+    fireEvent.change(username, { target: { value: 'owner' } });
+
+    // The operator alt-tabs to a password manager and comes back mid-deploy.
+    stubApi([
+      {
+        url: '/auth/session',
+        status: 503,
+        body: { error: { kind: 'internal', code: 'down', message: 'no', correlationId: 'c1' } },
+      },
+    ]);
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'hidden',
+    });
+    window.dispatchEvent(new Event('visibilitychange'));
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
+    window.dispatchEvent(new Event('visibilitychange'));
+    await act(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+    });
+
+    expect(screen.queryByText(UNAVAILABLE)).toBeNull();
+    expect((screen.getByLabelText('نام کاربری') as HTMLInputElement).value).toBe('owner');
+  });
+
+  afterEach(() => {
+    delete (document as unknown as { visibilityState?: unknown }).visibilityState;
   });
 });

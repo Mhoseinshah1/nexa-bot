@@ -1293,3 +1293,69 @@ are the two things a green suite cannot tell you.
 | U36 | a final answer stops the asking, not just the drawing | drop `finalAnswer` from `pollSession` | `shell-recovery.test.tsx` › stops showing a console it can no longer confirm                |
 
 U34 kills two. Sources restored and sha256-verified; suites green afterwards.
+
+# Round 16 — a clean verdict, and the four small things under it
+
+An eighth reviewer enumerated all sixty cells of `sessionView × pollSession`,
+verified `cancelQueries`'s revert ordering against the real `query-core`
+(`onCancel` dispatches the revert SYNCHRONOUSLY, so the subsequent
+`setQueryData` wins), ran U34-U36, and ran the web project five times serially
+and the shell suite six times concurrently looking for flake. **Verdict: round
+15 is correct.** No HIGH or MEDIUM finding.
+
+Four LOW items came with it, and two are the shapes this document exists for.
+
+## A rule expressed where nothing reads it
+
+`sessionView`'s comment claimed that answering `signed-in` in its unreachable
+cell "would render exactly the state the line above just refused". It would not:
+`App` read `view` only for `loading` and `unavailable`, and rendered the console
+from `session.data` directly. So the `signed-in`/`signed-out` half of that
+function had **no consumer at all** — the reviewer made it return `signed-out`
+in every case and all 239 web tests passed.
+
+Which means the `data === null` rule this branch spent a round arguing about
+works only via the `unavailable` branch, and the distinction it draws could be
+edited in good faith to no effect. `App` renders from `view` now, and the
+comment says only what is true.
+
+## The named harm had no test that could see it
+
+The `data === null` rule is justified — in the code and in round 15's commit —
+by "a failing focus refetch unmounted the form mid-typing and lost the username
+already in it". That was covered by two PURE-FUNCTION cases, which cannot see an
+unmount. `shell-recovery.test.tsx` now types a username, fails a focus refetch,
+and asserts both the form and the typed value survive; U38 kills it.
+
+## A zero with nothing anchoring it
+
+`expect(session calls).toBe(0)` after a final answer was satisfied equally by
+"the shell stopped asking" and by "this stub was never wired up". The first
+control I reached for — some other request proving the stub live — **does not
+exist in that state**: the unavailable screen unmounts `SignedIn`, so every page
+interval is gone and the stub sees no traffic whatsoever. The control is now a
+deliberate trigger: coming back to the tab must reach the stub, which leaves the
+zero meaning only what it claims.
+
+Worth recording because the first control FAILED, and its failure is the proof
+that the assertion had been unanchored.
+
+## One left alone, deliberately
+
+`{data: null, error: auth.tenant_suspended}` now renders the sign-in form, which
+`client.ts` deliberately avoids for that code — "authenticate their way out of
+something authentication cannot fix". Reaching it needs a second tab to sign in
+while this one sits at the form and the installation to pause in between; the
+tab still polls at thirty seconds and recovers on `botctl start`. Documented
+rather than fixed, because every fix in this area for eight rounds has cost more
+than the case it addressed.
+
+## The mutations
+
+| #   | rule                                               | mutation                                           | test that dies                                                                    |
+| --- | -------------------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------- |
+| U37 | the shell renders the verdict, not the raw data    | render from `session.data`, and mute `sessionView` | `session-view.test.ts` › reports a resolved session as signed in                  |
+| U38 | a failing lookup does not unmount the sign-in form | drop the `data === null` branch                    | `shell-recovery.test.tsx` › keeps the form and the username already typed into it |
+
+U37 and U38 each kill two and three tests respectively. Before this round U37's
+mutation killed NOTHING — that is the finding, not the footnote.

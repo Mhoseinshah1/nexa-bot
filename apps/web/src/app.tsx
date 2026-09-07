@@ -77,11 +77,10 @@ export function sessionView(query: {
   // agree about which failures are worth waiting through.
   if (query.data && !finalAnswer(query.error)) return 'signed-in';
   if (query.isError) return 'unavailable';
-  // Not `query.data ? 'signed-in' : 'signed-out'`. Reaching here with `data`
-  // truthy needs `isError` false alongside a final `error`, which query-core
-  // cannot produce — it sets and clears the two together — and if it ever
-  // could, answering `signed-in` would render exactly the state the line above
-  // just refused.
+  // Reaching here with `data` truthy needs `isError` false alongside a final
+  // `error`, which query-core cannot produce: it sets and clears the two
+  // together. `signed-out` rather than `query.data ? … : …` so the unreachable
+  // case cannot answer `signed-in` for the state the line above just refused.
   return 'signed-out';
 }
 
@@ -560,9 +559,17 @@ export function App() {
     );
   }
 
+  // From `view`, not from `session.data` again.
+  //
+  // Reading the data directly here left `sessionView`'s `signed-in`/`signed-out`
+  // distinction with no consumer at all: the function could be made to return
+  // `signed-out` in EVERY case and all 239 web tests still passed, because the
+  // only values `App` actually acted on were `loading` and `unavailable`. A
+  // rule expressed in a function nobody reads is a rule that will be edited in
+  // good faith and have no effect.
   return (
     <ToastProvider>
-      {session.data ? (
+      {view === 'signed-in' && session.data ? (
         <SignedIn permissions={session.data.permissions} admin={session.data.admin} />
       ) : (
         <SignIn />
