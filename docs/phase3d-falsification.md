@@ -1352,10 +1352,17 @@ than the case it addressed.
 
 ## The mutations
 
-| #   | rule                                               | mutation                                           | test that dies                                                                    |
-| --- | -------------------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------- |
-| U37 | the shell renders the verdict, not the raw data    | render from `session.data`, and mute `sessionView` | `session-view.test.ts` › reports a resolved session as signed in                  |
-| U38 | a failing lookup does not unmount the sign-in form | drop the `data === null` branch                    | `shell-recovery.test.tsx` › keeps the form and the username already typed into it |
+| #   | rule                                               | mutation                                                         | test that dies                                                                               |
+| --- | -------------------------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| U37 | the shell renders the verdict, not the raw data    | `sessionView`'s `signed-in` arm → `signed-out`, wiring untouched | `shell-recovery.test.tsx` › recovers by itself when the paused installation is started again |
+| U38 | a failing lookup does not unmount the sign-in form | drop the `data === null` branch                                  | `shell-recovery.test.tsx` › keeps the form and the username already typed into it            |
 
-U37 and U38 each kill two and three tests respectively. Before this round U37's
-mutation killed NOTHING — that is the finding, not the footnote.
+U38 kills three: two `session-view` cases and the new render test.
+
+U37 kills **seven**, and the number that matters is the one before it: the SAME
+mutation, run against the previous commit, killed **nothing** — 239 of 239. That
+is the finding rather than the footnote, and it is why the mutation has to be
+the narrow one. An earlier draft of this row bundled reverting the fix into the
+mutation; that kills the same two unit tests on both commits and so demonstrates
+nothing about what the round bought. A mutation that contains the fix is a
+mutation of the old code.

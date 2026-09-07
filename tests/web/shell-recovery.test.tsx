@@ -500,7 +500,7 @@ describe('a sign-in form during a failing lookup', () => {
     fireEvent.change(username, { target: { value: 'owner' } });
 
     // The operator alt-tabs to a password manager and comes back mid-deploy.
-    stubApi([
+    const blip = stubApi([
       {
         url: '/auth/session',
         status: 503,
@@ -523,6 +523,14 @@ describe('a sign-in form during a failing lookup', () => {
       });
     });
 
+    // The control this test needs, and the same one the assertion two describes
+    // above needed: without it, dropping `refetchOnWindowFocus` would leave the
+    // 503 unfetched, the form trivially intact, and this test green while
+    // covering nothing.
+    expect(
+      blip.calls.filter((call) => call.url.includes('/auth/session')).length,
+      'the failing refetch must actually have happened',
+    ).toBeGreaterThan(0);
     expect(screen.queryByText(UNAVAILABLE)).toBeNull();
     expect((screen.getByLabelText('نام کاربری') as HTMLInputElement).value).toBe('owner');
   });

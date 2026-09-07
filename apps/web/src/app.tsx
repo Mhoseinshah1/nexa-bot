@@ -561,12 +561,17 @@ export function App() {
 
   // From `view`, not from `session.data` again.
   //
-  // Reading the data directly here left `sessionView`'s `signed-in`/`signed-out`
-  // distinction with no consumer at all: the function could be made to return
-  // `signed-out` in EVERY case and all 239 web tests still passed, because the
-  // only values `App` actually acted on were `loading` and `unavailable`. A
-  // rule expressed in a function nobody reads is a rule that will be edited in
-  // good faith and have no effect.
+  // Reading the data directly here left one ARM of `sessionView` unconsumed:
+  // changing `signed-in` to `signed-out` — the arm that decides whether a
+  // session survives a stale error — killed nothing, 239 of 239 web tests
+  // green, because `App` acted on `loading` and `unavailable` and took the
+  // console straight from `data`. With this line the same change kills seven.
+  //
+  // (Not "the function could return `signed-out` in every case and nothing
+  // would notice": muting all four arms destroys `loading` and `unavailable`
+  // too and always failed. The narrow claim is the true one, and it is the one
+  // that matters — a rule expressed in an arm nobody reads is a rule that will
+  // be edited in good faith and have no effect.)
   return (
     <ToastProvider>
       {view === 'signed-in' && session.data ? (
