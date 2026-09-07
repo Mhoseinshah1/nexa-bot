@@ -740,9 +740,15 @@ It now compares the whole normalised shape: method, column order and predicate.
 | --- | ----------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | U12 | a transient failure does NOT stop the interval  | `refused` → `error !== null`                               | `permissions-and-refresh.test.tsx` › keeps polling through a transient failure, and recovers on its own |
 | U13 | a declared index matches the built one in shape | reorder the archived keyset to `(created_at,id,tenant_id)` | `online-indexes.test.ts` › has an index in the database matching every declared definition              |
-| U14 | a refused restore name cannot be resent         | drop `refusedNames` from the button's `disabled`           | `panels.test.tsx` › will not resend the name the restore was already refused                            |
 | U15 | the shell does not hide what the server serves  | gate `/providers` on `panels.view` again                   | `permissions-and-refresh.test.tsx` › is offered to an actor who may create a panel but not list one     |
 | U16 | a failed detail can be re-asked                 | drop the retry button from the error banner                | `permissions-and-refresh.test.tsx` › offers a retry that actually re-asks                               |
+
+**U14 has been removed from this table.** It protected round 9's rule that the
+restore button is disabled for a name the server already refused, and round 10
+reverted that rule — the disabled control was a dead end worse than the pointless
+press it prevented. The mutation and its test are both gone, and a row citing a
+test no commit contains is exactly the defect `check-falsification-citations.mjs`
+exists to catch; it caught this one. The area is covered by U20 below.
 
 U15 kills two tests. U12 died with `expected 1 to be greater than 1`; U13 with
 `panels_tenant_archived_page_idx shape: expected 'on panels using btree
@@ -760,3 +766,115 @@ refusal stop it?", which is the question the author already believed the answer
 to. What caught it was a reader who asked what the fix now does that it did not
 do before, and in which state that is wrong — the question `CLAUDE.md` says to
 ask, applied by somebody who had not written the answer.
+
+# Round 10 — the same rule, wrong for the third time
+
+A second fresh-context reviewer read round 9 and found seven more. Two of them
+are the polling rule again, and one is a fix of mine that reintroduced this
+branch's signature defect.
+
+## The partition was still not exhaustive
+
+Round 9 replaced "stop on any error" with "stop on 401 or 403, poll through
+everything else, which waiting is exactly the cure for". That last clause is
+false. `authedGet` throws in **two** places: `toApiError` for every
+`!response.ok`, and `schema.parse` on the SUCCESS path — a `ZodError`, with no
+status, which is neither 401 nor 403 and so was polled for ever.
+
+That state is not hypothetical here. `capture.mjs` already carries a note about
+it: four routes were once photographed showing a loading skeleton because the
+fixtures had drifted from the frozen schemas and `schema.parse` threw. In
+production it is a tab holding the previous release across a deploy, hitting it
+on every tick, for as long as the tab is open. Round 8 gave that tab one request
+and silence; round 9 gave it a request every fifteen seconds for ever. A 404 and
+a 400 were polled the same way.
+
+So the rule is now enumerated rather than partitioned by a rule of thumb, over
+the three failure classes that actually exist:
+
+- `ApiError` — always carries a status. A 4xx is an ANSWER (401 and 403 need a
+  human, 404 and 400 need a different request), except 408 and 429, which are
+  the server asking to be asked again. A 5xx is transient.
+- `ZodError` — the server answered and this bundle cannot read the answer. Only
+  a reload resolves it.
+- anything else — a dropped connection, an abort. The network, which waiting
+  cures.
+
+Unrecognised failures fall to the last case and keep polling, because a request
+the server shrugs off is cheaper than a frozen screen nobody is watching.
+
+## And a backoff that was not one
+
+The same round left the alerts list polling a failing server every three
+seconds, indefinitely: its "only while something is PENDING" condition is
+satisfied by RETAINED data, so an outage cannot clear it. Twenty minutes of one
+is about four hundred requests per open tab — the same rate as the 403 flood the
+helper exists to stop, landing in the load balancer's logs instead of in
+`operational_events`.
+
+The first fix for that scaled the interval by `fetchFailureCount`. It does not
+work: React Query zeroes that field when a fetch STARTS, so it counts the
+retries inside one attempt and never the consecutive failures across polls. The
+result would have been a flat multiplier wearing a backoff's docblock — and the
+test written for it passed, because at 15 s a flat doubling and a real backoff
+both land inside "fewer than eight in two minutes". It was caught by working the
+arithmetic out rather than by the green suite.
+
+What shipped instead is a single slow lane: while a query is in error, no faster
+than thirty seconds. Twenty minutes of outage costs forty requests rather than
+four hundred, and a recovered server is picked up within half a minute. The test
+moved to the alerts list, where the declared cadence is 3 s, so thirty attempts
+against a handful is a sharp discrimination rather than a soft one.
+
+## A fix of mine that reintroduced the dead end
+
+Round 9 answered "the restore button re-offers the name the server just refused"
+by remembering every refused name and DISABLING the button for it. That is wrong
+twice over. A 409 is a property of the database at an instant, not of the string:
+the colliding panel can be renamed or archived a minute later, which frees the
+name — and the button was dead on a request that had become valid, with no
+message, no tooltip, and no way back but a reload. **A dead control with no
+explanation is the dead end this entire screen exists to remove**, reintroduced
+by a fix for a much smaller version of it.
+
+Reverted. The button stays live, because pressing it again is legitimate, and
+the second refusal is answered with the message that says what to do — which was
+round 9's other half and is the part that was actually needed.
+
+## The rest
+
+- The `ProvidersPage` `denied` prop could only ever be `false` once its gate was
+  removed. Deleted, per the same rule that removed C12 in round 7.
+- The index-shape normaliser collapsed `, ` to `,` on the BUILT text only, so a
+  declaration written with the natural space after each comma would fail on an
+  index that is correct; and stripping every parenthesis made
+  `(a AND b) OR c` and `a AND (b OR c)` normalise equal. Now symmetric, and only
+  the predicate's outer pair — the one PostgreSQL adds — is unwrapped.
+- `interactiveStates` counted captures by looking for a parenthesis in a
+  hand-written display string. It is a `kind` field on the finding now.
+- The vacuous half of round 9's restore test went with the test itself.
+
+## The mutations
+
+| #   | rule                                             | mutation                                        | test that dies                                                                                                 |
+| --- | ------------------------------------------------ | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| U17 | a response this bundle cannot parse is an answer | `finalAnswer` returns false for a parse failure | `permissions-and-refresh.test.tsx` › stops polling a response this bundle cannot parse                         |
+| U18 | a failing query drops into the slow lane         | `paced` returns `ms` unconditionally            | `permissions-and-refresh.test.tsx` › drops a failing endpoint into a slow lane instead of its declared cadence |
+| U19 | every 4xx but 408 and 429 is an answer           | narrow it back to 401/403                       | `permissions-and-refresh.test.tsx` › stops polling a route the server says is not there                        |
+| U20 | the restore button stays live after a refusal    | disable it whenever a rename is offered         | `panels.test.tsx` › offers a replacement name when a restore is refused because the name was taken             |
+
+U20 kills two tests. Sources restored and sha256-verified; every suite green
+again afterwards.
+
+## U19 killed nothing the first time, which is the finding
+
+Round 9's rule was 401/403. This round widened it to every 4xx but 408 and 429 —
+and the first run of U19, which narrows it straight back, **passed 25 of 25**.
+The widening was a rule with no test, which `CLAUDE.md` says is a rule that will
+be silently reverted, and it was three review rounds' worth of scar tissue on
+this exact function.
+
+Recorded rather than quietly fixed, because the useful part is the shape: the
+mutation that kills nothing is the only signal that a rule was changed without
+being tested, and it fires precisely when the change felt too obvious to test.
+The 404 test now exists and U19 dies with `expected 5 to be 1`.

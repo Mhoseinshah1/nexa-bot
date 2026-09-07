@@ -18,7 +18,7 @@ import {
   type Tone,
   type ViewState,
 } from '../ui/kit';
-import { pollUnlessRefused } from '../polling';
+import { pollUnlessFinal } from '../polling';
 
 /**
  * One page of panels, at the contract's ceiling. `PANEL_PAGE_MAX` is the most
@@ -59,7 +59,7 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
   const readiness = useQuery({
     queryKey: ['readiness'],
     queryFn: fetchReadiness,
-    refetchInterval: pollUnlessRefused(15_000),
+    refetchInterval: pollUnlessFinal(15_000),
   });
 
   // One page, deliberately. The dashboard summarises; it does not walk the
@@ -72,7 +72,7 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
     // The health distribution is written by the monitor too, and it sits beside
     // a card that refreshes. One stale card next to a live one is worse than
     // two stale cards, because nothing on screen says which is which.
-    refetchInterval: pollUnlessRefused(60_000),
+    refetchInterval: pollUnlessFinal(60_000),
   });
 
   /**
@@ -105,7 +105,7 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
      * cadences on one screen produce a card that disagrees with the one beside
      * it.
      */
-    refetchInterval: pollUnlessRefused(15_000),
+    refetchInterval: pollUnlessFinal(15_000),
   });
 
   /**

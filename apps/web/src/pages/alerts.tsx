@@ -32,7 +32,7 @@ import {
   StateSwitch,
   type Column,
 } from '../ui/kit';
-import { pollUnlessRefusedWhile } from '../polling';
+import { pollUnlessFinalWhile } from '../polling';
 
 const SEVERITIES: readonly OperationalSeverity[] = ['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL'];
 
@@ -359,7 +359,7 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
     // destination that does not work.
     //
     // Only while something IS pending, so a settled list costs nothing.
-    refetchInterval: pollUnlessRefusedWhile<NotificationListResponse>(3_000, (data) =>
+    refetchInterval: pollUnlessFinalWhile<NotificationListResponse>(3_000, (data) =>
       data.notifications.some((entry) => entry.status === 'PENDING'),
     ),
   });
@@ -369,7 +369,7 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
     queryFn: () => fetchNotification(selected as string),
     enabled: selected !== null,
     // The open panel follows the same rule as the list above.
-    refetchInterval: pollUnlessRefusedWhile<NotificationDetailResponse>(
+    refetchInterval: pollUnlessFinalWhile<NotificationDetailResponse>(
       3_000,
       (data) => data.notification.status === 'PENDING',
     ),

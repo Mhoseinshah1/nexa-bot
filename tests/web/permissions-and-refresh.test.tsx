@@ -581,6 +581,128 @@ describe('polling that has started being refused, and polling that has merely st
    * makes. A gate that only ever asked "does a refusal stop it?" was green
    * throughout.
    */
+  /**
+   * The rule is "a 4xx is an ANSWER", not "a 403 is an answer".
+   *
+   * A 404 is the case that made the difference visible: a panel deleted or a
+   * route retired under an open tab answers 404 for ever, and asking again
+   * unchanged cannot make it exist. This test was missing when the widening
+   * shipped — the mutation that narrowed the rule back to 401/403 killed
+   * nothing, which is how the gap was found.
+   */
+  it('stops polling a route the server says is not there', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubApi([
+      READINESS,
+      { url: '/panels', body: { panels: [], nextCursor: null } },
+      { url: '/ops-log', body: { events: [], nextCursor: null } },
+    ]);
+    renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
+    await screen.findByText('چیزی برای رسیدگی نیست.');
+
+    const gone = stubApi([
+      READINESS,
+      { url: '/panels', body: { panels: [], nextCursor: null } },
+      {
+        url: '/ops-log',
+        status: 404,
+        body: {
+          error: { kind: 'not_found', code: 'gone', message: 'no', correlationId: 'test' },
+        },
+      },
+    ]);
+
+    await vi.advanceTimersByTimeAsync(16_000);
+    await waitFor(() => {
+      expect(countOf(gone.calls, '/ops-log')).toBeGreaterThan(0);
+    });
+    const asked = countOf(gone.calls, '/ops-log');
+
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(countOf(gone.calls, '/ops-log')).toBe(asked);
+    expect(countOf(gone.calls, '/system/readiness')).toBeGreaterThan(1);
+  });
+
+  /**
+   * Contract skew, which the second version of this rule polled for ever.
+   *
+   * `authedGet` throws in two places: `toApiError` for `!response.ok`, and
+   * `schema.parse` on the SUCCESS path. The second is a `ZodError`, carries no
+   * status, and is what a tab holding the previous release hits on every tick
+   * after a deploy. Asking again cannot help — the bundle is the thing that is
+   * old — so this is an answer, not a stumble.
+   */
+  it('stops polling a response this bundle cannot parse', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubApi([
+      READINESS,
+      { url: '/panels', body: { panels: [], nextCursor: null } },
+      { url: '/ops-log', body: { events: [], nextCursor: null } },
+    ]);
+    renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
+    await screen.findByText('چیزی برای رسیدگی نیست.');
+
+    // A 200 whose shape the frozen schema rejects.
+    const skewed = stubApi([
+      READINESS,
+      { url: '/panels', body: { panels: [], nextCursor: null } },
+      {
+        url: '/ops-log',
+        body: { events: [{ nothing: 'the server it expects' }], nextCursor: null },
+      },
+    ]);
+
+    await vi.advanceTimersByTimeAsync(16_000);
+    await waitFor(() => {
+      expect(countOf(skewed.calls, '/ops-log')).toBeGreaterThan(0);
+    });
+    const parsed = countOf(skewed.calls, '/ops-log');
+
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(countOf(skewed.calls, '/ops-log')).toBe(parsed);
+    expect(countOf(skewed.calls, '/system/readiness')).toBeGreaterThan(1);
+  });
+
+  /**
+   * A failure that waiting CAN cure drops into a slow lane instead of holding
+   * its declared cadence for as long as the tab is open.
+   *
+   * Measured on the alerts list, because that is where the hazard actually
+   * lives: it polls every THREE seconds while a delivery is pending, and React
+   * Query retains the last successful data across a failed refetch, so its own
+   * "only while pending" condition stays satisfied for the whole outage. At
+   * three seconds a twenty-minute outage is about four hundred requests per open
+   * tab, against a server that is already failing.
+   */
+  it('drops a failing endpoint into a slow lane instead of its declared cadence', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const pending = {
+      id: '01a05e35-c9ad-7e93-bef3-1ed9b55292ca',
+      kind: 'OPERATIONAL_EVENT',
+      status: 'PENDING',
+      templateKey: 'ops.alert',
+      attemptCount: 0,
+      maxAttempts: 5,
+      createdAt: '2026-09-06T08:00:00.000Z',
+      lastAttemptAt: null,
+      completedAt: null,
+      correlationId: 'c1',
+    };
+    stubApi([{ url: '/notifications', body: { notifications: [pending], nextCursor: null } }]);
+    renderPage(<NotificationsPage mayTest denied={false} />);
+    await screen.findByText('ops.alert');
+
+    const broken = stubApi([{ url: '/notifications', ...BROKEN }]);
+
+    // Ninety seconds. At the declared three-second cadence that is thirty
+    // attempts; in the slow lane it is a handful. More than one, because giving
+    // up entirely is the frozen-screen defect this must not become.
+    await vi.advanceTimersByTimeAsync(90_000);
+    const attempts = countOf(broken.calls, '/notifications');
+    expect(attempts).toBeGreaterThan(1);
+    expect(attempts).toBeLessThan(8);
+  });
+
   it('keeps polling through a transient failure, and recovers on its own', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     stubApi([

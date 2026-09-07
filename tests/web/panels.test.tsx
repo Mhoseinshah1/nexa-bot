@@ -762,14 +762,18 @@ describe('the panel detail', () => {
   });
 
   /**
-   * The field is seeded with the name the server just refused — it is the
-   * string being edited, not a suggestion — so the control beside it must not
-   * accept it back unchanged. Leaving it enabled meant the operator's most
-   * natural next action ("a field appeared, it is filled in, press the button")
-   * was a press that could only be refused again, and the second refusal is a
-   * different, blunter message.
+   * A second press with the name unchanged is LEGITIMATE — the colliding panel
+   * may have been renamed or archived in between, which frees the name — so the
+   * button stays live. What it must not do is answer with the blunt edit
+   * message: the operator is acting on advice this screen gave them, and the
+   * reply has to keep saying what to do.
+   *
+   * An earlier version disabled the button for every refused name instead. That
+   * killed the retry that would have succeeded, and left a dead control with no
+   * message and no way back short of a reload — the dead end this screen exists
+   * to remove, reintroduced by a fix for a smaller version of it.
    */
-  it('will not resend the name the restore was already refused', async () => {
+  it('lets the operator press restore again, because the name may since have been freed', async () => {
     const archived = detail({ status: 'ARCHIVED' });
     const api = stubApi([
       ...archived,
@@ -792,21 +796,19 @@ describe('the panel detail', () => {
 
     const restore = () => screen.getByRole('button', { name: 'بازگردانی از بایگانی' });
     fireEvent.click(restore());
-    const field = (await screen.findByLabelText('نام تازه برای بازگردانی')) as HTMLInputElement;
-    await waitFor(() => {
-      expect(restore()).toBeDisabled();
-    });
-
-    const refused = api.calls.filter((call) => call.method === 'POST').length;
-    fireEvent.click(restore());
-    expect(api.calls.filter((call) => call.method === 'POST').length).toBe(refused);
-
-    // Editing it re-enables the button: the block is on the refused VALUE, not
-    // on having been refused once.
-    fireEvent.change(field, { target: { value: 'Frankfurt A (restored)' } });
+    await screen.findByLabelText('نام تازه برای بازگردانی');
     await waitFor(() => {
       expect(restore()).toBeEnabled();
     });
+
+    const before = api.calls.filter((call) => call.method === 'POST').length;
+    fireEvent.click(restore());
+    await waitFor(() => {
+      expect(api.calls.filter((call) => call.method === 'POST').length).toBeGreaterThan(before);
+    });
+    // ...and it carried the name, so the server can answer the specific case.
+    const last = api.calls.filter((call) => call.method === 'POST').at(-1);
+    expect(last?.body).toMatchObject({ status: 'DISABLED', name: 'Frankfurt A' });
   });
 
   /**

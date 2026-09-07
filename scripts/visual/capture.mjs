@@ -202,6 +202,7 @@ for (const view of VIEWS) {
 
     findings.push({
       view: view.key,
+      kind: 'route',
       page: name,
       path,
       theme: overflow.theme,
@@ -327,6 +328,7 @@ for (const view of VIEWS) {
 
   findings.push({
     view: view.key,
+    kind: 'interactive',
     page: 'panel-created',
     path: '/panels/new (submitted, edit-only session)',
     theme: state.theme,
@@ -363,7 +365,11 @@ const summary = {
   // `captured` should be `pages x views` and left two captures looking lost.
   routes: PAGES.length,
   views: VIEWS.map((v) => v.key),
-  interactiveStates: findings.filter((f) => f.path.includes('(')).length,
+  // From a field on the finding, not from a parenthesis in a display string:
+  // the previous spelling was correct only because no route path happened to
+  // contain one, and a second interactive capture written without one would
+  // have silently gone uncounted.
+  interactiveStates: findings.filter((f) => f.kind === 'interactive').length,
   horizontalOverflow: findings.filter((f) => f.horizontalOverflow).length,
   documentScrolledInsteadOfShell: findings.filter((f) => f.pageScrolledBy > 0).length,
   stillLoadingAfterSettle: findings.filter((f) => f.stillLoading).length,

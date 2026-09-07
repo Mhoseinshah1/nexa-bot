@@ -379,7 +379,7 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
 
   if (route.path === '/providers') {
     return {
-      element: <ProvidersPage denied={false} />,
+      element: <ProvidersPage />,
       crumbs: [{ label: t('web.nav_providers') }],
       title: t('web.nav_providers'),
     };

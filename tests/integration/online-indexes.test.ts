@@ -119,32 +119,52 @@ describe('the online index build', () => {
       // so normalising whitespace and quoting is enough to compare the shape.
       // PostgreSQL re-renders a predicate — parenthesised, with an explicit
       // `::text` cast — so the comparison is of shape, not of spelling.
+      //
+      // Applied to BOTH sides. An earlier version collapsed `, ` to `,` on the
+      // built text only, so a declaration written with the natural space after
+      // each comma — semantically identical, and what a maintainer adding the
+      // third index would write — failed on an index that was correct.
+      //
+      // Only the predicate's OUTER parentheses are stripped, because that is
+      // the pair PostgreSQL adds when it re-renders. Stripping every paren made
+      // `(a AND b) OR c` and `a AND (b OR c)` normalise equal, which would let
+      // a compound predicate drift from its declaration unnoticed — the exact
+      // hazard this assertion exists for.
       const normalise = (text: string) =>
         text
           .replace(/"/g, '')
           .replace(/'/g, '')
           .replace(/::text/g, '')
-          .replace(/[()]/g, '')
+          .replace(/,\s+/g, ',')
           .replace(/\s+/g, ' ')
           .trim()
           .toLowerCase();
+      const unwrap = (text: string) => {
+        const trimmed = text.trim();
+        return trimmed.startsWith('(') && trimmed.endsWith(')')
+          ? trimmed.slice(1, -1).trim()
+          : trimmed;
+      };
+      const shapeOf = (text: string) => {
+        const split = / where (.*)$/.exec(text);
+        return split === null
+          ? { columns: text, predicate: null }
+          : { columns: text.slice(0, split.index), predicate: unwrap(split[1] ?? '') };
+      };
       const declared = normalise(index.definition);
       // `indexdef` is a full statement; the declaration is everything from `ON`
       // onwards. Strip the prefix and the schema qualification so what remains
       // is the same clause in the same order: method, columns, predicate.
       const built = normalise(actual)
         .replace(new RegExp(`^create index ${index.name} `), '')
-        .replace(/public\./g, '')
-        .replace(/,\s+/g, ',');
-      expect(built, `${index.name} shape`).toBe(declared);
+        .replace(/public\./g, '');
 
-      // And the predicate again on its own, so a failure of the line above says
-      // WHICH half moved rather than printing two long strings side by side.
-      const predicateOf = (text: string) => {
-        const where = / where (.*)$/.exec(text);
-        return where === null ? null : where[1];
-      };
-      expect(predicateOf(built), `${index.name} predicate`).toBe(predicateOf(declared));
+      // The two halves separately, so a failure names WHICH one moved rather
+      // than printing two long strings side by side. Column order is half the
+      // point: a keyset index whose leading column is not the one every query
+      // filters on serves nothing.
+      expect(shapeOf(built).columns, `${index.name} columns`).toBe(shapeOf(declared).columns);
+      expect(shapeOf(built).predicate, `${index.name} predicate`).toBe(shapeOf(declared).predicate);
     }
 
     // And the two panel indexes are complementary rather than duplicates: one

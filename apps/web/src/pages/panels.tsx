@@ -53,7 +53,7 @@ import {
   type Column,
   type Tone,
 } from '../ui/kit';
-import { pollUnlessRefused } from '../polling';
+import { pollUnlessFinal } from '../polling';
 
 /**
  * How often an open panel detail re-reads its own row.
@@ -390,7 +390,7 @@ export function PanelDetailPage({
      * watching one panel; polling faster than the thing that writes the data
      * only adds requests that find the same row.
      */
-    refetchInterval: pollUnlessRefused(PANEL_DETAIL_REFRESH_MS),
+    refetchInterval: pollUnlessFinal(PANEL_DETAIL_REFRESH_MS),
   });
 
   const refresh = async () => {
@@ -582,8 +582,6 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
    * something no screen could do, and the panel stayed unrestorable.
    */
   const [renameOnRestore, setRenameOnRestore] = useState<string | null>(null);
-  /** Every name this restore has already been refused, so none can be resent. */
-  const [refusedNames, setRefusedNames] = useState<readonly string[]>([]);
 
   const status = useMutation({
     mutationFn: (command: { idempotencyKey: string; status: PanelStatus; name?: string }) =>
@@ -591,7 +589,6 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     onSuccess: async () => {
       statusSubmission.settle();
       setRenameOnRestore(null);
-      setRefusedNames([]);
       toast({ tone: 'ok', message: t('web.saved') });
       await refresh();
     },
@@ -600,15 +597,18 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
       // The one refusal this screen can actually resolve: offer the field
       // rather than repeating advice the operator cannot act on.
       if (error instanceof ApiError && error.code === PANEL_ERROR_CODES.PANEL_NAME_TAKEN) {
-        // The name the server just refused, remembered so the button below can
-        // refuse it too. The field is seeded with it deliberately — it is the
-        // string the operator is editing, not a suggestion — but leaving the
-        // control enabled on a value already known to collide invited a second
-        // press that could only fail.
-        const attempted = renameOnRestore ?? panel.name;
-        setRefusedNames((current) =>
-          current.includes(attempted) ? current : [...current, attempted],
-        );
+        // The field is seeded with the refused name deliberately: it is the
+        // string the operator is about to edit, not a suggestion.
+        //
+        // An earlier version also remembered every refused name and DISABLED
+        // the button for it, to stop a press that could only fail. That was
+        // wrong twice over. A 409 is a property of the database at an instant,
+        // not of the string — the colliding panel can be renamed or archived a
+        // minute later, which frees the name — so the button went dead on a
+        // request that had become valid, with no message and no way back but a
+        // reload. And a dead control with no explanation is the dead end this
+        // whole screen exists to remove. The second refusal is answered with a
+        // message that says what to do instead.
         setRenameOnRestore((current) => current ?? panel.name);
       }
       toast({ tone: 'danger', message: messageFor(error) });
@@ -779,11 +779,7 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
               <button
                 type="button"
                 className="btn"
-                disabled={
-                  status.isPending ||
-                  renameOnRestore === '' ||
-                  refusedNames.includes(renameOnRestore ?? panel.name)
-                }
+                disabled={status.isPending || renameOnRestore === ''}
                 onClick={() => {
                   const command = {
                     status: 'DISABLED' as PanelStatus,
@@ -1438,12 +1434,18 @@ export function NewPanelPage({
 // Providers
 // ---------------------------------------------------------------------------
 
-export function ProvidersPage({ denied }: { denied: boolean }) {
-  const providers = useQuery({
-    queryKey: ['providers'],
-    queryFn: fetchProviders,
-    enabled: !denied,
-  });
+/**
+ * No `denied` prop.
+ *
+ * `GET /providers` authenticates and checks no permission — it is a catalogue
+ * of code, identical for every tenant. The prop existed to gate this page on
+ * `panels.view`, which hid it from the `panels.edit`-only actor whose create
+ * form fetches this very catalogue. Once the gate went, the prop could only
+ * ever be `false`, and a parameter with one reachable value is dead weight that
+ * reads like a control.
+ */
+export function ProvidersPage() {
+  const providers = useQuery({ queryKey: ['providers'], queryFn: fetchProviders });
   const rows = providers.data?.providers ?? [];
 
   return (
@@ -1460,7 +1462,7 @@ export function ProvidersPage({ denied }: { denied: boolean }) {
 
       <Card>
         <StateSwitch
-          state={denied ? 'denied' : queryState(providers, rows.length === 0)}
+          state={queryState(providers, rows.length === 0)}
           onRetry={() => void providers.refetch()}
         >
           <DataTable
