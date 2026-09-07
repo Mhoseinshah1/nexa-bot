@@ -145,6 +145,18 @@ export const WEB_FA = {
   // Concurrency and repair
   'web.changed_elsewhere':
     'این مقدار پس از آغاز ویرایش شما جای دیگری تغییر کرده است. ذخیره‌کردن با خطای تداخل روبه‌رو می‌شود.',
+  /*
+   * The same situation where the server CANNOT refuse the overwrite.
+   *
+   * `settings` and `content` send an `expectedVersion` and are told about a
+   * real conflict; `POST /panels/:id` carries no version, so promising one
+   * there described a refusal that cannot happen and invited the operator to
+   * press Save expecting to be stopped. The save succeeds and the other
+   * administrator's write is gone — the exact harm `VERSION_CONFLICT` exists to
+   * name, under a message saying it was safe to try.
+   */
+  'web.changed_elsewhere_overwrite':
+    'این مقدار پس از آغاز ویرایش شما جای دیگری تغییر کرده است. ذخیره‌کردن، تغییر آن‌ها را بازنویسی می‌کند.',
   'web.reload_value': 'گرفتن مقدار تازه',
   'web.stored_value_invalid':
     'مقدار ذخیره‌شده با تعریف این کلید نمی‌خواند، پس پیش‌فرض اعمال می‌شود. ذخیره‌کردن یک مقدار معتبر آن را اصلاح می‌کند.',

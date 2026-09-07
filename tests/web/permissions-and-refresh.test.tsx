@@ -5,6 +5,7 @@ import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { DashboardPage } from '../../apps/web/src/pages/dashboard';
 import { NotificationsPage } from '../../apps/web/src/pages/alerts';
 import { event, panel, renderPage, stubApi } from './harness';
+import { formatNumber } from '../../apps/web/src/format';
 
 /**
  * Two defect classes the fifth review found, kept together because they are the
@@ -420,6 +421,56 @@ describe('the archive filter and the cursor that belongs to it', () => {
     const latest = api.calls.at(-1);
     expect(latest?.url).not.toContain('cursor=');
     expect(latest?.url).not.toContain('archived=only');
+  });
+
+  /**
+   * The archive browser must ASK for the archive.
+   *
+   * Every assertion about `archived=only` in this file was a `not.toContain` —
+   * satisfied just as well by a client that never sends the parameter at all.
+   * Deleting it from either the API client or the page left all 963 tests
+   * green, on this branch's headline feature: the pill stays selected, the
+   * archived-empty copy never appears, and the operator is shown the LIVE
+   * fleet under the archived heading. The server side is covered; the wiring
+   * between them was not.
+   */
+  it('asks the server for the archive when the archive is what is shown', async () => {
+    const api = stubApi([{ url: '/panels', body: { panels: [], nextCursor: null } }]);
+    renderPage(resolve(routeWith('archived=only'), ['panels.view']).element as ReactElement);
+
+    await waitFor(() => {
+      expect(api.calls.length).toBeGreaterThan(0);
+    });
+    expect(api.calls.some((call) => call.url.includes('archived=only'))).toBe(true);
+  });
+
+  /**
+   * ...and the two modes must not share a cache entry. The key carries the
+   * mode, so switching cannot paint one list's rows under the other's heading
+   * while the new request is in flight.
+   */
+  it('does not show one mode a frame of the other mode rows', async () => {
+    const live = stubApi([
+      { url: '/panels', body: { panels: [panel({ name: 'Live One' })], nextCursor: null } },
+    ]);
+    const view = renderPage(resolve(routeWith(''), ['panels.view']).element as ReactElement);
+    await screen.findByText('Live One');
+    void live;
+
+    stubApi([
+      {
+        url: '/panels',
+        body: {
+          panels: [panel({ id: '01a05e35-c9ad-7e93-bef3-1ed9b55292f1', name: 'Retired One' })],
+          nextCursor: null,
+        },
+      },
+    ]);
+    view.rerender(resolve(routeWith('archived=only'), ['panels.view']).element as ReactElement);
+
+    // The live row must not survive into the archived view even for a frame.
+    expect(screen.queryByText('Live One')).toBeNull();
+    expect(await screen.findByText('Retired One')).toBeInTheDocument();
   });
 
   it('offers no previous page after the mode changed underneath it', async () => {
@@ -985,5 +1036,86 @@ describe('a list whose first load failed', () => {
 
     await vi.advanceTimersByTimeAsync(35_000);
     expect(await screen.findByText('ops.recovered')).toBeInTheDocument();
+  });
+});
+
+/**
+ * Bounds that were stated as rules and held by nothing.
+ *
+ * Each of these survived mutation with all 963 tests green. They are grouped
+ * because they share a shape: a condition whose absence produces more requests,
+ * or a screen that quietly says less than it knows.
+ */
+describe('bounds that were asserted only in comments', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const countOf = (calls: readonly { url: string }[], fragment: string) =>
+    calls.filter((call) => call.url.includes(fragment)).length;
+
+  const notification = (status: string, key: string) => ({
+    id: `01a05e35-c9ad-7e93-bef3-1ed9b552${status === 'SENT' ? '92cd' : '92ce'}`,
+    kind: 'OPERATIONAL_EVENT',
+    status,
+    templateKey: key,
+    attemptCount: 1,
+    maxAttempts: 5,
+    createdAt: '2026-09-06T08:00:00.000Z',
+    lastAttemptAt: '2026-09-06T08:00:01.000Z',
+    completedAt: status === 'SENT' ? '2026-09-06T08:00:01.000Z' : null,
+    correlationId: 'c1',
+  });
+
+  /**
+   * "Only while something IS pending, so a settled list costs nothing."
+   * Without the condition every open `/notifications` tab asks every three
+   * seconds for as long as it is open — 1200 requests an hour, per tab, on a
+   * single-VPS install.
+   */
+  it('stops polling a delivery list once nothing is pending', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const settled = stubApi([
+      {
+        url: '/notifications',
+        body: { notifications: [notification('SENT', 'ops.settled')], nextCursor: null },
+      },
+    ]);
+    renderPage(<NotificationsPage mayTest denied={false} />);
+    await screen.findByText('ops.settled');
+
+    const asked = countOf(settled.calls, '/notifications');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(countOf(settled.calls, '/notifications')).toBe(asked);
+  });
+
+  /**
+   * "Six rows with no count read as 'there are six'." The card headed «نیازمند
+   * رسیدگی» must say how many it did not draw.
+   */
+  it('says how many conditions the attention card did not draw', async () => {
+    const many = Array.from({ length: 9 }, (_, index) =>
+      event({
+        id: `01a05e35-c9ad-7e93-bef3-1ed9b55292${(10 + index).toString()}`,
+        code: 'settings.stored_value_invalid',
+        message: `condition ${index}`,
+      }),
+    );
+    stubApi([
+      READINESS,
+      { url: '/panels', body: { panels: [], nextCursor: null } },
+      { url: '/ops-log', body: { events: many, nextCursor: null } },
+    ]);
+    renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
+
+    await screen.findByText('condition 0');
+    // Six drawn, and the card must account for the other three rather than
+    // reading as "there are six".
+    const more = await screen.findByText(/شرایط باز دیگر/);
+    // Through the app's own formatter rather than a hand-typed glyph: jsdom
+    // resolves the locale to latin digits, so asserting `۳` would have been a
+    // test about Intl data rather than about the count.
+    expect(more.textContent ?? '').toContain(formatNumber(9 - 6));
+    expect(screen.queryByText('condition 8')).toBeNull();
   });
 });

@@ -586,9 +586,30 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
   const status = useMutation({
     mutationFn: (command: { idempotencyKey: string; status: PanelStatus; name?: string }) =>
       setPanelStatus({ id: panel.id, ...command }),
-    onSuccess: async () => {
+    onSuccess: async (result, command) => {
       statusSubmission.settle();
       setRenameOnRestore(null);
+      /*
+       * Only the NAME, and only when this command carried one.
+       *
+       * A restore that supplies a replacement name changes `name` on the
+       * server; leaving the draft on the old value made the page tell the
+       * operator that somebody ELSE had changed the row — attributing their own
+       * rename to a third party, in a notice about concurrent edits, with no
+       * concurrency anywhere in the flow.
+       *
+       * But `adopt(result.panel)` — the whole row, as `save` does — is wrong
+       * here and a test caught it: a status change is not an identity save, and
+       * an operator who has typed a new base URL and then presses Disable would
+       * have had that draft silently replaced by the stored value. `save` may
+       * adopt everything because the operator just submitted everything. This
+       * folds in the one field this command is responsible for and leaves every
+       * other draft exactly as it was.
+       */
+      if (command.name !== undefined) {
+        setBasis((current) => ({ ...current, name: result.panel.name }));
+        setName(result.panel.name);
+      }
       toast({ tone: 'ok', message: t('web.saved') });
       await refresh();
     },
@@ -691,10 +712,17 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
             rather than resolved: `POST /panels/:id` carries no expected
             version, so nothing on the server can refuse the overwrite, and the
             operator is the only party that can decide whose edit stands.
+
+            Which is why this is NOT `web.changed_elsewhere`, the string the
+            settings and content forms use: that one promises a conflict error,
+            and those two send an `expectedVersion` that can produce one. Here
+            it described a refusal the contract cannot make, so an operator who
+            pressed Save expecting to be stopped silently overwrote the other
+            administrator's rename instead.
           */}
           {changedElsewhere && (
             <p className="notice">
-              {t('web.changed_elsewhere')}{' '}
+              {t('web.changed_elsewhere_overwrite')}{' '}
               <button type="button" className="link" onClick={() => adopt(panel)}>
                 {t('web.reload_value')}
               </button>
@@ -999,11 +1027,19 @@ function CredentialsTab({
     // ABSENT and NULL mean different things, and only non-empty fields are
     // sent. Sending `''` for a field the operator did not touch would be a
     // request to store an empty credential.
-    // Guarded by `accepts` as well as by the field being hidden, for the same
-    // reason the create form is: this component is not remounted between two
-    // panel detail routes, so navigating from a Sanaei panel to a Marzban one
-    // through browser history keeps a typed token in state while its field is
-    // gone. Sending it puts the operator's secret on the wire to be refused.
+    // Guarded by `accepts` as well as by the field being hidden — belt and
+    // braces, deliberately, and NOT for the reason first written here.
+    //
+    // That reason was "this component is not remounted between two panel detail
+    // routes", which was true when it was written and is not now: `resolve`
+    // keys `PanelDetailPage` on the panel id precisely so the whole subtree
+    // remounts, which is what fixed the cross-panel draft write. So the
+    // scenario the comment described is unreachable, while the guard stays:
+    // `shape` is read from a query that can change under an open tab, and a
+    // hidden field whose value is still in state must never reach the wire —
+    // it would put the operator's secret out to be refused. The create form's
+    // identical guard IS reachable, because its provider picker changes the
+    // shape without any navigation at all.
     const credentials = {
       ...(username === '' || !accepts('username') ? {} : { username }),
       ...(password === '' || !accepts('password') ? {} : { password }),

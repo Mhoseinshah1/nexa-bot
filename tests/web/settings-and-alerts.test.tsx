@@ -238,6 +238,43 @@ describe('management alerts', () => {
     expect(params.get('open')).toBeNull();
   });
 
+  /**
+   * A filter change starts again from the newest page.
+   *
+   * Deleting `setTrail([])` from `filter()` left all 963 tests green. Without
+   * it the stale `before`/`beforeId` is reused, so the narrowed query returns
+   * only rows OLDER than the cursor and every matching newer row is silently
+   * omitted — page three of a list whose page one was never shown, on the
+   * surface whose stated rule is that silence is the one outcome it may not
+   * produce.
+   */
+  it('starts again from the newest page when the filter changes', async () => {
+    const api = stubApi([
+      {
+        url: '/ops-log',
+        body: {
+          events: [event({ message: 'first page' })],
+          nextCursor: { at: '2026-09-06T07:00:00.000Z', id: 'cursor-1' },
+        },
+      },
+    ]);
+    renderPage(<AlertsPage denied={false} />);
+    await screen.findByText('first page');
+
+    fireEvent.click(screen.getByRole('button', { name: 'قدیمی‌تر' }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.url.includes('beforeId='))).toBe(true);
+    });
+
+    fireEvent.change(screen.getByLabelText('شدت'), { target: { value: 'ERROR' } });
+    await waitFor(() => {
+      expect(api.calls.at(-1)?.url).toContain('severity=ERROR');
+    });
+    const narrowed = new URL(api.calls.at(-1)?.url ?? '', 'https://admin.example.test');
+    expect(narrowed.searchParams.get('beforeId')).toBeNull();
+    expect(narrowed.searchParams.get('before')).toBeNull();
+  });
+
   it('pages with the SERVER cursor pair rather than an offset', async () => {
     // The cursor is the server's, not a guess from the last row on screen. The
     // reader over-fetches one row and hands back the pair it actually stopped

@@ -1366,3 +1366,110 @@ the narrow one. An earlier draft of this row bundled reverting the fix into the
 mutation; that kills the same two unit tests on both commits and so demonstrates
 nothing about what the round bought. A mutation that contains the fix is a
 mutation of the old code.
+
+# Round 18 — a full review of the push candidate, which was not clean
+
+A ninth reviewer took `3edccc3` as a full head rather than a delta and found one
+confirmed production defect, one more the same fix uncovered, a false comment,
+and five rules held by nothing.
+
+## A screen promising a refusal the contract cannot make
+
+The panel identity form rendered `web.changed_elsewhere`, whose second sentence
+is "saving will run into a conflict error". `updatePanelRequestSchema` carries
+NO `expectedVersion`. Settings and content send one and are told about a real
+conflict; panels cannot be. So an operator who saw another administrator's
+rename arrive under their draft, and pressed Save expecting to be stopped,
+silently discarded that rename instead — the exact harm `VERSION_CONFLICT`
+exists to name, under a message saying it was safe to try.
+
+The comment ten lines above says the true thing — "nothing on the server can
+refuse the overwrite" — so the file contradicted the string it rendered. There
+is a second key now, `web.changed_elsewhere_overwrite`, which says saving will
+overwrite.
+
+**The existing test could not see it.** It matched `/جای دیگری تغییر کرده/`, the
+prefix BOTH strings share, stopping one word before the clause that was false.
+U43 killed nothing on its first run; the assertion now names the clause.
+
+## And a fix of mine that the suite caught
+
+`status.onSuccess` ignored the row it was handed, so a restore carrying a
+replacement name left `basis.name` stale and `changedElsewhere` fired against
+the operator's OWN action — a notice about concurrent editing, with no
+concurrency in the flow.
+
+The obvious fix, `adopt(result.panel)` as `save` does, is wrong, and
+`does not revert a concurrent rename when only the other field was edited`
+failed immediately: a status change is not an identity save, and an operator who
+had typed a new base URL and then pressed Disable would have had that draft
+replaced by the stored value. It folds in the ONE field the command is
+responsible for, and only when the command carried it.
+
+That is the first time on this branch that the existing suite caught a defect in
+a new fix before a reviewer did. Worth recording as the thing the last ten
+rounds were for.
+
+## Five rules held by nothing
+
+Each survived mutation with all 963 tests green:
+
+- **The archive browser never asked for the archive.** Deleting `archived=only`
+  from either the API client or the page changed no test. Every assertion about
+  the parameter was a `not.toContain` — satisfied by a client that never sends
+  it. On this branch's headline feature, the failure is the operator being shown
+  the LIVE fleet under the archived heading.
+- **The delivery poll's "only while something is PENDING" bound.** Both existing
+  tests seed a pending row, so both are satisfied by an interval that never
+  consults its condition. Without it every open `/notifications` tab asks every
+  three seconds for as long as it is open.
+- **A filter change starts from the newest page.** Without `setTrail([])` the
+  stale cursor is reused and every matching newer row is silently omitted — page
+  three of a list whose page one was never shown, on the surface whose stated
+  rule is that silence is the one outcome it may not produce.
+- **The attention card counts what it did not draw.** "Six rows with no count
+  read as 'there are six'."
+- The `key={panel.id}` remount made a comment on the credentials guard false:
+  it justified the guard by a cross-route staleness the key had already removed.
+  The guard stays — `shape` can change under an open tab — but for the real
+  reason.
+
+## The mutations
+
+| #   | rule                                                | mutation                                      | test that dies                                                                                         |
+| --- | --------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| U39 | the archive browser asks for the archive            | drop `archived` from the API client           | `permissions-and-refresh.test.tsx` › asks the server for the archive when the archive is what is shown |
+| U40 | a settled delivery list costs nothing               | drop the `unsettled` check                    | `permissions-and-refresh.test.tsx` › stops polling a delivery list once nothing is pending             |
+| U41 | a filter change starts from the newest page         | drop `setTrail([])`                           | `settings-and-alerts.test.tsx` › starts again from the newest page when the filter changes             |
+| U42 | the attention card counts what it did not draw      | `events.length > ATTENTION_SHOWN` → `false`   | `permissions-and-refresh.test.tsx` › says how many conditions the attention card did not draw          |
+| U43 | the panel form promises an overwrite, not a refusal | swap in `web.changed_elsewhere`               | `panels.test.tsx` › does not revert a concurrent rename when only the other field was edited           |
+| U44 | a restore-rename is the operator's own action       | drop the name fold-in from `status.onSuccess` | `panels.test.tsx` › does not blame a third party for a rename the operator just made                   |
+
+U43 killed nothing on its first run, which is the fourth time this session that
+a mutation killing nothing was the only signal a rule was untested. Sources
+restored and sha256-verified; suites green afterwards.
+
+## One integration failure this round could not root-cause
+
+`panel-monitor.test.ts › gives two replicas disjoint tenants` failed **once**,
+in the twelfth of thirteen full integration runs this session:
+`AssertionError: expected 2 to be 4`. It passed on the re-run (837/837), passes
+in isolation (105/105), and every other full run this session was green.
+
+Recorded rather than called a flake, because this document's own rule is that
+"flake" is not a root cause. What can be said with evidence:
+
+- The code is Phase 3C's monitor claim, untouched by this branch.
+- In that same failing run the STRONGER sibling — 600 real races asserting
+  `doubled === 0`, written for exactly the double-claim hazard — **passed**. The
+  invariant held; the weaker single-shot test is what observed something odd.
+- The assertion is `Set(all).size === all.length` over two `claimTenants(now, 1)`
+  calls against two tenants, so `all.length` cannot exceed 2 from this test's own
+  fixtures. A length of 4 means rows this test did not create were claimable,
+  which points at residual state under full-suite load rather than at the claim
+  logic.
+
+Not fixed here: it is outside Phase 3D, and widening the branch into Phase 3C's
+scheduler to chase a one-in-thirteen observation would cost more than it buys.
+It is written down so the next reader has the signature, the frequency and the
+one fact that narrows it, rather than a green tick that hides it.

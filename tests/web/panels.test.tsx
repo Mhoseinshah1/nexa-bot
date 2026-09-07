@@ -551,7 +551,17 @@ describe('the panel detail', () => {
     fireEvent.click(screen.getByRole('button', { name: 'غیرفعال‌سازی' }));
     // The page says the row changed underneath, rather than resolving it
     // silently — nothing on the server can arbitrate, so the operator must.
-    expect(await screen.findByText(/جای دیگری تغییر کرده/)).toBeInTheDocument();
+    //
+    // And it says WHICH THING WILL HAPPEN. `/جای دیگری تغییر کرده/` alone is
+    // the prefix both concurrency strings share, so it stopped one word before
+    // the clause that mattered and could not tell "saving will be refused with
+    // a conflict" — true on settings and content, which send an
+    // `expectedVersion` — from "saving will overwrite it", which is the only
+    // thing `POST /panels/:id` can do. Swapping this form to the settings
+    // string left the suite green.
+    const notice = await screen.findByText(/جای دیگری تغییر کرده/);
+    expect(notice.textContent ?? '').toContain('بازنویسی می‌کند');
+    expect(notice.textContent ?? '').not.toContain('خطای تداخل');
     // The form still holds what the operator typed, not the refetched name.
     expect((screen.getByLabelText('نام') as HTMLInputElement).value).toBe('Frankfurt A');
 
@@ -759,6 +769,65 @@ describe('the panel detail', () => {
     });
     const last = api.calls.filter((call) => call.method === 'POST').at(-1);
     expect(last?.body).toMatchObject({ status: 'DISABLED', name: 'Frankfurt A (restored)' });
+  });
+
+  /**
+   * A restore that renames is the operator's OWN action, and the form must
+   * say so.
+   *
+   * `status.onSuccess` used to ignore the row it was handed, so `basis.name`
+   * kept the pre-restore value while the query returned the new one — and
+   * `changedElsewhere` fired, telling the operator that somebody else had
+   * changed the row, in a notice about concurrent editing, with no concurrency
+   * in the flow at all.
+   */
+  it('does not blame a third party for a rename the operator just made', async () => {
+    const id = panel().id as string;
+    const archived = detail({ status: 'ARCHIVED' });
+    // `detail()` registers the route as the PREFIX `/panels/`, not the full id
+    // — the harness matches by substring with longest-wins — so this looks it
+    // up the way it is actually registered. Finding it by id silently returned
+    // `undefined`, the refetch kept serving the archived row, and the test
+    // failed for a reason that had nothing to do with the rule.
+    const detailRoute = archived.find((entry) => entry.url === '/panels/');
+    const renamed = panel({ name: 'Frankfurt B', status: 'DISABLED' });
+    const statusRoute: {
+      url: string;
+      body: unknown;
+      status?: number;
+    } = {
+      url: `/panels/${id}/status`,
+      status: 409,
+      body: {
+        error: {
+          kind: 'CONFLICT',
+          code: 'panel.name_taken',
+          message: 'Another panel took this name while it was archived.',
+          details: {},
+          correlationId: 'c1',
+        },
+      },
+    };
+    stubApi([...archived, statusRoute]);
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    // The first restore is refused, which is what offers the rename field.
+    fireEvent.click(screen.getByRole('button', { name: 'بازگردانی از بایگانی' }));
+    const field = (await screen.findByLabelText('نام تازه برای بازگردانی')) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: 'Frankfurt B' } });
+
+    // The second carries the name, and the server both restores and renames.
+    statusRoute.status = 200;
+    statusRoute.body = { panel: renamed };
+    if (detailRoute) detailRoute.body = { panel: renamed };
+    fireEvent.click(screen.getByRole('button', { name: 'بازگردانی از بایگانی' }));
+
+    await waitFor(() => {
+      expect((screen.getByLabelText('نام') as HTMLInputElement).value).toBe('Frankfurt B');
+    });
+    // The operator renamed it. Nothing may tell them somebody else did.
+    expect(screen.queryByText(/جای دیگری تغییر کرده/)).toBeNull();
   });
 
   /**
