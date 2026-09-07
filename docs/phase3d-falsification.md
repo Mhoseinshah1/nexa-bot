@@ -808,9 +808,9 @@ the server shrugs off is cheaper than a frozen screen nobody is watching.
 The same round left the alerts list polling a failing server every three
 seconds, indefinitely: its "only while something is PENDING" condition is
 satisfied by RETAINED data, so an outage cannot clear it. Twenty minutes of one
-is about four hundred requests per open tab — the same rate as the 403 flood the
-helper exists to stop, landing in the load balancer's logs instead of in
-`operational_events`.
+is about four hundred POLLS per open tab, and `retry: 1` makes that some eight
+hundred requests — the same order as the 403 flood the helper exists to stop,
+landing in the load balancer's logs instead of in `operational_events`.
 
 The first fix for that scaled the interval by `fetchFailureCount`. It does not
 work: React Query zeroes that field when a fetch STARTS, so it counts the
@@ -821,8 +821,9 @@ both land inside "fewer than eight in two minutes". It was caught by working the
 arithmetic out rather than by the green suite.
 
 What shipped instead is a single slow lane: while a query is in error, no faster
-than thirty seconds. Twenty minutes of outage costs forty requests rather than
-four hundred, and a recovered server is picked up within half a minute. The test
+than thirty seconds. Twenty minutes of outage costs forty polls rather than four
+hundred — some eighty requests rather than eight hundred, since `retry: 1`
+doubles each — and a recovered server is picked up within half a minute. The test
 moved to the alerts list, where the declared cadence is 3 s, so thirty attempts
 against a handful is a sharp discrimination rather than a soft one.
 
@@ -878,3 +879,77 @@ Recorded rather than quietly fixed, because the useful part is the shape: the
 mutation that kills nothing is the only signal that a rule was changed without
 being tested, and it fires precisely when the change felt too obvious to test.
 The 404 test now exists and U19 dies with `expected 5 to be 1`.
+
+# Round 11 — the fourth version of one forty-line file
+
+A third fresh-context reviewer read round 10 and found six more. The headline is
+the same defect for the fourth consecutive round, arrived at from a new
+direction.
+
+## A 401 that means "wait"
+
+Round 10's rule was "a 4xx is an ANSWER, except 408 and 429". That is false for
+one 401 this codebase issues deliberately. When a tenant is stopped,
+`AuthenticationService.authenticate` throws `auth.tenant_suspended` on every
+request and **does not revoke the session** — its own comment says why: _"a
+tenant can be started again, and the sessions its operators held are not the
+thing that was suspended"_, and _"a DIFFERENT code from an invalid session,
+because the two call for opposite responses: sign in again versus wait"_. The
+message it sends is _"This installation is paused. Try again once it has been
+started."_
+
+So the server explicitly asks to be asked again, and round 10 classified that as
+final. A wall display met a maintenance window, every interval stopped, and the
+screen stayed frozen after the installation came back — the round-8 defect, for
+the third time, reached through the status code instead of the error class.
+
+`client.ts` already had this distinction written down, in a comment about
+showing a sign-in form for a paused installation: _"told an operator to
+authenticate their way out of something authentication cannot fix"_. Two files
+in this repository knew, and the third asserted the opposite about the same
+status. The rule now reads the CODE before the status.
+
+That is the fourth version of `polling.ts`. Each was falsified, each passed its
+mutations, each was wrong. What the four have in common is that the mutation
+was chosen by whoever chose the rule, so it could only ever test the boundary
+the author had already thought of; every round the defect lived in the case
+that had not been enumerated at all.
+
+## And two more rules with no test
+
+U19 killed nothing last round. This round **U24 killed nothing**: the
+`data === undefined` branch of `pollUnlessFinalWhile` — a tab whose FIRST load
+fails during a rolling restart, which under the shipped code never polls again —
+had no test, and neither did the 408/429 carve-out (removing both exemptions
+left all 227 web tests green).
+
+Twice in two rounds, the mutation that kills nothing has been the only signal
+that a rule was changed without being tested. It is worth stating as a rule of
+its own: **a mutation that kills nothing is a finding, not a failed experiment.**
+
+## The rest
+
+- The slow-lane test's upper bound was eight, which passes anything at or above
+  a 13-second lane — twice the request volume the docblock promises. Measured
+  and tightened to four, which pins the declared thirty.
+- `unwrap` in the index-shape comparison stripped the first and last characters
+  whenever both were parentheses, without checking they were a matching PAIR. A
+  declaration written `WHERE (a) AND (b)` became `a) and (b` and failed against
+  a correct index. It now walks the depth and strips only a genuine wrapper.
+- The "about four hundred requests" figures in rounds 9 and 10 counted POLLS.
+  `retry: 1` doubles each, so the real numbers are ~800 and ~80. Corrected in
+  place, because a number in this record is a claim like any other.
+- "That name is taken as well" read oddly for an operator who had resent the
+  same name. Reworded.
+
+## The mutations
+
+| #   | rule                                                | mutation                                   | test that dies                                                                                                 |
+| --- | --------------------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| U21 | a paused installation is asked again                | drop the `AUTH_TENANT_SUSPENDED` exemption | `permissions-and-refresh.test.tsx` › keeps asking while the installation is merely paused                      |
+| U22 | 408 and 429 are asked again                         | drop both from the 4xx test                | `permissions-and-refresh.test.tsx` › keeps asking after a 408                                                  |
+| U23 | the slow lane is thirty seconds, not merely slower  | `FAILING_INTERVAL_MS` → `13_000`           | `permissions-and-refresh.test.tsx` › drops a failing endpoint into a slow lane instead of its declared cadence |
+| U24 | a first load that failed transiently retries itself | `data === undefined` → `false`             | `permissions-and-refresh.test.tsx` › retries on its own, and shows the data once the server returns            |
+
+U22 kills two tests. Sources restored and sha256-verified; every suite green
+afterwards.

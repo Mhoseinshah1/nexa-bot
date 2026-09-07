@@ -943,7 +943,7 @@ export class PanelService {
                 // message dropped the remedy at exactly the point they were
                 // acting on it, and left the screen saying nothing about what
                 // to do next.
-                'That name is taken as well. Choose another to restore this panel under.',
+                'Another panel is using that name. Choose a different one to restore this panel under.',
           );
         }
 

@@ -139,11 +139,24 @@ describe('the online index build', () => {
           .replace(/\s+/g, ' ')
           .trim()
           .toLowerCase();
+      // Strips the wrapping pair PostgreSQL adds, and ONLY a genuinely wrapping
+      // pair. `(a) and (b)` starts and ends with a parenthesis without being
+      // wrapped in one, and slicing it blind yields `a) and (b` — a false
+      // FAILURE on an index that is correct, whose only escape is to add a
+      // cosmetic paren to the declaration.
       const unwrap = (text: string) => {
         const trimmed = text.trim();
-        return trimmed.startsWith('(') && trimmed.endsWith(')')
-          ? trimmed.slice(1, -1).trim()
-          : trimmed;
+        if (!trimmed.startsWith('(') || !trimmed.endsWith(')')) return trimmed;
+        let depth = 0;
+        for (let i = 0; i < trimmed.length; i += 1) {
+          if (trimmed[i] === '(') depth += 1;
+          else if (trimmed[i] === ')') {
+            depth -= 1;
+            // The opener closed before the end, so it wrapped only a prefix.
+            if (depth === 0 && i < trimmed.length - 1) return trimmed;
+          }
+        }
+        return unwrap(trimmed.slice(1, -1));
       };
       const shapeOf = (text: string) => {
         const split = / where (.*)$/.exec(text);

@@ -698,9 +698,14 @@ describe('polling that has started being refused, and polling that has merely st
     // attempts; in the slow lane it is a handful. More than one, because giving
     // up entirely is the frozen-screen defect this must not become.
     await vi.advanceTimersByTimeAsync(90_000);
+    // Bounds chosen to pin the DECLARED 30s lane, not merely "slower than 3s":
+    // 30s gives three attempts in ninety seconds, a 13s lane gives seven, and
+    // giving up entirely gives one. An upper bound of eight would have passed a
+    // silent regression to a 13s lane — twice the request volume the docblock
+    // promises — so it is four.
     const attempts = countOf(broken.calls, '/notifications');
     expect(attempts).toBeGreaterThan(1);
-    expect(attempts).toBeLessThan(8);
+    expect(attempts).toBeLessThanOrEqual(4);
   });
 
   it('keeps polling through a transient failure, and recovers on its own', async () => {
@@ -852,5 +857,132 @@ describe('a notification detail that failed to load', () => {
         before,
       );
     });
+  });
+});
+
+/**
+ * The three exemptions carved out of "a 4xx is an answer".
+ *
+ * Each is a status the server uses to say ASK AGAIN, and each was a rule with
+ * no test when it shipped — which this branch has learned is a rule that will
+ * be silently reverted. Dropping all three from `finalAnswer` left the whole
+ * web suite green.
+ */
+describe('the 4xx answers that are really requests to wait', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const countOf = (calls: readonly { url: string }[], fragment: string) =>
+    calls.filter((call) => call.url.includes(fragment)).length;
+
+  const keepsPolling = async (status: number, code: string) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubApi([
+      READINESS,
+      { url: '/panels', body: { panels: [], nextCursor: null } },
+      { url: '/ops-log', body: { events: [], nextCursor: null } },
+    ]);
+    renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
+    await screen.findByText('چیزی برای رسیدگی نیست.');
+
+    const waiting = stubApi([
+      READINESS,
+      { url: '/panels', body: { panels: [], nextCursor: null } },
+      {
+        url: '/ops-log',
+        status,
+        body: { error: { kind: 'x', code, message: 'wait', correlationId: 'test' } },
+      },
+    ]);
+
+    await vi.advanceTimersByTimeAsync(16_000);
+    await waitFor(() => {
+      expect(countOf(waiting.calls, '/ops-log')).toBeGreaterThan(0);
+    });
+    const first = countOf(waiting.calls, '/ops-log');
+
+    // It must ask again. The slow lane applies, so ninety seconds is enough.
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(countOf(waiting.calls, '/ops-log')).toBeGreaterThan(first);
+  };
+
+  it('keeps asking after a 408', async () => {
+    await keepsPolling(408, 'timeout');
+  });
+
+  it('keeps asking after a 429', async () => {
+    await keepsPolling(429, 'rate_limited');
+  });
+
+  /**
+   * The one that made a status insufficient on its own.
+   *
+   * `auth.tenant_suspended` is a 401 the server issues while an installation is
+   * PAUSED. It deliberately does not revoke the session — "a tenant can be
+   * started again, and the sessions its operators held are not the thing that
+   * was suspended" — and its message is "Try again once it has been started".
+   * Treating it as final froze a wall display for a whole maintenance window
+   * AND left it frozen after the installation came back.
+   */
+  it('keeps asking while the installation is merely paused', async () => {
+    await keepsPolling(401, 'auth.tenant_suspended');
+  });
+});
+
+/**
+ * The coldest form of the frozen screen, and the one the "only while unsettled"
+ * interval nearly kept.
+ *
+ * `pollUnlessFinalWhile` asks its condition of the last successful data. On a
+ * FIRST load there is none, so an early version returned `false` for that case
+ * — and a tab opened during a rolling restart, whose very first request 502s,
+ * never polled again even after the server came back. A mutation restoring that
+ * killed nothing, which is how the gap was found.
+ */
+describe('a list whose first load failed', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('retries on its own, and shows the data once the server returns', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubApi([
+      {
+        url: '/notifications',
+        status: 502,
+        body: { error: { kind: 'internal', code: 'bad', message: 'no', correlationId: 'c1' } },
+      },
+    ]);
+    renderPage(<NotificationsPage mayTest denied={false} />);
+    // The error state, with nothing ever having loaded.
+    await screen.findByRole('button', { name: 'تلاش دوباره' });
+
+    // The deployment finishes. Nobody presses anything.
+    stubApi([
+      {
+        url: '/notifications',
+        body: {
+          notifications: [
+            {
+              id: '01a05e35-c9ad-7e93-bef3-1ed9b55292cc',
+              kind: 'OPERATIONAL_EVENT',
+              status: 'SENT',
+              templateKey: 'ops.recovered',
+              attemptCount: 1,
+              maxAttempts: 5,
+              createdAt: '2026-09-06T08:00:00.000Z',
+              lastAttemptAt: '2026-09-06T08:00:01.000Z',
+              completedAt: '2026-09-06T08:00:01.000Z',
+              correlationId: 'c1',
+            },
+          ],
+          nextCursor: null,
+        },
+      },
+    ]);
+
+    await vi.advanceTimersByTimeAsync(35_000);
+    expect(await screen.findByText('ops.recovered')).toBeInTheDocument();
   });
 });

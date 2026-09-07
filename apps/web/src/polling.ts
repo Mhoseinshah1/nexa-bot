@@ -1,3 +1,4 @@
+import { IDENTITY_ERROR_CODES } from '@nexa/contracts';
 import { ApiError } from './api/client';
 
 /**
@@ -50,10 +51,21 @@ const FAILING_INTERVAL_MS = 30_000;
  * rather than partitioned by a rule of thumb:
  *
  * - `ApiError`, thrown by `toApiError` for every `!response.ok` and therefore
- *   always carrying a status. A 4xx is an ANSWER: 401 and 403 need a human,
- *   404 and 400 need a different request. Repeating it changes nothing. The
- *   two exceptions are 408 and 429, which are the server asking to be asked
- *   again. A 5xx is transient.
+ *   always carrying a status and a CODE. A 4xx is usually an ANSWER: 403 needs
+ *   a human, 404 and 400 need a different request. Repeating it changes
+ *   nothing. Three exceptions, and the third is the one that made the status
+ *   alone insufficient:
+ *     - 408 and 429 are the server asking to be asked again.
+ *     - `auth.tenant_suspended` is a 401 the server issues while an
+ *       installation is PAUSED, and it deliberately does not revoke the
+ *       session, because "a tenant can be started again, and the sessions its
+ *       operators held are not the thing that was suspended". Its message is
+ *       "Try again once it has been started" — the service's own comment calls
+ *       the distinction "sign in again versus wait". Classing it final froze a
+ *       wall display for the whole of a maintenance window and left it frozen
+ *       after the installation came back, which is the round-8 defect a third
+ *       time. `client.ts` already special-cases this code for the same reason.
+ *   A 5xx is transient.
  * - `ZodError`, thrown by `schema.parse` on the SUCCESS path. The server
  *   answered and this bundle cannot read the answer — contract skew, which a
  *   tab holding a previous release across a deploy hits on every tick. Nothing
@@ -68,6 +80,7 @@ const FAILING_INTERVAL_MS = 30_000;
  */
 function finalAnswer(error: unknown): boolean {
   if (error instanceof ApiError) {
+    if (error.code === IDENTITY_ERROR_CODES.AUTH_TENANT_SUSPENDED) return false;
     return (
       error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429
     );
@@ -112,8 +125,15 @@ export function pollUnlessFinal(ms: number) {
 export function pollUnlessFinalWhile<TData>(ms: number, unsettled: (data: TData) => boolean) {
   return (query: PollingQuery): number | false => {
     if (finalAnswer(query.state.error)) return false;
+    // Nothing has loaded yet. A transient failure on the FIRST load still has
+    // to be retried — otherwise a tab opened during a rolling restart never
+    // polls again, which is the frozen screen in its coldest form — but a query
+    // that is merely still loading needs no interval, because a fetch is
+    // already in flight.
     const data = query.state.data as TData | undefined;
-    if (data === undefined || !unsettled(data)) return false;
+    if (data === undefined)
+      return query.state.error === null ? false : paced(ms, query.state.error);
+    if (!unsettled(data)) return false;
     return paced(ms, query.state.error);
   };
 }
