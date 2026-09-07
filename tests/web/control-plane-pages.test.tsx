@@ -294,40 +294,37 @@ describe('the template revisions pane', () => {
     expect(await screen.findByText('خطا در ارتباط با سرور')).toBeInTheDocument();
     expect(screen.queryByText('موردی برای نمایش نیست.')).toBeNull();
   });
-});
-
-describe('the notifications page', () => {
-  it('renders an intent and its delivery state', async () => {
-    stubApi([
-      { url: '/notifications', body: { notifications: [notification()], nextCursor: null } },
-    ]);
-    renderPage(<NotificationsPage mayTest denied={false} />);
-
-    expect(await screen.findByText('event.panel.unreachable')).toBeInTheDocument();
-  });
 
   /**
    * Reopening the pane is not a retry the rule does not know about.
    *
    * `enabled: showHistory` flipped false→true on every close-and-reopen, which
    * re-triggers an errored query — so the `<summary>` element was an unbounded
-   * retry button while the card inside deliberately withheld Retry because the
-   * answer was final. Measured before the fix at one request per reopen.
+   * retry button. Measured before the fix at one request per reopen.
+   *
+   * A 503 rather than the 403 this test was first written with, and the reason
+   * is the whole point of writing it down. The fix below it — `enabled` going
+   * false on a FINAL answer — independently stops a refused query refetching,
+   * so against a 403 this test passed with the sticky rule reverted: it had
+   * quietly stopped testing anything, killed by a fix in the same round. A
+   * retryable failure is the case where sticky is the only thing holding the
+   * line, because there `enabled` stays true and the false→true edge is the
+   * entire mechanism.
    */
-  it('does not refetch a refused history each time the pane is reopened', async () => {
+  it('does not refetch a failing history each time the pane is reopened', async () => {
     const api = stubApi([
       { url: '/templates', body: { templates: [template()] } },
       {
         url: 'unreachable/revisions',
         body: {
           error: {
-            kind: 'forbidden',
-            code: 'access.permission_denied',
-            message: 'no',
+            kind: 'internal',
+            code: 'test.down',
+            message: 'down',
             correlationId: 'test',
           },
         },
-        status: 403,
+        status: 503,
       },
     ]);
     renderPage(<ContentPage mayEdit denied={false} />);
@@ -352,6 +349,91 @@ describe('the notifications page', () => {
     // Still one. The pane's first open enables the query; closing it does not
     // disable it, so reopening cannot re-trigger anything.
     expect(api.calls.filter((call) => call.url.includes('/revisions'))).toHaveLength(1);
+  });
+
+  /**
+   * F5 — sticky-enabled is not "costs nothing"; `invalidate()` is the cost.
+   *
+   * The fix above made `showHistory` sticky so a reopen could not re-trigger
+   * an errored query. Its comment then claimed staying enabled "costs
+   * nothing: this query has no interval". The cost was never an interval. It
+   * is `invalidate()`, which the save mutation runs on success AND on error
+   * and which invalidates this exact key — so a query that used to be
+   * `enabled: false` behind a closed pane became one that refetches on the
+   * operator's PRIMARY action, in the same final 403 for which `retryOf`
+   * withholds the Retry button. Measured before the fix: three saves took the
+   * revisions request count from 1 to 4, pane shut, unbounded.
+   *
+   * One channel closed and a worse one opened is not a fix, so the rule
+   * `retryOf` states is stated on the query too: after a final answer there is
+   * nothing to fetch.
+   */
+  it('does not refetch a refused history when an unrelated save invalidates it', async () => {
+    const api = stubApi([
+      { url: '/templates', body: { templates: [template()] } },
+      // Longer than the save route below, so the revisions request is not
+      // swallowed by it — `includes` matching means the shorter save URL is a
+      // substring of this one, and longest match wins.
+      {
+        url: 'templates/event.panel.unreachable/revisions',
+        body: {
+          error: {
+            kind: 'forbidden',
+            code: 'access.permission_denied',
+            message: 'no',
+            correlationId: 'test',
+          },
+        },
+        status: 403,
+      },
+      {
+        url: '/templates/event.panel.unreachable',
+        body: { template: template({ overrideBody: 'تازه', source: 'TENANT', version: 2 }) },
+      },
+    ]);
+    renderPage(<ContentPage mayEdit denied={false} />);
+    await screen.findAllByText('event.panel.unreachable');
+
+    const revisionCalls = () => api.calls.filter((call) => call.url.includes('/revisions')).length;
+
+    // Open the pane once so the query runs and takes its final refusal…
+    const pane = screen.getAllByText('تاریخچه')[0] as HTMLElement;
+    const details = pane.closest('details');
+    if (details !== null) {
+      details.open = true;
+      fireEvent(details, new Event('toggle'));
+    }
+    await waitFor(() => {
+      expect(revisionCalls()).toBe(1);
+    });
+
+    // …then SHUT it. Nothing about the pane is on screen from here on.
+    if (details !== null) {
+      details.open = false;
+      fireEvent(details, new Event('toggle'));
+    }
+
+    // Three ordinary saves. Each one calls invalidate().
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+      await waitFor(() => {
+        expect(api.calls.filter((call) => call.method === 'POST').length).toBe(attempt + 1);
+      });
+    }
+
+    // Still one. Before the fix this was four.
+    expect(revisionCalls()).toBe(1);
+  });
+});
+
+describe('the notifications page', () => {
+  it('renders an intent and its delivery state', async () => {
+    stubApi([
+      { url: '/notifications', body: { notifications: [notification()], nextCursor: null } },
+    ]);
+    renderPage(<NotificationsPage mayTest denied={false} />);
+
+    expect(await screen.findByText('event.panel.unreachable')).toBeInTheDocument();
   });
 
   /**
@@ -457,6 +539,34 @@ describe('the notifications page', () => {
    * another `access.permission_denied` event per press. Both halves are the
    * defect the rest of the branch spent five rounds removing.
    */
+  /**
+   * F4/M10 — the notifications pager: same rule, same silence.
+   *
+   * Reverting this gate too left all 277 tests passing. The alerts pager one
+   * screen over had a test; this one did not, and the round's prose claimed
+   * all three pagers were fixed while its mutation table named neither. That
+   * is the branch's defining shape — the rule holds where the author was
+   * looking — reproduced by the commit written to remove it.
+   *
+   * DENIED, not a 403 response, and the first version of this test got that
+   * wrong. Against a 403 `queryState` is `'error'`, so the reverted gate
+   * (`queryState !== 'error'`) hides the pager too and the test passes either
+   * way — it was written to catch M10 and could not. A denied query is
+   * `enabled: false`, so it is `isPending` FOR EVER and never `isError`: the
+   * old gate reads `'loading' !== 'error'` and draws the pager above the "you
+   * do not have access" card. That is the state the rule exists for.
+   */
+  it('takes the notification pager down with the rows it was describing', async () => {
+    stubApi([{ url: '/notifications', body: { notifications: [], nextCursor: null } }]);
+    renderPage(<NotificationsPage mayTest denied />);
+    await screen.findByText(t('web.no_permission'));
+
+    // Denied: there are no rows, so there is nothing to page through.
+    expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'تازه‌تر' })).toBeNull();
+    expect(screen.queryByText('نمایش')).toBeNull();
+  });
+
   it('drops a stale attempts list on a final refusal, and offers no retry', async () => {
     const detail = {
       url: '/notifications/n1',
@@ -532,6 +642,54 @@ describe('the notifications page', () => {
    * intent as sent, and the inequality held. Everything but the status is
    * identical below, and the states are read out of the cells.
    */
+  /**
+   * F8, at the OTHER site — the one a whole-project mutation showed untested.
+   *
+   * `errorCopy` was introduced so this card and `StateSwitch` cannot give one
+   * screen two diagnoses of one failure. Reverting THIS site alone to the
+   * 403-only ternaries left all 281 tests green, which is the same shape as
+   * every finding on this branch: the rule held where the author was looking
+   * and nothing watched the other site. A structural fix that only one of its
+   * two call sites tests is one edit away from being a local fix again.
+   *
+   * A 200 the schema rejects, as in the list-card test: contract skew is the
+   * final answer an operator actually meets.
+   */
+  it('does not call a rejected detail a connection failure either', async () => {
+    const detail = {
+      url: '/notifications/n1',
+      body: {
+        notification: notification({ id: 'n1', status: 'PENDING' }),
+        attempts: [],
+        releasedClaims: [],
+      } as unknown,
+      status: 200,
+    };
+    stubApi([
+      {
+        url: '/notifications',
+        body: {
+          notifications: [notification({ id: 'n1', status: 'PENDING' })],
+          nextCursor: null,
+        },
+      },
+      detail,
+    ]);
+    renderPage(<NotificationsPage mayTest denied={false} />);
+    await screen.findByText('event.panel.unreachable');
+
+    // A deploy lands between the list and the detail: still 200, unreadable.
+    detail.body = { notification: { id: 'n1' } };
+    fireEvent.click(screen.getByRole('button', { name: 'event.panel.unreachable' }));
+
+    expect(await screen.findByText(t('web.rejected'))).toBeInTheDocument();
+    expect(screen.getByText(t('web.rejected_hint'))).toBeInTheDocument();
+    expect(screen.queryByText(t('web.error'))).toBeNull();
+    expect(screen.queryByText(t('web.error_hint'))).toBeNull();
+    // Not a refusal: the server never said no.
+    expect(screen.queryByText(t('web.no_permission'))).toBeNull();
+  });
+
   it('distinguishes an abandoned intent from a delivered one', async () => {
     stubApi([
       {

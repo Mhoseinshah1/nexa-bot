@@ -1,4 +1,5 @@
 import { ApiError } from './api/client';
+import type { WebKey } from './i18n/web.fa';
 import { finalAnswer } from './polling';
 
 /** The five states any query-driven view can be in. */
@@ -83,6 +84,38 @@ export function refused(query: QueryView): boolean {
 }
 
 /**
+ * The three things an error card says, decided in ONE place.
+ *
+ * Both sites that draw an error card had the identical triple of ternaries on
+ * `refused(query)` — `StateSwitch` and the alerts detail — and the round that
+ * introduced them fixed the 403 arm at both while leaving the other arm wrong
+ * at both. `finalAnswer` is broader than a 403: a `ZodError` from a tab
+ * holding a previous release, a 404, a 400. In every one of those the card
+ * said "ارتباط با سرور برقرار نشد. دوباره تلاش کنید." — the connection did not
+ * fail, the server answered it correctly, and `retryOf` has withheld the very
+ * button the sentence instructs the reader to press. Two false statements and
+ * an unactionable instruction, in the admin whose thesis is that no screen
+ * asserts what the server did not do.
+ *
+ * Returning the keys rather than the strings keeps this module free of copy,
+ * and returning all three together is what stops the next round fixing one arm
+ * at one site.
+ */
+export function errorCopy(query: QueryView): {
+  readonly title: WebKey;
+  readonly hint: WebKey;
+  readonly icon: 'lock' | 'alert';
+} {
+  if (refused(query)) {
+    return { title: 'web.no_permission', hint: 'web.no_permission_hint', icon: 'lock' };
+  }
+  if (query.isError && finalAnswer(query.error)) {
+    return { title: 'web.rejected', hint: 'web.rejected_hint', icon: 'alert' };
+  }
+  return { title: 'web.error', hint: 'web.error_hint', icon: 'alert' };
+}
+
+/**
  * A retry worth offering.
  *
  * After a FINAL answer there is nothing to retry: the request will be refused
@@ -109,6 +142,17 @@ export function retryOf(query: QueryView): (() => void) | undefined {
  * This covers every control beside a `StateSwitch` that mints a request — a
  * refresh button, a filter select, a scope pill, a pager. Each of them changes
  * or repeats the query the card below has just said cannot be answered.
+ *
+ * PRECONDITION, because the argument is doing more work than its name says.
+ * `denied` is not only "the actor lacks the permission": it is "this query is
+ * not allowed to run", and every caller that disables a query for ANY reason
+ * owes it a `true`. A query that is `enabled: false` is `isPending` for ever
+ * and never `isError`, so without it this function returns `true` and the
+ * control is drawn beside a card that is still showing a skeleton. Both call
+ * sites today pass `enabled: !denied`, so the two coincide and the gap is
+ * latent — but `content.tsx`'s `enabled: showHistory` and `alerts.tsx`'s
+ * `enabled: selected !== null` are exactly the shape that would reopen it, and
+ * the first control placed beside either would.
  */
 export function mayRequest(query: QueryView, denied = false): boolean {
   return !denied && retryOf(query) !== undefined;

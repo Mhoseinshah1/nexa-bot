@@ -182,3 +182,79 @@ describe('the tab strip keyboard contract', () => {
     expect((document.activeElement as HTMLElement).getAttribute('tabindex')).not.toBe('-1');
   });
 });
+
+/**
+ * F1 — `hidden` has to actually hide, and neither existing suite could see it.
+ *
+ * Round 28 withdrew the request-issuing filter toolbars from a denied or
+ * finally-refused page with `<div className="toolbar" hidden={…}>`. The user
+ * agent's `[hidden] { display: none }` is USER-AGENT origin, so the author's
+ * `.toolbar { display: flex }` beat it: the toolbar stayed laid out, visible
+ * and clickable, and a severity change still minted a new query key and one
+ * more refused request. The commit said that harm had been removed.
+ *
+ * Two independent blindfolds kept every test green. The web vitest project
+ * loads no CSS, so jsdom's own UA rule won there; and `getByRole` consults the
+ * `hidden` IDL property and short-circuits before computed style, so a role
+ * query returns null whether or not the element is painted. An assertion
+ * written that way is structurally incapable of failing on this.
+ *
+ * So this asserts the two things a role query cannot: what the cascade
+ * actually computes with the real stylesheet in the document, and — because
+ * jsdom drops `!important` and decides on source order alone — that the
+ * declaration carries `!important` for the browsers that decide on
+ * specificity.
+ */
+describe('the hidden attribute, against the real cascade', () => {
+  function withStylesheet(markup: string): HTMLElement {
+    const style = document.createElement('style');
+    style.textContent = CSS;
+    document.head.append(style);
+    const host = document.createElement('div');
+    host.innerHTML = markup;
+    document.body.append(host);
+    return host;
+  }
+
+  it('paints nothing for a styled element carrying hidden', () => {
+    const host = withStylesheet(
+      '<div class="toolbar" hidden id="a"><select></select></div>' +
+        '<div hidden id="b"></div>' +
+        '<div class="toolbar" id="c"></div>' +
+        '<div class="tabs vertical"><button hidden id="d"></button></div>',
+    );
+    const display = (id: string) =>
+      getComputedStyle(host.querySelector(`#${id}`) as Element).display;
+
+    // The regression itself: `.toolbar { display: flex }` used to win here.
+    expect(display('a'), '.toolbar[hidden] must not be painted').toBe('none');
+    expect(display('b')).toBe('none');
+    // …without hiding a toolbar that is NOT hidden. A rule that hides
+    // everything passes the assertion above and breaks every page.
+    expect(display('c')).toBe('flex');
+    // (0,3,1) beats (0,1,0) on specificity, so this one needs `!important`
+    // in a browser. jsdom cannot tell; the textual assertion below can.
+    expect(display('d'), '.tabs.vertical button[hidden] must not be painted').toBe('none');
+  });
+
+  it('declares that rule important, and last', () => {
+    expect(block('[hidden]'), 'specificity beats source order in a real browser').toMatch(
+      /display:\s*none\s*!important/,
+    );
+    /*
+     * Position is the OTHER half, and it is the half jsdom is sensitive to.
+     * `!important` is dropped by jsdom's cascade — probed directly:
+     * `.t{display:flex}` written after `[hidden]{display:none!important}`
+     * still computes `flex`. So a `[hidden]` rule placed anywhere above
+     * `.toolbar` would leave the test above unable to fail, and the seam
+     * unguarded in exactly the way it was unguarded before.
+     */
+    const hiddenAt = CSS.lastIndexOf('[hidden]');
+    const lastRule = CSS.trimEnd().lastIndexOf('\n}');
+    expect(hiddenAt, '[hidden] must be the last rule in the stylesheet').toBeGreaterThan(
+      CSS.lastIndexOf('.toolbar {'),
+    );
+    expect(CSS.slice(hiddenAt, lastRule).includes('{')).toBe(true);
+    expect(CSS.trimEnd().endsWith('}')).toBe(true);
+  });
+});

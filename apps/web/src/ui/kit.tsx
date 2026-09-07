@@ -9,7 +9,7 @@ import {
 } from 'react';
 import type { MoneyWire } from '@nexa/contracts';
 import { Icon, type IconName } from './icons';
-import { queryState, refused, retryOf, staleAfterError, type QueryView } from '../view-state';
+import { errorCopy, queryState, retryOf, staleAfterError, type QueryView } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { formatMoney, formatMoneyText, formatNumber } from '../format';
 
@@ -676,12 +676,12 @@ export function StateSwitch({
   if (state === 'error')
     return (
       <Empty
-        // A refusal is not a connection failure, and saying so to an operator
-        // whose permission was revoked mid-session is a false account of what
-        // happened — beside a hint telling them to retry, next to no button.
-        title={refused(query) ? t('web.no_permission') : t('web.error')}
-        hint={refused(query) ? t('web.no_permission_hint') : t('web.error_hint')}
-        icon={refused(query) ? 'lock' : 'alert'}
+        // A refusal is not a connection failure, and neither is any other
+        // final answer. `errorCopy` decides all three together so this site
+        // and the alerts detail cannot drift apart again.
+        title={t(errorCopy(query).title)}
+        hint={t(errorCopy(query).hint)}
+        icon={errorCopy(query).icon}
         action={
           onRetry === undefined ? undefined : (
             <button type="button" className="btn" onClick={onRetry}>

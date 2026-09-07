@@ -209,6 +209,26 @@ export const WEB_FA = {
   'web.newer': 'تازه‌تر',
   'web.error_hint': 'ارتباط با سرور برقرار نشد. دوباره تلاش کنید.',
   /*
+   * A final answer that is NOT a refusal.
+   *
+   * `web.error`/`web.error_hint` say the connection failed and tell the reader
+   * to try again. For a 403 that was already wrong, and the round before this
+   * one fixed the 403 arm alone — leaving every OTHER final answer saying the
+   * same two false things. `finalAnswer` also covers a `ZodError` on the
+   * SUCCESS path (a tab holding a previous release across a deploy, which
+   * `polling.ts` calls its headline case), a 404 and a 400: the server
+   * answered, correctly and fast, and `retryOf` has deliberately withheld the
+   * button the hint tells them to press.
+   *
+   * So this asserts only what is true of all of them — the answer came back,
+   * and repeating the request produces the same one — and names a reload as a
+   * conditional, because a reload cures contract skew and cures nothing about
+   * a 404.
+   */
+  'web.rejected': 'سرور این درخواست را نپذیرفت',
+  'web.rejected_hint':
+    'پاسخ سرور دریافت شد و با تکرار درخواست تغییر نمی‌کند. اگر نسخهٔ تازه‌ای منتشر شده، صفحه را دوباره بارگذاری کنید.',
+  /*
    * Shown ABOVE data that is still on screen, not instead of it.
    *
    * The claim is precise on purpose: not "there was an error" — the reader can

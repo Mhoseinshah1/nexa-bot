@@ -261,9 +261,20 @@ describe('management alerts', () => {
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: 'تازه‌سازی' })).toBeNull();
     });
-    // And nothing else on the page can fire it either.
-    const after = api.calls.length;
+    /*
+     * And nothing else on the page can fire it either — PRESSED, not asserted
+     * about.
+     *
+     * This read `const after = api.calls.length;` then queried the DOM then
+     * asserted the count was unchanged. Nothing between the two reads could
+     * change it: `queryByRole` is a pure DOM read. Three lines that could not
+     * fail, under a comment claiming the strongest thing on the page. The
+     * assertion that earns that sentence is to press what is left.
+     */
     expect(screen.queryByRole('button', { name: 'تلاش دوباره' })).toBeNull();
+    const after = api.calls.length;
+    for (const control of screen.queryAllByRole('button')) fireEvent.click(control);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(api.calls.length).toBe(after);
   });
 
@@ -323,9 +334,47 @@ describe('management alerts', () => {
     await waitFor(() => {
       expect(screen.queryByRole('combobox')).toBeNull();
     });
-    const after = api.calls.length;
+    // The same non-assertion as the refresh test above, and the same fix:
+    // press every control still on screen rather than reading the DOM twice.
     expect(screen.queryByRole('button', { name: 'حل‌نشده' })).toBeNull();
+    const after = api.calls.length;
+    for (const control of screen.queryAllByRole('button')) fireEvent.click(control);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(api.calls.length).toBe(after);
+  });
+
+  /**
+   * F8 — a refusal is not the only final answer, and the others said the wrong
+   * thing at every site that draws an error card.
+   *
+   * The previous round widened the copy for `refused()` — a 403 — and stopped
+   * there. `finalAnswer` is broader: it also covers a `ZodError` thrown on the
+   * SUCCESS path, which `polling.ts` calls its headline case ("a tab holding a
+   * previous release across a deploy hits it on every tick"), plus a 404 and a
+   * 400. For all of those the card said "خطا در ارتباط با سرور" and
+   * "ارتباط با سرور برقرار نشد. دوباره تلاش کنید." — two false statements,
+   * since the server answered correctly and fast — beside no retry button at
+   * all, because `retryOf` withholds it on a final answer. The hint instructed
+   * the reader to do the one thing the screen had removed the means to do.
+   *
+   * Driven with a 200 whose body the response schema rejects, which is that
+   * exact deploy-skew case rather than an approximation of it.
+   */
+  it('does not call a rejected answer a connection failure', async () => {
+    // A 200. The transport worked; the body is from another release.
+    stubApi([{ url: '/ops-log', body: { unexpected: true } }]);
+    renderPage(<AlertsPage denied={false} />);
+
+    expect(await screen.findByText(t('web.rejected'))).toBeInTheDocument();
+    expect(screen.getByText(t('web.rejected_hint'))).toBeInTheDocument();
+
+    // The two sentences that were false, and the button the old hint named.
+    expect(screen.queryByText(t('web.error'))).toBeNull();
+    expect(screen.queryByText(t('web.error_hint'))).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.retry') })).toBeNull();
+
+    // …and it is not mistaken for a refusal either. The server did not say no.
+    expect(screen.queryByText(t('web.no_permission'))).toBeNull();
   });
 
   it('asks the server for the management scope', async () => {

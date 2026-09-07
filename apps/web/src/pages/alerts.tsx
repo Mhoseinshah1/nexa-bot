@@ -18,7 +18,7 @@ import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
 import { severityTone } from './dashboard';
-import { mayRequest, queryState, refused, retryOf, staleAfterError } from '../view-state';
+import { errorCopy, mayRequest, queryState, retryOf, staleAfterError } from '../view-state';
 import {
   Badge,
   Banner,
@@ -576,17 +576,16 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
       )}
       {queryState(detail) === 'error' && (
         <Empty
-          // The SAME copy rule as `StateSwitch`, not a second opinion.
+          // The SAME copy rule as `StateSwitch`, and now literally the same
+          // function rather than a second copy of its ternaries.
           //
           // This card hard-coded the connection copy, so one screen gave two
-          // contradictory diagnoses of one 403: the list card above said "no
-          // permission" and this said "the connection failed — try again",
-          // beside a retry deliberately withheld. It is three lines below a
-          // comment claiming this site follows the same rule as every other
-          // query view.
-          title={refused(detail) ? t('web.no_permission') : t('web.error')}
-          hint={refused(detail) ? t('web.no_permission_hint') : t('web.error_hint')}
-          icon={refused(detail) ? 'lock' : 'alert'}
+          // contradictory diagnoses of one 403. Fixing that by writing the
+          // same three ternaries here left both sites wrong in the same NEW
+          // way one round later, for every final answer that is not a 403.
+          title={t(errorCopy(detail).title)}
+          hint={t(errorCopy(detail).hint)}
+          icon={errorCopy(detail).icon}
           {...(retryOf(detail) === undefined
             ? {}
             : {

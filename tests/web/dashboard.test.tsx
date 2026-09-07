@@ -45,6 +45,32 @@ describe('the dashboard', () => {
     expect(screen.queryByText('توزیع لوکیشن‌ها')).toBeNull();
   });
 
+  /**
+   * F9 — `empty` without `isEmpty` is a prop that can never be read.
+   *
+   * Both fleet cards passed an `empty` element naming the fleet, and neither
+   * passed `isEmpty`, which defaults to false. `StateSwitch` therefore could
+   * not reach the empty state at either one, and a zero-panel installation
+   * fell through to `Distribution`'s own `total === 0` guard — the GENERIC
+   * "موردی برای نمایش نیست.", twice, with the fleet copy nowhere. Dead props
+   * do not announce themselves; the card looked fine and said the wrong thing.
+   */
+  it('names the empty thing when the fleet is empty', async () => {
+    stubApi([
+      READINESS,
+      { url: '/panels', body: { panels: [], nextCursor: null } },
+      { url: '/ops-log', body: { events: [], nextCursor: null } },
+    ]);
+    renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
+
+    // Both fleet cards, and the copy that names what is missing.
+    await waitFor(() => {
+      expect(screen.getAllByText('هنوز پنلی ثبت نشده است.')).toHaveLength(2);
+    });
+    // Not the generic fallback that was appearing instead.
+    expect(screen.queryByText('موردی برای نمایش نیست.')).toBeNull();
+  });
+
   it('counts each panel exactly once per breakdown', () => {
     // PARSED, not cast. `as never[]` handed `healthSlices` an unchecked
     // `Record<string, unknown>`: rename `health.state` in the contract and

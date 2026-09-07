@@ -170,9 +170,21 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
             <StateSwitch
               query={panels}
               denied={!mayViewPanels}
+              /*
+                `empty` without `isEmpty` is a prop that can never be read.
+                `isEmpty` defaults to false, so `StateSwitch` could not reach
+                the empty state and this card fell through to `Distribution`'s
+                own `total === 0` guard — which draws the GENERIC `web.empty`
+                rather than `web.dashboard_no_panels`. Measured on a zero-panel
+                fleet: the fleet copy appeared 0 times and the generic one twice.
+                (Quoting the Persian here is what `check:i18n` forbids, and
+                rightly: a line scan cannot tell a quoted string in a comment
+                from a hard-coded one.)
+              */
+              isEmpty={(shownPanels?.panels.length ?? 0) === 0}
               empty={<Empty title={t('web.dashboard_no_panels')} icon="panels" />}
             >
-              <Distribution slices={healthSlices(panels.data?.panels ?? [])} />
+              <Distribution slices={healthSlices(shownPanels?.panels ?? [])} />
               {truncated && <p className="faint small">{t('web.dashboard_partial_fleet')}</p>}
             </StateSwitch>
           </Card>
@@ -188,9 +200,12 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
             <StateSwitch
               query={panels}
               denied={!mayViewPanels}
+              // The same emptiness as the card above, from the same data the
+              // header was already reading.
+              isEmpty={(shownPanels?.panels.length ?? 0) === 0}
               empty={<Empty title={t('web.dashboard_no_panels')} icon="panels" />}
             >
-              <Distribution slices={providerSlices(panels.data?.panels ?? [])} />
+              <Distribution slices={providerSlices(shownPanels?.panels ?? [])} />
               {truncated && <p className="faint small">{t('web.dashboard_partial_fleet')}</p>}
             </StateSwitch>
           </Card>

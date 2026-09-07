@@ -45,7 +45,7 @@ const RECORD = 'docs/phase3d-falsification.md';
  * to, which is the point: the number is a claim about this file and should be
  * re-stated deliberately, not drifted into.
  */
-const EXPECTED = 178;
+const EXPECTED = 194;
 /**
  * A table whose last column is one of these is making citations.
  *
@@ -83,16 +83,131 @@ function sources(dir) {
   });
 }
 
-/*
- * Split on UNESCAPED pipes only.
+/**
+ * The index just past the `)` that closes the paren at `open`.
  *
- * A mutation cell routinely contains one: `` `\|\|` → `&&` `` is how an
- * or-to-and mutation is written, and markdown escapes those as `\|`. Splitting
- * on every `|` turned three such rows into tables two columns wider than their
- * header. Reading only the last cell hid it — the last cell is the last cell
- * however many phantom ones precede it — so the defect surfaced the moment the
- * citation column was addressed by index instead.
+ * Counting bare parens is not enough, and the direction it goes wrong in is
+ * the dangerous one. A `)` inside a test title — `it('refuses a 403)')` — ends
+ * the walk EARLY, so the tail of a skipped suite survives the strip and a
+ * citation into it resolves: this script's one sentence of purpose, defeated.
+ * (Overshooting is the safe direction: live suites vanish and their citations
+ * fail loudly.) So strings, template literals and comments are skipped rather
+ * than counted.
+ *
+ * Regex literals are NOT parsed — telling `/` from division needs the parse
+ * this script deliberately does not do. Honouring a backslash escape in code
+ * position covers the case that matters, `\)`, since a backslash cannot
+ * legally appear in code position for any other reason. The residue is an
+ * unescaped paren in a character class, `/[)]/`, and it is left stated rather
+ * than half-handled.
  */
+function closeOf(text, open) {
+  let depth = 0;
+  for (let i = open; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === '\\') {
+      i += 1;
+    } else if (ch === '/' && text[i + 1] === '/') {
+      const newline = text.indexOf('\n', i);
+      if (newline === -1) return text.length;
+      i = newline;
+    } else if (ch === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      if (end === -1) return text.length;
+      i = end + 1;
+    } else if (ch === '"' || ch === "'" || ch === '`') {
+      i = endOfQuote(text, i);
+      if (i >= text.length) return text.length;
+    } else if (ch === '(') {
+      depth += 1;
+    } else if (ch === ')') {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return text.length;
+}
+
+/** The index of the quote closing the one at `start`, or the end of the text. */
+function endOfQuote(text, start) {
+  const quote = text[start];
+  for (let i = start + 1; i < text.length; i += 1) {
+    if (text[i] === '\\') i += 1;
+    else if (text[i] === quote) return i;
+  }
+  return text.length;
+}
+
+/**
+ * Modifiers on a `describe` chain that mean the suite may not run.
+ *
+ * `runIf` is here with the two obvious ones because whether it runs is a
+ * RUNTIME value this script cannot read, and the two ways of being wrong are
+ * not symmetric: treating a running suite as skipped fails its citations
+ * loudly, while treating a skipped one as running is this script being green
+ * and wrong, which is the single failure mode it exists to prevent.
+ */
+const SKIPPING = new Set(['skip', 'todo', 'skipIf', 'runIf']);
+
+/**
+ * A source with the body of every skipped `describe` removed.
+ *
+ * Two rounds of this were the same mistake in different clothes.
+ *
+ * The first matched `describe.skip(` and deleted `[\s\S]*` — to END OF FILE.
+ * One skipped suite would have erased every LIVE suite after it and every
+ * citation into them, and because the cross-file haystack is the sources
+ * concatenated, one skipped suite anywhere would have done it to every
+ * `file: null` citation too.
+ *
+ * The second bounded the deletion and kept matching the literal spelling
+ * `describe.skip(`. `describe.skipIf(true)(…)` is a first-class vitest API and
+ * does not match it — `skip` there is followed by `If`, not `(`. Probed on
+ * `panels.test.tsx`, the file this record cites 46 times: the suite went to
+ * `12 passed | 47 skipped` and this check still printed `ok 178`, exit 0. The
+ * whole point of the script, defeated by two characters.
+ *
+ * So it no longer matches a spelling. It reads the MODIFIER CHAIN after
+ * `describe` — every `.name`, with any call group between them consumed — and
+ * asks whether any link in it skips. `describe.skip.each([…])(…)` and
+ * `describe.skipIf(cond)(…)` are the same question as `describe.skip(…)`.
+ */
+function withoutSkippedSuites(text) {
+  const opener = /\bdescribe\b/g;
+  let out = '';
+  let cursor = 0;
+  let match;
+  while ((match = opener.exec(text)) !== null) {
+    if (match.index < cursor) continue;
+    const chain = [];
+    let i = match.index + 'describe'.length;
+    for (;;) {
+      while (i < text.length && /\s/.test(text[i])) i += 1;
+      if (text[i] === '.') {
+        i += 1;
+        while (i < text.length && /\s/.test(text[i])) i += 1;
+        const name = /^[A-Za-z_$][\w$]*/.exec(text.slice(i));
+        if (name === null) break;
+        chain.push(name[0]);
+        i += name[0].length;
+        continue;
+      }
+      // `describe.skipIf(cond)('name', fn)` is TWO call groups, and the suite
+      // ends at the last one. Consuming each in turn is what finds it.
+      if (text[i] === '(') {
+        i = closeOf(text, i);
+        continue;
+      }
+      break;
+    }
+    if (!chain.some((link) => SKIPPING.has(link))) continue;
+    out += text.slice(cursor, match.index);
+    cursor = i;
+    opener.lastIndex = cursor;
+  }
+  return out + text.slice(cursor);
+}
+
 /**
  * Every `it`/`test` title in a body of source.
  *
@@ -108,9 +223,11 @@ function titles(text) {
    * Round 27 closed `it.skip`/`it.todo` and left the same hole one level up,
    * which is the shape of most of this script's history: the instance fixed,
    * the class left open. A skipped SUITE contributes no titles at all.
+   *
+   * Only that suite, though, and `withoutSkippedSuites` says why finding where
+   * it ends is not the one-line regex it looks like.
    */
-  const live = text.replace(/\bdescribe\s*\.\s*(?:skip|todo)\s*\([\s\S]*/g, '');
-  text = live;
+  text = withoutSkippedSuites(text);
   const pattern =
     /*
      * `.skip` and `.todo` are NOT accepted.
@@ -126,6 +243,16 @@ function titles(text) {
   return found;
 }
 
+/*
+ * Split on UNESCAPED pipes only.
+ *
+ * A mutation cell routinely contains one: `` `\|\|` → `&&` `` is how an
+ * or-to-and mutation is written, and markdown escapes those as `\|`. Splitting
+ * on every `|` turned three such rows into tables two columns wider than their
+ * header. Reading only the last cell hid it — the last cell is the last cell
+ * however many phantom ones precede it — so the defect surfaced the moment the
+ * citation column was addressed by index instead.
+ */
 const cells = (row) =>
   row
     .replace(/^\||\|$/g, '')
@@ -223,7 +350,22 @@ let fenced = false;
 /** Tables with no header/separator pair, in which nothing at all was checked. */
 const unstructured = [];
 
-for (const line of lines) {
+/*
+ * A sentinel blank line, so END OF FILE is not a second copy of the rule.
+ *
+ * The end-of-table detector fired only on a non-`|` line, so a table at the
+ * end of the file was never closed — and the end of this file is exactly where
+ * every round appends its own table. The fix for that was a COPY of the check
+ * after the loop, and the copy could not fire: `split('\n')` on a file with a
+ * trailing newline already yields a final `''`, which is a non-`|` line, so
+ * the in-loop check had always been handling EOF for any file git and prettier
+ * would accept. Its certifying row in the record passed with the rule reverted
+ * — the definition of a test that is not a test.
+ *
+ * One rule, reached the same way in both cases, is the version that can be
+ * falsified. The sentinel costs one array element.
+ */
+for (const line of [...lines, '']) {
   /*
    * A fenced block is prose, not a table.
    *
@@ -361,10 +503,6 @@ for (const line of lines) {
       missing.push(`${cited.name}  (${cited.file ?? 'any file'})`);
   }
 }
-
-// EOF ends a table too. The detector only fired on a non-`|` line, and the end
-// of this file is exactly where every round appends its own table.
-if (header !== null && width === 0) unstructured.push(header);
 
 if (
   missing.length > 0 ||

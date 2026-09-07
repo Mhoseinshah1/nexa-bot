@@ -1784,3 +1784,38 @@ textarea.input {
 .dist-row svg.bar rect.neutral {
   fill: var(--text-3);
 }
+
+/*
+ * `hidden` means hidden, whatever else a rule says about display.
+ *
+ * The user agent's `[hidden] { display: none }` is USER-AGENT origin, so ANY
+ * author declaration of `display` beats it no matter how weak the selector.
+ * `.toolbar { display: flex }` above therefore left `<div className="toolbar"
+ * hidden>` fully laid out, visible, focusable and clickable — and the round
+ * that introduced that markup did so to withdraw a filter select whose every
+ * change mints a new query key and one more refused request. Measured in jsdom
+ * against this stylesheet: `display: flex`, with the `<select>` in the DOM and
+ * a severity change still issuing `GET /ops-log?...&severity=ERROR`.
+ *
+ * The tests could not see it from either side. `styles.css` is not loaded by
+ * the web vitest project, so jsdom's own UA rule won there; and even with it
+ * loaded, `getByRole` consults the `hidden` IDL property and short-circuits
+ * before computed style, so a role query returns null either way. That is the
+ * exact seam `tests/web/stylesheet-contract.test.tsx` exists for.
+ *
+ * BOTH halves are load-bearing, and they answer to different engines.
+ * `!important` is what a real browser needs: `.tabs.vertical button` is
+ * (0,3,1) and beats an ordinary `[hidden]` at (0,1,0) wherever the two meet,
+ * and specificity ignores order. LAST IN THE FILE is what jsdom needs:
+ * jsdom's cascade is source order only and drops `!important` entirely
+ * (probed: `.t{display:flex}` after `[hidden]{display:none!important}` still
+ * computes `flex`). Put this rule anywhere earlier and the test that proves
+ * it cannot run. So the computed-style assertion guards the position and a
+ * textual assertion guards the `!important`; neither covers the other.
+ *
+ * An attribute that means "this is not on the page" is not a cascade
+ * participant. Nothing may be appended below it.
+ */
+[hidden] {
+  display: none !important;
+}

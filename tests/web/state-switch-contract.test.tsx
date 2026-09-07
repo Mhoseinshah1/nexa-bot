@@ -75,26 +75,40 @@ describe('the query-view contract', () => {
       }
     }
     const wrong: string[] = [];
+    /*
+     * ONE pattern, over the whole file rather than line by line.
+     *
+     * Three separate line-anchored regexes had let four spellings through, one
+     * per round, and the fifth was `{!detail.isError ? … : null}` — the
+     * negated TERNARY, which the negated pattern missed because it demanded
+     * `&&`, and the un-negated one missed because of the `!`. Adding a fourth
+     * regex would have been the fifth instance of the same mistake.
+     *
+     * Line-anchoring was the other half of it. Prettier breaks a long JSX
+     * condition after the operand, so `{!detail.isError &&` and its `&&` can
+     * end up on different lines and a line-by-line scan sees neither. `\s*`
+     * over the whole text spans that; the line number is recovered from the
+     * match offset for the report.
+     */
+    const spelling = /\{\s*(!\s*)?(\w+)\s*\.\s*(?:isError\s*[&?]|status\s*!?==\s*'error')/g;
     for (const file of sources(ROOT)) {
       if (file.path.endsWith('view-state.ts')) continue;
-      file.text.split('\n').forEach((line, index) => {
-        // Three spellings of the same decision, all verified to escape the
-        // previous single-pattern version: `&&`, a ternary, and `status`.
-        const match =
-          /\{\s*(\w+)\.isError\s*[&?]/.exec(line) ??
-          // The NEGATED spelling, which is the natural way to write the ladder
-          // this scan hunts and escaped the first three patterns entirely. A
-          // reviewer rewrote one site as `{!detail.isError && detail.data && (`
-          // — prettier-clean, scan-clean, suite-clean — and it reverted commit
-          // 894be2a's rule (a failed poll keeps the page) at that site.
-          /\{\s*!\s*(\w+)\.isError\s*&&/.exec(line) ??
-          /\{\s*(\w+)\.status\s*!?===\s*'error'/.exec(line);
-        if (match === null) return;
-        if (mutations.has(`${file.path}:${match[1]}`)) return;
+      for (const match of file.text.matchAll(spelling)) {
+        const name = match[2] as string;
+        if (mutations.has(`${file.path}:${name}`)) continue;
+        // The offset of the NAME, not of the `{`. A split condition puts the
+        // brace on a line of its own, and reporting `alerts.tsx:600  {` tells
+        // the reader nothing about what was found.
+        const index = (match.index ?? 0) + match[0].indexOf(name);
+        const start = file.text.lastIndexOf('\n', index) + 1;
+        const lineEnd = file.text.indexOf('\n', index);
+        const line = file.text.slice(start, lineEnd === -1 ? undefined : lineEnd);
+        // Prose describing the old shape is not the old shape.
+        if (line.trimStart().startsWith('*')) continue;
         // `staleAfterError` on the same line IS asking the rule.
-        if (line.includes('staleAfterError(')) return;
-        wrong.push(`${file.path}:${index + 1}  ${line.trim()}`);
-      });
+        if (line.includes('staleAfterError(')) continue;
+        wrong.push(`${file.path}:${file.text.slice(0, index).split('\n').length}  ${line.trim()}`);
+      }
     }
     expect(
       wrong,

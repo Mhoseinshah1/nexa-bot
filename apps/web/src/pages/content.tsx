@@ -9,6 +9,7 @@ import {
   saveTemplate,
 } from '../api/client';
 import { formatTimestamp } from '../format';
+import { finalAnswer } from '../polling';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { ErrorReport } from './settings';
@@ -226,7 +227,30 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
   const revisions = useQuery({
     queryKey: ['revisions', template.key],
     queryFn: () => fetchTemplateRevisions(template.key),
-    enabled: showHistory,
+    /*
+     * Sticky-open, but a FINAL answer still ends it.
+     *
+     * `showHistory` is sticky so that closing the pane no longer flips
+     * `enabled` false→true on the next open, which used to re-trigger an
+     * errored query once per reopen. The comment on `<details>` below said
+     * staying enabled "costs nothing: this query has no interval". The cost is
+     * not an interval — it is `invalidate()`, which runs on every save
+     * success, every save failure and every undo failure and invalidates this
+     * exact key. Sticky-enabled, that refetches even with the pane CLOSED, and
+     * even when the query is sitting in the 403 for which `retryOf`
+     * deliberately withholds the Retry button: measured at one extra refused
+     * `GET /templates/:key/revisions` — and one more
+     * `access.permission_denied` — per save, unbounded, for the life of the
+     * card. That is a worse channel than the reopen it replaced, because it
+     * fires on the operator's primary action rather than on a deliberate
+     * gesture.
+     *
+     * So the rule `retryOf` states is stated here too: after a final answer
+     * there is nothing to fetch. A retryable failure stays enabled, because a
+     * retryable failure is worth waiting through.
+     */
+    enabled: (query) =>
+      showHistory && !(query.state.status === 'error' && finalAnswer(query.state.error)),
   });
 
   const onSubmit = (event: FormEvent) => {
@@ -367,7 +391,16 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
           false→true, which re-triggers an errored query — so the pane refetched
           on each reopen, unbounded, while the card inside deliberately withheld
           Retry because the answer was final. Measured at one request per
-          reopen. Staying enabled costs nothing: this query has no interval.
+          reopen.
+
+          Sticky is only half of it, and the first version of this comment had
+          the other half backwards: it said staying enabled "costs nothing:
+          this query has no interval". The cost was never an interval. It is
+          `invalidate()`, which fires on every save and every undo failure and
+          invalidates this key — so sticky-enabled turned one request per
+          deliberate reopen into one per save, with the pane shut. The
+          `enabled` callback on the query is where that is stopped: see it for
+          the measurement.
         */}
         <details
           onToggle={(event) => {

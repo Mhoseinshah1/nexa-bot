@@ -95,6 +95,54 @@ describe('the panel list', () => {
     expect(await screen.findByText('شما به این بخش دسترسی ندارید.')).toBeInTheDocument();
   });
 
+  /**
+   * F4/M8 — the panels toolbar had the gate and no test.
+   *
+   * A whole-project mutation run deleted `hidden={!mayRequest(panels, denied)}`
+   * outright and all 277 tests passed. The round's own prose said the rule was
+   * applied at "the three places nothing looked" and its mutation table listed
+   * one of them, so two gates and this toolbar shipped as rules no test could
+   * distinguish from their absence.
+   *
+   * Asserted on the ATTRIBUTE, deliberately. A role query cannot see this:
+   * `dom-accessibility-api` short-circuits on the `hidden` IDL property, so
+   * `queryByRole` returns null whether or not the element is painted — which
+   * is how the toolbar shipped visible-but-role-invisible for a whole round.
+   * The stylesheet half, that `[hidden]` actually stops the paint against
+   * `.toolbar { display: flex }`, is asserted in `stylesheet-contract.test.tsx`
+   * where the real CSS is in the document. Neither end proves the other.
+   */
+  it('withdraws the archive filter from an actor who may not read the fleet', async () => {
+    stubApi(list([]));
+    const { container } = renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit={false} denied />);
+    await screen.findByText('شما به این بخش دسترسی ندارید.');
+
+    const toolbar = container.querySelector('.toolbar');
+    expect(toolbar, 'the toolbar is still rendered, just not shown').not.toBeNull();
+    expect((toolbar as HTMLElement).hasAttribute('hidden')).toBe(true);
+  });
+
+  /**
+   * F4/M9 — and neither did the pager beneath it.
+   *
+   * `CursorPager` is a SIBLING of `StateSwitch`, so the refusal card replaced
+   * the table while the pager went on saying "showing 0" and offering an
+   * "older" button that pushes a cursor — a new query key, and one more
+   * refused request, against the question the card above has just said cannot
+   * be answered. Reverting the gate to `queryState(panels) !== 'error'` (which
+   * is true in `denied`, because a denied query is disabled and therefore
+   * pending for ever) left the suite green.
+   */
+  it('takes the pager down with the fleet it was describing', async () => {
+    stubApi(list([]));
+    renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit={false} denied />);
+    await screen.findByText('شما به این بخش دسترسی ندارید.');
+
+    expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'تازه‌تر' })).toBeNull();
+    expect(screen.queryByText('نمایش')).toBeNull();
+  });
+
   it('distinguishes an empty fleet from a failed request', async () => {
     stubApi(list([]));
     renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);

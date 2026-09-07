@@ -2524,9 +2524,14 @@ calls `refetch()`, which **does** fetch a disabled query in react-query 5.
 
 Reachable directly: `navPermitted` only hides the nav link, and `resolve()`
 renders the page for anyone who types the path. **No test in the suite had ever
-rendered `AlertsPage` with `denied` true** — all fourteen call sites passed
+rendered `AlertsPage` with `denied` true** — every call site passed
 `denied={false}` — which is why the round that claimed to remove this control
-left it working.
+left it working. (The sentence originally said "all fourteen call sites". That
+number was already wrong when it was written: `git grep -c "<AlertsPage" 031e93d
+-- tests/` returns 15, and the count has moved again since. The substantive
+claim — that none of them passed `true` — held; the count did not, and a number
+nobody could reproduce is exactly the kind of citation this record exists to
+stop.)
 
 `mayRequest(query, denied)` is the rule, and it now covers what three separate
 rounds gated one at a time: the refresh button, the severity filter, the
@@ -2597,13 +2602,13 @@ contribute no titles now.
 | V1  | a denied page draws no request-issuing control         | `mayRequest` → `retryOf`               | `settings-and-alerts.test.tsx` › draws no request-issuing control at all when the actor is denied                                                    |
 | V2  | the filters go with the rest                           | un-gate the toolbar                    | `settings-and-alerts.test.tsx` › draws no request-issuing control at all when the actor is denied; › withdraws its filters once the refusal is final |
 | V3  | the detail names the refusal, not a connection failure | hard-code the connection copy          | `control-plane-pages.test.tsx` › drops a stale attempts list on a final refusal, and offers no retry                                                 |
-| V4  | reopening the history pane is not a retry              | `setShowHistory(open)`                 | `control-plane-pages.test.tsx` › does not refetch a refused history each time the pane is reopened                                                   |
+| V4  | reopening the history pane is not a retry              | `setShowHistory(open)`                 | `control-plane-pages.test.tsx` › does not refetch a failing history each time the pane is reopened                                                   |
 | V5  | a card header states nothing the card withheld         | read `panels.data` directly            | `dashboard.test.tsx` › says nothing about a fleet it could not read                                                                                  |
 | V6  | the scan sees the NEGATED spelling                     | `{!detail.isError && detail.data && (` | `state-switch-contract.test.tsx` › renders no view off a bare isError unless it is a mutation                                                        |
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 165 citations were checked; this record declares 171 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 171 citations were checked; this record declares 178 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -2615,3 +2620,199 @@ mutation run saturates the machine, so the bound is what broke rather than the
 behaviour. Not reproduced since, not fixed, and named here so the next reader
 does not have to rediscover it. It is Phase 3C code untouched by this branch —
 the second such flake this session, both in real-socket tests under load.
+
+# Round 29 — the fix that did nothing in a browser, and a checker two characters could defeat
+
+The twentieth fresh-context review returned thirteen findings against round 28,
+and the two severe ones are the same failure at different layers: a rule that
+was correct in the source, believed by every test, and absent in the thing that
+actually runs.
+
+## The toolbars were never hidden
+
+Round 28 withdrew the request-issuing filter toolbars from a denied or
+finally-refused page with `<div className="toolbar" hidden={…}>`, and its
+commit message said the harm — one refused request and one
+`access.permission_denied` per filter change — had been removed. It had not.
+`[hidden] { display: none }` is a USER-AGENT rule, so the author's
+`.toolbar { display: flex }` beats it no matter how weak the selector. Measured
+in jsdom against the real stylesheet: `display: flex`, the `<select>` in the
+DOM, and a severity change still issuing
+`GET /ops-log?limit=25&severity=ERROR&scope=MANAGEMENT`.
+
+Two independent blindfolds kept the suite green, and neither is specific to
+this rule. `styles.css` is not loaded by the web vitest project, so jsdom's own
+UA rule won there. And `getByRole` consults the `hidden` IDL property and
+short-circuits before computed style, so a role query returns `null` whether or
+not the element is painted — an assertion written that way is structurally
+incapable of failing on this, for ever.
+
+The rule is now `[hidden] { display: none !important; }`, LAST in the file, and
+both halves are load-bearing against different engines. `!important` is what a
+browser needs, because `.tabs.vertical button` is (0,3,1) and beats `[hidden]`
+at (0,1,0) on specificity whatever the order. Last-in-file is what jsdom needs,
+because its cascade is source order only and drops `!important` entirely
+(probed: `.t{display:flex}` written after `[hidden]{display:none!important}`
+still computes `flex`). Put the rule anywhere earlier and the test that proves
+it cannot run.
+
+## `describe.skipIf(true)` defeated the citation checker completely
+
+The checker strips skipped suites so a citation cannot resolve to a test that
+never runs. It matched the literal spelling `describe.skip(`. `describe.skipIf`
+is a first-class vitest API, and `skip` there is followed by `If`, not `(`.
+Probed on `panels.test.tsx`, the file this record cites 46 times: the suite
+reported `12 passed | 47 skipped` and the checker printed `ok 178`, exit 0.
+
+It no longer matches a spelling. It reads the modifier chain after `describe` —
+every `.name`, with any call group between them consumed — and asks whether any
+link in it skips. `runIf` counts, because whether it runs is a runtime value
+this script cannot read and the two ways of being wrong are not symmetric.
+
+## Three rules the round shipped with no test at all
+
+A whole-project mutation run by the reviewer deleted the panels toolbar gate,
+reverted the panels pager gate and reverted the notifications pager gate, one
+at a time. All 277 tests passed each time. The round's prose said the rule had
+been applied at "the three places nothing looked"; its mutation table named
+one. The pattern the commit message opens with — correct at the site the author
+was looking at, absent at the others — reproduced by the fix for that pattern.
+
+The notifications pager needed a second attempt. Written against a 403 the test
+passed either way, because `queryState` is `'error'` there and the reverted
+gate hides the pager too. The discriminating state is `denied`: a denied query
+is `enabled: false`, so it is `isPending` FOR EVER and never `isError`, and the
+old gate reads `'loading' !== 'error'` and draws the pager above the "you do
+not have access" card.
+
+## One channel closed, a worse one opened
+
+Round 28 made `showHistory` sticky so reopening the revisions pane could not
+re-trigger an errored query, and its comment said staying enabled "costs
+nothing: this query has no interval". The cost was never an interval. It is
+`invalidate()`, which the save mutation runs on success AND on error and which
+invalidates that exact key — so a query that used to be `enabled: false` behind
+a closed pane became one that refetches on the operator's PRIMARY action, in
+the same final 403 for which `retryOf` withholds the Retry button. Measured:
+three saves took the revisions request count from 1 to 4, pane shut, unbounded.
+
+The `enabled` callback now states the rule `retryOf` states — after a final
+answer there is nothing to fetch — and that immediately made round 28's own
+test non-discriminating, because its 403 is covered by the new rule whether or
+not `showHistory` is sticky. It is rewritten against a 503, where sticky is the
+only thing holding the line. A fix that silently disables the test of the rule
+beside it is the same defect class as everything above.
+
+## The 403 arm was fixed and the others left wrong
+
+`refused()` was widened for a 403 and stopped there. `finalAnswer` is broader:
+a `ZodError` on the SUCCESS path — which `polling.ts` calls its headline case,
+a tab holding a previous release across a deploy — plus 404 and 400. For all of
+those the card said "خطا در ارتباط با سرور" and "ارتباط با سرور برقرار نشد.
+دوباره تلاش کنید." beside no retry button at all: two false statements, and an
+instruction to press something the screen had deliberately removed.
+
+Both sites that draw an error card carried the identical triple of ternaries,
+and the round fixed one arm at both. They now call one `errorCopy(query)` that
+returns all three keys together. Reverting only the alerts detail to its own
+ternaries left all 281 tests green, so that site got its own test before the
+structural fix was believed.
+
+## The tail of a file is not part of the skipped suite
+
+Round 28 closed the `describe.skip` hole by deleting from the suite's opener to
+END OF FILE: `text.replace(/\bdescribe\s*\.\s*(?:skip|todo)\s*\([\s\S]*/g, '')`.
+Nothing under `tests/` skips a suite today, so it never bit. Had one appeared,
+every LIVE suite after it would have stopped existing as far as this check is
+concerned, and every citation into them would have been reported as fabricated.
+That is the same "the instance fixed, the class left open" shape the round it
+was fixing is about, reproduced inside its own fix — found by re-reading round
+28's own claims against the tree rather than by a test.
+
+A skipped suite now ends where its parenthesis closes. Counting bare parens is
+not enough, and the direction it goes wrong in is the dangerous one: a `)`
+inside a test title ends the walk EARLY, the tail of the skipped suite survives
+the strip, and a citation into a test that never runs resolves. So the walk
+skips strings, template literals and comments rather than counting the parens
+inside them. Regex literals are not parsed — `\)` is covered by honouring
+backslash escapes, and `/[)]/` is stated in the code as the residue rather than
+half-handled.
+
+**How these were run.** A file was added to a COPY of `tests/` (`zz-probe.test.tsx`)
+holding a `describe.skip` with two tests — the first titled `mentions a stray
+paren ) in its title`, the second after it — followed by a live `describe`. The
+copy's `EXPECTED` was raised to 179 so that existence, not the count, is what
+each run decides. Nothing in the repository tree was modified to run them.
+
+Read VZ's row carefully: its mutation makes the check EXIT 0. The check going
+green is the failure being demonstrated, not the mutation surviving.
+
+| #   | rule                                               | mutation                               | what the check prints                                                     |
+| --- | -------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------- |
+| VX  | a test inside a skipped SUITE is still not citable | cite the skipped suite's first test    | exits 1: 1 of 179 cited tests do not exist                                |
+| VY  | and only THAT suite is stripped                    | restore round 28's `[\s\S]*` strip     | exits 1: 1 of 179 cited tests do not exist — naming the LIVE suite's test |
+| VZ  | a `)` inside a title does not end the suite early  | count bare parens, skipping no strings | exits **0**: green, with a citation into a skipped test resolving         |
+
+## Two more the reviewer found in the checker
+
+`WX` is the `describe.skipIf` hole above. `WY` is the end-of-table rule: round
+28 added a COPY of it after the loop for tables at EOF, and the copy could not
+fire — `split('\n')` on a file with a trailing newline already yields a final
+`''`, a non-`|` line, so the in-loop check had always handled EOF for any file
+git and prettier would accept. Its certifying row passed with the rule
+reverted, which is the definition of a test that is not a test. There is one
+rule now, reached through a sentinel blank line, and it can be falsified.
+
+| #   | rule                                                | mutation                                 | what the check prints                                                     |
+| --- | --------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------- |
+| WX  | a skipped suite is skipped however it is spelled    | match the literal `describe.skip(` again | exits **0**: `ok 178`, with 47 tests skipped and every citation resolving |
+| WY  | a table with no separator is checked for at EOF too | drop the one in-loop end-of-table rule   | exits **0**: `ok 178`, with a header-only table appended and unread       |
+
+Read WX and WY the same way as VZ: the mutation makes the check EXIT 0. Green
+is the failure being demonstrated.
+
+## The mutations
+
+Every one applied to the tree as committed, run against the whole `web`
+project, reverted, and the seven touched files verified byte-identical by
+sha256 afterwards. W12 was rewritten after its first attempt left the ternary
+unbalanced: it failed, but for a parse error rather than for the scan, and 181
+tests never ran. The version below compiles (`tsc --noEmit` exit 0).
+
+| #   | rule                                                       | mutation                                        | tests that die                                                                                                                                                                      |
+| --- | ---------------------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| W1  | `hidden` paints nothing, whatever else says `display`      | delete the `[hidden]` rule                      | `stylesheet-contract.test.tsx` › paints nothing for a styled element carrying hidden; › declares that rule important, and last                                                      |
+| W2  | …and carries `!important` for a real browser's specificity | drop `!important` (jsdom cannot see this)       | `stylesheet-contract.test.tsx` › declares that rule important, and last                                                                                                             |
+| W3  | …and is LAST, or the jsdom half cannot fail                | move it above `.toolbar`                        | (same two)                                                                                                                                                                          |
+| W4  | a denied fleet draws no archive filter                     | delete the panels toolbar gate                  | `panels.test.tsx` › withdraws the archive filter from an actor who may not read the fleet                                                                                           |
+| W5  | the panels pager goes with the rows                        | gate on `queryState(panels) !== 'error'`        | `panels.test.tsx` › takes the pager down with the fleet it was describing                                                                                                           |
+| W6  | the notifications pager goes with the rows                 | gate on `queryState(notifications) !== 'error'` | `control-plane-pages.test.tsx` › takes the notification pager down with the rows it was describing                                                                                  |
+| W7  | a final answer is not a connection failure                 | `errorCopy` loses its final-answer arm          | `settings-and-alerts.test.tsx` › does not call a rejected answer a connection failure; `control-plane-pages.test.tsx` › does not call a rejected detail a connection failure either |
+| W8  | …at the detail card too, not just the list                 | revert only that site to its own ternaries      | `control-plane-pages.test.tsx` › does not call a rejected detail a connection failure either                                                                                        |
+| W9  | a final answer ends the revisions query                    | `enabled: showHistory`                          | `control-plane-pages.test.tsx` › does not refetch a refused history when an unrelated save invalidates it                                                                           |
+| W10 | reopening the pane is still not a retry                    | `setShowHistory(open)`                          | `control-plane-pages.test.tsx` › does not refetch a failing history each time the pane is reopened                                                                                  |
+| W11 | an empty fleet is named, not left to the generic copy      | drop `isEmpty` from both dashboard cards        | `dashboard.test.tsx` › names the empty thing when the fleet is empty                                                                                                                |
+| W12 | the scan sees the negated TERNARY                          | `{!detail.isError ? detail.data && (…) : null}` | `state-switch-contract.test.tsx` › renders no view off a bare isError unless it is a mutation                                                                                       |
+| W13 | …and a condition prettier split off the brace line         | `{\n  !detail.isError &&\n  detail.data && (`   | `state-switch-contract.test.tsx` › renders no view off a bare isError unless it is a mutation                                                                                       |
+| W14 | "nothing else can fire it" is PRESSED, not asserted        | add one ungated control that refetches          | `settings-and-alerts.test.tsx` › withdraws its own refresh once the refusal is final; › withdraws its filters once the refusal is final                                             |
+
+## Two corrections to this record
+
+`U99`'s row recorded `165 citations were checked; this record declares 171`.
+Against the committed tree the same mutation prints `171 … declares 178`: the
+transcript had been copied from an intermediate state before `EXPECTED` reached
+its final value. A commit whose thesis is that a claim leaving no test behind is
+worse than no claim shipped a certifying transcript that did not match its own
+tree. Corrected above, and re-run to produce the number now written there.
+
+The "all fourteen call sites" sentence in round 28 is corrected in place, where
+it appears.
+
+## What is still not covered
+
+`stylesheet-contract.test.tsx` now guards `[hidden]` against the real cascade,
+but only for the four selectors it names. jsdom is not a browser: it decides on
+source order and ignores `!important` entirely, so no test in this repository
+can observe the specificity half. That half rests on the textual assertion and
+on the rule being last in the file, and both are stated in `styles.css` beside
+the declaration rather than left to be rediscovered.
