@@ -1194,11 +1194,11 @@ inert by accident. It answers the query now.
 
 ## The mutations
 
-| #   | rule                                                | mutation                                     | test that dies                                                                             |
-| --- | --------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| U31 | data wins over a retryable error, and only over one | drop the `!finalAnswer` guard                | `session-view.test.ts` › gives up a resolved session once the lookup is permanently broken |
-| U32 | signing out is set, not re-derived                  | `setQueryData` → `invalidateQueries`         | `shell-recovery.test.tsx` › signs out at once, even when the follow-up lookup fails        |
-| U33 | a returning tab re-asks at once                     | drop `refetchOnWindowFocus` from the session | `shell-recovery.test.tsx` › re-asks the moment the operator comes back to the tab          |
+| #   | rule                                                | mutation                                     | test that dies                                                                               |
+| --- | --------------------------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| U31 | data wins over a retryable error, and only over one | drop the `!finalAnswer` guard                | `session-view.test.ts` › gives up a resolved session once the lookup is permanently broken   |
+| U32 | signing out is set, not re-derived                  | `setQueryData` → `invalidateQueries`         | `shell-recovery.test.tsx` › signs out at once, without re-asking a question already answered |
+| U33 | a returning tab re-asks at once                     | drop `refetchOnWindowFocus` from the session | `shell-recovery.test.tsx` › re-asks the moment the operator comes back to the tab            |
 
 U31 kills two. Sources restored and sha256-verified; suites green afterwards.
 
@@ -1216,3 +1216,80 @@ only probe the boundary they already had in mind. Six of the seven were found by
 a reader with no stake in the fix asking what it now does that it did not do
 before. That is the only technique in this document with a seven-for-seven
 record, and it is the one `CLAUDE.md` already names.
+
+# Round 15 — the two pieces round 14 added were the two pieces that were wrong
+
+A seventh reviewer confirmed round 14's `sessionView`/`pollSession` half and
+could not break it. Both of the NEW pieces in that commit reopened the same
+defect.
+
+## `setQueryData` does not cancel
+
+`Query#setData` dispatches a success and never touches the retryer. So a
+`GET /auth/session` already IN FLIGHT when the operator signs out — sent with a
+cookie that was still valid — lands afterwards and overwrites the `null` with
+the session it fetched. The console came back, for a full refresh cadence, on
+the shared machine the fix was written for.
+
+`refetchOnWindowFocus: true`, added by the same commit, is what makes the race
+ordinary rather than a one-in-sixty coincidence: returning to a tab and
+immediately signing out is a normal sequence. The old `invalidateQueries` did
+not have this failure — it refetches with `cancelRefetch` — it had the different
+one round 14 describes. Both were wrong. `cancelQueries` first, then set.
+
+## A signed-out browser is not a console
+
+`sessionView`'s data-wins rule was truthiness-gated, so a resolved `null` — the
+server's own "nobody is signed in" — was not treated as a resolved answer at
+all, and fell through to `unavailable`. Before round 14 that column was
+unreachable, because a signed-out tab never fetched again. `refetchOnWindowFocus`
+made it routine.
+
+So a browser sitting at the sign-in form, returning to its tab mid-deploy, was
+put on the terminal "you may still be signed in" screen — provably false, the
+cache held `null` — with no interval and no way back; twenty minutes and zero
+requests in the reviewer's probe. The retryable variant of the same path
+unmounted the form mid-typing and lost the username already in it, which is
+verbatim the harm the data-wins comment claims to prevent.
+
+The asymmetry is the point, and it is now stated in the code: a session is
+surrendered on a final answer because a console that cannot be confirmed lies; a
+sign-in form never does.
+
+## A rule with no test, and a test that could not fail
+
+Two more from the same review, and they are the two failure shapes this document
+keeps recording:
+
+- `pollSession`'s "stop on a final answer" branch — the load-bearing half of
+  round 14's central claim that both halves ask `finalAnswer` — had **no test**.
+  Deleting it left all 959 tests green. Every test asserted what was DRAWN and
+  none how often it was asked.
+- `error?: unknown` was optional on `sessionView`, so six call sites silently
+  got the previous release's rule. Making it required turned all six into
+  compile errors, which is what a parameter that changes behaviour should do.
+
+## And one of mine, found by mutating it
+
+U35 killed nothing on its first run. The in-flight race test I had just written
+ended with
+`await waitFor(() => expect(queryByText('مدیر اصلی')).toBeNull())` — and the
+console is already gone at that point, so the condition holds on entry and the
+wait returns before the released response is anywhere near being applied. **It
+passed against the very defect it was written to name.** A direct probe showed
+the defect reproducing (`CONSOLE BACK AFTER RELEASE: true`) while the test in
+the suite stayed green.
+
+That is the fifth vacuous test of mine on this branch and the third mutation
+this session that killed nothing. Both counts are worth keeping, because they
+are the two things a green suite cannot tell you.
+
+## The mutations
+
+| #   | rule                                                  | mutation                              | test that dies                                                                              |
+| --- | ----------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------- |
+| U34 | a resolved sign-out survives a later failure          | drop the `data === null` branch       | `session-view.test.ts` › stays signed out when a later lookup fails permanently             |
+| U35 | sign-out cancels the lookup already in flight         | drop `cancelQueries`                  | `shell-recovery.test.tsx` › cannot be undone by a session lookup that was already in flight |
+| U36 | a final answer stops the asking, not just the drawing | drop `finalAnswer` from `pollSession` | `shell-recovery.test.tsx` › stops showing a console it can no longer confirm                |
+
+U34 kills two. Sources restored and sha256-verified; suites green afterwards.

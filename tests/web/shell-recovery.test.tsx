@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../apps/web/src/app';
 import { stubApi } from './harness';
@@ -224,6 +224,14 @@ describe('a session that expires under an open tab', () => {
 describe('the shell in the states a pure function cannot see', () => {
   afterEach(() => {
     vi.useRealTimers();
+    // RESTORED. Two tests here redefine it, and jsdom's document is shared for
+    // the whole file: leaving it stubbed is a landmine for the next test
+    // appended to this block, which would run against a tab that is
+    // permanently visible or permanently hidden without saying so.
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
   });
 
   const SIGNED_IN = [
@@ -255,6 +263,16 @@ describe('the shell in the states a pure function cannot see', () => {
     await vi.advanceTimersByTimeAsync(65_000);
     expect(await screen.findByText(UNAVAILABLE)).toBeInTheDocument();
     expect(screen.queryByText('مدیر اصلی')).toBeNull();
+
+    // ...and it STOPS asking. Deleting `pollSession`'s final-answer branch left
+    // every test in the suite green, because they all asserted what was drawn
+    // and never how often it was asked.
+    const skewed = stubApi([
+      ...SIGNED_IN.filter((route) => !route.url.includes('/auth/session')),
+      { url: '/auth/session', body: { nothing: 'the schema expects' } },
+    ]);
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(skewed.calls.filter((call) => call.url.includes('/auth/session')).length).toBe(0);
   });
 
   /**
@@ -262,8 +280,12 @@ describe('the shell in the states a pure function cannot see', () => {
    * client that re-asks and keeps the console up when the answer does not come
    * back has told the operator on a shared machine that they are still signed
    * in, and on a FINAL failure it says so for ever.
+   *
+   * The 403 route below is the answer a follow-up lookup WOULD get. Under the
+   * rule this test protects no follow-up happens at all, so the route is what
+   * the mutant hits; the assertion that nothing was asked is below.
    */
-  it('signs out at once, even when the follow-up lookup fails', async () => {
+  it('signs out at once, without re-asking a question already answered', async () => {
     stubApi(SIGNED_IN);
     renderShell();
     await screen.findByText('مدیر اصلی');
@@ -282,6 +304,95 @@ describe('the shell in the states a pure function cannot see', () => {
 
     expect(await screen.findByLabelText('نام کاربری')).toBeInTheDocument();
     expect(screen.queryByText('مدیر اصلی')).toBeNull();
+    // ...and it did not ask. A sign-out that re-derives its own outcome can
+    // only get something worse back.
+    expect(
+      screen.queryByText(UNAVAILABLE),
+      'a sign-out must not be able to render a lookup failure',
+    ).toBeNull();
+  });
+
+  /**
+   * The other half of the same rule: a lookup already IN FLIGHT when sign-out
+   * lands must not be allowed to answer.
+   *
+   * `setQueryData` dispatches a success and never touches the retryer, so a
+   * `GET /auth/session` sent moments earlier with a still-valid cookie resolves
+   * afterwards and overwrites the `null` with the session it fetched. The
+   * console came back — for a whole refresh cadence, on the shared machine this
+   * path exists for. `refetchOnWindowFocus` is what makes the race ordinary:
+   * returning to a tab and immediately signing out is a normal sequence.
+   */
+  it('cannot be undone by a session lookup that was already in flight', async () => {
+    // Captured out of the executor through an object so TypeScript does not
+    // narrow the binding to `null` at the call site below.
+    const gate: { release: (value: unknown) => void } = { release: () => undefined };
+    const pending = new Promise((resolve) => {
+      gate.release = resolve;
+    });
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = String(input);
+        calls.push(url);
+        const json = (body: unknown, status = 200) =>
+          new Response(JSON.stringify(body), {
+            status,
+            headers: { 'content-type': 'application/json' },
+          });
+        if (url.includes('/auth/logout')) return json({ ok: true });
+        if (url.includes('/auth/session')) {
+          // The FIRST session request answers immediately; the second is the
+          // one left hanging across the sign-out.
+          if (calls.filter((call) => call.includes('/auth/session')).length > 1) {
+            await pending;
+          }
+          return json(SESSION);
+        }
+        if (url.includes('/health/info'))
+          return json({ version: '1', commit: 'abc', builtAt: null });
+        if (url.includes('/system/readiness')) return json({ status: 'ok', dependencies: [] });
+        if (url.includes('/ops-log')) return json({ events: [], nextCursor: null });
+        if (url.includes('/panels')) return json({ panels: [], nextCursor: null });
+        return json({ error: { kind: 'x', code: 'x', message: 'x', correlationId: 'x' } }, 404);
+      }),
+    );
+
+    renderShell();
+    await screen.findByText('مدیر اصلی');
+
+    // Coming back to the tab starts a session lookup that will not answer yet.
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'hidden',
+    });
+    window.dispatchEvent(new Event('visibilitychange'));
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
+    window.dispatchEvent(new Event('visibilitychange'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'خروج' }));
+    await screen.findByLabelText('نام کاربری');
+
+    // The in-flight lookup now answers, with the session it was granted before
+    // the cookie was cleared.
+    //
+    // NOT `waitFor(() => expect(...).toBeNull())`. The console is already gone
+    // at this point, so that condition holds on entry and the wait returns
+    // before the released response is anywhere near being applied — the first
+    // version of this assertion passed against the very defect it names. Give
+    // the resolution a real chance to land, then assert.
+    gate.release(undefined);
+    await act(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+    });
+    expect(screen.queryByText('مدیر اصلی')).toBeNull();
+    expect(screen.getByLabelText('نام کاربری')).toBeInTheDocument();
   });
 
   /**

@@ -40,11 +40,12 @@ if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
     writable: true,
     value: (query: string): MediaQueryList =>
       ({
-        matches: /prefers-color-scheme:\s*light/.test(query)
-          ? true
-          : /max-width/.test(query)
-            ? false
-            : false,
+        // Light, because that is what a headless browser reports. Everything
+        // else is `false`, which for `(max-width: 980px)` agrees with jsdom's
+        // 1024px `innerWidth` — the value `app.tsx` reads for the same
+        // decision. A future `(min-width: …)` caller would need its own arm
+        // rather than this default.
+        matches: /prefers-color-scheme:\s*light/.test(query),
         media: query,
         onchange: null,
         addEventListener: () => undefined,

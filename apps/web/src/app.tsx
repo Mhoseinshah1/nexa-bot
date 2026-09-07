@@ -42,9 +42,22 @@ export function sessionView(query: {
   isPending: boolean;
   isError: boolean;
   data?: SessionResponse | null | undefined;
-  error?: unknown;
+  // REQUIRED, though it may be `undefined`. Optional, a caller that forgot it
+  // silently got the previous release's rule — data winning over every error —
+  // which is the defect this parameter was added to remove.
+  error: unknown;
 }): 'loading' | 'unavailable' | 'signed-in' | 'signed-out' {
   if (query.isPending) return 'loading';
+  // A resolved `null` is the server's own "nobody is signed in", and it stays
+  // the answer through any later failure. This is NOT the truthy case below and
+  // does not get the same treatment: surrendering a session on a final answer
+  // is right because a console that cannot be confirmed lies, and a sign-in
+  // form never does. Without this a signed-OUT browser returning to its tab
+  // during a deploy was put on the terminal "unavailable" screen — told it
+  // might still be signed in, blocked from the form it was using, with no
+  // interval and no way back — and on a retryable failure the same path
+  // unmounted the form mid-typing and lost the username already in it.
+  if (query.data === null) return 'signed-out';
   // Data wins over a RETRYABLE error, and only over a retryable one.
   //
   // The first half is why this exists: `refetchOnReconnect` is on by default,
@@ -64,7 +77,12 @@ export function sessionView(query: {
   // agree about which failures are worth waiting through.
   if (query.data && !finalAnswer(query.error)) return 'signed-in';
   if (query.isError) return 'unavailable';
-  return query.data ? 'signed-in' : 'signed-out';
+  // Not `query.data ? 'signed-in' : 'signed-out'`. Reaching here with `data`
+  // truthy needs `isError` false alongside a final `error`, which query-core
+  // cannot produce — it sets and clears the two together — and if it ever
+  // could, answering `signed-in` would render exactly the state the line above
+  // just refused.
+  return 'signed-out';
 }
 
 // ---------------------------------------------------------------------------
@@ -694,6 +712,13 @@ function SignedIn({
       // rendered "session unavailable" — telling an operator who had just
       // signed out that something was wrong — and on a final failure it said so
       // for ever. `signOut` succeeding IS the resolved state.
+      // CANCEL first. `setQueryData` dispatches a success and never touches the
+      // retryer, so a `GET /auth/session` already in flight — sent with a
+      // still-valid cookie, and made routine by `refetchOnWindowFocus` — lands
+      // afterwards and overwrites the `null` with the session it fetched. The
+      // console came back for a full minute after a successful sign-out, on the
+      // shared machine this whole path exists for.
+      await client.cancelQueries({ queryKey: ['session'] });
       client.setQueryData(['session'], null);
     },
   });

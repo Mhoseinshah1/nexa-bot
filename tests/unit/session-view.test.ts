@@ -29,7 +29,9 @@ const session = {
 
 describe('session view', () => {
   it('reports a lookup failure with nothing cached as unavailable, not as signed out', () => {
-    expect(sessionView({ isPending: false, isError: true })).toBe('unavailable');
+    expect(
+      sessionView({ isPending: false, isError: true, error: new ApiError(503, 'down', 'no') }),
+    ).toBe('unavailable');
   });
 
   /**
@@ -45,7 +47,9 @@ describe('session view', () => {
    * back as a resolved `null`, and lands in `signed-out` below.
    */
   it('keeps a resolved session when a later lookup fails', () => {
-    expect(sessionView({ isPending: false, isError: true, data: session })).toBe('signed-in');
+    expect(sessionView({ isPending: false, isError: true, data: session, error: null })).toBe(
+      'signed-in',
+    );
   });
 
   /**
@@ -73,15 +77,57 @@ describe('session view', () => {
   });
 
   it('reports the server saying "no session" as signed out', () => {
-    expect(sessionView({ isPending: false, isError: false, data: null })).toBe('signed-out');
+    expect(sessionView({ isPending: false, isError: false, data: null, error: null })).toBe(
+      'signed-out',
+    );
   });
 
   it('reports a resolved session as signed in', () => {
-    expect(sessionView({ isPending: false, isError: false, data: session })).toBe('signed-in');
+    expect(sessionView({ isPending: false, isError: false, data: session, error: null })).toBe(
+      'signed-in',
+    );
   });
 
   it('reports a pending query as loading, whatever else is set', () => {
-    expect(sessionView({ isPending: true, isError: false })).toBe('loading');
-    expect(sessionView({ isPending: true, isError: true })).toBe('loading');
+    expect(sessionView({ isPending: true, isError: false, error: null })).toBe('loading');
+    expect(sessionView({ isPending: true, isError: true, error: null })).toBe('loading');
+  });
+});
+
+/**
+ * A resolved `null` is an ANSWER, and it stays the answer through any later
+ * failure.
+ *
+ * Not the same rule as a resolved session, which is surrendered on a final
+ * answer because a console that cannot be confirmed lies. A sign-in form never
+ * does — so putting a browser that is provably signed out onto the "you may
+ * still be signed in" screen was wrong in both directions: on a final error it
+ * was terminal, with no interval and no way back, and on a retryable one it
+ * unmounted the form mid-typing and lost the username already in it.
+ *
+ * `refetchOnWindowFocus` is what made this routine: before it, a signed-out tab
+ * never fetched again at all.
+ */
+describe('a browser that is signed out', () => {
+  it('stays signed out when a later lookup fails permanently', () => {
+    expect(
+      sessionView({
+        isPending: false,
+        isError: true,
+        data: null,
+        error: new ApiError(404, 'gone', 'no'),
+      }),
+    ).toBe('signed-out');
+  });
+
+  it('stays signed out when a later lookup fails transiently', () => {
+    expect(
+      sessionView({
+        isPending: false,
+        isError: true,
+        data: null,
+        error: new ApiError(503, 'down', 'no'),
+      }),
+    ).toBe('signed-out');
   });
 });
