@@ -784,10 +784,15 @@ describe('the panel detail', () => {
    * change. The stub answers in a microtask, so the suite could not see it;
    * with real latency the operator got "somebody else changed this" on top of
    * their own "saved" toast.
+   *
+   * The write's answer carries a NEWER `updatedAt` because that is what the
+   * server does — `update` and `setStatus` both stamp it from the Clock — and
+   * a fixture that returned the request's own revision unchanged was modelling
+   * a server this one is not.
    */
   it('does not accuse anybody while the operator own write is still settling', async () => {
     const id = panel().id as string;
-    const renamed = panel({ name: 'Frankfurt B' });
+    const renamed = panel({ name: 'Frankfurt B', updatedAt: '2026-02-02T00:00:00.000Z' });
     const gate: { release: () => void } = { release: () => undefined };
     const held = new Promise<void>((resolve) => {
       gate.release = resolve;
@@ -964,10 +969,14 @@ describe('the panel detail', () => {
   });
 
   /**
-   * An ARCHIVED panel has no Save button and no inputs, and
-   * `PanelService.update` refuses with a 412. A notice about what saving will
-   * do describes a control that does not exist and a request the server will
-   * not accept.
+   * An ARCHIVED panel has no Save button — `PanelService.update` refuses one
+   * with a 412 — so a notice about what saving will do describes a control that
+   * does not exist and a request the server would not accept.
+   *
+   * The two inputs ARE still on screen, disabled, holding the operator's text.
+   * This docstring said they were gone, nine lines above a comment in its own
+   * body saying they were not, and that false premise is what an earlier round
+   * used to argue the notice could be dropped here entirely.
    */
   it('says nothing about saving a panel that can no longer be saved', async () => {
     const id = panel().id as string;
@@ -1171,6 +1180,325 @@ describe('the panel detail', () => {
     await screen.findByText('Frankfurt A');
     expect(screen.queryByRole('button', { name: 'بایگانی' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'بازگردانی از بایگانی' })).toBeNull();
+  });
+
+  /**
+   * The window between a write's response and the refetch that confirms it.
+   *
+   * Every previous version of the concurrency notice was suppressed by a
+   * mutation's `isPending` flag, and every one of them was found false in a
+   * state where that flag was the wrong one or had already cleared. The suite
+   * could not see any of it because `stubApi` answers in a microtask, which
+   * closes the window before React renders inside it. These tests hold the GET
+   * open so the window is a real interval.
+   */
+  const gatedApi = (
+    routes: readonly { url: string; method?: string; body: unknown; status?: number }[],
+  ) => {
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    let gate: Promise<void> | null = null;
+    let open: (() => void) | null = null;
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? 'GET';
+        calls.push({
+          url,
+          method,
+          body: typeof init?.body === 'string' ? JSON.parse(init.body) : null,
+        });
+        if (method === 'GET' && gate !== null) await gate;
+        // A route may pin the METHOD as well as the path. `POST /panels/:id`
+        // and `GET /panels/:id` are the same path, so a stub that routes on the
+        // URL alone answers a save with the detail body and a refetch with the
+        // save's — which is how a test meant to fail a refetch quietly stopped
+        // failing anything.
+        const matches = routes.filter(
+          (route) => url.includes(route.url) && (route.method ?? method) === method,
+        );
+        const route = matches.sort((a, b) => b.url.length - a.url.length)[0];
+        const body =
+          route === undefined
+            ? {
+                error: {
+                  kind: 'not_found',
+                  code: 'test.unrouted',
+                  message: url,
+                  correlationId: 'test',
+                },
+              }
+            : route.body;
+        return new Response(JSON.stringify(body), {
+          status: route === undefined ? 404 : (route.status ?? 200),
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
+
+    return {
+      calls,
+      /** Hold every subsequent GET. */
+      hold() {
+        gate = new Promise<void>((resolve) => {
+          open = resolve;
+        });
+      },
+      release() {
+        open?.();
+        gate = null;
+        open = null;
+      },
+    };
+  };
+
+  /**
+   * The restore-with-rename path, which is the ONE flow where this operator's
+   * own write moves `basis` while the query still holds the row it replaced.
+   *
+   * Archiving releases a panel's name, so a restore can be refused 409
+   * `panel.name_taken`; the operator supplies a replacement, the write
+   * succeeds, and until the refetch lands `basis.name` is the new name while
+   * `panel.name` is the old one. Told as "somebody else changed this", that
+   * attributes the operator's own rename to a third party — inside a notice
+   * about concurrency, with no concurrency anywhere in the flow.
+   */
+  it('does not blame a third party for the rename the operator gave a restore', async () => {
+    const id = panel().id as string;
+    const detailRoute = {
+      url: `/panels/${id}`,
+      body: { panel: panel({ status: 'ARCHIVED' }) } as unknown,
+    };
+    const statusRoute = {
+      url: `/panels/${id}/status`,
+      body: {
+        error: {
+          kind: 'conflict',
+          code: 'panel.name_taken',
+          message: 'taken',
+          correlationId: 'test',
+        },
+      } as unknown,
+      status: 409,
+    };
+    const api = gatedApi([detailRoute, statusRoute]);
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    // The name this panel had was claimed by a live panel while it was archived.
+    fireEvent.click(screen.getByRole('button', { name: 'بازگردانی از بایگانی' }));
+    const replacement = await screen.findByLabelText('نام تازه برای بازگردانی');
+    fireEvent.change(replacement, { target: { value: 'Frankfurt B' } });
+
+    // The second restore succeeds and returns the row it stored — a row the
+    // detail query has not seen yet, and will not see until it refetches.
+    statusRoute.status = 200;
+    statusRoute.body = {
+      panel: panel({
+        name: 'Frankfurt B',
+        status: 'DISABLED',
+        updatedAt: '2026-02-02T00:00:00.000Z',
+      }),
+    };
+    api.hold();
+    fireEvent.click(screen.getByRole('button', { name: 'بازگردانی از بایگانی' }));
+
+    // Inside the held refetch: the write has landed, the query has not.
+    await waitFor(() => {
+      expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(2);
+    });
+    await waitFor(() => {
+      expect(api.calls.filter((call) => call.method === 'GET').length).toBeGreaterThan(1);
+    });
+    expect(screen.queryByText(/جای دیگری تغییر کرده/)).toBeNull();
+
+    // And it stays absent once the row the operator wrote actually arrives.
+    detailRoute.body = {
+      panel: panel({
+        name: 'Frankfurt B',
+        status: 'DISABLED',
+        updatedAt: '2026-02-02T00:00:00.000Z',
+      }),
+    };
+    api.release();
+    await screen.findByText('Frankfurt B');
+    expect(screen.queryByText(/جای دیگری تغییر کرده/)).toBeNull();
+  });
+
+  /**
+   * The same false accusation, reached with no mutation pending and no server
+   * misbehaviour — the background poll racing the write.
+   *
+   * A poll fetch issued BEFORE the save commits is still in flight when it
+   * does. `invalidateQueries` does not start a second request for a query that
+   * is already fetching; it awaits the one in flight. So `refresh()` — and with
+   * it `save.isPending`, which spans the awaited `onSuccess` — resolves on the
+   * PRE-WRITE row, and the cache holds it until the next poll ninety seconds
+   * later. `basis` is the row the operator just stored, `panel` is the row it
+   * replaced, and a rule that suppresses only "while our own write is settling"
+   * has already stopped suppressing.
+   *
+   * A failed refetch is NOT this case and needs no rule: `queryState` maps
+   * `isError` to the error state, so the form is not on screen to say anything.
+   */
+  it('does not accuse anybody when a poll in flight answers with the replaced row', async () => {
+    const id = panel().id as string;
+    const readRoute = {
+      url: `/panels/${id}`,
+      method: 'GET',
+      body: { panel: panel() } as unknown,
+      status: 200,
+    };
+    const writeRoute = {
+      url: `/panels/${id}`,
+      method: 'POST',
+      body: {
+        panel: panel({ name: 'Frankfurt mine', updatedAt: '2026-02-02T00:00:00.000Z' }),
+      } as unknown,
+    };
+    const api = gatedApi([readRoute, writeRoute]);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    // A poll goes out and does not come back yet.
+    api.hold();
+    await vi.advanceTimersByTimeAsync(95_000);
+    await waitFor(() => {
+      expect(api.calls.filter((call) => call.method === 'GET').length).toBeGreaterThan(1);
+    });
+
+    fireEvent.change(screen.getByLabelText('نام'), { target: { value: 'Frankfurt mine' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+
+    // The poll answers now, with the row the save replaced — and that is what
+    // `refresh()` was waiting on, so the write finishes on stale data.
+    api.release();
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'در حال ذخیره…' })).toBeNull();
+    });
+    expect((screen.getByLabelText('نام') as HTMLInputElement).value).toBe('Frankfurt mine');
+    expect(screen.queryByText(/جای دیگری تغییر کرده/)).toBeNull();
+    vi.useRealTimers();
+  });
+
+  /**
+   * A name the server will store unchanged is not an overwrite.
+   *
+   * `panelNameSchema` is `z.string().trim()`, so a draft that differs from the
+   * stored value only in surrounding whitespace stores the identical string.
+   * Warning about it sends the operator to "load the fresh value", which resets
+   * the whole form — the loss the warning exists to prevent, incurred to
+   * prevent a write that changes nothing.
+   */
+  it('does not call a name an overwrite when the server would trim it to the stored one', async () => {
+    const id = panel().id as string;
+    const route = { url: `/panels/${id}`, body: { panel: panel() } as unknown };
+    stubApi([route, { url: `/panels/${id}/status`, body: { panel: panel() } }]);
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    // Both administrators correct the name to the same value; the other one
+    // saved first, and this one typed a trailing space.
+    fireEvent.change(screen.getByLabelText('نام'), { target: { value: 'Frankfurt B ' } });
+    route.body = { panel: panel({ name: 'Frankfurt B' }) };
+    fireEvent.click(screen.getByRole('button', { name: 'غیرفعال‌سازی' }));
+
+    const notice = await screen.findByText(/جای دیگری تغییر کرده/);
+    expect(notice.textContent ?? '').not.toContain('بازنویسی می‌کند');
+  });
+
+  /**
+   * The `changedRemotely` term of `overwrites`, on its own.
+   *
+   * Without it, an ordinary edit to a field NOBODY else touched is called an
+   * overwrite as soon as some OTHER field has moved — the operator is told they
+   * are about to clobber a colleague on the one field they are the only one to
+   * have changed.
+   */
+  it('calls no overwrite on the field the operator alone changed', async () => {
+    const id = panel().id as string;
+    const route = { url: `/panels/${id}`, body: { panel: panel() } as unknown };
+    stubApi([route, { url: `/panels/${id}/status`, body: { panel: panel() } }]);
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    // This operator renames. Somebody else touches the BASE URL, not the name —
+    // and rewrites it to an EQUIVALENT spelling, so that field cannot become an
+    // overwrite under any single-term mutation and the assertion below is about
+    // the name term alone.
+    fireEvent.change(screen.getByLabelText('نام'), { target: { value: 'Frankfurt mine' } });
+    route.body = { panel: panel({ baseUrl: 'https://panel.example:443/api' }) };
+    fireEvent.click(screen.getByRole('button', { name: 'غیرفعال‌سازی' }));
+
+    const notice = await screen.findByText(/جای دیگری تغییر کرده/);
+    expect(notice.textContent ?? '').not.toContain('بازنویسی می‌کند');
+  });
+
+  /**
+   * A draft that is not yet a URL falls back to comparing the text.
+   *
+   * `new URL()` throws on a half-typed address, and the catch decides what a
+   * comparison the operator's keystrokes have made impossible should answer.
+   * Answering "identical" suppresses a real overwrite warning; answering
+   * "different" raises one against a value the operator has not finished
+   * typing. It compares the raw text, which is right in both directions.
+   */
+  it('compares a half-typed base URL as text rather than guessing', async () => {
+    const id = panel().id as string;
+    const route = { url: `/panels/${id}`, body: { panel: panel() } as unknown };
+    stubApi([route, { url: `/panels/${id}/status`, body: { panel: panel() } }]);
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    // Not parseable by `new URL`, and not the stored value either: a real
+    // overwrite, mid-keystroke.
+    fireEvent.change(screen.getByLabelText('نشانی پایه'), { target: { value: 'panel.example' } });
+    route.body = { panel: panel({ baseUrl: 'https://moved.example/api' }) };
+    fireEvent.click(screen.getByRole('button', { name: 'غیرفعال‌سازی' }));
+
+    const notice = await screen.findByText(/جای دیگری تغییر کرده/);
+    expect(notice.textContent ?? '').toContain('بازنویسی می‌کند');
+  });
+
+  /**
+   * A viewer without `panels.edit` gets the notice and no writable control.
+   *
+   * Both halves matter and neither had a test. The notice is the only signal
+   * that the row moved and carries the only control that re-syncs the draft, so
+   * gating it on write access left a viewer looking at values that had silently
+   * gone stale. And `mayWrite` folding in `mayEdit` is what keeps the two text
+   * fields and the Save button off their screen — without it this page offers a
+   * `panels.view` actor a write the server will refuse.
+   */
+  it('tells a viewer the row moved without offering them a write', async () => {
+    const id = panel().id as string;
+    const route = { url: `/panels/${id}`, body: { panel: panel() } as unknown };
+    stubApi([route]);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPage(<PanelDetailPage id={id} mayEdit={false} mayRotate={false} denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    expect(screen.getByLabelText('نام')).toBeDisabled();
+    expect(screen.getByLabelText('نشانی پایه')).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'ذخیره' })).toBeNull();
+
+    // A viewer has no lifecycle control to force a refetch with, so the only
+    // way a concurrent change reaches their open page is the 90-second poll —
+    // which is also the only way it reaches anybody who is not writing.
+    route.body = { panel: panel({ name: 'Renamed by somebody else' }) };
+    await vi.advanceTimersByTimeAsync(95_000);
+    const notice = await screen.findByText(/جای دیگری تغییر کرده/);
+    // Nothing about saving, and nothing about an edit they never began.
+    expect(notice.textContent ?? '').not.toContain('بازنویسی می‌کند');
+    expect(notice.textContent ?? '').not.toContain('تنها فیلدهایی را می‌فرستد');
+    expect(notice.textContent ?? '').not.toContain('ویرایش شما');
+    expect(screen.getByRole('button', { name: 'گرفتن مقدار تازه' })).toBeInTheDocument();
+    vi.useRealTimers();
   });
 });
 

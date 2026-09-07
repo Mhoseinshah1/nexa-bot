@@ -1640,6 +1640,15 @@ is no self-inflicted false positive to hide; and the one path that does adopt �
 a restore carrying a replacement name — runs while the panel is still ARCHIVED,
 where `mayWrite` is false and the notice is not rendered at all.
 
+> **That last sentence was false when it was written, and round 22 removes the
+> rule it was used to justify.** The same commit that wrote it also stopped
+> gating the notice on `mayWrite` — so on the restore-with-rename path the
+> notice IS rendered, and it was rendered saying somebody else had made the
+> rename the operator had just supplied. The claim and its refutation were
+> committed together, in two files a hundred lines apart. See round 22.
+> `apps/web/src/pages/panels.tsx` carried the identical sentence in a comment
+> and it is gone with the rule.
+
 ## The round was named after an expression it did not test
 
 Round 20's table had one mutation per term of `willOverwrite` and one for
@@ -1692,3 +1701,198 @@ That is the fifth mutation this session that killed nothing on its first run,
 and the second where the test itself had to be repaired twice before it could
 discriminate. The count is worth keeping precisely because each one looked like
 a finished test.
+
+---
+
+# Round 22 — the same false accusation, from the two directions round 21 opened
+
+A thirteenth reviewer confirmed round 21's fix reintroduced, for the **sixth
+consecutive round**, the defect every one of those rounds was written to remove:
+the panel form telling an operator that somebody else had changed a row when
+nobody had. Round 21 removed BOTH guards that were independently suppressing it
+— `status.isPending` left `settling`, and the notice stopped being gated on
+`mayWrite` — and each removal was defensible on its own. Together they were not.
+
+## Why six rounds of this
+
+Every one of those fixes suppressed the notice on **a mutation's `isPending`
+flag**, and every one was falsified in a state where the flag was the wrong one
+or had already cleared. That is not six people getting the same thing wrong; it
+is one wrong question asked six times.
+
+`remote` compares `basis` against `panel`. Those two values arrive on different
+clocks: `basis` moves the moment a write answers, `panel` only when the query
+refetches. So every write opens a window in which the operator's own new value
+is compared against the old one the query still holds. A pending flag is a
+_proxy_ for that window, and it is wrong at both ends:
+
+- it covers requests that open no window (`status.isPending` across a Disable,
+  which adopts nothing) — so a stalled POST hid a genuine warning with no bound,
+  and the "load the fresh value" link that is the only escape lives inside the
+  suppressed notice;
+- and it stops covering while the window is still open.
+
+Two states prove the second half, and both are reproduced in the suite:
+
+1. **Restore under a replacement name.** `status.onSuccess` moves `basis.name`
+   to the row the server stored. `panel.status` comes only from the query, so
+   for the width of the awaited refetch the panel is still ARCHIVED, `mayWrite`
+   is false, and — since round 21 un-gated the notice — the read-only string
+   renders, telling the operator a third party made the rename they had just
+   typed. Its only control is `adopt(panel)` with the **stale** cached row, so
+   pressing it reverts the field to the name the server had already refused as
+   taken and makes the notice permanent.
+2. **A poll racing the write.** `invalidateQueries` does not supersede a fetch
+   already in flight; it awaits it. A poll issued before the save commits is
+   what `refresh()` — and with it `save.isPending`, which spans the awaited
+   `onSuccess` — resolves on. The cache is left holding the row the save
+   REPLACED, until the next poll ninety seconds later, with no mutation pending
+   at any point. No server misbehaviour is required.
+
+## The rule that replaces the flag
+
+The window is not "a request is in progress". It is "the query has not
+delivered my write yet" — so ask that:
+
+```ts
+const behind = written !== null && Date.parse(panel.updatedAt) < Date.parse(written);
+const changedElsewhere = !behind && (remote.name || remote.baseUrl);
+```
+
+`written` is the newest revision this session's own writes have stored, set in
+the two `onSuccess` handlers that move `basis` and nowhere else. `update` and
+`setStatus` both stamp `updatedAt` from the `Clock` and return the row they
+wrote (`drizzle-panel.repository.ts:290`, `:332`), so a query row older than
+that revision predates this operator's write and nothing else can. It closes on
+its own terms rather than a flag's, and a genuine concurrent change — which is
+necessarily NEWER — is never suppressed by it.
+
+`settling` is gone. It is not a second guard beside the new one; it is the
+proxy the new rule replaces.
+
+## What the reviewer found that was NOT a defect
+
+The reviewer also reported that a **failed** refetch after a successful save
+produces the same false accusation. It does not: `queryState` maps `isError` to
+the error state, so the form is not on screen to say anything. Reproducing it
+required routing GET and POST to the same stub response — which is the same
+URL-only routing collision that made the first version of this round's own test
+pass for the wrong reason. Recorded as disproved rather than fixed, and the test
+that would have covered it was rewritten to cover the poll race instead, which
+is reachable.
+
+## A fixture that was not modelling this server
+
+`does not accuse anybody while the operator own write is still settling` failed
+under the new rule until its fixture was corrected. It returned the write's
+answer with the **same** `updatedAt` as the read — a server that does not stamp
+its writes. The correction is toward the real server, not away from the test:
+the rule is now sensitive to something the fixtures have to get right, which is
+a property to want.
+
+## The mutations
+
+Eleven, each killing a **distinct** set of tests, so the suite can tell the
+versions of these expressions apart rather than merely noticing that one of them
+matters.
+
+| #   | rule                                                        | mutation                                | tests that die                                                                                                                                                                                                                                       |
+| --- | ----------------------------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| U55 | the notice waits for the query to deliver our own write     | `behind` → `false`                      | `panels.test.tsx` › does not accuse anybody while the operator own write is still settling; › does not blame a third party for the rename the operator gave a restore; › does not accuse anybody when a poll in flight answers with the replaced row |
+| U56 | a restore that renames records the revision it stored       | drop `setWritten` in `status.onSuccess` | `panels.test.tsx` › does not blame a third party for the rename the operator gave a restore                                                                                                                                                          |
+| U57 | an identity save records the revision it stored             | drop `setWritten` in `save.onSuccess`   | `panels.test.tsx` › does not accuse anybody while the operator own write is still settling; › does not accuse anybody when a poll in flight answers with the replaced row                                                                            |
+| U58 | a viewer is told the row moved                              | `changedElsewhere && mayEdit`           | `panels.test.tsx` › tells a viewer the row moved without offering them a write                                                                                                                                                                       |
+| U59 | a viewer is offered no identity write                       | `mayWrite` drops `mayEdit`              | `panels.test.tsx` › tells a viewer the row moved without offering them a write                                                                                                                                                                       |
+| U60 | a name is compared the way `panelNameSchema` trims it       | `a.trim() === b.trim()` → `a === b`     | `panels.test.tsx` › does not call a name an overwrite when the server would trim it to the stored one                                                                                                                                                |
+| U61 | only a field somebody ELSE moved can be overwritten         | drop `changedRemotely`                  | `panels.test.tsx` › does not revert a concurrent rename when only the other field was edited; › calls no overwrite on the field the operator alone changed                                                                                           |
+| U62 | a half-typed base URL is not the stored value               | `sameUrl` catch → `true`                | `panels.test.tsx` › compares a half-typed base URL as text rather than guessing                                                                                                                                                                      |
+| U63 | only a field the save CARRIES can be overwritten            | drop `draft !== base`                   | `panels.test.tsx` › does not revert a concurrent rename when only the other field was edited                                                                                                                                                         |
+| U64 | an identical correction replaces nothing                    | drop `!same(draft, stored)`             | `panels.test.tsx` › does not call an identical correction an overwrite; › does not call an equivalent url an overwrite; › does not call a name an overwrite when the server would trim it to the stored one                                          |
+| U65 | a viewer is not told an edit they never began has been lost | restore the `ویرایش شما` wording        | `panels.test.tsx` › tells a viewer the row moved without offering them a write                                                                                                                                                                       |
+
+U61, U63 and U64 are the three terms of `overwrites`. They do not each kill a
+single distinct test — two independent fields share one disjunction, so a
+dropped term can fire through either — but their failure SETS are distinct,
+which is the property that matters: no two versions of that expression look the
+same to the suite.
+
+## One branch that is asserted to be unreachable rather than tested
+
+`sameUrl`'s catch returns `a === b`, and only the `false` answer is reachable
+against this server: `b` is `panel.baseUrl`, which the server writes as
+`new URL(raw).toString()`, so it always parses, and an `a` that does not parse
+is never equal to it. U62 covers the reachable answer. The equality is kept —
+the contract types `baseUrl` as `z.string()`, so a row that ever held something
+else deserves the right answer — and is recorded here as untested-because-
+unreachable rather than covered by a test that would pass for the wrong reason.
+
+## Two false statements removed rather than argued with
+
+- `panels.tsx` claimed the restore-with-rename path "runs while the panel is
+  still ARCHIVED, where `mayWrite` is false and the notice is not rendered at
+  all", in the same commit that made the notice render regardless of `mayWrite`.
+  This document repeated it. Both are gone.
+- `tests/web/panels.test.tsx`'s archived-panel test opened with "An ARCHIVED
+  panel has no Save button **and no inputs**", nine lines above its own body
+  comment saying the disabled inputs are still on screen. That false premise is
+  what an earlier round used to argue the notice could be dropped there.
+
+## The count
+
+Six of this session's mutations killed nothing on their first run; none of
+round 22's did. Three tests in this round failed before the fix and pass after
+it — the two reproductions above and the read-only wording — and the fourth
+change to the suite was correcting a fixture, not adding an assertion.
+
+## The check that was green because it had stopped looking
+
+Writing round 22's table turned `check:falsification-citations` green at **the
+same count as before the table existed** — 124, unchanged, with eleven new rows
+in the record. `CITATION_HEADERS` held `test that dies` and not `tests that
+die`, so the whole table was not a citation table as far as the check was
+concerned, and every row in it was skipped in silence.
+
+That is the disease named in this script's own opening comment, for the second
+time in the same script: _a checker that decides for itself what to ignore is a
+checker that can be green and wrong._ Adding the plural fixes one table. Three
+things were done instead, so the class is closed:
+
+1. the plural is recognised, and a cell may cite **several** tests — one
+   mutation killing three is stronger evidence than naming one of them, but only
+   if all three are checked;
+2. a header row whose last column mentions a test and is **not** recognised is a
+   failure now, not a skip, so the next round that invents a fourth spelling
+   gets a red run;
+3. a continuation citation (`› second name`) inherits the FILE of the citation
+   before it. It had been inheriting the empty string, which `endsWith('')`
+   matches for every test file in the tree — so a continuation naming a test
+   that lives somewhere else entirely resolved, against the rule stated twenty
+   lines below it in the same file.
+
+| #   | rule                                                       | mutation                                                                                           | what the check prints                                                   |
+| --- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| U66 | every citation in a multi-test cell is checked             | rename the third citation of U55 to an absent test                                                 | `check-falsification-citations.mjs` exits 1: `a test nobody ever wrote` |
+| U67 | an unrecognised test-column header fails rather than skips | record header → `tests which die`                                                                  | `check-falsification-citations.mjs` exits 1: unrecognised header        |
+| U68 | the plural header is load-bearing                          | drop `'tests that die'` from `CITATION_HEADERS`                                                    | `check-falsification-citations.mjs` exits 1: unrecognised header        |
+| U70 | a continuation resolves in the file its row NAMES          | continuation → `counts each panel exactly once per breakdown`, a real test in `dashboard.test.tsx` | `check-falsification-citations.mjs` exits 1: `(panels.test.tsx)`        |
+
+These four rows cite a SCRIPT rather than a test, so this table's last column is
+headed `what the check prints` and the check does not read it — deliberately: a
+citation table that cited its own checker would be the check asserting itself.
+
+That header was `tests that die` first, and the check refused the table
+immediately, on the same run that added it: four rows in a citation table naming
+no test. Which is the check doing the job the rest of this section is about, to
+the section that describes it.
+
+The guard in (2) was wrong on its first attempt in the way these guards usually
+are — too eager rather than too lax. It tested the last cell of EVERY row of a
+non-citation table, so `a real test in dashboard.test.tsx`, an ordinary sentence
+in an ordinary data row of the table above, was reported as a misspelled header.
+A table declares its columns in the row above the separator and nowhere else, so
+that is where the decision is made now.
+
+U69 is not in the table because it proved nothing the others do not: it renamed
+a continuation to a string absent everywhere, which U66 already covers. It is
+named here rather than renumbered so the labels in this document keep matching
+the order they were run in.

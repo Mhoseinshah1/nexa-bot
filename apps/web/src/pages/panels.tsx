@@ -515,6 +515,13 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
   const [basis, setBasis] = useState(panel);
   const [name, setName] = useState(panel.name);
   const [baseUrl, setBaseUrl] = useState(panel.baseUrl);
+  /**
+   * The newest revision THIS session's own writes have stored.
+   *
+   * Declared here with the rest of the draft state, and read by `behind` below,
+   * where the rule it exists for is written out.
+   */
+  const [written, setWritten] = useState<string | null>(null);
   const submission = useSubmissionKey();
   const statusSubmission = useSubmissionKey();
 
@@ -578,7 +585,23 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     try {
       return new URL(a).toString() === new URL(b).toString();
     } catch {
-      // Not a URL yet — the operator is still typing. Fall back to the text.
+      /*
+       * Not a URL yet — the operator is still typing. Compare the text.
+       *
+       * Only ONE of this branch's two answers is reachable against this server,
+       * and the falsification record says so rather than carrying a test that
+       * would pass for the wrong reason. `b` is `panel.baseUrl`, which the
+       * server writes as `new URL(raw).toString()`, so it always parses; the
+       * throw is always `a`, and an `a` that does not parse is never equal to a
+       * `b` that does. The equality is therefore `false` in every state this
+       * server can produce, and the reachable rule — a half-typed address is
+       * NOT the stored value, so a warning is owed — is what the suite covers.
+       *
+       * It is written as a comparison rather than `false` because the contract
+       * types `baseUrl` as `z.string()`, not a URL: if a row ever holds
+       * something else, an operator who retypes it exactly has overwritten
+       * nothing, and this answers that correctly instead of accusing them.
+       */
       return a === b;
     }
   };
@@ -625,8 +648,11 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     onSuccess: async (result) => {
       submission.settle();
       // The basis follows what was actually stored, so the next edit is
-      // compared against the row this operator just wrote.
+      // compared against the row this operator just wrote — and `written`
+      // records WHICH revision that is, so the query being behind it is not
+      // read as somebody else's change.
       adopt(result.panel);
+      setWritten(result.panel.updatedAt);
       toast({ tone: 'ok', message: t('web.saved') });
       await refresh();
     },
@@ -674,6 +700,7 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
       if (command.name !== undefined) {
         setBasis((current) => ({ ...current, name: result.panel.name }));
         setName(result.panel.name);
+        setWritten(result.panel.updatedAt);
       }
       toast({ tone: 'ok', message: t('web.saved') });
       await refresh();
@@ -702,42 +729,47 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
   });
 
   /**
-   * Not while OUR OWN write is settling.
+   * Not until the query has caught up with THIS operator's own write.
    *
-   * `save` and `status` adopt the row they were handed before `refresh()`
-   * resolves, so for the width of that round trip `basis` holds the new values
-   * and `panel` still holds the old ones — which reads as a concurrent change.
-   * The suite could not see it because the stub resolves in a microtask; with
-   * any real latency the operator got "somebody else changed this" on top of
-   * their own "saved" toast, and on the restore-with-rename path the notice was
-   * blaming them for the rename they had just chosen.
+   * `remote` compares two values that arrive on different clocks: `basis` moves
+   * the moment a write answers, `panel` only when the query refetches. Every
+   * write therefore opens a window in which the operator's own new value is
+   * being compared against the old one the query still holds — which reads as
+   * somebody else's change, on top of their own "saved" toast.
    *
-   * ONE flag, and the two that were here before it are both instructive.
+   * Six rounds tried to close that window with a mutation's `isPending` flag,
+   * and every one of them was falsified in a state where the flag was the wrong
+   * one or had already cleared:
    *
-   * `isFetching` was redundant and dangerous: `refresh()` is awaited INSIDE
-   * `onSuccess`, so `isPending` already spans the refetch — and `isFetching` is
-   * true for the 90-second background poll too, so a genuine concurrent change
-   * that had already been detected and drawn was un-drawn for the width of
-   * every poll, and indefinitely while one stalled.
+   * - `isFetching` is true for the 90-second poll too, so a REAL concurrent
+   *   change that had been detected and drawn was un-drawn for the width of
+   *   every poll, and indefinitely while one stalled.
+   * - `status.isPending` suppressed the notice across a Disable, Enable or
+   *   Archive round trip while the Save button — disabled by `save.isPending`
+   *   and nothing else — stayed live, so a stalled status POST hid a genuine
+   *   warning with no bound, and the "load the fresh value" link that is the
+   *   only escape lives INSIDE the suppressed notice.
+   * - `save.isPending` alone leaves the restore-with-rename path, which is the
+   *   OTHER write that moves `basis`, uncovered — the operator was told a third
+   *   party had made the rename they had just supplied themselves.
+   * - and any of them clears while the window is still open: a poll fetch
+   *   already in flight when the write commits is what `invalidateQueries`
+   *   awaits rather than superseding, so `refresh()` returns having installed
+   *   the row the save REPLACED, and the cache holds it until the next poll.
    *
-   * `status.isPending` was the same defect wearing the fix's own name. Save is
-   * disabled by `save.isPending` and by nothing else, so across a Disable,
-   * Enable or Archive round trip the notice was suppressed while the Save
-   * button stayed live — a stalled status POST (no timeout, no abort in
-   * `client.ts`) hid the warning with no bound, and the "load the fresh value"
-   * link that is the only escape lives INSIDE the notice being suppressed.
+   * The window is not "a request is in progress"; it is "the query has not
+   * delivered my write yet". So ask that directly. `update` and `setStatus`
+   * both stamp `updatedAt` from the Clock and return the row they wrote, so a
+   * query row older than the newest one this session stored is by definition a
+   * row that predates it — and nothing else can be.
    *
-   * It bought nothing either. Those three commands adopt NOTHING, so there is
-   * no self-inflicted false positive to hide; and the one path that does adopt
-   * — a restore carrying a replacement name — runs while the panel is still
-   * ARCHIVED, where `mayWrite` is false and the notice is not rendered at all.
-   *
-   * `save.isPending` is safe for exactly the reason the other two were not: it
-   * disables the button in the same breath, so no write is reachable inside the
-   * window it suppresses.
+   * It closes on its own terms rather than a flag's: the moment the query
+   * delivers a row at or after that revision the comparison is between two
+   * values of the same age, and a genuine concurrent change — necessarily
+   * NEWER than this operator's write — is never suppressed by it.
    */
-  const settling = save.isPending;
-  const changedElsewhere = !settling && (remote.name || remote.baseUrl);
+  const behind = written !== null && Date.parse(panel.updatedAt) < Date.parse(written);
+  const changedElsewhere = !behind && (remote.name || remote.baseUrl);
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();

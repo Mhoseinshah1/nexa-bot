@@ -173,8 +173,17 @@ export const WEB_FA = {
    * save; the reload link is the point, and gating the whole notice on write
    * access took away both the only signal that the row had moved and the only
    * control that re-syncs the draft.
+   *
+   * And no claim about an EDIT either. The two other strings are addressed to
+   * somebody who opened a form and typed in it; a `panels.view` actor reading
+   * this one never began an edit, so "since your edit started" is a false
+   * statement about the reader — the same class of untruth as the rest of this
+   * notice's history, pointed at the one audience that cannot act on it. What
+   * is true for both audiences is that the values on screen are older than the
+   * row.
    */
-  'web.changed_elsewhere_readonly': 'این ردیف پس از آغاز ویرایش شما جای دیگری تغییر کرده است.',
+  'web.changed_elsewhere_readonly':
+    'این ردیف جای دیگری تغییر کرده است و مقدارهای روی صفحه از پیش از آن تغییر هستند.',
   'web.changed_elsewhere_untouched':
     'این ردیف پس از آغاز ویرایش شما جای دیگری تغییر کرده است. ذخیره‌کردن تنها فیلدهایی را می‌فرستد که خودتان تغییر داده‌اید.',
   'web.reload_value': 'گرفتن مقدار تازه',
