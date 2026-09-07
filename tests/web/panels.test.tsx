@@ -841,7 +841,7 @@ describe('the panel detail', () => {
   it('promises an overwrite only when the save will actually make one', async () => {
     const id = panel().id as string;
     const route = { url: `/panels/${id}`, body: { panel: panel() } as unknown };
-    stubApi([route, { url: `/panels/${id}/status`, body: { panel: panel() } }]);
+    const api = stubApi([route, { url: `/panels/${id}/status`, body: { panel: panel() } }]);
     renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
 
@@ -852,6 +852,89 @@ describe('the panel detail', () => {
 
     const notice = await screen.findByText(/جای دیگری تغییر کرده/);
     expect(notice.textContent ?? '').toContain('بازنویسی می‌کند');
+
+    // ...and the save WILL make one. Asserting the message alone left the
+    // "will actually make one" half of this test's own name unproved: mutating
+    // `onSubmit` to drop `name` from the command left it green, still promising
+    // an overwrite the request no longer carries.
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+    await waitFor(() => {
+      const write = api.calls.find(
+        (call) => call.method === 'POST' && call.url.endsWith(`/panels/${id}`),
+      );
+      expect((write?.body as Record<string, unknown> | undefined)?.['name']).toBe('Frankfurt mine');
+    });
+  });
+
+  /**
+   * A status command in flight must NOT hide a concurrent change.
+   *
+   * `settling` suppresses the notice so our own write cannot be reported as
+   * somebody else's. `save.isPending` is safe for that because it disables the
+   * Save button in the same breath. `status.isPending` is not: Save stays live
+   * across a Disable/Enable/Archive round trip, and `client.ts` sets no timeout
+   * and no abort — so a stalled status POST hid a correct warning with no
+   * bound, while the button it was warning about was still pressable.
+   */
+  it('keeps warning about a concurrent change while a status command is in flight', async () => {
+    const id = panel().id as string;
+    const gate: { release: () => void } = { release: () => undefined };
+    const held = new Promise<void>((resolve) => {
+      gate.release = resolve;
+    });
+    let stored = panel();
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init?: RequestInit) => {
+        const url = String(input);
+        calls.push(url);
+        const json = (body: unknown) =>
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        if (url.includes('/status')) {
+          // Held open: this is the window the notice must survive.
+          await held;
+          return json({ panel: stored });
+        }
+        if (url.endsWith(`/panels/${id}`) && (init?.method ?? 'GET') === 'GET') {
+          return json({ panel: stored });
+        }
+        return json({ panel: stored });
+      }),
+    );
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    fireEvent.change(screen.getByLabelText('نام'), { target: { value: 'Frankfurt mine' } });
+
+    // Somebody else renames it, and the 90-second poll brings it in — which is
+    // how a concurrent change actually reaches an open form.
+    stored = panel({ name: 'Renamed by somebody else' });
+    await vi.advanceTimersByTimeAsync(95_000);
+    await screen.findByText(/جای دیگری تغییر کرده/);
+
+    // Now the operator presses Disable, and that request never answers.
+    fireEvent.click(screen.getByRole('button', { name: 'غیرفعال‌سازی' }));
+    // WAIT for it to actually be in flight. Asserting straight after the click
+    // reads the render before `isPending` has flushed, so the notice is still
+    // on screen for a reason that has nothing to do with the rule — which is
+    // why the first version of this test could not be killed by re-adding
+    // `status.isPending`.
+    await waitFor(() => {
+      expect(calls.some((call) => call.includes('/status'))).toBe(true);
+    });
+
+    // The warning must still be there, and Save — which is still enabled —
+    // must still be the thing it warns about.
+    const notice = await screen.findByText(/جای دیگری تغییر کرده/);
+    expect(notice.textContent ?? '').toContain('بازنویسی می‌کند');
+    expect(screen.getByRole('button', { name: 'ذخیره' })).toBeEnabled();
+    gate.release();
+    vi.useRealTimers();
   });
 
   /**
@@ -902,7 +985,39 @@ describe('the panel detail', () => {
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: 'ذخیره' })).toBeNull();
     });
-    expect(screen.queryByText(/جای دیگری تغییر کرده/)).toBeNull();
+    // The notice STAYS — it is the only thing that says the row moved, and the
+    // only control that re-syncs the draft, and the disabled inputs are still
+    // on screen holding the operator's text. What it must not do is say
+    // anything about saving, because there is no save.
+    const notice = await screen.findByText(/جای دیگری تغییر کرده/);
+    expect(notice.textContent ?? '').not.toContain('بازنویسی می‌کند');
+    expect(notice.textContent ?? '').not.toContain('تنها فیلدهایی را می‌فرستد');
+    expect(screen.getByRole('button', { name: 'گرفتن مقدار تازه' })).toBeInTheDocument();
+  });
+
+  /**
+   * A base URL corrected to an equivalent spelling is not an overwrite.
+   *
+   * `validateUrl` stores `new URL(...).toString()`, so `:443` and the implicit
+   * default port are the same stored value. Comparing raw text warned two
+   * administrators making the same correction about each other, and the escape
+   * from that warning resets the whole form.
+   */
+  it('does not call an equivalent url an overwrite', async () => {
+    const id = panel().id as string;
+    const route = { url: `/panels/${id}`, body: { panel: panel() } as unknown };
+    stubApi([route, { url: `/panels/${id}/status`, body: { panel: panel() } }]);
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    fireEvent.change(screen.getByLabelText('نشانی پایه'), {
+      target: { value: 'https://panel.example:443/v2' },
+    });
+    route.body = { panel: panel({ baseUrl: 'https://panel.example/v2' }) };
+    fireEvent.click(screen.getByRole('button', { name: 'غیرفعال‌سازی' }));
+
+    const notice = await screen.findByText(/جای دیگری تغییر کرده/);
+    expect(notice.textContent ?? '').not.toContain('بازنویسی می‌کند');
   });
 
   /**

@@ -167,6 +167,14 @@ export const WEB_FA = {
    * resets the WHOLE form, and threw away their own unsaved edit to avoid a
    * loss that could not have happened.
    */
+  /*
+   * The row moved, and this operator cannot save at all — an ARCHIVED panel, or
+   * a viewer without `panels.edit`. No claim about saving, because there is no
+   * save; the reload link is the point, and gating the whole notice on write
+   * access took away both the only signal that the row had moved and the only
+   * control that re-syncs the draft.
+   */
+  'web.changed_elsewhere_readonly': 'این ردیف پس از آغاز ویرایش شما جای دیگری تغییر کرده است.',
   'web.changed_elsewhere_untouched':
     'این ردیف پس از آغاز ویرایش شما جای دیگری تغییر کرده است. ذخیره‌کردن تنها فیلدهایی را می‌فرستد که خودتان تغییر داده‌اید.',
   'web.reload_value': 'گرفتن مقدار تازه',

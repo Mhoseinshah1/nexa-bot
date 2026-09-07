@@ -1,4 +1,4 @@
-import { afterEach, expect } from 'vitest';
+import { afterEach, expect, vi } from 'vitest';
 import { cleanup } from '@testing-library/react';
 import * as matchers from '@testing-library/jest-dom/matchers';
 
@@ -59,4 +59,12 @@ if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
 
 afterEach(() => {
   cleanup();
+  /*
+   * `restoreMocks` restores `vi.spyOn` and NOT `vi.stubGlobal`, and
+   * `unstubGlobals` is not set — so a stubbed `fetch` survived into the next
+   * test and was displaced only because every following test happened to stub
+   * one first. One of those stubs resolves a held promise after its own test
+   * has returned. Latent, and exactly the kind of invariant nothing enforces.
+   */
+  vi.unstubAllGlobals();
 });

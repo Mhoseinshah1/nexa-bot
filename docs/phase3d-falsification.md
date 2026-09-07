@@ -1620,3 +1620,75 @@ Round 19's table had ONE mutation for `settling`, and the reviewer showed it
 could not distinguish the three disjuncts: dropping `refreshing` alone left
 44/44 green, which is how the defect got in. A conjunction or disjunction needs
 one mutation per term, and this round's table has them.
+
+# Round 21 — the fix left the defect in, under the other flag
+
+A twelfth reviewer found that round 20 removed `isFetching` from `settling` and
+left `status.isPending`, which is the same defect with a different name.
+
+`save.isPending` is safe to suppress on because `save.isPending` also DISABLES
+the Save button — no write is reachable inside the window it hides.
+`status.isPending` disables nothing: across a Disable, Enable or Archive round
+trip the notice was gone while Save stayed live, and a stalled status POST (no
+timeout, no abort in `client.ts`) hid a correct warning with no bound. The
+reviewer executed it: warning shown, Disable pressed, request never answers,
+warning gone, Save pressed, the write carries the stale name and clobbers the
+other administrator.
+
+It bought nothing, either. Disable, Enable and Archive adopt NOTHING, so there
+is no self-inflicted false positive to hide; and the one path that does adopt —
+a restore carrying a replacement name — runs while the panel is still ARCHIVED,
+where `mayWrite` is false and the notice is not rendered at all.
+
+## The round was named after an expression it did not test
+
+Round 20's table had one mutation per term of `willOverwrite` and one for
+`mayWrite`, and **none for `settling`** — the expression the round was named
+after. Re-adding the removed term left 250 of 250 green. The closing paragraph
+of that section states the rule — "a conjunction or disjunction needs one
+mutation per term" — and the table beneath it does not follow it for the one
+expression the round changed. That is the third time on this branch a lesson has
+been written down in the same commit that fails to apply it.
+
+## Gating the notice on `mayWrite` was itself a defect
+
+Round 20 moved the notice inside `mayWrite` because an archived panel has no
+Save button. But the inputs are DISABLED, not gone — they are still on screen
+holding the operator's draft — and the query keeps refreshing underneath. So
+hiding the notice removed both the only signal that the row had moved and the
+"load the fresh value" link that re-syncs it, for archived panels and for every
+viewer without `panels.edit`. The comment claiming the inputs were "gone"
+described the button, not the fields.
+
+The notice renders whenever the row moved now; only the CLAIM depends on
+`mayWrite`, and `web.changed_elsewhere_readonly` makes none.
+
+## And the comparison was against un-normalised text
+
+`draft !== stored` decided "this replaces something different" on raw text,
+while `panelNameSchema` trims and `validateUrl` stores
+`new URL(...).toString()`. Two administrators making the same base-URL
+correction in equivalent spellings — `https://p.example:443/v2` and
+`https://p.example/v2` — were warned they were overwriting each other, and the
+escape from that warning resets the whole form. Compared through the server's
+own normalisation now.
+
+## The mutations
+
+| #   | rule                                                   | mutation                  | test that dies                                                                                  |
+| --- | ------------------------------------------------------ | ------------------------- | ----------------------------------------------------------------------------------------------- |
+| U51 | a status command in flight does not hide a real change | re-add `status.isPending` | `panels.test.tsx` › keeps warning about a concurrent change while a status command is in flight |
+| U52 | our own identity save does not accuse anybody          | `settling` → `false`      | `panels.test.tsx` › does not accuse anybody while the operator own write is still settling      |
+| U53 | a read-only screen makes no claim about saving         | drop the `!mayWrite` arm  | `panels.test.tsx` › says nothing about saving a panel that can no longer be saved               |
+| U54 | equivalent URLs are not an overwrite                   | compare raw text          | `panels.test.tsx` › does not call an equivalent url an overwrite                                |
+
+**U51 killed nothing on its first two runs.** The first version of the test had
+no way for the concurrent change to reach the form — a rename with no refetch —
+and the second asserted immediately after the click, reading the render before
+`isPending` had flushed. Both passed for reasons unrelated to the rule. It kills
+now, having been made to wait for the request to be genuinely in flight.
+
+That is the fifth mutation this session that killed nothing on its first run,
+and the second where the test itself had to be repaired twice before it could
+discriminate. The count is worth keeping precisely because each one looked like
+a finished test.

@@ -556,11 +556,35 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
    * without it two administrators making the identical correction were warned
    * about each other.
    */
-  const overwrites = (draft: string, base: string, stored: string, changedRemotely: boolean) =>
-    changedRemotely && draft !== base && draft !== stored;
+  const overwrites = (
+    draft: string,
+    base: string,
+    stored: string,
+    changedRemotely: boolean,
+    same: (a: string, b: string) => boolean,
+  ) => changedRemotely && draft !== base && !same(draft, stored);
+  /*
+   * Compared the way the SERVER will compare them.
+   *
+   * `panelNameSchema` trims, and `validateUrl` stores `new URL(...).toString()`
+   * — so raw `!==` against the stored value decides "this replaces something
+   * different" on text the server would normalise to the same string. Two
+   * administrators making the same base-URL correction in equivalent spellings
+   * (`https://p.example:443/v2` and `https://p.example/v2`) were warned they
+   * were about to overwrite each other, and the escape from that warning resets
+   * the whole form.
+   */
+  const sameUrl = (a: string, b: string) => {
+    try {
+      return new URL(a).toString() === new URL(b).toString();
+    } catch {
+      // Not a URL yet — the operator is still typing. Fall back to the text.
+      return a === b;
+    }
+  };
   const willOverwrite =
-    overwrites(name, basis.name, panel.name, remote.name) ||
-    overwrites(baseUrl, basis.baseUrl, panel.baseUrl, remote.baseUrl);
+    overwrites(name, basis.name, panel.name, remote.name, (a, b) => a.trim() === b.trim()) ||
+    overwrites(baseUrl, basis.baseUrl, panel.baseUrl, remote.baseUrl, sameUrl);
 
   /**
    * Every identity control, not just the Save button.
@@ -688,17 +712,31 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
    * their own "saved" toast, and on the restore-with-rename path the notice was
    * blaming them for the rename they had just chosen.
    *
-   * The two mutation flags are the WHOLE rule. An earlier version also folded
-   * in the detail query's `isFetching`, which was redundant and dangerous:
-   * `refresh()` is awaited INSIDE `onSuccess`, so `isPending` already spans the
-   * refetch — and `isFetching` is true for the 90-second background poll too,
-   * so a genuine concurrent change that had already been detected and drawn
-   * was un-drawn for the width of every poll, and indefinitely while one
-   * stalled. `client.ts` sets no timeout and no abort, so that stall has no
-   * bound; Save stayed enabled, and the "load the fresh value" link that is the
-   * only way out lives INSIDE the notice being suppressed.
+   * ONE flag, and the two that were here before it are both instructive.
+   *
+   * `isFetching` was redundant and dangerous: `refresh()` is awaited INSIDE
+   * `onSuccess`, so `isPending` already spans the refetch — and `isFetching` is
+   * true for the 90-second background poll too, so a genuine concurrent change
+   * that had already been detected and drawn was un-drawn for the width of
+   * every poll, and indefinitely while one stalled.
+   *
+   * `status.isPending` was the same defect wearing the fix's own name. Save is
+   * disabled by `save.isPending` and by nothing else, so across a Disable,
+   * Enable or Archive round trip the notice was suppressed while the Save
+   * button stayed live — a stalled status POST (no timeout, no abort in
+   * `client.ts`) hid the warning with no bound, and the "load the fresh value"
+   * link that is the only escape lives INSIDE the notice being suppressed.
+   *
+   * It bought nothing either. Those three commands adopt NOTHING, so there is
+   * no self-inflicted false positive to hide; and the one path that does adopt
+   * — a restore carrying a replacement name — runs while the panel is still
+   * ARCHIVED, where `mayWrite` is false and the notice is not rendered at all.
+   *
+   * `save.isPending` is safe for exactly the reason the other two were not: it
+   * disables the button in the same breath, so no write is reachable inside the
+   * window it suppresses.
    */
-  const settling = save.isPending || status.isPending;
+  const settling = save.isPending;
   const changedElsewhere = !settling && (remote.name || remote.baseUrl);
 
   const onSubmit = (event: FormEvent) => {
@@ -786,19 +824,28 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
             administrator's rename instead.
           */}
           {/*
-            Inside `mayWrite`. On an ARCHIVED panel the Save button and both
-            inputs are gone and `PanelService.update` refuses with a 412, so a
-            notice about what saving will do describes a control that does not
-            exist and a request the server will not accept — which it did, when
-            another administrator archived and renamed the panel under an open
-            draft.
+            Always rendered when the row moved; only the CLAIM depends on
+            `mayWrite`.
+            
+            Gating the whole notice on write access was itself a defect: on an
+            ARCHIVED panel the inputs are disabled but still on screen holding
+            the operator's draft, the query keeps refreshing underneath, and
+            removing the notice took away both the only signal that the row had
+            moved and the "load the fresh value" link that re-syncs it. A viewer
+            without `panels.edit` lost the same thing.
+            
+            What must not be said to them is anything about saving: there is no
+            Save button, and `PanelService.update` refuses an archived panel
+            with a 412.
           */}
-          {mayWrite && changedElsewhere && (
+          {changedElsewhere && (
             <p className="notice">
               {t(
-                willOverwrite
-                  ? 'web.changed_elsewhere_overwrite'
-                  : 'web.changed_elsewhere_untouched',
+                !mayWrite
+                  ? 'web.changed_elsewhere_readonly'
+                  : willOverwrite
+                    ? 'web.changed_elsewhere_overwrite'
+                    : 'web.changed_elsewhere_untouched',
               )}{' '}
               <button type="button" className="link" onClick={() => adopt(panel)}>
                 {t('web.reload_value')}
