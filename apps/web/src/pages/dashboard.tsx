@@ -18,7 +18,7 @@ import {
   type Tone,
   type ViewState,
 } from '../ui/kit';
-import { pollUnlessFinal } from '../polling';
+import { finalAnswer, pollUnlessFinal } from '../polling';
 
 /**
  * One page of panels, at the contract's ceiling. `PANEL_PAGE_MAX` is the most
@@ -164,6 +164,7 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
           >
             <StateSwitch
               state={mayViewPanels ? queryState(panels) : 'denied'}
+              stale={staleAfterError(panels)}
               onRetry={() => void panels.refetch()}
               empty={<Empty title={t('web.dashboard_no_panels')} icon="panels" />}
             >
@@ -182,6 +183,7 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
           >
             <StateSwitch
               state={mayViewPanels ? queryState(panels) : 'denied'}
+              stale={staleAfterError(panels)}
               onRetry={() => void panels.refetch()}
               empty={<Empty title={t('web.dashboard_no_panels')} icon="panels" />}
             >
@@ -220,7 +222,20 @@ function AttentionCard({
     isPending: boolean;
     isError: boolean;
     refetch: () => unknown;
-    data?:
+    /*
+     * REQUIRED, though it may be `undefined`.
+     *
+     * The narrowed shape omitted it, and `queryState` accepting an optional
+     * `error` is what let that pass: this card would have decided a permanent
+     * refusal was worth waiting through while every other card on the page
+     * decided otherwise. Making the parameter required surfaced it at the type
+     * level the moment the rule changed, which is the whole argument for
+     * requiring it.
+     */
+    error: unknown;
+    // Required for the same reason, and `| undefined` rather than `?:` so the
+    // caller must actually have a query rather than a shape that resembles one.
+    data:
       | {
           events: readonly {
             id: string;
@@ -346,6 +361,11 @@ export function severityTone(severity: string): Tone {
 /**
  * The four view states, read off a react-query result.
  *
+ * `data` and `error` are REQUIRED, though either may be `undefined`. Optional,
+ * a caller that forgot one silently got a weaker rule — which is the exact
+ * mistake `sessionView` records against its own `error` parameter, made again
+ * here one release later.
+ *
  * `isError` alone is NOT the error state. TanStack Query sets `status: 'error'`
  * on a failed BACKGROUND refetch while `data` is still present, so mapping it
  * straight through replaced a working page with an error card on one transient
@@ -359,11 +379,27 @@ export function severityTone(severity: string): Tone {
  * is still the error state.
  */
 export function queryState(
-  query: { isPending: boolean; isError: boolean; data?: unknown },
+  query: { isPending: boolean; isError: boolean; data: unknown; error: unknown },
   isEmpty = false,
 ): ViewState {
   if (query.isPending) return 'loading';
-  if (query.isError && query.data === undefined) return 'error';
+  /*
+   * Data wins over a RETRYABLE error, and only over a retryable one.
+   *
+   * `sessionView` in `app.tsx` reached this rule two rounds earlier and says
+   * why in full: "the two rules have to agree about which failures are worth
+   * waiting through". The first version of this function did not agree. It let
+   * data win over EVERY error, and `pollUnlessFinal` stops the timer on exactly
+   * the ones it was ignoring — so a `panels.view` revoked mid-session, or a
+   * `ZodError` from a tab holding a previous release across a deploy, left the
+   * detail screen fully drawn: the tab strip, the editable identity form, the
+   * credential rotation form and the Test-connection button, all asserting
+   * capabilities the server had just refused, for ever, with no poll coming.
+   * That is the branch's central claim broken by the commit that widened this.
+   *
+   * A query that has never delivered anything still has nothing to show.
+   */
+  if (query.isError && (query.data === undefined || finalAnswer(query.error))) return 'error';
   return isEmpty ? 'empty' : 'ready';
 }
 
@@ -376,8 +412,12 @@ export function queryState(
  * remove — the legacy system's whole character — so the failure is stated
  * beside the data rather than drawn over the top of it.
  */
-export function staleAfterError(query: { isError: boolean; data?: unknown }): boolean {
-  return query.isError && query.data !== undefined;
+export function staleAfterError(query: {
+  isError: boolean;
+  data: unknown;
+  error: unknown;
+}): boolean {
+  return query.isError && query.data !== undefined && !finalAnswer(query.error);
 }
 
 export { Num };

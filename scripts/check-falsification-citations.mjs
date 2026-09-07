@@ -71,6 +71,22 @@ function sources(dir) {
  * however many phantom ones precede it — so the defect surfaced the moment the
  * citation column was addressed by index instead.
  */
+/**
+ * Every `it`/`test` title in a body of source.
+ *
+ * `it.each([...])('title', ...)` is allowed between the name and the string,
+ * and its titles carry printf placeholders — which is why a citation matches by
+ * PREFIX rather than equality.
+ */
+function titles(text) {
+  const found = [];
+  const pattern =
+    /\b(?:it|test)\s*(?:\.each\s*\([\s\S]*?\)\s*)?(?:\.(?:only|skip|concurrent|todo|fails))?\s*\(\s*(['"`])([\s\S]*?)\1/g;
+  let match;
+  while ((match = pattern.exec(text)) !== null) found.push(match[2]);
+  return found;
+}
+
 const cells = (row) =>
   row
     .replace(/^\||\|$/g, '')
@@ -163,9 +179,40 @@ let header = null;
 let column = -1;
 /** How many cells the current table's header declares. */
 let width = 0;
+/** Inside a fenced code block, where a pipe is illustration rather than data. */
+let fenced = false;
+/** Tables with no header/separator pair, in which nothing at all was checked. */
+const unstructured = [];
 
 for (const line of lines) {
+  /*
+   * A fenced block is prose, not a table.
+   *
+   * The record documents table SHAPES, and the moment one is written out
+   * properly inside a fence the check failed the run for a table making no
+   * claim at all. Two such lines already exist and escape only by not having a
+   * separator row under them, which is luck rather than a rule.
+   */
+  if (/^\s*```/.test(line)) {
+    fenced = !fenced;
+    inCitationTable = false;
+    header = null;
+    width = 0;
+    continue;
+  }
+  if (fenced) continue;
   if (!line.startsWith('|')) {
+    /*
+     * A blank line ENDS a table, and a table that ended without ever reaching a
+     * separator was never checked for anything.
+     *
+     * That was silent and it dropped rows wholesale: one blank line inserted
+     * mid-table took the count from 157 to 139 and still exited 0 — eighteen
+     * citations unverified, no warning. Third consecutive round in which this
+     * script skipped part of the record without saying so, which is precisely
+     * what its own opening comment forbids.
+     */
+    if (header !== null && width === 0) unstructured.push(header);
     inCitationTable = false;
     header = null;
     // A table's width dies with the table. Without this the HEADER row of the
@@ -202,11 +249,14 @@ for (const line of lines) {
      * positional escape that hid the record's largest table and would have hid
      * the next one written a column wider.
      */
-    if (
-      !inCitationTable &&
-      !declared.some((cell) => NON_CITING_HEADERS.includes(cell)) &&
-      declared.length > 0
-    ) {
+    if (header === null) {
+      // A separator with no header row above it. `declared` is empty, so every
+      // rule below silently does nothing — the declaration check, the width
+      // check and the citations all switch off for the rest of the table.
+      unstructured.push(line);
+      continue;
+    }
+    if (!inCitationTable && !declared.some((cell) => NON_CITING_HEADERS.includes(cell))) {
       unrecognised.push(header);
     }
     width = declared.length;
@@ -260,12 +310,32 @@ for (const line of lines) {
             .map(([, text]) => text)
             .join('\n');
     if (haystack === '') missing.push(`${cited.name}  (no such file: ${cited.file})`);
-    else if (!haystack.includes(needle))
+    // Matched against the TEST TITLES, not the file text.
+    //
+    // `includes` over the whole source made a `describe` name, a comment or a
+    // sentence of prose satisfy "resolves to a committed test" — and one row
+    // was doing exactly that. The guarantee this line prints has to be the one
+    // it checks.
+    // `includes` WITHIN a title, not within the file: an `it.each` title is
+    // `'%s is reachable at ...'`, so the citation names a suffix of it.
+    else if (!titles(haystack).some((title) => title.includes(needle)))
       missing.push(`${cited.name}  (${cited.file ?? 'any file'})`);
   }
 }
 
-if (missing.length > 0 || unparsed.length > 0 || unrecognised.length > 0 || malformed.length > 0) {
+if (
+  missing.length > 0 ||
+  unparsed.length > 0 ||
+  unrecognised.length > 0 ||
+  malformed.length > 0 ||
+  unstructured.length > 0
+) {
+  if (unstructured.length > 0) {
+    console.error(
+      `\x1b[31mfail\x1b[0m  ${unstructured.length} table(s) have no header/separator pair, so nothing in them was checked:`,
+    );
+    for (const row of unstructured) console.error(`        ${row.trim().slice(0, 110)}`);
+  }
   if (malformed.length > 0) {
     console.error(
       `\x1b[31mfail\x1b[0m  ${malformed.length} row(s) do not match their table's column count:`,

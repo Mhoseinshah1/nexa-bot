@@ -1662,6 +1662,34 @@ textarea.input {
   flex: none;
 }
 
+/* --- Inline link-buttons ---------------------------------------------------- */
+/*
+ * `class="link"` is used four times — "load the fresh value", the revert
+ * control, and the stale-data retry — and had NO rule at all, so every one of
+ * them rendered as a native UA push-button in the middle of a sentence. The
+ * escape from a warning looked like a form control the warning was about.
+ *
+ * A button and not an anchor because none of them navigates; styled as a link
+ * because each of them reads as one inside its sentence.
+ */
+.link {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.link:hover {
+  color: var(--accent-strong);
+}
+.link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 /* --- Skip link -------------------------------------------------------------- */
 .skip {
   position: absolute;

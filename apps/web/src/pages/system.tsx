@@ -201,6 +201,7 @@ function MonitorSection({ denied }: { denied: boolean }) {
       <Card title={t('web.monitor_cadence')} hint={t('web.monitor_cadence_hint')}>
         <StateSwitch
           state={denied ? 'denied' : queryState(monitor)}
+          stale={staleAfterError(monitor)}
           onRetry={() => void monitor.refetch()}
         >
           {profile !== undefined && (
@@ -235,6 +236,7 @@ function MonitorSection({ denied }: { denied: boolean }) {
       <Card title={t('web.monitor_capacity')} hint={t('web.monitor_capacity_hint')}>
         <StateSwitch
           state={denied ? 'denied' : queryState(monitor)}
+          stale={staleAfterError(monitor)}
           onRetry={() => void monitor.refetch()}
         >
           {profile !== undefined && <CapacityView profile={profile} />}

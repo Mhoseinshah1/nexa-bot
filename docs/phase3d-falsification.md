@@ -257,7 +257,7 @@ stating rather than averaging away:
 | V03  | the one-shot list is DERIVED from the admin codes               | re-type four literals, drop one    | _carries every administrator code the recorder can write_                  |
 | V04  | an archived panel offers no save                                | drop the status guard              | _offers no save on an archived panel_                                      |
 | V04b | an archived panel offers no credential write                    | `mayWrite = mayRotate`             | _offers no credential write on an archived panel_                          |
-| V05  | failures and recoveries are disjoint and paired                 | add a recovery to the failure list | _the condition lifecycle_                                                  |
+| V05  | failures and recoveries are disjoint and paired                 | add a recovery to the failure list | `web-money-and-scope.test.ts` › keeps failures and recoveries disjoint     |
 | V06  | "open" narrows to the conditions scope                          | back to a fixed `MANAGEMENT`       | _asks for the conditions scope when narrowed to open items_                |
 | V07  | the CSP dashboard test detects a broken card                    | drop `nextCursor` from the stub    | _renders a dashboard with no style attribute_                              |
 | V07b | the route sweep detects a broken card                           | drop the panel-detail stub         | `csp.test.tsx` › renders %s with no style attribute the policy would drop  |
@@ -2156,3 +2156,112 @@ The assertion moved inside the held refetch, where it discriminates.
 
 That is the fourth test this session that had to be repaired before it could
 fail — and the second whose NAME was the only thing asserting the rule.
+
+An illustration of the shape, in prose:
+
+```
+| column a | column b |
+| -------- | -------- |
+| one      | two      |
+```
+
+---
+
+# Round 25 — the rule was right at one screen and absent at six
+
+A sixteenth reviewer found round 24's fix applied where it was being looked at
+and nowhere else, disagreeing with a rule this codebase had already reached
+twice, and three more ways the check could be green and wrong.
+
+## `queryState` did not agree with `sessionView`, which says it must
+
+`app.tsx` states the rule and the reason in full: _"Data wins over a RETRYABLE
+error, and only over a retryable one … `pollSession` STOPS on a final answer …
+Letting data win there kept a complete, fully drawn console on screen for ever,
+with nothing to press and nothing said: the exact defect the round before this
+one was written to remove, reached through the door its own fix opened. **The
+two rules have to agree about which failures are worth waiting through.**"_
+
+Round 24 wrote the second rule and did not agree. It let data win over EVERY
+error, while `pollUnlessFinal` stops the timer on exactly the ones it ignored.
+So a `panels.view` revoked mid-session, or a `ZodError` from a tab holding a
+previous release across a deploy, left the detail screen fully drawn — tab
+strip, editable identity form, credential rotation form, Test-connection button
+— all asserting capabilities the server had just refused, permanently, with no
+poll coming and a Retry button that could only write another
+`access.permission_denied` event. That is the branch's central claim broken by
+the commit that widened this, in the same session that wrote the comment
+warning against it.
+
+## Six of eighteen call sites, and a count that was wrong
+
+Round 24 claimed the warning was drawn "at all fourteen call sites". There are
+**eighteen**, and **twelve** had it. The six without it had been given the
+weakened error rule and none of the compensating notice — including both
+dashboard distribution cards, on a POLLING query, on the page whose own comment
+reads _"One stale card next to a live one is worse than two stale cards, because
+nothing on screen says which is which."_ That is what the commit produced, since
+the readiness card beside them does announce its own failure.
+
+Deleting `stale=` from the other seventeen sites left **264 of 264 green**, and
+on four of the files it would not even have shown as an unused import. So the
+rule is asserted over the SOURCES now, in `state-switch-contract.test.tsx`,
+which is the only shape of test that catches a nineteenth site being added
+without it. The scan also asserts it found the call sites at all — a scan
+matching nothing passes every assertion under it.
+
+## `data?` optional, one release after the same mistake was documented
+
+`sessionView`'s own parameter carries: _"REQUIRED, though it may be `undefined`.
+Optional, a caller that forgot it silently got the previous release's rule."_
+`queryState` and `staleAfterError` shipped with `data?: unknown`. Both are
+required now, and making them so immediately surfaced a narrowed prop type in
+`AttentionCard` that omitted `error` — the card would have decided a permanent
+refusal was worth waiting through while every other card on the page decided
+otherwise.
+
+## A term no rendered test could falsify
+
+`staleAfterError`'s `!finalAnswer(...)` killed nothing: `StateSwitch` returns
+the error state before it ever reads `stale`, so through any rendered page the
+term is unreachable. Rather than delete a correct guard or keep dead logic
+dressed as a rule, both functions are now unit-tested directly beside
+`sessionView`, which is where the agreement between them belongs.
+
+## Three more ways the check was green and wrong
+
+- **One blank line inside a table dropped 18 of 157 citations, exit 0.** The
+  declaration rule fires only at a separator row; a blank line ends the table,
+  and every row after it is treated as a header candidate in a table that never
+  reaches a separator — so it is checked for nothing at all. Third consecutive
+  round in which this script skipped part of the record silently.
+- **A table whose separator comes first escaped completely** — no declaration
+  check, no width check, and a fabricated citation inside it never looked up.
+- **A markdown table inside a fenced code block failed the run.** The record
+  documents table shapes; writing one out properly was a red run. Two such lines
+  already existed and escaped only by not having a separator under them.
+
+And the guarantee the check prints was wider than the one it made: `includes`
+over whole file text let a `describe` name, a comment or a sentence of prose
+satisfy "resolves to a committed test", and row V05 was doing exactly that.
+Citations are matched against extracted `it`/`test` titles now.
+
+## The mutations
+
+| #   | rule                                                           | mutation                                  | tests that die                                                                                                                                                                     |
+| --- | -------------------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| U85 | data wins over a retryable error and only over a retryable one | drop `finalAnswer` from `queryState`      | `session-view.test.ts` › gives up the data on a final refusal, because no poll is coming; `panels.test.tsx` › takes the screen down when the refusal is final, rather than warning |
+| U86 | and a final refusal is not reported as staleness               | drop `finalAnswer` from `staleAfterError` | `session-view.test.ts` › calls data stale only while the failure is worth waiting through                                                                                          |
+| U87 | every `StateSwitch` says whether its data is stale             | drop one `stale=` prop                    | `state-switch-contract.test.tsx` › passes stale beside every queryState                                                                                                            |
+
+The check's own probes:
+
+| #   | rule                                          | mutation                       | what the check prints                                                    |
+| --- | --------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------ |
+| U82 | a table without a header/separator pair fails | insert a blank line mid-table  | exits 1: 1 table(s) have no header/separator pair                        |
+| U83 | so does a separator with no header above it   | append a separator-first table | exits 1: 2 table(s) have no header/separator pair                        |
+| U84 | a fenced block is prose, not a table          | ignore fences                  | exits 1: 1 table(s) declare neither a citation column nor what they hold |
+
+U86 killed nothing on its first run, which is what sent it to a unit test. That
+is the seventh mutation this session to kill nothing on the first attempt, and
+the reason the count is kept: each one looked like a finished rule.

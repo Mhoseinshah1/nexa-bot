@@ -1570,6 +1570,7 @@ export function NewPanelPage({
         */}
         <StateSwitch
           state={queryState(providers, (providers.data?.providers.length ?? 0) === 0)}
+          stale={staleAfterError(providers)}
           onRetry={() => void providers.refetch()}
           empty={<Empty title={t('web.providers_none')} icon="panels" />}
         >
@@ -1709,6 +1710,7 @@ export function ProvidersPage() {
       <Card>
         <StateSwitch
           state={queryState(providers, rows.length === 0)}
+          stale={staleAfterError(providers)}
           onRetry={() => void providers.refetch()}
         >
           <DataTable

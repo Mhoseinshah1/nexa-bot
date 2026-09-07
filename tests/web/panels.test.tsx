@@ -1652,6 +1652,51 @@ describe('the panel detail', () => {
   });
 
   /**
+   * A permanent refusal takes the screen down; it does not become a warning.
+   *
+   * Keeping data through a failed refetch is right for a blip and wrong for an
+   * answer. `pollUnlessFinal` STOPS on a final answer — a 403 when a permission
+   * is revoked mid-session, or a `ZodError` from a tab holding the previous
+   * release across a deploy — so there is no next poll to recover. Letting data
+   * win there leaves the tab strip, the editable identity form, the credential
+   * rotation form and the Test-connection button all on screen, asserting
+   * capabilities the server has just refused, for ever.
+   *
+   * `sessionView` reached this rule first and says so in `app.tsx`: data wins
+   * over a RETRYABLE error and only over a retryable one, and the two rules
+   * have to agree about which failures are worth waiting through.
+   */
+  it('takes the screen down when the refusal is final, rather than warning', async () => {
+    const id = panel().id as string;
+    const route = { url: `/panels/${id}`, body: { panel: panel() } as unknown, status: 200 };
+    stubApi([route]);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    // The permission is revoked. This is an ANSWER, not a blip.
+    route.status = 403;
+    route.body = {
+      error: {
+        kind: 'forbidden',
+        code: 'access.permission_denied',
+        message: 'no',
+        correlationId: 'test',
+      },
+    };
+    await vi.advanceTimersByTimeAsync(95_000);
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText('نام')).toBeNull();
+    });
+    // No form, no tabs, and no warning implying a refresh that will never come.
+    expect(screen.queryAllByRole('tab')).toHaveLength(0);
+    expect(screen.queryByText(/تازه‌سازی این صفحه انجام نشد/)).toBeNull();
+    expect(screen.getByText('خطا در ارتباط با سرور')).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  /**
    * A viewer without `panels.edit` gets the notice and no writable control.
    *
    * Both halves matter and neither had a test. The notice is the only signal

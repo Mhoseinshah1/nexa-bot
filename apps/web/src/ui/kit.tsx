@@ -299,14 +299,17 @@ export function Banner({
   title,
   children,
   icon,
+  role,
 }: {
   tone?: Tone;
   title?: string;
   children?: ReactNode;
   icon?: IconName;
+  /** Overrides the tone's default. See `StaleNotice` for why one needs to. */
+  role?: 'status' | 'alert' | undefined;
 }) {
   return (
-    <div className={`banner ${tone}`} role={tone === 'danger' ? 'alert' : undefined}>
+    <div className={`banner ${tone}`} role={role ?? (tone === 'danger' ? 'alert' : undefined)}>
       <Icon name={icon ?? (tone === 'danger' ? 'alert' : 'info')} size={16} />
       <div>
         {title !== undefined && <strong>{title}</strong>}
@@ -623,7 +626,17 @@ export type ViewState = 'ready' | 'loading' | 'empty' | 'error' | 'denied';
  */
 function StaleNotice({ onRetry }: { onRetry?: (() => void) | undefined }) {
   return (
-    <Banner tone="warn" icon="alert">
+    /*
+     * ANNOUNCED, because nothing on screen prompted it.
+     *
+     * `Banner` gives a role only to `danger`, and this one arrives on a timer
+     * with no user action behind it. Without a live region the page still stops
+     * refreshing in silence for a screen-reader operator — the exact defect the
+     * banner exists to remove, left in place for the one audience that cannot
+     * see it. `status` rather than `alert`: it is worth knowing, not worth
+     * interrupting what they are reading.
+     */
+    <Banner tone="warn" icon="alert" role="status">
       {t('web.refresh_failed')}{' '}
       {onRetry !== undefined && (
         <button type="button" className="link" onClick={onRetry}>
