@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { CurrencyCode, MoneyWire, ResolvedSettingResponse } from '@nexa/contracts';
 import { ApiError, fetchSettings, saveSetting } from '../api/client';
 import { currencyLabel, formatNumber, formatTimestamp } from '../format';
+import { finalAnswer } from '../polling';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import {
@@ -636,5 +637,20 @@ export function messageFor(error: unknown): string {
     // only part of the response that says what to change.
     return error.message;
   }
-  return t('web.error');
+  /*
+   * A THIRD copy of the same decision, and it had the same arm wrong.
+   *
+   * `post()` schema-parses a mutation's response, so a mutation can throw a
+   * `ZodError` — the deploy-skew case — and this returned "خطا در ارتباط با
+   * سرور" for it: the server answered, the transport was fine, and the
+   * sentence blamed the connection. `errorCopy` collapsed the two query-view
+   * sites into one rule and did not reach here, which is the same "fixed at
+   * the site the author was looking at" shape one layer down.
+   *
+   * The `ApiError` branch above stays as it is: for a mutation the server's
+   * own message names the offending field, and that is more use to an operator
+   * than any sentence written here. What is corrected is the fall-through,
+   * where there is no message and the old text asserted a cause.
+   */
+  return finalAnswer(error) ? t('web.rejected') : t('web.error');
 }

@@ -2608,7 +2608,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 171 citations were checked; this record declares 178 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 195 citations were checked; this record declares 202 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -2816,3 +2816,130 @@ source order and ignores `!important` entirely, so no test in this repository
 can observe the specificity half. That half rests on the textual assertion and
 on the rule being last in the file, and both are stated in `styles.css` beside
 the declaration rather than left to be rediscovered.
+
+# Round 30 — the round that fixed thirteen findings introduced six of its own
+
+The twenty-first fresh-context review returned thirteen confirmed findings
+against round 29. Six were defects in round 29's own fixes, and one of those was
+severe. The pattern is worth stating plainly rather than buried: a fix written
+against a reviewer's evidence tends to cover the state the evidence used and no
+other, and the round that is proudest of closing a class is the likeliest to
+close one instance of it.
+
+## A rule with half a test is a rule that can be reverted
+
+Round 29 gave the revisions query an `enabled` callback so that a FINAL answer
+ends it. Only that half was tested. Replacing `finalAnswer(...)` with the
+cruder `query.state.status !== 'error'` passed lint, prettier, `tsc` and all 286
+tests — and turns one transient 5xx into a revisions pane dead for the life of
+the card, because a disabled query can never be re-triggered by anything. That
+is the frozen-screen defect this branch spent four rounds removing, reached
+through a simplification no test could see. Worse: with that mutation in place
+the sticky-pane test round 29 had just rewritten to be discriminating stopped
+discriminating again. One untested half disarmed the test beside it.
+
+The same shape, three more times. The panels toolbar gate, the panels pager
+gate and the alerts pager gate were all tested with `denied` only, so
+`hidden={denied}` and `{!denied && (` were suite-clean while restoring exactly
+the regression they were written to close: on a final refusal — a permission
+revoked mid-session — `denied` is still false, the archive filter stays on
+screen beside the refusal card, and the pager goes on printing "showing 0" over
+rows nobody can see.
+
+## Two error cards nobody swept, one of them the shell's
+
+`errorCopy` was introduced in round 29 so two sites could not give one screen
+two diagnoses of one failure. There were four sites, not two.
+
+The shell's session screen is the one that gates every other screen, and it
+said the connection could not be established, beside a live Retry, for a **200**
+the schema rejected. `pollSession` had already stopped, so that button issued
+two doomed requests (`main.tsx` retries once) and nothing would ever ask again.
+It now asks `finalAnswer` — the same rule, in the shell's own vocabulary,
+because a 403 on the session lookup is not "you may not see this section" and
+`refused()`'s copy would be a worse lie than the one being removed.
+
+`messageFor` in `settings.tsx` was the third: `post()` schema-parses a
+mutation's response, so a save can throw a `ZodError`, and the fall-through
+returned the connection sentence for it.
+
+`app.tsx` has a function of the same name that is NOT a fourth copy, and it is
+recorded here because the resemblance is a trap for the next reader. It
+collapses every credential failure to one message so the sign-in screen cannot
+distinguish an unknown username from a wrong password. Making it "consistent"
+with the others would undo that on purpose.
+
+## The checker was defeated twice more, by the class it had just closed
+
+Round 29 replaced the literal `describe.skip(` matcher with a modifier-chain
+reader and said the class was closed. It was not:
+
+- `describe['skip']('the panel list', …)` — `ok 194`, exit 0, 56 tests skipped
+  in the file this record cites 46 times.
+- `describe /*x*/ .skip(…)` — same, because the chain walk skipped whitespace
+  and not comments.
+
+Both are now read. A bracket key this script cannot evaluate counts as
+skipping, because being wrong that way fails citations loudly and the other way
+is the check being green and wrong.
+
+Two more holes the reviewer found in the same script. `/[)]/` — an ordinary
+regex assertion — ended the paren walk early and left the tail of a skipped
+suite in the text; round 29's comment had called this a "residue… left stated
+rather than half-handled", which is documenting a hole rather than closing it.
+Regex literals are parsed now. And `it.only` was accepted on the grounds that
+".only does run": true of the marked test, false of its sixty siblings, and one
+of them produced `ok 194`, exit 0, against `1 passed | 60 skipped`. The checker
+refuses `.only` outright, and `vitest.config.mts` sets `allowOnly: false` so a
+local gate fails the way CI already did.
+
+## Two assertions that could not fail, again
+
+`declares that rule important, and last` asserted three things, none of which
+was lastness: appending `.dist-row { display: grid }` below `[hidden]` left all
+286 tests green while re-opening the jsdom seam for that class. It now asserts
+that nothing follows.
+
+The "press what is left" loop introduced in round 29 pressed
+`queryAllByRole('button')`, which on that screen is the empty list — so it
+pressed nothing and compared a number to itself, exactly as the vacuous version
+it replaced. It now asserts the SET of operable controls is empty, by name,
+including the `<select>` the second test is named for and excluding `hidden`
+subtrees, which a person cannot press.
+
+## The mutations
+
+Each applied to the tree as committed, run against the whole `web` project,
+reverted, and the six touched files verified byte-identical by sha256 after.
+X6 failed to kill on its first run — the `messageFor` fix had shipped with no
+test — and the row below is the re-run after one was written.
+
+| #   | rule                                                        | mutation                                                    | tests that die                                                                                                                                                                           |
+| --- | ----------------------------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| X1  | a RETRYABLE failure leaves the revisions query enabled      | `enabled: (q) => showHistory && q.state.status !== 'error'` | `control-plane-pages.test.tsx` › asks again after a retryable failure once something invalidates it                                                                                      |
+| X2  | the panels toolbar goes on a final refusal, not just DENIED | `hidden={denied}`                                           | `panels.test.tsx` › withdraws the filter and the pager when the fleet is finally refused                                                                                                 |
+| X3  | the panels pager likewise                                   | `{!denied && (`                                             | `panels.test.tsx` › withdraws the filter and the pager when the fleet is finally refused                                                                                                 |
+| X4  | the alerts pager likewise                                   | `{!denied && (`                                             | `settings-and-alerts.test.tsx` › withdraws the pager once the refusal is final; › withdraws its own refresh once the refusal is final; › withdraws its filters once the refusal is final |
+| X5  | the shell does not blame the connection for an answer       | restore the unconditional copy and Retry                    | `shell-recovery.test.tsx` › stops showing a console it can no longer confirm                                                                                                             |
+| X6  | nor does a mutation's error report                          | `return t('web.error');`                                    | `settings-and-alerts.test.tsx` › does not blame the connection for a save the server answered                                                                                            |
+
+## The checker probes
+
+Read these the way VZ and WX are read: the mutation makes the check EXIT 0, and
+green is the failure being shown.
+
+| #   | rule                                                  | mutation                            | what the check prints                                        |
+| --- | ----------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------ |
+| Y1  | a suite skipped by bracket access is skipped          | read the chain in dot notation only | exits **0**: `ok 194`, with 56 tests skipped                 |
+| Y2  | a comment inside the chain does not hide it           | skip whitespace but not comments    | exits **0**: `ok 194`, with the suite unstripped             |
+| Y3  | `/[)]/` does not truncate the strip                   | leave regex literals unparsed       | exits **0**: `ok 194`, with the skipped suite's tail citable |
+| Y4  | `.only` makes every citation in that file meaningless | accept `.only` as "it runs"         | exits **0**: `ok 194`, against `1 passed \| 60 skipped`      |
+
+## A standing note about transcripts that quote the count
+
+`U99`'s row was corrected in round 29 to `171 … declares 178` and was stale
+again the moment that same commit moved `EXPECTED` to 194. Any row whose
+transcript quotes the citation count is a claim about `EXPECTED`, so it must be
+re-run in every commit that changes it. The row below is re-run against this
+tree, and this paragraph is here so the next round does not have to rediscover
+why it drifted.

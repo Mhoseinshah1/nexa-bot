@@ -249,12 +249,20 @@ describe('the hidden attribute, against the real cascade', () => {
      * `.toolbar` would leave the test above unable to fail, and the seam
      * unguarded in exactly the way it was unguarded before.
      */
+    /*
+     * "Last" asserted as NOTHING FOLLOWS, which is what the word means.
+     *
+     * The first version of this checked that `[hidden]` came after the last
+     * `.toolbar {`, that the slice between it and the final `}` contained a
+     * `{`, and that the file ended in `}`. All three stay true when a rule is
+     * appended below it — measured: appending `.dist-row { display: grid }`
+     * left all 286 tests green while re-opening the jsdom seam for that class,
+     * because jsdom decides on source order alone. An assertion about a
+     * position has to be an assertion about what is on the other side of it.
+     */
     const hiddenAt = CSS.lastIndexOf('[hidden]');
-    const lastRule = CSS.trimEnd().lastIndexOf('\n}');
-    expect(hiddenAt, '[hidden] must be the last rule in the stylesheet').toBeGreaterThan(
-      CSS.lastIndexOf('.toolbar {'),
-    );
-    expect(CSS.slice(hiddenAt, lastRule).includes('{')).toBe(true);
-    expect(CSS.trimEnd().endsWith('}')).toBe(true);
+    expect(hiddenAt).toBeGreaterThan(CSS.lastIndexOf('.toolbar {'));
+    const after = CSS.slice(CSS.indexOf('}', hiddenAt) + 1);
+    expect(after.trim(), 'no rule may follow [hidden]; jsdom obeys source order').toBe('');
   });
 });

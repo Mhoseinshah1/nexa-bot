@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../apps/web/src/app';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { stubApi } from './harness';
 
 /**
@@ -246,6 +247,13 @@ describe('the shell in the states a pure function cannot see', () => {
    * lookup is permanently broken and will never ask again. Keeping the console
    * drawn there was the previous round's defect reached through the door its
    * own fix opened: a complete admin console, nothing to press, for ever.
+   *
+   * And what replaces it must not lie about why. This screen said the
+   * connection could not be established, beside a live Retry, for a **200** the
+   * schema rejected — the transport worked, the server answered, and pressing
+   * Retry issued two more requests (`main.tsx` retries once) that could not
+   * answer differently, on a query whose poll has stopped. It was the third
+   * error card on the branch and the only one `errorCopy` had not reached.
    */
   it('stops showing a console it can no longer confirm', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -260,7 +268,11 @@ describe('the shell in the states a pure function cannot see', () => {
     ]);
 
     await vi.advanceTimersByTimeAsync(65_000);
-    expect(await screen.findByText(UNAVAILABLE)).toBeInTheDocument();
+    // The server ANSWERED. Not the connection copy, and no retry to press.
+    expect(await screen.findByText(t('web.rejected'))).toBeInTheDocument();
+    expect(screen.getByText(t('web.rejected_hint'))).toBeInTheDocument();
+    expect(screen.queryByText(UNAVAILABLE)).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.retry') })).toBeNull();
     expect(screen.queryByText('مدیر اصلی')).toBeNull();
 
     // ...and it STOPS asking. Deleting `pollSession`'s final-answer branch left

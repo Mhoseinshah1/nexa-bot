@@ -143,6 +143,51 @@ describe('the panel list', () => {
     expect(screen.queryByText('نمایش')).toBeNull();
   });
 
+  /**
+   * The OTHER half of both gates above, and the half that was revertible.
+   *
+   * Round 29 added tests for the toolbar and the pager and rendered both with
+   * `denied`. `hidden={denied}` and `{!denied && (` then passed lint, prettier,
+   * tsc and all 286 tests while restoring the exact regression they were
+   * written to close: on a FINAL refusal — permission revoked mid-session, the
+   * common case — `denied` is still false, so the archive Pills stay on screen
+   * beside the refusal card and the pager goes on printing "showing 0" over
+   * rows nobody can see. `mayRequest` and `queryState` are what make the two
+   * states one rule; a test that only ever supplies one of them cannot tell the
+   * rule from a coincidence.
+   *
+   * The sibling rule on the alerts page had both halves from the start. This is
+   * the branch's signature shape — right at the site the author was looking at
+   * — reproduced inside the commit written to remove it.
+   */
+  it('withdraws the filter and the pager when the fleet is finally refused', async () => {
+    stubApi([
+      {
+        url: '/panels',
+        body: {
+          error: {
+            kind: 'forbidden',
+            code: 'access.permission_denied',
+            message: 'no',
+            correlationId: 'test',
+          },
+        },
+        status: 403,
+      },
+    ]);
+    const { container } = renderPage(
+      // NOT denied: the permission list still says yes, the server says no.
+      <PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />,
+    );
+    await screen.findByText('شما به این بخش دسترسی ندارید.');
+
+    const toolbar = container.querySelector('.toolbar');
+    expect((toolbar as HTMLElement).hasAttribute('hidden')).toBe(true);
+    expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'تازه‌تر' })).toBeNull();
+    expect(screen.queryByText('نمایش')).toBeNull();
+  });
+
   it('distinguishes an empty fleet from a failed request', async () => {
     stubApi(list([]));
     renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);

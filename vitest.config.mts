@@ -22,6 +22,20 @@ const shared = {
   globals: false,
   environment: 'node' as const,
   restoreMocks: true,
+  /*
+   * `.only` may not decide what runs, here or in CI.
+   *
+   * Vitest defaults `allowOnly` to `!isCI`, so a stray `it.only` is a hard
+   * failure on GitHub Actions and a SILENT one locally: the file runs a single
+   * test, `pnpm verify` reports success, and the citation checker went on
+   * resolving names into the sixty siblings that no longer ran. Measured:
+   * `1 passed | 60 skipped` alongside `ok 194`, exit 0.
+   *
+   * The gate a contributor runs before pushing should fail for the same
+   * reasons the one in CI does, so this is set explicitly rather than left to
+   * an environment variable.
+   */
+  allowOnly: false,
 };
 
 export default defineConfig({

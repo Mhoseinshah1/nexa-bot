@@ -352,6 +352,68 @@ describe('the template revisions pane', () => {
   });
 
   /**
+   * A RETRYABLE failure must not disable the pane — the other half of the rule.
+   *
+   * The `enabled` callback reads `finalAnswer`, and only the disable-on-final
+   * half was tested. Replacing it with the cruder `query.state.status !==
+   * 'error'` passed lint, prettier, tsc and all 286 tests — and it turns one
+   * transient 5xx into a revisions pane that is dead for the life of the card:
+   * the query is disabled the moment it errors, so no invalidation and no
+   * reopen can ever bring it back. That is the frozen-screen defect this branch
+   * spent four rounds removing, reintroduced by a "simplification" no test
+   * could see.
+   *
+   * Worse, with that mutation in place the sticky-pane test above stops
+   * discriminating too, because a disabled query cannot be re-triggered by
+   * anything. One untested half quietly disarmed the test beside it.
+   *
+   * So: fail retryably, let the server recover, save — and the pane must ask
+   * again.
+   */
+  it('asks again after a retryable failure once something invalidates it', async () => {
+    const revisions = {
+      url: 'templates/event.panel.unreachable/revisions',
+      body: {
+        error: { kind: 'internal', code: 'test.down', message: 'down', correlationId: 'test' },
+      } as unknown,
+      status: 503,
+    };
+    const api = stubApi([
+      { url: '/templates', body: { templates: [template()] } },
+      revisions,
+      {
+        url: '/templates/event.panel.unreachable',
+        body: { template: template({ overrideBody: 'تازه', source: 'TENANT', version: 2 }) },
+      },
+    ]);
+    renderPage(<ContentPage mayEdit denied={false} />);
+    await screen.findAllByText('event.panel.unreachable');
+
+    const revisionCalls = () => api.calls.filter((call) => call.url.includes('/revisions')).length;
+
+    const pane = screen.getAllByText('تاریخچه')[0] as HTMLElement;
+    const details = pane.closest('details');
+    if (details !== null) {
+      details.open = true;
+      fireEvent(details, new Event('toggle'));
+    }
+    await waitFor(() => {
+      expect(revisionCalls()).toBe(1);
+    });
+
+    // The outage ends.
+    revisions.status = 200;
+    revisions.body = { revisions: [] };
+
+    // An ordinary save invalidates the key. A retryable failure is worth
+    // waiting through, so the pane must take the chance.
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+    await waitFor(() => {
+      expect(revisionCalls()).toBe(2);
+    });
+  });
+
+  /**
    * F5 — sticky-enabled is not "costs nothing"; `invalidate()` is the cost.
    *
    * The fix above made `showHistory` sticky so a reopen could not re-trigger

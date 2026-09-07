@@ -45,7 +45,7 @@ const RECORD = 'docs/phase3d-falsification.md';
  * to, which is the point: the number is a claim about this file and should be
  * re-stated deliberately, not drifted into.
  */
-const EXPECTED = 194;
+const EXPECTED = 202;
 /**
  * A table whose last column is one of these is making citations.
  *
@@ -94,12 +94,19 @@ function sources(dir) {
  * fail loudly.) So strings, template literals and comments are skipped rather
  * than counted.
  *
- * Regex literals are NOT parsed — telling `/` from division needs the parse
- * this script deliberately does not do. Honouring a backslash escape in code
- * position covers the case that matters, `\)`, since a backslash cannot
- * legally appear in code position for any other reason. The residue is an
- * unescaped paren in a character class, `/[)]/`, and it is left stated rather
- * than half-handled.
+ * Regex literals ARE parsed, and the first version of this said they were not
+ * — that the residue, `/[)]/`, was "left stated rather than half-handled". It
+ * was not a residue. `expect('x').not.toMatch(/[)]/)` is an ordinary
+ * assertion, and one of them as the first `it` inside a skipped suite ended
+ * the walk early, left the rest of that suite in the text, and took the check
+ * to `ok`, exit 0, with 10 tests skipped. Documenting a hole does not close it.
+ *
+ * Telling a regex from division is done the way every hand-written scanner
+ * does it: by what precedes the slash. After a value — an identifier, a
+ * number, `)`, `]`, `}` — a slash is division; after an operator, a comma, an
+ * opening bracket or one of the keywords that take an expression, it opens a
+ * regex. The known-imperfect case is a slash after a `}` that closes a block
+ * rather than an object, which cannot occur in an argument list.
  */
 function closeOf(text, open) {
   let depth = 0;
@@ -107,6 +114,9 @@ function closeOf(text, open) {
     const ch = text[i];
     if (ch === '\\') {
       i += 1;
+    } else if (ch === '/' && text[i + 1] !== '/' && text[i + 1] !== '*' && startsRegex(text, i)) {
+      i = endOfRegex(text, i);
+      if (i >= text.length) return text.length;
     } else if (ch === '/' && text[i + 1] === '/') {
       const newline = text.indexOf('\n', i);
       if (newline === -1) return text.length;
@@ -124,6 +134,54 @@ function closeOf(text, open) {
       depth -= 1;
       if (depth === 0) return i + 1;
     }
+  }
+  return text.length;
+}
+
+/** Whether the `/` at `at` opens a regex literal rather than dividing. */
+function startsRegex(text, at) {
+  let i = at - 1;
+  while (i >= 0 && /\s/.test(text[i])) i -= 1;
+  if (i < 0) return true;
+  const prev = text[i];
+  if (/[)\]}]/.test(prev)) return false;
+  if (!/[A-Za-z0-9_$]/.test(prev)) return true;
+  // An identifier ends here — division — unless it is a keyword that is
+  // followed by an expression. `return /x/` and `case /x/` are regexes.
+  const word = /[A-Za-z0-9_$]+$/.exec(text.slice(0, i + 1));
+  return (
+    word !== null &&
+    [
+      'return',
+      'typeof',
+      'instanceof',
+      'in',
+      'of',
+      'new',
+      'delete',
+      'void',
+      'throw',
+      'case',
+      'do',
+      'else',
+      'yield',
+      'await',
+    ].includes(word[0])
+  );
+}
+
+/** The index of the `/` closing the regex opened at `start`. */
+function endOfRegex(text, start) {
+  let inClass = false;
+  for (let i = start + 1; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === '\\') i += 1;
+    else if (ch === '[') inClass = true;
+    else if (ch === ']') inClass = false;
+    // A `/` inside `[...]` is a literal slash, which is the whole reason a
+    // character class has to be tracked rather than skipped.
+    else if (ch === '/' && !inClass) return i;
+    else if (ch === '\n') return text.length;
   }
   return text.length;
 }
@@ -182,14 +240,34 @@ function withoutSkippedSuites(text) {
     const chain = [];
     let i = match.index + 'describe'.length;
     for (;;) {
-      while (i < text.length && /\s/.test(text[i])) i += 1;
+      i = afterGap(text, i);
       if (text[i] === '.') {
-        i += 1;
-        while (i < text.length && /\s/.test(text[i])) i += 1;
+        i = afterGap(text, i + 1);
         const name = /^[A-Za-z_$][\w$]*/.exec(text.slice(i));
         if (name === null) break;
         chain.push(name[0]);
         i += name[0].length;
+        continue;
+      }
+      /*
+       * `describe['skip'](...)` is the same suite, skipped the same way.
+       *
+       * The version before this read the chain in dot notation only, and
+       * `describe['skip']('the panel list', ...)` took the check to `ok 194`,
+       * exit 0, with 56 tests skipped in the file the record cites 46 times —
+       * the identical outcome to the `describe.skipIf` hole it had just been
+       * written to close. Substituting one spelling for two is not closing a
+       * class, and this script's history is almost entirely that mistake.
+       */
+      if (text[i] === '[') {
+        const close = closeBracket(text, i);
+        const inner = text.slice(i + 1, close - 1).trim();
+        const literal = /^(['"`])([A-Za-z_$][\w$]*)\1$/.exec(inner);
+        // A computed key this script cannot evaluate. Treat it as skipping:
+        // being wrong that way fails citations loudly, the other way is this
+        // check being green and wrong.
+        chain.push(literal === null ? 'skip' : literal[2]);
+        i = close;
         continue;
       }
       // `describe.skipIf(cond)('name', fn)` is TWO call groups, and the suite
@@ -206,6 +284,51 @@ function withoutSkippedSuites(text) {
     opener.lastIndex = cursor;
   }
   return out + text.slice(cursor);
+}
+
+/**
+ * The next index that is neither whitespace nor a comment.
+ *
+ * `describe /*x*\/ .skip(...)` is legal and was not read as a chain at all,
+ * so the suite went unstripped and its citations resolved. Whitespace was
+ * skipped and comments were not, which is the same omission one token over.
+ */
+function afterGap(text, from) {
+  let i = from;
+  for (;;) {
+    while (i < text.length && /\s/.test(text[i])) i += 1;
+    if (text[i] === '/' && text[i + 1] === '/') {
+      const newline = text.indexOf('\n', i);
+      if (newline === -1) return text.length;
+      i = newline + 1;
+      continue;
+    }
+    if (text[i] === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      if (end === -1) return text.length;
+      i = end + 2;
+      continue;
+    }
+    return i;
+  }
+}
+
+/** The index just past the `]` closing the bracket at `open`. */
+function closeBracket(text, open) {
+  let depth = 0;
+  for (let i = open; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === '\\') i += 1;
+    else if (ch === '"' || ch === "'" || ch === '`') {
+      i = endOfQuote(text, i);
+      if (i >= text.length) return text.length;
+    } else if (ch === '[') depth += 1;
+    else if (ch === ']') {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return text.length;
 }
 
 /**
@@ -234,8 +357,13 @@ function titles(text) {
      *
      * They were, and a citation therefore resolved to a name that never runs —
      * defeating this script's one sentence of purpose in the cheapest possible
-     * way. `.only` and `.concurrent` do run; `.fails` runs and asserts its own
-     * failure, so it is evidence too.
+     * way. `.concurrent` does run; `.fails` runs and asserts its own failure,
+     * so it is evidence too.
+     *
+     * `.only` is accepted HERE and refused by `onlyMarkers` below, because the
+     * problem with it is not the marked test — that one runs — but its sixty
+     * siblings, which do not. One `it.only` took this check to `ok 194`, exit
+     * 0, with `1 passed | 60 skipped`.
      */
     /\b(?:it|test)\s*(?:\.each\s*\([\s\S]*?\)\s*)?(?:\.(?:only|concurrent|fails))?\s*\(\s*(['"`])([\s\S]*?)\1/g;
   let match;
@@ -253,6 +381,32 @@ function titles(text) {
  * however many phantom ones precede it — so the defect surfaced the moment the
  * citation column was addressed by index instead.
  */
+/**
+ * Every `.only` marker in a source, with its line.
+ *
+ * `.only` does not skip the test it marks; it skips everything else. A file
+ * carrying one runs a single test, and this check went on resolving citations
+ * into the sixty that no longer ran — reporting success for evidence that had
+ * stopped existing, which is the one failure mode it exists to prevent. One
+ * `it.only` in `panels.test.tsx` printed `ok 194`, exit 0, against
+ * `1 passed | 60 skipped`.
+ *
+ * CI catches this by another route (vitest's `allowOnly` defaults to `!isCI`),
+ * and `vitest.config.mts` now sets it false everywhere so a local `pnpm verify`
+ * fails the same way. That is a second guard, not a reason to omit this one:
+ * this check is what makes the RECORD's claims false, so it should say so
+ * itself rather than depend on a runner setting somebody may relax.
+ */
+function onlyMarkers(text) {
+  const found = [];
+  const pattern = /\b(?:describe|it|test)\s*\.\s*only\s*\(/g;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    found.push(text.slice(0, match.index).split('\n').length);
+  }
+  return found;
+}
+
 const cells = (row) =>
   row
     .replace(/^\||\|$/g, '')
@@ -319,6 +473,12 @@ function citationsIn(cell) {
 
 const lines = readFileSync(RECORD, 'utf8').split('\n');
 const files = sources('tests');
+/*
+ * A `.only` anywhere makes every citation in this record unverifiable, because
+ * the tests they name have stopped running. Collected before anything else so
+ * the run says that rather than reporting a resolved count nobody can trust.
+ */
+const only = files.flatMap(([path, text]) => onlyMarkers(text).map((line) => `${path}:${line}`));
 const everything = files.map(([, text]) => text).join('\n');
 
 const missing = [];
@@ -363,7 +523,17 @@ const unstructured = [];
  * — the definition of a test that is not a test.
  *
  * One rule, reached the same way in both cases, is the version that can be
- * falsified. The sentinel costs one array element.
+ * falsified — and that rule IS falsified (row WY): drop the in-loop
+ * `unstructured.push(header)` with a header-only table appended and the check
+ * goes green.
+ *
+ * The sentinel itself is not separately falsifiable, and saying so is the
+ * point. Removing it changes nothing today, for exactly the reason round 28's
+ * end-of-file copy could not fire: prettier and git guarantee a trailing
+ * newline, so `lines` already ends in `''`. It is a guard against a file that
+ * lacks one — not a rule — and it is here so the loop is total rather than
+ * true-by-coincidence. A round that mistakes it for a tested rule would be
+ * repeating the mistake it replaced.
  */
 for (const line of [...lines, '']) {
   /*
@@ -509,8 +679,15 @@ if (
   unparsed.length > 0 ||
   unrecognised.length > 0 ||
   malformed.length > 0 ||
-  unstructured.length > 0
+  unstructured.length > 0 ||
+  only.length > 0
 ) {
+  if (only.length > 0) {
+    console.error(
+      `\x1b[31mfail\x1b[0m  ${only.length} \`.only\` marker(s): every OTHER test in those files is skipped, so no citation into them means anything:`,
+    );
+    for (const site of only) console.error(`        ${site}`);
+  }
   if (unstructured.length > 0) {
     console.error(
       `\x1b[31mfail\x1b[0m  ${unstructured.length} table(s) have no header/separator pair, so nothing in them was checked:`,

@@ -549,12 +549,36 @@ export function App() {
   // cookie that they were logged out, and invited them to open a second
   // session to fix a problem that was never theirs.
   if (view === 'unavailable') {
+    /*
+     * The THIRD error card, and the one that gates every other screen.
+     *
+     * `errorCopy` was introduced to stop two sites giving one screen two
+     * diagnoses of one failure, and it was wired into the two that draw a
+     * `StateSwitch`-shaped card. This one draws its own, and was left saying
+     * the connection could not be established — with a live Retry — for
+     * answers the server returned correctly. The headline case is a `ZodError`
+     * on the SUCCESS path: a tab holding a previous release across a deploy
+     * gets a 200 it cannot parse, and `pollSession` has STOPPED, so nothing
+     * will ever ask again. Measured before this: copy blaming the connection
+     * after a 200, and a Retry button whose press issued two more requests
+     * (`main.tsx` retries once) that could not answer differently.
+     *
+     * `finalAnswer` rather than `errorCopy` because a 403 here is not "you may
+     * not see this section" — it is the session lookup itself being refused,
+     * and `refused()`'s copy would be a worse lie than the one being removed.
+     * The rule is the same rule; only the vocabulary is the shell's.
+     */
+    const settled = finalAnswer(session.error);
     return (
       <main className="shell">
-        <p>{t('web.session_unavailable')}</p>
-        <button type="button" className="btn" onClick={() => void session.refetch()}>
-          {t('web.retry')}
-        </button>
+        <p>{settled ? t('web.rejected') : t('web.session_unavailable')}</p>
+        {settled ? (
+          <p>{t('web.rejected_hint')}</p>
+        ) : (
+          <button type="button" className="btn" onClick={() => void session.refetch()}>
+            {t('web.retry')}
+          </button>
+        )}
       </main>
     );
   }

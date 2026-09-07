@@ -206,6 +206,42 @@ describe('the settings screen', () => {
     expect(await screen.findByText('ثبت شد، اما مقداری تغییر نکرد.')).toBeInTheDocument();
   });
 
+  /**
+   * X6 — `messageFor`'s fall-through was a third copy of the same wrong arm,
+   * and the fix for it shipped with no test until a mutation run said so.
+   *
+   * `post()` schema-parses a mutation's response, so a save can throw a
+   * `ZodError` — a tab holding a previous release across a deploy, which
+   * `polling.ts` calls its headline case. This returned "خطا در ارتباط با
+   * سرور": the transport worked, the server answered 200, and the sentence
+   * blamed the connection. `errorCopy` collapsed the two query-view sites into
+   * one rule and never reached the mutation path.
+   *
+   * Driven through a real save with a 200 the response schema rejects, rather
+   * than by calling the function, so the assertion covers the wiring too.
+   *
+   * NOT to be confused with `app.tsx`'s own `messageFor`, which is a different
+   * rule with a different purpose: it collapses every credential failure to one
+   * message so that this screen cannot distinguish an unknown username from a
+   * wrong password. That one is correct as it stands.
+   */
+  it('does not blame the connection for a save the server answered', async () => {
+    stubApi([
+      ...settings([setting({ version: 2, source: 'TENANT' })]),
+      {
+        url: '/settings/ops.notifications.max_attempts',
+        // A 200 from another release: the shape this bundle cannot read.
+        body: { unexpected: true },
+      },
+    ]);
+    renderPage(<SettingsPage mayEdit denied={false} />);
+    await screen.findByText('ops.notifications.max_attempts');
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+
+    expect(await screen.findByText(t('web.rejected'))).toBeInTheDocument();
+    expect(screen.queryByText(t('web.error'))).toBeNull();
+  });
+
   it('reports a stored value the registry no longer accepts', async () => {
     stubApi(settings([setting({ storedValueInvalid: true, version: 4, source: 'DEFAULT' })]));
     renderPage(<SettingsPage mayEdit denied={false} />);
@@ -268,12 +304,28 @@ describe('management alerts', () => {
      * This read `const after = api.calls.length;` then queried the DOM then
      * asserted the count was unchanged. Nothing between the two reads could
      * change it: `queryByRole` is a pure DOM read. Three lines that could not
-     * fail, under a comment claiming the strongest thing on the page. The
-     * assertion that earns that sentence is to press what is left.
+     * fail, under a comment claiming the strongest thing on the page.
+     *
+     * The first attempt at fixing it pressed `queryAllByRole('button')`, which
+     * on this screen is the EMPTY LIST — so it pressed nothing and compared a
+     * number to itself exactly as before. It also could not have covered the
+     * `<select>` severity filter (role `combobox`) or anything inside a
+     * `hidden` toolbar, which is where the controls this rule withdraws
+     * actually go.
+     *
+     * So the claim is stated as a SET: no operable control remains. `hidden`
+     * subtrees are excluded because a person cannot press them — that is the
+     * whole mechanism — and the emptiness is asserted by NAME so a failure
+     * says which control came back.
      */
     expect(screen.queryByRole('button', { name: 'تلاش دوباره' })).toBeNull();
+    const operable = () =>
+      Array.from(document.querySelectorAll<HTMLElement>('button, select, input, a[href]')).filter(
+        (element) => element.closest('[hidden]') === null,
+      );
+    expect(operable().map((element) => element.textContent ?? element.tagName)).toEqual([]);
     const after = api.calls.length;
-    for (const control of screen.queryAllByRole('button')) fireEvent.click(control);
+    for (const control of operable()) fireEvent.click(control);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(api.calls.length).toBe(after);
   });
@@ -334,11 +386,18 @@ describe('management alerts', () => {
     await waitFor(() => {
       expect(screen.queryByRole('combobox')).toBeNull();
     });
-    // The same non-assertion as the refresh test above, and the same fix:
-    // press every control still on screen rather than reading the DOM twice.
+    // The same non-assertion as the refresh test above, and the same fix: the
+    // set of operable controls, by name, rather than a count compared to
+    // itself. `select` is in the query because the control this test is named
+    // for IS one.
     expect(screen.queryByRole('button', { name: 'حل‌نشده' })).toBeNull();
+    const operable = () =>
+      Array.from(document.querySelectorAll<HTMLElement>('button, select, input, a[href]')).filter(
+        (element) => element.closest('[hidden]') === null,
+      );
+    expect(operable().map((element) => element.textContent ?? element.tagName)).toEqual([]);
     const after = api.calls.length;
-    for (const control of screen.queryAllByRole('button')) fireEvent.click(control);
+    for (const control of operable()) fireEvent.click(control);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(api.calls.length).toBe(after);
   });
@@ -375,6 +434,39 @@ describe('management alerts', () => {
 
     // …and it is not mistaken for a refusal either. The server did not say no.
     expect(screen.queryByText(t('web.no_permission'))).toBeNull();
+  });
+
+  /**
+   * The alerts PAGER's final-answer half, which had no test either.
+   *
+   * Round 29's prose treated this pager as the one already covered. What
+   * covered it was `draws no request-issuing control at all when the actor is
+   * denied` — the `denied` half only. `{!denied && (` was therefore lint-clean,
+   * prettier-clean and suite-clean, and it puts the pager back over a finally
+   * refused list. Three of the five gates had exactly half a test; this is the
+   * third of the three.
+   */
+  it('withdraws the pager once the refusal is final', async () => {
+    stubApi([
+      {
+        url: '/ops-log',
+        body: {
+          error: {
+            kind: 'forbidden',
+            code: 'access.permission_denied',
+            message: 'no',
+            correlationId: 'test',
+          },
+        },
+        status: 403,
+      },
+    ]);
+    renderPage(<AlertsPage denied={false} />);
+    await screen.findByText(t('web.no_permission'));
+
+    expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'تازه‌تر' })).toBeNull();
+    expect(screen.queryByText('نمایش')).toBeNull();
   });
 
   it('asks the server for the management scope', async () => {
