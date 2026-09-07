@@ -34,11 +34,18 @@ const RECORD = 'docs/phase3d-falsification.md';
  * fix closed one channel and the next round found another; fence-skipping,
  * added in the round before this one, is a fifth channel by construction.
  *
- * A floor closes the class rather than the instance: whatever new way is found
- * to stop reading part of this file, the count falls and the run goes red. Raise
- * it when rows are added; the failure tells you to.
+ * A FLOOR does not close the class, and round 27 claimed it had been replaced
+ * by an exact count when the edit had silently never applied: the script that
+ * made it threw on a later assertion before writing, and the `ok 171` printed
+ * by the next command was read as confirmation of a change that did not exist.
+ * Measured afterwards: fencing 17 of the record's 25 citation tables still
+ * exited 0 under the floor, one of them the table certifying that very commit.
+ *
+ * So it is EXACT. Adding rows fails the run and the failure says what to set it
+ * to, which is the point: the number is a claim about this file and should be
+ * re-stated deliberately, not drifted into.
  */
-const FLOOR = 160;
+const EXPECTED = 178;
 /**
  * A table whose last column is one of these is making citations.
  *
@@ -95,6 +102,15 @@ function sources(dir) {
  */
 function titles(text) {
   const found = [];
+  /*
+   * A test inside a `describe.skip` never runs either.
+   *
+   * Round 27 closed `it.skip`/`it.todo` and left the same hole one level up,
+   * which is the shape of most of this script's history: the instance fixed,
+   * the class left open. A skipped SUITE contributes no titles at all.
+   */
+  const live = text.replace(/\bdescribe\s*\.\s*(?:skip|todo)\s*\([\s\S]*/g, '');
+  text = live;
   const pattern =
     /*
      * `.skip` and `.todo` are NOT accepted.
@@ -346,6 +362,10 @@ for (const line of lines) {
   }
 }
 
+// EOF ends a table too. The detector only fired on a non-`|` line, and the end
+// of this file is exactly where every round appends its own table.
+if (header !== null && width === 0) unstructured.push(header);
+
 if (
   missing.length > 0 ||
   unparsed.length > 0 ||
@@ -387,11 +407,15 @@ if (
   process.exit(1);
 }
 
-if (checked < FLOOR) {
+if (checked !== EXPECTED) {
   console.error(
-    `\x1b[31mfail\x1b[0m  only ${checked} citations were checked; this record must contain at least ${FLOOR}.`,
+    `\x1b[31mfail\x1b[0m  ${checked} citations were checked; this record declares ${EXPECTED}.`,
   );
-  console.error('      Rows are not missing from the file — they are missing from this CHECK.');
+  console.error(
+    checked < EXPECTED
+      ? '      Rows may not be missing from the FILE — they may be missing from this CHECK.'
+      : `      Rows were added. Set EXPECTED to ${checked} in the same commit that adds them.`,
+  );
   process.exit(1);
 }
 

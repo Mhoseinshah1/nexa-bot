@@ -62,6 +62,27 @@ export function staleAfterError(query: QueryView): boolean {
 }
 
 /**
+ * Whether the error state is a REFUSAL rather than a connection failure.
+ *
+ * The card said "خطا در ارتباط با سرور — ارتباط با سرور برقرار نشد. دوباره
+ * تلاش کنید" for a 403 the server answered correctly in microseconds: a false
+ * statement about what happened, and — since `retryOf` withholds the button —
+ * an instruction to do something the screen has deliberately removed the means
+ * to do.
+ *
+ * `StateSwitch`'s `denied` prop comes from the permission list, which the shell
+ * re-reads on a 60-second cadence, so a revocation IS eventually believed
+ * there. An earlier version of this comment said it never was; that had been
+ * true two rounds before the comment was written and was already fixed. What
+ * remains true is the window — up to one cadence, plus any 403 that is not
+ * permission-list drift at all — and inside it the 403 in hand is the better
+ * evidence.
+ */
+export function refused(query: QueryView): boolean {
+  return query.isError && query.error instanceof ApiError && query.error.status === 403;
+}
+
+/**
  * A retry worth offering.
  *
  * After a FINAL answer there is nothing to retry: the request will be refused
@@ -70,24 +91,27 @@ export function staleAfterError(query: QueryView): boolean {
  * noise the alerts page exists to keep clear. `main.tsx` retries once, so every
  * click is two refusals.
  */
-/**
- * Whether the error state is a REFUSAL rather than a connection failure.
- *
- * The card said "خطا در ارتباط با سرور — ارتباط با سرور برقرار نشد. دوباره
- * تلاش کنید" for a 403 the server answered correctly in microseconds: a false
- * statement about what happened, and — since `retryOf` now withholds the
- * button — an instruction to do something the screen has deliberately removed
- * the means to do. `StateSwitch` has correct copy for a permission failure that
- * a MID-SESSION revocation never reaches, because its `denied` prop comes from
- * the permission list fetched at sign-in, not from the 403.
- */
-export function refused(query: QueryView): boolean {
-  return query.isError && query.error instanceof ApiError && query.error.status === 403;
-}
-
 export function retryOf(query: QueryView): (() => void) | undefined {
   if (query.isError && finalAnswer(query.error)) return undefined;
   return () => void query.refetch();
+}
+
+/**
+ * Whether a control that ISSUES A REQUEST may be drawn.
+ *
+ * `retryOf` alone is not this test, and gating controls on it was wrong in the
+ * same way twice. A DENIED query is `enabled: false`, so it stays `isPending`
+ * for ever and is never `isError` — `retryOf` hands back a callback and the
+ * control is drawn above the "you do not have access" card. Pressing it calls
+ * `refetch()`, which DOES fetch a disabled query in react-query 5, so each
+ * press is two refused requests and two `access.permission_denied` events.
+ *
+ * This covers every control beside a `StateSwitch` that mints a request — a
+ * refresh button, a filter select, a scope pill, a pager. Each of them changes
+ * or repeats the query the card below has just said cannot be answered.
+ */
+export function mayRequest(query: QueryView, denied = false): boolean {
+  return !denied && retryOf(query) !== undefined;
 }
 
 /**

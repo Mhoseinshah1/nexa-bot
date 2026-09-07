@@ -82,7 +82,13 @@ describe('the query-view contract', () => {
         // previous single-pattern version: `&&`, a ternary, and `status`.
         const match =
           /\{\s*(\w+)\.isError\s*[&?]/.exec(line) ??
-          /\{\s*(\w+)\.status\s*===\s*'error'/.exec(line);
+          // The NEGATED spelling, which is the natural way to write the ladder
+          // this scan hunts and escaped the first three patterns entirely. A
+          // reviewer rewrote one site as `{!detail.isError && detail.data && (`
+          // — prettier-clean, scan-clean, suite-clean — and it reverted commit
+          // 894be2a's rule (a failed poll keeps the page) at that site.
+          /\{\s*!\s*(\w+)\.isError\s*&&/.exec(line) ??
+          /\{\s*(\w+)\.status\s*!?===\s*'error'/.exec(line);
         if (match === null) return;
         if (mutations.has(`${file.path}:${match[1]}`)) return;
         // `staleAfterError` on the same line IS asking the rule.

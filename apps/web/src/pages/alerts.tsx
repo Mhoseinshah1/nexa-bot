@@ -18,7 +18,7 @@ import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
 import { severityTone } from './dashboard';
-import { queryState, retryOf, staleAfterError } from '../view-state';
+import { mayRequest, queryState, refused, retryOf, staleAfterError } from '../view-state';
 import {
   Badge,
   Banner,
@@ -216,7 +216,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
            * `main.tsx` retries once. Exactly the shape the round before this
            * one fixed on the panel detail, left standing here.
            */
-          retryOf(events) === undefined ? undefined : (
+          !mayRequest(events, denied) ? undefined : (
             <button type="button" className="btn sm" onClick={retryOf(events)}>
               {t('web.refresh')}
             </button>
@@ -229,7 +229,14 @@ export function AlertsPage({ denied }: { denied: boolean }) {
       </Banner>
 
       <Card>
-        <div className="toolbar">
+        {/*
+          The filters mint a NEW query key, which is a fresh request against a
+          question the card below has just said cannot be answered — the same
+          harm as the refresh button and the pager, in the controls nobody
+          gated. Each change was one more refused request and one more
+          `access.permission_denied` event, two in production.
+        */}
+        <div className="toolbar" hidden={!mayRequest(events, denied)}>
           <Pills
             value={openOnly ? 'open' : 'all'}
             onChange={(next) => filter(() => setOpenOnly(next === 'open'))}
@@ -308,7 +315,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
           offering an enabled "older" that pushed a cursor — changing the query
           key and issuing a fresh request the server had just refused.
         */}
-        {queryState(events) !== 'error' && (
+        {['ready', 'empty'].includes(denied ? 'denied' : queryState(events)) && (
           <CursorPager
             shown={rows.length}
             hasPrevious={trail.length > 0}
@@ -511,7 +518,7 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
           offering an enabled "older" that pushed a cursor — changing the query
           key and issuing a fresh request the server had just refused.
         */}
-        {queryState(notifications) !== 'error' && (
+        {['ready', 'empty'].includes(denied ? 'denied' : queryState(notifications)) && (
           <CursorPager
             shown={rows.length}
             hasPrevious={trail.length > 0}
@@ -569,9 +576,17 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
       )}
       {queryState(detail) === 'error' && (
         <Empty
-          title={t('web.error')}
-          hint={t('web.error_hint')}
-          icon="alert"
+          // The SAME copy rule as `StateSwitch`, not a second opinion.
+          //
+          // This card hard-coded the connection copy, so one screen gave two
+          // contradictory diagnoses of one 403: the list card above said "no
+          // permission" and this said "the connection failed — try again",
+          // beside a retry deliberately withheld. It is three lines below a
+          // comment claiming this site follows the same rule as every other
+          // query view.
+          title={refused(detail) ? t('web.no_permission') : t('web.error')}
+          hint={refused(detail) ? t('web.no_permission_hint') : t('web.error_hint')}
+          icon={refused(detail) ? 'lock' : 'alert'}
           {...(retryOf(detail) === undefined
             ? {}
             : {

@@ -2490,3 +2490,128 @@ for the Refresh button on `NotificationsPage`, which never had one — the butto
 is on `AlertsPage`. Written against the wrong component, it could only pass.
 That is the eighth mutation this session to kill nothing on the first attempt,
 and the third whose test was aimed at the wrong thing entirely.
+
+---
+
+# Round 28 — a claim about the checker that was never applied at all
+
+A nineteenth reviewer returned **thirteen** confirmed findings. The theme holds
+for a fifth round: every rule is correct at the site the author was looking at
+and absent at one or more others — twice, this time, on the very page the
+previous commit edited.
+
+## The worst one is not a defect in code
+
+Round 27's message says of the citation checker: "It is an EXACT expectation
+now." **It was never applied.** The script that made the change asserted on a
+later pattern and threw before writing, so `const FLOOR = 160;` survived
+untouched — and the `ok 171` printed by the very next command was read as
+confirmation of a change that did not exist. Measured afterwards by the
+reviewer: fencing 17 of the record's 25 citation tables still exited 0 under the
+floor, one of them the table certifying that commit.
+
+This is the third round in which a claim about this script was stronger than the
+script, and the first in which the claim described an edit that had silently
+no-opped. The count is exact now, and probed.
+
+## Three rounds of gating controls on the wrong test
+
+`retryOf` was used to decide whether a control that issues a request may be
+drawn. It is not that test. A DENIED query is `enabled: false`, so it stays
+`isPending` for ever and is never `isError` — `retryOf` hands back a callback,
+the control is drawn above the "you do not have access" card, and pressing it
+calls `refetch()`, which **does** fetch a disabled query in react-query 5.
+
+Reachable directly: `navPermitted` only hides the nav link, and `resolve()`
+renders the page for anyone who types the path. **No test in the suite had ever
+rendered `AlertsPage` with `denied` true** — all fourteen call sites passed
+`denied={false}` — which is why the round that claimed to remove this control
+left it working.
+
+`mayRequest(query, denied)` is the rule, and it now covers what three separate
+rounds gated one at a time: the refresh button, the severity filter, the
+open/all pills, the live/archived pills, and the pagers. Every one of them mints
+or repeats the query the card below has just said cannot be answered.
+
+## The same screen gave two diagnoses of one refusal
+
+The notification detail's hand-rolled error card — three lines below the
+skeleton round 27 added, inside a block whose comment claims it follows "the
+SAME rule as every other query-driven view" — still hard-coded the connection
+copy. On one 403 the list card above said "no permission" and this said "the
+connection failed, try again", beside a retry deliberately removed.
+
+## Reopening a pane was an unbounded retry
+
+`enabled: showHistory` flipped false→true on every close-and-reopen of the
+revisions `<details>`, which re-triggers an errored query — so the `<summary>`
+element was a retry button the rule does not know about, at one request per
+reopen, while the card inside withheld Retry because the answer was final. The
+first open is sticky now; closing does not disable, so reopening cannot
+re-trigger. The query has no interval, so staying enabled costs nothing.
+
+## A test whose scenario was fictional
+
+The revisions test registered `{url: '/revisions', status: 503}` beside
+`{url: '/templates'}`. Both are ten characters and both are substrings of the
+revisions URL, so the longest-match sort ties and the first-registered wins: the
+revisions request was answered with the template list, and the error card the
+test asserted came from a `ZodError`, not the 503 it names. It still killed its
+mutation, so it was not vacuous — but it proved a different thing than it said.
+
+## The scan's fourth escape
+
+`{!detail.isError && detail.data && (` — the negated spelling, and the natural
+way to write the ladder the scan hunts. Prettier-clean, scan-clean, suite-clean,
+and it reverts round 24's rule (a failed poll keeps the page) at that site. Now
+matched, along with `status !== 'error'`.
+
+## Two more places the state did not reach
+
+- All three pagers rendered in `denied` and `loading`, so a "showing 0" pager
+  sat under a no-permission card.
+- The dashboard's by-provider card HINT read `panels.data` directly and went on
+  saying "this count covers only the first 200 panels" over a card saying the
+  fleet could not be read.
+
+## A false rationale, and an orphaned docblock
+
+`refused()`'s comment claimed `StateSwitch`'s permission copy is one "a
+MID-SESSION revocation never reaches, because `denied` comes from the permission
+list fetched at sign-in". The shell polls the session every 60 seconds; round 25
+fixed exactly that and `polling.ts` says so. The window is real (≤ one cadence,
+plus 403s that are not permission drift) but the stated reason was false. And
+`refused` had been inserted BETWEEN `retryOf`'s docblock and `retryOf`, so TSDoc
+attached the retry rule to the wrong function.
+
+## `describe.skip`, one level up
+
+Round 27 closed `it.skip`/`it.todo` and left the class open: a citation
+resolving to a test inside a skipped SUITE still counted. Skipped suites
+contribute no titles now.
+
+## The mutations
+
+| #   | rule                                                   | mutation                               | tests that die                                                                                                                                       |
+| --- | ------------------------------------------------------ | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| V1  | a denied page draws no request-issuing control         | `mayRequest` → `retryOf`               | `settings-and-alerts.test.tsx` › draws no request-issuing control at all when the actor is denied                                                    |
+| V2  | the filters go with the rest                           | un-gate the toolbar                    | `settings-and-alerts.test.tsx` › draws no request-issuing control at all when the actor is denied; › withdraws its filters once the refusal is final |
+| V3  | the detail names the refusal, not a connection failure | hard-code the connection copy          | `control-plane-pages.test.tsx` › drops a stale attempts list on a final refusal, and offers no retry                                                 |
+| V4  | reopening the history pane is not a retry              | `setShowHistory(open)`                 | `control-plane-pages.test.tsx` › does not refetch a refused history each time the pane is reopened                                                   |
+| V5  | a card header states nothing the card withheld         | read `panels.data` directly            | `dashboard.test.tsx` › says nothing about a fleet it could not read                                                                                  |
+| V6  | the scan sees the NEGATED spelling                     | `{!detail.isError && detail.data && (` | `state-switch-contract.test.tsx` › renders no view off a bare isError unless it is a mutation                                                        |
+
+| #    | rule                                     | mutation                    | what the check prints                                         |
+| ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 165 citations were checked; this record declares 171 |
+| U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
+
+## One flake, recorded rather than re-run away
+
+During V1's run, `safe-http-dns-pin.test.ts › keeps trusting the public roots
+when a private CA is configured` failed on its 10-second timeout. In isolation
+it passes in **809 ms**. It opens a real TLS socket against a 10 s bound, and a
+mutation run saturates the machine, so the bound is what broke rather than the
+behaviour. Not reproduced since, not fixed, and named here so the next reader
+does not have to rediscover it. It is Phase 3C code untouched by this branch —
+the second such flake this session, both in real-socket tests under load.

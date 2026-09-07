@@ -26,7 +26,7 @@ import {
 } from '../api/client';
 import { formatTimestamp, splitDuration } from '../format';
 import { useSubmissionKey } from '../submission-key';
-import { queryState, shownData } from '../view-state';
+import { mayRequest, queryState, shownData } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { navigate, setQuery, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
@@ -281,7 +281,12 @@ export function PanelsPage({
       />
 
       <Card>
-        <div className="toolbar">
+        {/*
+          The live/archived pills mint a new query key — a fresh request against
+          a question the card below has just said cannot be answered. Same rule
+          as the alerts toolbar, the refresh button and the pager.
+        */}
+        <div className="toolbar" hidden={!mayRequest(panels, denied)}>
           <Pills
             value={archived ? 'archived' : 'live'}
             onChange={(next) => setArchived(next === 'archived')}
@@ -324,7 +329,7 @@ export function PanelsPage({
           offering an enabled "older" that pushed a cursor — changing the query
           key and issuing a fresh request the server had just refused.
         */}
-        {queryState(panels) !== 'error' && (
+        {['ready', 'empty'].includes(denied ? 'denied' : queryState(panels)) && (
           <CursorPager
             shown={rows.length}
             hasPrevious={cursors.length > 0}

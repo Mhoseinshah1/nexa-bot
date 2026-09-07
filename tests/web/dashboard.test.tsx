@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { screen, waitFor } from '@testing-library/react';
 import { DashboardPage, healthSlices, providerSlices } from '../../apps/web/src/pages/dashboard';
 import { panelSummarySchema } from '@nexa/contracts';
 import { event, panel, renderPage, stubApi } from './harness';
@@ -218,5 +218,45 @@ describe('the dashboard', () => {
     await screen.findByText('وضعیت سامانه');
     expect(screen.queryByText('توزیع پنل‌ها')).toBeNull();
     expect(screen.queryByText('نیازمند توجه')).toBeNull();
+  });
+});
+/**
+ * A card header states nothing the card below has withheld.
+ *
+ * `truncated` fed the by-provider card's HINT, rendered above the
+ * `StateSwitch`, so after a refusal the header went on saying "this count
+ * covers only the first page; the fleet is larger than one page" over a card
+ * saying the fleet could not be read at all. The `shownData` rule, unapplied
+ * one component over.
+ */
+describe('the dashboard fleet header', () => {
+  it('says nothing about a fleet it could not read', async () => {
+    const route = {
+      url: '/panels',
+      body: { panels: [panel()], nextCursor: 'more' } as unknown,
+      status: 200,
+    };
+    stubApi([READINESS, { url: '/ops-log', body: { events: [], nextCursor: null } }, route]);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
+    await waitFor(() => {
+      expect(screen.queryAllByText(/فقط ۲۰۰ پنل نخست/).length).toBeGreaterThan(0);
+    });
+
+    route.status = 403;
+    route.body = {
+      error: {
+        kind: 'forbidden',
+        code: 'access.permission_denied',
+        message: 'no',
+        correlationId: 'test',
+      },
+    };
+    await vi.advanceTimersByTimeAsync(95_000);
+
+    await waitFor(() => {
+      expect(screen.queryAllByText(/فقط ۲۰۰ پنل نخست/)).toHaveLength(0);
+    });
+    vi.useRealTimers();
   });
 });

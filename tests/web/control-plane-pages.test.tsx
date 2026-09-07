@@ -257,7 +257,16 @@ describe('the template revisions pane', () => {
     stubApi([
       { url: '/templates', body: { templates: [template()] } },
       {
-        url: '/revisions',
+        /*
+         * `unreachable/revisions`, not `/revisions`.
+         *
+         * Longest match wins and the sort is stable, so `/revisions` and
+         * `/templates` — both ten characters, both substrings of the revisions
+         * URL — tie, and the FIRST registered wins. The earlier version of this
+         * test therefore answered the revisions request with the template list,
+         * and its error card came from a `ZodError`, not the 503 it names.
+         */
+        url: 'unreachable/revisions',
         body: {
           error: {
             kind: 'internal',
@@ -295,6 +304,54 @@ describe('the notifications page', () => {
     renderPage(<NotificationsPage mayTest denied={false} />);
 
     expect(await screen.findByText('event.panel.unreachable')).toBeInTheDocument();
+  });
+
+  /**
+   * Reopening the pane is not a retry the rule does not know about.
+   *
+   * `enabled: showHistory` flipped false→true on every close-and-reopen, which
+   * re-triggers an errored query — so the `<summary>` element was an unbounded
+   * retry button while the card inside deliberately withheld Retry because the
+   * answer was final. Measured before the fix at one request per reopen.
+   */
+  it('does not refetch a refused history each time the pane is reopened', async () => {
+    const api = stubApi([
+      { url: '/templates', body: { templates: [template()] } },
+      {
+        url: 'unreachable/revisions',
+        body: {
+          error: {
+            kind: 'forbidden',
+            code: 'access.permission_denied',
+            message: 'no',
+            correlationId: 'test',
+          },
+        },
+        status: 403,
+      },
+    ]);
+    renderPage(<ContentPage mayEdit denied={false} />);
+    await screen.findAllByText('event.panel.unreachable');
+
+    const open = () => {
+      const pane = screen.getAllByText('تاریخچه')[0] as HTMLElement;
+      const details = pane.closest('details');
+      if (details === null) return;
+      details.open = !details.open;
+      fireEvent(details, new Event('toggle'));
+    };
+    open();
+    await waitFor(() => {
+      expect(api.calls.filter((call) => call.url.includes('/revisions'))).toHaveLength(1);
+    });
+
+    open();
+    open();
+    open();
+    open();
+    // Still one. The pane's first open enables the query; closing it does not
+    // disable it, so reopening cannot re-trigger anything.
+    expect(api.calls.filter((call) => call.url.includes('/revisions'))).toHaveLength(1);
   });
 
   /**
@@ -448,6 +505,16 @@ describe('the notifications page', () => {
       expect(screen.queryByRole('heading', { name: 'تلاش‌ها' })).toBeNull();
     });
     expect(screen.queryByRole('button', { name: 'تلاش دوباره' })).toBeNull();
+    /*
+     * And it names the refusal, not a connection failure.
+     *
+     * This card hard-coded the connection copy while the list card ABOVE IT ON
+     * THE SAME SCREEN said "no permission" for the same 403 — two contradictory
+     * diagnoses of one refusal, the wrong one sitting beside a retry that had
+     * deliberately been removed.
+     */
+    expect(screen.getByText('شما به این بخش دسترسی ندارید.')).toBeInTheDocument();
+    expect(screen.queryByText('خطا در ارتباط با سرور')).toBeNull();
     vi.useRealTimers();
   });
 

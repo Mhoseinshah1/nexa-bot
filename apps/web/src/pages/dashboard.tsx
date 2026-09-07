@@ -18,6 +18,7 @@ import {
   type Tone,
 } from '../ui/kit';
 import { pollUnlessFinal } from '../polling';
+import { queryState, shownData } from '../view-state';
 
 /**
  * One page of panels, at the contract's ceiling. `PANEL_PAGE_MAX` is the most
@@ -123,7 +124,16 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
   // a tenant with exactly 200 panels got a partial-fleet warning over a
   // complete aggregate. `nextCursor` is non-null only when a panel really was
   // left out.
-  const truncated = panels.data?.nextCursor != null;
+  /*
+   * Only what the SCREEN is showing.
+   *
+   * This feeds a `Card` hint rendered ABOVE the `StateSwitch`, so after a
+   * refusal the header went on saying "this count covers only the first page;
+   * the fleet is larger" over a card saying the fleet could not be read. The
+   * `shownData` rule, unapplied one component over.
+   */
+  const shownPanels = shownData(panels, mayViewPanels ? queryState(panels) : 'denied', panels.data);
+  const truncated = shownPanels?.nextCursor != null;
 
   return (
     <>

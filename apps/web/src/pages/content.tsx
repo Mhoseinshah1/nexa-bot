@@ -359,7 +359,22 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
           )}
         </details>
 
-        <details onToggle={(event) => setShowHistory(event.currentTarget.open)}>
+        {/*
+          STICKY. The first open enables the query; closing does not disable it.
+          
+          `setShowHistory(open)` made the `<summary>` element a retry button the
+          rule does not know about: every close-and-reopen flipped `enabled`
+          false→true, which re-triggers an errored query — so the pane refetched
+          on each reopen, unbounded, while the card inside deliberately withheld
+          Retry because the answer was final. Measured at one request per
+          reopen. Staying enabled costs nothing: this query has no interval.
+        */}
+        <details
+          onToggle={(event) => {
+            const { open } = event.currentTarget;
+            setShowHistory((current) => current || open);
+          }}
+        >
           <summary>{t('web.revisions')}</summary>
           {/*
             The SAME rule as every other query-driven view.

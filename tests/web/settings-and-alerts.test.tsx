@@ -267,6 +267,67 @@ describe('management alerts', () => {
     expect(api.calls.length).toBe(after);
   });
 
+  /**
+   * A DENIED page draws no control that would issue a request.
+   *
+   * `retryOf` alone cannot decide this, and gating on it was wrong twice. A
+   * denied query is `enabled: false`, so it is `isPending` for ever and never
+   * `isError` — `retryOf` hands back a callback, the control is drawn above the
+   * "you do not have access" card, and pressing it calls `refetch()`, which
+   * DOES fetch a disabled query in react-query 5. Two refused requests and two
+   * `access.permission_denied` events per press, on a route reachable directly:
+   * `navPermitted` only hides the link.
+   *
+   * No test in this suite had ever rendered `AlertsPage` with `denied`, which
+   * is why the control survived the round that claimed to have removed it.
+   */
+  it('draws no request-issuing control at all when the actor is denied', async () => {
+    const api = stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
+    renderPage(<AlertsPage denied />);
+    await screen.findByText('شما به این بخش دسترسی ندارید.');
+
+    expect(screen.queryByRole('button', { name: 'تازه‌سازی' })).toBeNull();
+    expect(screen.queryByRole('combobox')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'حل‌نشده' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
+    // Nothing on the page can have asked the server anything.
+    expect(api.calls).toHaveLength(0);
+  });
+
+  /**
+   * The filters mint a NEW query key, which is a fresh request against a
+   * question the card below has just said cannot be answered.
+   */
+  it('withdraws its filters once the refusal is final', async () => {
+    const route = {
+      url: '/ops-log',
+      body: { events: [event()], nextCursor: null } as unknown,
+      status: 200,
+    };
+    const api = stubApi([route]);
+    renderPage(<AlertsPage denied={false} />);
+    await screen.findByText('Roles changed.');
+    expect(screen.getByRole('combobox')).toBeInTheDocument();
+
+    route.status = 403;
+    route.body = {
+      error: {
+        kind: 'forbidden',
+        code: 'access.permission_denied',
+        message: 'no',
+        correlationId: 'test',
+      },
+    };
+    fireEvent.click(screen.getByRole('button', { name: 'تازه‌سازی' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('combobox')).toBeNull();
+    });
+    const after = api.calls.length;
+    expect(screen.queryByRole('button', { name: 'حل‌نشده' })).toBeNull();
+    expect(api.calls.length).toBe(after);
+  });
+
   it('asks the server for the management scope', async () => {
     const api = stubApi([{ url: '/ops-log', body: { events: [event()], nextCursor: null } }]);
     renderPage(<AlertsPage denied={false} />);
