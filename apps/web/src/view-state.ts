@@ -1,3 +1,4 @@
+import { ApiError } from './api/client';
 import { finalAnswer } from './polling';
 
 /** The five states any query-driven view can be in. */
@@ -69,6 +70,21 @@ export function staleAfterError(query: QueryView): boolean {
  * noise the alerts page exists to keep clear. `main.tsx` retries once, so every
  * click is two refusals.
  */
+/**
+ * Whether the error state is a REFUSAL rather than a connection failure.
+ *
+ * The card said "خطا در ارتباط با سرور — ارتباط با سرور برقرار نشد. دوباره
+ * تلاش کنید" for a 403 the server answered correctly in microseconds: a false
+ * statement about what happened, and — since `retryOf` now withholds the
+ * button — an instruction to do something the screen has deliberately removed
+ * the means to do. `StateSwitch` has correct copy for a permission failure that
+ * a MID-SESSION revocation never reaches, because its `denied` prop comes from
+ * the permission list fetched at sign-in, not from the 403.
+ */
+export function refused(query: QueryView): boolean {
+  return query.isError && query.error instanceof ApiError && query.error.status === 403;
+}
+
 export function retryOf(query: QueryView): (() => void) | undefined {
   if (query.isError && finalAnswer(query.error)) return undefined;
   return () => void query.refetch();

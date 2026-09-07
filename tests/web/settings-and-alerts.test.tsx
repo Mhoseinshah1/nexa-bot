@@ -223,6 +223,50 @@ describe('management alerts', () => {
    * cursor having already walked past the other forty-eight, so paging would
    * drop rows silently.
    */
+  /**
+   * The page's own Refresh button goes when the answer is final.
+   *
+   * `PageHead` renders ABOVE `StateSwitch`, so the state never reached this
+   * control: after a revoked permission the error card below correctly offered
+   * no retry while the most obvious button on the page went on firing the
+   * refused request — one `access.permission_denied` operational event and one
+   * DENIED audit row per press, two in production because `main.tsx` retries
+   * once. Exactly the shape the round before this one fixed on the panel
+   * detail, left standing here.
+   */
+  it('withdraws its own refresh once the refusal is final', async () => {
+    const route = {
+      url: '/ops-log',
+      body: { events: [event()], nextCursor: null } as unknown,
+      status: 200,
+    };
+    const api = stubApi([route]);
+    renderPage(<AlertsPage denied={false} />);
+    await screen.findByText('Roles changed.');
+    const refresh = screen.getByRole('button', { name: 'تازه‌سازی' });
+    expect(refresh).toBeInTheDocument();
+
+    // The permission is revoked. Pressing Refresh is what delivers the answer.
+    route.status = 403;
+    route.body = {
+      error: {
+        kind: 'forbidden',
+        code: 'access.permission_denied',
+        message: 'no',
+        correlationId: 'test',
+      },
+    };
+    fireEvent.click(refresh);
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'تازه‌سازی' })).toBeNull();
+    });
+    // And nothing else on the page can fire it either.
+    const after = api.calls.length;
+    expect(screen.queryByRole('button', { name: 'تلاش دوباره' })).toBeNull();
+    expect(api.calls.length).toBe(after);
+  });
+
   it('asks the server for the management scope', async () => {
     const api = stubApi([{ url: '/ops-log', body: { events: [event()], nextCursor: null } }]);
     renderPage(<AlertsPage denied={false} />);

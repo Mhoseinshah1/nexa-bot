@@ -96,7 +96,15 @@ function sources(dir) {
 function titles(text) {
   const found = [];
   const pattern =
-    /\b(?:it|test)\s*(?:\.each\s*\([\s\S]*?\)\s*)?(?:\.(?:only|skip|concurrent|todo|fails))?\s*\(\s*(['"`])([\s\S]*?)\1/g;
+    /*
+     * `.skip` and `.todo` are NOT accepted.
+     *
+     * They were, and a citation therefore resolved to a name that never runs —
+     * defeating this script's one sentence of purpose in the cheapest possible
+     * way. `.only` and `.concurrent` do run; `.fails` runs and asserts its own
+     * failure, so it is evidence too.
+     */
+    /\b(?:it|test)\s*(?:\.each\s*\([\s\S]*?\)\s*)?(?:\.(?:only|concurrent|fails))?\s*\(\s*(['"`])([\s\S]*?)\1/g;
   let match;
   while ((match = pattern.exec(text)) !== null) found.push(match[2]);
   return found;

@@ -316,13 +316,23 @@ export function PanelsPage({
           />
         </StateSwitch>
 
-        <CursorPager
-          shown={rows.length}
-          hasPrevious={cursors.length > 0}
-          hasNext={nextCursor !== null}
-          onPrevious={popCursor}
-          onNext={() => nextCursor !== null && pushCursor(nextCursor)}
-        />
+        {/*
+          The pager describes rows that are ON SCREEN.
+          
+          It is a sibling of `StateSwitch`, so the error card replaced the table
+          while this went on reporting "showing N" for rows nobody could see and
+          offering an enabled "older" that pushed a cursor — changing the query
+          key and issuing a fresh request the server had just refused.
+        */}
+        {queryState(panels) !== 'error' && (
+          <CursorPager
+            shown={rows.length}
+            hasPrevious={cursors.length > 0}
+            hasNext={nextCursor !== null}
+            onPrevious={popCursor}
+            onNext={() => nextCursor !== null && pushCursor(nextCursor)}
+          />
+        )}
       </Card>
     </>
   );

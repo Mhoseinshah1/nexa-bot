@@ -2205,7 +2205,22 @@ the readiness card beside them does announce its own failure.
 
 Deleting `stale=` from seventeen of the eighteen sites, with
 `state-switch-contract.test.tsx` removed as well, leaves **265 of 265 green** —
-every remaining web test — so nothing but that scan was holding the property.
+every remaining web test. Re-measured in round 27 on this exact head: the figure
+holds.
+
+> **But the conclusion drawn from it did not.** "Nothing but that scan was
+> holding the property" is false: deleting only the PANEL-DETAIL prop fails
+> `panels.test.tsx › says so when the data on screen is older than the server`
+> as well as the scan. A behaviour test held one of the eighteen sites all
+> along; the scan held the other seventeen. Measured in round 27:
+> `2 failed | 265 passed (267)`.
+>
+> And the round-26 correction of this paragraph was itself wrong on its stated
+> reason — "since only twelve sites were then wired". Twelve was round 24's
+> state (`894be2a`: 2+1+2+1+2+1+3). At round 25's own head all eighteen were
+> wired (2+1+4+1+4+1+5). The reviewer's original experiment ran against round
+> 24, which is why theirs deleted eleven. Three successive statements about one
+> experiment, each correcting the last, and each wrong about something else.
 
 > The first version of this paragraph said "the other seventeen … 264 of 264",
 > which described an experiment nobody had run: at the time the reviewer ran
@@ -2355,9 +2370,9 @@ sixth way turns out to be, the count falls and the run goes red.
 | U90 | a final answer is offered no retry                       | `retryOf` never returns undefined     | `panels.test.tsx` › takes the screen down when the refusal is final, rather than warning; `control-plane-pages.test.tsx` › drops a stale attempts list on a final refusal, and offers no retry |
 | U91 | the notification detail asks the same rule as every view | drop `queryState(detail) !== 'error'` | `control-plane-pages.test.tsx` › drops a stale attempts list on a final refusal, and offers no retry                                                                                           |
 
-| #   | rule                                    | mutation                    | what the check prints                                           |
-| --- | --------------------------------------- | --------------------------- | --------------------------------------------------------------- |
-| U88 | the record's citation count has a floor | fence a real citation table | exits 1: only 157 citations were checked; at least 160 required |
+| #   | rule                                    | mutation                    | what the check prints                                          |
+| --- | --------------------------------------- | --------------------------- | -------------------------------------------------------------- |
+| U88 | the record's citation count has a floor | fence a real citation table | SUPERSEDED by round 27 — see there for the reproducible output |
 
 ## One test I had to repair three times before it could discriminate
 
@@ -2371,3 +2386,107 @@ touching anything.
 
 That the fixture was rejected by the contract is the harness working: these
 tests parse through the same schemas the server validates against.
+
+---
+
+# Round 27 — the same shape, three more places it had not been looked for
+
+An eighteenth reviewer found round 26's rule right and its sweep incomplete,
+for the third round running, plus three ways the checker and its scan still
+accepted less than they claimed.
+
+## Controls that outlive the screen, again
+
+Round 26 fixed `PageHead` on the panel detail: a control ABOVE `StateSwitch`
+that the state never reaches. The same shape was left standing in three more
+places, all found by looking rather than by any check:
+
+- **The alerts page's own Refresh button.** After a revoked permission the card
+  below correctly offered no retry while the most obvious button on the page
+  went on firing the refused request — one `access.permission_denied` event and
+  one DENIED audit row per press, two in production because `main.tsx` retries
+  once.
+- **All three `CursorPager`s.** Siblings of their switch, fed from
+  `query.data`, so the error card replaced the table while the pager reported
+  "showing N" for rows nobody could see and offered an enabled "older" that
+  pushed a cursor — changing the query key and issuing a fresh refused request.
+- **The template revisions pane**, which had no error state at all: it rendered
+  `{revisions.data && …}` and nothing else, so a refused history drew an EMPTY
+  pane. An operator reads that as "this template has no revision history" — a
+  false statement about the record, from the module whose own comment says
+  silence is the one outcome this subsystem may not produce.
+
+That last one is the important one, because the scan written in round 26 to
+catch exactly this class could not see it: the scan matches spellings of
+`isError`, and this site's defect was the ABSENCE of that spelling. A scan over
+spellings cannot find an absence, and the file now says so rather than implying
+coverage it does not have.
+
+## The error card described a failure that did not happen
+
+For a 403 the server answered correctly in microseconds, the card said "خطا در
+ارتباط با سرور — ارتباط با سرور برقرار نشد. دوباره تلاش کنید": a false account
+of what happened, next to an instruction to retry, next to no button — because
+round 26 had correctly withheld it. `StateSwitch` had the right copy for a
+permission failure all along; a MID-SESSION revocation never reaches it, since
+`denied` comes from the permission list fetched at sign-in rather than from the
+403 in hand.
+
+## The detail panel had no loading state
+
+Three blocks keyed on staleness, error and data — jointly incomplete, because
+`isPending` matched none. Selecting a notification left the DOM byte-identical
+until the request answered: a click that appears to do nothing.
+
+## The scan's exemption failed OPEN
+
+Round 26 exempted mutations by flagging only names matched by `const X =
+useQuery(` in the same file — so everything else was exempt by default,
+including a genuine polled query arriving as a prop. Inserting
+`{query.isError && …}` into `AttentionCard` left the scan green. An exemption
+that fails open exempts the cases nobody thought of, which are the ones a scan
+is for. It is inverted now: everything is a query unless a `useMutation` in the
+same file proves otherwise, and two further spellings the single pattern missed
+(a ternary, and `status === 'error'`) are matched too.
+
+## A floor is not a bound
+
+`FLOOR = 160` against 165 actual was measured by the reviewer against every one
+of the record's 25 citation tables: fencing 17 of them still exited 0, because
+the slack absorbed the drop. One was the table certifying the commit that
+introduced the floor. It is an EXACT expectation now — adding rows fails the run
+and the failure says what to set it to, which is the point: the number is a
+claim about this file and should be re-stated deliberately, not drifted into.
+
+Row **U88** cited `only 157 citations were checked`. No single-table fence on
+the committed record produces 157; the figure came from a pre-round-26 state.
+The row is corrected below to what the check actually prints.
+
+## `it.todo` counted as evidence
+
+`titles()` accepted `.skip` and `.todo`, so a citation resolved to a name that
+never runs — defeating this script's one sentence of purpose in the cheapest
+possible way. Both are rejected now; `.only`, `.concurrent` and `.fails` do run
+and remain accepted.
+
+## The mutations
+
+| #   | rule                                                 | mutation                                         | tests that die                                                                                |
+| --- | ---------------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| U94 | the page's own refresh goes when the answer is final | restore the ungated button                       | `settings-and-alerts.test.tsx` › withdraws its own refresh once the refusal is final          |
+| U95 | the pager goes with the rows it describes            | `queryState(notifications) !== 'error'` → `true` | `control-plane-pages.test.tsx` › takes the pager down with the rows it was describing         |
+| U96 | a refusal is not reported as a connection failure    | always use the connection copy                   | `panels.test.tsx` › takes the screen down when the refusal is final, rather than warning      |
+| U97 | a refused revision history is not an empty one       | drop the revisions `StateSwitch`                 | `control-plane-pages.test.tsx` › says the history could not be read, rather than showing none |
+| U98 | selecting a notification does something visible      | drop the detail skeleton                         | `control-plane-pages.test.tsx` › shows the detail is loading rather than nothing at all       |
+| U93 | the scan's mutation exemption fails CLOSED           | a query arriving as a prop renders off `isError` | `state-switch-contract.test.tsx` › renders no view off a bare isError unless it is a mutation |
+
+| #   | rule                                        | mutation                    | what the check prints                                         |
+| --- | ------------------------------------------- | --------------------------- | ------------------------------------------------------------- |
+| U88 | the record's citation count is exact        | fence a real citation table | exits 1: 161 citations were checked; this record declares 165 |
+| U92 | a citation must resolve to a test that RUNS | cite an `it.todo` stub      | exits 1: 1 of 166 cited tests do not exist                    |
+
+**U94 killed nothing on its first run.** The assertion was vacuous: it looked
+for the Refresh button on `NotificationsPage`, which never had one — the button
+is on `AlertsPage`. Written against the wrong component, it could only pass.
+That is the eighth mutation this session to kill nothing on the first attempt,
+and the third whose test was aimed at the wrong thing entirely.

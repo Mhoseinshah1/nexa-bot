@@ -239,6 +239,54 @@ describe('the content page', () => {
   });
 });
 
+describe('the template revisions pane', () => {
+  /**
+   * A refused revision history is not an empty one.
+   *
+   * The pane rendered `{revisions.data && …}` and nothing else — no loading
+   * state, no error state, no retry — so a refused or failing
+   * `GET /templates/:key/revisions` drew an EMPTY pane. An operator reads that
+   * as "this template has no revision history", which is a false statement
+   * about the record, from the module whose own comment says silence is the one
+   * outcome this subsystem may not produce.
+   *
+   * It never mentioned `isError`, so the scan aimed at hand-rolled error
+   * ladders could not see it: the defect was the ABSENCE of that spelling.
+   */
+  it('says the history could not be read, rather than showing none', async () => {
+    stubApi([
+      { url: '/templates', body: { templates: [template()] } },
+      {
+        url: '/revisions',
+        body: {
+          error: {
+            kind: 'internal',
+            code: 'test.down',
+            message: 'down',
+            correlationId: 'test',
+          },
+        },
+        status: 503,
+      },
+    ]);
+    renderPage(<ContentPage mayEdit denied={false} />);
+    await screen.findAllByText('event.panel.unreachable');
+
+    // Opening the <details> is what enables the query.
+    const pane = screen.getAllByText('تاریخچه')[0] as HTMLElement;
+    fireEvent.click(pane);
+    const details = pane.closest('details');
+    if (details !== null) {
+      details.open = true;
+      fireEvent(details, new Event('toggle'));
+    }
+
+    // Not silence, and not a claim that there are none.
+    expect(await screen.findByText('خطا در ارتباط با سرور')).toBeInTheDocument();
+    expect(screen.queryByText('موردی برای نمایش نیست.')).toBeNull();
+  });
+});
+
 describe('the notifications page', () => {
   it('renders an intent and its delivery state', async () => {
     stubApi([
@@ -247,6 +295,98 @@ describe('the notifications page', () => {
     renderPage(<NotificationsPage mayTest denied={false} />);
 
     expect(await screen.findByText('event.panel.unreachable')).toBeInTheDocument();
+  });
+
+  /**
+   * Selecting a notification does something visible immediately.
+   *
+   * The detail rendered three blocks keyed on staleness, the error state and
+   * the data — jointly incomplete, because `isPending` matched none of them.
+   * So the first load of a newly selected notification left the DOM
+   * byte-identical until the request answered: a click that appears to do
+   * nothing. Every `StateSwitch` view on the branch draws a skeleton here, and
+   * the comment claiming this site follows "the SAME rule as every other query
+   * view" was two thirds true.
+   */
+  it('shows the detail is loading rather than nothing at all', async () => {
+    // The same shape the other held-request tests use: TypeScript cannot see
+    // the assignment inside a Promise executor and narrows the binding to null.
+    const gate: { release: () => void } = { release: () => undefined };
+    const held = new Promise<void>((resolve) => {
+      gate.release = resolve;
+    });
+    const body = (value: unknown) =>
+      new Response(JSON.stringify(value), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = String(input);
+        if (url.includes('/notifications/')) {
+          await held;
+          return body({
+            notification: notification({ id: 'n1' }),
+            attempts: [],
+            releasedClaims: [],
+          });
+        }
+        return body({ notifications: [notification({ id: 'n1' })], nextCursor: null });
+      }),
+    );
+    renderPage(<NotificationsPage mayTest denied={false} />);
+    await screen.findByText('event.panel.unreachable');
+    const before = document.body.innerHTML;
+
+    fireEvent.click(screen.getByRole('button', { name: 'event.panel.unreachable' }));
+
+    await waitFor(() => {
+      expect(document.body.innerHTML).not.toBe(before);
+    });
+    gate.release();
+  });
+
+  /**
+   * The pager describes rows that are on screen, and stops when they are not.
+   *
+   * `CursorPager` is a SIBLING of `StateSwitch`, fed from `query.data`, so the
+   * error card replaced the table while the pager below went on reporting
+   * "showing N" for rows nobody could see — and offered an enabled "older" that
+   * pushed a cursor, changing the query key and issuing a fresh request the
+   * server had just refused.
+   */
+  it('takes the pager down with the rows it was describing', async () => {
+    const route = {
+      url: '/notifications',
+      body: {
+        notifications: [notification({ id: 'n1', status: 'PENDING' })],
+        nextCursor: { at: '2026-09-06T07:00:00.000Z', id: 'n0' },
+      } as unknown,
+      status: 200,
+    };
+    stubApi([route]);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPage(<NotificationsPage mayTest denied={false} />);
+    await screen.findByText('event.panel.unreachable');
+    expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeEnabled();
+
+    route.status = 403;
+    route.body = {
+      error: {
+        kind: 'forbidden',
+        code: 'access.permission_denied',
+        message: 'no',
+        correlationId: 'test',
+      },
+    };
+    await vi.advanceTimersByTimeAsync(95_000);
+
+    await waitFor(() => {
+      expect(screen.queryByRole('table')).toBeNull();
+    });
+    expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
+    vi.useRealTimers();
   });
 
   /**

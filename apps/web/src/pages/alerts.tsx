@@ -24,6 +24,7 @@ import {
   Banner,
   Card,
   CursorPager,
+  Skeleton,
   DataTable,
   Empty,
   Ltr,
@@ -203,9 +204,23 @@ export function AlertsPage({ denied }: { denied: boolean }) {
         subtitle={t('web.alerts_intro')}
         maturity="now"
         actions={
-          <button type="button" className="btn sm" onClick={() => void events.refetch()}>
-            {t('web.refresh')}
-          </button>
+          /*
+           * Gone once the answer is final, for the same reason the error card's
+           * retry is.
+           *
+           * `PageHead` renders ABOVE `StateSwitch`, so the state never reached
+           * this button: after a revoked permission the card below correctly
+           * offered nothing while the most obvious control on the page went on
+           * firing the refused request — one `access.permission_denied` event
+           * and one DENIED audit row per press, two in production because
+           * `main.tsx` retries once. Exactly the shape the round before this
+           * one fixed on the panel detail, left standing here.
+           */
+          retryOf(events) === undefined ? undefined : (
+            <button type="button" className="btn sm" onClick={retryOf(events)}>
+              {t('web.refresh')}
+            </button>
+          )
         }
       />
 
@@ -285,22 +300,32 @@ export function AlertsPage({ denied }: { denied: boolean }) {
           />
         </StateSwitch>
 
-        <CursorPager
-          shown={rows.length}
-          hasPrevious={trail.length > 0}
-          // The SERVER's cursor. A full page is not the same question as
-          // "is there another page": with exactly `ALERTS_PAGE_SIZE` matching
-          // rows the page is full and there is nothing behind it, so comparing
-          // lengths offered an "older" page that did not exist and landed the
-          // operator on "there are no open alerts" over alerts one page back.
-          // The reader over-fetches one row to answer this properly.
-          hasNext={events.data?.nextCursor != null}
-          onPrevious={() => setTrail((current) => current.slice(0, -1))}
-          onNext={() => {
-            const next = events.data?.nextCursor;
-            if (next) setTrail((current) => [...current, next]);
-          }}
-        />
+        {/*
+          The pager describes rows that are ON SCREEN.
+          
+          It is a sibling of `StateSwitch`, so the error card replaced the table
+          while this went on reporting "showing N" for rows nobody could see and
+          offering an enabled "older" that pushed a cursor — changing the query
+          key and issuing a fresh request the server had just refused.
+        */}
+        {queryState(events) !== 'error' && (
+          <CursorPager
+            shown={rows.length}
+            hasPrevious={trail.length > 0}
+            // The SERVER's cursor. A full page is not the same question as
+            // "is there another page": with exactly `ALERTS_PAGE_SIZE` matching
+            // rows the page is full and there is nothing behind it, so comparing
+            // lengths offered an "older" page that did not exist and landed the
+            // operator on "there are no open alerts" over alerts one page back.
+            // The reader over-fetches one row to answer this properly.
+            hasNext={events.data?.nextCursor != null}
+            onPrevious={() => setTrail((current) => current.slice(0, -1))}
+            onNext={() => {
+              const next = events.data?.nextCursor;
+              if (next) setTrail((current) => [...current, next]);
+            }}
+          />
+        )}
       </Card>
     </>
   );
@@ -478,19 +503,29 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
           />
         </StateSwitch>
 
-        <CursorPager
-          shown={rows.length}
-          hasPrevious={trail.length > 0}
-          // The SERVER's cursor, not a guess from the page length. `null`
-          // means the last page, so "older" is never offered where there is
-          // nothing older.
-          hasNext={notifications.data?.nextCursor != null}
-          onPrevious={() => setTrail((current) => current.slice(0, -1))}
-          onNext={() => {
-            const next = notifications.data?.nextCursor;
-            if (next) setTrail((current) => [...current, next]);
-          }}
-        />
+        {/*
+          The pager describes rows that are ON SCREEN.
+          
+          It is a sibling of `StateSwitch`, so the error card replaced the table
+          while this went on reporting "showing N" for rows nobody could see and
+          offering an enabled "older" that pushed a cursor — changing the query
+          key and issuing a fresh request the server had just refused.
+        */}
+        {queryState(notifications) !== 'error' && (
+          <CursorPager
+            shown={rows.length}
+            hasPrevious={trail.length > 0}
+            // The SERVER's cursor, not a guess from the page length. `null`
+            // means the last page, so "older" is never offered where there is
+            // nothing older.
+            hasNext={notifications.data?.nextCursor != null}
+            onPrevious={() => setTrail((current) => current.slice(0, -1))}
+            onNext={() => {
+              const next = notifications.data?.nextCursor;
+              if (next) setTrail((current) => [...current, next]);
+            }}
+          />
+        )}
       </Card>
 
       {/*
@@ -512,6 +547,16 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
         does not distinguish a blip from an answer, and `detail.data` does not
         know what `detail.isError` decided.
       */}
+      {/*
+        The LOADING state, which the three blocks below jointly did not cover.
+        
+        `isPending` matched none of them, so selecting a notification left the
+        DOM byte-identical until the request answered — a click that appears to
+        do nothing. Every `StateSwitch` view on the branch draws a skeleton
+        here; the comment claiming this site "follows the SAME rule as every
+        other query-driven view" was two thirds true.
+      */}
+      {selected !== null && detail.isPending && <Skeleton />}
       {detail.isError && staleAfterError(detail) && (
         <Banner tone="danger">
           {messageFor(detail.error)}{' '}

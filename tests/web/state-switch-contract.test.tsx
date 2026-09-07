@@ -53,30 +53,38 @@ describe('the query-view contract', () => {
     );
   });
 
-  it('renders no QUERY view off a bare isError', () => {
+  it('renders no view off a bare isError unless it is a mutation', () => {
     /*
-     * MUTATIONS are exempt, and the distinction is the whole point.
+     * FAIL CLOSED. Everything is a query unless proved a mutation.
+     *
+     * The first version of this exemption did the opposite — it flagged only
+     * names matched by `const X = useQuery(` IN THE SAME FILE, so everything
+     * else was exempt by default, including a genuine polled query arriving as
+     * a prop. Inserting `{query.isError && …}` into `AttentionCard`, which is
+     * exactly that, left the scan green. An exemption that fails open exempts
+     * the cases nobody thought of, which are the ones a scan is for.
      *
      * A mutation's `isError` reports one submission the operator just made:
-     * there is no poll, no staleness and no "is this worth waiting through" —
-     * it either failed or it did not, and the page says so beside the form.
-     * A QUERY's `isError` is the ambiguous one, and it is the only one
-     * `queryState` exists to interpret. Lumping them together would have this
-     * scan demand a rewrite of eight correct error reports.
+     * no poll, no staleness, nothing to interpret. That is the only exemption,
+     * and it has to be earned by a `useMutation` in the same file.
      */
-    const queries = new Set<string>();
+    const mutations = new Set<string>();
     for (const file of sources(ROOT)) {
-      for (const match of file.text.matchAll(/const (\w+) = useQuery\(/g)) {
-        queries.add(`${file.path}:${match[1]}`);
+      for (const match of file.text.matchAll(/const (\w+) = useMutation\(/g)) {
+        mutations.add(`${file.path}:${match[1]}`);
       }
     }
     const wrong: string[] = [];
     for (const file of sources(ROOT)) {
       if (file.path.endsWith('view-state.ts')) continue;
       file.text.split('\n').forEach((line, index) => {
-        const match = /\{\s*(\w+)\.isError\s*&&/.exec(line);
+        // Three spellings of the same decision, all verified to escape the
+        // previous single-pattern version: `&&`, a ternary, and `status`.
+        const match =
+          /\{\s*(\w+)\.isError\s*[&?]/.exec(line) ??
+          /\{\s*(\w+)\.status\s*===\s*'error'/.exec(line);
         if (match === null) return;
-        if (!queries.has(`${file.path}:${match[1]}`)) return;
+        if (mutations.has(`${file.path}:${match[1]}`)) return;
         // `staleAfterError` on the same line IS asking the rule.
         if (line.includes('staleAfterError(')) return;
         wrong.push(`${file.path}:${index + 1}  ${line.trim()}`);
@@ -87,4 +95,14 @@ describe('the query-view contract', () => {
       `these decide their own error state instead of asking queryState:\n${wrong.join('\n')}`,
     ).toEqual([]);
   });
+
+  /*
+   * What this scan CANNOT catch, stated rather than implied.
+   *
+   * A view that renders `{q.data && …}` and mentions no error at all has no
+   * spelling to match — and that was a live defect in `content.tsx`'s revision
+   * pane, found by a reviewer and not by this file. A scan over spellings
+   * cannot find an absence. The types catch a missing `query` prop on
+   * `StateSwitch`; nothing mechanical catches a query that was never given one.
+   */
 });

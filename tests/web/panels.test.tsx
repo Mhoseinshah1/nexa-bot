@@ -1692,7 +1692,19 @@ describe('the panel detail', () => {
     // No form, no tabs, and no warning implying a refresh that will never come.
     expect(screen.queryAllByRole('tab')).toHaveLength(0);
     expect(screen.queryByText(/تازه‌سازی این صفحه انجام نشد/)).toBeNull();
-    expect(screen.getByText('خطا در ارتباط با سرور')).toBeInTheDocument();
+    /*
+     * The REFUSAL's copy, not the connection failure's.
+     *
+     * The card said "خطا در ارتباط با سرور — ارتباط با سرور برقرار نشد. دوباره
+     * تلاش کنید" for a 403 the server answered correctly in microseconds: a
+     * false account of what happened, next to an instruction to retry, next to
+     * no button — because the retry is now correctly withheld. `StateSwitch`
+     * had the right copy all along; a MID-SESSION revocation never reached it,
+     * since `denied` comes from the permission list fetched at sign-in.
+     */
+    expect(screen.getByText('شما به این بخش دسترسی ندارید.')).toBeInTheDocument();
+    expect(screen.queryByText('خطا در ارتباط با سرور')).toBeNull();
+    expect(screen.queryByText(/ارتباط با سرور برقرار نشد/)).toBeNull();
     /*
      * And the HEADING goes with it, which is a separate rule.
      *

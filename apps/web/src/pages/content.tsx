@@ -361,32 +361,53 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
 
         <details onToggle={(event) => setShowHistory(event.currentTarget.open)}>
           <summary>{t('web.revisions')}</summary>
-          {revisions.data && revisions.data.revisions.length === 0 && <p>{t('web.empty')}</p>}
-          {revisions.data && revisions.data.revisions.length > 0 && (
-            <table>
-              <thead>
-                <tr>
-                  <th>{t('web.revision')}</th>
-                  <th>{t('web.action')}</th>
-                  <th>{t('web.template_body')}</th>
-                  <th>{t('web.updated_at')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {revisions.data.revisions.map((revision) => (
-                  <tr key={revision.revision}>
-                    <td>{revision.revision}</td>
-                    <td>
-                      {revision.action === 'SET' ? t('web.action_set') : t('web.action_revert')}
-                    </td>
-                    {/* A REVERT stores no body: reverting goes back to the
+          {/*
+            The SAME rule as every other query-driven view.
+            
+            This pane rendered `{revisions.data && …}` and nothing else — no
+            loading state, no error state, no retry. A refused or failing
+            `GET /templates/:key/revisions` therefore drew an EMPTY pane, which
+            an operator reads as "this template has no revision history": a
+            false statement about the record, from the module whose own comment
+            says silence is the one outcome this subsystem may not produce.
+            
+            It never mentioned `isError`, so the scan aimed at hand-rolled
+            ladders could not see it either — the scan matched a spelling, and
+            this site's defect was the absence of that spelling.
+          */}
+          {showHistory && (
+            <StateSwitch
+              query={revisions}
+              isEmpty={(revisions.data?.revisions.length ?? 0) === 0}
+              empty={<p>{t('web.empty')}</p>}
+            >
+              {revisions.data && revisions.data.revisions.length > 0 && (
+                <table>
+                  <thead>
+                    <tr>
+                      <th>{t('web.revision')}</th>
+                      <th>{t('web.action')}</th>
+                      <th>{t('web.template_body')}</th>
+                      <th>{t('web.updated_at')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {revisions.data.revisions.map((revision) => (
+                      <tr key={revision.revision}>
+                        <td>{revision.revision}</td>
+                        <td>
+                          {revision.action === 'SET' ? t('web.action_set') : t('web.action_revert')}
+                        </td>
+                        {/* A REVERT stores no body: reverting goes back to the
                       default rather than copying it. */}
-                    <td dir="auto">{revision.body ?? '—'}</td>
-                    <td>{formatTimestamp(revision.createdAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                        <td dir="auto">{revision.body ?? '—'}</td>
+                        <td>{formatTimestamp(revision.createdAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </StateSwitch>
           )}
         </details>
 
