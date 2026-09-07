@@ -1693,6 +1693,22 @@ describe('the panel detail', () => {
     expect(screen.queryAllByRole('tab')).toHaveLength(0);
     expect(screen.queryByText(/تازه‌سازی این صفحه انجام نشد/)).toBeNull();
     expect(screen.getByText('خطا در ارتباط با سرور')).toBeInTheDocument();
+    /*
+     * And the HEADING goes with it, which is a separate rule.
+     *
+     * `PageHead` renders above `StateSwitch` and read `panel.data` directly, so
+     * the tab strip and the form came down while the panel's name, its provider
+     * and its Test-connection button stayed on screen over the error card. That
+     * button records an `access.permission_denied` event and a DENIED audit row
+     * per press — a control that can never work, manufacturing exactly the noise
+     * the alerts page exists to keep clear. An earlier commit message listed
+     * this button among what the OLD rule left drawn; it was still drawn.
+     */
+    expect(screen.queryByRole('button', { name: 'تست اتصال' })).toBeNull();
+    expect(screen.queryByText('Frankfurt A')).toBeNull();
+    expect(screen.queryByText('Marzban')).toBeNull();
+    // And no retry: after a final answer it can only be refused again.
+    expect(screen.queryByRole('button', { name: 'تلاش دوباره' })).toBeNull();
     vi.useRealTimers();
   });
 

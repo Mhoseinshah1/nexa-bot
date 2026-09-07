@@ -2203,9 +2203,22 @@ reads _"One stale card next to a live one is worse than two stale cards, because
 nothing on screen says which is which."_ That is what the commit produced, since
 the readiness card beside them does announce its own failure.
 
-Deleting `stale=` from the other seventeen sites left **264 of 264 green**, and
-on four of the files it would not even have shown as an unused import. So the
-rule is asserted over the SOURCES now, in `state-switch-contract.test.tsx`,
+Deleting `stale=` from seventeen of the eighteen sites, with
+`state-switch-contract.test.tsx` removed as well, leaves **265 of 265 green** —
+every remaining web test — so nothing but that scan was holding the property.
+
+> The first version of this paragraph said "the other seventeen … 264 of 264",
+> which described an experiment nobody had run: at the time the reviewer ran
+> theirs only twelve sites were wired, so seventeen deletions were impossible,
+> and 264 was their web count, not a figure from this tree. Restating somebody
+> else's experiment in your own numbers is the same defect as citing a probe you
+> threw away. The figure above was measured here, on this head, after the
+> correction: baseline 267, and 265 with the seventeen props and the scan gone.
+
+Lint is not the backstop either: an unused `staleAfterError` import only appears
+where EVERY site in a file goes, so the one file that keeps a site — the one the
+rendered test covers — reports nothing. The rule is asserted over the SOURCES
+now, in `state-switch-contract.test.tsx`,
 which is the only shape of test that catches a nineteenth site being added
 without it. The scan also asserts it found the call sites at all — a scan
 matching nothing passes every assertion under it.
@@ -2252,7 +2265,7 @@ Citations are matched against extracted `it`/`test` titles now.
 | --- | -------------------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | U85 | data wins over a retryable error and only over a retryable one | drop `finalAnswer` from `queryState`      | `session-view.test.ts` › gives up the data on a final refusal, because no poll is coming; `panels.test.tsx` › takes the screen down when the refusal is final, rather than warning |
 | U86 | and a final refusal is not reported as staleness               | drop `finalAnswer` from `staleAfterError` | `session-view.test.ts` › calls data stale only while the failure is worth waiting through                                                                                          |
-| U87 | every `StateSwitch` says whether its data is stale             | drop one `stale=` prop                    | `state-switch-contract.test.tsx` › passes stale beside every queryState                                                                                                            |
+| U87 | every `StateSwitch` says whether its data is stale             | drop one `stale=` prop                    | `state-switch-contract.test.tsx` › hands StateSwitch a query rather than a state it computed                                                                                       |
 
 The check's own probes:
 
@@ -2265,3 +2278,96 @@ The check's own probes:
 U86 killed nothing on its first run, which is what sent it to a unit test. That
 is the seventh mutation this session to kill nothing on the first attempt, and
 the reason the count is kept: each one looked like a finished rule.
+
+---
+
+# Round 26 — three props derived from one value cannot be kept in agreement by care
+
+A seventeenth reviewer found the round-25 rule correct and incompletely applied,
+and the scan written to prevent exactly that unable to see either gap.
+
+## The heading outlived the screen, Test-connection button included
+
+`PageHead` renders ABOVE `StateSwitch` and read `panel.data?.panel` directly.
+React Query keeps `data` through a failed refetch, so on a FINAL refusal the tab
+strip and the form came down while the panel's name, its provider and its
+**Test-connection button** stayed on screen over the error card. Pressing that
+button records an `access.permission_denied` operational event and a DENIED
+audit row — a control that can never work, manufacturing precisely the noise the
+alerts page exists to keep clear.
+
+Round 25's commit message listed that button among what the OLD rule left drawn.
+It was still drawn, and the test written for that round asserted the tabs and the
+name field and never the button. `shownData` gates it now, on a state derived
+from the same pure function `StateSwitch` uses, so the heading and the body
+cannot disagree.
+
+## One view never adopted the rule, and the scan structurally could not see it
+
+The notification detail rendered a hand-rolled ladder — `{detail.isError &&
+<Banner/>}` beside `{detail.data && <Card/>}` — with no `queryState` anywhere.
+`isError` does not distinguish a blip from an answer, so on a final refusal it
+kept the pre-failure attempts list on screen as though current AND offered a
+retry that could only be refused again. Both halves of the defect the branch
+spent five rounds removing, in the one view that computed its own states.
+
+The round-25 scan grepped for `queryState(`, so this site was invisible to it by
+construction.
+
+## The scan asserted a token, not the property
+
+`window.includes('stale=')` over a few lines around each call. Three ways to be
+green and wrong, all executed by the reviewer: `stale={false}` at every one of
+the eighteen sites passed; a site wired to a DIFFERENT query than its state
+passed; a call site one directory over was never looked at.
+
+That is not fixable by a better grep. `state`, `stale` and `onRetry` were three
+derivations of one query, passed by hand eighteen times — which is why six were
+missed for a whole round and why a wrong-query wiring was undetectable.
+**`StateSwitch` takes the query now** and derives all three itself, so the
+disagreement is unrepresentable and the compiler refuses a site that omits it.
+`view-state.ts` holds the rules; `retryOf` makes "no retry after a final answer"
+automatic rather than eighteen more hand-passed props.
+
+The scan is aimed at what types cannot catch instead: a query-driven view that
+never uses `StateSwitch` at all. Mutations are exempt from it deliberately — a
+mutation's `isError` reports one submission the operator just made, with no poll
+and no staleness, and lumping the two together would demand a rewrite of eight
+correct error reports.
+
+## A fifth silent-drop channel, and the one line that closes the class
+
+Fence-skipping — added last round to stop a documented table shape failing the
+run — is itself a skip channel: wrapping a real citation table in a fence drops
+its citations at exit 0. That is the fifth distinct way this script has stopped
+reading part of the record, after a plural header, a non-final citation column,
+escaped pipes and a blank line.
+
+Every one of them was a DROP in the number checked, and every one exited 0
+because nothing compared that number to anything. `FLOOR` does. Whatever the
+sixth way turns out to be, the count falls and the run goes red.
+
+## The mutations
+
+| #   | rule                                                     | mutation                              | tests that die                                                                                                                                                                                 |
+| --- | -------------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| U89 | the heading shows only what the screen is showing        | `shownData` → `panel.data?.panel`     | `panels.test.tsx` › takes the screen down when the refusal is final, rather than warning                                                                                                       |
+| U90 | a final answer is offered no retry                       | `retryOf` never returns undefined     | `panels.test.tsx` › takes the screen down when the refusal is final, rather than warning; `control-plane-pages.test.tsx` › drops a stale attempts list on a final refusal, and offers no retry |
+| U91 | the notification detail asks the same rule as every view | drop `queryState(detail) !== 'error'` | `control-plane-pages.test.tsx` › drops a stale attempts list on a final refusal, and offers no retry                                                                                           |
+
+| #   | rule                                    | mutation                    | what the check prints                                           |
+| --- | --------------------------------------- | --------------------------- | --------------------------------------------------------------- |
+| U88 | the record's citation count has a floor | fence a real citation table | exits 1: only 157 citations were checked; at least 160 required |
+
+## One test I had to repair three times before it could discriminate
+
+`drops a stale attempts list on a final refusal` first clicked the row text
+rather than the button that selects it; then opened a detail whose fixture
+omitted `releasedClaims`, so the real schema refused it and the error state
+rendered for the wrong reason; then tried to force a refetch through a control
+that only exists when the rule is already broken. It uses the 3-second PENDING
+poll now, which is how the refusal actually reaches an open panel with nobody
+touching anything.
+
+That the fixture was rejected by the contract is the harness working: these
+tests parse through the same schemas the server validates against.

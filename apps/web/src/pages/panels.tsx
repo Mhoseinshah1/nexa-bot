@@ -26,10 +26,11 @@ import {
 } from '../api/client';
 import { formatTimestamp, splitDuration } from '../format';
 import { useSubmissionKey } from '../submission-key';
+import { queryState, shownData } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { navigate, setQuery, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
-import { HEALTH_TONES, queryState, staleAfterError } from './dashboard';
+import { HEALTH_TONES } from './dashboard';
 import {
   Badge,
   Banner,
@@ -292,9 +293,9 @@ export function PanelsPage({
         </div>
 
         <StateSwitch
-          state={denied ? 'denied' : queryState(panels, rows.length === 0)}
-          stale={staleAfterError(panels)}
-          onRetry={() => void panels.refetch()}
+          query={panels}
+          denied={denied}
+          isEmpty={rows.length === 0}
           empty={
             archived ? (
               <Empty title={t('web.panels_archived_empty')} icon="inbox" />
@@ -436,7 +437,24 @@ export function PanelDetailPage({
     },
   });
 
-  const data = panel.data?.panel;
+  /**
+   * The row this page may actually SHOW, which is not the same as the row the
+   * query holds.
+   *
+   * `PageHead` renders above `StateSwitch` and used to read `panel.data`
+   * directly, so on a final refusal — a revoked `panels.view`, or a `ZodError`
+   * from a tab holding a previous release — the tab strip and the form were
+   * torn down while the panel's name, its provider and its **Test-connection
+   * button** stayed on screen above the error card. Pressing that button
+   * records an `access.permission_denied` event and a DENIED audit row, which
+   * is the noise the alerts page exists to keep clear: a control that can never
+   * work, drawn over a screen that has just said so.
+   *
+   * The state is derived from the same pure function on the same object that
+   * `StateSwitch` uses, so the heading and the body cannot disagree about it.
+   */
+  const view = denied ? 'denied' : queryState(panel);
+  const data = shownData(panel, view, panel.data?.panel);
 
   return (
     <>
@@ -477,11 +495,7 @@ export function PanelDetailPage({
         }
       />
 
-      <StateSwitch
-        state={denied ? 'denied' : queryState(panel)}
-        stale={staleAfterError(panel)}
-        onRetry={() => void panel.refetch()}
-      >
+      <StateSwitch query={panel} denied={denied}>
         {data !== undefined && (
           <>
             <Tabs
@@ -1569,9 +1583,8 @@ export function NewPanelPage({
           no retry.
         */}
         <StateSwitch
-          state={queryState(providers, (providers.data?.providers.length ?? 0) === 0)}
-          stale={staleAfterError(providers)}
-          onRetry={() => void providers.refetch()}
+          query={providers}
+          isEmpty={(providers.data?.providers.length ?? 0) === 0}
           empty={<Empty title={t('web.providers_none')} icon="panels" />}
         >
           <form onSubmit={onSubmit} className="form-grid">
@@ -1708,11 +1721,7 @@ export function ProvidersPage() {
       </Banner>
 
       <Card>
-        <StateSwitch
-          state={queryState(providers, rows.length === 0)}
-          stale={staleAfterError(providers)}
-          onRetry={() => void providers.refetch()}
-        >
+        <StateSwitch query={providers} isEmpty={rows.length === 0}>
           <DataTable
             caption={t('web.providers_title')}
             rows={rows}

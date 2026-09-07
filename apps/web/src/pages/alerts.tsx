@@ -17,7 +17,8 @@ import { formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
-import { queryState, staleAfterError, severityTone } from './dashboard';
+import { severityTone } from './dashboard';
+import { queryState, retryOf, staleAfterError } from '../view-state';
 import {
   Badge,
   Banner,
@@ -242,9 +243,9 @@ export function AlertsPage({ denied }: { denied: boolean }) {
         </div>
 
         <StateSwitch
-          state={denied ? 'denied' : queryState(events, rows.length === 0)}
-          stale={staleAfterError(events)}
-          onRetry={() => void events.refetch()}
+          query={events}
+          denied={denied}
+          isEmpty={rows.length === 0}
           empty={
             /*
               Which emptiness this is. The page defaults to HISTORY and carries
@@ -468,11 +469,7 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
       {test.isError && <Banner tone="danger">{messageFor(test.error)}</Banner>}
 
       <Card title={t('web.notifications_title')}>
-        <StateSwitch
-          state={denied ? 'denied' : queryState(notifications, rows.length === 0)}
-          stale={staleAfterError(notifications)}
-          onRetry={() => void notifications.refetch()}
-        >
+        <StateSwitch query={notifications} denied={denied} isEmpty={rows.length === 0}>
           <DataTable
             caption={t('web.notifications_title')}
             columns={columns}
@@ -504,15 +501,44 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
         React bails out and nothing refetches. The only escapes were a full
         reload or a detour through another notification.
       */}
-      {detail.isError && (
+      {/*
+        The SAME rule as every other query-driven view, not a hand-rolled
+        ladder beside it.
+        
+        This version kept the pre-failure attempts list on screen through a
+        FINAL refusal and offered a retry that could only be refused again —
+        the two halves of the defect the rest of the branch spent five rounds
+        removing, in the one view that computed its own states. `detail.isError`
+        does not distinguish a blip from an answer, and `detail.data` does not
+        know what `detail.isError` decided.
+      */}
+      {detail.isError && staleAfterError(detail) && (
         <Banner tone="danger">
           {messageFor(detail.error)}{' '}
-          <button type="button" className="btn ghost sm" onClick={() => void detail.refetch()}>
-            {t('web.retry')}
-          </button>
+          {retryOf(detail) !== undefined && (
+            <button type="button" className="btn ghost sm" onClick={retryOf(detail)}>
+              {t('web.retry')}
+            </button>
+          )}
         </Banner>
       )}
-      {detail.data && (
+      {queryState(detail) === 'error' && (
+        <Empty
+          title={t('web.error')}
+          hint={t('web.error_hint')}
+          icon="alert"
+          {...(retryOf(detail) === undefined
+            ? {}
+            : {
+                action: (
+                  <button type="button" className="btn" onClick={retryOf(detail)}>
+                    {t('web.retry')}
+                  </button>
+                ),
+              })}
+        />
+      )}
+      {queryState(detail) !== 'error' && detail.data && (
         <Card title={t('web.attempts')}>
           {detail.data.attempts.length === 0 && <Empty title={t('web.empty')} />}
           {detail.data.attempts.length > 0 && (

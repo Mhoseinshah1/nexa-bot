@@ -5,7 +5,6 @@ import { ApiError, fetchSettings, saveSetting } from '../api/client';
 import { currencyLabel, formatNumber, formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
-import { queryState, staleAfterError } from './dashboard';
 import {
   Badge,
   Banner,
@@ -45,11 +44,7 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
     <>
       <PageHead title={t('web.settings_title')} subtitle={t('web.settings_intro')} maturity="now" />
 
-      <StateSwitch
-        state={denied ? 'denied' : queryState(settings, rows.length === 0)}
-        stale={staleAfterError(settings)}
-        onRetry={() => void settings.refetch()}
-      >
+      <StateSwitch query={settings} denied={denied} isEmpty={rows.length === 0}>
         {rows.map((setting) => (
           <SettingRow key={setting.key} setting={setting} mayEdit={mayEdit} />
         ))}

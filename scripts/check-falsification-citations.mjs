@@ -25,6 +25,21 @@ import { join } from 'node:path';
 
 const RECORD = 'docs/phase3d-falsification.md';
 /**
+ * The fewest citations this record may contain.
+ *
+ * Every one of the four rounds in which this script silently skipped part of
+ * the record — a plural header, a citation column that was not last, escaped
+ * pipes, a blank line mid-table — was a DROP in the number checked, and every
+ * one of them exited 0 because nothing compared that number to anything. Each
+ * fix closed one channel and the next round found another; fence-skipping,
+ * added in the round before this one, is a fifth channel by construction.
+ *
+ * A floor closes the class rather than the instance: whatever new way is found
+ * to stop reading part of this file, the count falls and the run goes red. Raise
+ * it when rows are added; the failure tells you to.
+ */
+const FLOOR = 160;
+/**
  * A table whose last column is one of these is making citations.
  *
  * The plural is here because it was NOT, and a table headed `tests that die`
@@ -361,6 +376,14 @@ if (
     for (const row of unparsed) console.error(`        ${row.trim().slice(0, 110)}`);
   }
   console.error('\n      Commit the probe or do not cite it.');
+  process.exit(1);
+}
+
+if (checked < FLOOR) {
+  console.error(
+    `\x1b[31mfail\x1b[0m  only ${checked} citations were checked; this record must contain at least ${FLOOR}.`,
+  );
+  console.error('      Rows are not missing from the file — they are missing from this CHECK.');
   process.exit(1);
 }
 

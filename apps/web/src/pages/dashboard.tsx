@@ -16,9 +16,8 @@ import {
   Stat,
   type DistributionSlice,
   type Tone,
-  type ViewState,
 } from '../ui/kit';
-import { finalAnswer, pollUnlessFinal } from '../polling';
+import { pollUnlessFinal } from '../polling';
 
 /**
  * One page of panels, at the contract's ceiling. `PANEL_PAGE_MAX` is the most
@@ -132,11 +131,7 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
 
       <div className="grid">
         <Card title={t('web.system_status')} className="span2">
-          <StateSwitch
-            state={queryState(readiness)}
-            stale={staleAfterError(readiness)}
-            onRetry={() => void readiness.refetch()}
-          >
+          <StateSwitch query={readiness}>
             <div className="head-stats">
               {(readiness.data?.dependencies ?? []).map((dependency) => (
                 <Stat
@@ -163,9 +158,8 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
             hint={t('web.dashboard_panel_distribution_hint')}
           >
             <StateSwitch
-              state={mayViewPanels ? queryState(panels) : 'denied'}
-              stale={staleAfterError(panels)}
-              onRetry={() => void panels.refetch()}
+              query={panels}
+              denied={!mayViewPanels}
               empty={<Empty title={t('web.dashboard_no_panels')} icon="panels" />}
             >
               <Distribution slices={healthSlices(panels.data?.panels ?? [])} />
@@ -182,9 +176,8 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
             }
           >
             <StateSwitch
-              state={mayViewPanels ? queryState(panels) : 'denied'}
-              stale={staleAfterError(panels)}
-              onRetry={() => void panels.refetch()}
+              query={panels}
+              denied={!mayViewPanels}
               empty={<Empty title={t('web.dashboard_no_panels')} icon="panels" />}
             >
               <Distribution slices={providerSlices(panels.data?.panels ?? [])} />
@@ -262,9 +255,8 @@ function AttentionCard({
       }
     >
       <StateSwitch
-        state={queryState(query, events.length === 0)}
-        stale={staleAfterError(query)}
-        onRetry={() => void query.refetch()}
+        query={query}
+        isEmpty={events.length === 0}
         empty={
           <Empty
             title={t('web.dashboard_nothing_to_do')}
@@ -356,68 +348,6 @@ export function severityTone(severity: string): Tone {
   if (severity === 'CRITICAL' || severity === 'ERROR') return 'danger';
   if (severity === 'WARN') return 'warn';
   return 'neutral';
-}
-
-/**
- * The four view states, read off a react-query result.
- *
- * `data` and `error` are REQUIRED, though either may be `undefined`. Optional,
- * a caller that forgot one silently got a weaker rule — which is the exact
- * mistake `sessionView` records against its own `error` parameter, made again
- * here one release later.
- *
- * `isError` alone is NOT the error state. TanStack Query sets `status: 'error'`
- * on a failed BACKGROUND refetch while `data` is still present, so mapping it
- * straight through replaced a working page with an error card on one transient
- * 5xx from a poll — and, because `StateSwitch` renders the card INSTEAD of its
- * children, unmounted the whole subtree and discarded whatever local state it
- * held. On the panel detail that is the operator's unsaved draft, the basis it
- * is compared against, and the revision their own writes stored. No operator
- * action is involved; it happens on a timer.
- *
- * A query that has never delivered anything still has nothing to show, so that
- * is still the error state.
- */
-export function queryState(
-  query: { isPending: boolean; isError: boolean; data: unknown; error: unknown },
-  isEmpty = false,
-): ViewState {
-  if (query.isPending) return 'loading';
-  /*
-   * Data wins over a RETRYABLE error, and only over a retryable one.
-   *
-   * `sessionView` in `app.tsx` reached this rule two rounds earlier and says
-   * why in full: "the two rules have to agree about which failures are worth
-   * waiting through". The first version of this function did not agree. It let
-   * data win over EVERY error, and `pollUnlessFinal` stops the timer on exactly
-   * the ones it was ignoring — so a `panels.view` revoked mid-session, or a
-   * `ZodError` from a tab holding a previous release across a deploy, left the
-   * detail screen fully drawn: the tab strip, the editable identity form, the
-   * credential rotation form and the Test-connection button, all asserting
-   * capabilities the server had just refused, for ever, with no poll coming.
-   * That is the branch's central claim broken by the commit that widened this.
-   *
-   * A query that has never delivered anything still has nothing to show.
-   */
-  if (query.isError && (query.data === undefined || finalAnswer(query.error))) return 'error';
-  return isEmpty ? 'empty' : 'ready';
-}
-
-/**
- * Showing data whose refresh failed, and therefore owing the reader a warning.
- *
- * Keeping the page is only half the fix: what is on screen is now older than
- * the server and nothing about it looks any different. A screen that has
- * stopped updating without saying so is the defect this admin exists to
- * remove — the legacy system's whole character — so the failure is stated
- * beside the data rather than drawn over the top of it.
- */
-export function staleAfterError(query: {
-  isError: boolean;
-  data: unknown;
-  error: unknown;
-}): boolean {
-  return query.isError && query.data !== undefined && !finalAnswer(query.error);
 }
 
 export { Num };

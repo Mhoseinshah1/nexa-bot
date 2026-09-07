@@ -9,6 +9,7 @@ import {
 } from 'react';
 import type { MoneyWire } from '@nexa/contracts';
 import { Icon, type IconName } from './icons';
+import { queryState, retryOf, staleAfterError, type QueryView } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { formatMoney, formatMoneyText, formatNumber } from '../format';
 
@@ -614,7 +615,7 @@ export function Skeleton({ rows = 6, cols = 4 }: { rows?: number; cols?: number 
   );
 }
 
-export type ViewState = 'ready' | 'loading' | 'empty' | 'error' | 'denied';
+export type { ViewState } from '../view-state';
 
 /**
  * The five states every data view has, in one place.
@@ -648,25 +649,27 @@ function StaleNotice({ onRetry }: { onRetry?: (() => void) | undefined }) {
 }
 
 export function StateSwitch({
-  state,
-  onRetry,
+  query,
+  denied = false,
+  isEmpty = false,
   empty,
-  stale = false,
   children,
 }: {
-  state: ViewState;
-  onRetry?: () => void;
-  empty?: ReactNode;
   /**
-   * The data is on screen but its refresh failed — see `staleAfterError`.
-   *
-   * Rendered ABOVE the children rather than instead of them, which is the whole
-   * point: the previous behaviour replaced a working page with an error card
-   * and took the operator's unsaved work with it.
+   * ONE object, from which the state, the staleness and the retry are all
+   * derived here — see `QueryView` in `view-state.ts` for why they are not
+   * three props any more.
    */
-  stale?: boolean;
+  query: QueryView;
+  /** The actor may not see this at all, which outranks every query state. */
+  denied?: boolean;
+  isEmpty?: boolean;
+  empty?: ReactNode;
   children: ReactNode;
 }) {
+  const state = denied ? 'denied' : queryState(query, isEmpty);
+  const stale = staleAfterError(query);
+  const onRetry = retryOf(query);
   if (state === 'loading') return <Skeleton />;
   if (state === 'denied')
     return <Empty title={t('web.no_permission')} hint={t('web.no_permission_hint')} icon="lock" />;

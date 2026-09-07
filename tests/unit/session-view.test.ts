@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sessionView } from '../../apps/web/src/app';
-import { queryState, staleAfterError } from '../../apps/web/src/pages/dashboard';
+import { queryState, staleAfterError } from '../../apps/web/src/view-state';
 import { ApiError } from '../../apps/web/src/api/client';
 
 /**
@@ -144,33 +144,40 @@ describe('a browser that is signed out', () => {
  * is dead logic dressed as a rule; a unit test is what makes it a rule.
  */
 describe('the view state of a query', () => {
+  /**
+   * A whole `QueryView`, because that is what the rules take now.
+   *
+   * `StateSwitch` derives the state, the staleness and the retry from ONE
+   * object; three separately-passed props are what let six call sites go
+   * unwired for a round and a wrong-query wiring go undetectable.
+   */
+  const view = (over: {
+    isPending?: boolean;
+    isError: boolean;
+    data: unknown;
+    error: unknown;
+  }) => ({ isPending: false, refetch: () => undefined, ...over });
   const denied = new ApiError(403, 'access.permission_denied', 'no');
   const blip = new ApiError(503, 'platform.unavailable', 'later');
 
   it('shows nothing it has never had', () => {
-    expect(queryState({ isPending: false, isError: true, data: undefined, error: blip })).toBe(
-      'error',
-    );
+    expect(queryState(view({ isError: true, data: undefined, error: blip }))).toBe('error');
   });
 
   it('keeps data through a retryable failure', () => {
-    expect(queryState({ isPending: false, isError: true, data: { a: 1 }, error: blip })).toBe(
-      'ready',
-    );
+    expect(queryState(view({ isError: true, data: { a: 1 }, error: blip }))).toBe('ready');
   });
 
   it('gives up the data on a final refusal, because no poll is coming', () => {
-    expect(queryState({ isPending: false, isError: true, data: { a: 1 }, error: denied })).toBe(
-      'error',
-    );
+    expect(queryState(view({ isError: true, data: { a: 1 }, error: denied }))).toBe('error');
   });
 
   it('calls data stale only while the failure is worth waiting through', () => {
-    expect(staleAfterError({ isError: true, data: { a: 1 }, error: blip })).toBe(true);
+    expect(staleAfterError(view({ isError: true, data: { a: 1 }, error: blip }))).toBe(true);
     // The screen is gone in this case; saying "stale" of it would be a second
     // claim about a page that is not on screen.
-    expect(staleAfterError({ isError: true, data: { a: 1 }, error: denied })).toBe(false);
-    expect(staleAfterError({ isError: false, data: { a: 1 }, error: null })).toBe(false);
-    expect(staleAfterError({ isError: true, data: undefined, error: blip })).toBe(false);
+    expect(staleAfterError(view({ isError: true, data: { a: 1 }, error: denied }))).toBe(false);
+    expect(staleAfterError(view({ isError: false, data: { a: 1 }, error: null }))).toBe(false);
+    expect(staleAfterError(view({ isError: true, data: undefined, error: blip }))).toBe(false);
   });
 });

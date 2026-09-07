@@ -1,58 +1,90 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * Every `StateSwitch` says whether its data is stale, and every `queryState`
- * call is handed a real query.
+ * No query-driven view decides its own states.
  *
- * Asserted over the SOURCES, because the way this comes back is somebody adding
- * a nineteenth call site, not somebody editing a rendered screen a test happens
- * to cover. Eighteen sites existed when this was written and exactly one of
- * them — the panel detail — was covered by a rendering test; deleting
- * `stale={...}` from the other seventeen left 264 of 264 green, and on four of
- * the files it would not even have shown up as an unused import.
+ * `StateSwitch` now takes the QUERY and derives the state, the staleness and
+ * the retry from it, so the three cannot disagree and TypeScript refuses a call
+ * site that omits it. That removes by construction what the previous version of
+ * this file tried and failed to assert: it grepped for the token `stale=`, so
+ * `stale={false}` at all eighteen sites passed, a site wired to a DIFFERENT
+ * query than its state passed, and a call site one directory over was invisible.
  *
- * That is the shape of the defect this branch keeps rediscovering: a rule
- * applied at the screen somebody was looking at, and nowhere else.
+ * What types cannot catch is a view that never uses `StateSwitch` at all. One
+ * did — the notification detail rendered `{q.isError && …}` beside `{q.data &&
+ * …}`, which kept a stale list through a FINAL refusal and offered a retry that
+ * could only be refused again. `isError` does not distinguish a blip from an
+ * answer, and that is the whole rule. So the scan is aimed there instead.
  */
-const SOURCES = 'apps/web/src/pages';
+const ROOT = 'apps/web/src';
 
-function pages(): { path: string; text: string }[] {
-  return readdirSync(SOURCES)
-    .filter((entry) => entry.endsWith('.tsx'))
-    .map((entry) => ({
-      path: join(SOURCES, entry),
-      text: readFileSync(join(SOURCES, entry), 'utf8'),
-    }));
+function sources(dir: string): { path: string; text: string }[] {
+  return readdirSync(dir).flatMap((entry) => {
+    const path = join(dir, entry);
+    if (statSync(path).isDirectory()) return sources(path);
+    return /\.tsx?$/.test(path) ? [{ path, text: readFileSync(path, 'utf8') }] : [];
+  });
 }
 
-describe('the StateSwitch contract', () => {
-  it('finds the call sites it is meant to be checking', () => {
-    const total = pages().reduce(
-      (count, page) => count + (page.text.match(/queryState\(/g) ?? []).length,
-      0,
-    );
-    // One of these is the definition in `dashboard.tsx`. A scan that matched
-    // nothing would pass every assertion below it.
-    expect(total).toBeGreaterThan(15);
+describe('the query-view contract', () => {
+  it('finds the sources it is meant to be checking', () => {
+    const files = sources(ROOT);
+    // A scan over an empty tree passes every assertion beneath it.
+    expect(files.length).toBeGreaterThan(15);
+    expect(files.some((file) => file.path.endsWith('ui/kit.tsx'))).toBe(true);
+    expect(files.filter((file) => file.text.includes('<StateSwitch')).length).toBeGreaterThan(5);
   });
 
-  it('passes stale beside every queryState', () => {
-    const missing: string[] = [];
-    for (const page of pages()) {
-      const lines = page.text.split('\n');
-      lines.forEach((line, index) => {
-        if (!line.includes('queryState(') || line.includes('export function')) return;
-        // The prop may sit on either side of the state prop, so a small window
-        // around the call is what is read rather than the line alone.
-        const window = lines.slice(Math.max(0, index - 2), index + 4).join('\n');
-        if (!window.includes('stale=')) missing.push(`${page.path}:${index + 1}`);
+  it('hands StateSwitch a query rather than a state it computed', () => {
+    const wrong: string[] = [];
+    for (const file of sources(ROOT)) {
+      file.text.split('\n').forEach((line, index) => {
+        // Prose describing the old shape is not the old shape. Only JSX.
+        if (line.trimStart().startsWith('*')) return;
+        if (/\bstate=\{/.test(line) || /\bstale=\{/.test(line)) {
+          wrong.push(`${file.path}:${index + 1}  ${line.trim()}`);
+        }
+      });
+    }
+    expect(wrong, `these pass a computed state instead of the query:\n${wrong.join('\n')}`).toEqual(
+      [],
+    );
+  });
+
+  it('renders no QUERY view off a bare isError', () => {
+    /*
+     * MUTATIONS are exempt, and the distinction is the whole point.
+     *
+     * A mutation's `isError` reports one submission the operator just made:
+     * there is no poll, no staleness and no "is this worth waiting through" —
+     * it either failed or it did not, and the page says so beside the form.
+     * A QUERY's `isError` is the ambiguous one, and it is the only one
+     * `queryState` exists to interpret. Lumping them together would have this
+     * scan demand a rewrite of eight correct error reports.
+     */
+    const queries = new Set<string>();
+    for (const file of sources(ROOT)) {
+      for (const match of file.text.matchAll(/const (\w+) = useQuery\(/g)) {
+        queries.add(`${file.path}:${match[1]}`);
+      }
+    }
+    const wrong: string[] = [];
+    for (const file of sources(ROOT)) {
+      if (file.path.endsWith('view-state.ts')) continue;
+      file.text.split('\n').forEach((line, index) => {
+        const match = /\{\s*(\w+)\.isError\s*&&/.exec(line);
+        if (match === null) return;
+        if (!queries.has(`${file.path}:${match[1]}`)) return;
+        // `staleAfterError` on the same line IS asking the rule.
+        if (line.includes('staleAfterError(')) return;
+        wrong.push(`${file.path}:${index + 1}  ${line.trim()}`);
       });
     }
     expect(
-      missing,
-      `these StateSwitch call sites say nothing when their data is stale:\n${missing.join('\n')}`,
+      wrong,
+      `these decide their own error state instead of asking queryState:\n${wrong.join('\n')}`,
     ).toEqual([]);
   });
 });

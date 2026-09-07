@@ -4,7 +4,6 @@ import { fetchAdmins, fetchInfo, fetchMonitorProfile, fetchReadiness } from '../
 import { formatTimestamp, splitDuration } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQuery, type Route } from '../router';
-import { queryState, staleAfterError } from './dashboard';
 import {
   Badge,
   Banner,
@@ -104,11 +103,7 @@ function StatusSection() {
   return (
     <>
       <Card title={t('web.system_status')} hint={t('web.system_status_hint')}>
-        <StateSwitch
-          state={queryState(readiness)}
-          stale={staleAfterError(readiness)}
-          onRetry={() => void readiness.refetch()}
-        >
+        <StateSwitch query={readiness}>
           <DataTable
             caption={t('web.system_status')}
             rows={readiness.data?.dependencies ?? []}
@@ -148,11 +143,7 @@ function StatusSection() {
       </Card>
 
       <Card title={t('web.build_info')}>
-        <StateSwitch
-          state={queryState(info)}
-          stale={staleAfterError(info)}
-          onRetry={() => void info.refetch()}
-        >
+        <StateSwitch query={info}>
           {info.data !== undefined && (
             <KV
               items={[
@@ -199,11 +190,7 @@ function MonitorSection({ denied }: { denied: boolean }) {
   return (
     <>
       <Card title={t('web.monitor_cadence')} hint={t('web.monitor_cadence_hint')}>
-        <StateSwitch
-          state={denied ? 'denied' : queryState(monitor)}
-          stale={staleAfterError(monitor)}
-          onRetry={() => void monitor.refetch()}
-        >
+        <StateSwitch query={monitor} denied={denied}>
           {profile !== undefined && (
             <KV
               items={[
@@ -234,11 +221,7 @@ function MonitorSection({ denied }: { denied: boolean }) {
       </Card>
 
       <Card title={t('web.monitor_capacity')} hint={t('web.monitor_capacity_hint')}>
-        <StateSwitch
-          state={denied ? 'denied' : queryState(monitor)}
-          stale={staleAfterError(monitor)}
-          onRetry={() => void monitor.refetch()}
-        >
+        <StateSwitch query={monitor} denied={denied}>
           {profile !== undefined && <CapacityView profile={profile} />}
         </StateSwitch>
       </Card>
@@ -347,11 +330,7 @@ function AdminsSection({ denied }: { denied: boolean }) {
 
   return (
     <Card title={t('web.administrators')} hint={t('web.administrators_hint')}>
-      <StateSwitch
-        state={denied ? 'denied' : queryState(admins, rows.length === 0)}
-        stale={staleAfterError(admins)}
-        onRetry={() => void admins.refetch()}
-      >
+      <StateSwitch query={admins} denied={denied} isEmpty={rows.length === 0}>
         <DataTable
           caption={t('web.administrators')}
           rows={rows}

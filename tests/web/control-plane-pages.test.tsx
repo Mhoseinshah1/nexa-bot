@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { featureFlagSchema, notificationSchema, templateViewSchema } from '@nexa/contracts';
 import { FeaturesPage } from '../../apps/web/src/pages/features';
@@ -247,6 +247,68 @@ describe('the notifications page', () => {
     renderPage(<NotificationsPage mayTest denied={false} />);
 
     expect(await screen.findByText('event.panel.unreachable')).toBeInTheDocument();
+  });
+
+  /**
+   * The notification detail obeys the SAME rule as every other query view.
+   *
+   * It was the one view on the branch that computed its own states — a
+   * hand-rolled `{detail.isError && <Banner/>}` beside `{detail.data && <Card/>}`
+   * — and `isError` does not distinguish a blip from an answer. So on a FINAL
+   * refusal it kept the pre-failure attempts list on screen as though it were
+   * current, and offered a Retry that could only be refused again, writing
+   * another `access.permission_denied` event per press. Both halves are the
+   * defect the rest of the branch spent five rounds removing.
+   */
+  it('drops a stale attempts list on a final refusal, and offers no retry', async () => {
+    const detail = {
+      url: '/notifications/n1',
+      body: {
+        notification: notification({ id: 'n1', status: 'PENDING' }),
+        attempts: [],
+        releasedClaims: [],
+      } as unknown,
+      status: 200,
+    };
+    stubApi([
+      {
+        url: '/notifications',
+        body: {
+          notifications: [notification({ id: 'n1', status: 'PENDING' })],
+          nextCursor: null,
+        },
+      },
+      detail,
+    ]);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPage(<NotificationsPage mayTest denied={false} />);
+    await screen.findByText('event.panel.unreachable');
+
+    // Open the detail so there is something to go stale. The row's template
+    // key IS the button that selects it.
+    fireEvent.click(screen.getByRole('button', { name: 'event.panel.unreachable' }));
+    // The CARD heading, not the table column of the same name.
+    await screen.findByRole('heading', { name: 'تلاش‌ها' });
+
+    // The permission is revoked. This is an ANSWER, not a blip.
+    detail.status = 403;
+    detail.body = {
+      error: {
+        kind: 'forbidden',
+        code: 'access.permission_denied',
+        message: 'no',
+        correlationId: 'test',
+      },
+    };
+    // The detail polls every 3s while the intent is PENDING, which is how the
+    // refusal reaches an already-open panel with no operator action.
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: 'تلاش‌ها' })).toBeNull();
+    });
+    expect(screen.queryByRole('button', { name: 'تلاش دوباره' })).toBeNull();
+    vi.useRealTimers();
   });
 
   /**

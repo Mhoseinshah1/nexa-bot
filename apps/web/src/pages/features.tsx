@@ -5,7 +5,6 @@ import { fetchFeatureFlags, saveFeatureFlag } from '../api/client';
 import { useSubmissionKey } from '../submission-key';
 import { t } from '../i18n/web.fa';
 import { ErrorReport } from './settings';
-import { queryState, staleAfterError } from './dashboard';
 import { Badge, Banner, Card, DataTable, Ltr, PageHead, StateSwitch } from '../ui/kit';
 
 /**
@@ -28,11 +27,7 @@ export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
   return (
     <>
       <PageHead title={t('web.features_title')} subtitle={t('web.features_intro')} maturity="now" />
-      <StateSwitch
-        state={denied ? 'denied' : queryState(flags, rows.length === 0)}
-        stale={staleAfterError(flags)}
-        onRetry={() => void flags.refetch()}
-      >
+      <StateSwitch query={flags} denied={denied} isEmpty={rows.length === 0}>
         {rows.map((flag) => (
           <FlagCard key={flag.key} flag={flag} mayEdit={mayEdit} />
         ))}
