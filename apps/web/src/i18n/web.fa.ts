@@ -157,6 +157,18 @@ export const WEB_FA = {
    */
   'web.changed_elsewhere_overwrite':
     'این مقدار پس از آغاز ویرایش شما جای دیگری تغییر کرده است. ذخیره‌کردن، تغییر آن‌ها را بازنویسی می‌کند.',
+  /*
+   * The same row changed elsewhere, in a field this operator has NOT edited.
+   *
+   * The form sends changed fields only, so saving leaves that field exactly as
+   * the other administrator left it. Promising an overwrite here was the
+   * previous version's defect in the opposite direction: an operator who did
+   * not want to clobber a colleague pressed "load the fresh value", which
+   * resets the WHOLE form, and threw away their own unsaved edit to avoid a
+   * loss that could not have happened.
+   */
+  'web.changed_elsewhere_untouched':
+    'این ردیف پس از آغاز ویرایش شما جای دیگری تغییر کرده است. ذخیره‌کردن تنها فیلدهایی را می‌فرستد که خودتان تغییر داده‌اید.',
   'web.reload_value': 'گرفتن مقدار تازه',
   'web.stored_value_invalid':
     'مقدار ذخیره‌شده با تعریف این کلید نمی‌خواند، پس پیش‌فرض اعمال می‌شود. ذخیره‌کردن یک مقدار معتبر آن را اصلاح می‌کند.',

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { PanelsPage, PanelDetailPage, NewPanelPage } from '../../apps/web/src/pages/panels';
 import { panel, renderPage, stubApi } from './harness';
@@ -552,15 +552,18 @@ describe('the panel detail', () => {
     // The page says the row changed underneath, rather than resolving it
     // silently — nothing on the server can arbitrate, so the operator must.
     //
-    // And it says WHICH THING WILL HAPPEN. `/جای دیگری تغییر کرده/` alone is
-    // the prefix both concurrency strings share, so it stopped one word before
-    // the clause that mattered and could not tell "saving will be refused with
-    // a conflict" — true on settings and content, which send an
-    // `expectedVersion` — from "saving will overwrite it", which is the only
-    // thing `POST /panels/:id` can do. Swapping this form to the settings
-    // string left the suite green.
+    // And it says WHICH THING WILL HAPPEN — which this test used to get wrong
+    // about itself. It asserted "saving will overwrite their change" twelve
+    // lines before proving, below, that the renamed field is ABSENT from the
+    // write. The operator edited the base URL only; the form sends changed
+    // fields only; the other administrator's rename is not going anywhere.
+    //
+    // So the notice here is the untouched one, and it must not promise either
+    // an overwrite or the conflict error that only the versioned surfaces can
+    // produce.
     const notice = await screen.findByText(/جای دیگری تغییر کرده/);
-    expect(notice.textContent ?? '').toContain('بازنویسی می‌کند');
+    expect(notice.textContent ?? '').toContain('تنها فیلدهایی را می‌فرستد');
+    expect(notice.textContent ?? '').not.toContain('بازنویسی می‌کند');
     expect(notice.textContent ?? '').not.toContain('خطای تداخل');
     // The form still holds what the operator typed, not the refetched name.
     expect((screen.getByLabelText('نام') as HTMLInputElement).value).toBe('Frankfurt A');
@@ -769,6 +772,86 @@ describe('the panel detail', () => {
     });
     const last = api.calls.filter((call) => call.method === 'POST').at(-1);
     expect(last?.body).toMatchObject({ status: 'DISABLED', name: 'Frankfurt A (restored)' });
+  });
+
+  /**
+   * The notice must never fire against the operator's OWN write while it
+   * settles.
+   *
+   * `save` and `status` adopt the row they were handed before `refresh()`
+   * resolves, so for the width of that round trip `basis` holds the new values
+   * and the query still holds the old ones — which reads as a concurrent
+   * change. The stub answers in a microtask, so the suite could not see it;
+   * with real latency the operator got "somebody else changed this" on top of
+   * their own "saved" toast.
+   */
+  it('does not accuse anybody while the operator own write is still settling', async () => {
+    const id = panel().id as string;
+    const renamed = panel({ name: 'Frankfurt B' });
+    const gate: { release: () => void } = { release: () => undefined };
+    const held = new Promise<void>((resolve) => {
+      gate.release = resolve;
+    });
+    let detailCalls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init?: RequestInit) => {
+        const url = String(input);
+        const json = (body: unknown) =>
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        // BY METHOD as well as by path: the save POSTs to the same URL the
+        // detail GETs from, so matching on the path alone made the write itself
+        // wait on the gate and the test deadlocked.
+        const isDetailRead = (init?.method ?? 'GET') === 'GET';
+        if (url.endsWith(`/panels/${id}`) && isDetailRead) {
+          detailCalls += 1;
+          // The first load is the form's starting point. The SECOND is the
+          // refetch after the save, and it is held open — that outstanding
+          // request is the window this test exists for.
+          if (detailCalls === 1) return json({ panel: panel() });
+          await held;
+          return json({ panel: renamed });
+        }
+        return json({ panel: renamed });
+      }),
+    );
+
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    fireEvent.change(screen.getByLabelText('نام'), { target: { value: 'Frankfurt B' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+
+    // The write has landed and the refetch has not. The form must say nothing
+    // about anybody else having changed the row.
+    await screen.findByText('ذخیره شد.');
+    expect(screen.queryByText(/جای دیگری تغییر کرده/)).toBeNull();
+    gate.release();
+  });
+
+  /**
+   * ...and it DOES promise an overwrite when one is actually coming.
+   *
+   * Same concurrent rename, except this operator has edited the name too. Their
+   * save carries `name`, so the other administrator's rename really is about to
+   * be replaced, and the notice has to say so rather than reassure.
+   */
+  it('promises an overwrite only when the save will actually make one', async () => {
+    const id = panel().id as string;
+    const route = { url: `/panels/${id}`, body: { panel: panel() } as unknown };
+    stubApi([route, { url: `/panels/${id}/status`, body: { panel: panel() } }]);
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    // This time the operator edits the NAME.
+    fireEvent.change(screen.getByLabelText('نام'), { target: { value: 'Frankfurt mine' } });
+    route.body = { panel: panel({ name: 'Renamed by somebody else' }) };
+    fireEvent.click(screen.getByRole('button', { name: 'غیرفعال‌سازی' }));
+
+    const notice = await screen.findByText(/جای دیگری تغییر کرده/);
+    expect(notice.textContent ?? '').toContain('بازنویسی می‌کند');
   });
 
   /**

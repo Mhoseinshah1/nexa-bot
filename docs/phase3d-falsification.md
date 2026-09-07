@@ -1473,3 +1473,81 @@ Not fixed here: it is outside Phase 3D, and widening the branch into Phase 3C's
 scheduler to chase a one-in-thirteen observation would cost more than it buys.
 It is written down so the next reader has the signature, the frequency and the
 one fact that narrows it, rather than a green tick that hides it.
+
+# Round 19 — the fix for the false promise made the opposite false promise
+
+A tenth reviewer found round 18's correction wrong in the other direction, plus
+a defect neither of us had looked for.
+
+## "Saving will overwrite their change" — when it would not
+
+`changedElsewhere` is FORM-level: it fires when either field differs from the
+basis, regardless of which one the operator has edited. `onSubmit` sends
+CHANGED FIELDS ONLY. So the notice promised an overwrite in exactly the case
+where saving leaves the other administrator's field untouched — and in the case
+where saving sends nothing at all.
+
+The harm is not hypothetical. The operator, not wanting to clobber a colleague,
+presses the notice's own «گرفتن مقدار تازه» — which is `adopt(panel)`, and
+resets the WHOLE form. They discard their own unsaved base URL to avoid a loss
+that could not have happened.
+
+**Round 18's own new test contained the contradiction.** It asserted the notice
+says "will overwrite", and twelve lines later asserted that the renamed field is
+ABSENT from the write. The test proved the message it had just asserted was
+false, and passed.
+
+The notice now asks the narrower question — does the operator's draft touch a
+field that also changed remotely — and there are two strings: the overwrite
+promise, and `web.changed_elsewhere_untouched`, which says saving sends only the
+fields they changed themselves.
+
+## And it fired against the operator's own write
+
+`save` and `status` adopt the row they were handed BEFORE `refresh()` resolves,
+so for the width of that round trip `basis` holds the new values and the query
+still holds the old ones — which reads as a concurrent change. The suite could
+not see it because the stub answers in a microtask; with real latency the
+operator got "somebody else changed this" on top of their own "saved" toast.
+
+On the restore-with-rename path that means the notice the round-14 test is named
+for — _does not blame a third party for a rename the operator just made_ — was
+displayed, blaming a third party for the rename the operator had just made. That
+test proved the settled state and not the claim in its own final comment.
+
+`settling` covers it: no accusation while our own write or its refetch is in
+flight. The regression test holds the refetch open, which is the window, and
+distinguishes the save POST from the detail GET by METHOD — matching on the path
+alone made the write wait on its own gate and deadlocked.
+
+## A comment wrong twice about the same guard
+
+Round 18 replaced a false justification for the credentials `accepts` guard with
+a second false one: "`shape` is read from a query that can change under an open
+tab". It is not — `shape` is a lookup into a frozen module-level catalogue keyed
+on `providerType`, which no request in the contract can change. The guard is
+unreachable here and kept deliberately, as a mirror of the create form's
+identical line where the picker really does change the shape. That is what it
+says now.
+
+## The mutations
+
+| #   | rule                                                  | mutation                 | test that dies                                                                               |
+| --- | ----------------------------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------- |
+| U45 | the overwrite promise is made only when one is coming | `willOverwrite` → `true` | `panels.test.tsx` › does not revert a concurrent rename when only the other field was edited |
+| U46 | our own write is never a concurrent change            | `settling` → `false`     | `panels.test.tsx` › does not accuse anybody while the operator own write is still settling   |
+
+Sources restored and sha256-verified; suites green afterwards.
+
+## What three rounds on one notice say
+
+Rounds 18 and 19 are the same sentence, wrong twice: it promised a refusal that
+could not happen, and then an overwrite that would not happen. Both versions had
+a test, both tests passed, and the round-18 test contained its own refutation
+twelve lines down.
+
+The pattern is not carelessness about the code — it is that a message describing
+what a BUTTON WILL DO was written from the state that raised it rather than from
+the request that would follow. The check that finds it is the one this branch
+keeps rediscovering: read the sentence and the code that runs after it as one
+claim, and ask whether they agree.

@@ -480,7 +480,9 @@ export function PanelDetailPage({
             />
 
             <TabPanel id="panel-detail-panel" labelledBy={`panel-detail-panel-tab-${tab}`}>
-              {tab === 'overview' && <OverviewTab panel={data} mayEdit={mayEdit} />}
+              {tab === 'overview' && (
+                <OverviewTab panel={data} mayEdit={mayEdit} refreshing={panel.isFetching} />
+              )}
               {tab === 'health' && <HealthTab panel={data} />}
               {tab === 'credentials' && (
                 <CredentialsTab panel={data} mayRotate={mayRotate} onDone={refresh} />
@@ -494,7 +496,16 @@ export function PanelDetailPage({
   );
 }
 
-function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit: boolean }) {
+function OverviewTab({
+  panel,
+  mayEdit,
+  refreshing,
+}: {
+  panel: PanelSummaryResponse;
+  mayEdit: boolean;
+  /** The detail query has a request in flight, so the two rows may disagree. */
+  refreshing: boolean;
+}) {
   const client = useQueryClient();
   const toast = useToast();
   /**
@@ -518,8 +529,23 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
   const submission = useSubmissionKey();
   const statusSubmission = useSubmissionKey();
 
-  /** The query has a row the draft was not based on. */
-  const changedElsewhere = basis.name !== panel.name || basis.baseUrl !== panel.baseUrl;
+  /**
+   * Which fields the query has that the draft was not based on, and of those,
+   * which this operator is actually going to send.
+   *
+   * Two separate questions, and conflating them produced a notice that was
+   * false in both directions. `onSubmit` sends CHANGED FIELDS ONLY, so a
+   * remote rename the operator never touched is not going to be overwritten by
+   * their save — telling them it would made them press "load the fresh value",
+   * which resets the whole form, and lose their own unsaved base URL to avoid
+   * a loss that could not happen.
+   */
+  const remote = {
+    name: basis.name !== panel.name,
+    baseUrl: basis.baseUrl !== panel.baseUrl,
+  };
+  const willOverwrite =
+    (remote.name && name !== basis.name) || (remote.baseUrl && baseUrl !== basis.baseUrl);
 
   /**
    * Every identity control, not just the Save button.
@@ -636,6 +662,20 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     },
   });
 
+  /**
+   * Not while OUR OWN write is settling.
+   *
+   * `save` and `status` adopt the row they were handed before `refresh()`
+   * resolves, so for the width of that round trip `basis` holds the new values
+   * and `panel` still holds the old ones — which reads as a concurrent change.
+   * The suite could not see it because the stub resolves in a microtask; with
+   * any real latency the operator got "somebody else changed this" on top of
+   * their own "saved" toast, and on the restore-with-rename path the notice was
+   * blaming them for the rename they had just chosen.
+   */
+  const settling = refreshing || save.isPending || status.isPending;
+  const changedElsewhere = !settling && (remote.name || remote.baseUrl);
+
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
     // Only what CHANGED. `PanelService.update` treats a present field as an
@@ -722,7 +762,11 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
           */}
           {changedElsewhere && (
             <p className="notice">
-              {t('web.changed_elsewhere_overwrite')}{' '}
+              {t(
+                willOverwrite
+                  ? 'web.changed_elsewhere_overwrite'
+                  : 'web.changed_elsewhere_untouched',
+              )}{' '}
               <button type="button" className="link" onClick={() => adopt(panel)}>
                 {t('web.reload_value')}
               </button>
@@ -1027,19 +1071,21 @@ function CredentialsTab({
     // ABSENT and NULL mean different things, and only non-empty fields are
     // sent. Sending `''` for a field the operator did not touch would be a
     // request to store an empty credential.
-    // Guarded by `accepts` as well as by the field being hidden — belt and
-    // braces, deliberately, and NOT for the reason first written here.
+    // Guarded by `accepts` as well as by the field being hidden. UNREACHABLE
+    // here, deliberately, and this comment has now been wrong twice about why.
     //
-    // That reason was "this component is not remounted between two panel detail
-    // routes", which was true when it was written and is not now: `resolve`
-    // keys `PanelDetailPage` on the panel id precisely so the whole subtree
-    // remounts, which is what fixed the cross-panel draft write. So the
-    // scenario the comment described is unreachable, while the guard stays:
-    // `shape` is read from a query that can change under an open tab, and a
-    // hidden field whose value is still in state must never reach the wire —
-    // it would put the operator's secret out to be refused. The create form's
-    // identical guard IS reachable, because its provider picker changes the
-    // shape without any navigation at all.
+    // It first said the component is not remounted between two panel detail
+    // routes. It is: `resolve` keys `PanelDetailPage` on the panel id, which is
+    // what fixed the cross-panel draft write. It then said `shape` is read from
+    // a query that can change under an open tab. It is not: `shape` comes from
+    // `providerDescriptor`, a lookup into a frozen module-level catalogue,
+    // keyed on `providerType` — which no request in the contract can change.
+    //
+    // So nothing can flip `accepts` under this form, and the guard is dead code
+    // kept on purpose: it MIRRORS the create form's identical line, where the
+    // provider picker really does change the shape with no navigation at all.
+    // Two spellings of one rule invite exactly the drift where the reachable
+    // copy is edited and the unreachable one is not.
     const credentials = {
       ...(username === '' || !accepts('username') ? {} : { username }),
       ...(password === '' || !accepts('password') ? {} : { password }),
