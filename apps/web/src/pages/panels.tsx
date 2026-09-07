@@ -9,10 +9,12 @@ import {
   type ProviderCapability,
   type ProviderType,
   providerDescriptor,
+  PANEL_ERROR_CODES,
   shapeAcceptsCredential,
   shapeIsSatisfiedBy,
 } from '@nexa/contracts';
 import {
+  ApiError,
   createPanel,
   fetchPanel,
   fetchPanels,
@@ -144,8 +146,25 @@ export function PanelsPage({
    * back to a cursor it has already held, so each page's starting cursor is
    * pushed and popped rather than recomputed.
    */
-  const [trail, setTrail] = useState<readonly string[]>([]);
-  const cursor = trail.length > 0 ? trail[trail.length - 1] : undefined;
+  /**
+   * The cursor stack, and the mode it belongs to.
+   *
+   * The mode lives in the URL, so it can change WITHOUT going through the
+   * toolbar: the sidebar's own «پنل‌ها» link navigates to `/panels`, which drops
+   * the query while re-rendering this same component with its `trail` intact.
+   * Clearing the trail only inside the filter's `onChange` covered one of the
+   * two ways the mode moves, and a cursor minted by one list applied to the
+   * other silently strands every row before it — the archive browser exists to
+   * find a retired panel, so a page that quietly omits it is the whole defect
+   * again.
+   *
+   * Storing the mode WITH the trail means the mismatch cannot survive a render,
+   * whichever route caused it.
+   */
+  const [trail, setTrail] = useState<{ mode: 'live' | 'archived'; cursors: readonly string[] }>({
+    mode: 'live',
+    cursors: [],
+  });
   /**
    * Which side of the archive this list is showing.
    *
@@ -161,12 +180,15 @@ export function PanelsPage({
    * includes the visual harness.
    */
   const archived = route.query.get('archived') === 'only';
+  const mode: 'live' | 'archived' = archived ? 'archived' : 'live';
+  // A trail from the OTHER list is not a position in this one.
+  const cursors = trail.mode === mode ? trail.cursors : [];
+  const cursor = cursors.length > 0 ? cursors[cursors.length - 1] : undefined;
   const setArchived = (next: boolean) => {
-    // The cursor belongs to the list it was minted from; carrying it across
-    // would ask the archive for a page of the live keyset.
-    setTrail([]);
     setQuery(route, 'archived', next ? 'only' : null);
   };
+  const pushCursor = (next: string) => setTrail({ mode, cursors: [...cursors, next] });
+  const popCursor = () => setTrail({ mode, cursors: cursors.slice(0, -1) });
 
   const panels = useQuery({
     // The mode is part of the key. Sharing one key across both lists would
@@ -293,10 +315,10 @@ export function PanelsPage({
 
         <CursorPager
           shown={rows.length}
-          hasPrevious={trail.length > 0}
+          hasPrevious={cursors.length > 0}
           hasNext={nextCursor !== null}
-          onPrevious={() => setTrail((current) => current.slice(0, -1))}
-          onNext={() => nextCursor !== null && setTrail((current) => [...current, nextCursor])}
+          onPrevious={popCursor}
+          onNext={() => nextCursor !== null && pushCursor(nextCursor)}
         />
       </Card>
     </>
@@ -548,16 +570,34 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     },
   });
 
+  /**
+   * The name a restore must be given because the old one was taken.
+   *
+   * Null until the server says so. Archiving RELEASES the panel's name — the
+   * unique index is partial on `status <> 'ARCHIVED'` — so a live panel may
+   * have claimed it since, and the restore then answers 409
+   * `panel.name_taken`. The API accepts a replacement name on that transition;
+   * without a field to type it into, the refusal told the operator to do
+   * something no screen could do, and the panel stayed unrestorable.
+   */
+  const [renameOnRestore, setRenameOnRestore] = useState<string | null>(null);
+
   const status = useMutation({
-    mutationFn: (command: { idempotencyKey: string; status: PanelStatus }) =>
+    mutationFn: (command: { idempotencyKey: string; status: PanelStatus; name?: string }) =>
       setPanelStatus({ id: panel.id, ...command }),
     onSuccess: async () => {
       statusSubmission.settle();
+      setRenameOnRestore(null);
       toast({ tone: 'ok', message: t('web.saved') });
       await refresh();
     },
     onError: (error: unknown) => {
       statusSubmission.settleOn(error);
+      // The one refusal this screen can actually resolve: offer the field
+      // rather than repeating advice the operator cannot act on.
+      if (error instanceof ApiError && error.code === PANEL_ERROR_CODES.PANEL_NAME_TAKEN) {
+        setRenameOnRestore((current) => current ?? panel.name);
+      }
       toast({ tone: 'danger', message: messageFor(error) });
     },
   });
@@ -726,9 +766,15 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
               <button
                 type="button"
                 className="btn"
-                disabled={status.isPending}
+                disabled={status.isPending || renameOnRestore === ''}
                 onClick={() => {
-                  const command = { status: 'DISABLED' as PanelStatus };
+                  const command = {
+                    status: 'DISABLED' as PanelStatus,
+                    // Sent only once the server has said the old name is gone.
+                    // A rename on every restore would be a change nobody asked
+                    // for, and the API refuses one outside this transition.
+                    ...(renameOnRestore === null ? {} : { name: renameOnRestore }),
+                  };
                   status.mutate({
                     ...command,
                     idempotencyKey: statusSubmission.current(command),
@@ -739,6 +785,22 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
               </button>
             )}
           </div>
+
+          {/* Only after the refusal, because until then there is nothing to
+              resolve and an always-present rename field would invite one. */}
+          {renameOnRestore !== null && (
+            <>
+              <Banner tone="warn">{t('web.panel_restore_name_taken')}</Banner>
+              <Field label={t('web.panel_restore_new_name')} htmlFor={`restore-name-${panel.id}`}>
+                <input
+                  id={`restore-name-${panel.id}`}
+                  className="input"
+                  value={renameOnRestore}
+                  onChange={(event) => setRenameOnRestore(event.target.value)}
+                />
+              </Field>
+            </>
+          )}
           <p className="faint small">{t('web.panel_archive_hint')}</p>
         </Card>
       )}

@@ -482,6 +482,18 @@ export function setPanelCredentials(input: {
 export function setPanelStatus(input: {
   id: string;
   status: PanelStatus;
+  /**
+   * A replacement name, accepted by the server ONLY on a transition out of
+   * `ARCHIVED`.
+   *
+   * Archiving releases the panel's name — `panels_tenant_name_live_key` is
+   * partial on `status <> 'ARCHIVED'` — so another panel may take it, and the
+   * restore then answers 409 `panel.name_taken`. Without this the refusal told
+   * the operator to rename the panel and no surface could: `POST /panels/:id`
+   * refuses an archived panel outright, so the panel was unrestorable from the
+   * Web Admin no matter what the API had gained.
+   */
+  name?: string;
   idempotencyKey: string;
 }): Promise<PanelResponse> {
   const { id, ...body } = input;

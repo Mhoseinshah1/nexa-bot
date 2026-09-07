@@ -865,7 +865,17 @@ export class PanelService {
       entityType: 'Panel',
       entityId: panelId,
     });
-    const requestHash = hashRequest({ panelId, status, name: parsed.name ?? null });
+    // The name is in the hash ONLY when it is present. Adding `name: null` to
+    // every command would have changed the hash of an ordinary status change
+    // across the release boundary, so a key minted before the update and
+    // replayed after it — which is exactly what `settleOn` holds a key for
+    // across a rolling restart's 5xx — would come back as a payload mismatch
+    // rather than as the replay it is.
+    const requestHash = hashRequest({
+      panelId,
+      status,
+      ...(parsed.name === undefined ? {} : { name: parsed.name }),
+    });
     const existing = await this.deps.idempotency.find<{ panelId: string }>(
       scope,
       actor.surface,
@@ -982,15 +992,24 @@ export class PanelService {
               severity: 'INFO',
               // What the status now IS, because a restore may land on DISABLED
               // and "monitored again" would then be false.
+              // `updated.name`, not `before.panel.name`. A restore may carry a
+              // replacement name BECAUSE the old one now belongs to a
+              // different, live panel — so the previous spelling wrote a log
+              // line naming somebody else's machine, which an operator reading
+              // it later would resolve to the wrong one.
               message:
                 status === 'ACTIVE'
-                  ? `Panel "${before.panel.name}" was restored and is monitored again.`
-                  : `Panel "${before.panel.name}" was restored from the archive and is ${status.toLowerCase()}.`,
+                  ? `Panel "${updated.name}" was restored and is monitored again.`
+                  : `Panel "${updated.name}" was restored from the archive and is ${status.toLowerCase()}.`,
               // No dedupe key: see `RESTORED_CODE`. This closes the
               // retirement and keeps no row of its own to be closed later.
               recoversCode: RETIRED_CODE,
               recoversDedupeKey: panelConditionKey(RETIRED_CODE, panelId),
-              context: { panelId, panelName: before.panel.name },
+              // The name it has AFTER the transition, not before it. A restore
+              // may carry a replacement name precisely because the old one now
+              // belongs to a different, live panel — so logging `before` here
+              // wrote a row naming somebody else's machine.
+              context: { panelId, panelName: updated.name },
             },
             tx,
           );
@@ -1032,8 +1051,14 @@ export class PanelService {
             action: 'panel.status',
             entityType: 'Panel',
             entityId: panelId,
-            before: { status: before.panel.status },
-            after: { status: updated.status },
+            // The NAME is in here because a restore may change it, and an
+            // audit row that records only the status leaves the one write an
+            // operator would later need to explain — who renamed this panel,
+            // and from what — recorded nowhere at all. `panel.update` has
+            // always carried both sides; this path could not change a name
+            // until now, and now it can.
+            before: { status: before.panel.status, name: before.panel.name },
+            after: { status: updated.status, name: updated.name },
             result: 'SUCCESS',
           },
           tx,

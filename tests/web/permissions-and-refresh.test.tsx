@@ -366,3 +366,92 @@ describe('creating a panel without permission to view one', () => {
     expect(await screen.findByText('شما به این بخش دسترسی ندارید.')).toBeInTheDocument();
   });
 });
+
+/**
+ * Second-order defects the fresh-context review found in the seven fixes.
+ */
+describe('the archive filter and the cursor that belongs to it', () => {
+  const routeWith = (query: string) => ({
+    path: '/panels',
+    query: new URLSearchParams(query),
+  });
+
+  const page = (rows: number, next: string | null) => ({
+    url: '/panels',
+    body: {
+      panels: Array.from({ length: rows }, (_, index) =>
+        panel({ id: `0000000${index}`.slice(-8), name: `row ${index}` }),
+      ),
+      nextCursor: next,
+    },
+  });
+
+  /**
+   * The mode lives in the URL, so it can change WITHOUT the toolbar: the
+   * sidebar's own «پنل‌ها» link navigates to `/panels`, dropping the query
+   * while React keeps this component — and its cursor trail — mounted.
+   * Clearing the trail only in the filter's `onChange` covered one of the two
+   * ways the mode moves, and a cursor minted by one list applied to the other
+   * silently strands every row before it.
+   */
+  it('does not carry a cursor from one list into the other', async () => {
+    const api = stubApi([page(2, 'archived-cursor-1')]);
+    const view = renderPage(
+      resolve(routeWith('archived=only'), ['panels.view']).element as ReactElement,
+    );
+    await screen.findByText('row 0');
+
+    // Page forward inside the ARCHIVE, so a trail exists.
+    fireEvent.click(screen.getByRole('button', { name: 'قدیمی‌تر' }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.url.includes('cursor=archived-cursor-1'))).toBe(true);
+    });
+
+    // Now the mode changes by ROUTE, not by the toolbar — the sidebar link.
+    const before = api.calls.length;
+    view.rerender(resolve(routeWith(''), ['panels.view']).element as ReactElement);
+    await waitFor(() => {
+      expect(api.calls.length).toBeGreaterThan(before);
+    });
+
+    // The live list is asked for its FIRST page. A carried cursor would have
+    // walked past every live panel older than that archived row.
+    const latest = api.calls.at(-1);
+    expect(latest?.url).not.toContain('cursor=');
+    expect(latest?.url).not.toContain('archived=only');
+  });
+
+  it('offers no previous page after the mode changed underneath it', async () => {
+    const api = stubApi([page(2, 'archived-cursor-1')]);
+    const view = renderPage(
+      resolve(routeWith('archived=only'), ['panels.view']).element as ReactElement,
+    );
+    await screen.findByText('row 0');
+    fireEvent.click(screen.getByRole('button', { name: 'قدیمی‌تر' }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.url.includes('cursor='))).toBe(true);
+    });
+
+    view.rerender(resolve(routeWith(''), ['panels.view']).element as ReactElement);
+    await screen.findByText('row 0');
+    // "Newer" would take them back to a position in a list they are no longer
+    // looking at. `CursorPager` always renders both buttons and disables them,
+    // so the assertion is on the disabled state, not on absence.
+    expect(screen.getByRole('button', { name: 'تازه‌تر' })).toBeDisabled();
+  });
+});
+
+/**
+ * `/panels` serves the fleet list and the route to the create form, and the
+ * server authorizes them separately — the same shape as `/notifications`.
+ */
+describe('the panels nav entry', () => {
+  const entry = NAV.find((candidate) => candidate.id === 'panels');
+
+  it('is offered to an actor who may create but not list', () => {
+    expect(entry).toBeDefined();
+    expect(navPermitted(entry!, ['panels.edit'])).toBe(true);
+    expect(navPermitted(entry!, ['panels.view'])).toBe(true);
+    expect(navPermitted(entry!, ['settings.edit'])).toBe(false);
+  });
+});

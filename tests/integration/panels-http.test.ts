@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   API_PREFIX,
@@ -372,19 +373,43 @@ describe('panel HTTP surface', () => {
       expect(walked).toEqual([...ids].sort());
     });
 
-    it('refuses a live cursor against the archive rather than mixing the lists', async () => {
-      // Two live panels, so the live list mints a real cursor.
+    /**
+     * A cursor from one list applied to the other, and what really happens.
+     *
+     * The first version of this test archived nothing, so `crossed.panels` was
+     * empty and its `for … expect` loop ran ZERO assertions while claiming the
+     * server "refuses" a crossed cursor. It does not refuse: the cursor is an
+     * opaque `(created_at, id)` keyset and the status predicate is applied
+     * independently, so a crossed cursor SILENTLY SKIPS every archived row
+     * older than it. That is the behaviour, it is why the Web Admin binds its
+     * cursor trail to the mode it was minted in, and a test asserting a guard
+     * that does not exist would have made the next reader believe the surface
+     * did not need one.
+     */
+    it('silently skips archived rows older than a cursor minted by the live list', async () => {
+      // An archived panel FIRST, so it is older than everything below it.
+      const retired = panelResponseSchema.parse(
+        (await createPanel(ownerCookie, { name: 'Retired and old' })).json(),
+      );
+      await archive(retired.panel.id);
       for (const name of ['L1', 'L2']) await createPanel(ownerCookie, { name });
+
+      // It is in the archive when asked properly.
+      const proper = await listOf('?archived=only');
+      expect(proper.panels.map((row) => row.id)).toEqual([retired.panel.id]);
+
+      // A cursor minted by the LIVE list names a row created after it.
       const liveFirst = await listOf('?limit=1');
       expect(liveFirst.nextCursor).not.toBeNull();
 
-      // That cursor names a LIVE row. Handing it to the archive must not
-      // return live panels under the archived filter — the predicate is
-      // applied independently of the keyset.
       const crossed = await listOf(
         `?archived=only&cursor=${encodeURIComponent(liveFirst.nextCursor as string)}`,
       );
+      // The predicate still holds — no live panel leaks into the archive...
       for (const row of crossed.panels) expect(row.status).toBe('ARCHIVED');
+      // ...but the archived panel is GONE, because the keyset walked past it.
+      // This is the row an operator opened the archive to restore.
+      expect(crossed.panels.map((row) => row.id)).not.toContain(retired.panel.id);
     });
 
     /**
@@ -455,6 +480,43 @@ describe('panel HTTP surface', () => {
       );
       expect(after.panel.status).toBe('ARCHIVED');
       expect(after.panel.name).toBe('Frankfurt A');
+    });
+
+    /**
+     * A restore that renames must SAY so, in both records.
+     *
+     * The audit row recorded only the status, so the one write an operator
+     * would later need explained — who renamed this panel, and from what — was
+     * recorded nowhere. And the operational event named `before.panel.name`,
+     * which at that moment identifies a DIFFERENT, live panel: a log line
+     * pointing at somebody else's machine.
+     */
+    it('records the rename in the audit row and names the panel as it now is', async () => {
+      const original = panelResponseSchema.parse(
+        (await createPanel(ownerCookie, { name: 'Frankfurt A' })).json(),
+      );
+      await archive(original.panel.id);
+      await createPanel(ownerCookie, { name: 'Frankfurt A' });
+      const restored = await restore(original.panel.id, { name: 'Frankfurt A (restored)' });
+      expect([200, 201]).toContain(restored.statusCode);
+
+      const audit = await api.container.database.db.execute(
+        sql`SELECT before, after FROM audit_logs
+             WHERE entity_id = ${original.panel.id} AND action = 'panel.status'
+             ORDER BY occurred_at DESC LIMIT 1`,
+      );
+      const row = (audit.rows as { before: unknown; after: unknown }[])[0];
+      expect(row?.before).toMatchObject({ name: 'Frankfurt A', status: 'ARCHIVED' });
+      expect(row?.after).toMatchObject({ name: 'Frankfurt A (restored)', status: 'DISABLED' });
+
+      const events = await api.container.database.db.execute(
+        sql`SELECT message, context FROM operational_events
+             WHERE code = 'panel.health.restored' ORDER BY last_seen_at DESC LIMIT 1`,
+      );
+      const event = (events.rows as { message: string; context: Record<string, unknown> }[])[0];
+      // The name it HAS, not the one another panel now owns.
+      expect(event?.message).toContain('Frankfurt A (restored)');
+      expect(event?.context).toMatchObject({ panelName: 'Frankfurt A (restored)' });
     });
 
     it('refuses a replacement name on a transition that is not a restore', async () => {

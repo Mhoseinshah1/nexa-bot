@@ -515,3 +515,65 @@ The test is still load-bearing — N10 kills it — but for the polling rule, no
 the key. The comment above it now says so, because a polling interval added
 beside a keyed subtree invites exactly the assumption that one protects the
 other.
+
+# Round 7 — the fresh-context review of round 6's fixes
+
+Seven findings, all confirmed. Two P2s, and the first is the one that matters:
+**round 6 built the server half of the restore fix and left the Web Admin unable
+to use it.**
+
+`setPanelStatus` in the API client had no `name`, and the Restore button posted a
+bare status. So the contract field, the `leavingArchive` branch and the
+single-statement rename were all unreachable from the only surface this release
+ships — while the archive browser added in the same round meant an operator could
+now FIND the retired panel and be told, in a server message, to rename it. The
+dead end was intact; it had merely been better signposted. That is the exact
+defect class this branch exists to remove, reintroduced by a fix for it.
+
+The second P2 was a consequence nobody would have predicted from the diff: the
+new polling intervals, pointed at a tab whose permissions were revoked after it
+loaded, write an `access.permission_denied` row on every tick. `denialEvent`
+carries no `dedupeKey`, `operational_events` has no retention, and the session
+permission list is fetched once per tab — so one wall display would have written
+thousands of rows a day into the very feed the alerts page argues must be kept
+clear. Before the polling, each of those queries ran once per page load.
+
+## The mutations
+
+| #   | rule                                           | mutation                                         | test that dies                                                                                     |
+| --- | ---------------------------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| P01 | a refused restore offers a replacement name    | drop `setRenameOnRestore`                        | `panels.test.tsx` › offers a replacement name when a restore is refused because the name was taken |
+| P02 | ...and the retry actually sends it             | drop the `name` from the command                 | `panels.test.tsx` › offers a replacement name when a restore is refused because the name was taken |
+| P03 | a cursor belongs to the list that minted it    | `trail.mode === mode ? … : []` → `trail.cursors` | `permissions-and-refresh.test.tsx` › does not carry a cursor from one list into the other          |
+| P04 | the panels nav accepts either capability       | back to `permission: 'panels.view'`              | `permissions-and-refresh.test.tsx` › is offered to an actor who may create but not list            |
+| P05 | a restore records the rename in its audit row  | drop `name` from before/after                    | `panels-http.test.ts` › records the rename in the audit row and names the panel as it now is       |
+| P06 | the restore event names the panel as it now is | `updated.name` → `before.panel.name`             | `panels-http.test.ts` › records the rename in the audit row and names the panel as it now is       |
+
+P03 kills two tests. Every mutation failed for the reason its row names, every
+source was restored and hash-verified, every suite green afterwards.
+
+## A third test of mine that could not fail
+
+_refuses a live cursor against the archive_ (round 6) archived nothing, so
+`crossed.panels` was empty and its `for … expect` loop ran **zero assertions**
+while claiming the server refuses a crossed cursor. It does not refuse: the
+keyset and the status predicate are applied independently, so a crossed cursor
+SILENTLY SKIPS every archived row older than it. The test now archives a panel
+older than the live cursor and asserts it is missing — the real behaviour, and
+the reason the surface has to bind its trail to a mode.
+
+That is three vacuous tests in two rounds, all mine, all found by mutation and
+none by reading. The pattern is the same each time: an assertion written from
+the same understanding that produced the code.
+
+## Also fixed, from the same review
+
+- `setPanelStatusRequestSchema.name` reuses `panelNameSchema` instead of
+  hand-spelling the bounds, so a change to `PANEL_NAME_MIN_LENGTH`/`MAX_LENGTH`
+  cannot apply everywhere except a restore.
+- The idempotency request hash includes `name` only when it is present, so a key
+  minted before this release and replayed after it — what `settleOn` deliberately
+  holds a key for across a rolling restart's 5xx — is still recognised as a
+  replay rather than answered as a payload mismatch.
+- The five new i18n keys were inserted between a comment and the key it
+  documents, leaving that comment describing the wrong line. Moved.

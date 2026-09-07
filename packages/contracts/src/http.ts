@@ -1022,7 +1022,10 @@ export type SetPanelCredentialsRequest = z.infer<typeof setPanelCredentialsReque
  */
 export const setPanelStatusRequestSchema = z.object({
   status: z.enum(PANEL_STATUSES),
-  name: z.string().trim().min(1).max(120).optional(),
+  // The SAME schema create and update use. Hand-spelling the bounds here let
+  // a change to `PANEL_NAME_MIN_LENGTH`/`MAX_LENGTH` apply everywhere except a
+  // restore, which would then store a name the rest of the system rejects.
+  name: panelNameSchema.optional(),
   idempotencyKey: z.string().min(8).max(255),
 });
 export type SetPanelStatusRequest = z.infer<typeof setPanelStatusRequestSchema>;

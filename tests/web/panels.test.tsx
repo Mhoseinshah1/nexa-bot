@@ -704,6 +704,84 @@ describe('the panel detail', () => {
     expect(screen.getByLabelText('گذرواژه')).toBeInTheDocument();
   });
 
+  /**
+   * The restore dead end, from the operator's side.
+   *
+   * The API gained a replacement name, and for one commit the Web Admin could
+   * not send one: `setPanelStatus` had no `name`, the Restore button posted a
+   * bare status, and the 409 told the operator to rename a panel that
+   * `POST /panels/:id` refuses to edit. The archive browser added beside it
+   * meant they could now FIND the panel and be told to do something no screen
+   * could do — the same dead end, better signposted.
+   */
+  it('offers a replacement name when a restore is refused because the name was taken', async () => {
+    const archived = detail({ status: 'ARCHIVED' });
+    const api = stubApi([
+      ...archived,
+      {
+        // The FULL path: the harness matches by substring with longest-wins,
+        // and the detail route's `/panels/` is longer than a bare `/status`,
+        // so it would answer this POST with the panel body and the mutation
+        // would look like a success.
+        url: '/panels/01a05e35-c9ad-7e93-bef3-1ed9b55292c8/status',
+        status: 409,
+        body: {
+          error: {
+            kind: 'CONFLICT',
+            code: 'panel.name_taken',
+            message: 'Another panel took this name while it was archived.',
+            details: {},
+            correlationId: 'c1',
+          },
+        },
+      },
+    ]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    // Nothing to resolve yet, so nothing is offered.
+    expect(screen.queryByLabelText('نام تازه برای بازگردانی')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'بازگردانی از بایگانی' }));
+
+    // The refusal produces the one control that can act on it, pre-filled.
+    const field = (await screen.findByLabelText('نام تازه برای بازگردانی')) as HTMLInputElement;
+    expect(field.value).toBe('Frankfurt A');
+    expect(screen.getByText(/نام قبلی این پنل را پنل دیگری گرفته است/)).toBeInTheDocument();
+
+    // And the retry carries it to the server.
+    fireEvent.change(field, { target: { value: 'Frankfurt A (restored)' } });
+    fireEvent.click(screen.getByRole('button', { name: 'بازگردانی از بایگانی' }));
+
+    await waitFor(() => {
+      const writes = api.calls.filter((call) => call.method === 'POST');
+      expect(writes.length).toBeGreaterThan(1);
+    });
+    const last = api.calls.filter((call) => call.method === 'POST').at(-1);
+    expect(last?.body).toMatchObject({ status: 'DISABLED', name: 'Frankfurt A (restored)' });
+  });
+
+  /**
+   * And a restore that was never refused sends no name at all — the API
+   * refuses one outside this transition, and a rename nobody asked for is a
+   * write nobody asked for.
+   */
+  it('sends no replacement name on a restore that was not refused', async () => {
+    const api = stubApi([
+      ...detail({ status: 'ARCHIVED' }),
+      { url: '/panels/01a05e35-c9ad-7e93-bef3-1ed9b55292c8/status', body: { panel: panel() } },
+    ]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    fireEvent.click(screen.getByRole('button', { name: 'بازگردانی از بایگانی' }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const write = api.calls.find((call) => call.method === 'POST');
+    expect(write?.body).toEqual({ status: 'DISABLED', idempotencyKey: expect.any(String) });
+  });
+
   it('offers no credential write on an archived panel, but still shows what it holds', async () => {
     stubApi(detail({ status: 'ARCHIVED', providerType: 'sanaei', providerName: 'Sanaei (3X-UI)' }));
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);

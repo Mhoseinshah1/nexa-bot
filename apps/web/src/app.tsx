@@ -186,7 +186,13 @@ export const NAV: readonly NavEntry[] = [
     path: '/panels',
     label: 'web.nav_panels',
     icon: 'panels',
-    permission: 'panels.view',
+    // EITHER, for the reason `/notifications` carries a list: this page serves
+    // the fleet list (`panels.view`) AND the route to the create form
+    // (`panels.edit`), and the server authorizes them separately. Gating the
+    // entry on the first hid the second — an actor permitted to create a panel
+    // had no link to the page the form lives behind, which is the same defect
+    // this branch fixed one entry away.
+    permission: ['panels.view', 'panels.edit'],
     group: 'web.navgroup_infra',
   },
   {
