@@ -480,7 +480,29 @@ export function PanelDetailPage({
             />
 
             <TabPanel id="panel-detail-panel" labelledBy={`panel-detail-panel-tab-${tab}`}>
-              {tab === 'overview' && <OverviewTab panel={data} mayEdit={mayEdit} />}
+              {/*
+                HIDDEN, not unmounted — and it is the only tab treated this way.
+
+                `OverviewTab` holds the operator's unsaved identity draft, the
+                basis that draft is compared against, and the revision this
+                session's own writes have stored. `{tab === 'overview' && …}`
+                destroyed all three on a tab click, and re-seeded them from
+                whatever row the query happened to be holding — so an operator
+                who saved, glanced at Health while the confirming refetch was in
+                flight, and came back found their own save apparently reverted
+                and a notice blaming somebody else for the change they had just
+                made themselves. The window that happens in is exactly the one
+                the revision rule exists to cover, and the rule's memory was
+                inside the component the click unmounted.
+
+                The other three genuinely hold nothing that must outlive the
+                click. `CredentialsTab`'s three fields are typed SECRETS, and
+                dropping them on the way out is the behaviour to want, not a
+                defect to fix here.
+              */}
+              <div hidden={tab !== 'overview'}>
+                <OverviewTab panel={data} mayEdit={mayEdit} />
+              </div>
               {tab === 'health' && <HealthTab panel={data} />}
               {tab === 'credentials' && (
                 <CredentialsTab panel={data} mayRotate={mayRotate} onDone={refresh} />

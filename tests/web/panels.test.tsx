@@ -1466,6 +1466,59 @@ describe('the panel detail', () => {
   });
 
   /**
+   * A tab click must not destroy the draft, the basis, or the revision.
+   *
+   * The overview holds all of them, and the tab strip used to unmount it — so
+   * an operator who saved, glanced at Health while the confirming refetch was
+   * in flight, and came back found their own save apparently reverted (the
+   * fields re-seeded from the row the query still held) and a notice accusing
+   * somebody else of having made the change they had just made themselves.
+   *
+   * The window this happens in is the one round 22's rule exists for, and the
+   * rule's memory lived inside the component the click destroyed.
+   */
+  it('keeps the draft and the revision across a tab click during a save', async () => {
+    const id = panel().id as string;
+    const readRoute = {
+      url: `/panels/${id}`,
+      method: 'GET',
+      body: { panel: panel() } as unknown,
+    };
+    const writeRoute = {
+      url: `/panels/${id}`,
+      method: 'POST',
+      body: {
+        panel: panel({ name: 'Frankfurt mine', updatedAt: '2026-02-02T00:00:00.000Z' }),
+      } as unknown,
+    };
+    const api = gatedApi([readRoute, writeRoute]);
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    fireEvent.change(screen.getByLabelText('نام'), { target: { value: 'Frankfurt mine' } });
+    api.hold();
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+
+    // Away and back, while the confirming refetch is still outstanding.
+    fireEvent.click(screen.getByRole('tab', { name: 'سلامت' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'کلیات' }));
+    // The draft is the operator's, not the row the query is still holding.
+    expect((screen.getByLabelText('نام') as HTMLInputElement).value).toBe('Frankfurt mine');
+
+    // The refetch lands with the row the operator themselves wrote.
+    readRoute.body = writeRoute.body;
+    api.release();
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'در حال ذخیره…' })).toBeNull();
+    });
+    expect((screen.getByLabelText('نام') as HTMLInputElement).value).toBe('Frankfurt mine');
+    expect(screen.queryByText(/جای دیگری تغییر کرده/)).toBeNull();
+  });
+
+  /**
    * A viewer without `panels.edit` gets the notice and no writable control.
    *
    * Both halves matter and neither had a test. The notice is the only signal

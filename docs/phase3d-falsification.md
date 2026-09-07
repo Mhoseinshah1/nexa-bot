@@ -19,7 +19,16 @@ Each row was run: revert the rule, run the named suite, restore, re-run.
 | F-H  | ~~"Older" is offered only on a FULL page~~ **SUPERSEDED** — see R-06 below | `rows.length === ALERTS_PAGE_SIZE` → `rows.length > 0`   | `settings-and-alerts.test.tsx` › offers no older page when the page came back short              | killed at the time; **the rule itself was wrong** and is gone                                             |
 | F-I  | A planned surface is reachable at the path its nav entry links to          | Typo in `PLANNED_SURFACES[].path`                        | `planned-and-absent.test.tsx` › is reachable at the path its navigation entry links to           | **SURVIVED at first** — see below. After the fix: killed                                                  |
 | F-I2 | (same rule, other side)                                                    | Typo in `NAV[].path`                                     | (same test)                                                                                      | **killed**                                                                                                |
-| F-J  | The visual harness detects a page that fails to render                     | `blastRadius: 'LOCAL'` → an invalid enum value           | `scripts/visual/capture.mjs`                                                                     | **killed** — `/features` came back `showingError: true`                                                   |
+
+One row of that table cites a probe that is not a vitest test, so it is kept
+separately rather than inside a column headed `Named test`. It sat in the table
+above for twenty rounds, naming a script where every other row names a test, and
+nothing noticed — because the table itself was never being read (see the round-23
+section at the end of this document).
+
+| #   | Rule                                                   | Mutation                                       | what dies                                                                |
+| --- | ------------------------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------ |
+| F-J | The visual harness detects a page that fails to render | `blastRadius: 'LOCAL'` → an invalid enum value | `scripts/visual/capture.mjs`: `/features` came back `showingError: true` |
 
 ## Three tests that could not fail when first written
 
@@ -1857,6 +1866,14 @@ time in the same script: _a checker that decides for itself what to ignore is a
 checker that can be green and wrong._ Adding the plural fixes one table. Three
 things were done instead, so the class is closed:
 
+> **"The class is closed" was itself false, and round 23 says how.** The three
+> fixes below all keyed on the LAST column of a header. The record's oldest and
+> largest table is headed `| # | Rule | Mutation | Named test | Result |` — a
+> recognised name, one position from the end — so all twelve of its rows stayed
+> unread through every one of them. The escape had moved from lexical to
+> positional, and the sentence claiming otherwise was written in the same commit
+> that left it open.
+
 1. the plural is recognised, and a cell may cite **several** tests — one
    mutation killing three is stronger evidence than naming one of them, but only
    if all three are checked;
@@ -1896,3 +1913,103 @@ U69 is not in the table because it proved nothing the others do not: it renamed
 a continuation to a string absent everywhere, which U66 already covers. It is
 named here rather than renumbered so the labels in this document keep matching
 the order they were run in.
+
+---
+
+# Round 23 — the state was put inside the component the tab strip unmounts
+
+A fourteenth reviewer found round 22's rule undone by an ordinary tab click, and
+three holes in the check that is supposed to prove these tables.
+
+## The rule's memory did not survive the window the rule exists for
+
+`written`, `basis`, `name` and `baseUrl` all lived in `OverviewTab`, and the tab
+strip rendered it as `{tab === 'overview' && <OverviewTab … />}`. A tab click
+therefore destroyed every one of them and re-seeded the draft from whatever row
+the query happened to be holding — **inside** the window round 22 was written to
+cover.
+
+So: type a new name, press Save, glance at Health while the confirming refetch
+is in flight, come back. The name field shows the OLD name — the operator's own
+save, apparently reverted — and when the refetch lands with the row they
+themselves wrote, `basis` (re-seeded, stale) differs from `panel` (fresh) and
+the form accuses a third party of the change they just made. `written` was
+`null` by then and could suppress nothing.
+
+This is the same lesson as row **U13** — _the loading state unmounts the
+credentials draft_ — and `app.tsx` already keys `PanelDetailPage` by panel id
+for the same class of reason. Round 22 read neither, and put new state in the
+one child that gets unmounted by a control sitting directly above it.
+
+The overview is now `hidden` rather than unmounted, and it is the only tab
+treated that way: it is the only one holding state that must outlive the click.
+`CredentialsTab`'s three fields are typed SECRETS, and dropping them on the way
+out is the behaviour to want.
+
+## The check had a second escape, one column to the left
+
+`check:falsification-citations` decided whether a table cites tests by reading
+**the last cell** of its header. The record's first and largest evidence table
+is headed `| # | Rule | Mutation | Named test | Result |`. `Named test` was
+always on the recognised list. It simply is not last — so `declared` was
+`result`, the table was not a citation table, and **all twelve of its rows went
+unchecked**, exactly as the eleven of round 22's table had. Round 22 widened the
+list of names; the escape had already moved to position.
+
+Two more, found while fixing it:
+
+- **The row parser split on escaped pipes.** A mutation cell routinely contains
+  one — `` `\|\|` → `&&` `` is how an or-to-and mutation is written — and
+  markdown escapes it as `\|`. Three rows were therefore parsed two columns
+  wider than their header. Reading only the last cell hid this completely: the
+  last cell is the last cell however many phantom ones precede it.
+- **Row F-J cited a script, not a test**, in a column headed `Named test`, and
+  had done since the first round. Nothing noticed because that table was never
+  read. It is now in its own table headed `what dies`, the treatment round 22
+  gave the checker's own probes.
+
+And the guard added in round 22 was **too eager** in the other direction: it
+failed the whole run on any non-citation table whose last column mentioned a
+test, so an ordinary `| area | tests added |` summary was reported as a
+misspelled header. It now keys on something meaningful — a table with a
+`mutation` column and no citation column is an error **unless it declares
+itself** with a name on `NON_CITING_HEADERS`.
+
+The count went from 141 to **151**: the ten citations of the table that had
+never been read.
+
+## Fake timers leaked out of a failing test
+
+`tests/web/setup.ts` restored globals and mocks and not timers, and the two
+tests that install fake timers call `vi.useRealTimers()` as their LAST
+statement — which a failed assertion skips. The test after a failure therefore
+ran on a clock nothing advanced. That matters most exactly where it is hardest
+to see: a mutation run, where the first failure is expected and every test after
+it is the evidence that the mutation killed nothing else. `afterEach` restores
+them now.
+
+No mutation in this session is known to have been distorted by it — U58, U59 and
+U65 each killed exactly one test with no cascade — and the hazard is recorded
+rather than the claim that it never bit.
+
+## The mutations
+
+| #   | rule                              | mutation                               | tests that die                                                                        |
+| --- | --------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------- |
+| U71 | the overview outlives a tab click | `hidden` → `{tab === 'overview' && …}` | `panels.test.tsx` › keeps the draft and the revision across a tab click during a save |
+
+The checker's own four are again outside the citation tables, for the reason
+round 22 gives:
+
+| #   | rule                                                  | mutation                               | what the check prints                                |
+| --- | ----------------------------------------------------- | -------------------------------------- | ---------------------------------------------------- |
+| U72 | the citation column is found by NAME, at any position | read the last cell instead             | exits 1: unrecognised header (table 1 skipped again) |
+| U73 | rows split on UNESCAPED pipes only                    | `.split(/(?<!\\)\|/)` → `.split('\|')` | exits 1: 2 rows in a citation table name no test     |
+| U74 | a misspelled citation header fails                    | record header → `tests which die`      | exits 1: unrecognised header                         |
+| U75 | the `what dies` opt-out is load-bearing               | drop it from `NON_CITING_HEADERS`      | exits 1: 2 unrecognised headers                      |
+
+Dropping the `declared.includes('mutation')` term of the guard kills **nothing**,
+and is recorded as such rather than dressed up: no table in the record currently
+violates it, so the term protects a future state and only the record-side probe
+(U74) can demonstrate it. The reviewer's own false-positive probe — appending
+`| area | tests added |` — now passes, which is the other half of that rule.

@@ -35,6 +35,14 @@ const RECORD = 'docs/phase3d-falsification.md';
  * what to ignore — and the second time it was this checker.
  */
 const CITATION_HEADERS = ['named test', 'test that dies', 'tests that die'];
+/**
+ * Mutation tables that deliberately cite something OTHER than a test.
+ *
+ * Declaring them is the price of the rule below: a table with a `mutation`
+ * column and no citation column is an error, because that is what a misspelled
+ * citation header looks like. These two say what they are.
+ */
+const NON_CITING_HEADERS = ['what dies', 'what the check prints'];
 
 /** Every test source, by path, so a citation can be checked where it points. */
 function sources(dir) {
@@ -45,10 +53,20 @@ function sources(dir) {
   });
 }
 
+/*
+ * Split on UNESCAPED pipes only.
+ *
+ * A mutation cell routinely contains one: `` `\|\|` → `&&` `` is how an
+ * or-to-and mutation is written, and markdown escapes those as `\|`. Splitting
+ * on every `|` turned three such rows into tables two columns wider than their
+ * header. Reading only the last cell hid it — the last cell is the last cell
+ * however many phantom ones precede it — so the defect surfaced the moment the
+ * citation column was addressed by index instead.
+ */
 const cells = (row) =>
   row
     .replace(/^\||\|$/g, '')
-    .split('|')
+    .split(/(?<!\\)\|/)
     .map((cell) => cell.trim());
 const isSeparator = (row) => /^\|[\s\-:|]+\|$/.test(row);
 
@@ -131,6 +149,8 @@ let previous = null;
 
 /** The previous table row, so a separator can identify the header above it. */
 let header = null;
+/** Which column of the current table holds its citations. */
+let column = -1;
 
 for (const line of lines) {
   if (!line.startsWith('|')) {
@@ -144,10 +164,34 @@ for (const line of lines) {
   // — an ordinary sentence in an ordinary data row — from being mistaken for a
   // misspelled declaration.
   if (isSeparator(line)) {
-    const declared = header === null ? '' : (cells(header).at(-1) ?? '').toLowerCase();
-    inCitationTable = CITATION_HEADERS.includes(declared);
+    const declared = header === null ? [] : cells(header).map((cell) => cell.toLowerCase());
+    /*
+     * By NAME, at whatever position — not "the last column".
+     *
+     * The record's oldest and largest evidence table is headed
+     * `| # | Rule | Mutation | Named test | Result |`. `Named test` was always
+     * a recognised name; it simply is not last, so reading only the last cell
+     * saw `result`, decided the table made no claims, and skipped all twelve of
+     * its rows in silence — the same escape as the misspelled header, one
+     * position over. Widening the header list would not have closed it.
+     */
+    column = declared.findIndex((cell) => CITATION_HEADERS.includes(cell));
+    inCitationTable = column >= 0;
     previous = null;
-    if (!inCitationTable && /\btests?\b/.test(declared)) unrecognised.push(header);
+    /*
+     * A mutation table that cites no test is an error unless it SAYS it cites
+     * something else. That is a far better signal than "the last column
+     * mentions a test", which was both too lax — `what dies` sails through —
+     * and too eager: an ordinary summary table headed `tests added` failed the
+     * whole run.
+     */
+    if (
+      !inCitationTable &&
+      declared.includes('mutation') &&
+      !NON_CITING_HEADERS.includes(declared.at(-1) ?? '')
+    ) {
+      unrecognised.push(header);
+    }
     header = null;
     continue;
   }
@@ -157,7 +201,7 @@ for (const line of lines) {
     continue;
   }
 
-  const cell = columns[columns.length - 1] ?? '';
+  const cell = columns[column] ?? '';
   if (/^\(same/i.test(cell.trim())) {
     if (previous === null) unparsed.push(line);
     continue;

@@ -67,4 +67,15 @@ afterEach(() => {
    * has returned. Latent, and exactly the kind of invariant nothing enforces.
    */
   vi.unstubAllGlobals();
+  /*
+   * And the timers, for the same reason one step further on.
+   *
+   * A test that installs fake timers restores them as its LAST statement, which
+   * a failing assertion skips — so the test AFTER a failure runs on a clock
+   * nothing is advancing. `restoreMocks` does not cover timers either. This
+   * matters most exactly when it is hardest to see: a mutation run, where the
+   * first failure is expected and every test after it is the evidence that the
+   * mutation killed nothing else.
+   */
+  vi.useRealTimers();
 });
