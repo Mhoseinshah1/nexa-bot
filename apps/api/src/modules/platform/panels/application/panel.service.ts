@@ -938,7 +938,12 @@ export class PanelService {
             PANEL_ERROR_CODES.PANEL_NAME_TAKEN,
             parsed.name === undefined
               ? 'Another panel took this name while it was archived. Restore it under a different name.'
-              : 'Another panel of this tenant already uses that name.',
+              : // Still actionable. The first refusal tells the operator to pick
+                // another name; answering the second with the generic edit
+                // message dropped the remedy at exactly the point they were
+                // acting on it, and left the screen saying nothing about what
+                // to do next.
+                'That name is taken as well. Choose another to restore this panel under.',
           );
         }
 

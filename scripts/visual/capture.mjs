@@ -297,9 +297,18 @@ for (const view of VIEWS) {
   await page.click('button[type="submit"]');
   await page.waitForTimeout(1500);
 
+  // Measured here exactly as in the loop above. An earlier version asserted
+  // `pageScrolledBy: 0` and `stillLoading: false` on this finding instead of
+  // measuring them, which quietly exempted the one capture with the most going
+  // on from the shell-scroll check the loop calls "measured on every route".
+  await page.evaluate(() => window.scrollTo(0, 5000));
+  const pageScrolledBy = await page.evaluate(() => window.scrollY);
+  await page.evaluate(() => window.scrollTo(0, 0));
+
   const state = await page.evaluate(() => ({
     text: document.body.textContent ?? '',
     path: window.location.pathname,
+    skeleton: document.querySelector('.skel') !== null,
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
     theme: document.documentElement.getAttribute('data-theme'),
@@ -324,8 +333,8 @@ for (const view of VIEWS) {
     dir: state.dir,
     horizontalOverflow: state.scrollWidth > state.clientWidth,
     overflowBy: state.scrollWidth - state.clientWidth,
-    pageScrolledBy: 0,
-    stillLoading: false,
+    pageScrolledBy,
+    stillLoading: state.skeleton,
     showingError: state.text.includes('خطا در ارتباط با سرور'),
     errors: [...errors],
   });
@@ -349,8 +358,12 @@ const wrongDir = findings.filter((f) => f.dir !== 'rtl');
 
 const summary = {
   captured: findings.length,
-  pages: PAGES.length + 1,
+  // Routes x views, plus the interactive states, which are single-view by
+  // construction. Reported separately because `PAGES.length + 1` read as if
+  // `captured` should be `pages x views` and left two captures looking lost.
+  routes: PAGES.length,
   views: VIEWS.map((v) => v.key),
+  interactiveStates: findings.filter((f) => f.path.includes('(')).length,
   horizontalOverflow: findings.filter((f) => f.horizontalOverflow).length,
   documentScrolledInsteadOfShell: findings.filter((f) => f.pageScrolledBy > 0).length,
   stillLoadingAfterSettle: findings.filter((f) => f.stillLoading).length,

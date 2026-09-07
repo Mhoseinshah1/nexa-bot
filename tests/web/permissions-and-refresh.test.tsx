@@ -471,7 +471,7 @@ describe('the panels nav entry', () => {
  *
  * So: one refusal, then silence.
  */
-describe('polling that has started being refused', () => {
+describe('polling that has started being refused, and polling that has merely stumbled', () => {
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -485,6 +485,18 @@ describe('polling that has started being refused', () => {
       error: {
         kind: 'forbidden',
         code: 'access.denied',
+        message: 'no',
+        correlationId: 'test',
+      },
+    },
+  };
+
+  const BROKEN = {
+    status: 502,
+    body: {
+      error: {
+        kind: 'internal',
+        code: 'gateway.bad',
         message: 'no',
         correlationId: 'test',
       },
@@ -555,5 +567,168 @@ describe('polling that has started being refused', () => {
 
     await vi.advanceTimersByTimeAsync(30_000);
     expect(countOf(revoked.calls, '/notifications')).toBe(refusals);
+  });
+
+  /**
+   * The inverse, and the test whose absence let the first version of this rule
+   * ship inverted.
+   *
+   * That version stopped on ANY error. A dashboard on a wall — the scenario the
+   * intervals exist for, where nobody is present to press Retry — met one 502
+   * from the edge during a rolling restart and froze into an error box for
+   * good: `refetchOnWindowFocus` is off, and React Query clears `state.error`
+   * only on a SUCCESSFUL fetch, which is the fetch the stopped timer no longer
+   * makes. A gate that only ever asked "does a refusal stop it?" was green
+   * throughout.
+   */
+  it('keeps polling through a transient failure, and recovers on its own', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubApi([
+      READINESS,
+      { url: '/panels', body: { panels: [], nextCursor: null } },
+      { url: '/ops-log', body: { events: [], nextCursor: null } },
+    ]);
+    renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
+    await screen.findByText('چیزی برای رسیدگی نیست.');
+
+    // The edge starts answering 502 for the conditions feed.
+    const broken = stubApi([
+      READINESS,
+      { url: '/panels', body: { panels: [], nextCursor: null } },
+      { url: '/ops-log', ...BROKEN },
+    ]);
+    await vi.advanceTimersByTimeAsync(16_000);
+    await waitFor(() => {
+      expect(countOf(broken.calls, '/ops-log')).toBeGreaterThan(0);
+    });
+    const first = countOf(broken.calls, '/ops-log');
+
+    // It must NOT have given up: a 502 is a state waiting resolves.
+    await vi.advanceTimersByTimeAsync(48_000);
+    await waitFor(() => {
+      expect(countOf(broken.calls, '/ops-log')).toBeGreaterThan(first);
+    });
+
+    // The deployment finishes, and the page heals with nobody present.
+    stubApi([
+      READINESS,
+      { url: '/panels', body: { panels: [], nextCursor: null } },
+      {
+        url: '/ops-log',
+        body: {
+          events: [
+            event({ code: 'settings.stored_value_invalid', message: 'A setting stopped parsing.' }),
+          ],
+          nextCursor: null,
+        },
+      },
+    ]);
+    await vi.advanceTimersByTimeAsync(16_000);
+    expect(await screen.findByText('A setting stopped parsing.')).toBeInTheDocument();
+  });
+});
+
+/**
+ * The inverse of the notifications case, and the same rule: a screen must not
+ * hide what the server would serve.
+ *
+ * `GET /providers` takes a session and no permission — it is a catalogue of
+ * code, identical for every tenant. The shell gated both the nav entry and the
+ * route on `panels.view`, so the actor this release built the create form for
+ * (`panels.edit`, no `panels.view`) could not reach it, while the create form
+ * they CAN reach fetches that same catalogue and renders it in its picker.
+ */
+describe('the providers catalogue', () => {
+  const entry = NAV.find((candidate) => candidate.id === 'providers');
+  const CATALOGUE = {
+    url: '/providers',
+    body: {
+      providers: [
+        {
+          key: 'marzban',
+          canonicalName: 'Marzban',
+          credentialShape: 'USERNAME_PASSWORD',
+          capabilities: ['HEALTH_CHECK'],
+          requiredActivationFields: [],
+          maturity: 'now',
+        },
+      ],
+    },
+  };
+
+  it('is offered to an actor who may create a panel but not list one', async () => {
+    expect(entry, 'the providers nav entry').toBeDefined();
+    expect(navPermitted(entry!, ['panels.edit'])).toBe(true);
+
+    stubApi([CATALOGUE]);
+    renderPage(routeFor('/providers', ['panels.edit']));
+    expect(await screen.findByText('Marzban')).toBeInTheDocument();
+    expect(screen.queryByText('شما به این بخش دسترسی ندارید.')).toBeNull();
+  });
+
+  it('is offered to a session holding neither panel permission, because the server serves it', async () => {
+    expect(navPermitted(entry!, ['reports.view'])).toBe(true);
+
+    stubApi([CATALOGUE]);
+    renderPage(routeFor('/providers', ['reports.view']));
+    expect(await screen.findByText('Marzban')).toBeInTheDocument();
+  });
+});
+
+/**
+ * The notification detail was the one polled query on this branch with no way
+ * back from a failure: a message and no button, a stale attempts card below it
+ * still showing the pre-failure list, and re-clicking the same row setting
+ * `selected` to the value it already held — so React bails out and nothing
+ * refetches. `polling.ts` asserted that every stopped interval could be
+ * restarted by "a Retry control and a reload"; for this one that was half true.
+ */
+describe('a notification detail that failed to load', () => {
+  const LIST = {
+    url: '/notifications',
+    body: {
+      notifications: [
+        {
+          id: '01a05e35-c9ad-7e93-bef3-1ed9b55292cb',
+          kind: 'OPERATIONAL_EVENT',
+          status: 'SENT',
+          templateKey: 'ops.alert',
+          attemptCount: 1,
+          maxAttempts: 5,
+          createdAt: '2026-09-06T08:00:00.000Z',
+          lastAttemptAt: '2026-09-06T08:00:01.000Z',
+          completedAt: '2026-09-06T08:00:01.000Z',
+          correlationId: 'c1',
+        },
+      ],
+      nextCursor: null,
+    },
+  };
+  const DETAIL_URL = '/notifications/01a05e35-c9ad-7e93-bef3-1ed9b55292cb';
+
+  it('offers a retry that actually re-asks', async () => {
+    const api = stubApi([
+      LIST,
+      {
+        url: DETAIL_URL,
+        status: 500,
+        body: {
+          error: { kind: 'internal', code: 'oops', message: 'no', correlationId: 'c1' },
+        },
+      },
+    ]);
+    renderPage(<NotificationsPage mayTest denied={false} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ops.alert' }));
+    const retry = await screen.findByRole('button', { name: 'تلاش دوباره' });
+
+    const before = api.calls.filter((call) => call.url.includes(DETAIL_URL)).length;
+    expect(before).toBeGreaterThan(0);
+    fireEvent.click(retry);
+    await waitFor(() => {
+      expect(api.calls.filter((call) => call.url.includes(DETAIL_URL)).length).toBeGreaterThan(
+        before,
+      );
+    });
   });
 });

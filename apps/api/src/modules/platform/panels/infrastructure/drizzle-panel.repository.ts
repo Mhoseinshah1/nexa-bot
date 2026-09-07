@@ -175,8 +175,8 @@ export class DrizzlePanelRepository implements PanelRepository {
    * One page of panels.
    *
    * TWO bounded statements, not one. The keys come first — an index-only walk
-   * of `(name, id)` that reads one row past the page to know whether a next
-   * cursor exists — and only then are the credential and health rows fetched,
+   * of `(created_at, id)` that reads one row past the page to know whether a
+   * next cursor exists — and only then are the credential and health rows fetched,
    * for those ids alone. The single joined query it replaced materialised every
    * live panel of the tenant with both child rows attached before any limit
    * applied, so the expensive part of the work was the part that scaled.

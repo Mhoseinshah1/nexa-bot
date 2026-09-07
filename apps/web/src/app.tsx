@@ -200,7 +200,13 @@ export const NAV: readonly NavEntry[] = [
     path: '/providers',
     label: 'web.nav_providers',
     icon: 'layers',
-    permission: 'panels.view',
+    // `GET /providers` needs a session and nothing more — it is a catalogue of
+    // code, identical for every tenant. Gating it on `panels.view` hid it from
+    // an actor holding `panels.edit` alone, who is the actor this release
+    // built the create form for, and whose create form fetches this very
+    // catalogue and renders it in its picker. Hiding what the server serves is
+    // the same defect as offering what it refuses, seen from the other side.
+    permission: null,
     group: 'web.navgroup_infra',
   },
   {
@@ -373,7 +379,7 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
 
   if (route.path === '/providers') {
     return {
-      element: <ProvidersPage denied={!may('panels.view')} />,
+      element: <ProvidersPage denied={false} />,
       crumbs: [{ label: t('web.nav_providers') }],
       title: t('web.nav_providers'),
     };

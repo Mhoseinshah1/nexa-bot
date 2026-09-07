@@ -100,8 +100,15 @@ describe('the online index build', () => {
    * predicate-only assertion stay green, because it was reading the database
    * rather than comparing the two.
    *
-   * So this compares DECLARED against ACTUAL. Changing a definition without
-   * changing its name now fails here, which is where somebody will see it.
+   * So this compares DECLARED against ACTUAL — the WHOLE shape, not a part of
+   * it. The first version of this assertion computed `declared` and then used
+   * it only inside `predicateOf(declared)`, checking the columns with an
+   * order-insensitive `toContain` over three hard-coded names. Reordering the
+   * keyset to `(created_at, id, tenant_id)` — which destroys the index, since
+   * the leading column would no longer be the one every query filters on —
+   * left it green. Its own docblock claimed otherwise, and the mutation that
+   * was run against it happened to be a predicate typo, the one dimension it
+   * did cover.
    */
   it('has an index in the database matching every declared definition', async () => {
     for (const index of ONLINE_INDEXES) {
@@ -122,17 +129,22 @@ describe('the online index build', () => {
           .trim()
           .toLowerCase();
       const declared = normalise(index.definition);
-      const built = normalise(actual);
-      // The predicate is the half that decides whether the index is usable at
-      // all, so it is compared explicitly rather than left inside a long string.
+      // `indexdef` is a full statement; the declaration is everything from `ON`
+      // onwards. Strip the prefix and the schema qualification so what remains
+      // is the same clause in the same order: method, columns, predicate.
+      const built = normalise(actual)
+        .replace(new RegExp(`^create index ${index.name} `), '')
+        .replace(/public\./g, '')
+        .replace(/,\s+/g, ',');
+      expect(built, `${index.name} shape`).toBe(declared);
+
+      // And the predicate again on its own, so a failure of the line above says
+      // WHICH half moved rather than printing two long strings side by side.
       const predicateOf = (text: string) => {
         const where = / where (.*)$/.exec(text);
         return where === null ? null : where[1];
       };
       expect(predicateOf(built), `${index.name} predicate`).toBe(predicateOf(declared));
-      for (const column of ['tenant_id', 'created_at', 'id']) {
-        expect(built, `${index.name} columns`).toContain(column);
-      }
     }
 
     // And the two panel indexes are complementary rather than duplicates: one

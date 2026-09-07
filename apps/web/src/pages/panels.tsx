@@ -53,7 +53,7 @@ import {
   type Column,
   type Tone,
 } from '../ui/kit';
-import { pollUnlessFailing } from '../polling';
+import { pollUnlessRefused } from '../polling';
 
 /**
  * How often an open panel detail re-reads its own row.
@@ -390,7 +390,7 @@ export function PanelDetailPage({
      * watching one panel; polling faster than the thing that writes the data
      * only adds requests that find the same row.
      */
-    refetchInterval: pollUnlessFailing(PANEL_DETAIL_REFRESH_MS),
+    refetchInterval: pollUnlessRefused(PANEL_DETAIL_REFRESH_MS),
   });
 
   const refresh = async () => {
@@ -582,6 +582,8 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
    * something no screen could do, and the panel stayed unrestorable.
    */
   const [renameOnRestore, setRenameOnRestore] = useState<string | null>(null);
+  /** Every name this restore has already been refused, so none can be resent. */
+  const [refusedNames, setRefusedNames] = useState<readonly string[]>([]);
 
   const status = useMutation({
     mutationFn: (command: { idempotencyKey: string; status: PanelStatus; name?: string }) =>
@@ -589,6 +591,7 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
     onSuccess: async () => {
       statusSubmission.settle();
       setRenameOnRestore(null);
+      setRefusedNames([]);
       toast({ tone: 'ok', message: t('web.saved') });
       await refresh();
     },
@@ -597,6 +600,15 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
       // The one refusal this screen can actually resolve: offer the field
       // rather than repeating advice the operator cannot act on.
       if (error instanceof ApiError && error.code === PANEL_ERROR_CODES.PANEL_NAME_TAKEN) {
+        // The name the server just refused, remembered so the button below can
+        // refuse it too. The field is seeded with it deliberately — it is the
+        // string the operator is editing, not a suggestion — but leaving the
+        // control enabled on a value already known to collide invited a second
+        // press that could only fail.
+        const attempted = renameOnRestore ?? panel.name;
+        setRefusedNames((current) =>
+          current.includes(attempted) ? current : [...current, attempted],
+        );
         setRenameOnRestore((current) => current ?? panel.name);
       }
       toast({ tone: 'danger', message: messageFor(error) });
@@ -767,7 +779,11 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
               <button
                 type="button"
                 className="btn"
-                disabled={status.isPending || renameOnRestore === ''}
+                disabled={
+                  status.isPending ||
+                  renameOnRestore === '' ||
+                  refusedNames.includes(renameOnRestore ?? panel.name)
+                }
                 onClick={() => {
                   const command = {
                     status: 'DISABLED' as PanelStatus,

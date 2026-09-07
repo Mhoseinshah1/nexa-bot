@@ -762,6 +762,54 @@ describe('the panel detail', () => {
   });
 
   /**
+   * The field is seeded with the name the server just refused — it is the
+   * string being edited, not a suggestion — so the control beside it must not
+   * accept it back unchanged. Leaving it enabled meant the operator's most
+   * natural next action ("a field appeared, it is filled in, press the button")
+   * was a press that could only be refused again, and the second refusal is a
+   * different, blunter message.
+   */
+  it('will not resend the name the restore was already refused', async () => {
+    const archived = detail({ status: 'ARCHIVED' });
+    const api = stubApi([
+      ...archived,
+      {
+        url: '/panels/01a05e35-c9ad-7e93-bef3-1ed9b55292c8/status',
+        status: 409,
+        body: {
+          error: {
+            kind: 'CONFLICT',
+            code: 'panel.name_taken',
+            message: 'Another panel took this name while it was archived.',
+            details: {},
+            correlationId: 'c1',
+          },
+        },
+      },
+    ]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    const restore = () => screen.getByRole('button', { name: 'بازگردانی از بایگانی' });
+    fireEvent.click(restore());
+    const field = (await screen.findByLabelText('نام تازه برای بازگردانی')) as HTMLInputElement;
+    await waitFor(() => {
+      expect(restore()).toBeDisabled();
+    });
+
+    const refused = api.calls.filter((call) => call.method === 'POST').length;
+    fireEvent.click(restore());
+    expect(api.calls.filter((call) => call.method === 'POST').length).toBe(refused);
+
+    // Editing it re-enables the button: the block is on the refused VALUE, not
+    // on having been refused once.
+    fireEvent.change(field, { target: { value: 'Frankfurt A (restored)' } });
+    await waitFor(() => {
+      expect(restore()).toBeEnabled();
+    });
+  });
+
+  /**
    * And a restore that was never refused sends no name at all — the API
    * refuses one outside this transition, and a rename nobody asked for is a
    * write nobody asked for.

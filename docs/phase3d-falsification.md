@@ -657,3 +657,106 @@ the checker's guarantee meaning exactly what it says — every _test that dies_
 citation names a test that exists — instead of quietly widening it to cover a
 row it cannot verify. The evidence for this row is reproducible by hand: make
 the one-line change the mutation column names and re-run the harness.
+
+# Round 9 — the fix for round 8 was worse than the defect
+
+A fresh-context reviewer read round 8 and found seven defects, one of them an
+inversion of exactly the kind this document keeps recording.
+
+## The inversion
+
+`pollUnlessFailing` stopped an interval on ANY error, and the docblock
+rationalised it: _"the user has a Retry control and a reload, both of which
+reset the query and start the interval again."_ That sentence is true only where
+a user is present — and the scenario the intervals were added for is the one
+where nobody is.
+
+What it did to a dashboard left open on a wall: one 502 from the edge during a
+rolling restart exhausts `retry: 1` and sets `state.error`. The interval returns
+`false` and the timer is cleared. `refetchOnWindowFocus` is off globally, so
+looking at the tab does not restart it; there was no offline/online transition,
+so `refetchOnReconnect` never fires; and React Query clears `error` only on a
+SUCCESSFUL fetch — `fetchState` clears it while STARTING one only when
+`data === undefined`, which is never true of a screen that has been serving
+figures. The single thing that would clear the error is the fetch the stopped
+timer no longer makes. The screen froze into an error box until somebody walked
+up to it, where before the fix it healed itself on the next tick.
+
+The hazard that motivated the rule is a **403** from a revoked session, because
+that is what writes the unbounded `access.permission_denied` rows. `ApiError`
+carries `status` and the codebase already discriminates on it. So the rule is
+now `pollUnlessRefused` — stop on 401 or 403, which no amount of waiting
+resolves; keep polling through everything else, which waiting is the cure for.
+Renamed, because a reader meeting `pollUnlessFailing` would assume the old
+meaning.
+
+The gate could not tell the two rules apart: every test asked only "does a
+refusal stop it?", and both versions answer yes. The missing test is the
+inverse, and it is now U12.
+
+## A fourth test of mine that could not fail
+
+_has an index in the database matching every declared definition_ computed
+`declared` and then used it only inside `predicateOf(declared)`, checking the
+columns with an order-insensitive `toContain` over three hard-coded names. Its
+own docblock said _"this compares DECLARED against ACTUAL"_. Reordering the
+keyset to `(created_at, id, tenant_id)` — which destroys the index, since the
+leading column would no longer be the one every query filters on — left it
+green. The mutation that had been run against it was a predicate typo, the one
+dimension it did cover.
+
+It now compares the whole normalised shape: method, column order and predicate.
+
+## The other five
+
+- The notification detail was the only polled query with no way back from a
+  failure: a message and no button, a stale attempts card still showing the
+  pre-failure list, and re-clicking the same row setting `selected` to the value
+  it already held, so React bails out and nothing refetches. It has a retry now.
+- The restore-rename field is seeded with the name the server just refused — it
+  is the string being edited, not a suggestion — but the button beside it stayed
+  enabled, so the operator's most natural next action was a press that could
+  only fail. It now refuses the refused value and re-enables the moment the
+  field changes. The second refusal also dropped the remedy sentence; it says
+  what to do again.
+- `/providers` needs a session and no permission, and the shell gated it on
+  `panels.view` — hiding it from the `panels.edit`-only actor this release built
+  the create form for, whose create form fetches that same catalogue and renders
+  it in its picker. Hiding what the server serves is the truthfulness defect
+  seen from the other side.
+- The interactive visual pass asserted `pageScrolledBy: 0` and
+  `stillLoading: false` instead of measuring them, exempting the one capture
+  with the most going on from the shell-scroll check the loop calls "measured on
+  every route". Both are measured now, and the summary reports `routes` and
+  `interactiveStates` separately rather than `PAGES.length + 1`, which read as
+  if `captured` should be `routes x views`.
+- A docblock on the panel pager still described an index-only walk of
+  `(name, id)`; the keyset moved to `(created_at, id)` and 0026 retired that
+  index.
+
+## The mutations
+
+| #   | rule                                            | mutation                                                   | test that dies                                                                                          |
+| --- | ----------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| U12 | a transient failure does NOT stop the interval  | `refused` → `error !== null`                               | `permissions-and-refresh.test.tsx` › keeps polling through a transient failure, and recovers on its own |
+| U13 | a declared index matches the built one in shape | reorder the archived keyset to `(created_at,id,tenant_id)` | `online-indexes.test.ts` › has an index in the database matching every declared definition              |
+| U14 | a refused restore name cannot be resent         | drop `refusedNames` from the button's `disabled`           | `panels.test.tsx` › will not resend the name the restore was already refused                            |
+| U15 | the shell does not hide what the server serves  | gate `/providers` on `panels.view` again                   | `permissions-and-refresh.test.tsx` › is offered to an actor who may create a panel but not list one     |
+| U16 | a failed detail can be re-asked                 | drop the retry button from the error banner                | `permissions-and-refresh.test.tsx` › offers a retry that actually re-asks                               |
+
+U15 kills two tests. U12 died with `expected 1 to be greater than 1`; U13 with
+`panels_tenant_archived_page_idx shape: expected 'on panels using btree
+tenant_id,creat…' to be 'on panels using btree created_at,id,t…'`. Every
+mutation killed only the tests its row names, every source was restored and
+sha256-verified, and every suite was green again afterwards.
+
+## What this round says about the method
+
+Round 8 was falsified — U10 and U11 both died as intended — and the rule was
+still wrong. Mutation proves a test can distinguish a rule from its absence; it
+says nothing about whether the rule is the right one, because the mutation is
+chosen by the same person who chose the rule. Both of U10 and U11 asked "does a
+refusal stop it?", which is the question the author already believed the answer
+to. What caught it was a reader who asked what the fix now does that it did not
+do before, and in which state that is wrong — the question `CLAUDE.md` says to
+ask, applied by somebody who had not written the answer.

@@ -32,7 +32,7 @@ import {
   StateSwitch,
   type Column,
 } from '../ui/kit';
-import { pollUnlessFailingWhile } from '../polling';
+import { pollUnlessRefusedWhile } from '../polling';
 
 const SEVERITIES: readonly OperationalSeverity[] = ['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL'];
 
@@ -359,7 +359,7 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
     // destination that does not work.
     //
     // Only while something IS pending, so a settled list costs nothing.
-    refetchInterval: pollUnlessFailingWhile<NotificationListResponse>(3_000, (data) =>
+    refetchInterval: pollUnlessRefusedWhile<NotificationListResponse>(3_000, (data) =>
       data.notifications.some((entry) => entry.status === 'PENDING'),
     ),
   });
@@ -369,7 +369,7 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
     queryFn: () => fetchNotification(selected as string),
     enabled: selected !== null,
     // The open panel follows the same rule as the list above.
-    refetchInterval: pollUnlessFailingWhile<NotificationDetailResponse>(
+    refetchInterval: pollUnlessRefusedWhile<NotificationDetailResponse>(
       3_000,
       (data) => data.notification.status === 'PENDING',
     ),
@@ -494,7 +494,22 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
         />
       </Card>
 
-      {detail.isError && <Banner tone="danger">{messageFor(detail.error)}</Banner>}
+      {/*
+        A message AND a way out. This was the one polled query on the branch
+        with no retry control: the interval stops on a refusal, the stale
+        attempts card below goes on showing the pre-failure list, and clicking
+        the same row again sets `selected` to the value it already holds, so
+        React bails out and nothing refetches. The only escapes were a full
+        reload or a detour through another notification.
+      */}
+      {detail.isError && (
+        <Banner tone="danger">
+          {messageFor(detail.error)}{' '}
+          <button type="button" className="btn ghost sm" onClick={() => void detail.refetch()}>
+            {t('web.retry')}
+          </button>
+        </Banner>
+      )}
       {detail.data && (
         <Card title={t('web.attempts')}>
           {detail.data.attempts.length === 0 && <Empty title={t('web.empty')} />}
