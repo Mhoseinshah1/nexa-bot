@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import { chromium } from 'playwright';
-import { INFO, PANELS, ROUTES } from './fixtures.mjs';
+import { ARCHIVED_PANELS_PAGE, INFO, PANELS, ROUTES } from './fixtures.mjs';
 
 /**
  * Visual verification for the production Web Admin.
@@ -70,6 +70,7 @@ const VIEWS = [
 const PAGES = [
   ['dashboard', '/'],
   ['panels', '/panels'],
+  ['panels-archived', '/panels?archived=only'],
   ['panel-detail', `/panels/${PANELS[0].id}`],
   ['panel-new', '/panels/new'],
   ['providers', '/providers'],
@@ -125,6 +126,13 @@ for (const view of VIEWS) {
       const key = Object.keys(ROUTES)
         .filter((candidate) => rest === candidate || rest.startsWith(`${candidate}/`))
         .sort((a, b) => b.length - a.length)[0];
+
+      // The archive is a QUERY on the same path, so the pathname alone would
+      // answer it with the live fleet — the live rows under the archived
+      // heading, which is precisely the screen this view exists to check.
+      if (rest === '/panels' && url.searchParams.get('archived') === 'only') {
+        return route.fulfill({ json: ARCHIVED_PANELS_PAGE });
+      }
 
       const detail = /^\/panels\/([^/]+)$/.exec(rest);
       if (detail && detail[1] !== 'new') {

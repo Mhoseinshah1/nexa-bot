@@ -11,6 +11,9 @@ import { DashboardPage } from '../../apps/web/src/pages/dashboard';
 import { PanelsPage } from '../../apps/web/src/pages/panels';
 import { panel, renderPage, stubApi } from './harness';
 
+/** The panels list reads its archive filter from the URL, as `/system` does. */
+const LIVE_ROUTE = { path: '/panels', query: new URLSearchParams() };
+
 const REPO_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '../..');
 
 /**
@@ -252,7 +255,7 @@ describe('the production content-security policy', () => {
 
   it('renders a table with no style attribute, and keeps its alignment', async () => {
     stubApi([{ url: '/panels', body: { panels: [panel()], nextCursor: null } }]);
-    const { container } = renderPage(<PanelsPage mayEdit denied={false} />);
+    const { container } = renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
     await screen.findByText('Frankfurt A');
 
     expect(container.querySelectorAll('[style]')).toHaveLength(0);

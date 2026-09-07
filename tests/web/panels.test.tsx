@@ -3,6 +3,9 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { PanelsPage, PanelDetailPage, NewPanelPage } from '../../apps/web/src/pages/panels';
 import { panel, renderPage, stubApi } from './harness';
 
+/** The panels list reads its archive filter from the URL, as `/system` does. */
+const LIVE_ROUTE = { path: '/panels', query: new URLSearchParams() };
+
 /**
  * Panels, rendered against the shapes the server actually returns.
  *
@@ -24,7 +27,7 @@ describe('the panel list', () => {
    */
   it('renders no location column, and no invented telemetry', async () => {
     stubApi(list([panel()]));
-    renderPage(<PanelsPage mayEdit denied={false} />);
+    renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
     await screen.findByText('Frankfurt A');
 
     const headers = screen.getAllByRole('columnheader').map((cell) => cell.textContent ?? '');
@@ -37,7 +40,7 @@ describe('the panel list', () => {
 
   it('renders every column from something the server sent', async () => {
     stubApi(list([panel()]));
-    renderPage(<PanelsPage mayEdit denied={false} />);
+    renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
 
     await screen.findByText('Frankfurt A');
     expect(screen.getByText('Marzban')).toBeInTheDocument();
@@ -47,7 +50,7 @@ describe('the panel list', () => {
 
   it('shows staleness as its own fact rather than folding it into the state', async () => {
     stubApi(list([panel({ health: { ...(panel().health as object), stale: true } })]));
-    renderPage(<PanelsPage mayEdit denied={false} />);
+    renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
     await screen.findByText('Frankfurt A');
     // A stale HEALTHY is not the same claim as a fresh one, and the state must
     // still read HEALTHY rather than being rewritten by the surface.
@@ -62,7 +65,7 @@ describe('the panel list', () => {
    */
   it('pages forward with the cursor the server minted, and never sorts a page', async () => {
     const api = stubApi(list([panel()], 'opaque-cursor-1'));
-    renderPage(<PanelsPage mayEdit denied={false} />);
+    renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
     await screen.findByText('Frankfurt A');
 
     // No column is a button, so no header can sort.
@@ -81,20 +84,20 @@ describe('the panel list', () => {
 
   it('offers no next page when the server says there is none', async () => {
     stubApi(list([panel()], null));
-    renderPage(<PanelsPage mayEdit denied={false} />);
+    renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
     await screen.findByText('Frankfurt A');
     expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeDisabled();
   });
 
   it('shows a permission refusal rather than an empty list', async () => {
     stubApi(list([]));
-    renderPage(<PanelsPage mayEdit={false} denied />);
+    renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit={false} denied />);
     expect(await screen.findByText('شما به این بخش دسترسی ندارید.')).toBeInTheDocument();
   });
 
   it('distinguishes an empty fleet from a failed request', async () => {
     stubApi(list([]));
-    renderPage(<PanelsPage mayEdit denied={false} />);
+    renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
     expect(await screen.findByText('هنوز پنلی ثبت نشده است.')).toBeInTheDocument();
   });
 });
@@ -773,7 +776,7 @@ describe('the new-panel form', () => {
         503,
       ),
     ]);
-    renderPage(<NewPanelPage denied={false} mayRotate />);
+    renderPage(<NewPanelPage denied={false} mayRotate mayView />);
 
     // A retry, which the silent form never offered.
     expect(await screen.findByRole('button', { name: 'تلاش دوباره' })).toBeInTheDocument();
@@ -783,7 +786,7 @@ describe('the new-panel form', () => {
 
   it('distinguishes an empty catalogue from a failed one', async () => {
     stubApi([providersRoute({ providers: [] })]);
-    renderPage(<NewPanelPage denied={false} mayRotate />);
+    renderPage(<NewPanelPage denied={false} mayRotate mayView />);
     expect(await screen.findByText('هیچ ارائه‌دهنده‌ای در دسترس نیست.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'ذخیره' })).toBeNull();
   });
@@ -800,7 +803,7 @@ describe('the new-panel form', () => {
    */
   it('offers no credential field to an actor who may not rotate credentials', async () => {
     stubApi([providersRoute(CATALOGUE)]);
-    renderPage(<NewPanelPage denied={false} mayRotate={false} />);
+    renderPage(<NewPanelPage denied={false} mayRotate={false} mayView />);
     await screen.findByLabelText('ارائه‌دهنده');
 
     fireEvent.change(screen.getByLabelText('ارائه‌دهنده'), { target: { value: 'sanaei' } });
@@ -818,7 +821,7 @@ describe('the new-panel form', () => {
    */
   it('offers only the credential fields the chosen provider accepts', async () => {
     stubApi([providersRoute(CATALOGUE)]);
-    renderPage(<NewPanelPage denied={false} mayRotate />);
+    renderPage(<NewPanelPage denied={false} mayRotate mayView />);
     await screen.findByLabelText('ارائه‌دهنده');
 
     // Nothing is known before a provider is chosen, so nothing is offered.
@@ -836,7 +839,7 @@ describe('the new-panel form', () => {
 
   it('never sends a credential the chosen provider cannot use', async () => {
     const api = stubApi([providersRoute(CATALOGUE), { url: '/panels', body: { panel: panel() } }]);
-    renderPage(<NewPanelPage denied={false} mayRotate />);
+    renderPage(<NewPanelPage denied={false} mayRotate mayView />);
     await screen.findByLabelText('ارائه‌دهنده');
 
     // Choose the provider that HAS a token field, fill it, then switch away.

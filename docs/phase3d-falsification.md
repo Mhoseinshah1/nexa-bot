@@ -447,3 +447,71 @@ The lesson is narrow and worth stating exactly: **a check that skips is a check
 that must say what it skipped.** Silence in a verifier is indistinguishable from
 success, which is the same sentence this codebase already has about the alerts
 page, arrived at from the other end.
+
+# Round 6 — the fifth Codex review's seven findings
+
+All seven were confirmed against production code, and two of them were not what
+the review said they were. Recording that first, because in both cases fixing
+what was reported would have changed nothing.
+
+**F3 was reported as a raw 23505.** It is not: `DrizzlePanelRepository.setStatus`
+already maps `panels_tenant_name_live_key` to a modelled `PANEL_NAME_TAKEN`. The
+defect is exactly what the review's title said — the 409 tells the operator to
+"rename it before restoring this one", and `update` refuses every edit to an
+archived panel, so that remedy does not exist. My first commit message for this
+round overstated it; this record is the correction.
+
+**F4 was reported in `NotificationsPage`.** It is not there. The test-send button
+renders outside the denied card and is gated on `settings.edit` alone, exactly as
+intended. The defect is the NAV entry, which required `opslog.view` — so the page
+was correct and unreachable.
+
+## Two tests that could not fail, found by mutating them
+
+Both were written this round, and both would have shipped as evidence.
+
+**The cross-panel draft test.** Its first version navigated `/panels/A` ->
+`/panels/B` with B uncached. A first visit is `pending`, which renders a skeleton
+and unmounts the subtree — so the draft reset for a reason that has nothing to do
+with the fix, and removing the route key left the test green. It now visits
+B -> A -> B so both are cached, which is the only state where the defect exists.
+
+**The archived index predicate test.** Its first version read the index
+definition out of PostgreSQL and asserted the predicate. Mutating the declared
+predicate in the source left it green — because `CREATE INDEX CONCURRENTLY IF
+NOT EXISTS` matches on NAME, so the database kept the index it already had. That
+is a real gap and not only a test defect: **editing a definition in
+`ONLINE_INDEXES` changes nothing on an installation that already has that index**.
+The test now compares DECLARED against ACTUAL, which fails on a source edit the
+database has not adopted.
+
+## The mutations
+
+| #   | rule                                                         | mutation                              | test that dies                                                                                              |
+| --- | ------------------------------------------------------------ | ------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| N01 | the panel detail subtree is keyed by panel id                | drop `key={panel['id']}`              | `router.test.tsx` › does not carry one panel’s draft onto another                                           |
+| N02 | ...including credential drafts and the open tab              | (same mutation)                       | `router.test.tsx` › does not carry a credential draft or the open tab across panels                         |
+| N03 | a replacement name travels WITH the status, in one statement | drop the name from the UPDATE set     | `panels-http.test.ts` › restores under a replacement name, and the rename lands with the status             |
+| N04 | ...so competing restores contend on the same name            | (same mutation)                       | `panels-http.test.ts` › never lets two competing restores escape as an unmodelled database error            |
+| N05 | a name outside a restore is refused, not dropped             | `if (false)` on the guard             | `panels-http.test.ts` › refuses a replacement name on a transition that is not a restore                    |
+| N06 | the archived mode selects archived rows                      | predicate back to `<> 'ARCHIVED'`     | `panels-http.test.ts` › drops an archived panel from the working fleet and keeps it in the archive          |
+| N07 | the notifications nav accepts either capability              | back to `permission: 'opslog.view'`   | `permissions-and-refresh.test.tsx` › offers the page to an actor who may only send a test                   |
+| N08 | a permission list means ANY, not ALL                         | `some` → `every`                      | `permissions-and-refresh.test.tsx` › treats a list of permissions as any, not all                           |
+| N09 | the dashboard re-reads its open conditions                   | drop `refetchInterval`                | `permissions-and-refresh.test.tsx` › re-reads the open management conditions while the dashboard stays open |
+| N10 | the panel detail re-reads its own row                        | drop `refetchInterval`                | `permissions-and-refresh.test.tsx` › re-reads its own row so a new health result appears                    |
+| N11 | create navigates only where the actor may go                 | `if (mayView)` → `if (true)`          | `permissions-and-refresh.test.tsx` › keeps an edit-only creator on the form and names what was created      |
+| N12 | the archive index predicate is the live one's mirror         | `=` → `<>` in the declared definition | `online-indexes.test.ts` › has an index in the database matching every declared definition                  |
+
+N03 and N06 each kill three or four tests; N08 kills three. Every mutation was
+required to fail for the reason its row names, every source was restored and
+hash-verified, and every suite was green again afterwards.
+
+## One mutation that killed nothing, and why that is recorded rather than hidden
+
+Removing the route key does NOT break _stops polling the panel the operator
+navigated away from_. React Query drops the previous query's last observer when
+the key changes, so the old interval stops whether or not the subtree remounted.
+The test is still load-bearing — N10 kills it — but for the polling rule, not for
+the key. The comment above it now says so, because a polling interval added
+beside a keyed subtree invites exactly the assumption that one protects the
+other.

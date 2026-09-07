@@ -932,15 +932,20 @@ export class PanelService {
           );
         }
 
-        const updated = await this.deps.repository.setStatus(tenant, panelId, status, now, tx);
+        // Name and status in ONE statement. Renaming afterwards would first
+        // make the row live under the name somebody else took, and the partial
+        // unique index refuses that before the rename can run — so the two-step
+        // version could not restore the very panels it was written for.
+        const updated = await this.deps.repository.setStatus(
+          tenant,
+          panelId,
+          status,
+          now,
+          tx,
+          parsed.name,
+        );
         if (updated === null) {
           throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
-        }
-        // The rename lands in the same transaction as the status change, so the
-        // row is never an ARCHIVED panel with an edited name — which is what
-        // keeps this from contradicting the archived-edit rule above.
-        if (parsed.name !== undefined) {
-          await this.deps.repository.update(tenant, panelId, { name: parsed.name }, now, tx);
         }
         // This is the monitor's status filter, and it is why the discovery scan
         // needs no status predicate to be correct: a panel that is not ACTIVE

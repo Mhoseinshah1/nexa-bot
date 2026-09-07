@@ -313,6 +313,7 @@ export class DrizzlePanelRepository implements PanelRepository {
     status: PanelStatus,
     at: Date,
     tx: TransactionScope,
+    name?: string,
   ): Promise<PanelRecord | null> {
     let row: typeof panels.$inferSelect | undefined;
     try {
@@ -320,6 +321,11 @@ export class DrizzlePanelRepository implements PanelRepository {
         .update(panels)
         .set({
           status,
+          // ONE statement, so the row never passes through a state the partial
+          // unique index refuses. Restoring under a replacement name in two
+          // statements would first make the row live under the name somebody
+          // else took, and collide before the rename could run.
+          ...(name === undefined ? {} : { name }),
           // The CHECK constraint requires these to agree, so they are set
           // together rather than left to a caller to remember.
           archivedAt: status === 'ARCHIVED' ? at : null,

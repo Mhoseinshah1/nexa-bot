@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   API_PREFIX,
   AUTH_ROUTES,
+  PANEL_ERROR_CODES,
   PANEL_ROUTES,
   panelListResponseSchema,
   panelResponseSchema,
@@ -300,6 +301,231 @@ describe('panel HTTP surface', () => {
    * secret the operator had just successfully saved. Enforced on the server
    * because the form is not the authority and an API client bypasses it.
    */
+  /**
+   * The archive, both halves of it: a panel that leaves the list must still be
+   * findable, and a panel that comes back must be able to.
+   */
+  describe('the archive', () => {
+    const archive = (id: string) =>
+      post(PANEL_ROUTES.status(id), ownerCookie, {
+        status: 'ARCHIVED',
+        idempotencyKey: idempotencyKey(),
+      });
+    const restore = (id: string, extra: Record<string, unknown> = {}) =>
+      post(PANEL_ROUTES.status(id), ownerCookie, {
+        status: 'DISABLED',
+        idempotencyKey: idempotencyKey(),
+        ...extra,
+      });
+    const listOf = async (query = '') =>
+      panelListResponseSchema.parse(
+        (await get(`${PANEL_ROUTES.list}${query}`, ownerCookie)).json(),
+      );
+
+    it('drops an archived panel from the working fleet and keeps it in the archive', async () => {
+      const live = panelResponseSchema.parse(
+        (await createPanel(ownerCookie, { name: 'Live' })).json(),
+      );
+      const gone = panelResponseSchema.parse(
+        (await createPanel(ownerCookie, { name: 'Retired' })).json(),
+      );
+      const archivedResponse = await archive(gone.panel.id);
+      if (![200, 201].includes(archivedResponse.statusCode))
+        console.log('DEBUG archive:', archivedResponse.body);
+      expect([200, 201]).toContain(archivedResponse.statusCode);
+
+      // The default list is the working fleet, and says nothing about the rest.
+      const working = await listOf();
+      expect(working.panels.map((row) => row.name)).toEqual(['Live']);
+
+      // The archive is its own list, and contains ONLY the archived panel —
+      // not the live one as well, which is what `includeArchived: true` would
+      // have produced and is a different, less useful answer.
+      const archived = await listOf('?archived=only');
+      expect(archived.panels.map((row) => row.name)).toEqual(['Retired']);
+      expect(archived.panels[0]?.status).toBe('ARCHIVED');
+      expect(live.panel.id).not.toBe(gone.panel.id);
+    });
+
+    it('pages the archive with its own cursor', async () => {
+      const ids: string[] = [];
+      for (const name of ['A1', 'A2', 'A3']) {
+        const created = panelResponseSchema.parse(
+          (await createPanel(ownerCookie, { name })).json(),
+        );
+        ids.push(created.panel.id);
+        await archive(created.panel.id);
+      }
+
+      const first = await listOf('?archived=only&limit=2');
+      expect(first.panels).toHaveLength(2);
+      expect(first.nextCursor).not.toBeNull();
+
+      const second = await listOf(
+        `?archived=only&limit=2&cursor=${encodeURIComponent(first.nextCursor as string)}`,
+      );
+      expect(second.panels).toHaveLength(1);
+      expect(second.nextCursor).toBeNull();
+
+      // Every archived panel appeared exactly once across the two pages.
+      const walked = [...first.panels, ...second.panels].map((row) => row.id).sort();
+      expect(walked).toEqual([...ids].sort());
+    });
+
+    it('refuses a live cursor against the archive rather than mixing the lists', async () => {
+      // Two live panels, so the live list mints a real cursor.
+      for (const name of ['L1', 'L2']) await createPanel(ownerCookie, { name });
+      const liveFirst = await listOf('?limit=1');
+      expect(liveFirst.nextCursor).not.toBeNull();
+
+      // That cursor names a LIVE row. Handing it to the archive must not
+      // return live panels under the archived filter — the predicate is
+      // applied independently of the keyset.
+      const crossed = await listOf(
+        `?archived=only&cursor=${encodeURIComponent(liveFirst.nextCursor as string)}`,
+      );
+      for (const row of crossed.panels) expect(row.status).toBe('ARCHIVED');
+    });
+
+    /**
+     * The dead end, end to end.
+     *
+     * `panels_tenant_name_live_key` is UNIQUE `(tenant_id, name)` WHERE the
+     * panel is not archived, so archiving RELEASES the name and a live panel
+     * may take it. Restoring then re-enters that index. Before this, `setStatus`
+     * had no name check at all: the collision arrived as a raw 23505, and
+     * `update` refuses every edit to an archived panel — so the operator could
+     * neither restore it nor rename it out of the way.
+     */
+    it('answers a modelled conflict when a restored name was taken, never a raw database error', async () => {
+      const original = panelResponseSchema.parse(
+        (await createPanel(ownerCookie, { name: 'Frankfurt A' })).json(),
+      );
+      await archive(original.panel.id);
+
+      // The name is genuinely released: another live panel takes it.
+      const claimant = await createPanel(ownerCookie, { name: 'Frankfurt A' });
+      expect(claimant.statusCode).toBe(201);
+
+      const conflict = await restore(original.panel.id);
+      expect(conflict.statusCode).toBe(409);
+      const body = conflict.json() as { error: { code: string; message: string } };
+      expect(body.error.code).toBe(PANEL_ERROR_CODES.PANEL_NAME_TAKEN);
+      // A modelled refusal that tells the operator what to do, not a 500.
+      expect(body.error.message).toMatch(/different name/i);
+    });
+
+    it('restores under a replacement name, and the rename lands with the status', async () => {
+      const original = panelResponseSchema.parse(
+        (await createPanel(ownerCookie, { name: 'Frankfurt A' })).json(),
+      );
+      await archive(original.panel.id);
+      await createPanel(ownerCookie, { name: 'Frankfurt A' });
+
+      const restored = await restore(original.panel.id, { name: 'Frankfurt A (restored)' });
+      expect([200, 201]).toContain(restored.statusCode);
+      const view = panelResponseSchema.parse(restored.json());
+      // BOTH halves, from the one response: the status moved and the name moved.
+      expect(view.panel.status).toBe('DISABLED');
+      expect(view.panel.name).toBe('Frankfurt A (restored)');
+
+      // And it is in the working fleet again, under the new name.
+      const working = await listOf();
+      expect(working.panels.map((row) => row.name).sort()).toEqual([
+        'Frankfurt A',
+        'Frankfurt A (restored)',
+      ]);
+    });
+
+    it('commits neither half when the replacement name is itself taken', async () => {
+      const original = panelResponseSchema.parse(
+        (await createPanel(ownerCookie, { name: 'Frankfurt A' })).json(),
+      );
+      await archive(original.panel.id);
+      await createPanel(ownerCookie, { name: 'Taken' });
+
+      const refused = await restore(original.panel.id, { name: 'Taken' });
+      expect(refused.statusCode).toBe(409);
+
+      // STILL archived, and still under its own name. A status change that
+      // committed while the rename failed would leave a restored panel the
+      // operator did not ask for.
+      const after = panelResponseSchema.parse(
+        (await get(PANEL_ROUTES.detail(original.panel.id), ownerCookie)).json(),
+      );
+      expect(after.panel.status).toBe('ARCHIVED');
+      expect(after.panel.name).toBe('Frankfurt A');
+    });
+
+    it('refuses a replacement name on a transition that is not a restore', async () => {
+      const panel = panelResponseSchema.parse(
+        (await createPanel(ownerCookie, { name: 'Live one' })).json(),
+      );
+      // A rename smuggled into an ordinary status change is refused rather
+      // than silently dropped — a discarded write is one the operator believes.
+      const refused = await post(PANEL_ROUTES.status(panel.panel.id), ownerCookie, {
+        status: 'DISABLED',
+        name: 'Renamed by the back door',
+        idempotencyKey: idempotencyKey(),
+      });
+      expect(refused.statusCode).toBe(400);
+
+      const after = panelResponseSchema.parse(
+        (await get(PANEL_ROUTES.detail(panel.panel.id), ownerCookie)).json(),
+      );
+      expect(after.panel.name).toBe('Live one');
+    });
+
+    it('still refuses an ordinary edit to an archived panel', async () => {
+      const panel = panelResponseSchema.parse(
+        (await createPanel(ownerCookie, { name: 'Retired again' })).json(),
+      );
+      await archive(panel.panel.id);
+
+      const refused = await post(PANEL_ROUTES.update(panel.panel.id), ownerCookie, {
+        name: 'Renamed while archived',
+        idempotencyKey: idempotencyKey(),
+      });
+      expect(refused.statusCode).toBe(412);
+      expect((refused.json() as { error: { code: string } }).error.code).toBe(
+        PANEL_ERROR_CODES.PANEL_ARCHIVED,
+      );
+    });
+
+    /**
+     * Two operators restoring into the same free name at once.
+     *
+     * The pre-check runs inside the row lock, but the two requests lock
+     * DIFFERENT rows, so the check alone cannot serialise them — the partial
+     * unique index is what does. Whatever the interleaving, one must succeed
+     * and the other must be a modelled refusal: an unhandled 23505 reaching the
+     * error filter as a 500 is the outcome this whole finding is about.
+     */
+    it('never lets two competing restores escape as an unmodelled database error', async () => {
+      const first = panelResponseSchema.parse(
+        (await createPanel(ownerCookie, { name: 'Contested one' })).json(),
+      );
+      const second = panelResponseSchema.parse(
+        (await createPanel(ownerCookie, { name: 'Contested two' })).json(),
+      );
+      await archive(first.panel.id);
+      await archive(second.panel.id);
+
+      const [a, b] = await Promise.all([
+        restore(first.panel.id, { name: 'The same name' }),
+        restore(second.panel.id, { name: 'The same name' }),
+      ]);
+
+      const succeeded = [a, b].filter((response) => [200, 201].includes(response.statusCode));
+      const refused = [a, b].filter((response) => response.statusCode === 409);
+      expect(succeeded, 'exactly one restore must succeed').toHaveLength(1);
+      expect(refused, 'the loser is a modelled conflict').toHaveLength(1);
+      for (const response of [a, b]) {
+        expect(response.statusCode, 'no unmodelled database error escaped').not.toBe(500);
+      }
+    });
+  });
+
   describe('the provider credential shape', () => {
     it('refuses an API token on a provider that authenticates with a password', async () => {
       const response = await createPanel(ownerCookie, {

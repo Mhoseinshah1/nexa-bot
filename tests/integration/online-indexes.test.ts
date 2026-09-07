@@ -82,6 +82,67 @@ describe('the online index build', () => {
     expect(await state('panels_tenant_page_idx')).toBe('MISSING');
   });
 
+  /**
+   * Every declared index matches what the DATABASE actually has.
+   *
+   * Not just its name, and not just `indisvalid`. Two ways this bites:
+   *
+   * `panels_tenant_created_page_idx` is partial on `status <> 'ARCHIVED'`, so
+   * the archive browser added beside it matched no index at all and paged by
+   * sequential scan. A typo in the new predicate — `<>` where `=` was meant —
+   * leaves an index that is present and VALID and serves nothing.
+   *
+   * And `CREATE INDEX CONCURRENTLY IF NOT EXISTS` matches on NAME. Editing a
+   * definition in `ONLINE_INDEXES` therefore changes nothing on an installation
+   * that already has the old index: the build is skipped, the planner keeps
+   * using the old shape, and every other assertion in this file passes. That
+   * was found by mutating the archived predicate in the source and watching a
+   * predicate-only assertion stay green, because it was reading the database
+   * rather than comparing the two.
+   *
+   * So this compares DECLARED against ACTUAL. Changing a definition without
+   * changing its name now fails here, which is where somebody will see it.
+   */
+  it('has an index in the database matching every declared definition', async () => {
+    for (const index of ONLINE_INDEXES) {
+      const actual = await definitionOf(index.name);
+      expect(actual, `${index.name} is missing`).not.toBe('');
+
+      // The declared text is everything after `CREATE INDEX CONCURRENTLY <name>`,
+      // so normalising whitespace and quoting is enough to compare the shape.
+      // PostgreSQL re-renders a predicate — parenthesised, with an explicit
+      // `::text` cast — so the comparison is of shape, not of spelling.
+      const normalise = (text: string) =>
+        text
+          .replace(/"/g, '')
+          .replace(/'/g, '')
+          .replace(/::text/g, '')
+          .replace(/[()]/g, '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toLowerCase();
+      const declared = normalise(index.definition);
+      const built = normalise(actual);
+      // The predicate is the half that decides whether the index is usable at
+      // all, so it is compared explicitly rather than left inside a long string.
+      const predicateOf = (text: string) => {
+        const where = / where (.*)$/.exec(text);
+        return where === null ? null : where[1];
+      };
+      expect(predicateOf(built), `${index.name} predicate`).toBe(predicateOf(declared));
+      for (const column of ['tenant_id', 'created_at', 'id']) {
+        expect(built, `${index.name} columns`).toContain(column);
+      }
+    }
+
+    // And the two panel indexes are complementary rather than duplicates: one
+    // serves the working fleet, the other the archive.
+    const live = await definitionOf('panels_tenant_created_page_idx');
+    const archived = await definitionOf('panels_tenant_archived_page_idx');
+    expect(live).toContain("status <> 'ARCHIVED'");
+    expect(archived).toContain("status = 'ARCHIVED'");
+  });
+
   it('is a no-op when the indexes are already valid', async () => {
     // Run on every migration, so a second `botctl update` that changes nothing
     // must not rebuild anything.

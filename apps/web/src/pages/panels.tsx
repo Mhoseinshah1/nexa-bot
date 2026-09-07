@@ -25,7 +25,7 @@ import {
 import { formatTimestamp, splitDuration } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
-import { navigate, useLinkHandler } from '../router';
+import { navigate, setQuery, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
 import { HEALTH_TONES, queryState } from './dashboard';
 import {
@@ -129,7 +129,15 @@ function FailureBadge({ failure }: { failure: string | null }) {
   );
 }
 
-export function PanelsPage({ mayEdit, denied }: { mayEdit: boolean; denied: boolean }) {
+export function PanelsPage({
+  route,
+  mayEdit,
+  denied,
+}: {
+  route: Route;
+  mayEdit: boolean;
+  denied: boolean;
+}) {
   const onLink = useLinkHandler();
   /**
    * The cursor stack. Keyset paging goes forward on its own and can only go
@@ -145,8 +153,20 @@ export function PanelsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bool
    * so the Restore control on its detail page was reachable only by an operator
    * who had kept the UUID. A lifecycle with an exit and no route back to the
    * door is a dead end; the server could always answer this and nothing asked.
+   *
+   * In the URL rather than in component state, for the reason `/system` puts
+   * its section there: an operator hunting a retired panel wants to link to the
+   * archive, reload without losing it, and use Back. It is also the only way
+   * the state is reachable by anything that drives this app by address, which
+   * includes the visual harness.
    */
-  const [archived, setArchived] = useState(false);
+  const archived = route.query.get('archived') === 'only';
+  const setArchived = (next: boolean) => {
+    // The cursor belongs to the list it was minted from; carrying it across
+    // would ask the archive for a page of the live keyset.
+    setTrail([]);
+    setQuery(route, 'archived', next ? 'only' : null);
+  };
 
   const panels = useQuery({
     // The mode is part of the key. Sharing one key across both lists would
@@ -240,12 +260,7 @@ export function PanelsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bool
         <div className="toolbar">
           <Pills
             value={archived ? 'archived' : 'live'}
-            onChange={(next) => {
-              // The cursor belongs to the list it was minted from. Carrying it
-              // across would ask the archive for a page of the live keyset.
-              setTrail([]);
-              setArchived(next === 'archived');
-            }}
+            onChange={(next) => setArchived(next === 'archived')}
             items={[
               { id: 'live', label: t('web.panels_live') },
               { id: 'archived', label: t('web.panels_archived') },

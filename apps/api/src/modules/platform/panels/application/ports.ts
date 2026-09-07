@@ -250,6 +250,16 @@ export interface PanelRepository {
     status: PanelStatus,
     at: Date,
     tx: TransactionScope,
+    /**
+     * A replacement name, applied in the SAME statement as the status.
+     *
+     * Two statements would put the row through an intermediate state that the
+     * partial unique index rejects: flipping to a live status while the row
+     * still carries the name another panel took collides on
+     * `panels_tenant_name_live_key` before the rename can run. One UPDATE has
+     * no such moment.
+     */
+    name?: string,
   ): Promise<PanelRecord | null>;
   /** Whether a LIVE panel of this tenant already uses the name. */
   nameTaken(

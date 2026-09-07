@@ -1616,7 +1616,7 @@ describe('the panel list is a bounded, stable traversal', () => {
     const seen: string[] = [];
     let cursor: PanelCursor | null = null;
     for (let guard = 0; guard < 20; guard += 1) {
-      const page = await repo.list(tenantA, { includeArchived: true, limit: 2, cursor });
+      const page = await repo.list(tenantA, { archived: 'ALL', limit: 2, cursor });
       seen.push(...page.panels.map((view) => view.panel.id));
       if (page.nextCursor === null) break;
       cursor = page.nextCursor;
@@ -1669,7 +1669,7 @@ describe('the panel list is a bounded, stable traversal', () => {
     const seen: string[] = [];
     let cursor: PanelCursor | null = null;
     for (let guard = 0; guard < 20; guard += 1) {
-      const page = await repo.list(tenantA, { includeArchived: true, limit: 1, cursor });
+      const page = await repo.list(tenantA, { archived: 'ALL', limit: 1, cursor });
       seen.push(...page.panels.map((view) => view.panel.id));
       if (page.nextCursor === null) break;
       cursor = page.nextCursor;
@@ -1828,7 +1828,7 @@ describe('the panel list is a bounded, stable traversal', () => {
 
     // Stage one: the page keys, the statement the repository issues.
     const first = DrizzlePanelRepository.pageKeysQuery(tenantA, {
-      includeArchived: false,
+      archived: 'LIVE',
       limit: 50,
       cursor: null,
     });
@@ -1837,7 +1837,7 @@ describe('the panel list is a bounded, stable traversal', () => {
 
     // And it does not grow with the collection: continue deep into it.
     const deep = DrizzlePanelRepository.pageKeysQuery(tenantA, {
-      includeArchived: false,
+      archived: 'LIVE',
       limit: 50,
       cursor: deepCursor,
     });
@@ -1848,7 +1848,7 @@ describe('the panel list is a bounded, stable traversal', () => {
     // page bound from that query is invisible to a result-shaped assertion,
     // because the extra rows are simply ignored when the page is assembled.
     const page = await new DrizzlePanelRepository(ctx.container.database.db).list(tenantA, {
-      includeArchived: false,
+      archived: 'LIVE',
       limit: 50,
     });
     expect(page.panels).toHaveLength(50);

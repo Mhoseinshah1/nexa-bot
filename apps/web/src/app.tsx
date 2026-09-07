@@ -303,7 +303,9 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
 
   if (route.path === '/panels') {
     return {
-      element: <PanelsPage mayEdit={may('panels.edit')} denied={!may('panels.view')} />,
+      element: (
+        <PanelsPage route={route} mayEdit={may('panels.edit')} denied={!may('panels.view')} />
+      ),
       crumbs: [{ label: t('web.nav_panels') }],
       title: t('web.nav_panels'),
     };

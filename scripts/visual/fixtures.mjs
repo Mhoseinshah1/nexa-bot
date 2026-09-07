@@ -234,6 +234,27 @@ export const NOTIFICATIONS = [
   },
 ];
 
+/**
+ * The archive browser's page.
+ *
+ * Its own rows, not the live ones with a flag: `/panels?archived=only` is a
+ * different collection, and a fixture that returned the working fleet here
+ * would photograph exactly the bug the archived mode was added to remove.
+ */
+export const ARCHIVED_PANELS_PAGE = {
+  panels: [
+    panel('01a05e35-c9ad-7e93-bef3-1ed9b55292f1', 'Retired — Frankfurt C', {
+      status: 'ARCHIVED',
+      health: health({ state: 'DISABLED', latencyMs: null, failure: null }),
+    }),
+    panel('01a05e35-c9ad-7e93-bef3-1ed9b55292f2', 'Retired — Helsinki A', {
+      status: 'ARCHIVED',
+      health: health({ state: 'DISABLED', latencyMs: null, failure: null }),
+    }),
+  ],
+  nextCursor: null,
+};
+
 export const ROUTES = {
   '/auth/session': {
     admin: {

@@ -130,6 +130,50 @@ describe('navigating between two panel details', () => {
   });
 
   /**
+   * The credential draft and the selected tab travel with the same instance.
+   *
+   * The identity fields are the ones that can be SAVED onto the wrong panel, so
+   * they are the sharp end — but they are not the only per-panel state in the
+   * subtree. A typed-but-unsent credential surviving onto another panel is a
+   * secret sitting in a form aimed at a row it was never meant for, and the
+   * open tab following the operator across panels is how they would fail to
+   * notice.
+   *
+   * This is the test that makes the KEY the fix rather than resetting two
+   * fields: nothing here would be covered by remembering to clear `name` and
+   * `baseUrl`.
+   */
+  it('does not carry a credential draft or the open tab across panels', async () => {
+    const sanaei = (id: string, name: string) => ({
+      ...panelBase({ id, name, providerType: 'sanaei', providerName: 'Sanaei (3X-UI)' }),
+    });
+    stubApi([
+      { url: `/panels/${A}`, body: { panel: sanaei(A, 'Frankfurt A') } },
+      { url: `/panels/${B}`, body: { panel: sanaei(B, 'Helsinki B') } },
+      { url: '/providers', body: { providers: [] } },
+    ]);
+
+    // Cache both, as history requires.
+    const view = renderPage(routeTo(B));
+    await screen.findByText('Helsinki B');
+    view.rerender(routeTo(A));
+    await screen.findByText('Frankfurt A');
+
+    // On A: open the credentials tab and half-type a username.
+    fireEvent.click(screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }));
+    const username = await screen.findByLabelText('نام کاربری');
+    fireEvent.change(username, { target: { value: 'half-typed-secret' } });
+
+    view.rerender(routeTo(B));
+    await screen.findByText('Helsinki B');
+
+    // The tab went back to the overview, so the identity card is on screen...
+    expect(screen.getByLabelText('نشانی پایه')).toBeInTheDocument();
+    // ...and the half-typed credential is nowhere, not merely hidden.
+    expect(screen.queryByDisplayValue('half-typed-secret')).toBeNull();
+  });
+
+  /**
    * And the same instance is genuinely reused when the id does NOT change, so
    * the key is not silently remounting on every render and quietly discarding
    * the draft-basis behaviour the previous round added.
