@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SessionResponse } from '@nexa/contracts';
+import { retryWhileFailing } from './polling';
 import { ApiError, fetchSession, signIn, signOut } from './api/client';
 import { t, type WebKey } from './i18n/web.fa';
 import { match, navigate, useDocumentTitle, useLinkHandler, useRoute, type Route } from './router';
@@ -467,8 +468,26 @@ function NotFound() {
 // Shell
 // ---------------------------------------------------------------------------
 
+/**
+ * How often a shell that could not resolve its session tries again.
+ *
+ * The same lane a failing page poll drops into. A paused installation is the
+ * case that matters, and `botctl start` is not an operation anybody expects a
+ * screen to notice instantly.
+ */
+const SESSION_RETRY_MS = 30_000;
+
 export function App() {
-  const session = useQuery({ queryKey: ['session'], queryFn: fetchSession, retry: false });
+  const session = useQuery({
+    queryKey: ['session'],
+    queryFn: fetchSession,
+    retry: false,
+    // The shell recovers on its own. See `retryWhileFailing`: without this the
+    // "session unavailable" screen below was terminal for an unattended tab,
+    // and its Retry button is the very rationalisation this branch established
+    // is false wherever nobody is present to press it.
+    refetchInterval: retryWhileFailing(SESSION_RETRY_MS),
+  });
   const view = sessionView(session);
 
   if (view === 'loading') return <main className="shell">{t('web.loading')}</main>;

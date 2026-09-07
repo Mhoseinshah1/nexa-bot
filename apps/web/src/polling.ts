@@ -27,8 +27,9 @@ type PollingQuery = { readonly state: { readonly error: unknown; readonly data: 
  * polls every three seconds while a delivery is pending, and React Query
  * retains the last successful data across a failed refetch — so its own "only
  * while pending" condition stays satisfied throughout an outage. Twenty minutes
- * of one cost about four hundred requests per open tab at three seconds, and
- * forty at thirty. Near enough that a screen still recovers on its own within
+ * of one cost about four hundred POLLS per open tab at three seconds and forty at
+ * thirty — some eight hundred requests and eighty, since `retry: 1` doubles
+ * each. Near enough that a screen still recovers on its own within
  * half a minute of the server doing so, which is the point of the interval.
  */
 const FAILING_INTERVAL_MS = 30_000;
@@ -134,6 +135,34 @@ export function pollUnlessFinalWhile<TData>(ms: number, unsettled: (data: TData)
     if (data === undefined)
       return query.state.error === null ? false : paced(ms, query.state.error);
     if (!unsettled(data)) return false;
+    return paced(ms, query.state.error);
+  };
+}
+
+/**
+ * An interval that exists ONLY to recover from a failure.
+ *
+ * For the session query, which is the shell rather than a page: it has no
+ * cadence of its own, because a resolved session does not go stale on a timer.
+ * But it had no interval AT ALL, and `fetchSession` deliberately THROWS on
+ * `auth.tenant_suspended` rather than returning `null` — so a tab whose page
+ * load fell inside a maintenance window rendered "session unavailable" with a
+ * manual Retry button and never asked again. A kiosk that power-cycles, a tab
+ * the browser discards and restores, a `botctl update` that swaps the bundle
+ * and forces a reload, or an operator's morning refresh all land there.
+ *
+ * That is the frozen screen this file was written to remove, surviving one
+ * layer above every call site it fixed — and with `retry: false` on that query
+ * the shell got exactly one request, ever, which is fewer than any page gets.
+ *
+ * Nothing while healthy, so a signed-in tab costs no extra traffic: the point
+ * is recovery, not freshness. A signed-OUT browser is a success rather than a
+ * failure here — `fetchSession` returns `null` for an ordinary 401 — so it arms
+ * nothing either.
+ */
+export function retryWhileFailing(ms: number) {
+  return (query: PollingQuery): number | false => {
+    if (query.state.error === null || finalAnswer(query.state.error)) return false;
     return paced(ms, query.state.error);
   };
 }

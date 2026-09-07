@@ -11,6 +11,34 @@ import * as matchers from '@testing-library/jest-dom/matchers';
  */
 expect.extend(matchers);
 
+/**
+ * jsdom implements no `matchMedia`, and `useTheme` calls it while the choice is
+ * `system` — which is the default. Every test that renders the whole shell
+ * therefore threw an unhandled error AFTER its assertions had passed, so the
+ * suite reported "233 passed" and a failing exit code at the same time.
+ *
+ * A real `MediaQueryList` shape rather than a no-op object: the effect
+ * subscribes and unsubscribes, and a stub missing either method would fail on
+ * cleanup instead. `matches: false` is the light-scheme answer, which is what
+ * the shell would get from a headless browser too.
+ */
+if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: (query: string): MediaQueryList =>
+      ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+        addListener: () => undefined,
+        removeListener: () => undefined,
+        dispatchEvent: () => false,
+      }) as unknown as MediaQueryList,
+  });
+}
+
 afterEach(() => {
   cleanup();
 });

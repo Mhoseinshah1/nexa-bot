@@ -671,8 +671,9 @@ describe('polling that has started being refused, and polling that has merely st
    * lives: it polls every THREE seconds while a delivery is pending, and React
    * Query retains the last successful data across a failed refetch, so its own
    * "only while pending" condition stays satisfied for the whole outage. At
-   * three seconds a twenty-minute outage is about four hundred requests per open
-   * tab, against a server that is already failing.
+   * three seconds a twenty-minute outage is about four hundred POLLS per open
+   * tab — some eight hundred requests, since `retry: 1` doubles each — against a
+   * server that is already failing.
    */
   it('drops a failing endpoint into a slow lane instead of its declared cadence', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });

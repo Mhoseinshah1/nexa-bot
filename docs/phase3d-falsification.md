@@ -953,3 +953,79 @@ its own: **a mutation that kills nothing is a finding, not a failed experiment.*
 
 U22 kills two tests. Sources restored and sha256-verified; every suite green
 afterwards.
+
+# Round 12 — the frozen screen was one layer above every fix for it
+
+A fourth fresh-context reviewer read round 11 and returned the verdict that
+`polling.ts` is finally correct: it enumerated every 4xx code in
+`packages/contracts/src/errors.ts` against its throw site, confirmed
+`auth.tenant_suspended` is the only self-resolving one reachable on a polled
+read, traced React Query's state machine for the `data === undefined` branch,
+and reproduced U21-U24 exactly. Four rounds of that file are done.
+
+And the defect is still shipping, because it was never only in that file.
+
+## The eighth polling site
+
+`App` resolves the session with
+`useQuery({ queryKey: ['session'], queryFn: fetchSession, retry: false })`. No
+`refetchInterval`. `retry: false`, which overrides the global `retry: 1` and
+gives the shell FEWER attempts than any page gets. And `fetchSession`
+deliberately THROWS on `auth.tenant_suspended` rather than returning `null`, so
+a paused installation lands in the `unavailable` branch: a paragraph, and a
+Retry button.
+
+Which is exactly the sentence round 9 established is false — _"the user has a
+Retry control and a reload. True only where a user is present"_ — reappearing
+one layer above every call site the four rounds fixed. Any tab whose PAGE LOAD
+falls inside a maintenance window is affected: a kiosk that power-cycles, a tab
+the browser discards and restores, a `botctl update` that swaps the bundle and
+forces a reload, an operator's morning refresh. The reviewer rendered the real
+`App`, stubbed a suspended 401, then made the server healthy and advanced ten
+minutes: **one request in total, zero after recovery.**
+
+No test in `tests/web/` rendered `App` at all. Only the pure `sessionView`
+mapping was covered — which asserts what each state RENDERS, never that the
+shell can leave one. That is the same shape as U19 and U24: the rule nobody
+could revert because nothing could tell the difference.
+
+`retryWhileFailing` is the narrow fix: nothing while healthy, nothing when the
+answer is final, the 30-second lane while a failure is transient. A signed-out
+browser is a SUCCESS here — `fetchSession` returns `null` for an ordinary 401 —
+so it arms nothing there either.
+
+## The rest
+
+- `unwrap` still sliced blind when the depth walk never balanced, which is the
+  behaviour the round-11 fix existed to remove, narrowed to unbalanced input.
+  It now returns the string untouched and lets the comparison fail loudly. Its
+  comment claimed only the outer pair was stripped while the code recursed
+  through every layer; corrected, and the string-literal limitation it cannot
+  see is now written down instead of implied away.
+- Round 11 said the "four hundred requests" figures were "corrected in place".
+  They were corrected in the RECORD only — the same wrong number survived in
+  `polling.ts`'s docblock, which is the primary artefact, and in the test that
+  pins the lane. A claim repaired in the account of the work and not in the work
+  is the failure mode this document is supposed to catch.
+
+## The mutations
+
+| #   | rule                                     | mutation                                      | test that dies                                                                               |
+| --- | ---------------------------------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| U25 | the shell recovers without a human       | drop `refetchInterval` from the session query | `shell-recovery.test.tsx` › recovers by itself when the paused installation is started again |
+| U26 | ...and costs nothing while it is healthy | poll whenever the answer is not final         | `shell-recovery.test.tsx` › does not poll when the server simply says there is no session    |
+
+## A deletion I nearly shipped
+
+Restoring `polling.ts` after U26, I copied back a scratch file from the PREVIOUS
+round. It was a valid file, it type-checked, and it silently removed
+`retryWhileFailing` — the entire fix — while `app.tsx` kept importing it. `git
+status` showed one modified file and looked unremarkable.
+
+`CLAUDE.md` says to run `git status`, read every line of `git diff`, and confirm
+no reviewer mutation is still in the tree, "deletions especially, because an
+added line is conspicuous and a removed predicate is not". This was that
+failure, self-inflicted by a careless restore rather than by an agent, and it
+was caught by grepping for the symbol rather than by reading the diff. Every
+restore in this round is now sha256-verified against a copy taken in the same
+round, and the mutation runs were repeated afterwards from the verified state.

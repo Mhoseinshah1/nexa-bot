@@ -125,11 +125,11 @@ describe('the online index build', () => {
       // each comma — semantically identical, and what a maintainer adding the
       // third index would write — failed on an index that was correct.
       //
-      // Only the predicate's OUTER parentheses are stripped, because that is
-      // the pair PostgreSQL adds when it re-renders. Stripping every paren made
-      // `(a AND b) OR c` and `a AND (b OR c)` normalise equal, which would let
-      // a compound predicate drift from its declaration unnoticed — the exact
-      // hazard this assertion exists for.
+      // Only WRAPPING parentheses are stripped from the predicate — however many
+      // layers of them PostgreSQL adds — and never an inner one. Stripping every
+      // paren made `(a AND b) OR c` and `a AND (b OR c)` normalise equal, which
+      // would let a compound predicate drift from its declaration unnoticed:
+      // the exact hazard this assertion exists for.
       const normalise = (text: string) =>
         text
           .replace(/"/g, '')
@@ -144,7 +144,14 @@ describe('the online index build', () => {
       // wrapped in one, and slicing it blind yields `a) and (b` — a false
       // FAILURE on an index that is correct, whose only escape is to add a
       // cosmetic paren to the declaration.
-      const unwrap = (text: string) => {
+      // Known limitation, stated rather than papered over: `normalise` strips
+      // quotes before this runs, so a parenthesis inside a string literal —
+      // `WHERE kind <> 'a)b'` — is indistinguishable from a structural one here
+      // and would make this assertion fail on a correct index. No declared
+      // predicate contains one, and a loud failure with both strings printed is
+      // a far better outcome than the silent pass the blind slice below used to
+      // risk.
+      const unwrap = (text: string): string => {
         const trimmed = text.trim();
         if (!trimmed.startsWith('(') || !trimmed.endsWith(')')) return trimmed;
         let depth = 0;
@@ -152,11 +159,15 @@ describe('the online index build', () => {
           if (trimmed[i] === '(') depth += 1;
           else if (trimmed[i] === ')') {
             depth -= 1;
-            // The opener closed before the end, so it wrapped only a prefix.
+            // The opener closed before the end, so it wrapped only a prefix:
+            // `(a) and (b)` is not a parenthesised expression.
             if (depth === 0 && i < trimmed.length - 1) return trimmed;
           }
         }
-        return unwrap(trimmed.slice(1, -1));
+        // Unbalanced. Slicing anyway is what the previous version did, and it is
+        // how `(a) and (b)` became `a) and (b` — so leave it alone and let the
+        // comparison fail with something a reader can act on.
+        return depth === 0 ? unwrap(trimmed.slice(1, -1)) : trimmed;
       };
       const shapeOf = (text: string) => {
         const split = / where (.*)$/.exec(text);
