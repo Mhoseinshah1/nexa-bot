@@ -85,8 +85,6 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
   const [basis, setBasis] = useState<ResolvedSettingResponse>(setting);
   const [draft, setDraft] = useState<unknown>(setting.value);
 
-  const changedElsewhere = basis.version !== setting.version;
-
   const refresh = async () => {
     await client.invalidateQueries({ queryKey: ['settings'] });
     await client.invalidateQueries({ queryKey: ['features'] });
@@ -115,8 +113,10 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
       expectedVersion: number | null;
     }) => saveSetting({ key: setting.key, ...command }),
     onSuccess: async (result) => {
-      // Adopt our own write before the refetch lands, so the row does not
-      // report itself as having changed elsewhere.
+      // Adopt our own write, so the next edit is compared against the row this
+      // operator just stored. `changedElsewhere` above is what keeps the row
+      // from reporting ITSELF as changed elsewhere while this settles — adopting
+      // alone does the opposite, which is what the comment here used to claim.
       submission.settle();
       adopt(result.setting);
       await refresh();
@@ -131,6 +131,19 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
       void refresh();
     },
   });
+
+  /**
+   * Not while OUR OWN write is settling.
+   *
+   * `adopt(result.setting)` runs before the awaited `refresh()` resolves, so
+   * for the width of that round trip `basis.version` is N+1 while the query
+   * still holds N — and the banner told the operator their own save had been
+   * made "elsewhere", promising a `VERSION_CONFLICT` that could not happen
+   * because `basis.version` was at that moment the newest version there is.
+   * The comment in `save.onSuccess` claimed adopting PREVENTED this; adopting
+   * is what caused it. Same fix as the panel form.
+   */
+  const changedElsewhere = !save.isPending && basis.version !== setting.version;
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();

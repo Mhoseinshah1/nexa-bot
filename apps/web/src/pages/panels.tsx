@@ -480,9 +480,7 @@ export function PanelDetailPage({
             />
 
             <TabPanel id="panel-detail-panel" labelledBy={`panel-detail-panel-tab-${tab}`}>
-              {tab === 'overview' && (
-                <OverviewTab panel={data} mayEdit={mayEdit} refreshing={panel.isFetching} />
-              )}
+              {tab === 'overview' && <OverviewTab panel={data} mayEdit={mayEdit} />}
               {tab === 'health' && <HealthTab panel={data} />}
               {tab === 'credentials' && (
                 <CredentialsTab panel={data} mayRotate={mayRotate} onDone={refresh} />
@@ -496,16 +494,7 @@ export function PanelDetailPage({
   );
 }
 
-function OverviewTab({
-  panel,
-  mayEdit,
-  refreshing,
-}: {
-  panel: PanelSummaryResponse;
-  mayEdit: boolean;
-  /** The detail query has a request in flight, so the two rows may disagree. */
-  refreshing: boolean;
-}) {
+function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit: boolean }) {
   const client = useQueryClient();
   const toast = useToast();
   /**
@@ -544,8 +533,34 @@ function OverviewTab({
     name: basis.name !== panel.name,
     baseUrl: basis.baseUrl !== panel.baseUrl,
   };
+  /*
+   * Sent AND different from what is stored now.
+   *
+   * `!== basis` alone is "this field is in the request"; it is not "somebody
+   * else's value is about to be replaced". Two administrators asked to fix the
+   * same typo type the same correction, and the earlier version warned the
+   * second one that they were about to overwrite the first — so they pressed
+   * "load the fresh value", which resets the whole form, and lost their own
+   * unsaved base URL to avoid a write that would have stored the identical
+   * string.
+   */
+  /*
+   * THREE conditions, and every one of them is load-bearing.
+   *
+   * `changedRemotely` — somebody else moved this field; without it an ordinary
+   * edit to an untouched row reads as clobbering a colleague.
+   * `draft !== base` — the operator changed it, so `onSubmit` includes it;
+   * without it a save that carries only the base URL was said to overwrite a
+   * rename it does not carry.
+   * `draft !== stored` — including it actually replaces the other value;
+   * without it two administrators making the identical correction were warned
+   * about each other.
+   */
+  const overwrites = (draft: string, base: string, stored: string, changedRemotely: boolean) =>
+    changedRemotely && draft !== base && draft !== stored;
   const willOverwrite =
-    (remote.name && name !== basis.name) || (remote.baseUrl && baseUrl !== basis.baseUrl);
+    overwrites(name, basis.name, panel.name, remote.name) ||
+    overwrites(baseUrl, basis.baseUrl, panel.baseUrl, remote.baseUrl);
 
   /**
    * Every identity control, not just the Save button.
@@ -672,8 +687,18 @@ function OverviewTab({
    * any real latency the operator got "somebody else changed this" on top of
    * their own "saved" toast, and on the restore-with-rename path the notice was
    * blaming them for the rename they had just chosen.
+   *
+   * The two mutation flags are the WHOLE rule. An earlier version also folded
+   * in the detail query's `isFetching`, which was redundant and dangerous:
+   * `refresh()` is awaited INSIDE `onSuccess`, so `isPending` already spans the
+   * refetch — and `isFetching` is true for the 90-second background poll too,
+   * so a genuine concurrent change that had already been detected and drawn
+   * was un-drawn for the width of every poll, and indefinitely while one
+   * stalled. `client.ts` sets no timeout and no abort, so that stall has no
+   * bound; Save stayed enabled, and the "load the fresh value" link that is the
+   * only way out lives INSIDE the notice being suppressed.
    */
-  const settling = refreshing || save.isPending || status.isPending;
+  const settling = save.isPending || status.isPending;
   const changedElsewhere = !settling && (remote.name || remote.baseUrl);
 
   const onSubmit = (event: FormEvent) => {
@@ -760,7 +785,15 @@ function OverviewTab({
             pressed Save expecting to be stopped silently overwrote the other
             administrator's rename instead.
           */}
-          {changedElsewhere && (
+          {/*
+            Inside `mayWrite`. On an ARCHIVED panel the Save button and both
+            inputs are gone and `PanelService.update` refuses with a 412, so a
+            notice about what saving will do describes a control that does not
+            exist and a request the server will not accept — which it did, when
+            another administrator archived and renamed the panel under an open
+            draft.
+          */}
+          {mayWrite && changedElsewhere && (
             <p className="notice">
               {t(
                 willOverwrite

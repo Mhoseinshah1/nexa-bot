@@ -106,7 +106,7 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
   // Revision AND version. A revert restarts the version at 1, so comparing
   // versions alone reports "unchanged" across a revert-then-save — which is
   // exactly the sequence that silently overwrote the other administrator.
-  const changedElsewhere =
+  const changedElsewhereStored =
     basis.version !== template.version || basis.revision !== template.revision;
   const unsaved = draft !== (basis.overrideBody ?? basis.defaultBody);
 
@@ -197,6 +197,19 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
 
   // The whole input, in a stable order, so a re-render cannot make it look
   // changed when it is not.
+  /**
+   * Not while OUR OWN write is settling.
+   *
+   * `save` and `undo` both adopt the row they were handed before the awaited
+   * invalidation resolves, so for the width of that round trip `basis` carries
+   * the new version/revision while the query still carries the old — and the
+   * banner told the operator their own write had been made "elsewhere",
+   * promising a conflict that could not happen because `basis` was at that
+   * moment the newest revision in existence. Same fix as the panel form and
+   * the settings editor.
+   */
+  const changedElsewhere = !save.isPending && !undo.isPending && changedElsewhereStored;
+
   const previewInput = JSON.stringify([draft, Object.entries(sample).sort()]);
 
   const preview = useMutation({

@@ -855,6 +855,57 @@ describe('the panel detail', () => {
   });
 
   /**
+   * Two administrators asked to fix the same typo.
+   *
+   * B renames the panel; A, with the form open, types the same correction. A's
+   * save writes the identical string, so nothing of B's is replaced — and
+   * warning A that it would sent them to "load the fresh value", which resets
+   * the whole form and discards A's own unsaved base URL to avoid a loss that
+   * could not happen.
+   */
+  it('does not call an identical correction an overwrite', async () => {
+    const id = panel().id as string;
+    const route = { url: `/panels/${id}`, body: { panel: panel() } as unknown };
+    stubApi([route, { url: `/panels/${id}/status`, body: { panel: panel() } }]);
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    fireEvent.change(screen.getByLabelText('نام'), { target: { value: 'Frankfurt B' } });
+    // ...and somebody else has already made exactly that change.
+    route.body = { panel: panel({ name: 'Frankfurt B' }) };
+    fireEvent.click(screen.getByRole('button', { name: 'غیرفعال‌سازی' }));
+
+    const notice = await screen.findByText(/جای دیگری تغییر کرده/);
+    expect(notice.textContent ?? '').toContain('تنها فیلدهایی را می‌فرستد');
+    expect(notice.textContent ?? '').not.toContain('بازنویسی می‌کند');
+  });
+
+  /**
+   * An ARCHIVED panel has no Save button and no inputs, and
+   * `PanelService.update` refuses with a 412. A notice about what saving will
+   * do describes a control that does not exist and a request the server will
+   * not accept.
+   */
+  it('says nothing about saving a panel that can no longer be saved', async () => {
+    const id = panel().id as string;
+    const route = { url: `/panels/${id}`, body: { panel: panel() } as unknown };
+    stubApi([route, { url: `/panels/${id}/status`, body: { panel: panel() } }]);
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    fireEvent.change(screen.getByLabelText('نام'), { target: { value: 'Frankfurt mine' } });
+    // Somebody else archives AND renames it; a status change refetches the row
+    // into this open form, which is how the archived state arrives here.
+    route.body = { panel: panel({ name: 'Renamed by somebody else', status: 'ARCHIVED' }) };
+    fireEvent.click(screen.getByRole('button', { name: 'غیرفعال‌سازی' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'ذخیره' })).toBeNull();
+    });
+    expect(screen.queryByText(/جای دیگری تغییر کرده/)).toBeNull();
+  });
+
+  /**
    * A restore that renames is the operator's OWN action, and the form must
    * say so.
    *

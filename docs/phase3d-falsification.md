@@ -1551,3 +1551,72 @@ what a BUTTON WILL DO was written from the state that raised it rather than from
 the request that would follow. The check that finds it is the one this branch
 keeps rediscovering: read the sentence and the code that runs after it as one
 claim, and ask whether they agree.
+
+# Round 20 — the suppression that hid the warning it was meant to sharpen
+
+An eleventh reviewer found round 19's `settling` term actively dangerous, and
+three more.
+
+## `isFetching` un-drew a warning that was correct
+
+`settling` folded in the detail query's `isFetching`. That is true for the
+90-second BACKGROUND POLL as well as for our own write — so a genuine
+concurrent change, already detected and already on screen, was un-drawn for the
+width of every poll, and indefinitely while one stalled. `client.ts` sets no
+timeout and no abort, so that stall has no bound. Save stayed enabled
+throughout, and the "load the fresh value" link that is the only way out lives
+INSIDE the notice being suppressed.
+
+The reviewer executed it: warning correctly shown, poll stalls, warning
+disappears, operator presses Save, the write carries `name` and silently
+overwrites the other administrator's rename. That is the data loss this whole
+sequence of rounds exists to prevent, caused by the term added to prevent it.
+
+And the term was REDUNDANT. `refresh()` is awaited inside `onSuccess`, so
+`isPending` already spans the refetch; dropping `refreshing` costs no coverage
+and removes the defect. Its own comment — "the detail query has a request in
+flight, so the two rows may disagree" — was false: `basis` only moves when the
+operator adopts or writes, so a background GET cannot MAKE the rows disagree,
+only reveal a disagreement somebody else caused.
+
+## The overwrite test needed three conditions, not one
+
+`willOverwrite` asked only "did the operator edit a field that also changed
+remotely". Two administrators asked to fix the same typo type the same
+correction, and the second was warned they were about to overwrite the first —
+so they pressed "load the fresh value", which resets the whole form, and lost
+their own unsaved base URL to avoid a write that would have stored the identical
+string.
+
+All three conditions are load-bearing, and each now has a mutation that kills
+only its own test: the field changed remotely, the operator is sending it, and
+sending it actually replaces a different value.
+
+## And the notice outlived the form it described
+
+It rendered outside `mayWrite`, so when another administrator archived and
+renamed the panel under an open draft, the operator was told "saving will
+overwrite their changes" on a screen with no Save button, about a request
+`PanelService.update` refuses with a 412.
+
+## The same defect in two siblings
+
+`settings.tsx` and `content.tsx` had round 19's settling bug unfixed, and
+`settings.tsx:118` asserted the opposite of what its code did: "Adopt our own
+write before the refetch lands, so the row does not report itself as having
+changed elsewhere." Adopting is what MAKES it report itself as changed
+elsewhere. Both now guard on their own mutations' `isPending`.
+
+## The mutations
+
+| #   | rule                                                     | mutation                     | test that dies                                                                               |
+| --- | -------------------------------------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------- |
+| U47 | an overwrite needs somebody else to have moved the field | drop `changedRemotely`       | `panels.test.tsx` › does not revert a concurrent rename when only the other field was edited |
+| U48 | ...and the operator to be sending it                     | drop `draft !== base`        | `panels.test.tsx` › does not revert a concurrent rename when only the other field was edited |
+| U49 | ...and the send to actually replace a different value    | drop `draft !== stored`      | `panels.test.tsx` › does not call an identical correction an overwrite                       |
+| U50 | the notice never outlives the form it describes          | render it outside `mayWrite` | `panels.test.tsx` › says nothing about saving a panel that can no longer be saved            |
+
+Round 19's table had ONE mutation for `settling`, and the reviewer showed it
+could not distinguish the three disjuncts: dropping `refreshing` alone left
+44/44 green, which is how the defect got in. A conjunction or disjunction needs
+one mutation per term, and this round's table has them.
