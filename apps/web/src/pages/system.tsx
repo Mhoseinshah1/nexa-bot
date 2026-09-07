@@ -21,6 +21,7 @@ import {
   Tabs,
   TabPanel,
 } from '../ui/kit';
+import { pollUnlessFailing } from '../polling';
 
 /**
  * System and operations.
@@ -96,7 +97,7 @@ function StatusSection() {
   const readiness = useQuery({
     queryKey: ['readiness'],
     queryFn: fetchReadiness,
-    refetchInterval: 15_000,
+    refetchInterval: pollUnlessFailing(15_000),
   });
   const info = useQuery({ queryKey: ['info'], queryFn: fetchInfo });
 

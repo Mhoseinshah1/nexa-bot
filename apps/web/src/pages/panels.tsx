@@ -53,6 +53,7 @@ import {
   type Column,
   type Tone,
 } from '../ui/kit';
+import { pollUnlessFailing } from '../polling';
 
 /**
  * How often an open panel detail re-reads its own row.
@@ -389,7 +390,7 @@ export function PanelDetailPage({
      * watching one panel; polling faster than the thing that writes the data
      * only adds requests that find the same row.
      */
-    refetchInterval: PANEL_DETAIL_REFRESH_MS,
+    refetchInterval: pollUnlessFailing(PANEL_DETAIL_REFRESH_MS),
   });
 
   const refresh = async () => {

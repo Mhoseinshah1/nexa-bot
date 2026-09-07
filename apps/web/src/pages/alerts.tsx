@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   isConditionRecoveryCode,
   isOneShotManagementCode,
+  type NotificationDetailResponse,
+  type NotificationListResponse,
   type OperationalSeverity,
 } from '@nexa/contracts';
 import {
@@ -30,6 +32,7 @@ import {
   StateSwitch,
   type Column,
 } from '../ui/kit';
+import { pollUnlessFailingWhile } from '../polling';
 
 const SEVERITIES: readonly OperationalSeverity[] = ['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL'];
 
@@ -356,8 +359,9 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
     // destination that does not work.
     //
     // Only while something IS pending, so a settled list costs nothing.
-    refetchInterval: (query) =>
-      query.state.data?.notifications.some((entry) => entry.status === 'PENDING') ? 3_000 : false,
+    refetchInterval: pollUnlessFailingWhile<NotificationListResponse>(3_000, (data) =>
+      data.notifications.some((entry) => entry.status === 'PENDING'),
+    ),
   });
 
   const detail = useQuery({
@@ -365,8 +369,10 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
     queryFn: () => fetchNotification(selected as string),
     enabled: selected !== null,
     // The open panel follows the same rule as the list above.
-    refetchInterval: (query) =>
-      query.state.data?.notification.status === 'PENDING' ? 3_000 : false,
+    refetchInterval: pollUnlessFailingWhile<NotificationDetailResponse>(
+      3_000,
+      (data) => data.notification.status === 'PENDING',
+    ),
   });
 
   const submission = useSubmissionKey();

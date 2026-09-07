@@ -67,6 +67,10 @@ const VIEWS = [
   { key: 'mobile-dark', theme: 'dark', width: 390, height: 844 },
 ];
 
+/** The panel the interactive create pass makes, and the name it must be told back. */
+const CREATED_ID = '01a05e35-c9ad-7e93-bef3-1ed9b55292fe';
+const CREATED_NAME = 'Oslo A';
+
 const PAGES = [
   ['dashboard', '/'],
   ['panels', '/panels'],
@@ -214,6 +218,121 @@ for (const view of VIEWS) {
   await context.close();
 }
 
+/*
+ * One capture that no URL can reach.
+ *
+ * The create confirmation only exists for an actor holding `panels.edit` and
+ * NOT `panels.view`: everyone else is navigated to the new panel's detail page,
+ * which is where the edit-only actor used to land on a permission-denied screen
+ * with no way back. So the state has to be REACHED — a different session, a
+ * filled form, a real submit — rather than photographed from a route.
+ *
+ * It is a separate pass rather than a fourth view so it does not multiply
+ * every other page by a permission set that changes only this one screen.
+ */
+{
+  const view = VIEWS[0];
+  const context = await browser.newContext({
+    viewport: { width: view.width, height: view.height },
+    deviceScaleFactor: 2,
+    locale: 'fa-IR',
+    colorScheme: view.theme,
+  });
+  await context.addInitScript((theme) => {
+    try {
+      window.localStorage.setItem('nexa.theme', theme);
+    } catch {
+      /* a browser that refuses storage still gets the system theme */
+    }
+  }, view.theme);
+
+  const EDIT_ONLY = {
+    ...ROUTES['/auth/session'],
+    permissions: ROUTES['/auth/session'].permissions.filter((p) => p !== 'panels.view'),
+  };
+
+  await context.route('**/*', async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    if (path.startsWith('/health/info')) return route.fulfill({ json: INFO });
+    if (path.startsWith(PREFIX)) {
+      const rest = path.slice(PREFIX.length);
+      if (rest === '/auth/session') return route.fulfill({ json: EDIT_ONLY });
+      // The create itself. Answering it with the LIST — which is what a
+      // path-only match does — would fail the client's schema parse and
+      // photograph an error toast instead of the confirmation.
+      if (rest === '/panels' && route.request().method() === 'POST') {
+        const sent = JSON.parse(route.request().postData() ?? '{}');
+        return route.fulfill({
+          status: 201,
+          json: { panel: { ...PANELS[0], id: CREATED_ID, name: sent.name ?? 'بدون نام' } },
+        });
+      }
+      const key = Object.keys(ROUTES)
+        .filter((candidate) => rest === candidate || rest.startsWith(`${candidate}/`))
+        .sort((a, b) => b.length - a.length)[0];
+      if (key) return route.fulfill({ json: ROUTES[key] });
+      return route.fulfill({
+        status: 404,
+        json: {
+          error: { kind: 'not_found', code: 'fixture.missing', message: rest, correlationId: 'x' },
+        },
+      });
+    }
+    return route.continue();
+  });
+
+  const page = await context.newPage();
+  const errors = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(`console: ${message.text()}`);
+  });
+  page.on('pageerror', (error) => errors.push(`page: ${error.message}`));
+
+  await page.goto(`http://localhost:${PORT}/panels/new`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(2500);
+  await page.fill('#new-name', CREATED_NAME);
+  await page.selectOption('#new-provider', 'marzban');
+  await page.fill('#new-url', 'https://new-panel.example/api');
+  await page.click('button[type="submit"]');
+  await page.waitForTimeout(1500);
+
+  const state = await page.evaluate(() => ({
+    text: document.body.textContent ?? '',
+    path: window.location.pathname,
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+    theme: document.documentElement.getAttribute('data-theme'),
+    dir: document.documentElement.getAttribute('dir'),
+  }));
+
+  await page.screenshot({
+    path: join(OUT, `${view.key}--panel-created.png`),
+    fullPage: true,
+  });
+
+  // The two things this capture exists to prove, measured rather than eyeballed:
+  // the actor was NOT navigated away, and the panel they made is named back.
+  if (state.path !== '/panels/new') errors.push(`navigated away to ${state.path}`);
+  if (!state.text.includes(CREATED_NAME)) errors.push('the created panel was not named back');
+
+  findings.push({
+    view: view.key,
+    page: 'panel-created',
+    path: '/panels/new (submitted, edit-only session)',
+    theme: state.theme,
+    dir: state.dir,
+    horizontalOverflow: state.scrollWidth > state.clientWidth,
+    overflowBy: state.scrollWidth - state.clientWidth,
+    pageScrolledBy: 0,
+    stillLoading: false,
+    showingError: state.text.includes('خطا در ارتباط با سرور'),
+    errors: [...errors],
+  });
+
+  await context.close();
+}
+
 await browser.close();
 server.close();
 
@@ -230,7 +349,7 @@ const wrongDir = findings.filter((f) => f.dir !== 'rtl');
 
 const summary = {
   captured: findings.length,
-  pages: PAGES.length,
+  pages: PAGES.length + 1,
   views: VIEWS.map((v) => v.key),
   horizontalOverflow: findings.filter((f) => f.horizontalOverflow).length,
   documentScrolledInsteadOfShell: findings.filter((f) => f.pageScrolledBy > 0).length,

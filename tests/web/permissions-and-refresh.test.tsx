@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { DashboardPage } from '../../apps/web/src/pages/dashboard';
+import { NotificationsPage } from '../../apps/web/src/pages/alerts';
 import { event, panel, renderPage, stubApi } from './harness';
 
 /**
@@ -453,5 +454,106 @@ describe('the panels nav entry', () => {
     expect(navPermitted(entry!, ['panels.edit'])).toBe(true);
     expect(navPermitted(entry!, ['panels.view'])).toBe(true);
     expect(navPermitted(entry!, ['settings.edit'])).toBe(false);
+  });
+});
+
+/**
+ * The other side of the polling that the four tests above exist to protect.
+ *
+ * `enabled:` is computed from the session's permission list, which is read ONCE
+ * per tab. A tab whose permissions were revoked after it loaded therefore goes
+ * on believing it holds them, and every refused request writes an
+ * `access.permission_denied` operational event — a code with no `dedupeKey`,
+ * into a table with no retention sweeper. Before these intervals existed the
+ * growth was bounded by how often somebody navigated; a wall display left on a
+ * revoked session would now write thousands of rows a day into the very feed
+ * the alerts page exists to keep readable.
+ *
+ * So: one refusal, then silence.
+ */
+describe('polling that has started being refused', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const countOf = (calls: readonly { url: string }[], fragment: string) =>
+    calls.filter((call) => call.url.includes(fragment)).length;
+
+  const FORBIDDEN = {
+    status: 403,
+    body: {
+      error: {
+        kind: 'forbidden',
+        code: 'access.denied',
+        message: 'no',
+        correlationId: 'test',
+      },
+    },
+  };
+
+  it('stops re-reading the conditions once the server starts refusing', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubApi([
+      READINESS,
+      { url: '/panels', body: { panels: [], nextCursor: null } },
+      { url: '/ops-log', body: { events: [], nextCursor: null } },
+    ]);
+    renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
+    await screen.findByText('چیزی برای رسیدگی نیست.');
+
+    // The permission is taken away while the page stays open. A fresh stub, so
+    // the counts below are of requests made AFTER the revocation only.
+    const revoked = stubApi([
+      READINESS,
+      { url: '/panels', body: { panels: [], nextCursor: null } },
+      { url: '/ops-log', ...FORBIDDEN },
+    ]);
+
+    // The next tick asks once — that request is what discovers the refusal.
+    await vi.advanceTimersByTimeAsync(16_000);
+    await waitFor(() => {
+      expect(countOf(revoked.calls, '/ops-log')).toBeGreaterThan(0);
+    });
+    const refusals = countOf(revoked.calls, '/ops-log');
+
+    // Everything after it is silence, across four further cadences.
+    await vi.advanceTimersByTimeAsync(64_000);
+    expect(countOf(revoked.calls, '/ops-log')).toBe(refusals);
+    // ...and the page is still polling something, so a stopped INTERVAL is not
+    // being mistaken for a stopped test.
+    expect(countOf(revoked.calls, '/system/readiness')).toBeGreaterThan(1);
+  });
+
+  it('stops the pending-delivery poll once the server starts refusing', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const pending = {
+      id: '01a05e35-c9ad-7e93-bef3-1ed9b55292ca',
+      kind: 'OPERATIONAL_EVENT',
+      status: 'PENDING',
+      templateKey: 'ops.alert',
+      attemptCount: 0,
+      maxAttempts: 5,
+      createdAt: '2026-09-06T08:00:00.000Z',
+      lastAttemptAt: null,
+      completedAt: null,
+      correlationId: 'c1',
+    };
+    stubApi([{ url: '/notifications', body: { notifications: [pending], nextCursor: null } }]);
+    renderPage(<NotificationsPage mayTest denied={false} />);
+    await screen.findByText('ops.alert');
+
+    const revoked = stubApi([{ url: '/notifications', ...FORBIDDEN }]);
+
+    // The list still HOLDS a pending row — React Query retains the last good
+    // data across a failed refetch — so an interval that only consulted its own
+    // condition would go on asking for ever.
+    await vi.advanceTimersByTimeAsync(4_000);
+    await waitFor(() => {
+      expect(countOf(revoked.calls, '/notifications')).toBeGreaterThan(0);
+    });
+    const refusals = countOf(revoked.calls, '/notifications');
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(countOf(revoked.calls, '/notifications')).toBe(refusals);
   });
 });

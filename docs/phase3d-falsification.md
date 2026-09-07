@@ -577,3 +577,83 @@ the same understanding that produced the code.
   replay rather than answered as a payload mismatch.
 - The five new i18n keys were inserted between a comment and the key it
   documents, leaving that comment describing the wrong line. Moved.
+
+# Round 8 — a claim in a commit message that was not true
+
+Round 7's commit `e53463e` says, of the polling defect its own review had just
+found, that _"the intervals now stop on a failed query"_. **They did not.** All
+four `refetchInterval` values were still plain numbers when that sentence was
+written; the fix had been described and not made. Nothing else in the round was
+affected — the sentence was the only artefact of it — but a reader taking the
+message at its word would have believed a bound existed that did not, which is
+the failure mode `docs/conventions.md` calls a claim with no evidence behind it,
+committed rather than merely said. The commit cannot be rewritten (no
+force-push), so the correction lives here, and the fix is this round.
+
+`apps/web/src/polling.ts` now holds the rule, once, in two forms:
+`pollUnlessFailing(ms)` for an interval with no other condition, and
+`pollUnlessFailingWhile(ms, unsettled)` for one that has its own. The second
+exists because the alerts page's interval already looked bounded — it polls only
+while a row is `PENDING` — and is not: React Query RETAINS the last successful
+`data` across a failed refetch, so a list holding a pending row when a session is
+revoked satisfies its own condition for ever. The error check has to come first
+for the condition to mean anything.
+
+Applied at every polling site: three on the dashboard, one on the panel detail,
+one on the system page's readiness, and the two on the alerts page.
+
+One thing the first attempt got wrong and typecheck caught: annotating the
+callback with React Query's own `Query` — which is generic in four parameters —
+is not assignable to `refetchInterval` on a typed `useQuery`, and spelling it
+`Query<unknown, …>` there silently collapses the call's own inference. That is
+how `readiness.data` became `{}` on the system page. The helpers take a
+structural supertype of every `Query` instead, so they accept them all and infer
+nothing.
+
+## The mutations
+
+| #   | rule                                     | mutation                                 | test that dies                                                                                       |
+| --- | ---------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| U10 | a failed poll stops the interval         | return `ms` unconditionally              | `permissions-and-refresh.test.tsx` › stops re-reading the conditions once the server starts refusing |
+| U11 | ...before its own condition is consulted | drop the error check, keep the condition | `permissions-and-refresh.test.tsx` › stops the pending-delivery poll once the server starts refusing |
+
+U10 died with `expected 5 to be 1`, U11 with `expected 11 to be 1` — the count of
+requests the server refused after the permission was taken away, which is exactly
+the row count the defect would have written into `operational_events`. Each
+mutation killed one test and only one; `apps/web/src/polling.ts` was restored
+byte-for-byte (sha256 `86726c89…`) and the suite was green again afterwards.
+
+The dashboard test also asserts that `/system/readiness` is STILL being polled
+after `/ops-log` has stopped, so a suite-wide timer failure cannot pass itself
+off as the rule under test.
+
+## The create confirmation, which no URL can reach
+
+The visual harness is route-driven, and the banner an edit-only creator sees
+after a successful create is not a route: everyone holding `panels.view` is
+navigated to the new panel's detail page instead. So the previous round's claim
+to have verified the create screen covered the empty form and nothing else.
+
+`capture.mjs` now has a second, interactive pass — a session with `panels.view`
+removed, a filled form, a real submit answered by a real `201` — and it MEASURES
+the two things that state exists for rather than leaving them to the screenshot:
+that the actor stayed on `/panels/new`, and that the panel they made is named
+back to them. 73 captures across three views, no problems.
+
+| #   | rule                                       | mutation                               | what dies                                                                                                     |
+| --- | ------------------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| V08 | an edit-only creator is not navigated away | give the fixture session `panels.view` | the `panel-created` capture, with `navigated away to /panels/<id>` and `the created panel was not named back` |
+
+That is the check the harness could not previously make: with the permission
+restored the pass reported both failures, and with it removed again the run is
+clean. `scripts/visual/capture.mjs` was restored from a pre-mutation copy and
+re-run green.
+
+Its column is headed _what dies_ rather than _test that dies_ on purpose, and
+that is worth saying out loud: `check-falsification-citations.mjs` resolves the
+second heading against a real vitest name and would fail this row, because V08's
+evidence is a harness run rather than a test. Naming the column differently keeps
+the checker's guarantee meaning exactly what it says — every _test that dies_
+citation names a test that exists — instead of quietly widening it to cover a
+row it cannot verify. The evidence for this row is reproducible by hand: make
+the one-line change the mutation column names and re-run the harness.
