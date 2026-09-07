@@ -208,6 +208,14 @@ export const WEB_FA = {
   'web.showing': 'نمایش',
   'web.newer': 'تازه‌تر',
   'web.error_hint': 'ارتباط با سرور برقرار نشد. دوباره تلاش کنید.',
+  /*
+   * Shown ABOVE data that is still on screen, not instead of it.
+   *
+   * The claim is precise on purpose: not "there was an error" — the reader can
+   * see the page — but "what you are looking at is older than the server". A
+   * page that quietly stops refreshing is the legacy system's defining defect.
+   */
+  'web.refresh_failed': 'تازه‌سازی این صفحه انجام نشد؛ آنچه می‌بینید از آخرین دریافت موفق است.',
   'web.no_permission_hint':
     'برای دیدن این بخش به دسترسی دیگری نیاز دارید. از یک مدیر بخواهید آن را بدهد.',
   // The separator between a display name and a numeric identifier. It is a

@@ -12,7 +12,7 @@ import { formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { ErrorReport } from './settings';
-import { queryState } from './dashboard';
+import { queryState, staleAfterError } from './dashboard';
 import { Card, PageHead, StateSwitch } from '../ui/kit';
 
 /**
@@ -62,6 +62,7 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
       />
       <StateSwitch
         state={denied ? 'denied' : queryState(templates, rows.length === 0)}
+        stale={staleAfterError(templates)}
         onRetry={() => void templates.refetch()}
       >
         {rows.map((template) => (

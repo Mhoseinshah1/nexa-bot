@@ -36,13 +36,21 @@ const RECORD = 'docs/phase3d-falsification.md';
  */
 const CITATION_HEADERS = ['named test', 'test that dies', 'tests that die'];
 /**
- * Mutation tables that deliberately cite something OTHER than a test.
+ * Tables that deliberately hold something OTHER than test citations.
  *
- * Declaring them is the price of the rule below: a table with a `mutation`
- * column and no citation column is an error, because that is what a misspelled
- * citation header looks like. These two say what they are.
+ * Declaring them is the price of the rule below: EVERY table in the record
+ * either cites tests or says what it does instead. Nothing is skipped because
+ * it did not look like a citation table — that judgement is what let two
+ * tables go unread for twenty rounds.
+ *
+ * An earlier version narrowed the rule to tables with a `mutation` column, and
+ * the commit that added it claimed removing that narrowing "kills nothing".
+ * That was false: `| test | why it could not fail | what it is now |` — three
+ * rows whose first column is literally headed `test` — was being skipped for
+ * exactly that reason, which is the disease this script's own header comment
+ * names. The narrowing is gone and the table is declared.
  */
-const NON_CITING_HEADERS = ['what dies', 'what the check prints'];
+const NON_CITING_HEADERS = ['what dies', 'what the check prints', 'what it is now'];
 
 /** Every test source, by path, so a citation can be checked where it points. */
 function sources(dir) {
@@ -143,6 +151,8 @@ const unparsed = [];
  * spelling gets a red run instead of a green one that checked nothing.
  */
 const unrecognised = [];
+/** Rows whose cell count disagrees with their table's header. */
+const malformed = [];
 let checked = 0;
 let inCitationTable = false;
 let previous = null;
@@ -151,11 +161,17 @@ let previous = null;
 let header = null;
 /** Which column of the current table holds its citations. */
 let column = -1;
+/** How many cells the current table's header declares. */
+let width = 0;
 
 for (const line of lines) {
   if (!line.startsWith('|')) {
     inCitationTable = false;
     header = null;
+    // A table's width dies with the table. Without this the HEADER row of the
+    // next one is measured against the previous one's column count, which is
+    // a mismatch for every table that changes shape.
+    width = 0;
     continue;
   }
   // A table declares its columns in the row ABOVE the separator, and nowhere
@@ -179,23 +195,36 @@ for (const line of lines) {
     inCitationTable = column >= 0;
     previous = null;
     /*
-     * A mutation table that cites no test is an error unless it SAYS it cites
-     * something else. That is a far better signal than "the last column
-     * mentions a test", which was both too lax — `what dies` sails through —
-     * and too eager: an ordinary summary table headed `tests added` failed the
-     * whole run.
+     * Every table declares itself, or the run fails.
+     *
+     * By NAME at any position, exactly as the citation column is found — the
+     * opt-out list was matched against the LAST cell alone, which is the same
+     * positional escape that hid the record's largest table and would have hid
+     * the next one written a column wider.
      */
     if (
       !inCitationTable &&
-      declared.includes('mutation') &&
-      !NON_CITING_HEADERS.includes(declared.at(-1) ?? '')
+      !declared.some((cell) => NON_CITING_HEADERS.includes(cell)) &&
+      declared.length > 0
     ) {
       unrecognised.push(header);
     }
+    width = declared.length;
     header = null;
     continue;
   }
   const columns = cells(line);
+  /*
+   * A row that does not match its header's width is malformed, in ANY table.
+   *
+   * The escaped-pipe bug produced exactly this shape and nothing looked at it;
+   * so did one hand-written row in the one table nothing was reading. A cell
+   * count is the cheapest possible check for both, and it does not care whether
+   * the table cites anything.
+   */
+  if (width > 0 && columns.length !== width) {
+    malformed.push(line);
+  }
   if (!inCitationTable) {
     header = line;
     continue;
@@ -236,13 +265,20 @@ for (const line of lines) {
   }
 }
 
-if (missing.length > 0 || unparsed.length > 0 || unrecognised.length > 0) {
+if (missing.length > 0 || unparsed.length > 0 || unrecognised.length > 0 || malformed.length > 0) {
+  if (malformed.length > 0) {
+    console.error(
+      `\x1b[31mfail\x1b[0m  ${malformed.length} row(s) do not match their table's column count:`,
+    );
+    for (const row of malformed) console.error(`        ${row.trim().slice(0, 110)}`);
+  }
   if (unrecognised.length > 0) {
     console.error(
-      `\x1b[31mfail\x1b[0m  ${unrecognised.length} table header(s) name a test column this check does not recognise:`,
+      `\x1b[31mfail\x1b[0m  ${unrecognised.length} table(s) declare neither a citation column nor what they hold instead:`,
     );
     for (const row of unrecognised) console.error(`        ${row.trim().slice(0, 110)}`);
-    console.error(`        recognised: ${CITATION_HEADERS.join(', ')}`);
+    console.error(`        citation columns: ${CITATION_HEADERS.join(', ')}`);
+    console.error(`        or declare one column: ${NON_CITING_HEADERS.join(', ')}`);
   }
   if (missing.length > 0) {
     console.error(`\x1b[31mfail\x1b[0m  ${missing.length} of ${checked} cited tests do not exist:`);

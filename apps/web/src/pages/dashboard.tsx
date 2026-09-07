@@ -132,7 +132,11 @@ export function DashboardPage({ permissions }: { permissions: readonly string[] 
 
       <div className="grid">
         <Card title={t('web.system_status')} className="span2">
-          <StateSwitch state={queryState(readiness)} onRetry={() => void readiness.refetch()}>
+          <StateSwitch
+            state={queryState(readiness)}
+            stale={staleAfterError(readiness)}
+            onRetry={() => void readiness.refetch()}
+          >
             <div className="head-stats">
               {(readiness.data?.dependencies ?? []).map((dependency) => (
                 <Stat
@@ -244,6 +248,7 @@ function AttentionCard({
     >
       <StateSwitch
         state={queryState(query, events.length === 0)}
+        stale={staleAfterError(query)}
         onRetry={() => void query.refetch()}
         empty={
           <Empty
@@ -338,14 +343,41 @@ export function severityTone(severity: string): Tone {
   return 'neutral';
 }
 
-/** The four view states, read off a react-query result. */
+/**
+ * The four view states, read off a react-query result.
+ *
+ * `isError` alone is NOT the error state. TanStack Query sets `status: 'error'`
+ * on a failed BACKGROUND refetch while `data` is still present, so mapping it
+ * straight through replaced a working page with an error card on one transient
+ * 5xx from a poll — and, because `StateSwitch` renders the card INSTEAD of its
+ * children, unmounted the whole subtree and discarded whatever local state it
+ * held. On the panel detail that is the operator's unsaved draft, the basis it
+ * is compared against, and the revision their own writes stored. No operator
+ * action is involved; it happens on a timer.
+ *
+ * A query that has never delivered anything still has nothing to show, so that
+ * is still the error state.
+ */
 export function queryState(
-  query: { isPending: boolean; isError: boolean },
+  query: { isPending: boolean; isError: boolean; data?: unknown },
   isEmpty = false,
 ): ViewState {
   if (query.isPending) return 'loading';
-  if (query.isError) return 'error';
+  if (query.isError && query.data === undefined) return 'error';
   return isEmpty ? 'empty' : 'ready';
+}
+
+/**
+ * Showing data whose refresh failed, and therefore owing the reader a warning.
+ *
+ * Keeping the page is only half the fix: what is on screen is now older than
+ * the server and nothing about it looks any different. A screen that has
+ * stopped updating without saying so is the defect this admin exists to
+ * remove — the legacy system's whole character — so the failure is stated
+ * beside the data rather than drawn over the top of it.
+ */
+export function staleAfterError(query: { isError: boolean; data?: unknown }): boolean {
+  return query.isError && query.data !== undefined;
 }
 
 export { Num };

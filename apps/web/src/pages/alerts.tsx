@@ -17,7 +17,7 @@ import { formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
-import { queryState, severityTone } from './dashboard';
+import { queryState, staleAfterError, severityTone } from './dashboard';
 import {
   Badge,
   Banner,
@@ -243,6 +243,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
 
         <StateSwitch
           state={denied ? 'denied' : queryState(events, rows.length === 0)}
+          stale={staleAfterError(events)}
           onRetry={() => void events.refetch()}
           empty={
             /*
@@ -469,6 +470,7 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
       <Card title={t('web.notifications_title')}>
         <StateSwitch
           state={denied ? 'denied' : queryState(notifications, rows.length === 0)}
+          stale={staleAfterError(notifications)}
           onRetry={() => void notifications.refetch()}
         >
           <DataTable

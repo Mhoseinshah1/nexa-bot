@@ -621,15 +621,37 @@ export type ViewState = 'ready' | 'loading' | 'empty' | 'error' | 'denied';
  * with a loading state and no empty state, or an empty state that is really an
  * error nobody surfaced.
  */
+function StaleNotice({ onRetry }: { onRetry?: (() => void) | undefined }) {
+  return (
+    <Banner tone="warn" icon="alert">
+      {t('web.refresh_failed')}{' '}
+      {onRetry !== undefined && (
+        <button type="button" className="link" onClick={onRetry}>
+          {t('web.retry')}
+        </button>
+      )}
+    </Banner>
+  );
+}
+
 export function StateSwitch({
   state,
   onRetry,
   empty,
+  stale = false,
   children,
 }: {
   state: ViewState;
   onRetry?: () => void;
   empty?: ReactNode;
+  /**
+   * The data is on screen but its refresh failed — see `staleAfterError`.
+   *
+   * Rendered ABOVE the children rather than instead of them, which is the whole
+   * point: the previous behaviour replaced a working page with an error card
+   * and took the operator's unsaved work with it.
+   */
+  stale?: boolean;
   children: ReactNode;
 }) {
   if (state === 'loading') return <Skeleton />;
@@ -650,8 +672,19 @@ export function StateSwitch({
         }
       />
     );
-  if (state === 'empty') return <>{empty ?? <Empty title={t('web.empty')} />}</>;
-  return <>{children}</>;
+  if (state === 'empty')
+    return (
+      <>
+        {stale && <StaleNotice onRetry={onRetry} />}
+        {empty ?? <Empty title={t('web.empty')} />}
+      </>
+    );
+  return (
+    <>
+      {stale && <StaleNotice onRetry={onRetry} />}
+      {children}
+    </>
+  );
 }
 
 /* ---------------------------------------------------------------- tables --- */

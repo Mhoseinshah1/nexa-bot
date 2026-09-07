@@ -5,7 +5,7 @@ import { ApiError, fetchSettings, saveSetting } from '../api/client';
 import { currencyLabel, formatNumber, formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
-import { queryState } from './dashboard';
+import { queryState, staleAfterError } from './dashboard';
 import {
   Badge,
   Banner,
@@ -47,6 +47,7 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
 
       <StateSwitch
         state={denied ? 'denied' : queryState(settings, rows.length === 0)}
+        stale={staleAfterError(settings)}
         onRetry={() => void settings.refetch()}
       >
         {rows.map((setting) => (

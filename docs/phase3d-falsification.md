@@ -214,7 +214,7 @@ running it rather than citing it.
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | the concurrent-rename regression  | it re-rendered with the same query key, so the cache served the old row and the "concurrent" change never arrived                  | driven through a real refetch — a status change invalidates the panel query, which is how the row actually arrives under an open form |
 | the CSP dashboard stub            | removing `nextCursor` again left it green: the card rendered its error state and the `[style]` assertion passed over a broken page | asserts no skeleton and no error state before asserting anything about style attributes                                               |
-| the credentials stale-value guard | see below — it was testing something that cannot happen                                                                            |
+| the credentials stale-value guard | see below — it was testing something that cannot happen                                                                            | removed — the case it guarded is unreachable                                                                                          |
 
 ## A finding that was real in shape and not reachable
 
@@ -1946,6 +1946,10 @@ treated that way: it is the only one holding state that must outlive the click.
 `CredentialsTab`'s three fields are typed SECRETS, and dropping them on the way
 out is the behaviour to want.
 
+> **That last sentence was half right, and round 24 says which half.** The
+> secrets should indeed die with the tab. The rotation's idempotency KEY had to
+> survive it and did not — see round 24.
+
 ## The check had a second escape, one column to the left
 
 `check:falsification-citations` decided whether a table cites tests by reading
@@ -1975,14 +1979,21 @@ misspelled header. It now keys on something meaningful — a table with a
 `mutation` column and no citation column is an error **unless it declares
 itself** with a name on `NON_CITING_HEADERS`.
 
-The count went from 141 to **151**: the ten citations of the table that had
-never been read.
+The count went from 141 to **152**, and the path is worth stating because the
+first version of this sentence got both the figure and the reason wrong. The old
+script against the new record gives 142 — that is round 23's own new row. The
+new script against it gives 152. So: **+1 for the row this round added, +10 for
+the table that had never been read** (twelve rows, of which one is a `(same
+test)` continuation that is not counted and one is the F-J row moved out). "141
+to 151, the ten citations of the recovered table" was wrong twice over in one
+line, and round 24 found it by instrumenting the script rather than by reading
+the sentence.
 
 ## Fake timers leaked out of a failing test
 
-`tests/web/setup.ts` restored globals and mocks and not timers, and the two
-tests that install fake timers call `vi.useRealTimers()` as their LAST
-statement — which a failed assertion skips. The test after a failure therefore
+`tests/web/setup.ts` restored globals and mocks and not timers, and the three
+tests in `panels.test.tsx` that install fake timers call `vi.useRealTimers()` as
+their LAST statement — which a failed assertion skips. The test after a failure therefore
 ran on a clock nothing advanced. That matters most exactly where it is hardest
 to see: a mutation run, where the first failure is expected and every test after
 it is the evidence that the mutation killed nothing else. `afterEach` restores
@@ -1991,6 +2002,12 @@ them now.
 No mutation in this session is known to have been distorted by it — U58, U59 and
 U65 each killed exactly one test with no cascade — and the hazard is recorded
 rather than the claim that it never bit.
+
+> The count was wrong: there are **three** such tests in `panels.test.tsx`, not
+> two, and it was three when the sentence was written. The other files that use
+> fake timers (`permissions-and-refresh`, `shell-recovery`) restore through a
+> `describe`-level `afterEach` and were never at risk. Round 24 also gave this
+> rule the test it did not have — see U79.
 
 ## The mutations
 
@@ -2008,8 +2025,134 @@ round 22 gives:
 | U74 | a misspelled citation header fails                    | record header → `tests which die`      | exits 1: unrecognised header                         |
 | U75 | the `what dies` opt-out is load-bearing               | drop it from `NON_CITING_HEADERS`      | exits 1: 2 unrecognised headers                      |
 
-Dropping the `declared.includes('mutation')` term of the guard kills **nothing**,
-and is recorded as such rather than dressed up: no table in the record currently
-violates it, so the term protects a future state and only the record-side probe
-(U74) can demonstrate it. The reviewer's own false-positive probe — appending
-`| area | tests added |` — now passes, which is the other half of that rule.
+~~Dropping the `declared.includes('mutation')` term of the guard kills
+**nothing**, and is recorded as such rather than dressed up: no table in the
+record currently violates it, so the term protects a future state and only the
+record-side probe (U74) can demonstrate it.~~
+
+> **False, and round 24 removed the term.** Dropping it fails the run
+> immediately, on this record: `| test | why it could not fail | what it is now |`
+> — three rows whose first column is literally headed `test` — was being skipped
+> for precisely that reason. The narrowing I called a protection was an
+> exemption, and it was already exempting something. Every table now declares
+> itself or the run fails.
+
+This makes the check STRICTER than the round-23 version, deliberately, and it
+reverses that round's other answer: the reviewer's `| area | tests added |`
+probe was reported there as a false positive to be removed, and under this rule
+it fails again — because it is an undeclared table, not because its header
+mentions a test. That is the intended direction for this document, whose entire
+purpose is evidence: a table either cites tests or says what it holds instead.
+The cost is one word in a header the next person adds; the alternative is an
+exemption that silently ate three rows for twenty rounds.
+
+The error message was rewritten to match, since "names a test column this check
+does not recognise" is not what is wrong with a table that names no column of
+the kind at all.
+
+---
+
+# Round 24 — the tab click was one unmount path of three
+
+A fifteenth reviewer found that round 23 fixed the unmount it was shown and left
+two others reaching the same state, and disproved three claims round 23 made
+about itself.
+
+## A failing background poll threw the page away, with no operator action
+
+`queryState` mapped `isError` straight to the error state, and TanStack Query
+sets `status: 'error'` on a failed BACKGROUND refetch while `data` is still
+present. `StateSwitch` renders the error card INSTEAD of its children, so one
+transient 5xx from the ninety-second poll unmounted the whole tab subtree — the
+`hidden` overview included — and took the operator's unsaved draft, their basis
+and the revision their own writes had stored.
+
+This is strictly worse than the tab click round 23 fixed: it needs nobody to do
+anything, it happens on a timer, and it lands inside the same window rounds 22
+and 23 exist for. Round 22 had actually looked straight at this code and drawn
+the opposite conclusion — it recorded that a failed refetch "does NOT produce
+this ... the form is not on screen to say anything" — which was true about the
+false accusation and missed that the form leaving takes the draft with it.
+
+`queryState` now returns the error state only when there is **nothing to show**.
+A query that has data keeps rendering it — and says so, because a page that has
+quietly stopped refreshing is the legacy system's defining defect and the one
+this admin exists to remove. `staleAfterError` names that state and
+`StateSwitch` draws the warning ABOVE the data rather than over it. Every one of
+the fourteen call sites passes it: a silently stale page is the same defect on
+every screen.
+
+## The credentials tab held something that had to outlive a tab click after all
+
+Round 23 asserted, in a comment and in its commit message, that the other three
+tabs "genuinely hold nothing that must outlive the click", because the
+credential fields are typed secrets and dropping them is what you want.
+
+The secrets, yes. The rotation's **idempotency key**, no. `useSubmissionKey`
+deliberately keeps its key when nothing came back — a 5xx is "did that work?",
+not "do it twice" — and the key was a `useRef` inside `CredentialsTab`. The
+natural response to an ambiguous rotation failure is to go and look at Health to
+see whether it landed, which is exactly the action that destroyed it. The retry
+then carried a NEW key with an identical payload, which the server cannot
+dedupe: a second credential write, a second CRITICAL audit row, and the panel's
+probe eligibility reset, for one operator intention.
+
+The key is owned by `PanelDetailPage` now, which a tab click cannot unmount. The
+secrets still die with the tab. The lesson is that "state" here is not only what
+the operator can see.
+
+## Three claims round 23 made about itself, disproved
+
+- **"Dropping the guard's `mutation` term kills nothing."** It fails the run
+  immediately. See the struck-through paragraph in round 23 — the narrowing was
+  an exemption, and it was already exempting a real table.
+- **"141 to 151, the ten citations of the recovered table."** Wrong figure and
+  wrong reason; the corrected arithmetic is in round 23's section.
+- **"the two tests that install fake timers."** Three, and three when written.
+
+## The check, again
+
+Two more holes, both found by enumerating the record's tables by hand rather
+than by reading the script:
+
+- a table declaring a recognised citation column that is **not last** was still
+  read correctly, but a table declaring nothing was skipped unless it had a
+  `mutation` column. Every table now declares itself or the run fails, and the
+  opt-out names are matched at any position — the same positional fix the
+  citation column got in round 23, applied to the list that had kept the bug.
+- **no row was ever checked against its header's width.** The escaped-pipe bug
+  produced exactly that shape and nothing looked; so did one hand-written row in
+  the one table nothing was reading. A cell count is the cheapest check for both
+  and it does not care whether the table cites anything. It found the row at
+  once.
+
+## The mutations
+
+| #   | rule                                                   | mutation                                  | tests that die                                                                                                                            |
+| --- | ------------------------------------------------------ | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| U76 | a failed refetch does not discard a page that has data | `queryState` → `if (query.isError)`       | `panels.test.tsx` › keeps the page and the draft when a background poll fails; › says so when the data on screen is older than the server |
+| U77 | and the page says it is stale rather than pretending   | `staleAfterError` → `false`               | `panels.test.tsx` › says so when the data on screen is older than the server                                                              |
+| U78 | a credential rotation's key outlives a tab click       | `useSubmissionKey()` back inside the tab  | `panels.test.tsx` › keeps a credential rotation idempotency key across a tab click                                                        |
+| U79 | the shared `afterEach` restores real timers            | drop `vi.useRealTimers()` from `setup.ts` | `setup-hygiene.test.tsx` › starts the next test on real timers anyway                                                                     |
+
+U76 and U77 are two rules and were one test until the mutation run showed both
+killing the same thing. Split, their failure sets differ, which is the property
+that lets the suite tell the versions apart.
+
+The check's own probes, outside the citation tables as before:
+
+| #   | rule                                 | mutation                                         | what the check prints                                                    |
+| --- | ------------------------------------ | ------------------------------------------------ | ------------------------------------------------------------------------ |
+| U80 | every table declares itself          | append an undeclared `\| area \| tests added \|` | exits 1: 1 table(s) declare neither a citation column nor what they hold |
+| U81 | every row matches its header's width | (the record's own malformed row, before repair)  | exits 1: 1 row(s) do not match their table's column count                |
+
+## What round 23's test was not testing
+
+`keeps the draft and the revision across a tab click during a save` named the
+revision and did not exercise it: its only concurrency assertion ran AFTER the
+refetch was released, by which point `basis` and `panel` agree and the assertion
+holds however `behind` is defined. Mutating `behind` to `false` did not kill it.
+The assertion moved inside the held refetch, where it discriminates.
+
+That is the fourth test this session that had to be repaired before it could
+fail — and the second whose NAME was the only thing asserting the rule.

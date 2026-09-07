@@ -1507,6 +1507,12 @@ describe('the panel detail', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'کلیات' }));
     // The draft is the operator's, not the row the query is still holding.
     expect((screen.getByLabelText('نام') as HTMLInputElement).value).toBe('Frankfurt mine');
+    // And the REVISION survived too. `basis` is the row the save stored while
+    // the query still holds the one it replaced, so without `written` this is
+    // where the form accuses a third party. Asserted HERE, inside the held
+    // refetch — after `release()` the two agree and the assertion is vacuous,
+    // which is what an earlier version of this test did.
+    expect(screen.queryByText(/جای دیگری تغییر کرده/)).toBeNull();
 
     // The refetch lands with the row the operator themselves wrote.
     readRoute.body = writeRoute.body;
@@ -1516,6 +1522,133 @@ describe('the panel detail', () => {
     });
     expect((screen.getByLabelText('نام') as HTMLInputElement).value).toBe('Frankfurt mine');
     expect(screen.queryByText(/جای دیگری تغییر کرده/)).toBeNull();
+  });
+
+  /**
+   * A failing background poll must not throw the page away.
+   *
+   * `queryState` mapped `isError` to the error state, and TanStack Query sets
+   * `status: 'error'` on a failed BACKGROUND refetch while `data` is still
+   * there — so one transient 5xx from the ninety-second poll replaced the whole
+   * detail with an error card, unmounting the tab subtree and silently
+   * discarding the operator's unsaved draft, their basis, and the revision
+   * their own writes had stored. No operator action is involved: it happens on
+   * a timer, and it lands inside the same window the concurrency rule exists
+   * for.
+   *
+   * Keeping the page is only half of it. What is on screen is now older than
+   * the server, and a screen that has stopped updating without saying so is the
+   * defect this admin exists to remove — so the failure is stated instead of
+   * being drawn as an error card over the top of good data.
+   */
+  it('keeps the page and the draft when a background poll fails', async () => {
+    const id = panel().id as string;
+    const route = { url: `/panels/${id}`, body: { panel: panel() } as unknown, status: 200 };
+    stubApi([route]);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    fireEvent.change(screen.getByLabelText('نام'), { target: { value: 'Frankfurt mine' } });
+
+    // The poll fails. The query keeps the row it has and reports an error.
+    route.status = 503;
+    route.body = {
+      error: { kind: 'internal', code: 'test.down', message: 'down', correlationId: 'test' },
+    };
+    await vi.advanceTimersByTimeAsync(95_000);
+
+    // The form is still there, still holding what the operator typed.
+    expect(screen.getByLabelText('نام')).toBeInTheDocument();
+    expect((screen.getByLabelText('نام') as HTMLInputElement).value).toBe('Frankfurt mine');
+    vi.useRealTimers();
+  });
+
+  /**
+   * ...and it says so, which is the other half and a separate rule.
+   *
+   * Keeping the page and telling the truth about it are two changes, and a
+   * single test asserting both cannot tell the reader which one broke. This
+   * one dies if the warning is dropped; the one above dies if the page is.
+   */
+  it('says so when the data on screen is older than the server', async () => {
+    const id = panel().id as string;
+    const route = { url: `/panels/${id}`, body: { panel: panel() } as unknown, status: 200 };
+    stubApi([route]);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    expect(screen.queryByText(/تازه‌سازی این صفحه انجام نشد/)).toBeNull();
+
+    route.status = 503;
+    route.body = {
+      error: { kind: 'internal', code: 'test.down', message: 'down', correlationId: 'test' },
+    };
+    await vi.advanceTimersByTimeAsync(95_000);
+
+    expect(screen.getByText(/تازه‌سازی این صفحه انجام نشد/)).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  /**
+   * The idempotency key of a credential rotation survives a tab click.
+   *
+   * `useSubmissionKey` deliberately KEEPS its key when nothing came back — a
+   * 5xx or a dropped connection is "did that work?", not "do it twice", and a
+   * fresh key turns the operator's question into a second command. The key was
+   * a `useRef` inside `CredentialsTab`, which the tab strip unmounts, and the
+   * natural response to an ambiguous rotation failure is exactly the action
+   * that destroyed it: go and look at Health to see whether it took.
+   *
+   * The retry then carries a NEW key with an identical payload, so
+   * `PanelService.setCredentials` misses the idempotency hit and writes the
+   * credential a second time — a second CRITICAL audit row, and the panel's
+   * probe eligibility reset — for one operator intention.
+   *
+   * An earlier round asserted in a comment and a commit message that this tab
+   * "genuinely holds nothing that must outlive the click". That was wrong: the
+   * typed secrets should indeed be dropped, and the key must not be.
+   */
+  it('keeps a credential rotation idempotency key across a tab click', async () => {
+    const id = panel().id as string;
+    const readRoute = { url: `/panels/${id}`, method: 'GET', body: { panel: panel() } as unknown };
+    const writeRoute = {
+      url: `/panels/${id}/credentials`,
+      method: 'POST',
+      body: {
+        error: { kind: 'internal', code: 'test.down', message: 'down', correlationId: 'test' },
+      } as unknown,
+      status: 503,
+    };
+    const api = gatedApi([readRoute, writeRoute]);
+    renderPage(<PanelDetailPage id={id} mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    const rotate = async () => {
+      fireEvent.change(screen.getByLabelText('گذرواژه'), { target: { value: 'hunter2' } });
+      fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+    };
+    const keys = () =>
+      api.calls
+        .filter((call) => call.method === 'POST' && call.url.includes('/credentials'))
+        .map((call) => (call.body as { idempotencyKey?: string }).idempotencyKey);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }));
+    await rotate();
+    await waitFor(() => {
+      expect(keys()).toHaveLength(1);
+    });
+
+    // "Did that work?" — the operator goes to look, and comes back.
+    fireEvent.click(screen.getByRole('tab', { name: 'سلامت' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'اعتبارنامه‌ها' }));
+    await rotate();
+    await waitFor(() => {
+      expect(keys()).toHaveLength(2);
+    });
+
+    const [first, second] = keys();
+    expect(second).toBe(first);
   });
 
   /**

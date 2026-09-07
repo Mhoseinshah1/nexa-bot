@@ -29,7 +29,7 @@ import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { navigate, setQuery, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
-import { HEALTH_TONES, queryState } from './dashboard';
+import { HEALTH_TONES, queryState, staleAfterError } from './dashboard';
 import {
   Badge,
   Banner,
@@ -293,6 +293,7 @@ export function PanelsPage({
 
         <StateSwitch
           state={denied ? 'denied' : queryState(panels, rows.length === 0)}
+          stale={staleAfterError(panels)}
           onRetry={() => void panels.refetch()}
           empty={
             archived ? (
@@ -399,6 +400,21 @@ export function PanelDetailPage({
   };
 
   const testSubmission = useSubmissionKey();
+  /**
+   * Held HERE, not in `CredentialsTab`, because the tab strip unmounts that.
+   *
+   * `useSubmissionKey` keeps its key when nothing came back, so the operator's
+   * retry after an ambiguous 5xx is recognised as the same command rather than
+   * a second one. A `useRef` inside the tab lost that on the one action an
+   * operator is most likely to take in exactly that situation — going to look
+   * at Health to see whether the write landed — and the retry then arrived with
+   * a fresh key and an identical payload, which the server cannot dedupe: a
+   * second credential write and a second CRITICAL audit row for one intention.
+   *
+   * The typed secrets still die with the tab, which is the behaviour to want.
+   * The key is not a secret.
+   */
+  const credentialSubmission = useSubmissionKey();
   const test = useMutation({
     mutationFn: (idempotencyKey: string) => testPanel({ id, idempotencyKey }),
     onSuccess: async (result) => {
@@ -463,6 +479,7 @@ export function PanelDetailPage({
 
       <StateSwitch
         state={denied ? 'denied' : queryState(panel)}
+        stale={staleAfterError(panel)}
         onRetry={() => void panel.refetch()}
       >
         {data !== undefined && (
@@ -495,17 +512,28 @@ export function PanelDetailPage({
                 the revision rule exists to cover, and the rule's memory was
                 inside the component the click unmounted.
 
-                The other three genuinely hold nothing that must outlive the
-                click. `CredentialsTab`'s three fields are typed SECRETS, and
-                dropping them on the way out is the behaviour to want, not a
-                defect to fix here.
+                The other three hold no DRAFT that must outlive the click —
+                `CredentialsTab`'s three fields are typed SECRETS, and dropping
+                them on the way out is the behaviour to want.
+
+                An earlier version of this comment said they held nothing that
+                must outlive it at all, and that was wrong: the credential
+                rotation's idempotency KEY had to, and the tab strip destroyed
+                it on precisely the action an operator takes after an ambiguous
+                failure. The key is owned by `PanelDetailPage` now. The lesson
+                is that "state" here is not only what the operator can see.
               */}
               <div hidden={tab !== 'overview'}>
                 <OverviewTab panel={data} mayEdit={mayEdit} />
               </div>
               {tab === 'health' && <HealthTab panel={data} />}
               {tab === 'credentials' && (
-                <CredentialsTab panel={data} mayRotate={mayRotate} onDone={refresh} />
+                <CredentialsTab
+                  panel={data}
+                  mayRotate={mayRotate}
+                  onDone={refresh}
+                  submission={credentialSubmission}
+                />
               )}
               {tab === 'capabilities' && <CapabilitiesTab panel={data} />}
             </TabPanel>
@@ -1117,16 +1145,18 @@ function CredentialsTab({
   panel,
   mayRotate,
   onDone,
+  submission,
 }: {
   panel: PanelSummaryResponse;
   mayRotate: boolean;
   onDone: () => Promise<void>;
+  /** Owned by `PanelDetailPage` — see the comment where it is created. */
+  submission: ReturnType<typeof useSubmissionKey>;
 }) {
   const toast = useToast();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [apiToken, setApiToken] = useState('');
-  const submission = useSubmissionKey();
 
   /**
    * Which credential fields this panel's provider can actually USE.
