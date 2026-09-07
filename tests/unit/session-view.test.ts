@@ -27,10 +27,24 @@ const session = {
 };
 
 describe('session view', () => {
-  it('reports a lookup failure as unavailable, not as signed out', () => {
+  it('reports a lookup failure with nothing cached as unavailable, not as signed out', () => {
     expect(sessionView({ isPending: false, isError: true })).toBe('unavailable');
-    // Even when a stale value is still cached: an error means we do not know.
-    expect(sessionView({ isPending: false, isError: true, data: session })).toBe('unavailable');
+  });
+
+  /**
+   * The opposite of what this asserted until round 13.
+   *
+   * "An error means we do not know" is true of the LOOKUP and false of the
+   * session: one that was successfully resolved is still the best thing this
+   * tab knows. `refetchOnReconnect` is on by default, so a laptop waking, a
+   * kiosk NIC flap or a Caddy reload fires `online` a moment before the API is
+   * reachable — and replacing the signed-in tree with an error paragraph
+   * unmounted every open form and lost whatever had been typed into it, for a
+   * blip the next poll resolves. A revoked session is not this case: it comes
+   * back as a resolved `null`, and lands in `signed-out` below.
+   */
+  it('keeps a resolved session when a later lookup fails', () => {
+    expect(sessionView({ isPending: false, isError: true, data: session })).toBe('signed-in');
   });
 
   it('reports the server saying "no session" as signed out', () => {

@@ -19,15 +19,23 @@ expect.extend(matchers);
  *
  * A real `MediaQueryList` shape rather than a no-op object: the effect
  * subscribes and unsubscribes, and a stub missing either method would fail on
- * cleanup instead. `matches: false` is the light-scheme answer, which is what
- * the shell would get from a headless browser too.
+ * cleanup instead.
+ *
+ * `matches: true` because the query `theme.ts` asks is
+ * `(prefers-color-scheme: light)`, so `true` means LIGHT — which is what a
+ * headless browser reports, and therefore what a test should get. An earlier
+ * version returned `false` under a comment calling it "the light-scheme
+ * answer"; `resolveTheme('system', false)` is `'dark'`, so the comment named
+ * the opposite of what it installed. Nothing depended on it yet, which is
+ * exactly when a comment like that survives to mislead the first test that
+ * does.
  */
 if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
     value: (query: string): MediaQueryList =>
       ({
-        matches: false,
+        matches: true,
         media: query,
         onchange: null,
         addEventListener: () => undefined,

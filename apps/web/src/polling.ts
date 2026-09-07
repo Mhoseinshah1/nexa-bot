@@ -140,29 +140,45 @@ export function pollUnlessFinalWhile<TData>(ms: number, unsettled: (data: TData)
 }
 
 /**
- * An interval that exists ONLY to recover from a failure.
+ * The session query's interval.
  *
- * For the session query, which is the shell rather than a page: it has no
- * cadence of its own, because a resolved session does not go stale on a timer.
- * But it had no interval AT ALL, and `fetchSession` deliberately THROWS on
- * `auth.tenant_suspended` rather than returning `null` — so a tab whose page
- * load fell inside a maintenance window rendered "session unavailable" with a
- * manual Retry button and never asked again. A kiosk that power-cycles, a tab
- * the browser discards and restores, a `botctl update` that swaps the bundle
- * and forces a reload, or an operator's morning refresh all land there.
+ * The shell, not a page, and it needs all three behaviours at once.
  *
- * That is the frozen screen this file was written to remove, surviving one
- * layer above every call site it fixed — and with `retry: false` on that query
- * the shell got exactly one request, ever, which is fewer than any page gets.
+ * **While signed in it re-asks.** An earlier version polled only on failure and
+ * justified it: "a resolved session does not go stale on a timer". The
+ * contracts say otherwise — `sessionResponseSchema` carries `expiresAt`, and
+ * `auth.session_invalid` exists because sessions are revoked — and the premise
+ * being false left the worst screen on this branch: a tab whose session expired
+ * kept rendering a complete, fully-drawn admin console that could do nothing.
+ * Every page had correctly stopped polling on its 401; the shell alone never
+ * asked, so nothing on screen ever said to sign in again.
  *
- * Nothing while healthy, so a signed-in tab costs no extra traffic: the point
- * is recovery, not freshness. A signed-OUT browser is a success rather than a
- * failure here — `fetchSession` returns `null` for an ordinary 401 — so it arms
- * nothing either.
+ * Re-asking also bounds the hazard the rest of this file mitigates rather than
+ * fixes: `enabled:` is computed from a permission list that used to be fetched
+ * once per tab, so a revoked permission was believed until a reload. It is now
+ * believed for at most one cadence.
+ *
+ * **While failing it drops into the slow lane**, so a paused installation or a
+ * rolling restart recovers without anybody present.
+ *
+ * **Signed OUT it asks nothing.** `fetchSession` returns `null` for an ordinary
+ * 401, which is a resolved answer rather than a failure: nobody is signed in,
+ * and nothing this tab does will change that. Polling a login screen is the
+ * noise this rule exists to avoid.
  */
-export function retryWhileFailing(ms: number) {
+export function pollSession(ms: number) {
   return (query: PollingQuery): number | false => {
-    if (query.state.error === null || finalAnswer(query.state.error)) return false;
-    return paced(ms, query.state.error);
+    if (finalAnswer(query.state.error)) return false;
+    // The shared slow lane DIRECTLY, not `paced(ms, …)`. `paced` returns
+    // `max(ms, lane)`, which is a floor for a page polling faster than the lane
+    // — and the session's healthy cadence is SLOWER than it, so the max would
+    // have made a failing shell recover at sixty seconds instead of thirty,
+    // doubling how long a paused installation stays frozen. Recovery is the
+    // whole point of the failing branch; it should not be throttled by how
+    // rarely a healthy session needs re-asking.
+    if (query.state.error !== null) return FAILING_INTERVAL_MS;
+    // `== null` covers both: `null` is signed out, `undefined` is a first load
+    // still in flight, and neither wants a timer.
+    return query.state.data == null ? false : ms;
   };
 }

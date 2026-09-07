@@ -1018,14 +1018,118 @@ so it arms nothing there either.
 ## A deletion I nearly shipped
 
 Restoring `polling.ts` after U26, I copied back a scratch file from the PREVIOUS
-round. It was a valid file, it type-checked, and it silently removed
-`retryWhileFailing` — the entire fix — while `app.tsx` kept importing it. `git
-status` showed one modified file and looked unremarkable.
+round. It silently removed `retryWhileFailing` — the entire fix — while
+`app.tsx` kept importing it, and `git status` showed one modified file and
+looked unremarkable.
+
+**Correction, added in round 13: the sentence that stood here claimed the
+deletion "type-checked". It does not.** `pnpm typecheck` runs
+`tsc -p apps/web/tsconfig.json`, and the import in `app.tsx` fails it with
+`TS2305: Module './polling' has no exported member 'retryWhileFailing'`. The
+gate catches this deletion immediately. A false claim about which checks are
+blind, used to argue that only sha256 verification would have caught it, is the
+failure this document exists to catch — and it is the second time in this branch
+that I put an unverified claim into an artefact rather than into a test.
 
 `CLAUDE.md` says to run `git status`, read every line of `git diff`, and confirm
 no reviewer mutation is still in the tree, "deletions especially, because an
 added line is conspicuous and a removed predicate is not". This was that
-failure, self-inflicted by a careless restore rather than by an agent, and it
-was caught by grepping for the symbol rather than by reading the diff. Every
-restore in this round is now sha256-verified against a copy taken in the same
-round, and the mutation runs were repeated afterwards from the verified state.
+failure, self-inflicted by a careless restore rather than by an agent. Every
+restore is now sha256-verified against a copy taken in the same round, which is
+worth doing on its own account — but the honest version of the lesson is
+narrower than the one first written here: the gate would have caught it, and
+what actually failed was that I reported the near-miss without checking the
+claim I made about it.
+
+# Round 13 — the shell had the defect too, from the inside
+
+A fifth fresh-context reviewer confirmed round 12's shell fix works for the
+cases it was written for, and found that it declined the one case that mattered
+most — on a premise the contracts contradict.
+
+## "A resolved session does not go stale on a timer"
+
+That is what `retryWhileFailing`'s docblock said, and it is false.
+`sessionResponseSchema` carries `expiresAt`, and `auth.session_invalid` exists
+precisely because sessions expire and are revoked. So the round-12 rule —
+poll only while FAILING, nothing while healthy — left this:
+
+An operator signs in and leaves the tab open. The session expires, or an owner
+revokes it. Every endpoint answers 401. Every PAGE correctly stops polling,
+which is the rule four rounds of `polling.ts` established. And the shell, which
+alone could notice, never asks. After ten simulated minutes the reviewer
+measured a complete, fully drawn admin console — the operator's name, the whole
+nav, every panel — that could do nothing, said nothing about signing in again,
+and had no way back but a manual reload.
+
+That is the worst screen this branch produced, and it was produced by the commit
+that added an interval to that very query and reasoned its way out of the
+healthy case.
+
+`pollSession` now re-asks every sixty seconds while signed in, drops to the
+shared thirty-second lane while failing, and asks nothing at all when signed out
+— because `fetchSession` reports an ordinary 401 as a resolved `null`, which is
+an answer, not a failure. Re-asking also bounds the hazard the rest of the file
+only mitigates: a permission list fetched once per tab is now believed for at
+most one cadence rather than until a reload.
+
+One thing the fix got wrong on the first attempt, caught by a test rather than
+by reading: reusing `paced(ms, error)` for the failing branch. `paced` returns
+`max(ms, lane)`, a FLOOR for a page polling faster than the lane — and the
+session's healthy cadence is slower than it, so the max made a failing shell
+recover at sixty seconds instead of thirty, doubling how long a paused
+installation stays frozen. The failing branch uses the lane directly.
+
+## And the opposite mistake, which the fix would have made worse
+
+`sessionView` returned `unavailable` on `isError` even when `data` held a good
+session — a comment on the test said "an error means we do not know". True of
+the LOOKUP, false of the session. `refetchOnReconnect` is on by default, so a
+laptop waking, a kiosk NIC flap or a Caddy reload fires `online` a moment before
+the API is reachable, and the failed refetch replaced the whole signed-in tree
+with an error paragraph: every open form unmounted, everything typed into them
+lost, for a blip the next poll resolves. Adding a healthy cadence would have
+turned that from an occasional event into a scheduled one.
+
+Data now wins over a stale error. A revoked session is not this case — it comes
+back as a resolved `null` and lands in `signed-out`.
+
+## A false claim in this document
+
+Round 12's near-miss section said the accidental deletion of `retryWhileFailing`
+"type-checked". **It does not.** `pnpm typecheck` fails it with `TS2305` on the
+import in `app.tsx`. I asserted a blindness in the gate that does not exist, and
+used it to argue for a process rule. Corrected in place, in the round-12 section
+where it stands.
+
+That is the second time on this branch that I put an unverified claim into an
+artefact instead of into a test — the first being the commit message that
+described a polling fix I had not made. Both were caught by somebody else
+checking. The rule this actually supports is narrower and worse for me than the
+one I wrote: **a claim about what the tooling would or would not have caught is
+a claim, and has to be run.**
+
+## Two more, both mine
+
+- `tests/web/shell-recovery.test.tsx`'s recovery assertion was that the
+  "unavailable" paragraph left the DOM. It passed just as well when the recovery
+  answered "no session" and signed the operator out — the exact conflation
+  `fetchSession`, `sessionView` and `auth.tenant_suspended` exist to prevent.
+  It now asserts the operator is signed in.
+- `setup.ts`'s `matchMedia` stub returned `matches: false` under a comment
+  calling it "the light-scheme answer". The query is
+  `(prefers-color-scheme: light)`, so `false` is DARK, and a headless browser
+  reports light. Nothing depended on it yet, which is exactly when a comment
+  like that survives to mislead the first test that does.
+
+## The mutations
+
+| #   | rule                                        | mutation                                 | test that dies                                                                                                 |
+| --- | ------------------------------------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| U27 | the shell re-asks while signed in           | never poll a resolved session            | `shell-recovery.test.tsx` › tells the operator to sign in again instead of leaving a console that does nothing |
+| U28 | a resolved session survives a stale error   | `isError` before `data` in `sessionView` | `session-view.test.ts` › keeps a resolved session when a later lookup fails                                    |
+| U29 | a failing shell recovers on the shared lane | `paced(ms, …)` in the failing branch     | `shell-recovery.test.tsx` › recovers by itself when the paused installation is started again                   |
+| U30 | the healthy cadence is the one declared     | `SESSION_REFRESH_MS` → `300_000`         | `shell-recovery.test.tsx` › tells the operator to sign in again instead of leaving a console that does nothing |
+
+U27, U28, U29 and U30 each kill two tests. Sources restored and sha256-verified;
+every suite green afterwards.

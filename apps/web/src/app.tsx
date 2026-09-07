@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SessionResponse } from '@nexa/contracts';
-import { retryWhileFailing } from './polling';
+import { pollSession } from './polling';
 import { ApiError, fetchSession, signIn, signOut } from './api/client';
 import { t, type WebKey } from './i18n/web.fa';
 import { match, navigate, useDocumentTitle, useLinkHandler, useRoute, type Route } from './router';
@@ -44,8 +44,16 @@ export function sessionView(query: {
   data?: SessionResponse | null | undefined;
 }): 'loading' | 'unavailable' | 'signed-in' | 'signed-out' {
   if (query.isPending) return 'loading';
+  // DATA WINS over a stale error. `refetchOnReconnect` is on by default, so a
+  // laptop waking, a kiosk NIC flap or a Caddy reload fires `online` a moment
+  // before the API is reachable, the refetch fails, and this used to replace
+  // the whole signed-in tree with an error paragraph — unmounting every open
+  // form and losing whatever was typed into it. A session we DID resolve is
+  // still the best thing we know; the pages below report their own failures,
+  // and the interval brings the session back on its own.
+  if (query.data) return 'signed-in';
   if (query.isError) return 'unavailable';
-  return query.data ? 'signed-in' : 'signed-out';
+  return 'signed-out';
 }
 
 // ---------------------------------------------------------------------------
@@ -469,24 +477,29 @@ function NotFound() {
 // ---------------------------------------------------------------------------
 
 /**
- * How often a shell that could not resolve its session tries again.
+ * How often the shell re-resolves its session.
  *
- * The same lane a failing page poll drops into. A paused installation is the
- * case that matters, and `botctl start` is not an operation anybody expects a
- * screen to notice instantly.
+ * The bound on two things: how long an expired or revoked session goes on
+ * looking valid, and how long a permission this tab no longer holds goes on
+ * being believed. A minute is short enough that neither outlives an operator's
+ * attention and long enough to be one request per tab per minute.
+ *
+ * A FAILING session is asked about on `polling.ts`'s slow lane instead, which
+ * is the shorter of the two; this constant governs the healthy cadence.
  */
-const SESSION_RETRY_MS = 30_000;
+const SESSION_REFRESH_MS = 60_000;
 
 export function App() {
   const session = useQuery({
     queryKey: ['session'],
     queryFn: fetchSession,
     retry: false,
-    // The shell recovers on its own. See `retryWhileFailing`: without this the
-    // "session unavailable" screen below was terminal for an unattended tab,
-    // and its Retry button is the very rationalisation this branch established
-    // is false wherever nobody is present to press it.
-    refetchInterval: retryWhileFailing(SESSION_RETRY_MS),
+    // The shell keeps up with its own session. See `pollSession`: without an
+    // interval the "session unavailable" screen below was terminal for an
+    // unattended tab — its Retry button being the very rationalisation this
+    // branch established is false wherever nobody is present to press it — and
+    // an expired session left a complete admin console on screen for ever.
+    refetchInterval: pollSession(SESSION_REFRESH_MS),
   });
   const view = sessionView(session);
 
