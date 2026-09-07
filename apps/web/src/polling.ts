@@ -79,7 +79,7 @@ const FAILING_INTERVAL_MS = 30_000;
  * cost of being wrong there is a request the server shrugs off, while the cost
  * of being wrong the other way is a frozen screen nobody is watching.
  */
-function finalAnswer(error: unknown): boolean {
+export function finalAnswer(error: unknown): boolean {
   if (error instanceof ApiError) {
     if (error.code === IDENTITY_ERROR_CODES.AUTH_TENANT_SUSPENDED) return false;
     return (

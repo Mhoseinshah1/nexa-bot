@@ -1133,3 +1133,86 @@ a claim, and has to be run.**
 
 U27, U28, U29 and U30 each kill two tests. Sources restored and sha256-verified;
 every suite green afterwards.
+
+# Round 14 — the fix opened the door it had just closed
+
+A sixth reviewer confirmed round 13's diagnosis and its `pollSession` half, and
+found that its OTHER half put the same console back on screen through every
+failure class but the one it was written for.
+
+## Two rules that disagreed about which failures are worth waiting through
+
+Round 13 changed `sessionView` so a resolved session survives a stale error —
+written against a reconnect blip, and right for that. It applied to EVERY error.
+And `pollSession`, in the same commit, STOPS on a final answer.
+
+Composed: the shell asks, learns the lookup is permanently broken, throws that
+away, keeps the console drawn, and never asks again. A 403 on the session route,
+or a `ZodError` from a tab holding a previous release across a deploy — the
+class `polling.ts`'s own docblock enumerates — and the operator has a complete,
+fully drawn admin console that does nothing, says nothing, has no Retry, and no
+way back but a manual reload. **Word for word the defect round 13 was written to
+remove**, reached through the door round 13's own fix opened. The reviewer
+measured it: one request, then eleven minutes of silence with the console up.
+
+The rule is now: data wins over a RETRYABLE error, and only over one. The two
+halves ask the same question — `finalAnswer` — because a fix that stops asking
+and a screen that keeps rendering have to agree about what is permanent.
+
+## The same root cause, on the way out
+
+`SignedIn`'s sign-out did `signOut()` then `invalidateQueries(['session'])`.
+React Query retains the previous `data` across a failed refetch, so with data
+winning, a follow-up lookup that failed left the signed-in console drawn as
+though sign-out had not happened — on a shared or kiosk machine, and for good if
+the failure was final.
+
+Sign-out is KNOWN, not derived: `client.setQueryData(['session'], null)`. The
+invalidate went with it, because re-asking an answered question can only return
+something worse — a failed lookup after a successful sign-out rendered "session
+unavailable", telling an operator who had just signed out that something was
+wrong.
+
+## And the headline scenario was still the one that failed
+
+Round 13's own words: "an operator signs in and leaves the tab open".
+`refetchInterval` does not run while a tab is HIDDEN —
+`refetchIntervalInBackground` is `false` by default — and
+`refetchOnWindowFocus` is off globally. So the interval covered the wall display
+and not the case the commit described: ten minutes in another tab produced zero
+polls and no re-ask on return, leaving exactly the dead console, corrected up to
+a minute later.
+
+`refetchOnWindowFocus: true`, on the session query alone.
+
+## Also
+
+`setup.ts`'s `matchMedia` stub answered `true` to everything, so it claimed
+light AND dark at once and claimed a narrow viewport while `window.innerWidth`
+said 1024. `app.tsx` is a real second caller with `(max-width: 980px)`. Both
+inert by accident. It answers the query now.
+
+## The mutations
+
+| #   | rule                                                | mutation                                     | test that dies                                                                             |
+| --- | --------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| U31 | data wins over a retryable error, and only over one | drop the `!finalAnswer` guard                | `session-view.test.ts` › gives up a resolved session once the lookup is permanently broken |
+| U32 | signing out is set, not re-derived                  | `setQueryData` → `invalidateQueries`         | `shell-recovery.test.tsx` › signs out at once, even when the follow-up lookup fails        |
+| U33 | a returning tab re-asks at once                     | drop `refetchOnWindowFocus` from the session | `shell-recovery.test.tsx` › re-asks the moment the operator comes back to the tab          |
+
+U31 kills two. Sources restored and sha256-verified; suites green afterwards.
+
+## What seven rounds of one defect actually say
+
+The same frozen screen has now been fixed seven times, in five different places:
+the page intervals, the interval's error partition, the interval's cadence, the
+shell's missing interval, the shell's healthy cadence, the shell's render rule,
+and the sign-out path. Every round was falsified. Every round's mutations
+passed. Every round was wrong.
+
+What survived each time was not a case anybody got wrong — it was a case nobody
+enumerated, because the mutation is chosen by whoever chose the rule and can
+only probe the boundary they already had in mind. Six of the seven were found by
+a reader with no stake in the fix asking what it now does that it did not do
+before. That is the only technique in this document with a seven-for-seven
+record, and it is the one `CLAUDE.md` already names.

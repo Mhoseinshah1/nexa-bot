@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SessionResponse } from '@nexa/contracts';
-import { pollSession } from './polling';
+import { finalAnswer, pollSession } from './polling';
 import { ApiError, fetchSession, signIn, signOut } from './api/client';
 import { t, type WebKey } from './i18n/web.fa';
 import { match, navigate, useDocumentTitle, useLinkHandler, useRoute, type Route } from './router';
@@ -42,18 +42,29 @@ export function sessionView(query: {
   isPending: boolean;
   isError: boolean;
   data?: SessionResponse | null | undefined;
+  error?: unknown;
 }): 'loading' | 'unavailable' | 'signed-in' | 'signed-out' {
   if (query.isPending) return 'loading';
-  // DATA WINS over a stale error. `refetchOnReconnect` is on by default, so a
-  // laptop waking, a kiosk NIC flap or a Caddy reload fires `online` a moment
-  // before the API is reachable, the refetch fails, and this used to replace
-  // the whole signed-in tree with an error paragraph — unmounting every open
-  // form and losing whatever was typed into it. A session we DID resolve is
-  // still the best thing we know; the pages below report their own failures,
-  // and the interval brings the session back on its own.
-  if (query.data) return 'signed-in';
+  // Data wins over a RETRYABLE error, and only over a retryable one.
+  //
+  // The first half is why this exists: `refetchOnReconnect` is on by default,
+  // so a laptop waking, a kiosk NIC flap or a Caddy reload fires `online` a
+  // moment before the API is reachable, and replacing the signed-in tree with
+  // an error paragraph unmounted every open form and lost whatever had been
+  // typed into it — for a blip the next poll resolves. A session we DID resolve
+  // is the best thing we know while the lookup is merely struggling.
+  //
+  // The second half is why the first is not enough. `pollSession` STOPS on a
+  // final answer — a 403, or a `ZodError` from a tab holding a previous release
+  // across a deploy — so on those the shell has learned the lookup is
+  // permanently broken and will never ask again. Letting data win there kept a
+  // complete, fully drawn console on screen for ever, with nothing to press and
+  // nothing said: the exact defect the round before this one was written to
+  // remove, reached through the door its own fix opened. The two rules have to
+  // agree about which failures are worth waiting through.
+  if (query.data && !finalAnswer(query.error)) return 'signed-in';
   if (query.isError) return 'unavailable';
-  return 'signed-out';
+  return query.data ? 'signed-in' : 'signed-out';
 }
 
 // ---------------------------------------------------------------------------
@@ -500,6 +511,15 @@ export function App() {
     // branch established is false wherever nobody is present to press it — and
     // an expired session left a complete admin console on screen for ever.
     refetchInterval: pollSession(SESSION_REFRESH_MS),
+    // ON, against the global default, and only here. `refetchInterval` does not
+    // run while a tab is hidden (`refetchIntervalInBackground` is `false` by
+    // default), so the interval alone covers the wall display and NOT the case
+    // this was written for: an operator who leaves the tab open behind another
+    // one. Without this they come back to the dead console, click something,
+    // and are told to sign in again up to a minute later. Scoped to the session
+    // because it is the one query whose answer can have changed while nobody
+    // was looking; the pages have their own intervals and re-fetch on mount.
+    refetchOnWindowFocus: true,
   });
   const view = sessionView(session);
 
@@ -661,7 +681,20 @@ function SignedIn({
     mutationFn: signOut,
     onSuccess: async () => {
       navigate('/');
-      await client.invalidateQueries({ queryKey: ['session'] });
+      // SET it, do not merely invalidate. The server has destroyed the session;
+      // that is known, and it is not a fact the client should have to re-derive
+      // from a lookup that may fail. React Query retains the previous `data`
+      // across a failed refetch, so an invalidate alone left the signed-in
+      // console drawn when the follow-up request did not come back — and on a
+      // final failure it stayed drawn for good. Writing the resolved answer
+      // makes signing out immediate and independent of the network.
+      // SET, and nothing else. An `invalidateQueries` beside it re-asks a
+      // question already answered, and the answer it gets back can be worse
+      // than the one we have: a failed lookup after a successful sign-out
+      // rendered "session unavailable" — telling an operator who had just
+      // signed out that something was wrong — and on a final failure it said so
+      // for ever. `signOut` succeeding IS the resolved state.
+      client.setQueryData(['session'], null);
     },
   });
 

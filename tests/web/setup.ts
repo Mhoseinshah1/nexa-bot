@@ -21,21 +21,30 @@ expect.extend(matchers);
  * subscribes and unsubscribes, and a stub missing either method would fail on
  * cleanup instead.
  *
- * `matches: true` because the query `theme.ts` asks is
- * `(prefers-color-scheme: light)`, so `true` means LIGHT — which is what a
- * headless browser reports, and therefore what a test should get. An earlier
- * version returned `false` under a comment calling it "the light-scheme
- * answer"; `resolveTheme('system', false)` is `'dark'`, so the comment named
- * the opposite of what it installed. Nothing depended on it yet, which is
- * exactly when a comment like that survives to mislead the first test that
- * does.
+ * It ANSWERS THE QUERY rather than returning one verdict to everything. Two
+ * call sites ask different questions — `theme.ts` asks
+ * `(prefers-color-scheme: light)` and `app.tsx` asks `(max-width: 980px)` — so
+ * a blanket `true` claimed light and dark at once, and claimed a narrow
+ * viewport while `window.innerWidth` said 1024. Both were inert only by
+ * accident, and a stub that contradicts itself is worse than none: the first
+ * test to depend on either would have been written against a lie.
+ *
+ * Light, because that is what a headless browser reports; wide, because that is
+ * what jsdom's default `innerWidth` says. An even earlier version returned
+ * `false` under a comment calling it "the light-scheme answer" —
+ * `resolveTheme('system', false)` is `'dark'`, so the comment named the
+ * opposite of what it installed.
  */
 if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
     value: (query: string): MediaQueryList =>
       ({
-        matches: true,
+        matches: /prefers-color-scheme:\s*light/.test(query)
+          ? true
+          : /max-width/.test(query)
+            ? false
+            : false,
         media: query,
         onchange: null,
         addEventListener: () => undefined,

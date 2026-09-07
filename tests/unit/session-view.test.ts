@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sessionView } from '../../apps/web/src/app';
+import { ApiError } from '../../apps/web/src/api/client';
 
 /**
  * A failed session LOOKUP is not a signed-out state.
@@ -45,6 +46,30 @@ describe('session view', () => {
    */
   it('keeps a resolved session when a later lookup fails', () => {
     expect(sessionView({ isPending: false, isError: true, data: session })).toBe('signed-in');
+  });
+
+  /**
+   * And NOT over an error the shell has stopped asking about.
+   *
+   * `pollSession` gives up on a final answer — a 403, or a `ZodError` from a tab
+   * holding a previous release across a deploy. Data winning there kept a
+   * complete console drawn for ever with nothing to press, which is the defect
+   * the data-wins rule was introduced beside. The two rules have to agree about
+   * which failures are worth waiting through.
+   */
+  it('gives up a resolved session once the lookup is permanently broken', () => {
+    const zod = Object.assign(new Error('bad shape'), { name: 'ZodError' });
+    expect(sessionView({ isPending: false, isError: true, data: session, error: zod })).toBe(
+      'unavailable',
+    );
+    expect(
+      sessionView({
+        isPending: false,
+        isError: true,
+        data: session,
+        error: new ApiError(403, 'nope', 'no'),
+      }),
+    ).toBe('unavailable');
   });
 
   it('reports the server saying "no session" as signed out', () => {
