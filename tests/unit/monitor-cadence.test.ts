@@ -201,6 +201,32 @@ describe('the monitor cadence', () => {
     expect(healthyCadenceFitsFreshness(ceiling, tick)).toBe(true);
     expect(healthyCadenceFitsFreshness(ceiling + 60_000, tick)).toBe(false);
 
+    /*
+     * At EVERY tick, not the one this test happened to pick.
+     *
+     * The two functions were parallel formulas for one rule and disagreed
+     * wherever floating point said they did: `720000 * 1.1` is
+     * `792000.0000000001`, so at `tick = 108000` the schema refused 720001,
+     * advised "at most 720000", and refused 720000 too — the process would not
+     * boot and the instruction it printed could not be followed. Asserting one
+     * tick could not see it, and `tick = 30_000` is not one of the ticks that
+     * breaks.
+     *
+     * Both halves are asserted, because a ceiling that is merely ACCEPTED can
+     * be had by returning 1. It has to be the largest accepted value.
+     */
+    for (let coarse = 1_000; coarse <= 600_000; coarse += 997) {
+      const advised = maxHealthyIntervalMs(coarse);
+      expect(
+        healthyCadenceFitsFreshness(advised, coarse),
+        `tick ${coarse}: the schema advises ${advised} and then refuses it`,
+      ).toBe(true);
+      expect(
+        healthyCadenceFitsFreshness(advised + 1, coarse),
+        `tick ${coarse}: ${advised} is not the largest interval that fits`,
+      ).toBe(false);
+    }
+
     // A long tick shrinks what a healthy interval may be, which is the whole
     // reason this cannot live on either field alone.
     expect(maxHealthyIntervalMs(10 * 60 * 1000)).toBeLessThan(maxHealthyIntervalMs(30_000));

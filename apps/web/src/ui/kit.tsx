@@ -779,10 +779,21 @@ export function DataTable<T>({
  * Keyset paging: forward through opaque cursors, and back through the ones
  * already seen.
  *
- * There is no page number, because the API does not offer one — `nextCursor`
- * encodes `(name, id)` and the response says nothing about how many pages
- * exist. Rendering "page 3 of 12" would require counting the collection on
- * every request, which is the thing keyset paging exists to avoid.
+ * There is no page number, because the API does not offer one: `nextCursor` is
+ * opaque and the response says nothing about how many pages exist. Rendering
+ * "page 3 of 12" would require counting the collection on every request, which
+ * is the thing keyset paging exists to avoid.
+ *
+ * This used to say the cursor "encodes `(name, id)`", which is wrong for every
+ * one of the three lists that mount this component — panels keyset on
+ * `(created_at, id)`, alerts on `(last_seen_at, id)`, notifications on
+ * `(created_at, id)`. `(name, id)` is the keyset the panel page was MIGRATED
+ * OFF, by 0026, because a rename moves a row across a cursor and the row is
+ * then returned twice or never. A reader who took this docstring at face value
+ * would put the mutable column back.
+ *
+ * The cursor is opaque to this component and it stays that way; naming its
+ * contents here is what made the sentence wrong, so it no longer does.
  */
 export function CursorPager({
   onPrevious,

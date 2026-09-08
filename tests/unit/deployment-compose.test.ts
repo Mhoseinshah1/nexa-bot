@@ -353,7 +353,17 @@ describe('the production Caddy routing', () => {
     // where it expected JSON, which fails in the least legible way available.
     const apiAt = routes.indexOf('@api path /api/*');
     const healthAt = routes.indexOf('@health path /health/*');
-    const fallbackAt = routes.indexOf('try_files {path} /index.html');
+    /*
+     * The DIRECTIVE, not prose that mentions it.
+     *
+     * `indexOf` on the bare token matches the first place the string appears,
+     * and a comment explaining why the font block must NOT have a fallback is
+     * such a place. Adding that comment moved this offset above the SPA block
+     * entirely, and the scan then reported that the handler had no root — a
+     * correct routing file failing a test that was reading the wrong offset.
+     * Caddy indents directives with tabs; a comment line starts with `#`.
+     */
+    const fallbackAt = routes.indexOf('\t\ttry_files {path} /index.html');
     expect(apiAt).toBeGreaterThan(-1);
     expect(healthAt).toBeGreaterThan(-1);
     expect(apiAt).toBeLessThan(fallbackAt);
@@ -367,7 +377,7 @@ describe('the production Caddy routing', () => {
     // with 200 — and 200 is precisely how Telegram is told an update was
     // accepted. Every update would be acknowledged and discarded silently.
     const telegramAt = routes.indexOf('@telegram path /telegram/webhook/*');
-    const fallbackAt = routes.indexOf('try_files {path} /index.html');
+    const fallbackAt = routes.indexOf('\t\ttry_files {path} /index.html');
     expect(telegramAt, 'the webhook path has no handle block').toBeGreaterThan(-1);
     expect(telegramAt).toBeLessThan(fallbackAt);
 
@@ -464,11 +474,48 @@ describe('the production Caddy routing', () => {
       /^\s*root \* \/srv\/web$/m,
     );
     const assetsAt = routes.indexOf('@assets path /assets/*');
-    const fallbackAt = routes.indexOf('try_files {path} /index.html');
+    const fallbackAt = routes.indexOf('\t\ttry_files {path} /index.html');
     expect(assetsAt).toBeGreaterThan(-1);
     expect(assetsAt).toBeLessThan(fallbackAt);
     expect(routes.slice(assetsAt, fallbackAt)).toMatch(/root \* \/srv\/web\/pool$/m);
-    expect(routes.slice(fallbackAt - 400, fallbackAt)).toMatch(/root \* \/srv\/web\/current$/m);
+
+    /*
+     * The NEAREST preceding root, not a fixed byte window.
+     *
+     * This used to slice `fallbackAt - 400`, which asserted the right thing by
+     * accident: it held only while no block sat between `@assets` and the SPA
+     * handler. Adding the `/fonts/*` block pushed the SPA's own `root` out of
+     * the window and the assertion failed on a routing file that was correct —
+     * a test that breaks when something unrelated grows is one somebody edits
+     * the number in. Which root governs `try_files` is the question, so that
+     * is what is asked.
+     */
+    const before = routes.slice(0, fallbackAt);
+    expect(
+      before.lastIndexOf('root * /srv/web/current'),
+      'the SPA handler must be rooted at the activated release',
+    ).toBeGreaterThan(before.lastIndexOf('root * /srv/web/pool'));
+  });
+
+  it('serves the webfont from the release, cached, and 404s when it is missing', () => {
+    /*
+     * `styles.css` names `/fonts/Vazirmatn-Variable.woff2`, and this block did
+     * not exist: the font fell through to the SPA handler and inherited two of
+     * its properties, both wrong for a 111 KB binary that never changes.
+     * `Cache-Control "no-store"` re-downloaded it on every admin page load,
+     * and `try_files {path} /index.html` answered a font that failed to ship
+     * with the HTML document and a 200 — a missing asset reported as success,
+     * with the page rendering in the fallback family and nothing saying why.
+     */
+    const fontsAt = routes.indexOf('@fonts path /fonts/*');
+    expect(fontsAt, 'the webfont has no route of its own').toBeGreaterThan(-1);
+    const block = routes.slice(fontsAt, routes.indexOf('# Everything else is the SPA'));
+    expect(block).toMatch(/root \* \/srv\/web\/current$/m);
+    expect(block).toMatch(/Cache-Control "public, max-age=\d+"/);
+    expect(block, 'no-store on a font that never changes').not.toContain('no-store');
+    // The load-bearing half: no fallback, so a missing file is a 404 rather
+    // than an HTML document served with a 200.
+    expect(block, 'a missing font must not answer with index.html').not.toContain('try_files');
   });
 
   it('lets an operator follow the logs of every service the topology runs', () => {

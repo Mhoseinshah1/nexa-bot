@@ -181,8 +181,27 @@ export function slowProbeLatencyModelFigure(
   return Math.floor(concurrency * (healthyIntervalMs / httpTimeoutMs));
 }
 
+/**
+ * The largest healthy interval this tick admits — DEFINED as the largest value
+ * the predicate below accepts, not as a second formula that ought to agree
+ * with it.
+ *
+ * It was the second formula, and the two disagreed. `720000 * 1.1` is
+ * `792000.0000000001` in IEEE754, so with `PANEL_MONITOR_TICK_MS=108000` the
+ * schema refused `HEALTHY_INTERVAL_MS=720001`, advised "at most 720000", and
+ * then refused 720000 as well: the process would not boot and the instruction
+ * it printed could not be followed.
+ *
+ * Rounding the arithmetic differently would only move the boundary. Two
+ * expressions of one rule disagree wherever floating point says they do, so
+ * there is one expression now and the ceiling is walked down to it. The loop
+ * corrects by at most a millisecond or two and cannot diverge, because it
+ * stops on the same function the schema calls.
+ */
 export function maxHealthyIntervalMs(tickMs: number): number {
-  return Math.floor((PANEL_HEALTH_FRESH_FOR_MS - tickMs) / (1 + MONITOR_SPREAD_FRACTION));
+  let candidate = Math.floor((PANEL_HEALTH_FRESH_FOR_MS - tickMs) / (1 + MONITOR_SPREAD_FRACTION));
+  while (candidate > 0 && !healthyCadenceFitsFreshness(candidate, tickMs)) candidate -= 1;
+  return candidate;
 }
 
 /**

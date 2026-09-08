@@ -94,15 +94,41 @@
 		file_server
 	}
 
+	# The webfont, which is neither hashed nor a route.
+	#
+	# `styles.css` names `/fonts/Vazirmatn-Variable.woff2` and this block did
+	# not exist, so the font fell through to the SPA handler below and picked up
+	# two of its properties, both wrong for a 111 KB binary that never changes:
+	# `Cache-Control "no-store"`, so every admin page load re-downloaded it, and
+	# the SPA fallback, so a font that failed to ship was answered
+	# with the HTML document and a 200. A missing font that returns 200 is an
+	# invisible failure — the page renders in the fallback family and nothing
+	# anywhere says why.
+	#
+	# No `try_files`: a file that is not there is a 404, which is what a missing
+	# static asset is. Not `immutable` either, because the name carries no hash
+	# — a week is long enough to stop the re-download and short enough that
+	# replacing the file is not a support call.
+	@fonts path /fonts/*
+	handle @fonts {
+		header Cache-Control "public, max-age=604800"
+		header X-Content-Type-Options "nosniff"
+		root * /srv/web/current
+		file_server
+	}
+
 	# Everything else is the SPA. `try_files` falls back to index.html so a
 	# deep link the client routes on is served the application rather than a
 	# 404 from the file server.
 	handle {
 		header {
 			# The document's CSP, which is a different question from the API's.
-			# The bundle loads one module script and one stylesheet from its own
-			# origin and talks to its own origin; nothing is inline, nothing is
-			# third-party, so this is as tight as the application actually needs.
+			# The bundle loads one module script, one stylesheet and one webfont
+			# from its own origin and talks to its own origin; nothing is inline,
+			# nothing is third-party, so this is as tight as the application
+			# actually needs. `font-src 'self'` is what the font needs and it was
+			# already here; the sentence above it said "one stylesheet" and
+			# stopped, one asset class out of date.
 			Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
 			X-Content-Type-Options "nosniff"
 			Referrer-Policy "no-referrer"

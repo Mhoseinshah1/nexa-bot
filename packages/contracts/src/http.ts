@@ -899,18 +899,6 @@ export const panelSummarySchema = z.object({
 export type PanelSummaryResponse = z.infer<typeof panelSummarySchema>;
 
 /**
- * A page of panels, and where the next one starts.
- *
- * The list used to return every live panel of the tenant with both child rows
- * joined, so one request materialised the whole collection, sorted it, and
- * serialised it on the event loop. At the stated target of tens of thousands of
- * panels that is a request any administrator can repeat.
- *
- * `nextCursor` is null on the last page. It is opaque on purpose: it encodes
- * `(name, id)`, and a caller that started parsing it would be depending on an
- * ordering this API has not promised.
- */
-/**
  * Which side of the archive to list.
  *
  * `exclude` is the working fleet and the default — an archived panel is retired
@@ -932,6 +920,20 @@ export type PanelListArchivedMode = (typeof PANEL_LIST_ARCHIVED_MODES)[number];
 
 /**
  * The panel page, and the ONE place that says what an unreadable cursor does.
+ *
+ * The list used to return every live panel of the tenant with both child rows
+ * joined, so one request materialised the whole collection, sorted it and
+ * serialised it on the event loop. At the stated target of tens of thousands of
+ * panels that is a request any administrator can repeat. `nextCursor` is null
+ * on the last page and opaque on purpose — a caller that parsed it would be
+ * depending on an ordering this API has not promised.
+ *
+ * That paragraph used to sit above `panelSummarySchema`'s neighbour and say the
+ * cursor "encodes `(name, id)`". Two docblocks added to this file in this
+ * branch pushed it away from the schema it described, so it documented nothing
+ * — and `(name, id)` is the keyset migration 0026 moved the panel page OFF,
+ * because `name` is mutable and a rename moves a row across a cursor. It is
+ * merged here, next to the schema, with the claim removed.
  *
  * A cursor this server cannot decode RESTARTS the traversal: `GET /panels`
  * answers 200 with page one rather than refusing. That is deliberate — the

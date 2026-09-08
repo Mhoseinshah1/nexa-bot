@@ -2608,7 +2608,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 269 citations were checked; this record declares 271 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 271 citations were checked; this record declares 277 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -3706,3 +3706,151 @@ them are load-bearing prose with no mutation of their own: the cursor asymmetry
 is already pinned from both sides by `panels-http.test.ts` and
 `web-admin-v2.test.ts`, and what was wrong was the sentence describing them.
 Saying so is the honest entry; inventing a row for a comment would not be.
+
+## A shared component's docstring named the wrong keyset for all three of its callers
+
+`CursorPager` — new on this branch, mounted by panels, alerts and notifications
+— told the reader that "`nextCursor` encodes `(name, id)`". None of the three
+does: panels keyset on `(created_at, id)`, alerts on `(last_seen_at, id)`,
+notifications on `(created_at, id)`. `(name, id)` is the keyset the panel page
+was MIGRATED OFF, by 0026, because `name` is mutable and a rename moves a row
+across a cursor so it is returned twice or never — which
+`panels/application/ports.ts` spends six lines explaining. A reader who took the
+docstring at face value would put the mutable column back.
+
+The identical claim sat in the frozen spec, and this branch ORPHANED it: on
+`main` it documented `panelListQuerySchema`, and two docblocks added to
+`http.ts` in this branch pushed it away from that schema, so it documented
+nothing at all — thirty lines above a new docblock in the same file describing
+the same cursor correctly. Merged into the schema's own docblock, with the
+claim removed. The pager's docstring no longer names the cursor's contents at
+all, which is what made it wrong.
+
+## The monitor config refused the value its own error message advised
+
+`healthyCadenceFitsFreshness` requires `interval * 1.1 + tick < 900000`;
+`maxHealthyIntervalMs` advertised `floor((900000 - tick) / 1.1)`. Two
+expressions of one rule, and they disagree wherever floating point says they
+do: `720000 * 1.1` is `792000.0000000001`, so with
+`PANEL_MONITOR_TICK_MS=108000` the schema refused `HEALTHY_INTERVAL_MS=720001`,
+advised "at most 720000", and then refused 720000 as well. The process does not
+boot and the instruction it prints cannot be followed.
+
+**This predates the branch** — both functions are unchanged from `main`. It is
+fixed here because this branch re-sized the monitor defaults these functions
+judge, and because `monitor-profile.test.ts` re-asserts the same round-trip at
+the same single tick.
+
+Rounding differently would only move the boundary, so the ceiling is no longer
+a second formula: it is defined as the largest value the predicate accepts, and
+walked down to it. The test asserts BOTH halves — accepted, and one more
+refused, so a ceiling of `1` cannot pass — at 601 ticks across the admissible
+range rather than the one tick that happened not to break.
+
+## Two rules whose only definition was the line itself
+
+Both reverted with the whole web suite green.
+
+`panels.tsx` disables Restore while the replacement-name field is empty. That is
+the guard against a press whose only possible outcome is a 400, since
+`panelNameSchema` has a minimum length. `router.ts`'s `setQuery` treats `''` as
+"delete the parameter" rather than writing `key=` — which matters the moment a
+filter is driven by a text input, because every empty query parameter on the
+list endpoints now answers 400 rather than widening the read, so a cleared
+search box would become an error.
+
+The restore test's first version failed for a reason worth keeping: it stubbed
+`/panels/p1/status`, but `PanelDetailPage` is asked for `p1` and writes to the
+id the SERVER returned, so the 409 arrived as an unrouted 404 and the rename
+field never opened. A stub keyed on the route parameter tests the wrong URL.
+
+## The webfont was served `no-store`, and its absence answered 200
+
+`styles.css` names `/fonts/Vazirmatn-Variable.woff2`; `routes.caddy` matched
+only `/assets/*`, so the font fell through to the SPA handler and inherited two
+of its properties, both wrong for a 111 KB binary that never changes:
+`Cache-Control "no-store"`, so every admin page load re-downloaded it, and
+`try_files {path} /index.html`, so a font that failed to ship was answered with
+the HTML document and a **200**. A missing font that returns 200 is an
+invisible failure — the page renders in the fallback family and nothing says
+why.
+
+The font now has its own block with a week's cache and no `try_files`, so a
+missing file is the 404 it is; `check-image.sh` asserts the file by name, which
+is the last place a font that did not ship can be made loud; and the CSP comment
+that said "one module script and one stylesheet" no longer stops one asset class
+short of the truth.
+
+## Two findings recorded rather than fixed, both raised twice now
+
+**The two new cursors truncate microseconds.** `/ops-log` and `/notifications`
+read a `timestamptz` into a JavaScript `Date` and re-send `toISOString()`, which
+is millisecond precision. `PanelCursor` spends twenty lines on exactly this
+hazard and the panel query was hardened against it — `to_char(… .US …)` and an
+explicit `::timestamptz` — because "the driver TRUNCATES rather than rounds".
+The two cursors this branch ADDED do the opposite of the sibling whose
+rationale argues the case, which is this branch's own recurring shape.
+
+Unreachable today, verified twice independently: `operational_events` has no
+`defaultNow()` and `notifications.created_at` is written from `input.now`, both
+from the `Clock` at millisecond precision. Not fixed here for one reason: the
+fix is a change to both readers' SQL, and nothing in this system can produce a
+sub-millisecond row, so there is no way to make the fix fail before it is
+applied. A fix that cannot be falsified is what this record exists to refuse.
+
+**The alerts pager keysets on a mutable column.** `last_seen_at` is rewritten by
+every repeat occurrence of a deduped condition — that is what the occurrence
+counter is for — so a row below the operator's cursor that recurs jumps above it
+and is returned on no subsequent page. It is the argument that moved the panel
+keyset off `name`, applied to the one subsystem whose stated rule is that
+silence is the outcome it may not produce. Bounded in practice: within
+`MANAGEMENT` only four codes dedupe, at most about ten mutable rows per tenant,
+and they sort to the top anyway. `first_seen_at` is the immutable column, but
+ordering by it changes what the page MEANS — most-recently-active first is the
+product decision, not an implementation detail — so this is the owner's call
+rather than a defect to fix quietly.
+
+## A caveat about this branch's own review method
+
+A reviewer mutating `packages/contracts/src/*.ts` inside a `git worktree` whose
+`node_modules` is symlinked to the primary checkout tests **nothing**:
+`@nexa/contracts` exports only `dist`, so the mutation is read from the primary
+repository's build. Six contract mutations survived for that reason and were
+re-run as shims inside the consumer, where all three died. `pnpm verify` and CI
+are unaffected — contracts' `typecheck` script emits — but an ad-hoc
+`pnpm test:web` after editing contract source reads the previous build. Written
+down because this record is full of contract mutations and the next person to
+run one in a worktree will otherwise record a survivor that is an artefact.
+
+## The mutations
+
+| #   | rule                                                | mutation                                   | tests that die                                                                                                   |
+| --- | --------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| AG1 | the advertised ceiling is one the predicate accepts | return the parallel `floor(…/1.1)` formula | `monitor-cadence.test.ts` › keeps a healthy panel fresh, tick delay included                                     |
+| AG2 | Restore is refused while the replacement is empty   | drop `\|\| renameOnRestore === ''`         | `panels.test.tsx` › refuses to send a restore whose replacement name is empty                                    |
+| AG3 | `setQuery` deletes on an empty value                | drop `\|\| value === ''`                   | `router.test.tsx` › treats an empty value as removing the parameter                                              |
+| AG4 | the font block has no SPA fallback                  | add `try_files` to it                      | `deployment-compose.test.ts` › serves the webfont from the release, cached, and 404s when it is missing          |
+| AG5 | the webfont has a route of its own                  | rename the matcher and its path            | `deployment-compose.test.ts` › serves the webfont from the release, cached, and 404s when it is missing          |
+| AG6 | the SPA handler is rooted at the activated release  | root it at the pool                        | `deployment-compose.test.ts` › serves the entry document from the activated release and its assets from the pool |
+
+Each applied alone with an anchor assertion that fails the run if the edit does
+not land, and reverted; every touched file verified byte-identical by sha256
+after each. AG1's failure names the tick it found — `tick 112664: the schema
+advises 715760 and then refuses it` — which is the property the single-tick
+assertion above it could not see.
+
+The two cursor-docstring corrections have no mutation of their own and the
+record says so rather than inventing rows for them: they are prose about
+behaviour already pinned from both sides. `check-image.sh` failing on a missing
+font is the other half of AG4 and is not separately falsifiable here, because
+this suite reads the routing file rather than building an image.
+
+The routing test had to be repaired before AG6 could kill, for a reason this
+record keeps meeting from the other direction. It sliced a fixed 400 characters
+before `try_files` to find the SPA's root — which held only while nothing sat
+between `@assets` and the SPA handler, so the font block pushed the root out of
+the window and a correct routing file failed. Worse, that offset was found with
+`indexOf` on the bare token, so the COMMENT explaining why the font block must
+not have a fallback became the match: prose describing the shape, read as the
+shape. Both are structural now — the nearest preceding root, and an anchor on
+the tab-indented directive.

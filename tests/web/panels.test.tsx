@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { PanelsPage, PanelDetailPage, NewPanelPage } from '../../apps/web/src/pages/panels';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { panel, renderPage, stubApi } from './harness';
 
 /** The panels list reads its archive filter from the URL, as `/system` does. */
@@ -252,6 +253,9 @@ describe('the panel list', () => {
 });
 
 describe('the panel detail', () => {
+  /** The id `panel()` mints, which is what the page writes to. */
+  const PANEL_ID = '01a05e35-c9ad-7e93-bef3-1ed9b55292c8';
+
   const detail = (overrides: Record<string, unknown> = {}) => [
     { url: '/panels/', body: { panel: panel(overrides) } },
   ];
@@ -768,6 +772,68 @@ describe('the panel detail', () => {
       // dialled by the monitor.
       expect(write?.body).toMatchObject({ status: 'DISABLED' });
     });
+  });
+
+  it('refuses to send a restore whose replacement name is empty', async () => {
+    /*
+     * The rule the Restore button carries once the rename field is open:
+     * `disabled={status.isPending || renameOnRestore === ''}`.
+     *
+     * It had no test. `panelNameSchema` has a minimum length, so a restore
+     * carrying `name: ''` can only come back 400 — a button whose single
+     * possible outcome is a validation error the operator can see coming.
+     *
+     * Driven through the real sequence: restore refuses with
+     * `panel.name_taken`, which opens the field pre-filled with the panel's
+     * own name; clearing it must close the button rather than send.
+     */
+    const archived = detail({ status: 'ARCHIVED' });
+    const api = stubApi([
+      ...archived,
+      {
+        // The panel fixture's own id, not the route param. `PanelDetailPage`
+        // is asked for `p1` but writes to the id the SERVER returned, so a
+        // stub keyed on `p1` is never matched and the 409 arrives as an
+        // unrouted 404 — which is how the first version of this test failed.
+        url: `/panels/${PANEL_ID}/status`,
+        status: 409,
+        body: {
+          error: {
+            kind: 'conflict',
+            code: 'panel.name_taken',
+            message: 'a live panel already holds that name',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    const restore = screen.getByRole('button', { name: 'بازگردانی از بایگانی' });
+    fireEvent.click(restore);
+    // The refusal opens the rename field, pre-filled with the current name.
+    await screen.findByText(t('web.panel_restore_name_taken'));
+    const field = document.getElementById(`restore-name-${PANEL_ID}`) as HTMLInputElement;
+    expect(field.value).toBe('Frankfurt A');
+    expect(restore.hasAttribute('disabled')).toBe(false);
+
+    const before = api.calls.filter((call) => call.url.includes('/status')).length;
+    fireEvent.change(field, { target: { value: '' } });
+    expect(
+      restore.hasAttribute('disabled'),
+      'an empty replacement name can only be refused by the server',
+    ).toBe(true);
+
+    // And pressing it sends nothing, which is the consequence that matters.
+    fireEvent.click(restore);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(api.calls.filter((call) => call.url.includes('/status')).length).toBe(before);
+
+    // A non-empty replacement re-opens it, so the guard is the empty string
+    // and not "disabled once the field appears".
+    fireEvent.change(field, { target: { value: 'Frankfurt B' } });
+    expect(restore.hasAttribute('disabled')).toBe(false);
   });
 
   /**

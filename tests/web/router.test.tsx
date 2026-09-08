@@ -207,6 +207,30 @@ describe('a filter change is not a place the operator navigated to', () => {
    * was the claim, and a claim about behaviour needs something that fails when
    * the behaviour changes.
    */
+  it('treats an empty value as removing the parameter', () => {
+    /*
+     * `setQuery(route, key, '')` DELETES the key rather than writing `key=`.
+     *
+     * The rule had no test, and no caller passes `''` today — so its only
+     * definition was the line itself, and removing the `|| value === ''` half
+     * left the whole suite green. It matters the moment a filter is driven by
+     * a text input, because `?q=` is a filter the server now refuses: every
+     * empty query parameter on the list endpoints answers 400 rather than
+     * widening the read. Writing `key=` into the URL would turn a cleared
+     * search box into an error.
+     */
+    window.history.replaceState(null, '', '/panels?archived=only&q=frankfurt');
+    setQuery({ path: '/panels', query: new URLSearchParams('archived=only&q=frankfurt') }, 'q', '');
+    expect(window.location.search).toBe('?archived=only');
+    expect(window.location.search).not.toContain('q=');
+
+    // `null` is the other way of saying it, and a real value still writes.
+    setQuery({ path: '/panels', query: new URLSearchParams('archived=only') }, 'archived', null);
+    expect(window.location.search).toBe('');
+    setQuery({ path: '/panels', query: new URLSearchParams() }, 'archived', 'only');
+    expect(window.location.search).toBe('?archived=only');
+  });
+
   it('replaces the history entry rather than pushing one', () => {
     const pushed: unknown[] = [];
     const replaced: unknown[] = [];
