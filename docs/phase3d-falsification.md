@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 285 citations were checked; this record declares 290 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 285 citations were checked; this record declares 292 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -4020,6 +4020,46 @@ on `last_seen_at`, because they are an ACTIVITY filter and a condition that
 first appeared last month and recurred this morning belongs in this morning's
 window; filtering and ordering are independent predicates.
 
+### The keyset moved and its index did not
+
+Moving the alerts traversal to `(first_seen_at, id)` left it with no index. The
+only one on `operational_events` was `operational_events_tenant_seen_idx` on
+`(tenant_id, last_seen_at)`, so the new `ORDER BY first_seen_at DESC, id DESC`
+matched nothing and the alerts page sorted the tenant's whole event history on
+every request. Measured, on 2 000 rows: `Sort ... -> Seq Scan on
+operational_events (actual rows=2000)`. This branch's own recurring shape — the
+rule applied correctly where the author was looking and absent one expression
+over.
+
+`operational_events_tenant_first_seen_page_idx` on
+`(tenant_id, first_seen_at, id)` is declared in `ONLINE_INDEXES`, so it is built
+with `CREATE INDEX CONCURRENTLY` after the migrator like the two panel indexes,
+for the same reason: `botctl update` migrates while the outgoing release is
+still serving. Not partial — unlike panels there is no status split here. The
+`(tenant_id, last_seen_at)` index stays, because `since`/`until` remain an
+activity filter on `last_seen_at`.
+
+**And nothing in this file had ever run `EXPLAIN`.** Every assertion in
+`online-indexes.test.ts` compared a declaration against `pg_indexes`, which
+proves an index EXISTS, not that anything uses it: an index whose column order
+served no query would be present, VALID, matching, and useless. So the first
+version of the new test asked the planner — and could not fail either.
+Reversing the declaration to `(first_seen_at, tenant_id, id)` — which is not a
+keyset index at all, because the leading column is not the one every query
+filters on — left it GREEN: PostgreSQL scans that index backwards too, names it
+in the plan, applies `tenant_id` as an `Index Cond`, and emits no `Sort`. Name
+and plan shape cannot tell the two apart.
+
+What tells them apart is the work done, and it only shows when ANOTHER tenant's
+history is newer than this one's. The fixture now writes 2 000 rows for tenant A
+aged a million seconds back and 6 000 for tenant B at the present, and asserts
+on `EXPLAIN (ANALYZE, BUFFERS)`: the right index starts the scan inside tenant
+A's own range, the reversed one walks the whole of tenant B's history first.
+Measured 6 buffers against 49 in isolation and 81 through the suite, stable
+across repeated runs and growing with the other tenant's history — which is
+exactly the cost being bought off. The threshold is 20, with room on both sides
+rather than sitting on the measurement.
+
 ### Four of this round's own tests could not fail
 
 The pattern is now familiar enough to be worth stating as a rule: **a fixture
@@ -4042,18 +4082,25 @@ different values in it.**
 
 ## The mutations
 
-| #   | rule                                           | mutation                            | tests that die                                                                                          |
-| --- | ---------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| AJ1 | an unreadable panels cursor is REFUSED         | return a cursor instead of throwing | `panels-http.test.ts` › refuses a malformed cursor with a 400 rather than restarting the traversal      |
-| AJ2 | the alerts keyset PREDICATE is `first_seen_at` | compare `last_seen_at` in both arms | `alerts-keyset.test.ts` › walks every row exactly once when a recurrence rewrites last_seen_at mid-walk |
-| AJ3 | the alerts ORDERING is `first_seen_at`         | order by `last_seen_at`             | `alerts-keyset.test.ts` › walks every row exactly once when a recurrence rewrites last_seen_at mid-walk |
-| AJ4 | the id TIE-BREAK inside a shared instant       | drop the `or(...)` arm              | `alerts-keyset.test.ts` › breaks a shared first_seen_at by id, deterministically                        |
-| AJ5 | the SERVER cursor carries `first_seen_at`      | build it from `lastSeenAt`          | `web-admin-v2.test.ts` › walks the ops log through the SERVER cursor without skipping a recurrence      |
+| #   | rule                                           | mutation                                     | tests that die                                                                                          |
+| --- | ---------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| AJ1 | an unreadable panels cursor is REFUSED         | return a cursor instead of throwing          | `panels-http.test.ts` › refuses a malformed cursor with a 400 rather than restarting the traversal      |
+| AJ2 | the alerts keyset PREDICATE is `first_seen_at` | compare `last_seen_at` in both arms          | `alerts-keyset.test.ts` › walks every row exactly once when a recurrence rewrites last_seen_at mid-walk |
+| AJ3 | the alerts ORDERING is `first_seen_at`         | order by `last_seen_at`                      | `alerts-keyset.test.ts` › walks every row exactly once when a recurrence rewrites last_seen_at mid-walk |
+| AJ4 | the id TIE-BREAK inside a shared instant       | drop the `or(...)` arm                       | `alerts-keyset.test.ts` › breaks a shared first_seen_at by id, deterministically                        |
+| AJ5 | the SERVER cursor carries `first_seen_at`      | build it from `lastSeenAt`                   | `web-admin-v2.test.ts` › walks the ops log through the SERVER cursor without skipping a recurrence      |
+| AK1 | the alerts keyset HAS an index                 | delete the entry from `ONLINE_INDEXES`       | `online-indexes.test.ts` › serves the alerts keyset from an index rather than sorting the tenant        |
+| AK2 | that index LEADS with `tenant_id`              | reverse it to `(first_seen_at,tenant_id,id)` | `online-indexes.test.ts` › serves the alerts keyset from an index rather than sorting the tenant        |
 
 Each applied alone with an anchor assertion that fails the run if the edit does
 not land, and reverted; every touched file verified byte-identical by sha256
 after each. AJ2 kills two tests, the skip and the duplicate, which are the two
-directions of one defect.
+directions of one defect. AK1 and AK2 were each run against a database created
+empty for the mutation, because `CREATE INDEX CONCURRENTLY IF NOT EXISTS`
+matches on NAME: an index already present from an earlier run would survive the
+deletion of its own declaration and the mutation would prove nothing. AK2 was
+run TWICE — once against the first version of the test, which it did not kill,
+and again against the fixture written because it did not.
 
 ## The microsecond truncation is still open, deliberately
 

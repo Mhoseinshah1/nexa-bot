@@ -4,7 +4,7 @@ import {
   ONLINE_INDEXES,
 } from '../../apps/api/src/infrastructure/persistence/online-indexes';
 import { createDatabase } from '../../apps/api/src/infrastructure/persistence/database';
-import { createTestContext, tenantA, testConfig, type TestContext } from './harness';
+import { createTestContext, tenantA, tenantB, testConfig, type TestContext } from './harness';
 
 /**
  * The indexes built outside the migrator.
@@ -67,6 +67,108 @@ describe('the online index build', () => {
       );
     });
   };
+
+  /**
+   * Operational events, straight into the table: this is about the planner.
+   *
+   * `agedBy` is what makes the fixture able to tell two index shapes apart.
+   * Rows are written `agedBy` seconds further back, so a caller can put one
+   * tenant's whole history NEWER than another's — see the test below.
+   */
+  const bulkEvents = async (
+    scope: { tenantId: unknown },
+    count: number,
+    agedBy: number,
+    tag: string,
+  ): Promise<void> => {
+    await ctx.container.database.withClient(async (client) => {
+      await client.query(
+        `INSERT INTO operational_events
+           (id, tenant_id, code, severity, message, dedupe_scope, dedupe_key,
+            occurrence_count, first_seen_at, last_seen_at)
+         SELECT gen_random_uuid(), $1::uuid, 'panel.health.unreachable', 'WARN',
+                $3::text || g, $1::text, $3::text || '-' || g, 1,
+                now() - ((g + $4::int) || ' seconds')::interval,
+                now() - ((g + $4::int) || ' seconds')::interval
+           FROM generate_series(1, $2::int) AS g`,
+        [scope.tenantId, count, tag, agedBy],
+      );
+    });
+  };
+
+  /** `ANALYZE`, once the fixture is complete. */
+  const analyse = async (): Promise<void> => {
+    // The planner chooses on STATISTICS, not on row count. Without this the
+    // table looks empty to it and every plan is a sequential scan, which would
+    // make the assertion below pass or fail for a reason that has nothing to
+    // do with the index.
+    await ctx.container.database.withClient((client) => client.query('ANALYZE operational_events'));
+  };
+
+  it('serves the alerts keyset from an index rather than sorting the tenant', async () => {
+    /*
+     * The index is a CLAIM until the planner is asked.
+     *
+     * `ONLINE_INDEXES` declares shapes and the assertions further down compare
+     * the declaration against `pg_indexes` — which proves the index EXISTS, not
+     * that anything uses it. Nothing in this file ran `EXPLAIN`, so an index
+     * whose column order served no query would be present, VALID, matching,
+     * and useless.
+     *
+     * That is not hypothetical here: the owner's decision moved the alerts
+     * traversal to `(first_seen_at, id)` and the only index on the table was
+     * `(tenant_id, last_seen_at)`. The keyset moved and its index did not, so
+     * the alerts page sorted the tenant's whole event history on every request
+     * with nothing saying so.
+     *
+     * THE FIXTURE IS THE ASSERTION. A single-tenant table cannot tell
+     * `(tenant_id, first_seen_at, id)` from `(first_seen_at, tenant_id, id)`:
+     * both are scanned backwards, both name the index, neither sorts, and the
+     * reversed one — which is not a keyset index at all, because the leading
+     * column is not the one every query filters on — passed a name-and-no-Sort
+     * assertion unchanged. Measured, not assumed.
+     *
+     * So the OTHER tenant's history is newer than this one's. Under the right
+     * index the scan starts inside this tenant's own range; under the reversed
+     * one it must walk the whole of the other tenant's history first. That is
+     * invisible in the plan SHAPE and plain in the work done: 6 buffers
+     * against 49, stable across runs, and growing with the other tenant's
+     * history — which is exactly the cost being bought off.
+     */
+    await bulkEvents(tenantA, 2_000, 1_000_000, 'a');
+    await bulkEvents(tenantB, 6_000, 0, 'b');
+    await analyse();
+
+    const plan = await ctx.container.database.withClient(async (client) => {
+      const { rows } = await client.query<{ 'QUERY PLAN': string }>(
+        `EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF)
+         SELECT * FROM operational_events
+          WHERE tenant_id = $1::uuid
+          ORDER BY first_seen_at DESC, id DESC
+          LIMIT 50`,
+        [tenantA.tenantId],
+      );
+      return rows.map((row) => row['QUERY PLAN']).join('\n');
+    });
+
+    expect(plan, `the alerts keyset is not served by its index:\n${plan}`).toContain(
+      'operational_events_tenant_first_seen_page_idx',
+    );
+    // And no Sort node: an index that is merely SCANNED while the server still
+    // sorts on top of it is the cost this exists to remove.
+    expect(plan, `the tenant's history is still being sorted:\n${plan}`).not.toContain('Sort');
+
+    // The FIRST `Buffers:` line is the top node's, which is the whole
+    // execution. `Planning:` prints its own below it even under `SUMMARY OFF`,
+    // and counting that would drown the signal in catalogue lookups.
+    const buffers = /Buffers: shared( hit=(\d+))?( read=(\d+))?/.exec(plan);
+    expect(buffers, `no buffer accounting in:\n${plan}`).not.toBeNull();
+    const touched = Number(buffers?.[2] ?? 0) + Number(buffers?.[4] ?? 0);
+    // Measured 6 with the keyset index and 49 with its columns reversed. The
+    // threshold sits between them with room on both sides rather than on the
+    // measurement itself.
+    expect(touched, `the scan walked the other tenant's history:\n${plan}`).toBeLessThan(20);
+  });
 
   it('leaves every declared index present and valid after migrating', async () => {
     // The harness migrated through the real `runMigrations`, which is the only
