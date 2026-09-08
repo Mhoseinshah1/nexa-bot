@@ -2608,7 +2608,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 229 citations were checked; this record declares 240 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 240 citations were checked; this record declares 264 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -3371,3 +3371,161 @@ typed is itself a claim, so it has a probe rather than a comment: a
 AC7 also kills `does not report a .only mentioned in a multi-line JSX attribute`,
 and AC11 also kills AC9's test; both are stated rather than split into rows,
 because a row is a rule and these are one rule each.
+
+## A save nobody asked for, reachable from the preview box
+
+`TemplateCard` wraps the editor, the placeholder table, the preview pane and
+the revisions pane in one `<form onSubmit={onSubmit}>`, and `onSubmit`
+unconditionally saves. The preview's per-placeholder sample fields are ordinary
+enabled inputs inside that form, and the Preview control is `type="button"`, so
+Enter never previewed.
+
+For an actor with `templates.view` and not `templates.edit`, `mayEdit` removes
+the only submit button. HTML's implicit-submission rule then applies: a form
+with no submit button and exactly ONE field that blocks implicit submission
+submits when Enter is pressed in that field. `bot.ping.reply` declares exactly
+one placeholder, so that card is precisely that shape — Enter in its sample box
+issued `POST /templates/bot.ping.reply`, which the server refuses on
+`templates.edit`, writing a `DENIED` audit row and an
+`access.permission_denied` operational event, and putting a red error about a
+save they never asked for on a screen with no Save button.
+
+With `templates.edit` it is worse in a quieter way: the first submit button in
+tree order is Save, so Enter in any sample field stored the draft body instead
+of rendering a preview.
+
+Two rules, because one does not cover the other. Enter in a sample field now
+PREVIEWS — which is what the operator typing a sample value is asking for — and
+`preventDefault` is what stops the save; and the form refuses any submit that
+no submit control produced, which is the backstop for the field somebody adds
+next. The second was itself wrong on the first attempt: `submitter === null`
+missed an event that is not a `SubmitEvent` at all, so the rule is stated as a
+positive instead.
+
+## An empty filter answered with more rows than were asked for
+
+`?scope=` is an empty string, which is falsy, so the key was dropped and
+`opsLogQuerySchema`'s `ALL` default applied: `?scope=BOGUS` was a 400 and
+`?scope=` a 200 carrying the routine stream — one line below the comment
+promising it could not be. The `open` parameter directly above it had been
+moved to `=== undefined` one round earlier for exactly this reason, and
+`scope`, `severity`, `code`, `since` and `until` were left on the truthiness
+spelling. `?since=` was worse: `new Date('')` is an Invalid Date that reaches
+the driver.
+
+All five now say present-or-absent, `code` gained `min(1)` so an empty one is
+refused rather than silently meaning "no filter", and the two timestamps are
+parsed by a helper that answers 400 the way `cursorFrom` already did.
+
+## Sixteen rules that reverted with the whole gate green
+
+An adversarial reviewer applied one mutation at a time to `content.tsx`,
+`settings.tsx`, `app.tsx`, `system.tsx` and `theme.ts`: 306 of 306 web tests
+passing, every time. Nineteen other mutations in the same sweep each killed
+between one and eight tests, so the harness was live and these rules simply had
+nothing pointing at them. The whole template PREVIEW feature — button, sample
+fields, staleness marker, unresolved list — had no case in `tests/web/` at all.
+
+Two are worse than untested. This record says of round 19's settling bug:
+"`settings.tsx` and `content.tsx` had round 19's settling bug unfixed … Both
+now guard on their own mutations' `isPending`." The mutation table under that
+sentence cites `panels.test.tsx` four times and neither sibling — the rule
+fixed and covered where the author was looking, and shipped uncovered in the
+two files the same paragraph names.
+
+## Four of this round's own tests could not fail either
+
+The first versions of `AD1`, `AD2`, `AD12` and `AD13` all passed with the rule
+they name deleted, and the two reasons are worth keeping.
+
+The basis-version pair moved the stubbed route body and pressed Save with
+nothing REFETCHING in between, so `template` was still the row `basis` was
+taken from and both spellings sent the same number. They now drive the refetch
+the way production drives it — a conflicting save invalidates the query — and
+wait for the conflict banner before pressing Save again.
+
+The settling pair held the POST pending, which never reaches the adopt at all:
+`basis` and the cached row stayed equal, so the banner could not appear with or
+without the guard. They now let the save SUCCEED with a new version and hold
+the refetch it awaits open instead, which is the actual window the guard exists
+for.
+
+## A citation could resolve against prose
+
+`titles` was the one reader in `check-falsification-citations.mjs` that ran
+over the raw source while every other ran over the mask, so an `it('…')` inside
+a comment or a string counted as a committed test — the "resolves to prose, not
+to a test" failure the script exists to prevent, in the script itself. Measured
+over the committed tree: 23 `it(` calls live inside string fixtures in
+`falsification-checker.test.ts` alone, and no citation depended on one, so the
+channel was open rather than exercised. It now matches on the mask and reads
+the title from the source, which keeps `it.each` placeholders and template
+titles exact.
+
+## Two claims that were false, and one that had no test
+
+The panels archive comment said the mode lives in the URL so an operator can
+"link to the archive, reload without losing it, and use Back". `setQuery`
+navigates with `replace: true`, so switching mode overwrites the `/panels`
+entry and Back leaves the page. Replacing is the right behaviour for a filter —
+`/system` argues the same case correctly by stopping at linking and refresh —
+so the comment is corrected and the behaviour now has a test that fails if it
+changes.
+
+`docs/phase3d-coverage-ledger.md` cited `ops-log?scope=MANAGEMENT` for `/`,
+where the dashboard asks for `MANAGEMENT_CONDITIONS`. The difference is the fix
+this branch made so the needs-attention card is not buried under one-shot
+records nothing can resolve, and the ledger's own header says it is "kept true
+as the work landed".
+
+## One finding recorded rather than fixed
+
+The `lastSeenAt`/`createdAt` keyset cursors on `/ops-log` and `/notifications`
+serialise a `Date` to millisecond ISO, while `panels` deliberately renders its
+cursor with `to_char(… .US …)` because "a cursor read as a Date is strictly
+below the row it names". Every writer supplies those columns from the `Clock`,
+which is millisecond precision, so the truncation is a no-op today and no
+skipped row could be produced. It is a latent difference between two cursor
+readers in one codebase, not a defect with a failing case, and it is written
+down here rather than fixed on a guess.
+
+## The mutations
+
+| #    | rule                                                | mutation                             | tests that die                                                                                      |
+| ---- | --------------------------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| AD1  | a save carries the DRAFT BASIS version              | send `template.version`/`revision`   | `editor-rules.test.tsx` › sends the version the DRAFT was based on, not the row the query now holds |
+| AD2  | the conflict notice waits for our own write         | drop both `isPending` terms          | `editor-rules.test.tsx` › does not blame somebody else for the write this card just made            |
+| AD3  | changed-elsewhere reads the REVISION too            | drop the revision half of the `\|\|` | `editor-rules.test.tsx` › sees a revert as a change even though it restarts the version at 1        |
+| AD4  | the preview input includes the sample values        | `JSON.stringify([draft])`            | `editor-rules.test.tsx` › calls the preview stale when the SAMPLE VALUES move, not only the body    |
+| AD5  | the staleness marker comes from the VARIABLES       | read `previewInput` from the closure | `editor-rules.test.tsx` › marks a preview stale against the input the REQUEST used                  |
+| AD6  | the unresolved-placeholder list                     | gate it on `false`                   | `editor-rules.test.tsx` › names the placeholders the preview left unresolved                        |
+| AD7  | Enter in a sample field previews                    | delete the `onKeyDown`               | `editor-rules.test.tsx` › previews on Enter in a sample field, and does not save                    |
+| AD8  | a submit needs a real submit control                | delete the `submitter` guard         | `editor-rules.test.tsx` › ignores a submit that no submit control produced                          |
+| AD9  | a save that stored nothing says so                  | always render `web.saved`            | `editor-rules.test.tsx` › says a save stored nothing when the server says it changed nothing        |
+| AD10 | the unsaved-changes notice and discard              | gate it on `false`                   | `editor-rules.test.tsx` › offers to discard an unsaved edit, and says there is one                  |
+| AD11 | the suppressed-override warning                     | render nothing                       | `editor-rules.test.tsx` › warns when a stored override is being suppressed                          |
+| AD12 | the settings save carries the BASIS version         | send `setting.version`               | `editor-rules.test.tsx` › sends the version the DRAFT was based on                                  |
+| AD13 | the settings conflict notice waits                  | drop the `isPending` term            | `editor-rules.test.tsx` › does not blame somebody else for the write this editor just made          |
+| AD14 | the settings field remounts on a new basis          | `key={setting.key}`                  | `editor-rules.test.tsx` › resets the typed value when the editor is re-based on a fresh row         |
+| AD15 | `?section=` is narrowed to known sections           | accept any non-null value            | `editor-rules.test.tsx` › falls back to the status section for a `section` it does not know         |
+| AD16 | `system` follows the operating system               | always return `'dark'`               | `editor-rules.test.tsx` › follows the operating system only while the choice is `system`            |
+| AD17 | the sidebar stops following once the operator picks | drop the `touched` guard             | `editor-rules.test.tsx` › follows the viewport until the operator decides, and then stops           |
+| AD18 | `scope` is present-or-absent                        | back to `query.scope ? … : {}`       | `web-admin-v2.test.ts` › refuses an empty filter rather than widening the read                      |
+| AD19 | `severity` is present-or-absent                     | back to truthiness                   | `web-admin-v2.test.ts` › refuses an empty filter rather than widening the read                      |
+| AD20 | `code` is present-or-absent                         | back to truthiness                   | `web-admin-v2.test.ts` › refuses an empty filter rather than widening the read                      |
+| AD21 | `since`/`until` are parsed or refused               | back to `new Date(query.since)`      | `web-admin-v2.test.ts` › refuses an empty filter rather than widening the read                      |
+| AD22 | an empty `code` is not a code                       | drop `min(1)` from the schema        | `web-admin-v2.test.ts` › refuses an empty filter rather than widening the read                      |
+| AD23 | `titles` matches on the MASK                        | run the pattern over the raw text    | `falsification-checker.test.ts` › does not resolve a citation against an it( written in prose       |
+| AD24 | `setQuery` replaces, never pushes                   | drop `{ replace: true }`             | `router.test.tsx` › replaces the history entry rather than pushing one                              |
+
+Each applied alone with an anchor assertion that fails the run if the edit does
+not land, and reverted; every touched file verified byte-identical by sha256
+after each. AD18–AD22 share one test because they are five spellings of one
+rule and the test asserts all five.
+
+A note on this round's own harness. The mutation sweep was killed by a worker
+restart between writing a mutation and restoring it, and left `content.tsx`
+carrying AD7's revert. It was found by `git status` and the residue grep the
+project rules require before any commit that follows agent work — which is
+exactly the scenario that rule was written for, and the first time on this
+branch it has actually fired.

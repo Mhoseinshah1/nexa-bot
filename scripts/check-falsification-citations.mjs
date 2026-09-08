@@ -46,7 +46,7 @@ const RECORD = 'docs/phase3d-falsification.md';
  * to, which is the point: the number is a claim about this file and should be
  * re-stated deliberately, not drifted into.
  */
-const EXPECTED = 240;
+const EXPECTED = 264;
 /**
  * A table whose last column is one of these is making citations.
  *
@@ -463,6 +463,24 @@ export function titles(text, fileName = 'source.tsx') {
    * it ends is not the one-line regex it looks like.
    */
   text = withoutSkippedSuites(text, fileName);
+  /*
+   * MATCHED on the mask, READ from the source.
+   *
+   * `withoutSkippedSuites` returns the source, so this used to run its regex
+   * over raw text — and every other reader in this file runs over the mask.
+   * A citation could therefore resolve against `it('…')` written inside a
+   * COMMENT or a STRING: "resolves to prose, not to a test", which is the
+   * failure this script exists to prevent and which its own header comment
+   * claims to have removed. Measured over the committed tree, 23 `it(` calls
+   * live inside string fixtures in `falsification-checker.test.ts` alone.
+   *
+   * Matching on the mask cannot read the title, because the title IS a string
+   * literal and the mask blanks it. So the offsets come from the mask and the
+   * text comes from the source: the closing quote is the last character of the
+   * match, which makes the body's span exact without re-scanning for a quote
+   * that `.each([...])` may also contain.
+   */
+  const masked = maskLiterals(text, fileName);
   const pattern =
     /*
      * `.skip` and `.todo` are NOT accepted.
@@ -479,7 +497,11 @@ export function titles(text, fileName = 'source.tsx') {
      */
     /\b(?:it|test)\s*(?:\.each\s*\([\s\S]*?\)\s*)?(?:\.(?:only|concurrent|fails))?\s*\(\s*(['"`])([\s\S]*?)\1/g;
   let match;
-  while ((match = pattern.exec(text)) !== null) found.push(match[2]);
+  while ((match = pattern.exec(masked)) !== null) {
+    const body = match[2] ?? '';
+    const end = match.index + match[0].length - 1;
+    found.push(text.slice(end - body.length, end));
+  }
   return found;
 }
 

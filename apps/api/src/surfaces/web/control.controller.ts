@@ -276,10 +276,25 @@ export class ControlController {
       // distinguish "exactly a page" from "a page and more"; asking for
       // `size + 1` and returning `size` makes `nextCursor` mean what it says.
       limit: size + 1,
-      ...(query.code ? { code: query.code } : {}),
-      ...(query.severity ? { severities: query.severity.split(',') } : {}),
-      ...(query.since ? { since: new Date(query.since) } : {}),
-      ...(query.until ? { until: new Date(query.until) } : {}),
+      /*
+       * PRESENT or ABSENT, never "truthy or absent".
+       *
+       * `?code=` is an empty string, which is falsy, so every one of these
+       * dropped the key and the read widened to the whole log — a malformed
+       * filter answering 200 with MORE than was asked for. The `open`
+       * parameter below was moved to `=== undefined` for exactly this reason
+       * one round earlier and these four were left behind, which is this
+       * branch's own recurring defect: the rule applied where the author was
+       * looking and absent four lines up.
+       *
+       * `severity=` now reaches the enum and is refused; `code=` reaches
+       * `min(1)` and is refused; the two timestamps are parsed here rather
+       * than handed to `new Date('')`, which is an Invalid Date and a 500.
+       */
+      ...(query.code === undefined ? {} : { code: query.code }),
+      ...(query.severity === undefined ? {} : { severities: query.severity.split(',') }),
+      ...dateParam('since', query.since),
+      ...dateParam('until', query.until),
       // The cursor: the `lastSeenAt` of the oldest row already shown, plus its
       // id. Rows are ordered by that pair descending, so "older than this" is
       // the next page. An offset would have skipped and duplicated rows as
@@ -299,7 +314,10 @@ export class ControlController {
       // validated by the service's enum, so an unknown value is a 400 rather
       // than a silent fall back to the whole log — which would show an alerts
       // page the routine stream it exists to exclude.
-      ...(query.scope ? { scope: query.scope } : {}),
+      // `?scope=` was falsy, so the key was dropped and the schema's `ALL`
+      // default applied: `?scope=BOGUS` was a 400 and `?scope=` a 200 carrying
+      // the routine stream, one line below a comment promising it could not be.
+      ...(query.scope === undefined ? {} : { scope: query.scope }),
     });
     const events = found.slice(0, size);
     const oldest = found.length > size ? events[events.length - 1] : undefined;
@@ -433,6 +451,25 @@ export class ControlController {
  * checking hands the driver an Invalid Date and turns a bad request into a 500.
  */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A timestamp query parameter: absent, or parsed and refused if malformed.
+ *
+ * Shares the rule `cursorFrom` applies to `before`. Written once because the
+ * two call sites are adjacent and were both wrong in the same way.
+ */
+function dateParam(name: string, value: string | undefined): Record<string, Date> {
+  if (value === undefined) return {};
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) {
+    throw errors.validation(
+      CONTROL_ERROR_CODES.INVALID_VALUE,
+      `The \`${name}\` filter is not a timestamp.`,
+      { [name]: value },
+    );
+  }
+  return { [name]: at };
+}
 
 function cursorFrom(
   before: string | undefined,

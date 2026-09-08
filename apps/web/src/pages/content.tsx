@@ -253,8 +253,37 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
       showHistory && !(query.state.status === 'error' && finalAnswer(query.state.error)),
   });
 
+  const runPreview = () => preview.mutate({ body: draft, values: sample });
+
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
+    /*
+     * A SUBMIT CONTROL pressed it, or nothing happens.
+     *
+     * This form holds more than the save: the preview pane's sample-value
+     * fields are ordinary enabled inputs inside it. HTML's implicit submission
+     * rule says a form with no submit button and exactly ONE field that blocks
+     * implicit submission submits when Enter is pressed in that field — and for
+     * an actor with `templates.view` but not `templates.edit` the Save button
+     * is not rendered at all, so a single-placeholder template like
+     * `bot.ping.reply` is exactly that shape. Enter in its sample box issued
+     * `POST /templates/bot.ping.reply`, which the server refuses on
+     * `templates.edit` — writing a DENIED audit row and an
+     * `access.permission_denied` operational event, and putting a red error
+     * about a save they never asked for on a screen with no Save button.
+     *
+     * So the rule is stated as a POSITIVE: a submit control produced this, or
+     * nothing happens. `submitter` is null for implicit submission with no
+     * default button and undefined on an event that is not a `SubmitEvent` at
+     * all — `=== null` alone let the second through, which is how the test
+     * below first caught this guard rather than the defect it guards.
+     *
+     * It is the backstop that keeps holding when a later field is added to
+     * this form; `onKeyDown` on the sample inputs below is what stops Enter
+     * reaching here at all when the Save button IS rendered, because then
+     * implicit submission clicks it and `submitter` is perfectly legitimate.
+     */
+    if (!((event.nativeEvent as SubmitEvent).submitter instanceof HTMLElement)) return;
     // Snapshotted at the click, so a retry cannot see a later edit.
     const command = {
       body: draft,
@@ -355,14 +384,27 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
                 onChange={(event) =>
                   setSample((current) => ({ ...current, [placeholder.token]: event.target.value }))
                 }
+                /*
+                  Enter here PREVIEWS. It must not reach the form.
+
+                  These fields sit inside the save form, so implicit submission
+                  made Enter store the draft body — the one action on this card
+                  that is not undoable by pressing it again, reached from the
+                  control furthest from it in intent. Preview is what the
+                  operator typing a sample value is asking for, so that is what
+                  it does; `preventDefault` is what stops the save, and doing
+                  the useful thing instead of nothing is why nobody will be
+                  tempted to remove it.
+                */
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter') return;
+                  event.preventDefault();
+                  runPreview();
+                }}
               />
             </div>
           ))}
-          <button
-            type="button"
-            onClick={() => preview.mutate({ body: draft, values: sample })}
-            disabled={preview.isPending}
-          >
+          <button type="button" onClick={runPreview} disabled={preview.isPending}>
             {t('web.preview')}
           </button>
           {preview.isError && <ErrorReport error={preview.error} />}

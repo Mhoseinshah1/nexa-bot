@@ -266,6 +266,48 @@ describe('the Web Admin V2 surface', () => {
     });
 
     /**
+     * The same rule for every OTHER filter on this endpoint.
+     *
+     * `open` was moved to `=== undefined` one round earlier and the four
+     * filters beside it were left on the truthiness spelling, so `?scope=` was
+     * falsy, the key was dropped, and the schema's `ALL` default applied:
+     * `?scope=BOGUS` was a 400 and `?scope=` a 200 carrying the routine stream
+     * — one line below a comment promising it could not be. `?since=` was
+     * worse, because `new Date('')` is an Invalid Date that reaches the driver.
+     *
+     * An empty string is a filter the caller sent. Answering it with MORE rows
+     * than were asked for is the widening this endpoint exists to refuse.
+     */
+    it('refuses an empty filter rather than widening the read', async () => {
+      for (const parameter of ['scope', 'severity', 'code', 'since', 'until']) {
+        const response = await get(`${CONTROL_ROUTES.opsLog}?${parameter}=`, ownerCookie);
+        expect(response.statusCode, `${parameter}=`).toBe(400);
+      }
+      // A malformed value is refused too, not only an empty one.
+      for (const query of ['scope=BOGUS', 'severity=LOUD', 'since=yesterday', 'until=soon']) {
+        expect(
+          (await get(`${CONTROL_ROUTES.opsLog}?${query}`, ownerCookie)).statusCode,
+          query,
+        ).toBe(400);
+      }
+      // And every well-formed spelling still answers, so the guard is not
+      // simply "refuse everything".
+      for (const query of [
+        'scope=ALL',
+        'scope=MANAGEMENT_CONDITIONS',
+        'severity=ERROR',
+        'code=panel.health.degraded',
+        'since=2026-01-01T00:00:00.000Z',
+        'until=2026-12-31T00:00:00.000Z',
+      ]) {
+        expect(
+          (await get(`${CONTROL_ROUTES.opsLog}?${query}`, ownerCookie)).statusCode,
+          query,
+        ).toBe(200);
+      }
+    });
+
+    /**
      * T18 — a malformed cursor id is a 400, not a 500.
      *
      * `beforeId` is compared against a `uuid` column, so a short string reached

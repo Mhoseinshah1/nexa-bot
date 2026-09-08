@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react';
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen } from '@testing-library/react';
-import { match } from '../../apps/web/src/router';
+import { match, setQuery } from '../../apps/web/src/router';
 import { resolve } from '../../apps/web/src/app';
 import { PERMISSION_KEYS } from '@nexa/contracts';
 import { panel as panelBase, renderPage, stubApi } from './harness';
@@ -192,5 +192,42 @@ describe('navigating between two panel details', () => {
     view.rerender(routeTo(A));
     await screen.findByText('Frankfurt A');
     expect(nameOf().value).toBe('Half typed');
+  });
+});
+
+describe('a filter change is not a place the operator navigated to', () => {
+  /**
+   * `setQuery` REPLACES the history entry, and the panels page's comment used
+   * to claim the opposite — that putting the archive filter in the URL let an
+   * operator "use Back". It does not: switching mode overwrites the `/panels`
+   * entry, so Back leaves the page entirely.
+   *
+   * Replacing is the behaviour to want for a filter, and `/system` argues for
+   * its section correctly by stopping at linking and refresh. What was wrong
+   * was the claim, and a claim about behaviour needs something that fails when
+   * the behaviour changes.
+   */
+  it('replaces the history entry rather than pushing one', () => {
+    const pushed: unknown[] = [];
+    const replaced: unknown[] = [];
+    const realPush = window.history.pushState.bind(window.history);
+    const realReplace = window.history.replaceState.bind(window.history);
+    window.history.pushState = (...args: unknown[]) => {
+      pushed.push(args);
+      return realPush(...(args as Parameters<typeof realPush>));
+    };
+    window.history.replaceState = (...args: unknown[]) => {
+      replaced.push(args);
+      return realReplace(...(args as Parameters<typeof realReplace>));
+    };
+    try {
+      setQuery({ path: '/panels', query: new URLSearchParams() }, 'archived', 'only');
+      expect(window.location.search).toBe('?archived=only');
+      expect(replaced, 'a filter change replaces').toHaveLength(1);
+      expect(pushed, 'and never pushes — Back would otherwise leave the page').toHaveLength(0);
+    } finally {
+      window.history.pushState = realPush;
+      window.history.replaceState = realReplace;
+    }
   });
 });

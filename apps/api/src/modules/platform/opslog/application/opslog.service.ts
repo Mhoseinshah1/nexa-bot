@@ -50,7 +50,10 @@ export const opsLogQuerySchema = z.object({
   // malformed cursor became a driver error and a 500 rather than a 400.
   beforeId: uuidV7Schema.optional(),
   severities: z.array(z.enum(OPERATIONAL_SEVERITIES)).optional(),
-  code: z.string().max(200).optional(),
+  // `min(1)`, so `?code=` is refused rather than silently meaning "no code
+  // filter". An empty string is a filter the caller sent; answering it with
+  // the unfiltered stream is the widening this schema exists to prevent.
+  code: z.string().min(1).max(200).optional(),
   since: z.date().optional(),
   until: z.date().optional(),
   open: z.boolean().optional(),

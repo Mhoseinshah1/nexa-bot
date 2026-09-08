@@ -177,9 +177,18 @@ export function PanelsPage({
    *
    * In the URL rather than in component state, for the reason `/system` puts
    * its section there: an operator hunting a retired panel wants to link to the
-   * archive, reload without losing it, and use Back. It is also the only way
-   * the state is reachable by anything that drives this app by address, which
-   * includes the visual harness.
+   * archive and reload without losing it. It is also the only way the state is
+   * reachable by anything that drives this app by address, which includes the
+   * visual harness.
+   *
+   * NOT Back, and an earlier version of this comment claimed it. `setQuery`
+   * navigates with `replace: true`, so switching mode overwrites the `/panels`
+   * entry instead of pushing one and Back leaves the page altogether. That is
+   * the behaviour to want for a filter — a pager and two pills would otherwise
+   * bury whatever the operator was on before — but the comment said the
+   * opposite of what the router does, which is the kind of claim this branch
+   * has been wrong about before. `/system` makes the same argument for its
+   * section and correctly stops at linking and refresh.
    */
   const archived = route.query.get('archived') === 'only';
   const mode: 'live' | 'archived' = archived ? 'archived' : 'live';

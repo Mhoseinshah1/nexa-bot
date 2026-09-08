@@ -194,6 +194,34 @@ describe('the falsification checker, on sources that look like this repository',
     expect(kept).toContain('shown');
   });
 
+  it('does not resolve a citation against an it( written in prose', async () => {
+    /*
+     * `titles` is the ONE reader in that script that ran over the raw source
+     * while every other ran over the mask, so an `it('…')` inside a comment or
+     * a string counted as a committed test — "resolves to prose, not to a
+     * test", which is the failure the script exists to prevent and which its
+     * own header comment claimed to have removed.
+     *
+     * Matching on the mask cannot read the title, because the title IS a
+     * string literal and the mask blanks it. The offsets come from the mask
+     * and the text from the source, so the real titles below are still exact —
+     * including a printf placeholder and a template literal, which is what a
+     * naive "read the mask" fix would have returned blank.
+     */
+    const prose =
+      "// it('a phantom in a comment', () => {});\n" +
+      'const advice = "write it(\'a phantom in a string\', fn)";\n' +
+      "/* it('a phantom in a block', () => {}); */\n" +
+      "it('a real test', () => {});\n" +
+      "it.each([1])('a real %s test', () => {});\n" +
+      'it(`a real template title`, () => {});\n';
+    expect(titles(prose, 'a.ts')).toEqual([
+      'a real test',
+      'a real %s test',
+      'a real template title',
+    ]);
+  });
+
   it('reports a skip on a receiver it cannot resolve, rather than ignoring it', async () => {
     /*
      * The one alias shape a single-file scan cannot follow: a default import
