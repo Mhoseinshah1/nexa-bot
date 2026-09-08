@@ -2608,7 +2608,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 222 citations were checked; this record declares 229 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 229 citations were checked; this record declares 240 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -3280,3 +3280,94 @@ while the corrected experiment went into the prose. Both are restated.
 
 Each applied alone and reverted; the script verified byte-identical by sha256
 after each.
+
+## Three of this round's own rows asserted the wrong function
+
+The three fixtures added for the parser rewrite — JSX text, template literals,
+and reading a `.ts` file as TypeScript — all passed with the rule they name
+deleted. Not because the rules are dead: because the fixtures asserted through
+`titles`, and `titles` reads the RAW text. `withoutSkippedSuites` returns the
+source with skipped suites cut out of it, so a mask defect is invisible there
+unless it happens to move a cut.
+
+The mask feeds the CHAIN READERS. Measured over all 249 sources under `tests/`,
+`apps/web/src` and `apps/api/src`, with each blanking kind removed one at a
+time:
+
+```
+sources compared: 249
+no-jsxtext         mask-differs:  4  titles-differ:  0  only-differ:  0
+no-notemplate      mask-differs: 41  titles-differ:  0  only-differ:  0
+no-templateparts   mask-differs:157  titles-differ:  0  only-differ:  0
+always-tsx         mask-differs:  1  titles-differ:  0  only-differ:  0
+always-ts          mask-differs: 16  titles-differ:  0  only-differ:  0
+```
+
+Zero in both observable columns is what a fixture aimed at `titles` was
+measuring. The rules are still load-bearing — the inputs that show it are prose
+quoting `it.only(`, which `onlyMarkers` then reports as a real marker, and a
+generic arrow in a `.ts` file, after which a real `describe.skip` is inside the
+blanked run and its parked titles resolve as though they run. Both are now the
+assertion.
+
+## A comment that measured something and then said something else
+
+The `ScriptKind` comment claimed that parsing every file as TSX made "all five
+`it(` calls in `notification-claim-exclusivity.test.ts` disappear from the mask,
+so its titles were invisible". Measured on the current implementation: the mask
+does lose 1451 of that file's 8891 characters — it is the only source on the
+tree the mutation damages — and all five titles still resolve, because the
+blanked run falls between them.
+
+The claim was true of a version four rewrites ago and was carried forward
+unchecked, which is the failure this record exists to catch, in this record's
+own supporting file. The comment now states the measurement and names the real
+cost, which is the false negative rather than a lost title.
+
+## The one alias shape a single-file scan cannot follow
+
+`import d from './helpers'` re-exporting `describe`, then `d.skip('x', …)`,
+contains no token this script can bind — measured, the parked suite's titles
+come back as `['hidden', 'shown']`. Following it needs the other file.
+
+The namespace form needs nothing: `v.describe.skip(` still contains the token
+`describe`, and the identifier lookaround admits it because the preceding
+character is a dot. Verified rather than assumed.
+
+Refusing to be silently wrong about the shape it cannot follow costs nothing.
+Any skipping modifier called on an unresolvable receiver is now an error, the
+same policy this script already applies to an unrecognised table header.
+Measured over the 109 sources in `tests/`, across `skip`, `only`, `todo`,
+`skipIf` and `runIf`: zero, so the guard starts green and a red run means a new
+alias rather than a backlog.
+
+## The mutations
+
+| #    | rule                                                 | mutation                              | tests that die                                                                                             |
+| ---- | ---------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| AC1  | JSX text is blanked                                  | drop `JsxText` from the blanked kinds | `falsification-checker.test.ts` › does not read an it.only written out as JSX TEXT                         |
+| AC2  | a plain template body is blanked                     | drop `NoSubstitutionTemplateLiteral`  | `falsification-checker.test.ts` › does not read an it.only written out inside a template literal           |
+| AC3  | an interpolated template's HEAD is blanked           | drop `TemplateHead`                   | `falsification-checker.test.ts` › blanks all three parts of an interpolated template, not just a plain one |
+| AC4  | an interpolated template's MIDDLE is blanked         | drop `TemplateMiddle`                 | `falsification-checker.test.ts` › blanks all three parts of an interpolated template, not just a plain one |
+| AC5  | an interpolated template's TAIL is blanked           | drop `TemplateTail`                   | `falsification-checker.test.ts` › blanks all three parts of an interpolated template, not just a plain one |
+| AC6  | the script kind follows the extension                | force `ScriptKind.TSX` for every file | `falsification-checker.test.ts` › reads a .ts file as TypeScript rather than as TSX                        |
+| AC7  | string bodies are blanked                            | drop `StringLiteral`                  | `falsification-checker.test.ts` › does not report a .only that is only mentioned in %s                     |
+| AC8  | regex bodies are blanked                             | drop `RegularExpressionLiteral`       | `falsification-checker.test.ts` › recognises a regex in a concise arrow body                               |
+| AC9  | an unresolvable modifier receiver is reported        | `continue` on every receiver          | `falsification-checker.test.ts` › reports a skip on a receiver it cannot resolve, rather than ignoring it  |
+| AC10 | the resolved set carries the aliases and the globals | resolve only bare `describe`          | `falsification-checker.test.ts` › reports a skip on a receiver it cannot resolve, rather than ignoring it  |
+| AC11 | the guard reads the MASK, not the source             | scan `text` instead of `masked`       | `falsification-checker.test.ts` › finds no unresolvable modifier in the committed test tree                |
+
+Each applied alone with an anchor assertion that fails the run if the edit does
+not land, and reverted; the script verified byte-identical by sha256 after each.
+
+`typecheck:tests` refused this round's first gate. The suite now imports the
+`.mjs` script instead of slicing it through a `data:` URL, and an untyped
+import is `TS7016` under `noImplicitAny`. It is answered with `allowJs`, so
+TypeScript infers the exports from the script rather than from a hand-written
+`.d.mts` that would be free to drift from it. That the import is genuinely
+typed is itself a claim, so it has a probe rather than a comment: a
+`@ts-expect-error` in the suite fails the BUILD the day that module degrades to
+`any`.
+AC7 also kills `does not report a .only mentioned in a multi-line JSX attribute`,
+and AC11 also kills AC9's test; both are stated rather than split into rows,
+because a row is a rule and these are one rule each.

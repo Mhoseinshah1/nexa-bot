@@ -18,6 +18,13 @@
   // among them an assertion comparing a template key against a value outside
   // its own union, which could never be true and had been passing vacuously.
   "compilerOptions": {
+    // The citation checker is a `.mjs` script and the suite imports it
+    // directly. `allowJs` lets TypeScript INFER its exports from the source
+    // rather than from a hand-written `.d.mts` that would be free to drift
+    // from it — and a declaration file that lies is exactly the shape of
+    // defect the suite importing it exists to catch. `checkJs` stays off: the
+    // script is linted and tested, not typechecked.
+    "allowJs": true,
     "noEmit": true,
     "declaration": false,
     "declarationMap": false,

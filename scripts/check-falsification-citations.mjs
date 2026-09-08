@@ -21,7 +21,8 @@
  * cannot parse is a failure, not a skip.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import ts from 'typescript';
+import { basename, join } from 'node:path';
 
 const RECORD = 'docs/phase3d-falsification.md';
 /**
@@ -45,7 +46,7 @@ const RECORD = 'docs/phase3d-falsification.md';
  * to, which is the point: the number is a claim about this file and should be
  * re-stated deliberately, not drifted into.
  */
-const EXPECTED = 229;
+const EXPECTED = 240;
 /**
  * A table whose last column is one of these is making citations.
  *
@@ -86,52 +87,16 @@ function sources(dir) {
 /**
  * The index just past the `)` that closes the paren at `open`.
  *
- * Counting bare parens is not enough, and the direction it goes wrong in is
- * the dangerous one. A `)` inside a test title — `it('refuses a 403)')` — ends
- * the walk EARLY, so the tail of a skipped suite survives the strip and a
- * citation into it resolves: this script's one sentence of purpose, defeated.
- * (Overshooting is the safe direction: live suites vanish and their citations
- * fail loudly.) So strings, template literals and comments are skipped rather
- * than counted.
- *
- * Regex literals ARE parsed, and the first version of this said they were not
- * — that the residue, `/[)]/`, was "left stated rather than half-handled". It
- * was not a residue. `expect('x').not.toMatch(/[)]/)` is an ordinary
- * assertion, and one of them as the first `it` inside a skipped suite ended
- * the walk early, left the rest of that suite in the text, and took the check
- * to `ok`, exit 0, with 10 tests skipped. Documenting a hole does not close it.
- *
- * Telling a regex from division is done the way every hand-written scanner
- * does it: by what precedes the slash. After a value — an identifier, a
- * number, `)`, `]`, `}` — a slash is division; after an operator, a comma, an
- * opening bracket or one of the keywords that take an expression, it opens a
- * regex. The known-imperfect case is a slash after a `}` that closes a block
- * rather than an object, which cannot occur in an argument list.
+ * Plain counting, because every caller passes text whose strings, comments,
+ * templates and regexes are already blanked by `maskLiterals`. The three
+ * heuristics this used to need — `startsRegex`, `endOfRegex`, `endOfQuote` —
+ * are gone with the hand-rolled lexer they served.
  */
 function closeOf(text, open) {
   let depth = 0;
   for (let i = open; i < text.length; i += 1) {
-    const ch = text[i];
-    if (ch === '\\') {
-      i += 1;
-    } else if (ch === '/' && text[i + 1] !== '/' && text[i + 1] !== '*' && startsRegex(text, i)) {
-      const close = endOfRegex(text, i);
-      // Not a regex after all: leave `i` where it is and let the loop advance.
-      if (close !== i) i = close;
-    } else if (ch === '/' && text[i + 1] === '/') {
-      const newline = text.indexOf('\n', i);
-      if (newline === -1) return text.length;
-      i = newline;
-    } else if (ch === '/' && text[i + 1] === '*') {
-      const end = text.indexOf('*/', i + 2);
-      if (end === -1) return text.length;
-      i = end + 1;
-    } else if (ch === '"' || ch === "'" || ch === '`') {
-      const close = endOfQuote(text, i);
-      if (close !== i) i = close;
-    } else if (ch === '(') {
-      depth += 1;
-    } else if (ch === ')') {
+    if (text[i] === '(') depth += 1;
+    else if (text[i] === ')') {
       depth -= 1;
       if (depth === 0) return i + 1;
     }
@@ -139,105 +104,17 @@ function closeOf(text, open) {
   return text.length;
 }
 
-/** Whether the `/` at `at` opens a regex literal rather than dividing. */
-function startsRegex(text, at) {
-  let i = at - 1;
-  while (i >= 0 && /\s/.test(text[i])) i -= 1;
-  if (i < 0) return true;
-  const prev = text[i];
-  /*
-   * An ALLOW-list, because the deny-list version blinded this script on TSX.
-   *
-   * It previously returned true for anything that was not `)`, `]`, `}` or an
-   * identifier character — which includes `<` and `"`. Those are JSX: `</Foo>`
-   * and `display="…" />`. `endOfRegex` then ran to the newline, returned the
-   * end of the file, and `maskLiterals` blanked everything after it. Measured
-   * on the committed tree: 4 of 113 test sources went dark from some line to
-   * EOF, taking 4 of 4 `describe(` calls in `shell-recovery.test.tsx` with
-   * them, and a `describe.skip` on the suite holding this round's own rows
-   * printed `ok 213`, exit 0. The PARENT commit's checker caught it. A rewrite
-   * that regresses the thing it rewrites is the worst shape available, and it
-   * happened because "not obviously division" was treated as "regex".
-   *
-   * So: a regex may follow an operator, an opening bracket, a comma, a
-   * semicolon, or a keyword that takes an expression — and nothing else.
-   */
-  // `>` is here for `=>`. It is also JSX text, which is why it can only be
-  // admitted once a mis-detection is bounded to a single line — see
-  // `endOfQuote`.
-  if ('(,=:[!&|?{;+-*%^~>'.includes(prev)) return true;
-  if (/[A-Za-z0-9_$]/.test(prev)) {
-    const word = /[A-Za-z0-9_$]+$/.exec(text.slice(0, i + 1));
-    return (
-      word !== null &&
-      [
-        'return',
-        'typeof',
-        'instanceof',
-        'in',
-        'of',
-        'new',
-        'delete',
-        'void',
-        'throw',
-        'case',
-        'do',
-        'else',
-        'yield',
-        'await',
-      ].includes(word[0])
-    );
+/** The index just past the `]` closing the bracket at `open`. */
+function closeBracket(text, open) {
+  let depth = 0;
+  for (let i = open; i < text.length; i += 1) {
+    if (text[i] === '[') depth += 1;
+    else if (text[i] === ']') {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+    }
   }
-  // `)`, `]`, `}`, `>`, `<`, a quote, a dot — none of these precede a regex in
-  // code this script will ever read, and three of them are JSX.
-  return false;
-}
-
-/** The index of the `/` closing the regex opened at `start`. */
-function endOfRegex(text, start) {
-  let inClass = false;
-  for (let i = start + 1; i < text.length; i += 1) {
-    const ch = text[i];
-    if (ch === '\\') i += 1;
-    else if (ch === '[') inClass = true;
-    else if (ch === ']') inClass = false;
-    // A `/` inside `[...]` is a literal slash, which is the whole reason a
-    // character class has to be tracked rather than skipped.
-    else if (ch === '/' && !inClass) return i;
-    // A regex literal cannot span a line. Returning the END OF FILE here is
-    // what turned one mis-detected `/` into a blanked remainder; returning
-    // `start` says "this was not a regex", and the caller advances one
-    // character instead of erasing the rest of the source.
-    else if (ch === '\n') return start;
-  }
-  return start;
-}
-
-/** The index of the quote closing the one at `start`, or the end of the text. */
-function endOfQuote(text, start) {
-  const quote = text[start];
-  for (let i = start + 1; i < text.length; i += 1) {
-    if (text[i] === '\\') i += 1;
-    else if (text[i] === quote) return i;
-    /*
-     * A `'` or `"` string cannot span a line, and saying so is what makes a
-     * mis-detection harmless.
-     *
-     * The allow-list added last round left `>` out, so a concise arrow body —
-     * `(v) => /['"]/.test(v)`, the commonest idiom in JavaScript — was not
-     * read as a regex. The `'` inside the character class then opened a
-     * PHANTOM STRING, and masking ran to the next quote anywhere in the file,
-     * inverting parity for everything after it. The commit that added the
-     * allow-list claimed "a mis-detection can never blank more than nothing";
-     * that was true only of mis-detections in the direction it had just fixed.
-     *
-     * Bounding the scan to one line makes it true in BOTH directions: whatever
-     * the heuristic decides, the damage cannot leave the line. A template
-     * literal legitimately spans lines and keeps its multi-line scan.
-     */
-    else if (text[i] === '\n' && quote !== '`') return start;
-  }
-  return start;
+  return text.length;
 }
 
 /**
@@ -261,60 +138,110 @@ const SKIPPING = new Set(['skip', 'todo', 'skipIf', 'runIf']);
 const COMPUTED = '\u0000computed';
 
 /**
- * A copy of a source with every comment, string and regex body blanked.
+ * A copy of a source with every comment, string, template and regex body
+ * blanked. Same length, same newlines, so an offset into it is an offset into
+ * the original.
  *
- * Same length, same newlines, so an offset into it is an offset into the
- * original and a line number computed from it is right.
+ * THE PARSER, not a heuristic. Four consecutive rounds hand-rolled this and
+ * each fix introduced the next defect in the same function:
  *
- * Every scanner in this file that looks for a TOKEN runs over this rather than
- * over the source, because the alternative is a scanner that fires on prose.
- * `onlyMarkers` did: a comment reading "never write it.only( in a committed
- * file" failed the run. It fails closed, so it was loud rather than dangerous
- * — but a check that cannot describe its own hazard in its own comments is one
- * nobody can document, and the asymmetry with `describe.onlyish` (correctly
- * ignored) made it an inconsistency rather than a policy.
+ *   r31  `<` and `"` were treated as opening a regex, so every JSX closing tag
+ *        blanked the rest of the file. 4 of 113 sources went dark.
+ *   r32  an allow-list fixed that and omitted `>`, so a concise arrow body
+ *        `(v) => /['"]/.test(v)` opened a phantom STRING and ran away.
+ *   r33  bounding `'`/`"` to one line fixed that, on the claim that such a
+ *        string cannot span a line. In TSX it can: a JSX attribute
+ *        `title="…"` spans lines freely, so its text was scanned as code, a
+ *        backtick in it opened a phantom TEMPLATE — which is deliberately not
+ *        line-bounded — and 5169 characters over 409 lines were blanked, with
+ *        a `describe.skip` and nine skipped tests reported `ok`, exit 0.
+ *
+ * Each of those was a green gate away from shipping, and the third was found
+ * by a reviewer building a TypeScript-scanner oracle to check the second. The
+ * lesson is not "be more careful with the fifth heuristic": telling a regex
+ * from a division, or a JSX attribute from a string, IS parsing, and the
+ * parser is already a dependency of this repository.
+ *
+ * `ts.createSourceFile` resolves all of it — regex versus division, JSX text,
+ * attributes, template interpolation, nesting — because it is the same code
+ * that compiles the sources. Comments are removed in a second pass, which is
+ * safe only because it runs on text whose string bodies are already gone.
  */
-function maskLiterals(text) {
+export function maskLiterals(text, fileName = 'source.tsx') {
   const out = text.split('');
   const blank = (from, to) => {
-    for (let k = from; k < to && k < text.length; k += 1) {
-      if (text[k] !== '\n') out[k] = ' ';
+    for (let i = from; i < to && i < text.length; i += 1) {
+      if (text[i] !== '\n') out[i] = ' ';
     }
   };
+  /*
+   * The SCRIPT KIND follows the extension, and getting that wrong is its own
+   * blind spot.
+   *
+   * Parsing every file as TSX misreads a `.ts` file's angle brackets: a
+   * generic arrow becomes JSX, and the "JSX text" after it is blanked. On the
+   * current tree that damages exactly one source —
+   * `notification-claim-exclusivity.test.ts`, 1451 characters of its mask —
+   * and an earlier version of this comment claimed the damage cost that file
+   * its five titles. It does not: measured with the kind forced to TSX, all
+   * five still resolve, because the blanked run falls between them.
+   *
+   * The real cost is a FALSE NEGATIVE. A `describe.skip` inside a blanked run
+   * is not seen by the chain reader, so the parked suite is never stripped and
+   * its titles resolve as though they run — a citation into a suite nobody
+   * executes, which is this script's one sentence of purpose. That is the
+   * shape the fixture asserts, and it is the shape three earlier fixtures for
+   * this rule missed while passing.
+   */
+  const source = ts.createSourceFile(
+    fileName,
+    text,
+    ts.ScriptTarget.Latest,
+    /* setParentNodes */ false,
+    fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const BODIES = new Set([
+    ts.SyntaxKind.StringLiteral,
+    ts.SyntaxKind.NoSubstitutionTemplateLiteral,
+    ts.SyntaxKind.TemplateHead,
+    ts.SyntaxKind.TemplateMiddle,
+    ts.SyntaxKind.TemplateTail,
+    ts.SyntaxKind.RegularExpressionLiteral,
+    ts.SyntaxKind.JsxText,
+  ]);
+  const visit = (node) => {
+    if (BODIES.has(node.kind)) {
+      // Keep the delimiters, blank what is between them: the chain readers
+      // look for `'`/`"` to tell a literal bracket key from a computed one.
+      const from = node.getStart(source);
+      blank(from + 1, node.end - 1);
+    }
+    node.forEachChild(visit);
+  };
+  source.forEachChild(visit);
+
+  // Comments, on the literal-blanked text. No string can hide a `//` now.
+  const stripped = out.join('');
+  const withoutComments = out.slice();
   let i = 0;
-  while (i < text.length) {
-    const ch = text[i];
-    if (ch === '/' && text[i + 1] === '/') {
-      const newline = text.indexOf('\n', i);
-      const stop = newline === -1 ? text.length : newline;
-      blank(i, stop);
+  while (i < stripped.length) {
+    if (stripped[i] === '/' && stripped[i + 1] === '/') {
+      const newline = stripped.indexOf('\n', i);
+      const stop = newline === -1 ? stripped.length : newline;
+      for (let k = i; k < stop; k += 1) withoutComments[k] = ' ';
       i = stop;
-    } else if (ch === '/' && text[i + 1] === '*') {
-      const close = text.indexOf('*/', i + 2);
-      const stop = close === -1 ? text.length : close + 2;
-      blank(i, stop);
+    } else if (stripped[i] === '/' && stripped[i + 1] === '*') {
+      const close = stripped.indexOf('*/', i + 2);
+      const stop = close === -1 ? stripped.length : close + 2;
+      for (let k = i; k < stop; k += 1) {
+        if (stripped[k] !== '\n') withoutComments[k] = ' ';
+      }
       i = stop;
-    } else if (ch === '"' || ch === "'" || ch === '`') {
-      const close = endOfQuote(text, i);
-      // `close === i` means it was not a string after all.
-      if (close === i) i += 1;
-      else {
-        blank(i + 1, close);
-        i = close + 1;
-      }
-    } else if (ch === '/' && startsRegex(text, i)) {
-      const close = endOfRegex(text, i);
-      // `close === i` means it was not a regex after all.
-      if (close === i) i += 1;
-      else {
-        blank(i + 1, close);
-        i = close + 1;
-      }
     } else {
       i += 1;
     }
   }
-  return out.join('');
+  return withoutComments.join('');
 }
 
 /**
@@ -455,8 +382,8 @@ function readChain(masked, source, from) {
  * spelling"; it is "this suite does not run", and every spelling that says so
  * has to reach the same reader.
  */
-function withoutSkippedSuites(text) {
-  const masked = maskLiterals(text);
+export function withoutSkippedSuites(text, fileName = 'source.tsx') {
+  const masked = maskLiterals(text, fileName);
   const { always, describeLike } = skippingOpeners(masked, text);
   const names = [...new Set([...always, ...describeLike])].map(escapeName);
   /*
@@ -516,24 +443,6 @@ function afterGap(text, from) {
   }
 }
 
-/** The index just past the `]` closing the bracket at `open`. */
-function closeBracket(text, open) {
-  let depth = 0;
-  for (let i = open; i < text.length; i += 1) {
-    const ch = text[i];
-    if (ch === '\\') i += 1;
-    else if (ch === '"' || ch === "'" || ch === '`') {
-      i = endOfQuote(text, i);
-      if (i >= text.length) return text.length;
-    } else if (ch === '[') depth += 1;
-    else if (ch === ']') {
-      depth -= 1;
-      if (depth === 0) return i + 1;
-    }
-  }
-  return text.length;
-}
-
 /**
  * Every `it`/`test` title in a body of source.
  *
@@ -541,7 +450,7 @@ function closeBracket(text, open) {
  * and its titles carry printf placeholders — which is why a citation matches by
  * PREFIX rather than equality.
  */
-function titles(text) {
+export function titles(text, fileName = 'source.tsx') {
   const found = [];
   /*
    * A test inside a `describe.skip` never runs either.
@@ -553,7 +462,7 @@ function titles(text) {
    * Only that suite, though, and `withoutSkippedSuites` says why finding where
    * it ends is not the one-line regex it looks like.
    */
-  text = withoutSkippedSuites(text);
+  text = withoutSkippedSuites(text, fileName);
   const pattern =
     /*
      * `.skip` and `.todo` are NOT accepted.
@@ -600,8 +509,8 @@ function titles(text) {
  * this check is what makes the RECORD's claims false, so it should say so
  * itself rather than depend on a runner setting somebody may relax.
  */
-function onlyMarkers(text) {
-  const masked = maskLiterals(text);
+export function onlyMarkers(text, fileName = 'source.tsx') {
+  const masked = maskLiterals(text, fileName);
   const found = [];
   // THE SAME reader the skipped-suite scan uses. The previous version matched
   // `\.\s*only\s*\(` — dot notation, whitespace only — so `it['only'](…)`,
@@ -619,6 +528,42 @@ function onlyMarkers(text) {
 }
 
 /**
+ * Every skipping modifier called on a receiver this file cannot resolve.
+ *
+ * The alias scan reads four shapes and the namespace form falls out for free:
+ * `v.describe.skip(` still contains the token `describe`, and the identifier
+ * lookaround admits it because the character before it is a dot. What it
+ * cannot read is a rename that removes the token altogether —
+ * `import d from './helpers'` re-exporting `describe`, then `d.skip(`. That
+ * needs the OTHER file, and this script reads one at a time.
+ *
+ * So it does not guess and it does not shrug. An unresolved receiver is an
+ * error, exactly as an unrecognised table header is: the alternative is the
+ * disease this file's header comment names, a checker deciding for itself what
+ * to ignore. Measured over the 109 sources in `tests/`: zero. The guard costs
+ * nothing today and refuses to be silently wrong the day somebody writes one.
+ */
+export function unresolvedModifiers(text, fileName = 'source.tsx') {
+  const masked = maskLiterals(text, fileName);
+  const { always, describeLike } = skippingOpeners(masked, text);
+  /*
+   * `it` and `test` are not describe-like — they take no suite — but they
+   * carry the same modifiers and `titles`/`onlyMarkers` already read them by
+   * name. `bench` and `suite` are vitest's own, listed so adopting one is not
+   * reported as an alias nobody can resolve.
+   */
+  const resolved = new Set([...always, ...describeLike, 'it', 'test', 'bench', 'suite']);
+  const found = [];
+  for (const match of masked.matchAll(
+    /([A-Za-z_$][\w$]*)\s*\.\s*(skip|only|todo|skipIf|runIf)\s*\(/g,
+  )) {
+    if (resolved.has(match[1])) continue;
+    found.push(`${masked.slice(0, match.index).split('\n').length}  ${match[1]}.${match[2]}(`);
+  }
+  return found;
+}
+
+/**
  * Row labels that name more than one rule, and transcripts quoting a count
  * that is no longer this record's.
  *
@@ -627,7 +572,7 @@ function onlyMarkers(text) {
  * carry — fence tracking in each loop, and the label pattern — reverted with
  * the whole gate green.
  */
-function recordIssues(record, expected) {
+export function recordIssues(record, expected) {
   const labels = new Set();
   const duplicated = [];
   const staleCounts = [];
@@ -652,7 +597,15 @@ function recordIssues(record, expected) {
         else labels.add(label[1]);
       }
     }
-    if (!line.startsWith('|') || line.includes('(then)')) continue;
+    /*
+     * `(then)` marks a row deliberately, at the END of its cell.
+     *
+     * Matching it anywhere in the line meant a row whose CITED TEST TITLE
+     * contains the words — "leaves a row marked (then) alone" — exempted
+     * itself by accident, so the rule it certifies was unfalsifiable through
+     * the record.
+     */
+    if (!line.startsWith('|') || /\(then\)\s*\|/.test(line)) continue;
     // A LEFT boundary: without it `took 812 ms` reads as `ok 812`, and this
     // record's genre is timings.
     for (const quoted of line.matchAll(/(?<![A-Za-z])(?:ok|declares)\s+([0-9]{2,4})/g)) {
@@ -729,282 +682,327 @@ function citationsIn(cell) {
 }
 
 const lines = readFileSync(RECORD, 'utf8').split('\n');
-const files = sources('tests');
-/*
- * A `.only` anywhere makes every citation in this record unverifiable, because
- * the tests they name have stopped running. Collected before anything else so
- * the run says that rather than reporting a resolved count nobody can trust.
- */
-const { duplicated, staleCounts } = recordIssues(readFileSync(RECORD, 'utf8'), EXPECTED);
-
-const only = files.flatMap(([path, text]) => onlyMarkers(text).map((line) => `${path}:${line}`));
-const everything = files.map(([, text]) => text).join('\n');
-
-const missing = [];
-const unparsed = [];
 /**
- * Headers that LOOK like citations and are not recognised.
+ * The check itself, behind a guard so the module can be imported.
  *
- * Adding the plural fixed one table; it did not fix the reason that table was
- * skipped, which is that an unrecognised header is indistinguishable from a
- * table that makes no claims. So a header whose last column mentions a test and
- * is not on the list is an error now, and a future round inventing a fourth
- * spelling gets a red run instead of a green one that checked nothing.
+ * The unit suite used to slice this file at `const cells` and import the
+ * prefix through a `data:` URL. That broke the moment the masking started
+ * using the TypeScript parser, because a data URL cannot resolve a bare
+ * specifier — and it had always been a way of testing something that was
+ * not quite the module. Ordinary exports, and an entry-point guard.
  */
-const unrecognised = [];
-/** Rows whose cell count disagrees with their table's header. */
-const malformed = [];
-let checked = 0;
-let inCitationTable = false;
-let previous = null;
-
-/** The previous table row, so a separator can identify the header above it. */
-let header = null;
-/** Which column of the current table holds its citations. */
-let column = -1;
-/** How many cells the current table's header declares. */
-let width = 0;
-/** Inside a fenced code block, where a pipe is illustration rather than data. */
-let fenced = false;
-/** Tables with no header/separator pair, in which nothing at all was checked. */
-const unstructured = [];
-
-/*
- * A sentinel blank line, so END OF FILE is not a second copy of the rule.
- *
- * The end-of-table detector fired only on a non-`|` line, so a table at the
- * end of the file was never closed — and the end of this file is exactly where
- * every round appends its own table. The fix for that was a COPY of the check
- * after the loop, and the copy could not fire: `split('\n')` on a file with a
- * trailing newline already yields a final `''`, which is a non-`|` line, so
- * the in-loop check had always been handling EOF for any file git and prettier
- * would accept. Its certifying row in the record passed with the rule reverted
- * — the definition of a test that is not a test.
- *
- * One rule, reached the same way in both cases, is the version that can be
- * falsified — and that rule IS falsified (row WY): drop the in-loop
- * `unstructured.push(header)` with a header-only table appended and the check
- * goes green.
- *
- * The sentinel itself is not separately falsifiable, and saying so is the
- * point. Removing it changes nothing today, for exactly the reason round 28's
- * end-of-file copy could not fire: prettier and git guarantee a trailing
- * newline, so `lines` already ends in `''`. It is a guard against a file that
- * lacks one — not a rule — and it is here so the loop is total rather than
- * true-by-coincidence. A round that mistakes it for a tested rule would be
- * repeating the mistake it replaced.
- */
-for (const line of [...lines, '']) {
+function main() {
+  const files = sources('tests');
   /*
-   * A fenced block is prose, not a table.
-   *
-   * The record documents table SHAPES, and the moment one is written out
-   * properly inside a fence the check failed the run for a table making no
-   * claim at all. Two such lines already exist and escape only by not having a
-   * separator row under them, which is luck rather than a rule.
+   * A `.only` anywhere makes every citation in this record unverifiable, because
+   * the tests they name have stopped running. Collected before anything else so
+   * the run says that rather than reporting a resolved count nobody can trust.
    */
-  if (/^\s*```/.test(line)) {
-    fenced = !fenced;
-    inCitationTable = false;
-    header = null;
-    width = 0;
-    continue;
-  }
-  if (fenced) continue;
-  if (!line.startsWith('|')) {
+  const { duplicated, staleCounts } = recordIssues(readFileSync(RECORD, 'utf8'), EXPECTED);
+
+  const only = files.flatMap(([path, text]) =>
+    onlyMarkers(text, path).map((line) => `${path}:${line}`),
+  );
+  /*
+   * And every skipping modifier whose receiver this script could not resolve.
+   * Not a warning: an alias it cannot follow is a suite it cannot see, and a
+   * citation into an invisible suite resolves exactly like a real one.
+   */
+  const unresolvable = files.flatMap(([path, text]) =>
+    unresolvedModifiers(text, path).map((site) => `${path}:${site}`),
+  );
+  /*
+   * Titles PER FILE, not one concatenated haystack.
+   *
+   * The haystack used to be every source joined with a newline and parsed as a
+   * single unit. That cannot be told which language it is — and concatenating
+   * sources can produce syntax that parses unlike any of its parts. Each file
+   * is read as itself, with its own extension, and the titles are unioned.
+   */
+  const titlesByPath = new Map(files.map(([path, text]) => [path, titles(text, path)]));
+  const everyTitle = [...titlesByPath.values()].flat();
+
+  const missing = [];
+  const unparsed = [];
+  /**
+   * Headers that LOOK like citations and are not recognised.
+   *
+   * Adding the plural fixed one table; it did not fix the reason that table was
+   * skipped, which is that an unrecognised header is indistinguishable from a
+   * table that makes no claims. So a header whose last column mentions a test and
+   * is not on the list is an error now, and a future round inventing a fourth
+   * spelling gets a red run instead of a green one that checked nothing.
+   */
+  const unrecognised = [];
+  /** Rows whose cell count disagrees with their table's header. */
+  const malformed = [];
+  let checked = 0;
+  let inCitationTable = false;
+  let previous = null;
+
+  /** The previous table row, so a separator can identify the header above it. */
+  let header = null;
+  /** Which column of the current table holds its citations. */
+  let column = -1;
+  /** How many cells the current table's header declares. */
+  let width = 0;
+  /** Inside a fenced code block, where a pipe is illustration rather than data. */
+  let fenced = false;
+  /** Tables with no header/separator pair, in which nothing at all was checked. */
+  const unstructured = [];
+
+  /*
+   * A sentinel blank line, so END OF FILE is not a second copy of the rule.
+   *
+   * The end-of-table detector fired only on a non-`|` line, so a table at the
+   * end of the file was never closed — and the end of this file is exactly where
+   * every round appends its own table. The fix for that was a COPY of the check
+   * after the loop, and the copy could not fire: `split('\n')` on a file with a
+   * trailing newline already yields a final `''`, which is a non-`|` line, so
+   * the in-loop check had always been handling EOF for any file git and prettier
+   * would accept. Its certifying row in the record passed with the rule reverted
+   * — the definition of a test that is not a test.
+   *
+   * One rule, reached the same way in both cases, is the version that can be
+   * falsified — and that rule IS falsified (row WY): drop the in-loop
+   * `unstructured.push(header)` with a header-only table appended and the check
+   * goes green.
+   *
+   * The sentinel itself is not separately falsifiable, and saying so is the
+   * point. Removing it changes nothing today, for exactly the reason round 28's
+   * end-of-file copy could not fire: prettier and git guarantee a trailing
+   * newline, so `lines` already ends in `''`. It is a guard against a file that
+   * lacks one — not a rule — and it is here so the loop is total rather than
+   * true-by-coincidence. A round that mistakes it for a tested rule would be
+   * repeating the mistake it replaced.
+   */
+  for (const line of [...lines, '']) {
     /*
-     * A blank line ENDS a table, and a table that ended without ever reaching a
-     * separator was never checked for anything.
+     * A fenced block is prose, not a table.
      *
-     * That was silent and it dropped rows wholesale: one blank line inserted
-     * mid-table took the count from 157 to 139 and still exited 0 — eighteen
-     * citations unverified, no warning. Third consecutive round in which this
-     * script skipped part of the record without saying so, which is precisely
-     * what its own opening comment forbids.
+     * The record documents table SHAPES, and the moment one is written out
+     * properly inside a fence the check failed the run for a table making no
+     * claim at all. Two such lines already exist and escape only by not having a
+     * separator row under them, which is luck rather than a rule.
      */
-    if (header !== null && width === 0) unstructured.push(header);
-    inCitationTable = false;
-    header = null;
-    // A table's width dies with the table. Without this the HEADER row of the
-    // next one is measured against the previous one's column count, which is
-    // a mismatch for every table that changes shape.
-    width = 0;
-    continue;
-  }
-  // A table declares its columns in the row ABOVE the separator, and nowhere
-  // else. Deciding at the separator rather than on any row whose last cell
-  // happens to read like a header is what keeps `a real test in dashboard.tsx`
-  // — an ordinary sentence in an ordinary data row — from being mistaken for a
-  // misspelled declaration.
-  if (isSeparator(line)) {
-    const declared = header === null ? [] : cells(header).map((cell) => cell.toLowerCase());
-    /*
-     * By NAME, at whatever position — not "the last column".
-     *
-     * The record's oldest and largest evidence table is headed
-     * `| # | Rule | Mutation | Named test | Result |`. `Named test` was always
-     * a recognised name; it simply is not last, so reading only the last cell
-     * saw `result`, decided the table made no claims, and skipped all twelve of
-     * its rows in silence — the same escape as the misspelled header, one
-     * position over. Widening the header list would not have closed it.
-     */
-    column = declared.findIndex((cell) => CITATION_HEADERS.includes(cell));
-    inCitationTable = column >= 0;
-    previous = null;
-    /*
-     * Every table declares itself, or the run fails.
-     *
-     * By NAME at any position, exactly as the citation column is found — the
-     * opt-out list was matched against the LAST cell alone, which is the same
-     * positional escape that hid the record's largest table and would have hid
-     * the next one written a column wider.
-     */
-    if (header === null) {
-      // A separator with no header row above it. `declared` is empty, so every
-      // rule below silently does nothing — the declaration check, the width
-      // check and the citations all switch off for the rest of the table.
-      unstructured.push(line);
+    if (/^\s*```/.test(line)) {
+      fenced = !fenced;
+      inCitationTable = false;
+      header = null;
+      width = 0;
       continue;
     }
-    if (!inCitationTable && !declared.some((cell) => NON_CITING_HEADERS.includes(cell))) {
-      unrecognised.push(header);
+    if (fenced) continue;
+    if (!line.startsWith('|')) {
+      /*
+       * A blank line ENDS a table, and a table that ended without ever reaching a
+       * separator was never checked for anything.
+       *
+       * That was silent and it dropped rows wholesale: one blank line inserted
+       * mid-table took the count from 157 to 139 and still exited 0 — eighteen
+       * citations unverified, no warning. Third consecutive round in which this
+       * script skipped part of the record without saying so, which is precisely
+       * what its own opening comment forbids.
+       */
+      if (header !== null && width === 0) unstructured.push(header);
+      inCitationTable = false;
+      header = null;
+      // A table's width dies with the table. Without this the HEADER row of the
+      // next one is measured against the previous one's column count, which is
+      // a mismatch for every table that changes shape.
+      width = 0;
+      continue;
     }
-    width = declared.length;
-    header = null;
-    continue;
-  }
-  const columns = cells(line);
-  /*
-   * A row that does not match its header's width is malformed, in ANY table.
-   *
-   * The escaped-pipe bug produced exactly this shape and nothing looked at it;
-   * so did one hand-written row in the one table nothing was reading. A cell
-   * count is the cheapest possible check for both, and it does not care whether
-   * the table cites anything.
-   */
-  if (width > 0 && columns.length !== width) {
-    malformed.push(line);
-  }
-  if (!inCitationTable) {
-    header = line;
-    continue;
+    // A table declares its columns in the row ABOVE the separator, and nowhere
+    // else. Deciding at the separator rather than on any row whose last cell
+    // happens to read like a header is what keeps `a real test in dashboard.tsx`
+    // — an ordinary sentence in an ordinary data row — from being mistaken for a
+    // misspelled declaration.
+    if (isSeparator(line)) {
+      const declared = header === null ? [] : cells(header).map((cell) => cell.toLowerCase());
+      /*
+       * By NAME, at whatever position — not "the last column".
+       *
+       * The record's oldest and largest evidence table is headed
+       * `| # | Rule | Mutation | Named test | Result |`. `Named test` was always
+       * a recognised name; it simply is not last, so reading only the last cell
+       * saw `result`, decided the table made no claims, and skipped all twelve of
+       * its rows in silence — the same escape as the misspelled header, one
+       * position over. Widening the header list would not have closed it.
+       */
+      column = declared.findIndex((cell) => CITATION_HEADERS.includes(cell));
+      inCitationTable = column >= 0;
+      previous = null;
+      /*
+       * Every table declares itself, or the run fails.
+       *
+       * By NAME at any position, exactly as the citation column is found — the
+       * opt-out list was matched against the LAST cell alone, which is the same
+       * positional escape that hid the record's largest table and would have hid
+       * the next one written a column wider.
+       */
+      if (header === null) {
+        // A separator with no header row above it. `declared` is empty, so every
+        // rule below silently does nothing — the declaration check, the width
+        // check and the citations all switch off for the rest of the table.
+        unstructured.push(line);
+        continue;
+      }
+      if (!inCitationTable && !declared.some((cell) => NON_CITING_HEADERS.includes(cell))) {
+        unrecognised.push(header);
+      }
+      width = declared.length;
+      header = null;
+      continue;
+    }
+    const columns = cells(line);
+    /*
+     * A row that does not match its header's width is malformed, in ANY table.
+     *
+     * The escaped-pipe bug produced exactly this shape and nothing looked at it;
+     * so did one hand-written row in the one table nothing was reading. A cell
+     * count is the cheapest possible check for both, and it does not care whether
+     * the table cites anything.
+     */
+    if (width > 0 && columns.length !== width) {
+      malformed.push(line);
+    }
+    if (!inCitationTable) {
+      header = line;
+      continue;
+    }
+
+    const cell = columns[column] ?? '';
+    if (/^\(same/i.test(cell.trim())) {
+      if (previous === null) unparsed.push(line);
+      continue;
+    }
+    const cites = citationsIn(cell);
+    if (cites === null) {
+      // NOT skipped. A row in a citation table that names no test is the defect.
+      unparsed.push(line);
+      continue;
+    }
+    previous = cites[cites.length - 1];
+
+    for (const cited of cites) {
+      checked += 1;
+      // `it.each` titles carry a printf placeholder; the literal head of the name
+      // is what distinguishes one test from another anyway.
+      const needle = cited.name.includes('%')
+        ? cited.name.slice(0, cited.name.indexOf('%'))
+        : cited.name;
+      // Checked in the file the citation NAMES, when it names one. A name that
+      // resolves in some other file is not evidence for the row that cites it.
+      const named =
+        cited.file === null
+          ? null
+          : [...titlesByPath].filter(([path]) => path.endsWith(cited.file));
+      const candidates = named === null ? everyTitle : named.flatMap(([, names]) => names);
+      if (named !== null && named.length === 0) {
+        missing.push(`${cited.name}  (no such file: ${cited.file})`);
+      }
+      // Matched against the TEST TITLES, not the file text.
+      //
+      // `includes` over the whole source made a `describe` name, a comment or a
+      // sentence of prose satisfy "resolves to a committed test" — and one row
+      // was doing exactly that. The guarantee this line prints has to be the one
+      // it checks.
+      // `includes` WITHIN a title, not within the file: an `it.each` title is
+      // `'%s is reachable at ...'`, so the citation names a suffix of it.
+      else if (!candidates.some((title) => title.includes(needle)))
+        missing.push(`${cited.name}  (${cited.file ?? 'any file'})`);
+    }
   }
 
-  const cell = columns[column] ?? '';
-  if (/^\(same/i.test(cell.trim())) {
-    if (previous === null) unparsed.push(line);
-    continue;
+  if (
+    missing.length > 0 ||
+    unparsed.length > 0 ||
+    unrecognised.length > 0 ||
+    malformed.length > 0 ||
+    unstructured.length > 0 ||
+    only.length > 0 ||
+    unresolvable.length > 0 ||
+    duplicated.length > 0 ||
+    staleCounts.length > 0
+  ) {
+    if (staleCounts.length > 0) {
+      console.error(
+        `\x1b[31mfail\x1b[0m  ${staleCounts.length} transcript(s) quote a citation count that is no longer this record's. Re-run them, or mark the row (then):`,
+      );
+      for (const row of staleCounts) console.error(`        ${row}`);
+    }
+    if (duplicated.length > 0) {
+      console.error(
+        `\x1b[31mfail\x1b[0m  ${duplicated.length} row label(s) name more than one rule, so a citation to them resolves to neither:`,
+      );
+      for (const label of duplicated) console.error(`        ${label}`);
+    }
+    if (unresolvable.length > 0) {
+      console.error(
+        `\x1b[31mfail\x1b[0m  ${unresolvable.length} skipping modifier(s) on a receiver this check cannot resolve, so the suites they park are invisible to it:`,
+      );
+      for (const site of unresolvable) console.error(`        ${site}`);
+    }
+    if (only.length > 0) {
+      console.error(
+        `\x1b[31mfail\x1b[0m  ${only.length} \`.only\` marker(s): every OTHER test in those files is skipped, so no citation into them means anything:`,
+      );
+      for (const site of only) console.error(`        ${site}`);
+    }
+    if (unstructured.length > 0) {
+      console.error(
+        `\x1b[31mfail\x1b[0m  ${unstructured.length} table(s) have no header/separator pair, so nothing in them was checked:`,
+      );
+      for (const row of unstructured) console.error(`        ${row.trim().slice(0, 110)}`);
+    }
+    if (malformed.length > 0) {
+      console.error(
+        `\x1b[31mfail\x1b[0m  ${malformed.length} row(s) do not match their table's column count:`,
+      );
+      for (const row of malformed) console.error(`        ${row.trim().slice(0, 110)}`);
+    }
+    if (unrecognised.length > 0) {
+      console.error(
+        `\x1b[31mfail\x1b[0m  ${unrecognised.length} table(s) declare neither a citation column nor what they hold instead:`,
+      );
+      for (const row of unrecognised) console.error(`        ${row.trim().slice(0, 110)}`);
+      console.error(`        citation columns: ${CITATION_HEADERS.join(', ')}`);
+      console.error(`        or declare one column: ${NON_CITING_HEADERS.join(', ')}`);
+    }
+    if (missing.length > 0) {
+      console.error(
+        `\x1b[31mfail\x1b[0m  ${missing.length} of ${checked} cited tests do not exist:`,
+      );
+      for (const name of missing) console.error(`        ${name}`);
+    }
+    if (unparsed.length > 0) {
+      console.error(
+        `\x1b[31mfail\x1b[0m  ${unparsed.length} row(s) in a citation table name no test:`,
+      );
+      for (const row of unparsed) console.error(`        ${row.trim().slice(0, 110)}`);
+    }
+    console.error('\n      Commit the probe or do not cite it.');
+    process.exit(1);
   }
-  const cites = citationsIn(cell);
-  if (cites === null) {
-    // NOT skipped. A row in a citation table that names no test is the defect.
-    unparsed.push(line);
-    continue;
-  }
-  previous = cites[cites.length - 1];
 
-  for (const cited of cites) {
-    checked += 1;
-    // `it.each` titles carry a printf placeholder; the literal head of the name
-    // is what distinguishes one test from another anyway.
-    const needle = cited.name.includes('%')
-      ? cited.name.slice(0, cited.name.indexOf('%'))
-      : cited.name;
-    // Checked in the file the citation NAMES, when it names one. A name that
-    // resolves in some other file is not evidence for the row that cites it.
-    const haystack =
-      cited.file === null
-        ? everything
-        : files
-            .filter(([path]) => path.endsWith(cited.file))
-            .map(([, text]) => text)
-            .join('\n');
-    if (haystack === '') missing.push(`${cited.name}  (no such file: ${cited.file})`);
-    // Matched against the TEST TITLES, not the file text.
-    //
-    // `includes` over the whole source made a `describe` name, a comment or a
-    // sentence of prose satisfy "resolves to a committed test" — and one row
-    // was doing exactly that. The guarantee this line prints has to be the one
-    // it checks.
-    // `includes` WITHIN a title, not within the file: an `it.each` title is
-    // `'%s is reachable at ...'`, so the citation names a suffix of it.
-    else if (!titles(haystack).some((title) => title.includes(needle)))
-      missing.push(`${cited.name}  (${cited.file ?? 'any file'})`);
+  if (checked !== EXPECTED) {
+    console.error(
+      `\x1b[31mfail\x1b[0m  ${checked} citations were checked; this record declares ${EXPECTED}.`,
+    );
+    console.error(
+      checked < EXPECTED
+        ? '      Rows may not be missing from the FILE — they may be missing from this CHECK.'
+        : `      Rows were added. Set EXPECTED to ${checked} in the same commit that adds them.`,
+    );
+    process.exit(1);
   }
-}
 
-if (
-  missing.length > 0 ||
-  unparsed.length > 0 ||
-  unrecognised.length > 0 ||
-  malformed.length > 0 ||
-  unstructured.length > 0 ||
-  only.length > 0 ||
-  duplicated.length > 0 ||
-  staleCounts.length > 0
-) {
-  if (staleCounts.length > 0) {
-    console.error(
-      `\x1b[31mfail\x1b[0m  ${staleCounts.length} transcript(s) quote a citation count that is no longer this record's. Re-run them, or mark the row (then):`,
-    );
-    for (const row of staleCounts) console.error(`        ${row}`);
-  }
-  if (duplicated.length > 0) {
-    console.error(
-      `\x1b[31mfail\x1b[0m  ${duplicated.length} row label(s) name more than one rule, so a citation to them resolves to neither:`,
-    );
-    for (const label of duplicated) console.error(`        ${label}`);
-  }
-  if (only.length > 0) {
-    console.error(
-      `\x1b[31mfail\x1b[0m  ${only.length} \`.only\` marker(s): every OTHER test in those files is skipped, so no citation into them means anything:`,
-    );
-    for (const site of only) console.error(`        ${site}`);
-  }
-  if (unstructured.length > 0) {
-    console.error(
-      `\x1b[31mfail\x1b[0m  ${unstructured.length} table(s) have no header/separator pair, so nothing in them was checked:`,
-    );
-    for (const row of unstructured) console.error(`        ${row.trim().slice(0, 110)}`);
-  }
-  if (malformed.length > 0) {
-    console.error(
-      `\x1b[31mfail\x1b[0m  ${malformed.length} row(s) do not match their table's column count:`,
-    );
-    for (const row of malformed) console.error(`        ${row.trim().slice(0, 110)}`);
-  }
-  if (unrecognised.length > 0) {
-    console.error(
-      `\x1b[31mfail\x1b[0m  ${unrecognised.length} table(s) declare neither a citation column nor what they hold instead:`,
-    );
-    for (const row of unrecognised) console.error(`        ${row.trim().slice(0, 110)}`);
-    console.error(`        citation columns: ${CITATION_HEADERS.join(', ')}`);
-    console.error(`        or declare one column: ${NON_CITING_HEADERS.join(', ')}`);
-  }
-  if (missing.length > 0) {
-    console.error(`\x1b[31mfail\x1b[0m  ${missing.length} of ${checked} cited tests do not exist:`);
-    for (const name of missing) console.error(`        ${name}`);
-  }
-  if (unparsed.length > 0) {
-    console.error(
-      `\x1b[31mfail\x1b[0m  ${unparsed.length} row(s) in a citation table name no test:`,
-    );
-    for (const row of unparsed) console.error(`        ${row.trim().slice(0, 110)}`);
-  }
-  console.error('\n      Commit the probe or do not cite it.');
-  process.exit(1);
-}
-
-if (checked !== EXPECTED) {
-  console.error(
-    `\x1b[31mfail\x1b[0m  ${checked} citations were checked; this record declares ${EXPECTED}.`,
+  console.log(
+    `\x1b[32mok\x1b[0m    ${checked} falsification citations resolve to a committed test`,
   );
-  console.error(
-    checked < EXPECTED
-      ? '      Rows may not be missing from the FILE — they may be missing from this CHECK.'
-      : `      Rows were added. Set EXPECTED to ${checked} in the same commit that adds them.`,
-  );
-  process.exit(1);
 }
 
-console.log(`\x1b[32mok\x1b[0m    ${checked} falsification citations resolve to a committed test`);
+if (process.argv[1] !== undefined && import.meta.url.endsWith(basename(process.argv[1]))) {
+  main();
+}
