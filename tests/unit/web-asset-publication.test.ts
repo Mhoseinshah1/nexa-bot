@@ -257,10 +257,13 @@ function partiallyWritten(rootDir: string, expected: number, settled: Set<string
  *     run is over the staging tree is gone and no further looking can find it,
  *     so a miss costs the child's own lifetime — about 250ms — instead of two
  *     seconds of pointless spinning. This one is an OPTIMISATION and no test
- *     kills it: removing `!exited` leaves the whole unit project green and
- *     only makes the anchors take 2.6s instead of 0.8s. Said plainly rather
- *     than left to look like a rule with no test, because it is not a rule —
- *     correctness here is the budget below.
+ *     kills it: removing `!exited` leaves the whole unit project green. Said
+ *     plainly rather than left to look like a rule with no test, because it
+ *     is not a rule — correctness here is the budget below. (An earlier
+ *     version of this line also cited "2.6s instead of 0.8s". A reviewer
+ *     could not reproduce it and measured the mutant as no slower or faster;
+ *     the figure only holds on a run where the kill misses the copy, and it
+ *     is withdrawn rather than left as a number with nothing behind it.)
  *   - The whole arrangement gets ONE wall-clock budget, checked before each
  *     attempt and inside each poll. It cannot overrun whatever is left for the
  *     assertions, so `caught` reaches the anchor and the anchor reports.
@@ -320,8 +323,15 @@ async function killMidCopy(
        * claimed to have closed it by removing. Passing `baseline` in closed
        * the cross-test contamination and not this half, and the docblock
        * claimed both.
+       *
+       * The guard is on `rootDir`, not `workspace`, and that is the whole
+       * fix. `workspace` is a module-level `let` that `beforeEach` REASSIGNS,
+       * so by the time an orphan resumes it names the NEXT test's directory —
+       * which exists. Measured: with `existsSync(workspace)` a forced timeout
+       * still leaked a tree; with `existsSync(rootDir)` it leaks none. Two
+       * rounds guarded the wrong variable, in the check written to close this.
        */
-      if (!existsSync(workspace)) return { caught, good, died };
+      if (!existsSync(rootDir)) return { caught, good, died };
       rmSync(rootDir, { recursive: true, force: true });
       mkdirSync(rootDir, { recursive: true });
       run(baseline, rootDir);

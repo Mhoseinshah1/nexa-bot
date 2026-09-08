@@ -1068,6 +1068,15 @@ describe('panel HTTP surface', () => {
         [PANEL_ROUTES.test(id), body('test')],
       ] as const;
 
+    /** Which of the five a route is, so the well-formed body matches it. */
+    const routeName = (route: string, panelId: string): string => {
+      if (route === PANEL_ROUTES.create) return 'create';
+      if (route === PANEL_ROUTES.credentials(panelId)) return 'credentials';
+      if (route === PANEL_ROUTES.status(panelId)) return 'status';
+      if (route === PANEL_ROUTES.test(panelId)) return 'test';
+      return 'update';
+    };
+
     const wellFormed = (route: string): unknown => {
       const key = idempotencyKey();
       if (route === 'create') {
@@ -1087,29 +1096,99 @@ describe('panel HTTP surface', () => {
     };
 
     /*
-     * The two deltas must MATCH. Not a fixed number: a denial happens to
-     * write two rows here — the guard records one and `recordMutationDenial`
-     * another — and pinning that count would make this test about the
-     * recorder rather than about the order. What it is about is that a caller
-     * cannot make the record disappear by changing the BODY.
+     * PER ROUTE, and with an ABSOLUTE floor as well as the comparison.
+     *
+     * The first version compared one aggregate delta against the other and
+     * claimed to assert "the RECORD, not just the status". It did not: a
+     * mutation that removed `recordMutationDenial` from the credentials path
+     * left the whole file green, because BOTH loops lose the same rows and
+     * `malformed === wellFormed` still held. A comparison cannot see a change
+     * that affects both sides of it — the only thing discriminating was the
+     * `toBe(403)` inside the loops, which is not what the docblock said.
+     *
+     * So each route is measured on its own, and each is required to leave a
+     * denial in BOTH ledgers: the operational event an operator reads on the
+     * alerts page, and the DENIED audit row. Two rows and one audit row is
+     * what a denial writes here today; the floor is one of each, so the test
+     * fails if either recorder is lost and does not fail if a third is added.
      */
-    const beforeMalformed = await denials();
-    for (const [route, body] of routes(() => ({ nonsense: true }))) {
-      expect((await post(route, supportCookie, body)).statusCode, `${route} malformed`).toBe(403);
-    }
-    const malformed = (await denials()) - beforeMalformed;
+    const auditDenials = async (): Promise<number> => {
+      const rows = await api.container.database.db.execute(
+        // A refusal is an audit row whose `after` names the permission it was
+        // refused. There is no `outcome` column: `recordMutationDenial`
+        // encodes the refusal in the payload.
+        sql`SELECT count(*)::int AS n FROM audit_logs WHERE after ? 'deniedPermission'`,
+      );
+      return Number((rows.rows[0] as { n: number }).n);
+    };
 
-    const beforeWellFormed = await denials();
-    for (const [route, body] of routes(wellFormed)) {
-      expect((await post(route, supportCookie, body)).statusCode, `${route} well-formed`).toBe(403);
-    }
-    const wellFormedDelta = (await denials()) - beforeWellFormed;
+    const measure = async (route: string, body: unknown, label: string) => {
+      const beforeEvents = await denials();
+      const beforeAudit = await auditDenials();
+      expect((await post(route, supportCookie, body)).statusCode, `${route} ${label}`).toBe(403);
+      return {
+        events: (await denials()) - beforeEvents,
+        audit: (await auditDenials()) - beforeAudit,
+      };
+    };
 
-    expect(malformed, 'a denial must be recorded at all').toBeGreaterThan(0);
+    for (const [route, malformedBody] of routes(() => ({ nonsense: true }))) {
+      const bad = await measure(route, malformedBody, 'malformed');
+      const good = await measure(route, wellFormed(routeName(route, id)), 'well-formed');
+
+      expect(bad.events, `${route}: no operational event for a malformed body`).toBeGreaterThan(0);
+      expect(bad.audit, `${route}: no DENIED audit row for a malformed body`).toBeGreaterThan(0);
+      expect(bad.events, `${route}: a malformed body suppressed the event`).toBe(good.events);
+      expect(bad.audit, `${route}: a malformed body suppressed the audit row`).toBe(good.audit);
+    }
+  });
+
+  it('records the CREDENTIALS denial on create, even with a malformed body', async () => {
+    /*
+     * The gap the previous round left inside the file it fixed.
+     *
+     * `create`'s second guard — `panels.credentials.rotate`, the CRITICAL
+     * permission — is gated on `parsed.credentials !== undefined`, so it
+     * necessarily ran after the parse. An actor holding `panels.edit` but not
+     * the rotate permission could therefore post credentials WITH a malformed
+     * idempotency key, be answered 400, and leave no record; the same body
+     * with a valid key was a 403 with both. Measured on the round that said
+     * "fixed at all five sites".
+     *
+     * The first guard cannot see it: `supportCookie` holds no panel
+     * permission at all and is refused before ever reaching the second, which
+     * is why the sibling test above is blind to this cell. `technical` is the
+     * actor that has one and not the other.
+     */
+    const denials = async (): Promise<number> => {
+      const rows = await api.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM audit_logs WHERE after ? 'deniedPermission'`,
+      );
+      return Number((rows.rows[0] as { n: number }).n);
+    };
+    const body = (idempotencyKey: unknown) => ({
+      name: 'Credentials on create',
+      providerType: 'marzban',
+      baseUrl: 'https://panel.example.test',
+      credentials: { password: PASSWORD },
+      idempotencyKey,
+    });
+
+    const beforeBad = await denials();
     expect(
-      malformed,
-      'a malformed body must not suppress the access.permission_denied record',
-    ).toBe(wellFormedDelta);
+      (await post(PANEL_ROUTES.create, technicalCookie, body('short'))).statusCode,
+      'a malformed key must not turn the CRITICAL denial into a 400',
+    ).toBe(403);
+    const bad = (await denials()) - beforeBad;
+
+    const beforeGood = await denials();
+    expect(
+      (await post(PANEL_ROUTES.create, technicalCookie, body(idempotencyKey()))).statusCode,
+    ).toBe(403);
+    const good = (await denials()) - beforeGood;
+
+    expect(bad, 'a malformed body left no denial record').toBeGreaterThan(0);
+    expect(bad, 'a malformed body suppressed the credentials denial').toBe(good);
   });
 
   it('refuses an anonymous caller', async () => {

@@ -453,6 +453,31 @@ export class PanelService {
       entityType: 'Panel',
       entityId: null,
     });
+    /*
+     * And the CREDENTIALS permission too, on the raw body, when the request
+     * carries credentials at all.
+     *
+     * The full check below needs `parsed.credentials`, so it necessarily runs
+     * after the parse — which left the CRITICAL denial suppressible on this
+     * route alone: an actor holding `panels.edit` but not
+     * `panels.credentials.rotate` who posted credentials WITH a malformed
+     * idempotency key was answered 400 and left no record, where the same body
+     * with a valid key was answered 403 and left two. Measured, on the round
+     * that claimed to have fixed all five sites.
+     *
+     * A structural look at the raw input is enough to close it and is all that
+     * is available before parsing: the request either mentions credentials or
+     * it does not. The check below stays, because "mentions" is not "carries"
+     * — `{credentials: null}` mentions them and parses to `undefined` — and
+     * refusing a caller who may not rotate is right either way.
+     */
+    if (typeof input === 'object' && input !== null && 'credentials' in input) {
+      await this.authorize(scope, actor, PANELS_CREDENTIALS_ROTATE, {
+        action: 'panel.create',
+        entityType: 'Panel',
+        entityId: null,
+      });
+    }
     const parsed = parseCommand(createPanelRequestSchema, input);
     const command: CreatePanelCommand = {
       name: parsed.name,

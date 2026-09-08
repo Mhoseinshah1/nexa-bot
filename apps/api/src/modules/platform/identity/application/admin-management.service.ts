@@ -126,19 +126,38 @@ export class AdminManagementService {
     actor: ActorContext,
     input: unknown,
   ): Promise<{ admin: Admin; roleKeys: string[] }> {
-    const command = createAdminRequestSchema.parse(input);
-
-    const username = adminUsernameSchema.parse(command.username.trim().toLowerCase());
-    adminPasswordSchema.parse(command.password);
-
-    // A cheap rejection before the expensive hash, so an unprivileged caller
-    // does not get to spend a KDF per request. It is NOT the authorization —
-    // that is re-run under the lock below, because this one is read on the pool
-    // and can be stale by the time the row is written.
+    /*
+     * BEFORE the parse, and this is the odd arm of its own file.
+     *
+     * `setStatus` and `setRoles` both authorize and then parse; only `create`
+     * was inverted — the one that mints a NEW CREDENTIAL with roles attached.
+     * A `ZodError` is a 400 that never reaches the guard, so an authenticated
+     * caller without `admins.edit` who posted `{nonsense:true}` was answered
+     * 400 and left NO `access.permission_denied` and NO DENIED audit row,
+     * while the same caller posting a well-formed body left both. Measured:
+     * +0 and +0 against +1 and +1.
+     *
+     * The previous round moved the five panel writes for exactly this reason
+     * and said in three documents that the panel service was "the last to
+     * follow a rule the others kept". It was not: this was, in the module with
+     * the highest blast radius on the surface, and in a file that already did
+     * it correctly twice. Correct where the author was looking, wrong one
+     * module over — the same shape the move itself was fixing.
+     *
+     * Still a CHEAP rejection before the expensive hash, so an unprivileged
+     * caller does not get to spend a KDF per request, and still NOT the
+     * authorization of record: that is re-run under the lock below, because
+     * this one is read on the pool and can be stale by the time the row is
+     * written.
+     */
     await this.assertMayAttempt(scope, actor, 'admins.edit', {
       action: 'admin.create',
       entityId: null,
     });
+
+    const command = createAdminRequestSchema.parse(input);
+    const username = adminUsernameSchema.parse(command.username.trim().toLowerCase());
+    adminPasswordSchema.parse(command.password);
 
     const adminId = this.ids.uuid() as AdminId;
     // Hashing is deliberately outside the transaction: it is intentionally slow,

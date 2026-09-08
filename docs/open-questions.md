@@ -354,9 +354,23 @@ neither true nor false`, which cannot tell the two orders apart.
   including on `panels.credentials.rotate`, the CRITICAL permission. **This
   one was FIXED** rather than recorded, because unlike the query cases the
   same layer already did it the other way round in settings, features,
-  templates and the notification test: the panel service was the last to
-  follow a rule the others kept. Pinned by
+  templates and the notification test. Pinned by
   `panels-http.test.ts` › records the denial even when the body is nonsense.
+- And the same defect again in `AdminManagementService.create`, which parsed
+  before `assertMayAttempt` while `setStatus` and `setRoles` in the SAME FILE
+  authorized first — the one operation that mints a credential with roles
+  attached. The round that fixed the panels said in three documents that "the
+  panel service was the last to follow a rule the others kept"; it was not,
+  and that sentence is corrected here. Pinned by
+  `admin-http.test.ts` › records the denial on create even when the body is
+  nonsense.
+- And once more INSIDE the file that had just been fixed: `create`'s second
+  guard, `panels.credentials.rotate`, is gated on the parsed body, so an actor
+  holding `panels.edit` but not the rotate permission could suppress the
+  CRITICAL denial with a malformed idempotency key. Closed by authorizing on
+  the raw body's shape when it mentions credentials at all. Pinned by
+  `panels-http.test.ts` › records the CREDENTIALS denial on create, even with
+  a malformed body.
 
 The honest reading is that nothing decides this at all: the ordering follows
 wherever each value happens to be validated, and five attempts to state it as

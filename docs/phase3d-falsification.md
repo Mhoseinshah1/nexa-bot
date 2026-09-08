@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 309 citations were checked; this record declares 310 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 310 citations were checked; this record declares 312 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -4729,6 +4729,13 @@ was the last to follow a rule the others kept, and the sentence it falsified —
 "a BODY is handed to the service, WHICH AUTHORIZES FIRST" — was true of the
 three endpoints it named and false one module over. Fixed at all five sites.
 
+("the panel service was the last" is FALSE, and round 42 below found two more:
+`AdminManagementService.create` — the operation that mints a credential — and
+the CRITICAL second guard inside `PanelService.create` itself. "Fixed at all
+five sites" was true of the sites it counted and the count was wrong. Left
+standing and corrected here, because a claim of completeness that was not
+complete is the finding.)
+
 The test asserts the RECORD, not the status, and compares the malformed delta
 against the WELL-FORMED delta rather than a fixed number. A denial happens to
 write two rows here — the guard records one and `recordMutationDenial` another
@@ -4785,6 +4792,95 @@ AR1 was applied to ONE of the five sites, deliberately: it fails with
 `/panels/<id>/credentials malformed: expected 400 to be 403`, naming the route
 whose order was reverted. A mutation that had to change all five to be caught
 would not have shown that the test discriminates per site.
+
+## Round 42 — the twenty-fourth reviewer, and "fixed at all five sites" was not
+
+Six findings. The shape is the same one for the ninth round running, and this
+time it is a claim of COMPLETENESS that was not complete.
+
+### The identical defect, one module over, in the module that mints credentials
+
+`AdminManagementService.create` parsed `createAdminRequestSchema` before
+`assertMayAttempt` — while `setStatus` and `setRoles`, in the SAME FILE,
+authorize first. Measured: an unprivileged caller posting `{nonsense:true}`
+got 400 with +0 operational events and +0 DENIED audit rows; the same caller
+posting a well-formed body got 403 with +1 and +1.
+
+`create` is the one operation that mints a NEW CREDENTIAL with roles attached,
+described in its own comment as "the most privileged act on this surface". So
+`admins.edit` was the last denial in the codebase a malformed body could
+erase, in the round that stated in three documents that none remained.
+
+### And once more inside the file that had just been fixed
+
+`PanelService.create`'s second guard is `panels.credentials.rotate`, the
+CRITICAL permission, and it is gated on `parsed.credentials !== undefined` —
+so it necessarily ran after the parse. An actor holding `panels.edit` but not
+the rotate permission could post credentials with a malformed idempotency key,
+be answered 400, and leave nothing: measured +0 against +2 for the same body
+with a valid key.
+
+The previous round's test could not see it by construction, and that is worth
+stating: its actor holds NO panel permission, so it is refused at the first
+guard and never reaches the second. The cell needed a different actor —
+`technical`, who has one permission and not the other.
+
+Closed by authorizing on the RAW body's shape when it mentions credentials at
+all. The parsed check stays, because "mentions" is not "carries":
+`{credentials: null}` mentions them and parses to `undefined`.
+
+### The new test's headline claim was not backed
+
+`records the denial even when the body is nonsense` compared one aggregate
+delta against another and said it "asserts the RECORD, not just the status".
+It did not. Removing `recordMutationDenial` from the credentials path left the
+whole file GREEN — both loops lose the same rows, so `malformed ===
+wellFormed` still held, and the only discriminating assertion was the
+`toBe(403)` inside the loops. A comparison cannot see a change that affects
+both sides of it.
+
+Now measured PER ROUTE, against both ledgers, with an absolute floor as well
+as the comparison. The reviewer's exact mutation now fails with
+`/panels/<id>/credentials: no DENIED audit row for a malformed body`.
+
+### The leak guard was on the wrong variable, twice
+
+`existsSync(workspace)` cannot fire: `workspace` is a module-level `let` that
+`beforeEach` REASSIGNS, so an orphan resuming after teardown sees the NEXT
+test's directory, which exists. Measured: with the committed guard a forced
+timeout still leaked a tree; with `existsSync(rootDir)` it leaks none. Two
+rounds guarded the wrong variable, in the check written to close this.
+
+### A citation withdrawn
+
+"removing `!exited` … makes the anchors take 2.6s instead of 0.8s" did not
+reproduce; the reviewer measured the mutant as no slower. The figure only
+holds on a run where the kill misses the copy. Withdrawn rather than left as
+a number with nothing behind it — the green half, which is the part that
+matters, is verified.
+
+### Recorded, not fixed
+
+Every panel denial writes the operational event TWICE: `permission-guard.ts`
+records it whenever no transaction is passed, and `recordMutationDenial`
+records it again. `PanelService.authorize` passes none, so both fire.
+`access.permission_denied` never resolves, so an operator counting denials
+counts double, permanently. Pre-existing and shared with every other
+non-transactional caller of `recordMutationDenial`; flagged here because this
+branch's previous round DOCUMENTED it as expected rather than noticing it.
+Out of scope for a Web Admin branch, and named so the next person has
+somewhere to start.
+
+## The mutations
+
+| #   | rule                                       | mutation                                                                   | tests that die                                                                     |
+| --- | ------------------------------------------ | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| AS1 | `admin.create` AUTHORIZES before it parses | move the parse back in front of `assertMayAttempt`                         | `admin-http.test.ts` › records the denial on create even when the body is nonsense |
+| AS2 | a denial leaves a row in BOTH ledgers      | replace `this.authorize` with a bare `guard.check` on the credentials path | `panels-http.test.ts` › records the denial even when the body is nonsense          |
+
+AS2 is the reviewer's own mutation, which left the whole file green before this
+round and now fails naming the route and the ledger that lost its row. AS1
+fails with `a malformed body: expected 400 to be 403`, which is the finding.
 
 ## The microsecond truncation is still open, deliberately
 
