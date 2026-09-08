@@ -260,7 +260,15 @@ function AttentionCard({
             code: string;
             severity: string;
             message: string;
-            lastSeenAt: string;
+            /*
+             * The ORDERING column, which is the one this card draws.
+             *
+             * `lastSeenAt` was named here and drawn below while the server
+             * ordered by `first_seen_at DESC`. Narrowing the prop to the field
+             * actually rendered is what makes a future swap a type error
+             * rather than six timestamps in no particular order.
+             */
+            firstSeenAt: string;
           }[];
         }
       | undefined;
@@ -297,7 +305,25 @@ function AttentionCard({
               <span className="grow" dir="auto">
                 {event.message}
               </span>
-              <span className="faint small nowrap">{formatTimestamp(event.lastSeenAt)}</span>
+              {/*
+               * FIRST seen, which is the column the list is ORDERED by.
+               *
+               * This drew `lastSeenAt` while the server ordered by
+               * `first_seen_at DESC`, so six rows carried six timestamps in
+               * no particular order — on the one card headed "needs
+               * attention", whose whole purpose is triage. Nothing said
+               * "most recent", so nothing was literally false; the card was
+               * simply incoherent with its own ordering, which is worse
+               * because it reads as a bug in the data.
+               *
+               * The alerts page has room for both and shows both, with
+               * occurrences beside them. Six rows do not, so the one drawn
+               * here is the one that decided the order, and it is labelled
+               * rather than left as a bare timestamp whose meaning changed.
+               */}
+              <span className="faint small nowrap" title={t('web.first_seen')}>
+                {formatTimestamp(event.firstSeenAt)}
+              </span>
             </li>
           ))}
         </ul>

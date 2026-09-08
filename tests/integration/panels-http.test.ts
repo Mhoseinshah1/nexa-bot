@@ -792,6 +792,14 @@ describe('panel HTTP surface', () => {
       firstPage.nextCursor!.slice(0, Math.floor(firstPage.nextCursor!.length / 2)),
     ];
 
+    // The count is CITED — in `client.ts` and twice in the falsification
+    // record — and it drifted: two places said thirteen, the commit message
+    // said fifteen, and the fixture held fourteen. A number in prose that no
+    // test asserts is a claim about testing with nothing behind it, so the
+    // fixture now states its own size and a citation cannot go stale in
+    // silence.
+    expect(cursors, 'the cited malformed-cursor count changed').toHaveLength(14);
+
     for (const cursor of cursors) {
       const response = await get(
         `${PANEL_ROUTES.list}?limit=1&cursor=${encodeURIComponent(cursor)}`,
@@ -843,13 +851,23 @@ describe('panel HTTP surface', () => {
     expect(unknownRow.nextCursor).toBeNull();
 
     // An OVERSIZED cursor is refused by the request schema at 512 characters,
-    // before this code sees it — the same 400, by a different route. Asserted
-    // rather than folded into the loop, because a test that accepted either
-    // answer would not notice if the two rules swapped.
-    expect(
-      (await get(`${PANEL_ROUTES.list}?limit=1&cursor=${'A'.repeat(4_096)}`, ownerCookie))
-        .statusCode,
-    ).toBe(400);
+    // before `decodeCursor` sees it — the same 400, by a different route and
+    // with a DIFFERENT CODE. Asserted rather than folded into the loop,
+    // because a test that accepted either answer would not notice if the two
+    // rules swapped — and the code is asserted too, because the schema is now
+    // the only length bound: the decoder carried a second copy that could not
+    // fire, so nothing but this pins which refusal an oversize cursor gets.
+    const oversize = await get(
+      `${PANEL_ROUTES.list}?limit=1&cursor=${'A'.repeat(4_096)}`,
+      ownerCookie,
+    );
+    expect(oversize.statusCode).toBe(400);
+    expect(oversize.json()).toMatchObject({
+      // The literal the error filter maps a `ZodError` to. Not a contract
+      // constant — stated here rather than invented, because inventing one
+      // would be a contract change wearing a test's clothes.
+      error: { kind: 'VALIDATION', code: 'request.invalid' },
+    });
 
     // A cursor this API issued is still honoured, so the validation did not
     // simply refuse everything.
@@ -923,6 +941,49 @@ describe('panel HTTP surface', () => {
     expect((await get(PANEL_ROUTES.list, supportCookie)).statusCode).toBe(403);
     expect((await get(PANEL_ROUTES.detail(created.panel.id), supportCookie)).statusCode).toBe(403);
     expect((await createPanel(supportCookie, { name: 'Nope' })).statusCode).toBe(403);
+  });
+
+  it('refuses a request it cannot READ before it decides who may read it', async () => {
+    /*
+     * A 400 pre-empts the 403, for EVERY malformed query parameter.
+     *
+     * Worth pinning because the cursor refusal made it visible: before the
+     * owner's decision an unreadable cursor was silently ignored, so an
+     * unprivileged caller who sent one still reached the service and still got
+     * a 403 with its `access.permission_denied` record. Now the cursor is
+     * refused first — and a reviewer reasonably asked whether that lets a
+     * prober suppress a security record by appending six characters.
+     *
+     * It does not introduce anything: `limit=abc` has always done exactly the
+     * same, through the same schema, on the same line, and so has every other
+     * surface in this codebase — the query is parsed in the controller and the
+     * service that resolves the permission is not called until it parses. What
+     * the cursor did was JOIN that class, not create it.
+     *
+     * So the rule is stated and pinned rather than patched: a request this
+     * server cannot understand is refused before it is authorized, uniformly,
+     * and the two parameters must not drift apart. A 400 also tells the caller
+     * nothing about what they may read, which is why this ordering is the
+     * conventional one.
+     */
+    const denied = await get(PANEL_ROUTES.list, supportCookie);
+    expect(denied.statusCode, 'a readable request from an unprivileged caller').toBe(403);
+
+    for (const query of ['limit=abc', 'cursor=not-a-cursor', 'archived=maybe']) {
+      const response = await get(`${PANEL_ROUTES.list}?${query}`, supportCookie);
+      expect(response.statusCode, `${query} did not pre-empt the guard`).toBe(400);
+      // And no page: refusing early may not become answering early.
+      expect(response.json().panels, `${query} answered with a page`).toBeUndefined();
+    }
+
+    // The same three, from a caller who IS privileged: still 400, so the
+    // refusal is about the request rather than about the actor.
+    for (const query of ['limit=abc', 'cursor=not-a-cursor', 'archived=maybe']) {
+      expect(
+        (await get(`${PANEL_ROUTES.list}?${query}`, ownerCookie)).statusCode,
+        `${query} from a privileged caller`,
+      ).toBe(400);
+    }
   });
 
   it('refuses an anonymous caller', async () => {

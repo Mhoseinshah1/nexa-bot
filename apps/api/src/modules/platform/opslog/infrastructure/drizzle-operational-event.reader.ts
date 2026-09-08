@@ -24,13 +24,20 @@ export class DrizzleOperationalEventReader implements OperationalEventReader {
   async list(scope: ScopeContext, query: OperationalEventQuery): Promise<OperationalEventRow[]> {
     const tenantId = requireTenantId(scope);
 
-    // Ordered by `last_seen_at` descending, which is what the existing
-    // `(tenant_id, last_seen_at)` index serves. The legacy `/admin/logs` has
-    // 1,700 rows, no pagination and no filter of any kind; every clause below is
-    // there because that is what an operator does with a log.
+    // Ordered by `first_seen_at` descending, served by
+    // `operational_events_tenant_first_seen_page_idx` on
+    // `(tenant_id, first_seen_at, id)` — which is built concurrently outside
+    // the migrator, see `online-indexes.ts`. This comment named `last_seen_at`
+    // and its index for one commit after the ordering had moved, five lines
+    // above the block that says the opposite: the sentence a maintainer would
+    // read to conclude the ordering was indexed, while it was not.
+    //
+    // The legacy `/admin/logs` has 1,700 rows, no pagination and no filter of
+    // any kind; every clause below is there because that is what an operator
+    // does with a log.
     const filters = [eq(operationalEvents.tenantId, tenantId)];
-    // The cursor is a PAIR, `(last_seen_at, id)`, and the comparison is
-    // lexicographic. `last_seen_at` alone is not unique — a `Clock.now()` is
+    // The cursor is a PAIR, `(first_seen_at, id)`, and the comparison is
+    // lexicographic. `first_seen_at` alone is not unique — a `Clock.now()` is
     // typically captured once per transaction, so several distinct conditions
     // share one microsecond — and a strict `<` on it skips the rest of a group
     // that straddles the page boundary. Rows would simply not appear on any

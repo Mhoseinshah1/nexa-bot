@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 285 citations were checked; this record declares 292 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 292 citations were checked; this record declares 296 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -4101,6 +4101,120 @@ matches on NAME: an index already present from an earlier run would survive the
 deletion of its own declaration and the mutation would prove nothing. AK2 was
 run TWICE — once against the first version of the test, which it did not kill,
 and again against the fixture written because it did not.
+
+## Round 36 — the eighteenth reviewer, on the owner-decision commit itself
+
+Eight findings against `256c3ca`, six of them the branch's own three shapes.
+
+### `/ops-log` answered 500 for a Date-legal, `timestamptz`-illegal instant
+
+`dateParam` and `cursorFrom` tested `Number.isNaN` and nothing else. A
+JavaScript `Date` spans ±271821 years and `timestamptz` does not, so
+`since=+275760-09-13T00:00:00.000Z` and `since=-005000-01-01T00:00:00.000Z`
+parse, reach the driver, and raise `22008` at the cast — arriving as
+`internal.unhandled`. Five caller-controlled shapes across `since`, `until`
+and the `before` cursor half.
+
+Defect class 1 AND class 3 at once. `panels.controller.ts` documents this exact
+hazard at length and guards it — "the four-digit year is load-bearing" —
+`/notifications` is guarded by `isoTimestamp` in its schema, and `/ops-log` is
+the third cursor and the one left behind. And `dateParam` was ADDED by this
+branch to stop `new Date('')` reaching the driver: its own docblock claimed
+"parsed and refused if malformed" while refusing one of the two ways to be
+malformed. The existing test refused `since=yesterday`, which is the
+Invalid-Date shape only, so five callable 500s sat under a green suite.
+
+The bound is checked on what the Date PARSED to rather than on the text:
+`toISOString` renders anything outside year 0001-9999 in the expanded
+`±YYYYYY` form, so one comparison covers both directions and every spelling.
+
+### The cursor refusal pre-empts the permission guard
+
+An unprivileged caller who appends an unreadable cursor gets 400 where the
+same caller with no cursor gets 403 — and no `access.permission_denied` is
+recorded, which is a security fact about people that an operator is meant to
+be able to find.
+
+Confirmed, and NOT patched, because the patch would be the inconsistency.
+`limit=abc` and `archived=maybe` have always done exactly the same, through
+the same `parse` on the same line, and so does every other surface here: the
+query is parsed in the controller and the service that resolves the permission
+is not called until it parses. What the cursor did was JOIN that class, not
+create it — before the owner's decision it was silently ignored, so the request
+reached the service and was denied there. A 400 also tells the caller nothing
+about what they may read, which is why this ordering is the conventional one.
+
+So the rule is stated where it lives and PINNED for all three parameters at
+once, from an unprivileged and a privileged caller, rather than one of them
+being quietly given a different order.
+
+### Four docblocks still named the keyset that moved, and one named the rule that inverted
+
+The port contract (`OperationalEventQuery.before`), the reader's own header
+comment five lines above the block that says the opposite, `CursorPager`'s
+docstring — which exists SOLELY to stop a reader reintroducing a mutable
+ordering column, and had come to name one — `fetchOpsLog`'s `before`, and a
+test comment. Plus one the reviewer did not list: `panels.controller.ts`'s
+cursor docblock still said an unreadable cursor "is treated as no cursor
+rather than an error… refusing would turn a stale bookmark into a failed
+request", two screens above the function that now refuses. All corrected in
+place, the inverted one by naming the old sentence rather than deleting it,
+because that sentence is precisely the argument a later reader would use to
+put the silent restart back.
+
+### A cited count that was three different numbers
+
+`panels-http.test.ts` builds FOURTEEN malformed cursors. `client.ts` and this
+record said thirteen; the commit message said fifteen. Defect class 4 — a claim
+about testing whose probe was never run. Corrected, and the fixture now asserts
+its own length, so a citation cannot go stale in silence again.
+
+### Two dead branches, and a message that named the case it is not
+
+`raw.length > CURSOR_MAX_LENGTH` could not fire: `panelListQuerySchema.cursor`
+is `z.string().max(512)`, so a longer value is a `ZodError` first — the comment
+about "a megabyte of base64" described a path that no longer existed. And
+`Buffer.from(text, 'base64url')` never throws for any string; it SKIPS what it
+cannot decode, so the `catch` was unreachable and `'!!!not base64!!!'` is
+refused for having no separator, not by the guard its fixture was written for.
+Both removed, leaving ONE length bound, in the schema, where the wire contract
+states it — and with it the honest consequence, which the commit had not said:
+an oversize cursor is `request.invalid` and every other unreadable one is
+`control.invalid_value`. Two codes, both 400, now asserted separately.
+
+Separately, the uuid arm refused with "does not name a row this server issued"
+— which is the 200-with-an-empty-page case, stated three times in that same
+commit. The messages now say what the code does: cannot be read.
+
+### The attention card sorted by a column it did not draw
+
+`dashboard.tsx` labelled each row with `lastSeenAt` while the server ordered by
+`first_seen_at DESC`, so six rows carried six timestamps in no particular order
+on the one card whose purpose is triage. Nothing claimed "most recent", so
+nothing was literally false; the card was incoherent with its own ordering,
+which reads as a bug in the data. It draws `firstSeenAt` now, labelled rather
+than left bare.
+
+The test for it puts the two columns in OPPOSITE orders on every row, because
+the web harness's shared `event()` fixture writes them EQUAL — which is why no
+existing test could tell the two spellings apart, and why the card's regression
+was invisible for a commit.
+
+## The mutations
+
+| #   | rule                                           | mutation                                  | tests that die                                                                                     |
+| --- | ---------------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| AL1 | an instant outside `timestamptz` is REFUSED    | drop the four-digit-year comparison       | `web-admin-v2.test.ts` › refuses an empty filter rather than widening the read                     |
+| AL2 | the attention card dates by `firstSeenAt`      | draw `lastSeenAt`                         | `dashboard.test.tsx` › dates each condition by when it FIRST appeared, which is the order it is in |
+| AL3 | the SCHEMA is the only cursor length bound     | raise `max(512)` to `max(8192)`           | `panels-http.test.ts` › refuses a malformed cursor with a 400 rather than restarting the traversal |
+| AL4 | a request that cannot be READ is refused first | decode `not-a-cursor` instead of throwing | `panels-http.test.ts` › refuses a request it cannot READ before it decides who may read it         |
+
+Each applied alone, reverted, and every touched file verified byte-identical by
+sha256 after each — `packages/contracts` rebuilt on both sides of AL3, because
+a worktree resolves that package to its `dist` and mutating the source alone
+tests nothing. AL1 fails with `expected 500 to be 400`, which is the finding
+itself. AL4 fails with `expected 403 to be 400`, which is the behaviour the
+parent commit had.
 
 ## The microsecond truncation is still open, deliberately
 

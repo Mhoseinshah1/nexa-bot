@@ -19,7 +19,13 @@ export interface OperationalEventRow {
 
 export interface OperationalEventQuery {
   readonly limit: number;
-  /** Keyset pagination on `lastSeenAt`, which is also the sort key. */
+  /**
+   * Keyset pagination on `firstSeenAt`, which is also the sort key.
+   *
+   * IMMUTABLE, by owner decision: `lastSeenAt` is rewritten by every repeat
+   * occurrence of a deduped condition, so a row below an operator's cursor
+   * that recurs jumps above it and is returned on no later page.
+   */
   readonly before?: Date | undefined;
   readonly beforeId?: string | undefined;
   readonly severities?: readonly OperationalSeverity[] | undefined;

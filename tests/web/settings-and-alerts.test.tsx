@@ -660,7 +660,7 @@ describe('management alerts', () => {
     await waitFor(() => {
       const paged = api.calls.find((call) => call.url.includes('beforeId'));
       expect(paged?.url).toContain('beforeId=e24');
-      // Both halves of the cursor: `lastSeenAt` alone is not unique, and a
+      // Both halves of the cursor: `firstSeenAt` alone is not unique, and a
       // strict comparison on it skips the tail of a group that straddles a page.
       expect(paged?.url).toContain('before=2026-09-06T08%3A00%3A04.000Z');
     });

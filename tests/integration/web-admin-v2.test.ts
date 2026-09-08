@@ -281,6 +281,14 @@ describe('the Web Admin V2 surface', () => {
      * An empty string is a filter the caller sent. Answering it with MORE rows
      * than were asked for is the widening this endpoint exists to refuse.
      */
+    /**
+     * A legal `uuid` for the `beforeId` half, so the OTHER half is the only
+     * thing that can refuse the request. A cursor missing its tie-break is
+     * refused before either half is parsed, which would make the assertion
+     * below pass for the wrong reason.
+     */
+    const OUT_OF_RANGE_CURSOR_ID = '01a05e35-c9ad-7e93-bef3-1ed9b5520001';
+
     it('refuses an empty filter rather than widening the read', async () => {
       for (const parameter of ['scope', 'severity', 'code', 'since', 'until']) {
         const response = await get(`${CONTROL_ROUTES.opsLog}?${parameter}=`, ownerCookie);
@@ -292,6 +300,36 @@ describe('the Web Admin V2 surface', () => {
           (await get(`${CONTROL_ROUTES.opsLog}?${query}`, ownerCookie)).statusCode,
           query,
         ).toBe(400);
+      }
+      /*
+       * And the OTHER way to be malformed, which is the one that answered 500.
+       *
+       * `Number.isNaN` was the whole test, and a JavaScript `Date` spans
+       * ±271821 years while `timestamptz` does not. Every value below parses,
+       * reaches the driver, and raises `22008` at the cast — arriving as
+       * `internal.unhandled`. `since=yesterday` above is the Invalid-Date
+       * shape only, which is why five callable 500s sat under a green suite.
+       *
+       * The sibling cursor in `panels.controller.ts` documents this exact
+       * hazard and guards it; `/notifications` is guarded in its schema.
+       * `/ops-log` was the third and the one left behind.
+       */
+      const outOfRange = [
+        'since=%2B275760-09-13T00:00:00.000Z',
+        'until=%2B275760-09-13T00:00:00.000Z',
+        'since=-005000-01-01T00:00:00.000Z',
+        'until=-005000-01-01T00:00:00.000Z',
+        `before=%2B275760-09-13T00:00:00.000Z&beforeId=${OUT_OF_RANGE_CURSOR_ID}`,
+        `before=-005000-01-01T00:00:00.000Z&beforeId=${OUT_OF_RANGE_CURSOR_ID}`,
+      ];
+      for (const query of outOfRange) {
+        const response = await get(`${CONTROL_ROUTES.opsLog}?${query}`, ownerCookie);
+        // 400 EXACTLY. Asserting `not.toBe(500)` would pass on a 200, which is
+        // the other way this could go wrong.
+        expect(response.statusCode, query).toBe(400);
+        expect(response.json(), query).toMatchObject({
+          error: { kind: 'VALIDATION', code: CONTROL_ERROR_CODES.INVALID_VALUE },
+        });
       }
       // And every well-formed spelling still answers, so the guard is not
       // simply "refuse everything".

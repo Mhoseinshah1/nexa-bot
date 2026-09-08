@@ -786,7 +786,7 @@ export function DataTable<T>({
  *
  * This used to say the cursor "encodes `(name, id)`", which is wrong for every
  * one of the three lists that mount this component — panels keyset on
- * `(created_at, id)`, alerts on `(last_seen_at, id)`, notifications on
+ * `(created_at, id)`, alerts on `(first_seen_at, id)`, notifications on
  * `(created_at, id)`. `(name, id)` is the keyset the panel page was MIGRATED
  * OFF, by 0026, because a rename moves a row across a cursor and the row is
  * then returned twice or never. A reader who took this docstring at face value

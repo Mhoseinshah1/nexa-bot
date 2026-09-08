@@ -45,19 +45,20 @@ import type { PanelView } from '../../modules/platform/panels/application/ports.
  *
  * Base64url of `(id, created_at)`. Opaque on purpose: a caller that parsed it
  * would be depending on an ordering this API has not promised, and would break
- * the day the list is ordered differently. A cursor that does not decode is
- * treated as no cursor rather than an error — the worst it can do is restart
- * the traversal, and refusing would turn a stale bookmark into a failed
- * request.
+ * the day the list is ordered differently.
+ *
+ * A cursor that does not decode is a 400. This block used to say the opposite —
+ * "treated as no cursor rather than an error… refusing would turn a stale
+ * bookmark into a failed request" — and it was left standing one commit after
+ * the owner inverted the rule, two screens above the function that now refuses.
+ * Restating it here rather than deleting it, because the sentence is exactly
+ * the argument a later reader would use to put the silent restart back.
  *
  * EVERY component is validated, and that is the point rather than tidiness.
  * The decoded id goes into a query that casts it to `uuid`, so `not-a-uuid`
  * reached PostgreSQL as 22P02 and came back as a 500 — a caller could turn any
- * text into an internal error by base64ing it. Restarting the traversal is the
- * documented behaviour for a cursor this code cannot read, and a cursor whose
- * id is not a uuid is one of those.
+ * text into an internal error by base64ing it.
  */
-const CURSOR_MAX_LENGTH = 512;
 const CURSOR_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /**
  * The exact rendering `pageKeysQuery` produces, and nothing else.
@@ -124,26 +125,42 @@ function decodeCursor(raw: string): PanelCursor {
       // string a caller controls.
       cursor: raw.length > 64 ? `${raw.slice(0, 64)}…` : raw,
     });
-  // Bounded before it is decoded: a megabyte of base64 is a megabyte this
-  // process would otherwise allocate and scan to reject.
-  if (raw.length === 0 || raw.length > CURSOR_MAX_LENGTH) {
-    throw bad('is not a cursor this server issued');
-  }
-  let decoded: string;
-  try {
-    decoded = Buffer.from(raw, 'base64url').toString('utf8');
-  } catch {
-    throw bad('is not a cursor this server issued');
-  }
+  /*
+   * NO length bound here, deliberately, and no `try` around the decode.
+   *
+   * Both were written, and both were dead. `panelListQuerySchema.cursor` is
+   * `z.string().max(512)`, so a longer value is a `ZodError` and a 400 before
+   * this function is reached — the branch that claimed to stop "a megabyte of
+   * base64" could not fire, and its comment described a path that no longer
+   * existed. And `Buffer.from(text, 'base64url')` never throws for any string:
+   * it SKIPS characters it cannot decode, so the `catch` was unreachable and
+   * `'!!!not base64!!!'` is refused below for having no separator rather than
+   * by the guard the fixture was written for.
+   *
+   * One bound, in the schema, which is also where the wire contract states it.
+   * The cost of that arrangement is stated rather than glossed: an oversize
+   * cursor is refused with `request.invalid` and every other unreadable one
+   * with `control.invalid_value`. Both are 400s a client can act on, they are
+   * asserted separately so the two cannot swap unnoticed, and `http.ts` says
+   * so where the rule is declared.
+   */
+  if (raw.length === 0) throw bad('is not a cursor this server issued');
+  const decoded = Buffer.from(raw, 'base64url').toString('utf8');
   const separator = decoded.indexOf(':');
   if (separator === -1) throw bad('is not a cursor this server issued');
   const id = decoded.slice(0, separator);
   // Any UUID version, not v7 specifically: the only thing this value has to be
   // is a legal `uuid` literal, because it reaches a `uuid` column and a
   // malformed one was a driver error and a 500.
-  if (!CURSOR_UUID.test(id)) throw bad('does not name a row this server issued');
+  //
+  // The message says CANNOT BE READ, never "names no row": a well-formed uuid
+  // at a well-formed instant naming nothing is the 200-with-an-empty-page case,
+  // three times over in this commit, and a message that called this refusal
+  // "does not name a row" told the client the opposite of the boundary the
+  // code draws.
+  if (!CURSOR_UUID.test(id)) throw bad('does not carry an identifier this server issues');
   const createdAt = decodeInstant(decoded.slice(separator + 1));
-  if (createdAt === null) throw bad('does not carry a position this server issued');
+  if (createdAt === null) throw bad('does not carry a position this server issues');
   return { id: id.toLowerCase(), createdAt };
 }
 

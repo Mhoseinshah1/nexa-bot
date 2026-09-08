@@ -327,7 +327,12 @@ export function previewTemplate(
 export function fetchOpsLog(query: {
   severity?: string;
   open?: boolean;
-  /** The `lastSeenAt` of the oldest row already shown; returns older ones. */
+  /**
+   * The `firstSeenAt` of the oldest row already shown; returns older ones.
+   *
+   * NOT `lastSeenAt`: every repeat occurrence rewrites that, so a row below
+   * the cursor that recurs would jump above it and appear on no later page.
+   */
   before?: string;
   /** Its id, which breaks ties when several rows share that timestamp. */
   beforeId?: string;
@@ -430,7 +435,10 @@ export function fetchProviders(): Promise<ProviderListResponse> {
  * client that truncated one looped silently — the exact subtle bug the sentence
  * promised could not happen. The owner resolved the inconsistency in favour of
  * refusing, `panelListQuerySchema` carries the rule, and
- * `panels-http.test.ts` pins it against thirteen malformed cursors.
+ * `panels-http.test.ts` pins it against fourteen malformed cursors — a count
+ * that test asserts about its own fixture, because this sentence and the
+ * falsification record said thirteen while a fourteenth was added and the
+ * commit message said fifteen.
  */
 export function fetchPanels(
   query: { limit?: number; cursor?: string; archived?: PanelListArchivedMode } = {},

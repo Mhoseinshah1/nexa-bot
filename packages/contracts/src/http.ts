@@ -933,12 +933,21 @@ export type PanelListArchivedMode = (typeof PANEL_LIST_ARCHIVED_MODES)[number];
 /**
  * The panel page, and the ONE place that says what an unreadable cursor does.
  *
- * A cursor this server cannot decode is a **400**, with
- * `control.invalid_value`. It never restarts the traversal.
+ * A cursor this server cannot decode is a **400**. It never restarts the
+ * traversal.
  *
  *   - absent  → the first page
  *   - valid   → the next page
  *   - anything else → 400, never a successful-looking answer
+ *
+ * TWO codes, because there are two bounds and saying there is one was not
+ * true: a cursor longer than the `max(512)` below is `request.invalid` from
+ * this schema, and everything that reaches the decoder is
+ * `control.invalid_value`. Both are 400s a client can act on, and both are
+ * asserted separately in `panels-http.test.ts` so the two cannot swap
+ * unnoticed. The length bound lives HERE and only here — the decoder used to
+ * carry a second copy of it, which could not fire and whose comment described
+ * a path that no longer existed.
  *
  * This is the house rule for every cursor in this API, and `/ops-log` and
  * `/notifications` have always followed it. Panels did not: `decodeCursor`

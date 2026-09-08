@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import { DashboardPage, healthSlices, providerSlices } from '../../apps/web/src/pages/dashboard';
 import { panelSummarySchema } from '@nexa/contracts';
+import { formatTimestamp } from '../../apps/web/src/format';
 import { event, panel, renderPage, stubApi } from './harness';
 
 /**
@@ -122,6 +123,65 @@ describe('the dashboard', () => {
     const scope = new URL(call?.url ?? '', 'https://admin.example.test').searchParams;
     expect(scope.get('scope')).toBe('MANAGEMENT_CONDITIONS');
     expect(scope.get('open')).toBe('true');
+  });
+
+  /**
+   * The card's timestamp is the column the LIST IS ORDERED BY.
+   *
+   * It drew `lastSeenAt` while the server ordered by `first_seen_at DESC`, so
+   * six rows carried six timestamps in no particular order on the one card
+   * whose purpose is triage. Nothing claimed "most recent", so nothing was
+   * literally false — the card was simply incoherent with its own ordering,
+   * which reads as a bug in the data.
+   *
+   * The fixture sets the two columns APART on every row and puts them in
+   * OPPOSITE orders, because the shared default (`firstSeenAt === lastSeenAt`)
+   * is why no existing test could tell the two spellings apart: an assertion
+   * over it would pass whichever column the card drew.
+   */
+  it('dates each condition by when it FIRST appeared, which is the order it is in', async () => {
+    stubApi([
+      READINESS,
+      { url: '/panels', body: { panels: [], nextCursor: null } },
+      {
+        url: '/ops-log',
+        body: {
+          events: [
+            event({
+              id: 'newer-first-seen',
+              message: 'Newer condition',
+              firstSeenAt: '2026-09-06T08:00:00.000Z',
+              lastSeenAt: '2026-09-06T09:00:00.000Z',
+            }),
+            event({
+              id: 'older-first-seen',
+              message: 'Older condition',
+              firstSeenAt: '2026-09-05T08:00:00.000Z',
+              // Recurring RIGHT NOW: under the old spelling this row's
+              // timestamp sorted above the one drawn for the row above it.
+              lastSeenAt: '2026-09-06T23:00:00.000Z',
+            }),
+          ],
+          nextCursor: null,
+        },
+      },
+    ]);
+    renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
+    await screen.findByText('Older condition');
+
+    const shown = screen
+      .getAllByTitle('نخستین بار')
+      .map((node) => node.textContent ?? '')
+      .filter((text) => text.length > 0);
+    expect(shown, 'both conditions carry a timestamp').toHaveLength(2);
+    expect(shown).toEqual([
+      formatTimestamp('2026-09-06T08:00:00.000Z'),
+      formatTimestamp('2026-09-05T08:00:00.000Z'),
+    ]);
+    // And NOT the activity column, which is what made the card incoherent.
+    for (const lastSeen of ['2026-09-06T09:00:00.000Z', '2026-09-06T23:00:00.000Z']) {
+      expect(shown, `${lastSeen} is the activity column`).not.toContain(formatTimestamp(lastSeen));
+    }
   });
 
   /**
