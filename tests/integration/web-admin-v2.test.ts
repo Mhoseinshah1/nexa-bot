@@ -1054,6 +1054,11 @@ describe('the Web Admin V2 surface', () => {
         'until=soon',
         'until=',
         'beforeId=oops&before=2026-01-01T00:00:00.000Z',
+        // `before`'s OWN malformation. The line above exercises `cursorFrom`'s
+        // uuid check, not `before`'s — so `before` was the next enumerated
+        // entry with nothing behind it on the side that discriminates, one
+        // entry over in the loop written to close that for `until`.
+        'before=notatimestamp&beforeId=01a05e35-c9ad-7e93-bef3-1ed9b5520001',
         'open=maybe',
         'open=TRUE',
         'open=',

@@ -429,6 +429,30 @@ export class PanelService {
     input: unknown,
   ): Promise<{ view: PanelView; replayed: boolean }> {
     const tenant = this.tenant(scope);
+    /*
+     * AUTHORIZE, then parse. The order is the audit trail.
+     *
+     * Every write on this service used to parse the body first, and a
+     * `ZodError` is a 400 that never reaches the guard — so an authenticated
+     * caller WITHOUT `panels.edit` who posted `{nonsense:true}` was answered
+     * 400 and left no `access.permission_denied` row, while the same caller
+     * posting a well-formed body was answered 403 and did. Measured: the
+     * event count moved 18 to 18 for the malformed body and 18 to 20 for the
+     * well-formed one. `access.permission_denied` is in
+     * `MANAGEMENT_ONE_SHOT_CODES` because it is a security fact about people,
+     * and it was suppressible by sending nonsense.
+     *
+     * The sibling control services already did it this way — settings,
+     * features, templates and the notification test all authorize on the raw
+     * value — so this is not a new rule, it is the one the panel service was
+     * the last to follow. Its blast radius is why it is worth the five moves:
+     * `panel.credentials.replace` is the CRITICAL permission in this module.
+     */
+    await this.authorize(scope, actor, PANELS_EDIT, {
+      action: 'panel.create',
+      entityType: 'Panel',
+      entityId: null,
+    });
     const parsed = parseCommand(createPanelRequestSchema, input);
     const command: CreatePanelCommand = {
       name: parsed.name,
@@ -462,12 +486,6 @@ export class PanelService {
     const providerType: ProviderType = command.providerType;
     this.deps.adapters(providerType);
     const baseUrl = this.validateUrl(command.baseUrl);
-
-    await this.authorize(scope, actor, PANELS_EDIT, {
-      action: 'panel.create',
-      entityType: 'Panel',
-      entityId: null,
-    });
 
     /**
      * Initial credentials need the CREDENTIAL permission, not just the edit one.
@@ -602,13 +620,14 @@ export class PanelService {
     input: unknown,
   ): Promise<PanelView> {
     const tenant = this.tenant(scope);
-    const command: UpdatePanelCommand = parseCommand(updatePanelRequestSchema, input);
-    const baseUrl = command.baseUrl === undefined ? undefined : this.validateUrl(command.baseUrl);
+    // Authorize, then parse — see `create`.
     await this.authorize(scope, actor, PANELS_EDIT, {
       action: 'panel.update',
       entityType: 'Panel',
       entityId: panelId,
     });
+    const command: UpdatePanelCommand = parseCommand(updatePanelRequestSchema, input);
+    const baseUrl = command.baseUrl === undefined ? undefined : this.validateUrl(command.baseUrl);
     const requestHash = hashRequest({ panelId, name: command.name, baseUrl });
     const existing = await this.deps.idempotency.find<{ panelId: string }>(
       scope,
@@ -726,6 +745,13 @@ export class PanelService {
     input: unknown,
   ): Promise<PanelView> {
     const tenant = this.tenant(scope);
+    // Authorize, then parse — see `create`. This is the CRITICAL permission in
+    // this module, and it was the one a malformed body could probe silently.
+    await this.authorize(scope, actor, PANELS_CREDENTIALS_ROTATE, {
+      action: 'panel.credentials.replace',
+      entityType: 'Panel',
+      entityId: panelId,
+    });
     const parsed = parseCommand(setPanelCredentialsRequestSchema, input);
     const write: PanelCredentialWrite = {
       username: parsed.credentials.username,
@@ -733,11 +759,6 @@ export class PanelService {
       apiToken: parsed.credentials.apiToken,
     };
     const idempotencyKey = parsed.idempotencyKey;
-    await this.authorize(scope, actor, PANELS_CREDENTIALS_ROTATE, {
-      action: 'panel.credentials.replace',
-      entityType: 'Panel',
-      entityId: panelId,
-    });
     // The KINDS being written, never the values. A request hash computed over
     // a password would put a value derived from it in the idempotency table,
     // and would make an operator who retyped the same password look like a
@@ -857,14 +878,15 @@ export class PanelService {
     input: unknown,
   ): Promise<PanelView> {
     const tenant = this.tenant(scope);
-    const parsed = parseCommand(setPanelStatusRequestSchema, input);
-    const status: PanelStatus = parsed.status;
-    const idempotencyKey = parsed.idempotencyKey;
+    // Authorize, then parse — see `create`.
     await this.authorize(scope, actor, PANELS_EDIT, {
       action: 'panel.status',
       entityType: 'Panel',
       entityId: panelId,
     });
+    const parsed = parseCommand(setPanelStatusRequestSchema, input);
+    const status: PanelStatus = parsed.status;
+    const idempotencyKey = parsed.idempotencyKey;
     // The name is in the hash ONLY when it is present. Adding `name: null` to
     // every command would have changed the hash of an ordinary status change
     // across the release boundary, so a key minted before the update and
@@ -1102,12 +1124,13 @@ export class PanelService {
     input: unknown,
   ): Promise<{ view: PanelView; probed: boolean }> {
     const tenant = this.tenant(scope);
-    const idempotencyKey = parseCommand(testPanelRequestSchema, input).idempotencyKey;
+    // Authorize, then parse — see `create`.
     await this.authorize(scope, actor, PANELS_EDIT, {
       action: 'panel.test',
       entityType: 'Panel',
       entityId: panelId,
     });
+    const idempotencyKey = parseCommand(testPanelRequestSchema, input).idempotencyKey;
 
     // A stopped tenant's panels are not dialled, on either lane. The monitor
     // refuses them in `claimTenants`; this is the operator's lane, and a probe

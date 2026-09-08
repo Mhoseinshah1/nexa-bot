@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 307 citations were checked; this record declares 309 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 309 citations were checked; this record declares 310 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -4703,6 +4703,88 @@ diagnostic; under this one it produces
 1.3s. A mutation that changes a test from timing out to FAILING FOR ITS NAMED
 REASON is the only evidence that an anchor is load-bearing rather than
 decorative.
+
+## Round 41 — the twenty-third reviewer, and the fifth counter-example is a real hole
+
+Nine findings. One is a production defect with an audit consequence; two are
+the previous round's fix being worse than what it replaced, for the eighth
+round running.
+
+### `PanelService` parsed every write body BEFORE it authorized
+
+Create, update, credentials, status and test all ran `parseCommand` first, and
+a `ZodError` is a 400 that never reaches the guard. So an authenticated caller
+WITHOUT `panels.edit` who posted `{nonsense:true}` was answered 400 and left no
+`access.permission_denied` row, while the same caller posting a well-formed
+body was answered 403 and did. Measured: the row count moved 18 to 18 for the
+malformed body and 18 to 20 for the well-formed one. That code is in
+`MANAGEMENT_ONE_SHOT_CODES` because it is a security fact about people, and it
+was suppressible by sending rubbish — including on
+`POST /panels/:id/credentials`, the CRITICAL permission in that module.
+
+This is the FIFTH counter-example to the 400-before-403 question, and the first
+that is fixable rather than recordable: the same layer already authorized first
+in settings, features, templates and the notification test. The panel service
+was the last to follow a rule the others kept, and the sentence it falsified —
+"a BODY is handed to the service, WHICH AUTHORIZES FIRST" — was true of the
+three endpoints it named and false one module over. Fixed at all five sites.
+
+The test asserts the RECORD, not the status, and compares the malformed delta
+against the WELL-FORMED delta rather than a fixed number. A denial happens to
+write two rows here — the guard records one and `recordMutationDenial` another
+— and pinning that count would make the test about the recorder instead of
+about the order. What it pins is that a caller cannot make the record
+disappear by changing the body.
+
+### The 2.5s budget turned a timeout into a spurious accusation
+
+Round 40's budget was checked in the `for` condition, so when it expired the
+loop exited with `caught === 0` and the anchor fired — with a message that
+names a publisher regression. Measured at 24 spinners: the successful attempt
+finished with 2057, 882, 1554, 616, 484 and **31** ms left; at 32 spinners the
+forced-miss test failed 3 of 4 runs. Worse than the timeout it replaced,
+because a timeout does not accuse anything.
+
+The mechanism is that `missFirst`'s attempt 0 spends a mandatory FULL
+publication out of the same budget the retries need — the budget consumed by
+the work it exists to permit. The budget is now reset after that deliberate
+miss, so the retries get their full allowance. 4 of 4 green at 32 spinners,
+where the previous version failed 3 of 4.
+
+### "The leak is closed by construction" was false
+
+The leaked temp tree was never `source()`; it is `mkdirSync(rootDir)`
+re-creating a workspace subtree `afterEach` has already deleted. Passing
+`baseline` in closed the cross-test contamination half and the docblock claimed
+both halves. Closed properly now by returning early when the workspace is gone
+— which is exactly the state "this test has already been torn down" produces.
+
+### Two more enumerated-but-unpinned entries, and two stale sentences
+
+`before` was named in the controller-parsed list while the only assertion near
+it exercised `cursorFrom`'s uuid check — one entry over in the loop written to
+close that for `until`. And `open`'s retraction landed in the falsification
+record but not in OQ-3D-02, which still said "the fourth did not"; `open` had
+assertions all along, just none that discriminated which side of the guard it
+was parsed on.
+
+### Stated rather than fixed
+
+`exited` — "polling stops when the child exits" — is an OPTIMISATION, not a
+rule: removing it leaves the whole unit project green and only makes the
+anchors take 2.6s instead of 0.8s. Correctness is the budget. Said plainly in
+the docblock rather than left looking like a rule with no test.
+
+## The mutations
+
+| #   | rule                                      | mutation                                                              | tests that die                                                            |
+| --- | ----------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| AR1 | a panel write AUTHORIZES before it parses | put `parseCommand` back in front of the guard on the credentials path | `panels-http.test.ts` › records the denial even when the body is nonsense |
+
+AR1 was applied to ONE of the five sites, deliberately: it fails with
+`/panels/<id>/credentials malformed: expected 400 to be 403`, naming the route
+whose order was reverted. A mutation that had to change all five to be caught
+would not have shown that the test discriminates per site.
 
 ## The microsecond truncation is still open, deliberately
 

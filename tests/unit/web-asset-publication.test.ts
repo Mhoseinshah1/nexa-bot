@@ -256,15 +256,21 @@ function partiallyWritten(rootDir: string, expected: number, settled: Set<string
  *   - Polling stops when the CHILD EXITS, not at a fixed deadline. Once the
  *     run is over the staging tree is gone and no further looking can find it,
  *     so a miss costs the child's own lifetime — about 250ms — instead of two
- *     seconds of pointless spinning.
+ *     seconds of pointless spinning. This one is an OPTIMISATION and no test
+ *     kills it: removing `!exited` leaves the whole unit project green and
+ *     only makes the anchors take 2.6s instead of 0.8s. Said plainly rather
+ *     than left to look like a rule with no test, because it is not a rule —
+ *     correctness here is the budget below.
  *   - The whole arrangement gets ONE wall-clock budget, checked before each
  *     attempt and inside each poll. It cannot overrun whatever is left for the
  *     assertions, so `caught` reaches the anchor and the anchor reports.
  *
  * The baseline source directory is passed IN rather than rebuilt from
- * `source()`, so a retry cannot write through the module-level `workspace` at
- * all — the leak above is closed by construction and not only by not timing
- * out.
+ * `source()`, so a retry cannot write into the NEXT test's directory. That
+ * closes the cross-test half. The leak itself was `mkdirSync` re-creating a
+ * torn-down workspace, and it is closed by the `existsSync` check below —
+ * stated separately because an earlier version of this paragraph claimed one
+ * change had closed both, and it had not.
  *
  * `missFirst` forces the first attempt to look after the copy has finished,
  * which is what makes the retry path itself testable rather than a branch
@@ -281,14 +287,41 @@ async function killMidCopy(
   let settled = new Set(releases(rootDir));
   let caught = 0;
   let died: Promise<void> = Promise.resolve();
-  // Half of what the assertions after this need, and a quarter of the unit
-  // `testTimeout`. Whatever happens inside, the caller gets its answer.
-  const budgetEndsAt = Date.now() + 2_500;
+  /*
+   * The budget starts when the RETRYING starts, not when the helper is
+   * entered, and that is the whole point of the second assignment below.
+   *
+   * The first version put a single 2.5s budget around everything, including
+   * `missFirst`'s mandatory full publication — so the budget was consumed by
+   * the work it exists to permit. Measured at 24 spinners: the successful
+   * attempt finished with 2057, 882, 1554, 616, 484 and 31 ms left, and at 32
+   * spinners the forced-miss test failed 3 of 4 runs with
+   * `a missed first attempt was not recovered`. That is a SPURIOUS failure
+   * wearing the anchor's message — a message that names a publisher
+   * regression — which is worse than the timeout it replaced, because a
+   * timeout at least does not accuse anything.
+   *
+   * ~2.5s of RETRIES, measured against the assertions that follow: one
+   * 200-asset publication is about 250ms idle, and the whole tail after this
+   * helper is about 260ms. The budget is roughly ten times that, and a
+   * quarter of the unit `testTimeout` — so the caller always gets its answer
+   * and the answer is about the publisher.
+   */
+  let budgetEndsAt = Date.now() + 2_500;
 
   for (let attempt = 0; attempt < 4 && caught === 0 && Date.now() < budgetEndsAt; attempt += 1) {
     if (attempt > 0) {
-      // A completed attempt activated a release; start from a clean root so
-      // the caller's assertions still describe ONE killed publication.
+      /*
+       * The workspace is gone when this test has already been torn down —
+       * which happens when something ELSE times out and vitest leaves this
+       * async function running. Rebuilding into it then RE-CREATES a tree
+       * `afterEach` has deleted, one per timeout, and that is the leak: it was
+       * `mkdirSync` all along, not the `source()` call that an earlier round
+       * claimed to have closed it by removing. Passing `baseline` in closed
+       * the cross-test contamination and not this half, and the docblock
+       * claimed both.
+       */
+      if (!existsSync(workspace)) return { caught, good, died };
       rmSync(rootDir, { recursive: true, force: true });
       mkdirSync(rootDir, { recursive: true });
       run(baseline, rootDir);
@@ -312,6 +345,11 @@ async function killMidCopy(
       // attempt cannot catch anything and the retry must.
       await died;
       caught = partiallyWritten(rootDir, expected, settled);
+      // And give the retries their full budget back. This attempt is a
+      // deliberate, mandatory miss; charging it to the budget is what made
+      // the forced-miss test fail on a loaded machine for a reason that had
+      // nothing to do with the publisher.
+      budgetEndsAt = Date.now() + 2_500;
       continue;
     }
 

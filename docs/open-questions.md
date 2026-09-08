@@ -324,7 +324,7 @@ disclosure: a `400` tells the caller nothing about what they may read, and
 every path that would reveal something still authorizes first.
 
 **What is not.** Which order the API should have, and whether the inconsistency
-below is worth removing. Four successive attempts to state a RULE governing
+below is worth removing. Five successive attempts to state a RULE governing
 it were each falsified by a case on an endpoint the rule named:
 
 - "It is uniform; every surface parses before authorizing." False —
@@ -337,15 +337,29 @@ it were each falsified by a case on an endpoint the rule named:
 - "Within `/ops-log`, `scope`, `severity`, `code` and `open` are
   service-parsed." False for `open`, which is `openFlag.parse(query.open)` in
   the argument list of the service call and therefore evaluated before it. The
-  three that were listed correctly had assertions; the fourth did not.
+  three that were listed correctly had assertions that DISCRIMINATED which
+  side of the guard they were parsed on; `open` had assertions but none that
+  did — it was pinned at 400 all along by `refuses an open filter that is
+neither true nor false`, which cannot tell the two orders apart.
 - "The ordering is per-PARAMETER." Still too general. It is per
   (parameter, MALFORMATION): `singleValued` refuses a REPEATED key in the
   controller, so `?scope=ALL&scope=ALL` is a 400 from a caller for whom
   `?scope=BOGUS` is a 403 — the same parameter, the same endpoint, the same
   caller.
 
+- "A body is handed to the service, which authorizes first." False for every
+  panel WRITE: `PanelService` parsed the body before it authorized on create,
+  update, credentials, status and test, so an unprivileged caller posting
+  `{nonsense:true}` was answered 400 and left no `access.permission_denied` —
+  including on `panels.credentials.rotate`, the CRITICAL permission. **This
+  one was FIXED** rather than recorded, because unlike the query cases the
+  same layer already did it the other way round in settings, features,
+  templates and the notification test: the panel service was the last to
+  follow a rule the others kept. Pinned by
+  `panels-http.test.ts` › records the denial even when the body is nonsense.
+
 The honest reading is that nothing decides this at all: the ordering follows
-wherever each value happens to be validated, and four attempts to state it as
+wherever each value happens to be validated, and five attempts to state it as
 a rule were each falsified by a case the rule itself named. It is not stated
 as a rule anywhere any more; the cases are pinned instead.
 Making it uniform means moving every query parse behind the guard, which a

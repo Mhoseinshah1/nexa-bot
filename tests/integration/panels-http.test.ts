@@ -981,10 +981,16 @@ describe('panel HTTP surface', () => {
      * This paragraph is the reason the correction is worth reading twice: the
      * round that corrected "per-PARAMETER" corrected it in the OTHER file and
      * left this one asserting the superseded rule — one file over, in the
-     * sentence written to close exactly that. So this test states no rule. It pins the cases that exist, in both
-     * directions, INCLUDING the two that killed the last rule — and the
-     * consequence is written down as an open question rather than argued away
-     * a fourth time (OQ-3D-02).
+     * sentence written to close exactly that.
+     *
+     * So this test states no rule. It pins the cases that exist here, in both
+     * directions. The case that killed the LAST rule — a repeated key — lives
+     * in the sibling file, because this endpoint has no service-parsed
+     * parameter to contrast one against. And the consequence is written down
+     * as an open question rather than argued away a FIFTH time (OQ-3D-02):
+     * the fifth counter-example was that `PanelService` parsed every write
+     * body before authorizing, which is fixed and pinned by
+     * `records the denial even when the body is nonsense` below.
      *
      * What is genuinely true, and worth keeping: a 400 tells the caller
      * nothing about what they may read. The exposure is the missing audit
@@ -1020,6 +1026,90 @@ describe('panel HTTP surface', () => {
       (await get(PANEL_ROUTES.detail('not-a-uuid'), ownerCookie)).statusCode,
       'a malformed path id from a privileged caller',
     ).toBe(400);
+  });
+
+  it('records the denial even when the body is nonsense', async () => {
+    /*
+     * The fifth counter-example, and the one that was an audit hole.
+     *
+     * Every write on `PanelService` parsed the body BEFORE it authorized, and
+     * a `ZodError` is a 400 that never reaches the guard. So an authenticated
+     * caller without `panels.edit` who posted `{nonsense:true}` got a 400 and
+     * left NO `access.permission_denied` row, while the same caller posting a
+     * well-formed body got a 403 and did. That code is in
+     * `MANAGEMENT_ONE_SHOT_CODES` because it is a security fact about people,
+     * and it was suppressible by sending rubbish — including on
+     * `POST /panels/:id/credentials`, the CRITICAL permission here.
+     *
+     * The claim it falsified was this file's own: "a PATH PARAMETER or BODY is
+     * handed to the service, WHICH AUTHORIZES FIRST". True of the three
+     * control endpoints that sentence named, false of every panel body
+     * endpoint — correct where the author was looking and wrong one module
+     * over, for the fifth time on this question.
+     *
+     * So this asserts the RECORD, not just the status. A test that only
+     * checked the status could not tell 403-with-a-row from 403-without-one,
+     * and the row is the whole point.
+     */
+    const created = panelResponseSchema.parse((await createPanel(ownerCookie)).json());
+    const denials = async (): Promise<number> => {
+      const rows = await api.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM operational_events WHERE code = 'access.permission_denied'`,
+      );
+      return Number((rows.rows[0] as { n: number }).n);
+    };
+    const id = created.panel.id;
+    const routes = (body: (route: string) => unknown) =>
+      [
+        [PANEL_ROUTES.create, body('create')],
+        [PANEL_ROUTES.update(id), body('update')],
+        [PANEL_ROUTES.credentials(id), body('credentials')],
+        [PANEL_ROUTES.status(id), body('status')],
+        [PANEL_ROUTES.test(id), body('test')],
+      ] as const;
+
+    const wellFormed = (route: string): unknown => {
+      const key = idempotencyKey();
+      if (route === 'create') {
+        return {
+          name: 'Denied create',
+          providerType: 'marzban',
+          baseUrl: 'https://panel.example.test',
+          idempotencyKey: key,
+        };
+      }
+      if (route === 'update') return { name: 'Denied update', idempotencyKey: key };
+      if (route === 'credentials') {
+        return { credentials: { password: PASSWORD }, idempotencyKey: key };
+      }
+      if (route === 'status') return { status: 'DISABLED', idempotencyKey: key };
+      return { idempotencyKey: key };
+    };
+
+    /*
+     * The two deltas must MATCH. Not a fixed number: a denial happens to
+     * write two rows here — the guard records one and `recordMutationDenial`
+     * another — and pinning that count would make this test about the
+     * recorder rather than about the order. What it is about is that a caller
+     * cannot make the record disappear by changing the BODY.
+     */
+    const beforeMalformed = await denials();
+    for (const [route, body] of routes(() => ({ nonsense: true }))) {
+      expect((await post(route, supportCookie, body)).statusCode, `${route} malformed`).toBe(403);
+    }
+    const malformed = (await denials()) - beforeMalformed;
+
+    const beforeWellFormed = await denials();
+    for (const [route, body] of routes(wellFormed)) {
+      expect((await post(route, supportCookie, body)).statusCode, `${route} well-formed`).toBe(403);
+    }
+    const wellFormedDelta = (await denials()) - beforeWellFormed;
+
+    expect(malformed, 'a denial must be recorded at all').toBeGreaterThan(0);
+    expect(
+      malformed,
+      'a malformed body must not suppress the access.permission_denied record',
+    ).toBe(wellFormedDelta);
   });
 
   it('refuses an anonymous caller', async () => {
