@@ -737,8 +737,12 @@ describe('panel HTTP surface', () => {
     // base64url-encoded reached PostgreSQL as 22P02 and came back as an
     // internal error — a caller could turn `not-a-uuid:x` into a 500.
     //
-    // The documented behaviour for a cursor this code cannot read is to
-    // restart the traversal, so each of these answers the FIRST page.
+    // A cursor this code cannot read RESTARTS the traversal, so each of these
+    // answers the FIRST page. "Documented" was doing no work in this sentence
+    // when it said so: nothing documented it, the Web Admin client's own
+    // comment claimed the opposite (a 400 that has never existed), and there
+    // was no third place to settle which was right. `panelListQuerySchema` now
+    // carries the rule and the reason it differs from the other two cursors.
     const created = panelResponseSchema.parse((await createPanel(ownerCookie)).json());
     // TWO panels, so page one has a successor and the honoured-cursor
     // assertion at the end is not vacuous.

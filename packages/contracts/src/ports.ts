@@ -375,6 +375,24 @@ export function isConditionRecoveryCode(code: string): boolean {
  * is already visible where it is actionable — on the panel itself, and on the
  * dashboard. Putting it here would make this page the log the owner asked for
  * it not to be.
+ *
+ * Deliberately NOT here either, and this was an OMISSION until it was
+ * questioned: `panel.probe.limited` and `panel.probe.ok`. They are a real
+ * condition pair — dedupe-keyed, opened by `PanelService.testConnection` when
+ * the tenant's outbound-probe budget is spent, closed by the next probe that
+ * succeeds — and their twin one lane over, `panel.monitor.tenant_budget_*`,
+ * IS in the conditions scope. The asymmetry is the point rather than an
+ * oversight: the monitor lane runs unattended, so a budget it exhausts is only
+ * ever discoverable from a durable record, while the operator lane exhausts
+ * the budget by a person pressing a button and answers that person with a
+ * `RATE_LIMITED` error in the same second. A management page carries what
+ * nobody has been told; this one has already been told.
+ *
+ * The consequence, stated rather than hidden: an open `panel.probe.limited`
+ * row is reachable from no Web Admin screen, because every screen asks for
+ * `MANAGEMENT` or `MANAGEMENT_CONDITIONS` and owner revision 25 removed the
+ * general log browser. It is in the database and in the Telegram operational
+ * projection, and nowhere else.
  */
 export const MANAGEMENT_EVENT_CODES = [
   ...MANAGEMENT_ONE_SHOT_CODES,

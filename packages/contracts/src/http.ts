@@ -930,6 +930,27 @@ export type PanelSummaryResponse = z.infer<typeof panelSummarySchema>;
 export const PANEL_LIST_ARCHIVED_MODES = ['exclude', 'only'] as const;
 export type PanelListArchivedMode = (typeof PANEL_LIST_ARCHIVED_MODES)[number];
 
+/**
+ * The panel page, and the ONE place that says what an unreadable cursor does.
+ *
+ * A cursor this server cannot decode RESTARTS the traversal: `GET /panels`
+ * answers 200 with page one rather than refusing. That is deliberate — the
+ * decoder argues that refusing a legal-but-unknown id would restart the walk
+ * for ever instead of failing it — and `panels-http.test.ts` pins it against
+ * thirteen malformed cursors.
+ *
+ * It is the OPPOSITE of the rule the other two cursors follow. `GET /ops-log`
+ * and `GET /notifications` refuse an unreadable or half-supplied cursor with a
+ * 400, because a client whose cursor was truncated otherwise loops on page one
+ * with a 200 instead of being told. Both rules are defensible; having them
+ * unwritten is not, and it produced two comments in two files claiming
+ * opposite things about this endpoint — one of them in the Web Admin client,
+ * which promised a 400 that has never existed.
+ *
+ * So: this is the asymmetry, it is intentional, and neither side may be
+ * changed to match the other without changing this paragraph and the test that
+ * pins it.
+ */
 export const panelListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(PANEL_PAGE_MAX).optional(),
   cursor: z.string().max(512).optional(),

@@ -27,7 +27,14 @@ export function singleValued(query: Record<string, unknown>): Record<string, str
     if (value !== undefined && typeof value !== 'string') {
       throw errors.validation(
         CONTROL_ERROR_CODES.INVALID_VALUE,
-        `The \`${name}\` query parameter was supplied more than once.`,
+        // Names the accepted spelling. `severity` is genuinely multi-valued
+        // and takes a COMMA-SEPARATED list, so the repeated-key encoding that
+        // `URLSearchParams.append` and most HTTP clients emit is refused here
+        // — and a refusal that does not say what to send instead leaves the
+        // caller to find the comma form by reading the source.
+        `The \`${name}\` query parameter was supplied more than once. ` +
+          'Supply it once; a filter that takes several values takes them ' +
+          'comma-separated.',
         { [name]: value },
       );
     }

@@ -369,6 +369,11 @@ describe('the Web Admin V2 surface', () => {
         expect(response.statusCode, route).toBe(400);
         expect(response.json().error.code, route).toBe(CONTROL_ERROR_CODES.INVALID_VALUE);
         expect(response.json().error.message, route).toContain('more than once');
+        // And it names the encoding that IS accepted. `severity` is genuinely
+        // multi-valued and takes a comma-separated list, so a refusal that
+        // stopped at "more than once" left the caller to find that in the
+        // source.
+        expect(response.json().error.message, route).toContain('comma-separated');
       }
     });
 

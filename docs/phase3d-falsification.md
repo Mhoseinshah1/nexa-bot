@@ -2608,7 +2608,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 264 citations were checked; this record declares 269 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 269 citations were checked; this record declares 271 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -3624,3 +3624,85 @@ is a previous round's, now that there are several. Run as written it printed
 table now and the measured pair is the one recorded. The number happened to be
 right; it was written before anything checked it, which is the order of
 operations this record has a standing note about.
+
+## A claim about the server that was never true
+
+`apps/web/src/api/client.ts` told the next reader that "the server rejects a
+cursor it did not mint, so a 'clever' client-side cursor is a 400 rather than a
+subtle bug". It does not. `decodeCursor` returns `null` for every unreadable
+cursor, a `null` cursor drops the keyset predicate, and
+`GET /panels?cursor=<anything>` answers **200 with page one** — so a client
+that truncates or invents a cursor loops on the first page and is never told,
+which is precisely the subtle bug the sentence promised could not happen.
+
+It was never true: `decodeCursor` has returned `null` since the commit that
+introduced it, and that commit is an ancestor of the one that wrote the claim.
+
+The behaviour is deliberate — `decodeCursor`'s own comment argues that refusing
+a legal-but-unknown id would restart the traversal for ever instead of failing
+it — and `panels-http.test.ts` pins it against thirteen malformed cursors. It
+is also the OPPOSITE of the rule this branch gave the other two cursors:
+`/ops-log` and `/notifications` refuse an unreadable or half-supplied cursor
+with a 400, and the comment there gives this exact looping as the reason.
+
+Two defensible rules, described in two files that contradicted each other, with
+no third place to settle it — the test's own comment said "the documented
+behaviour ... is to restart the traversal" and nothing documented it.
+`panelListQuerySchema` carries the rule now, says why the two differ, and says
+that neither side may be changed to match the other without changing that
+paragraph and the test that pins it. Both behaviours already have tests; what
+was missing was a true sentence.
+
+## An omission in a rationale that enumerates its exclusions
+
+`panel.probe.limited` / `panel.probe.ok` are a real condition pair — dedupe-
+keyed, opened when a tenant's outbound-probe budget is spent by
+`testConnection`, closed by the next probe that succeeds. Their twin one lane
+over, `panel.monitor.tenant_budget_*`, is in the conditions scope and appears
+on both the Alerts page and the dashboard's needs-attention card. The probe
+pair is in neither list and is not mentioned in the paragraph that enumerates
+every entry and every deliberate exclusion.
+
+Judged and kept excluded, with the reason now written down: the monitor lane
+runs unattended, so a budget it exhausts is discoverable only from a durable
+record, while the operator lane exhausts it by a person pressing a button and
+answers that person with a `RATE_LIMITED` error in the same second. A
+management page carries what nobody has been told.
+
+The consequence is stated rather than hidden: an open `panel.probe.limited` row
+is reachable from no Web Admin screen, because every screen asks for
+`MANAGEMENT` or `MANAGEMENT_CONDITIONS` and owner revision 25 removed the
+general log browser. And the decision is asserted rather than left to prose,
+because the next person to add a condition will copy the twin.
+
+## A refusal that did not say what to send instead
+
+`severity` on `GET /ops-log` is genuinely multi-valued and takes a
+COMMA-SEPARATED list, so the repeated-key encoding that `URLSearchParams.append`
+and most HTTP clients emit is refused by the guard added a round earlier. Before
+that guard it was a 500, so this is an improvement rather than a regression —
+but the message stopped at "supplied more than once" and left the comma form
+discoverable only by reading the source.
+
+## The mutations
+
+| #   | rule                                            | mutation                                  | tests that die                                                                                           |
+| --- | ----------------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| AF1 | the operator probe lane stays out of the scopes | add `panel.probe.limited` to the failures | `web-money-and-scope.test.ts` › keeps the operator probe lane out of the management scopes, deliberately |
+| AF2 | the refusal names the accepted encoding         | empty the second sentence                 | `web-admin-v2.test.ts` › refuses a repeated query parameter instead of throwing on it                    |
+
+Each applied alone with an anchor assertion that fails the run if the edit does
+not land, and reverted; the contracts package rebuilt around the first, because
+every suite resolves `@nexa/contracts` through the workspace link to its `dist`
+and a contracts mutation without a rebuild tests nothing. Both files verified
+byte-identical by sha256 afterwards.
+
+AF1 kills four tests, not one: the completeness, pairing and routine-stream
+assertions all notice the added code as well. That is the list working as
+designed and is stated rather than presented as four separate rows.
+
+The three corrections above this table are claims rather than rules, and two of
+them are load-bearing prose with no mutation of their own: the cursor asymmetry
+is already pinned from both sides by `panels-http.test.ts` and
+`web-admin-v2.test.ts`, and what was wrong was the sentence describing them.
+Saying so is the honest entry; inventing a row for a comment would not be.

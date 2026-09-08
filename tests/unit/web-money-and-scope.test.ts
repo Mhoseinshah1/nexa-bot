@@ -209,6 +209,37 @@ describe('the management event scope', () => {
       );
     });
 
+    it('keeps the operator probe lane out of the management scopes, deliberately', () => {
+      /*
+       * `panel.probe.limited` / `panel.probe.ok` are a real condition pair —
+       * dedupe-keyed, opened when a tenant's outbound-probe budget is spent by
+       * `testConnection`, closed by the next probe that succeeds — and their
+       * twin one lane over, `panel.monitor.tenant_budget_*`, IS in the
+       * conditions scope. Their absence was an OMISSION in the rationale until
+       * a reviewer asked, and the reason is now written there: the monitor lane
+       * runs unattended, so a budget it exhausts is discoverable only from a
+       * durable record, while the operator lane answers the person who pressed
+       * the button with a `RATE_LIMITED` error in the same second.
+       *
+       * Asserted rather than left to the comment, because the next person to
+       * add a condition will copy the twin. This fails if they do, which sends
+       * them to the paragraph that explains why they should not.
+       */
+      for (const code of ['panel.probe.limited', 'panel.probe.ok']) {
+        expect(
+          (MANAGEMENT_EVENT_CODES as readonly string[]).includes(code),
+          `${code} reached a management scope; read the rationale in ports.ts first`,
+        ).toBe(false);
+      }
+      // The twin IS there, so this is an asymmetry that was chosen rather than
+      // a list nobody filled in.
+      expect(
+        (MANAGEMENT_CONDITION_FAILURE_CODES as readonly string[]).includes(
+          'panel.monitor.tenant_budget_exceeded',
+        ),
+      ).toBe(true);
+    });
+
     it('pairs every failure with a recovery, and every recovery with a failure', () => {
       // The naming convention IS the pairing, and both directions are walked so
       // neither a failure without a recovery nor an orphan recovery can be
