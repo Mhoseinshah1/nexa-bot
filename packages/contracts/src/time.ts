@@ -70,7 +70,13 @@ export function storableInstantOrNull(value: string): Instant | null {
 
 export const instantSchema = z
   .union([z.iso.datetime({ offset: true }), z.iso.datetime()])
-  .transform((value) => new Date(value));
+  .transform((value) => new Date(value))
+  // The SAME bound, because a second unbounded spelling one screen below a
+  // docblock that says "ONE place" is how the third copy gets written. This
+  // one has no live caller today — `timePeriodSchema` is its only user and
+  // nothing references that yet — which is exactly why it would have been the
+  // one a future surface reached for.
+  .refine(isStorableInstant, { message: 'Not an instant this API can store.' });
 
 /** A half-open interval `[start, end)`. `end` is never included. */
 export interface TimePeriod {

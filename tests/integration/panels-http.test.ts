@@ -947,40 +947,47 @@ describe('panel HTTP surface', () => {
     expect((await createPanel(supportCookie, { name: 'Nope' })).statusCode).toBe(403);
   });
 
-  it('parses a QUERY before it authorizes, and authorizes before it parses a PATH', async () => {
+  it('does not decide 400-before-403 by a rule, and the cases are pinned one by one', async () => {
     /*
-     * Where the 400 sits relative to the 403, stated as it actually is.
+     * There is NO rule here. That is the finding, and it took three tries.
      *
-     * The cursor refusal made this visible: before the owner's decision an
-     * unreadable cursor was silently ignored, so an unprivileged caller who
-     * sent one still reached the service and still got a 403 with its
-     * `access.permission_denied` record. Now the cursor is refused first, and
-     * a reviewer asked whether that lets a prober suppress a security record
-     * by appending six characters.
+     * The cursor refusal made the question visible: an unprivileged caller who
+     * appends an unreadable cursor gets 400, where the same caller with no
+     * cursor gets 403 and its `access.permission_denied` record — a security
+     * fact about people that an operator is meant to be able to find.
      *
-     * The first answer given was that this is UNIFORM — "`limit=abc` has
-     * always done the same, and so has every other surface in this codebase".
-     * The second half of that was FALSE, and a later reviewer proved it:
-     * `POST /settings/:key`, `POST /features/:key`, `POST /templates/:key` and
-     * `GET /panels/:id` all hand the raw value to the service and answer 403
-     * to an unprivileged caller sending a malformed one. The sharpest case is
-     * one route down from this one.
+     * The first answer was "this is uniform, `limit=abc` does the same and so
+     * does every other surface". FALSE: `POST /settings/:key`,
+     * `POST /features/:key`, `POST /templates/:key` and `GET /panels/:id` hand
+     * the raw value to the service, which authorizes first.
      *
-     * What is actually true is narrower and is what this pins: a QUERY STRING
-     * is parsed in the controller, on every endpoint that takes one — panels,
-     * `/ops-log`, `/notifications` — and a PATH PARAMETER or a BODY is handed
-     * to the service, which authorizes first. The cursor joined the
-     * query-string class rather than creating it.
+     * The second answer was "a QUERY STRING is parsed in the controller and a
+     * PATH PARAMETER or BODY is handed to the service". Also FALSE, in BOTH
+     * directions, and each counter-example is on an endpoint that sentence
+     * named. `GET /notifications/:id` parses `uuidV7Schema` in the controller
+     * (`control.controller.ts`), so a malformed path id is 400 before the
+     * guard. And `/ops-log` splits inside itself: `limit`, `since` and
+     * `beforeId` are parsed in the controller, while `scope`, `severity` and
+     * `code` reach `OpsLogService.list`, which calls `guard.check` BEFORE
+     * `opsLogQuerySchema.parse` — so `?scope=BOGUS` is a 403 and `?limit=abc`
+     * a 400, from the same caller against the same endpoint.
      *
-     * Both orders are pinned here, deliberately, because the finding this
-     * answers is about the DIFFERENCE between them: a claim of uniformity with
-     * only one half tested is exactly the shape this branch keeps producing,
-     * and correcting the sentence without testing the counter-example would
-     * have left the same hole one sentence shorter.
+     * Three rounds, three rules, three counter-examples. The honest reading is
+     * that the ordering is per-PARAMETER and incidental: it follows wherever
+     * each value happens to be validated, and nothing in this codebase decides
+     * it. So this test states no rule. It pins the cases that exist, in both
+     * directions, INCLUDING the two that killed the last rule — and the
+     * consequence is written down as an open question rather than argued away
+     * a fourth time (OQ-3D-02).
+     *
+     * What is genuinely true, and worth keeping: a 400 tells the caller
+     * nothing about what they may read. The exposure is the missing audit
+     * record, not a disclosure.
      */
     const denied = await get(PANEL_ROUTES.list, supportCookie);
     expect(denied.statusCode, 'a readable request from an unprivileged caller').toBe(403);
 
+    // Refused BEFORE the guard: parsed in the controller.
     for (const query of ['limit=abc', 'cursor=not-a-cursor', 'archived=maybe']) {
       const response = await get(`${PANEL_ROUTES.list}?${query}`, supportCookie);
       expect(response.statusCode, `${query} did not pre-empt the guard`).toBe(400);
@@ -988,8 +995,8 @@ describe('panel HTTP surface', () => {
       expect(response.json().panels, `${query} answered with a page`).toBeUndefined();
     }
 
-    // The same three, from a caller who IS privileged: still 400, so the
-    // refusal is about the request rather than about the actor.
+    // The same three from a privileged caller: still 400, so the refusal is
+    // about the request rather than about the actor.
     for (const query of ['limit=abc', 'cursor=not-a-cursor', 'archived=maybe']) {
       expect(
         (await get(`${PANEL_ROUTES.list}?${query}`, ownerCookie)).statusCode,
@@ -997,10 +1004,8 @@ describe('panel HTTP surface', () => {
       ).toBe(400);
     }
 
-    // And the OTHER order, one route down. A malformed path id is refused by
-    // the SERVICE, which resolves the permission first — so an unprivileged
-    // caller gets 403 and its `access.permission_denied` record, and a
-    // privileged one gets the 400.
+    // Refused AFTER the guard: handed to the service. One route down, which is
+    // what falsified the rule this test used to assert.
     expect(
       (await get(PANEL_ROUTES.detail('not-a-uuid'), supportCookie)).statusCode,
       'a malformed path id from an unprivileged caller',

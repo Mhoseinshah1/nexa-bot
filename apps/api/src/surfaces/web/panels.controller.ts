@@ -148,9 +148,13 @@ function decodeCursor(raw: string): PanelCursor {
    * asserted separately so the two cannot swap unnoticed, and `http.ts` says
    * so where the rule is declared.
    */
-  if (raw.length === 0) throw bad('is not a cursor this server issued');
   const decoded = Buffer.from(raw, 'base64url').toString('utf8');
   const separator = decoded.indexOf(':');
+  // The empty cursor arrives here too. `Buffer.from('', 'base64url')` is empty
+  // and `''.indexOf(':')` is -1, so this line refuses `?cursor=` with the same
+  // message a `raw.length === 0` branch above it used to produce — a THIRD
+  // line of the same class as the two the previous round removed, written in
+  // the same function, and no test could tell whether it existed.
   if (separator === -1) throw bad('is not a cursor this server issued');
   const id = decoded.slice(0, separator);
   // Any UUID version, not v7 specifically: the only thing this value has to be

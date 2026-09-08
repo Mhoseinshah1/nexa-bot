@@ -1010,6 +1010,67 @@ describe('the Web Admin V2 surface', () => {
       expect((await get(CONTROL_ROUTES.notifications, ownerCookie)).statusCode).toBe(200);
     });
 
+    it('splits 400-before-403 INSIDE one endpoint, by parameter', async () => {
+      /*
+       * The counter-example that killed a rule three rounds running.
+       *
+       * `/ops-log` does not have one ordering. `limit`, `since`, `until`,
+       * `before` and `beforeId` are parsed in the CONTROLLER, so a malformed
+       * one is a 400 before the guard runs and leaves no
+       * `access.permission_denied`. `scope`, `severity`, `code` and `open`
+       * reach `OpsLogService.list`, which calls `guard.check` BEFORE
+       * `opsLogQuerySchema.parse` — so those are a 403 for the same caller on
+       * the same request line.
+       *
+       * Nothing decides this; it follows wherever each value happens to be
+       * validated. Pinned rather than explained, because the last three
+       * explanations were each falsified by a case exactly like these two, and
+       * the consequence is recorded as OQ-3D-02.
+       */
+      const bare = await get(CONTROL_ROUTES.opsLog, supportCookie);
+      expect(bare.statusCode, 'a readable request from an unprivileged caller').toBe(403);
+
+      // Controller-parsed: the 400 pre-empts the guard.
+      for (const query of [
+        'limit=abc',
+        'since=yesterday',
+        'beforeId=oops&before=2026-01-01T00:00:00.000Z',
+      ]) {
+        expect(
+          (await get(`${CONTROL_ROUTES.opsLog}?${query}`, supportCookie)).statusCode,
+          `${query} is parsed in the controller`,
+        ).toBe(400);
+      }
+
+      // Service-parsed: the guard runs first, so the same caller is refused
+      // for WHO THEY ARE and the malformed value is never reached.
+      for (const query of ['scope=BOGUS', 'severity=LOUD', 'code=']) {
+        expect(
+          (await get(`${CONTROL_ROUTES.opsLog}?${query}`, supportCookie)).statusCode,
+          `${query} is parsed in the service`,
+        ).toBe(403);
+        // And the privileged caller does get the 400, so the value really is
+        // rejected — the 403 above is the guard, not a schema that accepts it.
+        expect(
+          (await get(`${CONTROL_ROUTES.opsLog}?${query}`, ownerCookie)).statusCode,
+          `${query} from a privileged caller`,
+        ).toBe(400);
+      }
+
+      // And the other direction on the sibling endpoint: a PATH id parsed in
+      // the controller, which is what falsified the "paths are authorized
+      // first" half of the rule.
+      const id = '01a05e35-c9ad-7e93-bef3-1ed9b55292c8';
+      expect(
+        (await get(`${CONTROL_ROUTES.notifications}/not-a-uuid`, supportCookie)).statusCode,
+        'a malformed notification path id from an unprivileged caller',
+      ).toBe(400);
+      expect(
+        (await get(`${CONTROL_ROUTES.notifications}/${id}`, supportCookie)).statusCode,
+        'a well-formed one from the same caller',
+      ).toBe(403);
+    });
+
     it('refuses half an ops-log cursor', async () => {
       const id = '01a05e35-c9ad-7e93-bef3-1ed9b55292c8';
       expect(
@@ -1046,6 +1107,13 @@ describe('the Web Admin V2 surface', () => {
        * parses, reaches the driver, and raises `22008`: PostgreSQL has no year
        * zero. Three cursors, three private copies of one rule, three ways to be
        * almost right — so `isStorableInstant` is now the only copy.
+       *
+       * ONLY THE FIRST CASE EXERCISES THAT RULE. The two extremes below were
+       * already refused by the shape check — `Invalid ISO datetime`, measured —
+       * and survive the mutation that removes the range refinement. They are
+       * here as the boundary either side of it, not as evidence for it, and
+       * saying so is the difference between three assertions and one plus two
+       * that cannot fail.
        */
       const id = '01a05e35-c9ad-7e93-bef3-1ed9b55292c8';
       for (const before of [

@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 296 citations were checked; this record declares 301 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 301 citations were checked; this record declares 304 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -3663,7 +3663,9 @@ introduced it, and that commit is an ancestor of the one that wrote the claim.
 
 The behaviour is deliberate — `decodeCursor`'s own comment argues that refusing
 a legal-but-unknown id would restart the traversal for ever instead of failing
-it — and `panels-http.test.ts` pins it against thirteen malformed cursors. It
+it — and `panels-http.test.ts` pins it against fifteen malformed cursors (thirteen when
+this was written; corrected in place rather than left to drift a fourth time).
+It
 is also the OPPOSITE of the rule this branch gave the other two cursors:
 `/ops-log` and `/notifications` refuse an unreadable or half-supplied cursor
 with a 400, and the comment there gives this exact looping as the reason.
@@ -3734,7 +3736,10 @@ Saying so is the honest entry; inventing a row for a comment would not be.
 
 `CursorPager` — new on this branch, mounted by panels, alerts and notifications
 — told the reader that "`nextCursor` encodes `(name, id)`". None of the three
-does: panels keyset on `(created_at, id)`, alerts on `(last_seen_at, id)`,
+does: panels keyset on `(created_at, id)`, alerts on `(first_seen_at, id)` —
+`(last_seen_at, id)` when this was written, and corrected here in place, since
+leaving it made this a seventh copy of the claim in the entry recording the
+correction of the other six —
 notifications on `(created_at, id)`. `(name, id)` is the keyset the panel page
 was MIGRATED OFF, by 0026, because `name` is mutable and a rename moves a row
 across a cursor so it is returned twice or never — which
@@ -4187,7 +4192,9 @@ put the silent restart back.
 
 ### A cited count that was three different numbers
 
-`panels-http.test.ts` builds FOURTEEN malformed cursors. `client.ts` and this
+`panels-http.test.ts` builds FOURTEEN malformed cursors. (Fifteen since round
+37 added year zero — corrected here, in the entry about this very number
+drifting, which round 37 changed the count in and did not come back to.) `client.ts` and this
 record said thirteen; the commit message said fifteen. Defect class 4 — a claim
 about testing whose probe was never run. Corrected, and the fixture now asserts
 its own length, so a citation cannot go stale in silence again.
@@ -4225,12 +4232,12 @@ was invisible for a commit.
 
 ## The mutations
 
-| #   | rule                                           | mutation                                  | tests that die                                                                                      |
-| --- | ---------------------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| AL1 | an instant outside `timestamptz` is REFUSED    | drop the four-digit-year comparison       | `web-admin-v2.test.ts` › refuses an empty filter rather than widening the read                      |
-| AL2 | the attention card dates by `firstSeenAt`      | draw `lastSeenAt`                         | `dashboard.test.tsx` › dates each condition by when it FIRST appeared, which is the order it is in  |
-| AL3 | the SCHEMA is the only cursor length bound     | raise `max(512)` to `max(8192)`           | `panels-http.test.ts` › refuses a malformed cursor with a 400 rather than restarting the traversal  |
-| AL4 | a request that cannot be READ is refused first | decode `not-a-cursor` instead of throwing | `panels-http.test.ts` › parses a QUERY before it authorizes, and authorizes before it parses a PATH |
+| #   | rule                                           | mutation                                  | tests that die                                                                                        |
+| --- | ---------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| AL1 | an instant outside `timestamptz` is REFUSED    | drop the four-digit-year comparison       | `web-admin-v2.test.ts` › refuses an empty filter rather than widening the read                        |
+| AL2 | the attention card dates by `firstSeenAt`      | draw `lastSeenAt`                         | `dashboard.test.tsx` › dates each condition by when it FIRST appeared, which is the order it is in    |
+| AL3 | the SCHEMA is the only cursor length bound     | raise `max(512)` to `max(8192)`           | `panels-http.test.ts` › refuses a malformed cursor with a 400 rather than restarting the traversal    |
+| AL4 | a request that cannot be READ is refused first | decode `not-a-cursor` instead of throwing | `panels-http.test.ts` › does not decide 400-before-403 by a rule, and the cases are pinned one by one |
 
 Each applied alone, reverted, and every touched file verified byte-identical by
 sha256 after each — `packages/contracts` rebuilt on both sides of AL3, because
@@ -4359,6 +4366,124 @@ mutation to `packages/contracts/src` is INERT in a review worktree, whose
 `dist`. Either rebuild into the primary — which mutates the author's tree, so
 do not — or run those two mutations in the primary checkout, which is where
 both were run here.
+
+## Round 38 — the twentieth reviewer, and the round that stops claiming a rule
+
+Seven confirmed findings. The important one is that this branch has now
+attempted THREE different rules for one behaviour and each was falsified by a
+case on an endpoint the rule itself named.
+
+### There is no rule for 400-before-403, and there was never going to be
+
+Round 36 said the ordering is uniform. Round 37 corrected that to "a query
+string is parsed in the controller; a path parameter or body is handed to the
+service". Both false, and the second one in BOTH directions:
+
+- `GET /notifications/:id` runs `uuidV7Schema.parse(id)` in the CONTROLLER, so
+  a malformed path id is 400 before the guard — measured, with the same caller
+  getting 403 on a well-formed id, and no `access.permission_denied` row for
+  the malformed one.
+- `/ops-log` splits INSIDE ITSELF. `limit`, `since`, `until`, `before` and
+  `beforeId` are controller-parsed; `scope`, `severity`, `code` and `open`
+  reach `OpsLogService.list`, which calls `guard.check` BEFORE
+  `opsLogQuerySchema.parse`. So `?limit=abc` is 400 and `?scope=BOGUS` is 403,
+  from one caller against one endpoint.
+
+Both counter-examples are on endpoints round 37's sentence enumerated as
+examples of the rule.
+
+The honest reading is that the ordering is per-PARAMETER and incidental — it
+follows wherever each value happens to be validated, and nothing in this
+codebase decides it. So the tests state no rule now: they pin the cases, in
+both directions, including the two that killed the last one. The consequence —
+that a denial record can be suppressed by malforming the request — is written
+down as **OQ-3D-02** rather than argued away a fourth time. What survives from
+the argument is only the part that was always true: a 400 tells the caller
+nothing about what they may read, so the exposure is the missing audit record
+and not a disclosure.
+
+Three rounds, three rules, three counter-examples, and each rule was narrower
+than the last. That is the shape of guessing at an invariant a codebase does
+not have.
+
+### Numbers attributed to the wrong fixture, for the third time
+
+Round 37 cited "11 and 7 buffers with the index, 921 and 899 without — a bitmap
+scan and a sequential scan… a top-N sort over 6 858 rows… over 40 000 rows".
+The test's fixture holds 8 000 rows and cannot produce any of those figures:
+they came from a larger standalone probe, exactly as round 35's "49 buffers"
+did. Re-measured on the test's own fixture, index built before the rows as the
+migrator builds it:
+
+- keyset index: **10** buffers (dashboard), **6** (alerts), no sort.
+- no index: **183** and **63**, Bitmap Heap Scan with a top-N sort — not a
+  sequential scan.
+- reversed index: **85** and **81**.
+
+So the margin is 18x and 10x, not two orders of magnitude. Still real, and it
+grows with the table because the sort is over every matching row. The threshold
+of 40 sits between 10 and 81.
+
+And the test's own docblock asserted, as measured fact, that a single-code
+fixture makes the planner choose `operational_events_code_idx` — while the
+record two files away said the opposite. The record was right: a single-code
+fixture gives the same Index Scan Backward at 6 buffers, and both mutations
+still die without the interleaving. The interleaving is representativeness, not
+discrimination; what discriminates is the second tenant. A comment that says
+"measured" about something that was not is how a maintainer gets told they
+broke a test they did not.
+
+### A third dead branch, in the function two were removed from
+
+`if (raw.length === 0) throw bad(...)` in `decodeCursor` could not be
+distinguished from the line below it: `Buffer.from('', 'base64url')` is empty,
+`''.indexOf(':')` is `-1`, and the separator branch throws the identical error
+with the identical message. Removed, with the reachability written where the
+branch was rather than left implicit.
+
+### A second unbounded spelling of the rule, one screen below "ONE place"
+
+`instantSchema` in `time.ts` was still `z.iso.datetime()`-based with no range
+refinement — the very shape the previous commit indicts for `/notifications`.
+It has no live caller today (`timePeriodSchema` is its only user and nothing
+references that), which is precisely why it is the one a future surface would
+have reached for. Bounded, and the rule now has a UNIT test at every boundary
+that decides it, which it did not: the three integration tests prove the
+wiring, and a boundary is what wiring gets wrong.
+
+### Two of three fixtures in the new `/notifications` test could not fail
+
+`+275760-…` and `-005000-…` are refused by the pre-existing `z.iso.datetime()`
+shape check and survive the mutation that removes the range refinement. Only
+the year-zero case exercises the new rule. The docblock framed all three as the
+year-zero class; it now says which one discriminates and why the other two are
+there.
+
+### And the count entry drifted again, in the entry about the count drifting
+
+Round 37 added a fifteenth malformed cursor, corrected `client.ts`, and left
+the record's own "FOURTEEN" — inside the section written because that number
+had been three different numbers. Corrected, along with the "thirteen" still
+standing in the round-33 text and the seventh copy of `(last_seen_at, id)`.
+
+## The mutations
+
+| #   | rule                                | mutation                                     | tests that die                                                                                   |
+| --- | ----------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| AN1 | year zero is not a storable instant | drop `!iso.startsWith('0000-')`              | `time.test.ts` › refuses what it cannot, including the four-digit year that is not a year        |
+| AN2 | the alerts keyset has an index      | delete the entry from `ONLINE_INDEXES`       | `online-indexes.test.ts` › serves the alerts keyset from an index rather than sorting the tenant |
+| AN3 | that index leads with `tenant_id`   | reverse it to `(first_seen_at,tenant_id,id)` | `online-indexes.test.ts` › serves the alerts keyset from an index rather than sorting the tenant |
+
+AN1 is the same mutation as AM1 and now dies in the UNIT suite as well, at the
+boundary rather than only through three endpoints. AN2 and AN3 were each run
+against a database created empty for the mutation.
+
+One caveat recorded rather than left to be found: AN3's margin is
+page-split history. The reversed index costs 85 buffers when built BEFORE the
+rows — the migrator's order, which the suite reproduces — and about 50 when
+built after them on the same data, which would be 1.2x the threshold rather
+than 2.1x. It kills either way, and anyone tightening the threshold should know
+which number they are standing on.
 
 ## The microsecond truncation is still open, deliberately
 

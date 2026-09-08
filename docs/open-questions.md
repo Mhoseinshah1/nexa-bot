@@ -307,3 +307,47 @@ repeated probe limiting left no trace on the alerts page, or the first tenant
 large enough that manual testing competes with the monitor for the budget.
 Whoever revisits it changes the comment in `ports.ts` and the exclusion test in
 `tests/unit/web-money-and-scope.test.ts` together.
+
+## OQ-3D-02 — a malformed request refused before the guard leaves no `access.permission_denied`
+
+**Status: UNRESOLVED. Recorded rather than argued away a fourth time.**
+
+An unprivileged but authenticated caller who sends a request the server cannot
+parse is answered `400` and no `access.permission_denied` is recorded — that
+event is written by the guard, and on those paths the guard never runs. The
+same caller sending a well-formed request is answered `403` and the record is
+written. So an operational-log entry that exists to be a security fact about
+people can be suppressed by malforming the request.
+
+**What is settled.** The exposure is the missing audit record, not a
+disclosure: a `400` tells the caller nothing about what they may read, and
+every path that would reveal something still authorizes first.
+
+**What is not.** Which order the API should have, and whether the inconsistency
+below is worth removing. Three successive attempts to state a RULE governing
+it were each falsified by a case on an endpoint the rule named:
+
+- "It is uniform; every surface parses before authorizing." False —
+  `POST /settings/:key`, `POST /features/:key`, `POST /templates/:key` and
+  `GET /panels/:id` hand the raw value to the service, which authorizes first.
+- "A query string is parsed in the controller; a path parameter or body is
+  handed to the service." False in both directions —
+  `GET /notifications/:id` parses `uuidV7Schema` in the controller, and
+  `/ops-log` splits inside itself: `limit`, `since`, `before` and `beforeId`
+  are controller-parsed while `scope`, `severity`, `code` and `open` reach
+  `OpsLogService.list`, which calls `guard.check` before it parses.
+
+The honest reading is that the ordering is per-PARAMETER and incidental: it
+follows wherever each value happens to be validated, and nothing decides it.
+Making it uniform means moving every query parse behind the guard, which a
+surface cannot do — it does not resolve permissions — so it means moving the
+parsing into the application services, which is a change across three
+controllers and every query schema, and is not what Phase 3D was asked for.
+
+**Trigger to revisit:** an operator or an auditor asking why a denied attempt
+is missing from the log, or the first phase that adds an endpoint whose denial
+record is relied on for anything more than reading. Whoever revisits it changes
+the two tests that pin the current matrix together —
+`panels-http.test.ts` › does not decide 400-before-403 by a rule, and the cases
+are pinned one by one, and `web-admin-v2.test.ts` › splits 400-before-403
+INSIDE one endpoint, by parameter.

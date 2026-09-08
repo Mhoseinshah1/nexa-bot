@@ -82,11 +82,17 @@ describe('the online index build', () => {
    *
    * The CODES are drawn from the contract's own catalogues and interleaved,
    * because the readers never send a bare tenant filter: every caller sends a
-   * `scope`, which becomes `code = ANY (...)`. A fixture in which one tenant's
-   * rows all carry ONE code makes that predicate look highly selective and the
-   * planner picks `operational_events_code_idx` and a sort instead — measured,
-   * and it is what made an earlier version of this test measure a query no
-   * caller issues. Production has a mixture; so does this.
+   * `scope`, which becomes `code = ANY (...)`. That predicate was absent from
+   * an earlier version of this test, which therefore measured a query no
+   * caller issues.
+   *
+   * The interleaving itself is REPRESENTATIVENESS, not discrimination, and
+   * saying otherwise was this file's own false claim for one commit: a
+   * single-code fixture was measured and gives the same plan and 6 buffers, so
+   * both mutations below still die without it. What discriminates is the
+   * second tenant, above. Stated plainly because a comment that says
+   * "measured" about something that was not is how a maintainer gets told they
+   * broke a test they did not.
    */
   const bulkEvents = async (
     scope: { tenantId: unknown },
@@ -181,9 +187,19 @@ describe('the online index build', () => {
      *
      * So the two shapes below ARE the two callers, built from the contract's
      * own catalogue rather than retyped, and the bare-tenant shape is gone.
-     * Measured on this fixture: 11 and 7 buffers with the index, 921 and 899
-     * without it — a bitmap scan and a sequential scan, each with a top-N sort
-     * over thousands of rows, on a table `ADR-0020` forbids `DELETE` on.
+     *
+     * Measured ON THIS FIXTURE, with the index built before the rows as the
+     * migrator builds it: 10 and 6 buffers with the keyset index, 183 and 63
+     * without it — a Bitmap Heap Scan with a top-N sort on top, both times —
+     * and 85 and 81 with the index's columns reversed. Every earlier figure in
+     * this comment came from a LARGER standalone probe and was quoted as if it
+     * came from here, which is the third time a number on this branch has been
+     * attributed to the wrong fixture. These came from this fixture and can be
+     * reproduced by deleting the declaration and reading the failure.
+     *
+     * The margin is 18x and 10x rather than the two orders of magnitude that
+     * was claimed, and it grows with the table, because the sort is over every
+     * matching row and `ADR-0020` forbids `DELETE` on this one.
      */
     await bulkEvents(tenantA, 2_000, 1_000_000, 'a');
     await bulkEvents(tenantB, 6_000, 0, 'b');
@@ -220,9 +236,17 @@ describe('the online index build', () => {
       // And no Sort node: an index that is merely SCANNED while the server
       // still sorts on top of it is the cost this exists to remove.
       expect(plan, `${shape.what} is still being sorted:\n${plan}`).not.toContain('Sort');
-      // Measured 11 and 7 with the index, 921 and 899 without, and 81 with the
-      // index's columns reversed. The threshold sits between them with room on
-      // both sides rather than on the measurement itself.
+      // Measured 10 and 6 with the keyset index, 183 and 63 without it, and 85
+      // and 81 with its columns reversed. The threshold sits between 10 and 81
+      // with room on both sides rather than on the measurement itself.
+      //
+      // One caveat, stated rather than left for the next reviewer to find: the
+      // reversed index costs 85 when built BEFORE the rows, which is what the
+      // migrator does and what this suite reproduces, and about 50 when built
+      // after them on the same data. The margin is page-split history, so it
+      // is 2.1x here and would be 1.2x under a build order this file does not
+      // pin. Still a kill either way, and worth knowing before anyone tightens
+      // the threshold.
       expect(buffersIn(plan), `${shape.what} walked more than its own page:\n${plan}`).toBeLessThan(
         40,
       );
