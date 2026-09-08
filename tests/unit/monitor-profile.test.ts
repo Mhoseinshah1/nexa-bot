@@ -3,8 +3,10 @@ import { PANEL_HEALTH_FRESH_FOR_MS } from '@nexa/contracts';
 import { loadConfig } from '../../apps/api/src/infrastructure/config/load-config';
 import {
   MonitorProfileService,
+  SCHEDULER_CAPACITY_CONDITION,
   type MonitorProfileConfig,
 } from '../../apps/api/src/modules/platform/panels/application/monitor-profile.service';
+import { SCHEDULER_CONDITION } from '../../apps/api/src/modules/platform/panels/application/panel-monitor.service';
 import {
   maxHealthyIntervalMs,
   schedulerFreshPanelUpperBound,
@@ -240,5 +242,19 @@ describe('the monitor profile service', () => {
         {} as never,
       ),
     ).rejects.toThrow('denied');
+  });
+
+  it('carries the same condition code the monitor opens', () => {
+    /*
+     * The profile service duplicates this string rather than importing it, to
+     * keep the read off the monitor's module graph — a production concern this
+     * test does not share. Its docblock claimed "the integration suite asserts
+     * the two agree" and nothing did: drift was caught only incidentally, by a
+     * fixture elsewhere that happens to use the literal, and only in one
+     * direction.
+     *
+     * One line, and the duplication is a duplication rather than a fork.
+     */
+    expect(SCHEDULER_CAPACITY_CONDITION).toBe(SCHEDULER_CONDITION);
   });
 });

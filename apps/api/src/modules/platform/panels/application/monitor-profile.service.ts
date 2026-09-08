@@ -13,8 +13,15 @@ export const MONITOR_PROFILE_VIEW: PermissionKey = 'panels.view';
 /**
  * The code `PanelMonitorService` opens when the active fleet exceeds what the
  * scheduler can start within one freshness window. Duplicated as a constant
- * rather than imported to keep this read off the monitor's module graph; the
- * integration suite asserts the two agree.
+ * rather than imported to keep this read off the monitor's module graph.
+ *
+ * `tests/unit/monitor-profile.test.ts` › "carries the same condition code the
+ * monitor opens" asserts the two agree. The sentence here used to say the
+ * INTEGRATION suite did, and no assertion anywhere compared them — drift was
+ * caught only incidentally, by a fixture in `web-admin-v2.test.ts` that
+ * happens to use the literal, and one-sidedly: changing this constant failed
+ * that test while `monitor-profile.test.ts` stayed green. A claim that a guard
+ * exists is worth less than no claim when the guard does not.
  */
 export const SCHEDULER_CAPACITY_CONDITION = 'panel.monitor.scheduler_capacity_exceeded';
 

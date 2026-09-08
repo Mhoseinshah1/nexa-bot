@@ -1465,8 +1465,31 @@ in the twelfth of thirteen full integration runs this session:
 `AssertionError: expected 2 to be 4`. It passed on the re-run (837/837), passes
 in isolation (105/105), and every other full run this session was green.
 
-Recorded rather than called a flake, because this document's own rule is that
-"flake" is not a root cause. What can be said with evidence:
+**The transcribed message cannot be right, and that is established rather than
+suspected.** `expected 2 to be 4` means `new Set(all).size === 2` and
+`all.length === 4` — two rows from each `claimTenants(now, 1)`. The statement
+cannot return two: the inner select carries `LIMIT ${limit}` with `limit = 1`,
+and the `UPDATE … FROM due` joins on `t.tenant_id = due.tenant_id` where
+`panel_monitor_tenants.tenant_id` is the PRIMARY KEY, so at most one row can
+match and be returned per call. `git show` of the commit that recorded this
+confirms the test was byte-identical then, so the shape was the same.
+
+So the message was mis-transcribed, and this record cannot say what the failure
+was. The two shapes the assertion can actually produce are `expected 1 to be 2`
+— both replicas handed the SAME tenant, which is a real double-claim and the
+defect this test exists to catch — and, before the vacuity below was closed,
+`expected 0 to be 0`, which passes. The first is the one a mis-transcription of
+`expected 2 to be 4` most plausibly came from, and it is not something to
+record as "could not root-cause" while the digits say something impossible.
+
+**The test was also vacuous when both claims returned nothing.**
+`new Set([]).size === 0 === [].length`, so a claim predicate that stopped
+claiming altogether left it green — the most likely regression, agreed with
+rather than caught. It now asserts at least one claim succeeded, which is the
+form it should have had when the failure above was recorded, and which would
+have distinguished the two shapes.
+
+What can still be said with evidence:
 
 - The code is Phase 3C's monitor claim, untouched by this branch.
 - In that same failing run the STRONGER sibling — 600 real races asserting
@@ -2608,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 271 citations were checked; this record declares 277 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 277 citations were checked; this record declares 285 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -3854,3 +3877,93 @@ the window and a correct routing file failed. Worse, that offset was found with
 not have a fallback became the match: prose describing the shape, read as the
 shape. Both are structural now — the nearest preceding root, and an anchor on
 the tab-indented directive.
+
+## The integration suite had never been mutation-tested, and six predicates were unfalsifiable
+
+Sixteen adversarial rounds reviewed this branch and every one of them was
+forbidden from running `tests/integration/**`, because they shared a database
+with the working checkout. That is 45 files and 840 assertions — the only place
+the real HTTP surface, the real schema and the real transactions are exercised
+together — and not one of its assertions had ever been reverted to see whether
+it could fail. The seventeenth reviewer was given its own database and 43
+production rules across 21 files were mutated against it.
+
+Six of them were the control plane's **compare-and-swap predicates**: settings,
+both halves of the template save, both halves of the template revert, and
+feature flags. Every one could be DELETED with the entire 840-test suite still
+green.
+
+They are not decoration. Every control-plane write reads the current version
+with a plain `SELECT` — no `FOR UPDATE` — and then issues
+`UPDATE … WHERE version = expectedVersion`. The port's docblock states what
+rests on that: _"The check IS the write: the predicate lives in the statement,
+so there is no window between deciding that a write is safe and performing
+it."_ The reviewer demonstrated the consequence with a barrier probe — hold one
+request between its read and its statement, let another commit, release the
+first — and the second administrator's write is silently gone. No conflict, no
+audit of the loss, and the Web Admin's "changed elsewhere" notice never fires,
+because the server reported success.
+
+The reason nothing caught it is this branch's own recurring shape: the services'
+pre-check refuses every sequential case before the statement is reached, and the
+pre-check has three tests. The rule was covered where the author was looking and
+absent one expression over — under a comment asserting the guarantee.
+
+`control-plane-review-round-3.test.ts` › _"refuses a save built on a version
+that a revert has recycled"_ is named for the revision predicate and passes with
+it deleted, for the same reason.
+
+The new tests drive the REPOSITORIES rather than the services, deliberately: the
+pre-check is exactly what makes a service-level test unable to see whether the
+statement carries a predicate at all. Two sequential calls with the same
+`expectedVersion` reproduce the interleaving without needing concurrency.
+
+**Four of the first five could not fail either, and that is the part worth
+keeping.** The realistic fixtures advance version and revision together, so the
+stale revision refuses the write on its own and deleting the version predicate
+changes nothing — measured, twice. Two predicates need two fixtures: one that
+moves the version and holds the revision still, and one that moves the revision
+and lets a revert recycle the version. One fixture cannot show which predicate
+did the work.
+
+## A session that expires between admission and its transaction
+
+`isLive` has two halves and only one was tested. Its `isNull(revokedAt)` half is
+covered by a barrier test; its `gt(expiresAt, now)` half was covered by nothing
+— removing it left all 840 green. The docblocks promise revocation-freshness
+explicitly and say nothing about expiry, so the asymmetry is invisible to a
+reader.
+
+## A claim that the integration suite asserts something it never asserted
+
+`monitor-profile.service.ts` duplicates the monitor's scheduler-capacity code
+rather than importing it, to keep the profile read off the monitor's module
+graph — and said "the integration suite asserts the two agree". Nothing
+compared them. Drift was caught only incidentally and one-sidedly: changing the
+profile's copy failed a fixture in `web-admin-v2.test.ts` that happens to use
+the literal, while `monitor-profile.test.ts` stayed green. The monitor's
+constant is exported now and one line asserts the equality, which is what the
+sentence claimed all along.
+
+## The mutations
+
+| #   | rule                                                 | mutation                                   | tests that die                                                                                         |
+| --- | ---------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| AH1 | the settings write carries its version predicate     | delete `eq(settingValues.version, …)`      | `compare-and-swap.test.ts` › refuses a second setting write that names a version already spent         |
+| AH2 | the template save carries its VERSION predicate      | delete `eq(templateOverrides.version, …)`  | `compare-and-swap.test.ts` › refuses a template save whose revision matches but whose version does not |
+| AH3 | the template save carries its REVISION predicate     | delete `eq(templateOverrides.revision, …)` | `compare-and-swap.test.ts` › refuses a template save whose version matches but whose revision does not |
+| AH4 | the template revert carries its VERSION predicate    | delete it from the `delete` statement      | `compare-and-swap.test.ts` › refuses a revert whose revision matches but whose version does not        |
+| AH5 | the template revert carries its REVISION predicate   | delete it from the `delete` statement      | `compare-and-swap.test.ts` › refuses a revert whose version matches only because a revert recycled it  |
+| AH6 | the feature-flag write carries its version predicate | delete `eq(featureFlagStates.version, …)`  | `compare-and-swap.test.ts` › refuses a second feature-flag write that names a version already spent    |
+| AH7 | `isLive` checks EXPIRY, not only revocation          | delete `gt(adminSessions.expiresAt, now)`  | `transactional-authorization.test.ts` › treats an EXPIRED session as dead, not only a revoked one      |
+| AH8 | the duplicated condition code equals the monitor's   | drop one character from the profile's copy | `monitor-profile.test.ts` › carries the same condition code the monitor opens                          |
+
+Each applied alone with an anchor assertion that fails the run if the edit does
+not land, and reverted; every touched file verified byte-identical by sha256
+after each. AH2 and AH4 kill only because of the isolating fixtures described
+above — with the realistic ones they survived, which is recorded because the
+survival is the lesson.
+
+`gives two replicas disjoint tenants` is not in the table: closing its vacuity
+strengthened an assertion rather than adding a rule, and the correction to what
+this record said about its one failure is above, under that round's heading.

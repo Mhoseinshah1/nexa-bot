@@ -129,7 +129,13 @@ export function closesPanelCondition(
 /** Operational conditions this loop reports about its own capacity. */
 const TENANT_BUDGET_CONDITION = 'panel.monitor.tenant_budget_exceeded';
 const TENANT_BUDGET_RESOLVED = 'panel.monitor.tenant_budget_ok';
-const SCHEDULER_CONDITION = 'panel.monitor.scheduler_capacity_exceeded';
+/**
+ * Exported so the copy in `monitor-profile.service.ts` can be ASSERTED equal
+ * to it. That copy exists to keep the profile read off this module's graph,
+ * which is a production concern; a test importing both costs nothing and is
+ * the only thing that can stop the two drifting.
+ */
+export const SCHEDULER_CONDITION = 'panel.monitor.scheduler_capacity_exceeded';
 const SCHEDULER_RESOLVED = 'panel.monitor.scheduler_capacity_ok';
 
 /** The installation's own scope: this condition belongs to no single tenant. */

@@ -1945,7 +1945,19 @@ describe('the panel health monitor', () => {
       // One takes a tenant, the other takes the other or nothing — never the
       // same one twice.
       const all = [...first, ...second];
-      expect(new Set(all).size).toBe(all.length);
+      /*
+       * NOT VACUOUS. `new Set([]).size === 0 === [].length`, so this passed
+       * when both claims returned nothing — which is the most likely shape of
+       * a regression in the claim predicate, and precisely the one the
+       * assertion below it is for.
+       *
+       * Two tenants are due and each call asks for one, so at least one claim
+       * must succeed. Anything less means the query stopped claiming, and this
+       * test should say so rather than agreeing with it.
+       */
+      expect(all.length, 'two due tenants and neither was claimed').toBeGreaterThan(0);
+      expect(all.length).toBeLessThanOrEqual(2);
+      expect(new Set(all).size, 'the same tenant was handed to both replicas').toBe(all.length);
     });
 
     it('puts a tenant bound back where its own schedule says', async () => {

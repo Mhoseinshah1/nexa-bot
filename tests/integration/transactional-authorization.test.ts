@@ -291,6 +291,49 @@ describe('fresh transactional authorization', () => {
     ).toBe(true);
   }, 30_000);
 
+  it('treats an EXPIRED session as dead, not only a revoked one', async () => {
+    /*
+     * `isLive` has two halves and only one was tested.
+     *
+     * Its `isNull(revokedAt)` half is covered by the barrier test below —
+     * delete it and that test fails. Its `gt(expiresAt, now)` half was covered
+     * by nothing: measured, removing it left the entire 840-test integration
+     * suite green. The docblocks promise revocation-freshness explicitly and
+     * say nothing about expiry, so the asymmetry is invisible to a reader.
+     *
+     * The consequence is a session that reaches `expires_at` between request
+     * admission and the mutation transaction authorising the write. The window
+     * is short — session lifetimes are hours — which is why this is a plain
+     * repository test rather than another barrier: what was missing is any
+     * assertion at all that expiry is checked.
+     */
+    const now = ctx.container.clock.now();
+    const live = ctx.container.ids.uuid() as AdminSessionId;
+    const expired = ctx.container.ids.uuid() as AdminSessionId;
+    for (const [id, expiresAt] of [
+      [live, new Date(now.getTime() + 3_600_000)],
+      [expired, new Date(now.getTime() - 1_000)],
+    ] as const) {
+      await ctx.container.sessions.create(tenantA, {
+        id,
+        adminId: adminA.id,
+        tokenHash: `${id}`.padEnd(64, 'b').slice(0, 64),
+        issuedAt: new Date(now.getTime() - 7_200_000),
+        expiresAt,
+        ip: '198.51.100.9',
+        userAgent: 'vitest',
+      });
+    }
+
+    // Neither is revoked, so the other half of the predicate cannot be what
+    // separates them: expiry is the only difference between these two rows.
+    expect(await ctx.container.sessions.isLive(tenantA, live, now)).toBe(true);
+    expect(
+      await ctx.container.sessions.isLive(tenantA, expired, now),
+      'a session past its expiry may not authorise a write',
+    ).toBe(false);
+  });
+
   it('refuses a control-plane write whose session is revoked before the transaction', async () => {
     const sessionId = ctx.container.ids.uuid() as AdminSessionId;
     await ctx.container.sessions.create(tenantA, {
