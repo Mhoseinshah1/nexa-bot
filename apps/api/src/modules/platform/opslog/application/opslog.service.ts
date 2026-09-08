@@ -38,12 +38,21 @@ export const openFlag = z.enum(['true', 'false']).transform((v) => v === 'true')
 export const opsLogQuerySchema = z.object({
   limit: z.number().int().min(1).max(201).default(OPS_LOG_PAGE_DEFAULT),
   /**
-   * The cursor: the `lastSeenAt` of the oldest row already shown, and its id.
+   * The cursor: the `firstSeenAt` of the oldest row already shown, and its id.
    *
-   * Both, because `last_seen_at` is not unique — a `Clock.now()` is captured
-   * once per transaction, so distinct conditions share one microsecond — and a
-   * strict comparison on it alone skips the rest of a group that straddles the
-   * page boundary.
+   * IMMUTABLE, by owner decision. It was `last_seen_at`, which every repeat
+   * occurrence of a deduped condition rewrites — so a row below the cursor that
+   * recurred jumped above it and was returned on no later page. A mutable
+   * ordering column is not a keyset; `first_seen_at` never moves after the
+   * insert.
+   *
+   * Both halves, because `first_seen_at` is not unique either — a
+   * `Clock.now()` is captured once per transaction, so distinct conditions
+   * share one microsecond — and a strict comparison on it alone skips the rest
+   * of a group that straddles the page boundary.
+   *
+   * `last_seen_at` is still returned and displayed as the latest occurrence.
+   * It is operational metadata; it is not a traversal key.
    */
   before: z.date().optional(),
   // An ID, not any short string: it is compared against a `uuid` column, so a

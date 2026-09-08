@@ -304,7 +304,7 @@ export class ControlController {
       ...(query.severity === undefined ? {} : { severities: query.severity.split(',') }),
       ...dateParam('since', query.since),
       ...dateParam('until', query.until),
-      // The cursor: the `lastSeenAt` of the oldest row already shown, plus its
+      // The cursor: the `firstSeenAt` of the oldest row already shown, plus its
       // id. Rows are ordered by that pair descending, so "older than this" is
       // the next page. An offset would have skipped and duplicated rows as
       // events were recorded underneath the reader; the id breaks ties, without
@@ -333,7 +333,7 @@ export class ControlController {
     return {
       events: events.map(toEventResponse),
       nextCursor:
-        oldest === undefined ? null : { at: oldest.lastSeenAt.toISOString(), id: oldest.id },
+        oldest === undefined ? null : { at: oldest.firstSeenAt.toISOString(), id: oldest.id },
     };
   }
 

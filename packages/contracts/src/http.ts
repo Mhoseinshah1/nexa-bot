@@ -628,6 +628,18 @@ export const operationalEventListResponseSchema = z.object({
    * page that does not exist and the operator lands on the empty state — a
    * false "no open alerts" in the subsystem whose stated rule is that silence
    * is the one outcome it may not produce.
+   *
+   * It carries `(first_seen_at, id)` — the IMMUTABLE pair — and the list is
+   * ordered by it, `DESC` on both. Not `last_seen_at`: every repeat occurrence
+   * of a deduped condition rewrites that, so a row below the cursor that
+   * recurred jumped above it and appeared on no later page. `lastSeenAt` above
+   * is still the latest occurrence and is what the screen displays; it is
+   * metadata, not a traversal key.
+   *
+   * So this list is ordered by when a condition FIRST appeared. A
+   * most-recently-active ordering is a different view with its own pagination
+   * semantics for a mutable key, and is deliberately not bought by weakening
+   * this one.
    */
   nextCursor: z.object({ at: isoTimestamp, id: z.string() }).nullable(),
 });
@@ -921,37 +933,33 @@ export type PanelListArchivedMode = (typeof PANEL_LIST_ARCHIVED_MODES)[number];
 /**
  * The panel page, and the ONE place that says what an unreadable cursor does.
  *
+ * A cursor this server cannot decode is a **400**, with
+ * `control.invalid_value`. It never restarts the traversal.
+ *
+ *   - absent  → the first page
+ *   - valid   → the next page
+ *   - anything else → 400, never a successful-looking answer
+ *
+ * This is the house rule for every cursor in this API, and `/ops-log` and
+ * `/notifications` have always followed it. Panels did not: `decodeCursor`
+ * returned `null` for anything unreadable, a null cursor dropped the keyset
+ * predicate, and the endpoint answered 200 with page ONE. A client that
+ * truncated or invented a cursor looped on the first page for ever and was
+ * never told — while the Web Admin's own client docblock promised a 400 that
+ * had never existed. Two defensible rules described in three places that
+ * disagreed, resolved by the owner in favour of refusing.
+ *
+ * The old argument for restarting — that refusing a legal-but-unknown id would
+ * "restart the traversal for ever rather than fail it" — is inverted
+ * deliberately. Failing loudly once is strictly better than looping silently,
+ * because the loop is invisible to everyone including the operator watching it.
+ *
  * The list used to return every live panel of the tenant with both child rows
  * joined, so one request materialised the whole collection, sorted it and
  * serialised it on the event loop. At the stated target of tens of thousands of
  * panels that is a request any administrator can repeat. `nextCursor` is null
  * on the last page and opaque on purpose — a caller that parsed it would be
  * depending on an ordering this API has not promised.
- *
- * That paragraph used to sit above `panelSummarySchema`'s neighbour and say the
- * cursor "encodes `(name, id)`". Two docblocks added to this file in this
- * branch pushed it away from the schema it described, so it documented nothing
- * — and `(name, id)` is the keyset migration 0026 moved the panel page OFF,
- * because `name` is mutable and a rename moves a row across a cursor. It is
- * merged here, next to the schema, with the claim removed.
- *
- * A cursor this server cannot decode RESTARTS the traversal: `GET /panels`
- * answers 200 with page one rather than refusing. That is deliberate — the
- * decoder argues that refusing a legal-but-unknown id would restart the walk
- * for ever instead of failing it — and `panels-http.test.ts` pins it against
- * thirteen malformed cursors.
- *
- * It is the OPPOSITE of the rule the other two cursors follow. `GET /ops-log`
- * and `GET /notifications` refuse an unreadable or half-supplied cursor with a
- * 400, because a client whose cursor was truncated otherwise loops on page one
- * with a 200 instead of being told. Both rules are defensible; having them
- * unwritten is not, and it produced two comments in two files claiming
- * opposite things about this endpoint — one of them in the Web Admin client,
- * which promised a 400 that has never existed.
- *
- * So: this is the asymmetry, it is intentional, and neither side may be
- * changed to match the other without changing this paragraph and the test that
- * pins it.
  */
 export const panelListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(PANEL_PAGE_MAX).optional(),

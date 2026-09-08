@@ -36,14 +36,35 @@ export class DrizzleOperationalEventReader implements OperationalEventReader {
     // that straddles the page boundary. Rows would simply not appear on any
     // page, in a subsystem whose stated rule is that silence is the one outcome
     // it may not produce.
+    /*
+     * `first_seen_at`, which is IMMUTABLE. Not `last_seen_at`.
+     *
+     * OWNER DECISION. `last_seen_at` is rewritten by every repeat occurrence of
+     * a deduped condition — that is what the occurrence counter is for — so a
+     * row currently below the operator's cursor that recurs jumps ABOVE it and
+     * is returned on no subsequent page. It is the same argument that moved the
+     * panel keyset off `name`, applied to the one subsystem whose stated rule
+     * is that silence is the outcome it may not produce.
+     *
+     * `first_seen_at` never changes after the insert, so a row cannot cross a
+     * cursor while an operator pages. `last_seen_at` is still returned and
+     * still displayed as the latest occurrence — it is operational metadata,
+     * not a traversal key.
+     *
+     * This deliberately changes what the list MEANS: it is ordered by when a
+     * condition first appeared, not by when it was last active. A
+     * most-recently-active view is a separate design with its own pagination
+     * semantics for a mutable ordering column, and is not bought by
+     * compromising this keyset.
+     */
     if (query.before) {
       filters.push(
         query.beforeId === undefined
-          ? lt(operationalEvents.lastSeenAt, query.before)
+          ? lt(operationalEvents.firstSeenAt, query.before)
           : or(
-              lt(operationalEvents.lastSeenAt, query.before),
+              lt(operationalEvents.firstSeenAt, query.before),
               and(
-                eq(operationalEvents.lastSeenAt, query.before),
+                eq(operationalEvents.firstSeenAt, query.before),
                 lt(operationalEvents.id, query.beforeId),
               ),
             )!,
@@ -79,8 +100,18 @@ export class DrizzleOperationalEventReader implements OperationalEventReader {
       // attention is no longer needed.
       filters.push(inArray(operationalEvents.code, [...MANAGEMENT_CONDITION_FAILURE_CODES]));
     }
-    // Half-open `[since, until)`: an event at exactly `until` belongs to the
-    // next interval, so two adjacent reports never double-count it.
+    /*
+     * Half-open `[since, until)`: an event at exactly `until` belongs to the
+     * next interval, so two adjacent reports never double-count it.
+     *
+     * Still on `last_seen_at`, deliberately, even though the keyset moved to
+     * `first_seen_at`. These are an ACTIVITY filter — "what was happening in
+     * this window" — and a condition that first appeared last month and
+     * recurred this morning belongs in this morning's window. Filtering and
+     * ordering are independent predicates; conflating them because they now
+     * name different columns would change what a report counts, which is not
+     * what the keyset decision was about.
+     */
     if (query.since) filters.push(gte(operationalEvents.lastSeenAt, query.since));
     if (query.until) filters.push(lt(operationalEvents.lastSeenAt, query.until));
     if (query.open === true) filters.push(isNull(operationalEvents.resolvedAt));
@@ -90,10 +121,12 @@ export class DrizzleOperationalEventReader implements OperationalEventReader {
       .select()
       .from(operationalEvents)
       .where(and(...filters))
-      // Both columns, matching the cursor above. Without the tie-break the
-      // order within a shared timestamp is arbitrary and the cursor cannot
-      // resume from it.
-      .orderBy(desc(operationalEvents.lastSeenAt), desc(operationalEvents.id))
+      // Both columns, matching the cursor above, and BOTH immutable. Without
+      // the tie-break the order within a shared timestamp is arbitrary and the
+      // cursor cannot resume from it — `first_seen_at` is a `Clock.now()`
+      // captured once per transaction, so distinct conditions really do share
+      // one microsecond and the id is what separates them deterministically.
+      .orderBy(desc(operationalEvents.firstSeenAt), desc(operationalEvents.id))
       .limit(query.limit);
 
     return rows.map((row) => ({

@@ -4,6 +4,8 @@ import type { PanelCursor } from '../../modules/platform/panels/application/port
 import {
   panelListQuerySchema,
   API_PREFIX,
+  CONTROL_ERROR_CODES,
+  errors,
   PANEL_HEALTH_FRESH_FOR_MS,
   PANEL_ROUTES,
   providerDescriptor,
@@ -87,25 +89,62 @@ function decodeInstant(text: string): string | null {
   return text;
 }
 
-function decodeCursor(raw: string): PanelCursor | null {
+/**
+ * A cursor this server did not mint is a 400. It never restarts the traversal.
+ *
+ * This function used to return `null` for every unreadable cursor, and a null
+ * cursor drops the keyset predicate — so `GET /panels?cursor=<anything>`
+ * answered **200 with page one**. A client that truncated or invented a cursor
+ * looped on the first page for ever and was never told, and the Web Admin's own
+ * docblock promised the opposite: "the server rejects a cursor it did not mint,
+ * so a clever client-side cursor is a 400 rather than a subtle bug". It was the
+ * only one of the three cursors in this codebase that behaved that way;
+ * `/ops-log` and `/notifications` have always refused, and their comment gives
+ * this exact looping as the reason.
+ *
+ * The owner resolved it: ONE house rule, and it is refusal. Absent means the
+ * first page, valid means the next page, and anything else is
+ * `control.invalid_value` with a 400 — never a successful-looking answer to a
+ * question the caller did not ask.
+ *
+ * The old argument for restarting was that refusing a legal-but-unknown id
+ * "would restart the traversal for ever rather than fail it, which is the worse
+ * outcome". That reasoning is now inverted deliberately: failing loudly once is
+ * strictly better than looping silently, because the loop is invisible to
+ * everyone including the operator watching it.
+ */
+function decodeCursor(raw: string): PanelCursor {
+  // Built rather than thrown, so every `throw` below is visible to the reader
+  // AND to the compiler: a helper that throws is not a narrowing point unless
+  // it is typed `never`, and `throw bad(...)` needs neither the annotation nor
+  // the casts that came with it.
+  const bad = (why: string): Error =>
+    errors.validation(CONTROL_ERROR_CODES.INVALID_VALUE, `The \`cursor\` ${why}.`, {
+      // A TRUNCATED echo. A 400 body is not a place to reflect an unbounded
+      // string a caller controls.
+      cursor: raw.length > 64 ? `${raw.slice(0, 64)}…` : raw,
+    });
   // Bounded before it is decoded: a megabyte of base64 is a megabyte this
   // process would otherwise allocate and scan to reject.
-  if (raw.length === 0 || raw.length > CURSOR_MAX_LENGTH) return null;
-  try {
-    const decoded = Buffer.from(raw, 'base64url').toString('utf8');
-    const separator = decoded.indexOf(':');
-    if (separator === -1) return null;
-    const id = decoded.slice(0, separator);
-    // Any UUID version, not v7 specifically. The only thing this value has to
-    // be is a legal `uuid` literal; refusing a legal one would restart the
-    // traversal for ever rather than fail it, which is the worse outcome.
-    if (!CURSOR_UUID.test(id)) return null;
-    const createdAt = decodeInstant(decoded.slice(separator + 1));
-    if (createdAt === null) return null;
-    return { id: id.toLowerCase(), createdAt };
-  } catch {
-    return null;
+  if (raw.length === 0 || raw.length > CURSOR_MAX_LENGTH) {
+    throw bad('is not a cursor this server issued');
   }
+  let decoded: string;
+  try {
+    decoded = Buffer.from(raw, 'base64url').toString('utf8');
+  } catch {
+    throw bad('is not a cursor this server issued');
+  }
+  const separator = decoded.indexOf(':');
+  if (separator === -1) throw bad('is not a cursor this server issued');
+  const id = decoded.slice(0, separator);
+  // Any UUID version, not v7 specifically: the only thing this value has to be
+  // is a legal `uuid` literal, because it reaches a `uuid` column and a
+  // malformed one was a driver error and a 500.
+  if (!CURSOR_UUID.test(id)) throw bad('does not name a row this server issued');
+  const createdAt = decodeInstant(decoded.slice(separator + 1));
+  if (createdAt === null) throw bad('does not carry a position this server issued');
+  return { id: id.toLowerCase(), createdAt };
 }
 
 @Controller(`${API_PREFIX}`)

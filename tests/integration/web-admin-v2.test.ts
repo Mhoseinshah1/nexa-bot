@@ -19,6 +19,7 @@ import {
   tenantBudgetFreshPanelUpperBound,
   tenantTurnFreshTenantUpperBound,
 } from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
+import { newCorrelationId } from '../../apps/api/src/infrastructure/logging/logger';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
@@ -307,6 +308,125 @@ describe('the Web Admin V2 surface', () => {
           query,
         ).toBe(200);
       }
+    });
+
+    it('walks the ops log through the SERVER cursor without skipping a recurrence', async () => {
+      /*
+       * OWNER DECISION, asserted end to end through `nextCursor`.
+       *
+       * `tests/integration/alerts-keyset.test.ts` proves the reader's keyset
+       * and ordering. It cannot prove which column the CONTROLLER puts in the
+       * cursor it hands out, because it builds its own — measured: swapping
+       * `oldest.firstSeenAt` for `oldest.lastSeenAt` in the controller left
+       * all four of those tests green.
+       *
+       * So this walks the real endpoint using only the cursor the server
+       * returned, and recurs the oldest row mid-walk. Under the old keyset —
+       * or a cursor that still carries `last_seen_at` — the recurring row
+       * jumps above the held cursor and is returned on no later page.
+       */
+      const ids: string[] = [];
+      for (const n of [1, 2, 3]) {
+        const recorded = await api.container.opsLog.record(tenantA, {
+          code: 'panel.monitor.tenant_budget_exceeded',
+          severity: 'WARN',
+          message: `walk ${n}`,
+          dedupeKey: `walk-${n}`,
+          correlationId: newCorrelationId(api.container.ids.uuid()),
+        });
+        ids.push(recorded.id);
+      }
+      /*
+       * `first_seen_at` is NOT adjusted here, and cannot be: the append-only
+       * guard on `operational_events` refuses an identity change, which is
+       * exactly the property that makes it a safe keyset. The three rows may
+       * therefore share one instant — a `Clock.now()` captured per transaction
+       * — and the id tie-break is what orders them. Since ids are UUIDv7, `id
+       * DESC` is newest-first either way, so the expected order below holds
+       * whether the clock moved between the three records or not.
+       */
+
+      /*
+       * The boundary row recurs BEFORE page one is fetched.
+       *
+       * This ordering is the whole point and the first version of this test
+       * got it wrong: recurring after the fetch mutates a cursor the server
+       * has already issued, so the controller's choice of column cannot show.
+       * Measured — with the recurrence after the fetch, swapping
+       * `oldest.firstSeenAt` for `oldest.lastSeenAt` left this test green.
+       *
+       * Recurring first means the row page one ends on has
+       * `last_seen_at` strictly after its `first_seen_at`, so a cursor
+       * carrying the wrong one admits the row it just returned.
+       */
+      await api.container.opsLog.record(tenantA, {
+        code: 'panel.monitor.tenant_budget_exceeded',
+        severity: 'WARN',
+        message: 'walk 3 again',
+        dedupeKey: 'walk-3',
+        correlationId: newCorrelationId(api.container.ids.uuid()),
+      });
+
+      const first = operationalEventListResponseSchema.parse(
+        (await get(`${CONTROL_ROUTES.opsLog}?scope=MANAGEMENT&limit=1`, ownerCookie)).json(),
+      );
+      expect(first.events).toHaveLength(1);
+      expect(first.events[0]!.id).toBe(ids[2]);
+      expect(first.nextCursor).not.toBeNull();
+      // The cursor must be the row's FIRST-seen instant, not its latest
+      // activity — asserted directly as well as through the walk below.
+      expect(first.nextCursor!.at, 'the cursor carries first_seen_at').toBe(
+        first.events[0]!.firstSeenAt,
+      );
+      expect(
+        first.events[0]!.lastSeenAt > first.events[0]!.firstSeenAt,
+        'the boundary row must really have recurred, or this proves nothing',
+      ).toBe(true);
+
+      /*
+       * And now the OLDEST row recurs, while the operator holds page one's
+       * cursor. This is the half that catches a keyset still ordering by
+       * `last_seen_at`: under it the row jumps above the held cursor and is
+       * returned on no later page.
+       *
+       * Through the REAL recorder under the same dedupe key, which is what
+       * production does. A raw UPDATE would be a weaker fixture and would also
+       * be refused: the append-only guard permits the occurrence counter to
+       * advance and refuses an identity change.
+       */
+      await api.container.opsLog.record(tenantA, {
+        code: 'panel.monitor.tenant_budget_exceeded',
+        severity: 'WARN',
+        message: 'walk 1 again',
+        dedupeKey: 'walk-1',
+        correlationId: newCorrelationId(api.container.ids.uuid()),
+      });
+
+      const seen = first.events.map((event) => event.id);
+      let cursor = first.nextCursor;
+      for (let page = 0; page < 5 && cursor !== null; page += 1) {
+        const next = operationalEventListResponseSchema.parse(
+          (
+            await get(
+              `${CONTROL_ROUTES.opsLog}?scope=MANAGEMENT&limit=1` +
+                `&before=${encodeURIComponent(cursor.at)}&beforeId=${encodeURIComponent(cursor.id)}`,
+              ownerCookie,
+            )
+          ).json(),
+        );
+        seen.push(...next.events.map((event) => event.id));
+        cursor = next.nextCursor;
+      }
+
+      expect(seen, 'the recurring row must appear exactly once').toEqual([ids[2], ids[1], ids[0]]);
+      expect(new Set(seen).size).toBe(seen.length);
+
+      // And the recurrence is still visible as activity metadata.
+      const walked = operationalEventListResponseSchema.parse(
+        (await get(`${CONTROL_ROUTES.opsLog}?scope=MANAGEMENT&limit=10`, ownerCookie)).json(),
+      );
+      const recurred = walked.events.find((event) => event.id === ids[0]);
+      expect(recurred?.occurrenceCount, 'the recurrence is still visible as metadata').toBe(2);
     });
 
     /**

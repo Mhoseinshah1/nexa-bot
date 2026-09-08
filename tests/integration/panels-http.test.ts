@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   API_PREFIX,
   AUTH_ROUTES,
+  CONTROL_ERROR_CODES,
   PANEL_ERROR_CODES,
   PANEL_ROUTES,
   panelListResponseSchema,
@@ -731,18 +732,27 @@ describe('panel HTTP surface', () => {
     }
   });
 
-  it('answers a malformed cursor by restarting the traversal, not with a 500', async () => {
-    // The cursor decodes to `<id>:<created_at>` and the id goes into a query
-    // that casts it to `uuid`. Nothing validated it, so any text a caller
-    // base64url-encoded reached PostgreSQL as 22P02 and came back as an
-    // internal error — a caller could turn `not-a-uuid:x` into a 500.
-    //
-    // A cursor this code cannot read RESTARTS the traversal, so each of these
-    // answers the FIRST page. "Documented" was doing no work in this sentence
-    // when it said so: nothing documented it, the Web Admin client's own
-    // comment claimed the opposite (a 400 that has never existed), and there
-    // was no third place to settle which was right. `panelListQuerySchema` now
-    // carries the rule and the reason it differs from the other two cursors.
+  it('refuses a malformed cursor with a 400 rather than restarting the traversal', async () => {
+    /*
+     * OWNER DECISION. A cursor this server did not mint is a 400.
+     *
+     * This test previously asserted the OPPOSITE — 200 with page one — and
+     * asserted it strictly, so it is the falsification of the old rule as well
+     * as the test for the new one. The old behaviour hid a client defect
+     * behind a successful-looking response: a truncated or invented cursor
+     * dropped the keyset predicate, the endpoint answered the first page, and
+     * a paging client looped on it for ever with nothing anywhere saying so.
+     *
+     *   absent → first page · valid → next page · anything else → 400
+     *
+     * The same rule `/ops-log` and `/notifications` have always followed, and
+     * the one the Web Admin client's docblock claimed all along.
+     *
+     * The id half still matters for the reason it always did: it reaches a
+     * `uuid` column, so before it was validated `not-a-uuid:x` was a driver
+     * error and a 500. A 400 and a 500 are different answers to different
+     * questions and this asserts the first exactly.
+     */
     const created = panelResponseSchema.parse((await createPanel(ownerCookie)).json());
     // TWO panels, so page one has a successor and the honoured-cursor
     // assertion at the end is not vacuous.
@@ -777,6 +787,9 @@ describe('panel HTTP surface', () => {
       b64(`${created.panel.id}:2026-01-01T00:00:00.000Z`),
       // Empty.
       '',
+      // TRUNCATED — a real cursor with its tail cut off, which is the shape
+      // the owner's decision names and the one a client actually produces.
+      firstPage.nextCursor!.slice(0, Math.floor(firstPage.nextCursor!.length / 2)),
     ];
 
     for (const cursor of cursors) {
@@ -784,23 +797,55 @@ describe('panel HTTP surface', () => {
         `${PANEL_ROUTES.list}?limit=1&cursor=${encodeURIComponent(cursor)}`,
         ownerCookie,
       );
-      // 200 exactly, not merely "under 500": the documented behaviour for a
-      // cursor this code cannot read is to RESTART the traversal, and a guard
-      // that only ran the assertion when the status happened to be 200 would
-      // stay green if a future change started refusing instead.
-      expect(response.statusCode, `cursor ${cursor.slice(0, 40)} was not restarted`).toBe(200);
-      const body = panelListResponseSchema.parse(response.json());
-      expect(body.panels.map((panel) => panel.id)).toEqual(
-        firstPage.panels.map((panel) => panel.id),
-      );
+      const label = `cursor ${JSON.stringify(cursor.slice(0, 40))}`;
+      // 400 EXACTLY, not merely 4xx, and never a 500: the first would let a
+      // future 404 or 422 pass, the second is the driver error this validation
+      // exists to stop.
+      expect(response.statusCode, `${label} was not refused with a 400`).toBe(400);
+      // A STABLE, machine-readable shape. A client that cannot tell "your
+      // cursor is bad" from "you may not read this" is back to guessing.
+      expect(response.json(), label).toMatchObject({
+        error: { kind: 'VALIDATION', code: CONTROL_ERROR_CODES.INVALID_VALUE },
+      });
+      // And it did NOT quietly answer with data. This is the assertion that
+      // makes the old behaviour impossible rather than merely unasserted.
+      expect(response.json().panels, `${label} answered with a page anyway`).toBeUndefined();
     }
 
-    // An OVERSIZED cursor is the one that does not restart, and that is a
-    // different rule for a different reason: the request schema bounds the
-    // string at 512 characters before this code ever sees it, so what is
-    // refused is the request rather than the bookmark. Asserted rather than
-    // folded into the loop above, because a test that accepted either answer
-    // would not notice if the two rules swapped.
+    /*
+     * "Syntactically decodable but invalid" is where the owner's rule says
+     * `400 where applicable`, and this is the case where it is NOT.
+     *
+     * A well-formed uuid at a well-formed instant naming no row is not a
+     * malformed cursor — it is a legitimate POSITION whose row may simply have
+     * been archived or deleted between two page requests, which is ordinary.
+     * Refusing it would turn a routine race into an error the operator cannot
+     * act on. It decodes, reaches the query, matches nothing, and the walk ends:
+     * a 200 with an empty page and a null cursor.
+     *
+     * Asserted separately and deliberately, because conflating "I cannot read
+     * this" with "this names nothing" is what would make the 400 loop above
+     * pass for the wrong reason.
+     */
+    const unknownRow = panelListResponseSchema.parse(
+      (
+        await get(
+          `${PANEL_ROUTES.list}?limit=1&cursor=${encodeURIComponent(
+            Buffer.from(`${created.panel.id}:2099-01-01T00:00:00.000000Z`, 'utf8').toString(
+              'base64url',
+            ),
+          )}`,
+          ownerCookie,
+        )
+      ).json(),
+    );
+    expect(unknownRow.panels, 'a decodable cursor past the end is an empty page').toHaveLength(0);
+    expect(unknownRow.nextCursor).toBeNull();
+
+    // An OVERSIZED cursor is refused by the request schema at 512 characters,
+    // before this code sees it — the same 400, by a different route. Asserted
+    // rather than folded into the loop, because a test that accepted either
+    // answer would not notice if the two rules swapped.
     expect(
       (await get(`${PANEL_ROUTES.list}?limit=1&cursor=${'A'.repeat(4_096)}`, ownerCookie))
         .statusCode,
@@ -820,6 +865,56 @@ describe('panel HTTP surface', () => {
     expect(second.panels.map((panel) => panel.id)).not.toEqual(
       firstPage.panels.map((panel) => panel.id),
     );
+    // And no cursor at all is still the first page, which is the third arm of
+    // the rule and the one a regression would silently take with it.
+    const restart = panelListResponseSchema.parse(
+      (await get(`${PANEL_ROUTES.list}?limit=1`, ownerCookie)).json(),
+    );
+    expect(restart.panels.map((panel) => panel.id)).toEqual(
+      firstPage.panels.map((panel) => panel.id),
+    );
+  });
+
+  it("does not let a cursor naming another tenant's row reach it", async () => {
+    /*
+     * Tenant isolation survives the new refusal, shaped the way this file
+     * already shapes it: there is no session in which tenant B is the scope
+     * (login resolves against the installation tenant), so the hostile case is
+     * tenant A's real, fully privileged owner presenting a cursor built from
+     * tenant B's real panel id.
+     *
+     * It DECODES — a well-formed uuid at a well-formed instant — so it is not
+     * a 400, and that is the point: the refusal added for malformed cursors
+     * must not be mistaken for the thing that keeps tenants apart. The keyset
+     * is tenant-scoped, so the walk simply finds nothing of B's.
+     */
+    const mine = panelResponseSchema.parse((await createPanel(ownerCookie)).json());
+    const theirs = await api.container.panels.create(tenantB, adminActorFor(ownerB), {
+      name: 'A panel belonging to the other tenant',
+      providerType: 'marzban',
+      baseUrl: 'https://other.example/api',
+      credentials: { username: 'u', password: 'p' },
+      idempotencyKey: 'cursor-isolation-b',
+    });
+
+    const cursor = Buffer.from(
+      `${theirs.view.panel.id}:2020-01-01T00:00:00.000000Z`,
+      'utf8',
+    ).toString('base64url');
+    const response = await get(
+      `${PANEL_ROUTES.list}?limit=5&cursor=${encodeURIComponent(cursor)}`,
+      ownerCookie,
+    );
+    // Decodable, so a 200 — not the 400 a malformed cursor gets.
+    expect(response.statusCode).toBe(200);
+    const body = panelListResponseSchema.parse(response.json());
+    expect(
+      body.panels.map((panel) => panel.id),
+      "tenant B's panel must not appear in tenant A's page",
+    ).not.toContain(theirs.view.panel.id);
+    // And A's own row is still reachable, so the walk was not simply empty for
+    // an unrelated reason.
+    expect(body.panels.map((panel) => panel.id)).toContain(mine.panel.id);
   });
 
   it('refuses an unprivileged but authenticated caller', async () => {

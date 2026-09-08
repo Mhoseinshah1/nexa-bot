@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 277 citations were checked; this record declares 285 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 285 citations were checked; this record declares 290 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -3967,3 +3967,100 @@ survival is the lesson.
 `gives two replicas disjoint tenants` is not in the table: closing its vacuity
 strengthened an assertion rather than adding a rule, and the correction to what
 this record said about its one failure is above, under that round's heading.
+
+## Two owner decisions, and the four tests of my own that could not fail
+
+The two design questions this record has carried open — what an unreadable
+panels cursor does, and which column the alerts keyset orders by — were decided
+by the owner. Both are implemented here, and both changed behaviour the branch
+previously pinned with a test, so the old tests are the falsification of the
+old rules.
+
+### An unreadable panels cursor is a 400
+
+`decodeCursor` returned `null` for anything it could not read, a null cursor
+dropped the keyset predicate, and `GET /panels?cursor=<anything>` answered
+**200 with page one**. A client that truncated or invented a cursor looped on
+the first page for ever and was never told, while the Web Admin's own client
+docblock promised the 400 that had never existed.
+
+One house rule now, the one `/ops-log` and `/notifications` always followed:
+absent → first page, valid → next page, anything else → `control.invalid_value`
+with a 400. The old argument — that refusing a legal-but-unknown id "would
+restart the traversal for ever rather than fail it, which is the worse outcome"
+— is inverted deliberately: failing loudly once beats looping silently, because
+the loop is invisible to everyone including the operator watching it.
+
+`400 where applicable` needed a boundary, and it is drawn at DECODABILITY. A
+well-formed uuid at a well-formed instant naming no row is not malformed — it
+is a legitimate position whose row may have been archived between two page
+requests — so it stays a 200 with an empty page and a null cursor. Refusing it
+would turn a routine race into an error nobody can act on. Asserted separately
+from the fifteen-cursor refusal loop, because conflating "I cannot read this"
+with "this names nothing" is what would make the loop pass for the wrong reason.
+
+### The alerts keyset is `(first_seen_at, id)`
+
+`last_seen_at` is rewritten by every repeat occurrence of a deduped condition —
+that is what the occurrence counter is for — so a row below the operator's
+cursor that recurred jumped above it and was returned on no later page. The
+same argument that moved the panel keyset off `name`, in the one subsystem
+whose stated rule is that silence is the outcome it may not produce.
+
+`first_seen_at` never changes after the insert; the append-only guard refuses an
+identity change, which is what makes it safe to traverse. `last_seen_at` is
+still returned and still displayed as the latest occurrence, with `occurrences`,
+severity and condition state beside it: metadata, not a traversal key.
+
+This deliberately changes what the list MEANS — it is ordered by when a
+condition first appeared, not by when it was last active. A most-recently-active
+view is a separate design with its own pagination semantics for a mutable
+ordering column, and is not bought by weakening this one. `since`/`until` stay
+on `last_seen_at`, because they are an ACTIVITY filter and a condition that
+first appeared last month and recurred this morning belongs in this morning's
+window; filtering and ordering are independent predicates.
+
+### Four of this round's own tests could not fail
+
+The pattern is now familiar enough to be worth stating as a rule: **a fixture
+proves the rule it was aimed at only if the two spellings of that rule produce
+different values in it.**
+
+- The HTTP walk recurred rows AFTER fetching page one. A cursor the server has
+  already issued cannot be changed by a later mutation, so swapping
+  `oldest.firstSeenAt` for `oldest.lastSeenAt` in the controller left it green.
+  The boundary row has to recur BEFORE the fetch.
+- Even recurring the OLDEST row before the fetch was not enough: page one's
+  boundary row still had `first_seen_at == last_seen_at`, so both spellings
+  produced the same cursor. The row the cursor is BUILT FROM is the one that
+  has to have recurred.
+- The reader tests build their own cursors, so they cannot see the controller's
+  column at all — measured, all four stayed green under that mutation. They
+  prove the predicate and the ordering; the HTTP walk proves the cursor.
+- The `L3` tie-break fixture needed a SHARED `first_seen_at`, which the
+  recorder never produces on its own, so those rows are inserted directly.
+
+## The mutations
+
+| #   | rule                                           | mutation                            | tests that die                                                                                          |
+| --- | ---------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| AJ1 | an unreadable panels cursor is REFUSED         | return a cursor instead of throwing | `panels-http.test.ts` › refuses a malformed cursor with a 400 rather than restarting the traversal      |
+| AJ2 | the alerts keyset PREDICATE is `first_seen_at` | compare `last_seen_at` in both arms | `alerts-keyset.test.ts` › walks every row exactly once when a recurrence rewrites last_seen_at mid-walk |
+| AJ3 | the alerts ORDERING is `first_seen_at`         | order by `last_seen_at`             | `alerts-keyset.test.ts` › walks every row exactly once when a recurrence rewrites last_seen_at mid-walk |
+| AJ4 | the id TIE-BREAK inside a shared instant       | drop the `or(...)` arm              | `alerts-keyset.test.ts` › breaks a shared first_seen_at by id, deterministically                        |
+| AJ5 | the SERVER cursor carries `first_seen_at`      | build it from `lastSeenAt`          | `web-admin-v2.test.ts` › walks the ops log through the SERVER cursor without skipping a recurrence      |
+
+Each applied alone with an anchor assertion that fails the run if the edit does
+not land, and reverted; every touched file verified byte-identical by sha256
+after each. AJ2 kills two tests, the skip and the duplicate, which are the two
+directions of one defect.
+
+## The microsecond truncation is still open, deliberately
+
+Unchanged by this round, on the owner's instruction. `/ops-log` and
+`/notifications` still read a `timestamptz` into a `Date` and re-send
+`toISOString()` at millisecond precision, where `PanelCursor` renders
+microseconds and casts explicitly. It remains unreachable — every writer
+supplies those columns from the `Clock` — and the fix is SQL that cannot be
+made to fail before it is applied. It is not hardened on a guess and the record
+of it above is not erased.

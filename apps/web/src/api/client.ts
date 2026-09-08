@@ -422,25 +422,15 @@ export function fetchProviders(): Promise<ProviderListResponse> {
  *
  * `cursor` is opaque and is passed back exactly as received. Parsing it here
  * would make this client depend on an ordering the API has deliberately not
- * promised.
+ * promised — and the server refuses a cursor it did not mint, so a "clever"
+ * client-side cursor is a 400 rather than a subtle bug.
  *
- * The second half of this sentence used to claim "the server rejects a cursor
- * it did not mint, so a clever client-side cursor is a 400 rather than a
- * subtle bug". That is FALSE, and was false when it was written: `decodeCursor`
- * has returned `null` for every unreadable cursor since the commit that
- * introduced it, and a `null` cursor drops the keyset predicate, so
- * `GET /panels?cursor=<anything>` answers 200 with page ONE. A client that
- * truncates or invents a cursor loops on the first page and is never told —
- * precisely the subtle bug the comment promised could not happen.
- *
- * It is also the opposite of what this branch decided for the other two
- * cursors: `GET /ops-log` and `GET /notifications` refuse an unreadable or
- * half-supplied cursor with a 400, and the comment there gives this exact
- * looping as the reason. The asymmetry is real, deliberate on the panels side
- * (`decodeCursor` argues that refusing a legal-but-unknown id would restart
- * the traversal for ever) and covered by `panels-http.test.ts`. It is written
- * down in `panelListQuerySchema` now rather than described two ways in two
- * files. Do not "fix" one side without settling the other.
+ * That second half was FALSE when it was first written and is true now. The
+ * server used to answer 200 with page one for any unreadable cursor, so a
+ * client that truncated one looped silently — the exact subtle bug the sentence
+ * promised could not happen. The owner resolved the inconsistency in favour of
+ * refusing, `panelListQuerySchema` carries the rule, and
+ * `panels-http.test.ts` pins it against thirteen malformed cursors.
  */
 export function fetchPanels(
   query: { limit?: number; cursor?: string; archived?: PanelListArchivedMode } = {},
