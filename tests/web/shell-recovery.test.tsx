@@ -243,6 +243,60 @@ describe('the shell in the states a pure function cannot see', () => {
   ];
 
   /**
+   * 1d — the rule is `finalAnswer`, and only its `ZodError` arm was tested.
+   *
+   * The comment at the site says it covers "a 403 here… the session lookup
+   * itself being refused". Replacing `finalAnswer(session.error)` with an
+   * explicit `name === 'ZodError'` check left all 290 tests green, and on a
+   * 403 or a 404 restored exactly the measured defect the round claims to have
+   * removed: copy blaming the connection for an answer the server gave, beside
+   * a Retry whose press issues two more requests (`main.tsx` retries once)
+   * against a query whose poll has already stopped.
+   *
+   * A 503 is the control. It is retryable, `pollSession` keeps asking, and the
+   * connection copy is TRUE there — so this test would pass under the mutation
+   * if it only checked the final cases, and the third leg is what makes it a
+   * rule rather than three examples.
+   */
+  it.each([
+    ['forbidden', 403],
+    ['not_found', 404],
+  ])('says the server refused a %s session lookup, and offers no retry', async (kind, status) => {
+    stubApi([
+      ...SIGNED_IN.filter((route) => !route.url.includes('/auth/session')),
+      {
+        url: '/auth/session',
+        status,
+        body: { error: { kind, code: 'test.refused', message: 'no', correlationId: 'c' } },
+      },
+    ]);
+    renderShell();
+
+    expect(await screen.findByText(t('web.rejected'))).toBeInTheDocument();
+    expect(screen.queryByText(UNAVAILABLE)).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.retry') })).toBeNull();
+  });
+
+  it('keeps the connection copy and the retry for a 503', async () => {
+    stubApi([
+      ...SIGNED_IN.filter((route) => !route.url.includes('/auth/session')),
+      {
+        url: '/auth/session',
+        status: 503,
+        body: {
+          error: { kind: 'internal', code: 'test.down', message: 'down', correlationId: 'c' },
+        },
+      },
+    ]);
+    renderShell();
+
+    // The connection really may be the problem, and the poll is still running.
+    expect(await screen.findByText(UNAVAILABLE)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: t('web.retry') })).toBeInTheDocument();
+    expect(screen.queryByText(t('web.rejected'))).toBeNull();
+  });
+
+  /**
    * `pollSession` stops on a final answer, so on one the shell has learned the
    * lookup is permanently broken and will never ask again. Keeping the console
    * drawn there was the previous round's defect reached through the door its

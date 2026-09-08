@@ -45,7 +45,7 @@ const RECORD = 'docs/phase3d-falsification.md';
  * to, which is the point: the number is a claim about this file and should be
  * re-stated deliberately, not drifted into.
  */
-const EXPECTED = 202;
+const EXPECTED = 213;
 /**
  * A table whose last column is one of these is making citations.
  *
@@ -199,89 +199,171 @@ function endOfQuote(text, start) {
 /**
  * Modifiers on a `describe` chain that mean the suite may not run.
  *
- * `runIf` is here with the two obvious ones because whether it runs is a
- * RUNTIME value this script cannot read, and the two ways of being wrong are
- * not symmetric: treating a running suite as skipped fails its citations
- * loudly, while treating a skipped one as running is this script being green
- * and wrong, which is the single failure mode it exists to prevent.
+ * `runIf` is here with the others because whether it runs is a RUNTIME value
+ * this script cannot read, and the two ways of being wrong are not symmetric:
+ * treating a running suite as skipped fails its citations loudly, while
+ * treating a skipped one as running is this script being green and wrong,
+ * which is the single failure mode it exists to prevent.
  */
 const SKIPPING = new Set(['skip', 'todo', 'skipIf', 'runIf']);
 
 /**
+ * A copy of a source with every comment, string and regex body blanked.
+ *
+ * Same length, same newlines, so an offset into it is an offset into the
+ * original and a line number computed from it is right.
+ *
+ * Every scanner in this file that looks for a TOKEN runs over this rather than
+ * over the source, because the alternative is a scanner that fires on prose.
+ * `onlyMarkers` did: a comment reading "never write it.only( in a committed
+ * file" failed the run. It fails closed, so it was loud rather than dangerous
+ * — but a check that cannot describe its own hazard in its own comments is one
+ * nobody can document, and the asymmetry with `describe.onlyish` (correctly
+ * ignored) made it an inconsistency rather than a policy.
+ */
+function maskLiterals(text) {
+  const out = text.split('');
+  const blank = (from, to) => {
+    for (let k = from; k < to && k < text.length; k += 1) {
+      if (text[k] !== '\n') out[k] = ' ';
+    }
+  };
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '/' && text[i + 1] === '/') {
+      const newline = text.indexOf('\n', i);
+      const stop = newline === -1 ? text.length : newline;
+      blank(i, stop);
+      i = stop;
+    } else if (ch === '/' && text[i + 1] === '*') {
+      const close = text.indexOf('*/', i + 2);
+      const stop = close === -1 ? text.length : close + 2;
+      blank(i, stop);
+      i = stop;
+    } else if (ch === '"' || ch === "'" || ch === '`') {
+      const close = endOfQuote(text, i);
+      blank(i + 1, close);
+      i = Math.min(close + 1, text.length);
+    } else if (ch === '/' && startsRegex(text, i)) {
+      const close = endOfRegex(text, i);
+      blank(i + 1, close);
+      i = Math.min(close + 1, text.length);
+    } else {
+      i += 1;
+    }
+  }
+  return out.join('');
+}
+
+/**
+ * The modifier chain after an identifier, and where the whole call expression
+ * ends.
+ *
+ * ONE reader, used for the suites that are skipped AND for the `.only` that
+ * skips everything else, because the round before this one wrote a careful
+ * chain reader for the first and left the second matching `\.\s*only\s*\(` —
+ * dot notation and whitespace only — twenty lines below it. `it['only'](…)`,
+ * `it /*x*\/ .only(…)` and `it.only.each([1])(…)` all printed `ok 202`, exit 0,
+ * against `1 failed | 61 skipped`. That is this branch's documented defect
+ * class (the rule holds where the author was looking) occurring inside the
+ * commit written about it, which is why the two callers now share a reader
+ * instead of agreeing by care.
+ */
+function chainAfter(text, from) {
+  const chain = [];
+  let i = from;
+  for (;;) {
+    i = afterGap(text, i);
+    // `describe?.skip(...)` is the same suite. One character defeated the
+    // previous reader, on a branch whose parent commit is titled for exactly
+    // that.
+    if (text[i] === '?' && text[i + 1] === '.') i += 1;
+    if (text[i] === '.') {
+      i = afterGap(text, i + 1);
+      const name = /^[A-Za-z_$][\w$]*/.exec(text.slice(i));
+      if (name === null) break;
+      chain.push(name[0]);
+      i += name[0].length;
+      continue;
+    }
+    if (text[i] === '[') {
+      const close = closeBracket(text, i);
+      const inner = text.slice(i + 1, close - 1).trim();
+      const literal = /^(['"`])\s*([A-Za-z_$][\w$]*)\s*\1$/.exec(inner);
+      // A computed key this script cannot evaluate counts as skipping: being
+      // wrong that way fails citations loudly, the other way is green and
+      // wrong. NOTE the masked text blanks string BODIES, so the literal is
+      // read from the original — see the callers.
+      chain.push(literal === null ? 'skip' : literal[2]);
+      i = close;
+      continue;
+    }
+    // `describe.skipIf(cond)('name', fn)` is TWO call groups and the suite ends
+    // at the last one. Consuming each in turn is what finds it.
+    if (text[i] === '(') {
+      i = closeOf(text, i);
+      continue;
+    }
+    break;
+  }
+  return { chain, end: i };
+}
+
+/**
+ * The names that open a skipped suite in this source.
+ *
+ * `describe` always, plus any local bound to a skipping chain:
+ * `const zz = describe.skip;` then `zz('the panel list', …)` skipped ten tests
+ * with the check reporting `ok 202`, exit 0. A reader that follows only the
+ * literal identifier cannot see an alias, and an alias is one line.
+ */
+function skippingOpeners(masked, source) {
+  const names = ['describe'];
+  const binding = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*describe\b/g;
+  let match;
+  while ((match = binding.exec(masked)) !== null) {
+    const { chain } = readChain(masked, source, match.index + match[0].length);
+    if (chain.some((link) => SKIPPING.has(link))) names.push(match[1]);
+  }
+  return names;
+}
+
+/** `chainAfter` over the masked text, with bracket keys read from the source. */
+function readChain(masked, source, from) {
+  const onMask = chainAfter(masked, from);
+  if (!onMask.chain.includes('skip')) return onMask;
+  // A bracket key is blanked in the masked copy, so re-read the chain from the
+  // source to tell `describe['skip']` from a genuinely computed key.
+  return chainAfter(source, from);
+}
+
+/**
  * A source with the body of every skipped `describe` removed.
  *
- * Two rounds of this were the same mistake in different clothes.
- *
- * The first matched `describe.skip(` and deleted `[\s\S]*` — to END OF FILE.
- * One skipped suite would have erased every LIVE suite after it and every
- * citation into them, and because the cross-file haystack is the sources
- * concatenated, one skipped suite anywhere would have done it to every
- * `file: null` citation too.
- *
- * The second bounded the deletion and kept matching the literal spelling
- * `describe.skip(`. `describe.skipIf(true)(…)` is a first-class vitest API and
- * does not match it — `skip` there is followed by `If`, not `(`. Probed on
- * `panels.test.tsx`, the file this record cites 46 times: the suite went to
- * `12 passed | 47 skipped` and this check still printed `ok 178`, exit 0. The
- * whole point of the script, defeated by two characters.
- *
- * So it no longer matches a spelling. It reads the MODIFIER CHAIN after
- * `describe` — every `.name`, with any call group between them consumed — and
- * asks whether any link in it skips. `describe.skip.each([…])(…)` and
- * `describe.skipIf(cond)(…)` are the same question as `describe.skip(…)`.
+ * Three rounds of this were the same mistake in different clothes: a regex to
+ * end of file, then a literal `describe.skip(` matcher, then a chain reader
+ * that handled dots and brackets and not `?.` or an alias. The rule is not "a
+ * spelling"; it is "this suite does not run", and every spelling that says so
+ * has to reach the same reader.
  */
 function withoutSkippedSuites(text) {
-  const opener = /\bdescribe\b/g;
+  const masked = maskLiterals(text);
+  const openers = skippingOpeners(masked, text);
+  const pattern = new RegExp(`\\b(?:${openers.join('|')})\\b`, 'g');
   let out = '';
   let cursor = 0;
   let match;
-  while ((match = opener.exec(text)) !== null) {
+  while ((match = pattern.exec(masked)) !== null) {
     if (match.index < cursor) continue;
-    const chain = [];
-    let i = match.index + 'describe'.length;
-    for (;;) {
-      i = afterGap(text, i);
-      if (text[i] === '.') {
-        i = afterGap(text, i + 1);
-        const name = /^[A-Za-z_$][\w$]*/.exec(text.slice(i));
-        if (name === null) break;
-        chain.push(name[0]);
-        i += name[0].length;
-        continue;
-      }
-      /*
-       * `describe['skip'](...)` is the same suite, skipped the same way.
-       *
-       * The version before this read the chain in dot notation only, and
-       * `describe['skip']('the panel list', ...)` took the check to `ok 194`,
-       * exit 0, with 56 tests skipped in the file the record cites 46 times —
-       * the identical outcome to the `describe.skipIf` hole it had just been
-       * written to close. Substituting one spelling for two is not closing a
-       * class, and this script's history is almost entirely that mistake.
-       */
-      if (text[i] === '[') {
-        const close = closeBracket(text, i);
-        const inner = text.slice(i + 1, close - 1).trim();
-        const literal = /^(['"`])([A-Za-z_$][\w$]*)\1$/.exec(inner);
-        // A computed key this script cannot evaluate. Treat it as skipping:
-        // being wrong that way fails citations loudly, the other way is this
-        // check being green and wrong.
-        chain.push(literal === null ? 'skip' : literal[2]);
-        i = close;
-        continue;
-      }
-      // `describe.skipIf(cond)('name', fn)` is TWO call groups, and the suite
-      // ends at the last one. Consuming each in turn is what finds it.
-      if (text[i] === '(') {
-        i = closeOf(text, i);
-        continue;
-      }
-      break;
-    }
-    if (!chain.some((link) => SKIPPING.has(link))) continue;
+    const { chain, end } = readChain(masked, text, match.index + match[0].length);
+    // A bare alias call — `zz('name', fn)` — is skipped by what it was bound
+    // to, so it needs no skipping link of its own.
+    const skips = match[0] !== 'describe' || chain.some((link) => SKIPPING.has(link));
+    if (!skips) continue;
     out += text.slice(cursor, match.index);
-    cursor = i;
-    opener.lastIndex = cursor;
+    cursor = end;
+    pattern.lastIndex = cursor;
   }
   return out + text.slice(cursor);
 }
@@ -289,9 +371,10 @@ function withoutSkippedSuites(text) {
 /**
  * The next index that is neither whitespace nor a comment.
  *
- * `describe /*x*\/ .skip(...)` is legal and was not read as a chain at all,
- * so the suite went unstripped and its citations resolved. Whitespace was
- * skipped and comments were not, which is the same omission one token over.
+ * A comment inside the chain — `describe /*x*\/ .skip(...)` — was not read as a
+ * chain at all, so the suite went unstripped and its citations resolved.
+ * Whitespace was skipped and comments were not, which is the same omission one
+ * token over.
  */
 function afterGap(text, from) {
   let i = from;
@@ -398,11 +481,19 @@ function titles(text) {
  * itself rather than depend on a runner setting somebody may relax.
  */
 function onlyMarkers(text) {
+  const masked = maskLiterals(text);
   const found = [];
-  const pattern = /\b(?:describe|it|test)\s*\.\s*only\s*\(/g;
+  // THE SAME reader the skipped-suite scan uses. The previous version matched
+  // `\.\s*only\s*\(` — dot notation, whitespace only — so `it['only'](…)`,
+  // `it /*x*/ .only(…)` and `it.only.each([1])(…)` all passed while skipping
+  // sixty-one tests. Sharing the reader is what stops the two drifting again.
+  const opener = /\b(?:describe|it|test)\b/g;
   let match;
-  while ((match = pattern.exec(text)) !== null) {
-    found.push(text.slice(0, match.index).split('\n').length);
+  while ((match = opener.exec(masked)) !== null) {
+    const { chain } = readChain(masked, text, match.index + match[0].length);
+    if (chain.includes('only')) {
+      found.push(masked.slice(0, match.index).split('\n').length);
+    }
   }
   return found;
 }
@@ -478,6 +569,25 @@ const files = sources('tests');
  * the tests they name have stopped running. Collected before anything else so
  * the run says that rather than reporting a resolved count nobody can trust.
  */
+/*
+ * A row label may name only one rule.
+ *
+ * The record carried `Y1`-`Y4` twice, `U13` twice and `U88` twice, so a
+ * citation to any of them resolved to two different rules and neither could be
+ * looked up. One of those collisions was created by the round that wrote the
+ * table, which is why this is mechanical now rather than a thing to be careful
+ * about. Labels are the record's own primary keys.
+ */
+const labels = new Map();
+const duplicated = [];
+for (const line of readFileSync(RECORD, 'utf8').split('\n')) {
+  const label = /^\|\s*([A-Z]+[0-9]+[a-z]?)\s*\|/.exec(line);
+  if (label === null) continue;
+  const seen = labels.get(label[1]);
+  if (seen === undefined) labels.set(label[1], line);
+  else duplicated.push(label[1]);
+}
+
 const only = files.flatMap(([path, text]) => onlyMarkers(text).map((line) => `${path}:${line}`));
 const everything = files.map(([, text]) => text).join('\n');
 
@@ -680,8 +790,15 @@ if (
   unrecognised.length > 0 ||
   malformed.length > 0 ||
   unstructured.length > 0 ||
-  only.length > 0
+  only.length > 0 ||
+  duplicated.length > 0
 ) {
+  if (duplicated.length > 0) {
+    console.error(
+      `\x1b[31mfail\x1b[0m  ${duplicated.length} row label(s) name more than one rule, so a citation to them resolves to neither:`,
+    );
+    for (const label of duplicated) console.error(`        ${label}`);
+  }
   if (only.length > 0) {
     console.error(
       `\x1b[31mfail\x1b[0m  ${only.length} \`.only\` marker(s): every OTHER test in those files is skipped, so no citation into them means anything:`,

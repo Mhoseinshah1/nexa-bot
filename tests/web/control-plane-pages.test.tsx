@@ -352,6 +352,30 @@ describe('the template revisions pane', () => {
   });
 
   /**
+   * 1a — the pane is not fetched until it is OPENED, which nothing tested.
+   *
+   * `enabled` has three terms and two of them had tests. Dropping
+   * `showHistory` entirely left all 290 green: the two existing tests both
+   * open the pane, and the sticky test cannot see it either because an
+   * always-enabled cached query still shows one call. What it costs is one
+   * `GET /templates/:key/revisions` per template card on page load, panes
+   * shut — an N-fold amplification against the endpoint the test below is
+   * about not touching from a closed pane.
+   */
+  it('asks for no revision history until a pane is opened', async () => {
+    const api = stubApi([
+      { url: '/templates', body: { templates: [template()] } },
+      { url: 'templates/event.panel.unreachable/revisions', body: { revisions: [] } },
+    ]);
+    renderPage(<ContentPage mayEdit denied={false} />);
+    await screen.findAllByText('event.panel.unreachable');
+
+    // Give any mount-time fetch a turn to land before asserting its absence.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(api.calls.filter((call) => call.url.includes('/revisions'))).toHaveLength(0);
+  });
+
+  /**
    * A RETRYABLE failure must not disable the pane — the other half of the rule.
    *
    * The `enabled` callback reads `finalAnswer`, and only the disable-on-final

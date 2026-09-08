@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { SettingsPage } from '../../apps/web/src/pages/settings';
 import { AlertsPage } from '../../apps/web/src/pages/alerts';
@@ -242,6 +242,37 @@ describe('the settings screen', () => {
     expect(screen.queryByText(t('web.error'))).toBeNull();
   });
 
+  /**
+   * 1e — the OTHER arm of the fix round 30 made, untested in the round that is
+   * about untested halves.
+   *
+   * `messageFor` returns the rejected copy on a final answer and the
+   * connection copy otherwise, and only the first had a test. Widening it to
+   * `finalAnswer(error) || error instanceof TypeError` was lint-clean,
+   * prettier-clean and suite-green — and it tells an operator whose save never
+   * reached the server that "the server answered and retrying will not change
+   * it", which is false twice and advises against the one thing that would
+   * work.
+   *
+   * A `fetch` that rejects is what a dropped connection actually looks like
+   * here, so that is what this drives.
+   */
+  it('does blame the connection when the request never arrived', async () => {
+    stubApi(settings([setting({ version: 2, source: 'TENANT' })]));
+    renderPage(<SettingsPage mayEdit denied={false} />);
+    await screen.findByText('ops.notifications.max_attempts');
+
+    // The save leaves the browser and dies on the wire.
+    const failing = vi.fn(() => Promise.reject(new TypeError('Failed to fetch')));
+    const previous = globalThis.fetch;
+    vi.stubGlobal('fetch', failing);
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+
+    expect(await screen.findByText(t('web.error'))).toBeInTheDocument();
+    expect(screen.queryByText(t('web.rejected'))).toBeNull();
+    vi.stubGlobal('fetch', previous);
+  });
+
   it('reports a stored value the registry no longer accepts', async () => {
     stubApi(settings([setting({ storedValueInvalid: true, version: 4, source: 'DEFAULT' })]));
     renderPage(<SettingsPage mayEdit denied={false} />);
@@ -320,9 +351,16 @@ describe('management alerts', () => {
      */
     expect(screen.queryByRole('button', { name: 'تلاش دوباره' })).toBeNull();
     const operable = () =>
-      Array.from(document.querySelectorAll<HTMLElement>('button, select, input, a[href]')).filter(
-        (element) => element.closest('[hidden]') === null,
-      );
+      Array.from(
+        document.querySelectorAll<HTMLElement>(
+          // Widened after a `<div role="button" tabIndex={0} onClick={refetch}>`
+          // and a `<textarea>` both survived all three of these tests. A
+          // keyboard-operable div that refetches costs one
+          // `access.permission_denied` event and one DENIED audit row per
+          // press, two in production — the exact harm, wearing a different tag.
+          'button, select, input, textarea, a[href], [role="button"], [role="link"], [tabindex]',
+        ),
+      ).filter((element) => element.closest('[hidden]') === null);
     expect(operable().map((element) => element.textContent ?? element.tagName)).toEqual([]);
     const after = api.calls.length;
     for (const control of operable()) fireEvent.click(control);
@@ -392,9 +430,16 @@ describe('management alerts', () => {
     // for IS one.
     expect(screen.queryByRole('button', { name: 'حل‌نشده' })).toBeNull();
     const operable = () =>
-      Array.from(document.querySelectorAll<HTMLElement>('button, select, input, a[href]')).filter(
-        (element) => element.closest('[hidden]') === null,
-      );
+      Array.from(
+        document.querySelectorAll<HTMLElement>(
+          // Widened after a `<div role="button" tabIndex={0} onClick={refetch}>`
+          // and a `<textarea>` both survived all three of these tests. A
+          // keyboard-operable div that refetches costs one
+          // `access.permission_denied` event and one DENIED audit row per
+          // press, two in production — the exact harm, wearing a different tag.
+          'button, select, input, textarea, a[href], [role="button"], [role="link"], [tabindex]',
+        ),
+      ).filter((element) => element.closest('[hidden]') === null);
     expect(operable().map((element) => element.textContent ?? element.tagName)).toEqual([]);
     const after = api.calls.length;
     for (const control of operable()) fireEvent.click(control);
@@ -466,6 +511,32 @@ describe('management alerts', () => {
 
     expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'تازه‌تر' })).toBeNull();
+    expect(screen.queryByText('نمایش')).toBeNull();
+  });
+
+  /**
+   * 1b/1c for the alerts pager — the same two untested states, one screen over.
+   *
+   * Deleting `denied ? 'denied' :` from this gate, and widening it to accept
+   * `'loading'`, both left all 290 tests green. The mid-session revocation is
+   * the case the rule exists for: the shell's 60-second permission poll turns
+   * `denied` true while the rows fetched a moment ago are still on screen.
+   */
+  it('withdraws the pager when the permission is lost over rows already shown', async () => {
+    stubApi([{ url: '/ops-log', body: { events: [event()], nextCursor: null } }]);
+    const { rerender } = renderPage(<AlertsPage denied={false} />);
+    await screen.findByText('Roles changed.');
+    expect(screen.getByText('نمایش')).toBeInTheDocument();
+
+    rerender(<AlertsPage denied />);
+
+    expect(screen.queryByText('نمایش')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
+  });
+
+  it('draws no pager before the first page of alerts has arrived', () => {
+    stubApi([{ url: '/ops-log', body: { events: [event()], nextCursor: null } }]);
+    renderPage(<AlertsPage denied={false} />);
     expect(screen.queryByText('نمایش')).toBeNull();
   });
 

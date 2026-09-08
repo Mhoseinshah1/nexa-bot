@@ -260,9 +260,23 @@ describe('the hidden attribute, against the real cascade', () => {
      * because jsdom decides on source order alone. An assertion about a
      * position has to be an assertion about what is on the other side of it.
      */
-    const hiddenAt = CSS.lastIndexOf('[hidden]');
-    expect(hiddenAt).toBeGreaterThan(CSS.lastIndexOf('.toolbar {'));
-    const after = CSS.slice(CSS.indexOf('}', hiddenAt) + 1);
-    expect(after.trim(), 'no rule may follow [hidden]; jsdom obeys source order').toBe('');
+    /*
+     * Anchored on the RULE, not on the last mention of the selector.
+     *
+     * The first version took `CSS.lastIndexOf('[hidden]')`, so anything whose
+     * selector merely CONTAINS `[hidden]` moved the anchor past the rule and
+     * the assertion then proved only that nothing follows that. Appending
+     * `.dist-row[hidden] { display: grid }` — the likeliest thing anyone writes
+     * near this rule — kept all 290 tests green while `.dist-row[hidden]`
+     * computed `grid` against the real stylesheet. A position assertion has to
+     * be anchored on the thing whose position it is asserting.
+     */
+    const rule = /(^|\n)\[hidden\]\s*\{[^}]*\}/g;
+    const matches = [...CSS.matchAll(rule)];
+    expect(matches, 'exactly one bare [hidden] rule').toHaveLength(1);
+    const only = matches[0] as RegExpMatchArray;
+    const end = (only.index ?? 0) + only[0].length;
+    expect(end, '[hidden] must come after .toolbar').toBeGreaterThan(CSS.lastIndexOf('.toolbar {'));
+    expect(CSS.slice(end).trim(), 'no rule may follow [hidden]; jsdom obeys source order').toBe('');
   });
 });

@@ -745,12 +745,12 @@ It now compares the whole normalised shape: method, column order and predicate.
 
 ## The mutations
 
-| #   | rule                                            | mutation                                                   | test that dies                                                                                          |
-| --- | ----------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| U12 | a transient failure does NOT stop the interval  | `refused` → `error !== null`                               | `permissions-and-refresh.test.tsx` › keeps polling through a transient failure, and recovers on its own |
-| U13 | a declared index matches the built one in shape | reorder the archived keyset to `(created_at,id,tenant_id)` | `online-indexes.test.ts` › has an index in the database matching every declared definition              |
-| U15 | the shell does not hide what the server serves  | gate `/providers` on `panels.view` again                   | `permissions-and-refresh.test.tsx` › is offered to an actor who may create a panel but not list one     |
-| U16 | a failed detail can be re-asked                 | drop the retry button from the error banner                | `permissions-and-refresh.test.tsx` › offers a retry that actually re-asks                               |
+| #    | rule                                            | mutation                                                   | test that dies                                                                                          |
+| ---- | ----------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| U12  | a transient failure does NOT stop the interval  | `refused` → `error !== null`                               | `permissions-and-refresh.test.tsx` › keeps polling through a transient failure, and recovers on its own |
+| U13b | a declared index matches the built one in shape | reorder the archived keyset to `(created_at,id,tenant_id)` | `online-indexes.test.ts` › has an index in the database matching every declared definition              |
+| U15  | the shell does not hide what the server serves  | gate `/providers` on `panels.view` again                   | `permissions-and-refresh.test.tsx` › is offered to an actor who may create a panel but not list one     |
+| U16  | a failed detail can be re-asked                 | drop the retry button from the error banner                | `permissions-and-refresh.test.tsx` › offers a retry that actually re-asks                               |
 
 **U14 has been removed from this table.** It protected round 9's rule that the
 restore button is disabled for a name the server already refused, and round 10
@@ -2480,10 +2480,10 @@ and remain accepted.
 | U98 | selecting a notification does something visible      | drop the detail skeleton                         | `control-plane-pages.test.tsx` › shows the detail is loading rather than nothing at all       |
 | U93 | the scan's mutation exemption fails CLOSED           | a query arriving as a prop renders off `isError` | `state-switch-contract.test.tsx` › renders no view off a bare isError unless it is a mutation |
 
-| #   | rule                                        | mutation                    | what the check prints                                         |
-| --- | ------------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U88 | the record's citation count is exact        | fence a real citation table | exits 1: 161 citations were checked; this record declares 165 |
-| U92 | a citation must resolve to a test that RUNS | cite an `it.todo` stub      | exits 1: 1 of 166 cited tests do not exist                    |
+| #    | rule                                        | mutation                    | what the check prints                                         |
+| ---- | ------------------------------------------- | --------------------------- | ------------------------------------------------------------- |
+| U88b | the record's citation count is exact        | fence a real citation table | exits 1: 161 citations were checked; this record declares 165 |
+| U92  | a citation must resolve to a test that RUNS | cite an `it.todo` stub      | exits 1: 1 of 166 cited tests do not exist                    |
 
 **U94 killed nothing on its first run.** The assertion was vacuous: it looked
 for the Refresh button on `NotificationsPage`, which never had one — the button
@@ -2608,7 +2608,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 195 citations were checked; this record declares 202 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 206 citations were checked; this record declares 213 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -2928,12 +2928,12 @@ test — and the row below is the re-run after one was written.
 Read these the way VZ and WX are read: the mutation makes the check EXIT 0, and
 green is the failure being shown.
 
-| #   | rule                                                  | mutation                            | what the check prints                                        |
-| --- | ----------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------ |
-| Y1  | a suite skipped by bracket access is skipped          | read the chain in dot notation only | exits **0**: `ok 194`, with 56 tests skipped                 |
-| Y2  | a comment inside the chain does not hide it           | skip whitespace but not comments    | exits **0**: `ok 194`, with the suite unstripped             |
-| Y3  | `/[)]/` does not truncate the strip                   | leave regex literals unparsed       | exits **0**: `ok 194`, with the skipped suite's tail citable |
-| Y4  | `.only` makes every citation in that file meaningless | accept `.only` as "it runs"         | exits **0**: `ok 194`, against `1 passed \| 60 skipped`      |
+| #   | rule                                                  | mutation                            | what the check prints                                                            |
+| --- | ----------------------------------------------------- | ----------------------------------- | -------------------------------------------------------------------------------- |
+| K1  | a suite skipped by bracket access is skipped          | read the chain in dot notation only | exits **0**: `ok 202`, against `52 passed \| 12 skipped (64)`                    |
+| K2  | a comment inside the chain does not hide it           | skip whitespace but not comments    | exits **0**: `ok 202`, with the suite unstripped                                 |
+| K3  | `/[)]/` does not truncate the strip                   | leave regex literals unparsed       | exits **0**: `ok 202`, with the skipped suite's tail citable                     |
+| K4  | `.only` makes every citation in that file meaningless | accept `.only` as "it runs"         | exits **0**: `ok 202`, against `1 passed \| 63 skipped (64)` under `--allowOnly` |
 
 ## A standing note about transcripts that quote the count
 
@@ -2943,3 +2943,109 @@ transcript quotes the citation count is a claim about `EXPECTED`, so it must be
 re-run in every commit that changes it. The row below is re-run against this
 tree, and this paragraph is here so the next round does not have to rediscover
 why it drifted.
+
+# Round 31 — five rules revertible with the whole gate green
+
+The twenty-second review reverted four of round 30's rules SIMULTANEOUSLY and
+ran everything — typecheck, lint, format, boundaries, i18n, citations, 727 unit
+and 290 web tests — all green. That is the strongest form this branch's
+recurring finding can take, and the shape of it is worth stating plainly: round
+30 was the round about half-tested fixes, and it shipped five of them.
+
+## The half nobody supplied
+
+- **`showHistory`.** The revisions query's `enabled` has three terms and two had
+  tests. Dropping the first left 290 green, and costs one
+  `GET /templates/:key/revisions` per template card on page load, panes shut —
+  against the endpoint the test beside it exists to keep quiet.
+- **`denied` over cached rows.** Three pager gates carry `denied ? 'denied' :`
+  and nothing exercised it. Round 29's test supplies `denied` from the first
+  render, where the query is `enabled: false` and therefore `'loading'`, so the
+  gate closes for the wrong reason. Round 30's supplies `denied={false}` with a 403. The state the rule exists for is neither: the shell re-reads permissions
+  every 60 seconds, so `denied` flips true while rows fetched a moment ago are
+  still on screen.
+- **`loading`.** Round 29's record names this as a defect it fixed. Widening the
+  gate to accept `'loading'` left 290 green.
+- **403 and 404 on the session lookup.** The shell rule is `finalAnswer` and
+  only its `ZodError` arm was tested; a `name === 'ZodError'` substitute passed
+  everything and restored the connection copy plus a live Retry for answers the
+  server gave.
+- **`messageFor`'s connection arm.** Round 30 recorded that this fix had shipped
+  untested and that a test was written. One arm got a test.
+
+## The checker, defeated five more ways
+
+`onlyMarkers` matched `.only` in dot notation with whitespace only — twenty
+lines below the bracket-and-comment-aware reader the same commit had just
+written for `describe`. So `it['only']`, `it /*x*/ .only` and `it.only.each`
+printed `ok 202`, exit 0. The `describe` reader itself broke on `?.` and never
+followed an alias, so `describe?.skip` and `const zz = describe.skip; zz(…)`
+went unstripped.
+
+Both scanners share ONE reader now, run over a copy of the source with every
+comment, string and regex body blanked. That also removes the `.only`
+false-positive on prose — the word in a comment no longer fails the run, which
+matters because this file's comments have to be able to name what they forbid.
+
+## Two assertions that still could not fail
+
+`declares that rule important, and last` anchored on
+`CSS.lastIndexOf('[hidden]')`, so appending `.dist-row[hidden] { display: grid }`
+— the likeliest thing anyone writes near that rule — moved the anchor past the
+rule, kept 290 green, and re-opened the jsdom seam for that class. It now
+matches the bare `[hidden]` RULE, requires exactly one, and asserts nothing
+follows it.
+
+The operable-control set was `button, select, input, a[href]`. A
+`<div role="button" tabIndex={0} onClick={refetch}>` and a `<textarea>` both
+survived all three "no request-issuing control" tests.
+
+## Row labels are primary keys
+
+Found while renaming: the record carried `Y1`–`Y4` twice, `U13` twice and `U88`
+twice, so a citation to any of them resolved to two different rules and neither
+could be looked up. One collision was created by the round that wrote the table.
+The later duplicates are suffixed, round 30's checker probes are relabelled
+`K1`–`K4`, and the check is mechanical now rather than a thing to remember.
+
+## The mutations
+
+| #   | rule                                                 | mutation                                             | tests that die                                                                                                                          |
+| --- | ---------------------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Z1  | the revisions pane is not fetched until it is opened | drop `showHistory` from `enabled`                    | `control-plane-pages.test.tsx` › asks for no revision history until a pane is opened                                                    |
+| Z2  | the panels pager goes when the permission goes       | delete `denied ? 'denied' :`                         | `panels.test.tsx` › withdraws the pager when the permission is lost over rows already shown                                             |
+| Z3  | …and is not drawn before the first page arrives      | accept `'loading'` in the gate                       | `panels.test.tsx` › draws no pager before the first page has arrived                                                                    |
+| Z4  | the alerts pager, when the permission goes           | delete `denied ? 'denied' :`                         | `settings-and-alerts.test.tsx` › withdraws the pager when the permission is lost over rows already shown                                |
+| Z5  | …and its loading state                               | accept `'loading'` in the gate                       | `settings-and-alerts.test.tsx` › draws no pager before the first page of alerts has arrived                                             |
+| Z6  | a refused session lookup is not a connection failure | `settled = error.name === 'ZodError'`                | `shell-recovery.test.tsx` › says the server refused a %s session lookup, and offers no retry                                            |
+| Z7  | …and a 503 still IS one                              | `settled = true`                                     | `shell-recovery.test.tsx` › keeps the connection copy and the retry for a 503                                                           |
+| Z8  | a request that never arrived blames the connection   | `finalAnswer(error) \|\| error instanceof TypeError` | `settings-and-alerts.test.tsx` › does blame the connection when the request never arrived                                               |
+| Z9  | `[hidden]` is the last RULE, not the last mention    | append `.dist-row[hidden] { display: grid }`         | `stylesheet-contract.test.tsx` › declares that rule important, and last                                                                 |
+| Z10 | a keyboard-operable control counts as operable       | add an ungated `<div role="button" tabIndex={0}>`    | `settings-and-alerts.test.tsx` › withdraws its own refresh once the refusal is final; › withdraws its filters once the refusal is final |
+
+## The checker probes
+
+| #   | defeat                                 | before         | what the check prints |
+| --- | -------------------------------------- | -------------- | --------------------- |
+| Z11 | `const zz = describe.skip; zz(…)`      | `ok`, exit 0   | exit 1                |
+| Z12 | `describe?.skip(…)`                    | `ok`, exit 0   | exit 1                |
+| Z13 | `it['only'](…)`                        | `ok`, exit 0   | exit 1                |
+| Z14 | `it /*x*/ .only(…)`                    | `ok`, exit 0   | exit 1                |
+| Z15 | `it.only.each([1])(…)`                 | `ok`, exit 0   | exit 1                |
+| Z16 | the word `it.only(` in a PROSE comment | exit 1 (wrong) | exit 0                |
+| Z17 | a row label used twice                 | silent         | exit 1                |
+
+Positive controls re-run and still correct: `describe` + newline + `.skip`,
+`describe["skip"]`, `describe['sk'+'ip']`, `describe.skipIf` with `/[)]/` inside,
+`it.only(`, `test.only(`, `describe.onlyish(` (must not fire), and `a / b / c`
+division inside a suite.
+
+## The K transcripts, corrected
+
+Round 30 added the rule that any row quoting the citation count must be re-run
+when `EXPECTED` changes, applied it to `U99`, and left the four rows four lines
+above it quoting `ok 194` after moving `EXPECTED` to 202. Two numbers there were
+wrong in kind rather than degree: "56 tests skipped" was the count of
+unresolvable CITATIONS, not of skipped tests, and `1 passed | 60 skipped`
+predates both `allowOnly: false` and the tests added since. All four are
+re-measured.

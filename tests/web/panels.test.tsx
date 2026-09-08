@@ -188,6 +188,47 @@ describe('the panel list', () => {
     expect(screen.queryByText('نمایش')).toBeNull();
   });
 
+  /**
+   * 1b — DENIED flipping true over rows already on screen, which is the state
+   * the rule was written for and the one nothing supplied.
+   *
+   * Two tests bracket this gate and neither reaches it. Round 29's supplies
+   * `denied` from the first render, where the query is `enabled: false` and
+   * therefore `'loading'` — so the gate is closed for the wrong reason and
+   * `denied ? 'denied' :` can be deleted with 290 green. Round 30's supplies
+   * `denied={false}` with a 403. The real sequence is neither: the shell
+   * re-reads permissions every 60 seconds, so `denied` goes true while the
+   * query still holds the rows it fetched a moment ago, and without this term
+   * the pager keeps reporting "showing N" for rows the operator may no longer
+   * see and offers an "older" that mints a fresh refused request.
+   */
+  it('withdraws the pager when the permission is lost over rows already shown', async () => {
+    stubApi(list([panel({ id: 'p1', name: 'Frankfurt A' })], 'c1'));
+    const { rerender } = renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
+    await screen.findByText('Frankfurt A');
+    // The rows are here, and so is the pager describing them.
+    expect(screen.getByText('نمایش')).toBeInTheDocument();
+
+    // The 60-second permission poll comes back without `panels.view`.
+    rerender(<PanelsPage route={LIVE_ROUTE} mayEdit denied />);
+
+    expect(screen.queryByText('نمایش')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
+  });
+
+  /**
+   * 1c — and the LOADING state, which round 29's record names as a defect it
+   * fixed ("all three pagers rendered in `denied` and `loading`") and which no
+   * test covers: widening the gate to accept `'loading'` leaves 290 green.
+   */
+  it('draws no pager before the first page has arrived', () => {
+    stubApi(list([panel()]));
+    renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
+    // Synchronously after mount: the query is pending, nothing has been said
+    // about how many rows there are, so nothing may claim to be showing any.
+    expect(screen.queryByText('نمایش')).toBeNull();
+  });
+
   it('distinguishes an empty fleet from a failed request', async () => {
     stubApi(list([]));
     renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
