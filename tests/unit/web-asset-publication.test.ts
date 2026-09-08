@@ -327,9 +327,23 @@ async function killMidCopy(
        * The guard is on `rootDir`, not `workspace`, and that is the whole
        * fix. `workspace` is a module-level `let` that `beforeEach` REASSIGNS,
        * so by the time an orphan resumes it names the NEXT test's directory —
-       * which exists. Measured: with `existsSync(workspace)` a forced timeout
-       * still leaked a tree; with `existsSync(rootDir)` it leaks none. Two
-       * rounds guarded the wrong variable, in the check written to close this.
+       * which exists. Two rounds guarded the wrong variable, in the check
+       * written to close this.
+       *
+       * It HELPS and does not close it, and the earlier claim here that "it
+       * leaks none" was wrong: over forced timeouts, 6 of 6 runs leaked under
+       * `existsSync(workspace)`, 5 of 6 under this one, and 2 of 6 with the
+       * retry block removed ALTOGETHER. The residue is the still-live
+       * publisher child, which recreates its asset root after teardown — no
+       * `existsSync` on any variable can stop that. (Corrected in the record
+       * one round ago and left standing here, which is where the next reader
+       * looks.)
+       *
+       * The block stays even though removing it leaks less, and that is a
+       * trade rather than an oversight: the leak is temp directories, and what
+       * the retry prevents is a spurious anchor failure that ACCUSES the
+       * publisher on a loaded machine. A wrong red is worse than a stray
+       * directory.
        */
       if (!existsSync(rootDir)) return { caught, good, died };
       rmSync(rootDir, { recursive: true, force: true });

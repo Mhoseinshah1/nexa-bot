@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 312 citations were checked; this record declares 313 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 313 citations were checked; this record declares 314 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -4916,12 +4916,12 @@ answers "could this request touch the owner role", not "does it", and the
 authoritative decision is still the guard under the lock. `setRoles` gets the
 same early check for the GRANT direction.
 
-Left OPEN, and recorded rather than guessed: the REMOVE direction, and
-`setStatus` on an owner, are triggered by the TARGET's authoritative roles
-rather than by the body. Pre-authorizing those would mean an unlocked read
-whose answer can be stale — which is the staleness the locked re-check exists
-to avoid — so the record loss there stays in OQ-3D-02 rather than being closed
-by a worse mechanism.
+**That fix is REVERTED — see round 44.** It was wrong in both directions and
+the second direction was harmful: the guess refused an operation the system
+permits and wrote a false escalation record for it. "Left OPEN, and recorded"
+was also untrue — nothing was written down; `docs/open-questions.md` gained
+only OQ-3D-03 that round, and OQ-3D-02 was not touched. Both are corrected
+below rather than rewritten away.
 
 ### The floor could not see either operational-event recorder
 
@@ -4983,6 +4983,89 @@ is the still-live publisher recreating its asset root after teardown, which no
 AT1 is the finding: before this round the same mutation left the entire
 integration suite green, and it now fails with
 `/panels: operational events for a malformed body: expected 1 to be 2`.
+
+## Round 44 — the twenty-sixth reviewer, and the round the fix was the defect
+
+Ten findings. This is the first round where the previous round's fix did not
+merely miss something — it BROKE something, and the honest outcome is a revert
+rather than another patch.
+
+### The guess refused what the system permits, and wrote a false record for it
+
+`mentionsOwnerRole` fired on the body MENTIONING the owner role. The
+authoritative guard fires on the locked DELTA adding or removing it. Those are
+different predicates, and the difference is a legitimate request: an actor with
+`admins.edit` editing an existing owner's OTHER roles has to keep `owner` in
+the list — removing it trips the remove gate — so the pre-check refused them.
+
+Measured, same actor, same body, parent against this branch:
+
+- parent: RESOLVED, roles become `["owner","support"]`, +0 audit, +0 events.
+- with the guess: REJECTED `Missing permission "admins.permissions.edit"`,
+  roles unchanged, **+1 audit, +1 event**.
+
+So the module whose thesis is audit fidelity wrote a `DENIED` row and an
+`access.permission_denied` event describing an escalation attempt that, by the
+system's own locked rule, was not one — on a row that reaches the Management
+Alerts page and never resolves. The docblock defending it said "a false
+positive costs one permission resolution on a request that was going to be
+refused anyway". That sentence was false, and it was the justification.
+
+It was also too NARROW: `roleKeys: 'owner'` as a bare string, rather than a
+one-element array, went straight back to 400 with no record. The hole it was
+written to close was one keystroke away.
+
+**And it had no test.** Deleting both call sites left the entire corpus green —
+integration and unit alike. The round was named after this rule and the only
+mutation it recorded covered the PANELS test.
+
+A false record is worse than a missing one, and a guess at an authoritative
+predicate is what produced both. Reverted.
+
+### What replaces it: the class, written down
+
+Some refusals depend on a permission that is only known once the body is
+parsed — `admins.permissions.edit` when a request grants or removes the owner
+role, and `ADMIN_PRIVILEGE_ESCALATION` for every delegable role. There is no
+permission to check before the parse, only a guess at one, and this round is
+what a guess costs.
+
+`docs/open-questions.md` now carries the whole class: the two cases that ARE
+closed, the four that are not, the measured harm of the attempt, and the one
+restructure that would close two of them authoritatively — moving the parse
+inside the lock and gating on the locked `current`, which needs no unlocked
+read at all. The previous round's stated reason for leaving them ("an unlocked
+read whose answer can be stale") was itself wrong: nothing reads the target's
+roles before the lock on either path.
+
+### The rest
+
+- The corrected sentence about the leak guard survived VERBATIM in the source
+  comment it was copied from, one file over from the correction. Fixed where
+  the next reader looks.
+- Round 43's own numbers argue against keeping the retry block — 2 of 6 leaks
+  without it against 5 of 6 with it — and it is kept anyway. Now stated as the
+  trade it is: the leak is temp directories, the retry prevents a spurious
+  anchor failure that ACCUSES the publisher, and a wrong red is worse than a
+  stray directory.
+- OQ-3D-03 listed templates among `recordMutationDenial`'s callers; templates
+  goes through `authorizedCommand` and writes no operational event.
+- "two rows and one audit row is what a denial writes here" holds for the
+  PRE-TRANSACTION path only; inside `runAuthorizedMutation` it is one and one.
+  The pinned counts are right for the path they measure and the sentence
+  generalised past it.
+
+## The mutations
+
+| #   | rule                                       | mutation                                  | tests that die                                                                     |
+| --- | ------------------------------------------ | ----------------------------------------- | ---------------------------------------------------------------------------------- |
+| AU1 | `admin.create` AUTHORIZES before it parses | move the parse back in front of the guard | `admin-http.test.ts` › records the denial on create even when the body is nonsense |
+
+AU1 is the FIRST guard, which is the part of round 43 that survives. There is
+deliberately no mutation row for `mentionsOwnerRole` this round, because there
+is deliberately no `mentionsOwnerRole`: the rule it encoded was not the
+system's rule, and the right record of that is an open question, not a test
+pinning a guess.
 
 ## The microsecond truncation is still open, deliberately
 

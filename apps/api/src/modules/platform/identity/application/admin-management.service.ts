@@ -87,27 +87,6 @@ export interface PasswordChangeContext {
   readonly ip: string | null;
 }
 
-/**
- * Whether a raw request body MENTIONS the owner role.
- *
- * Structural, on the unparsed input, because the parse is what a caller can
- * make fail: an escalation attempt refused for lacking
- * `admins.permissions.edit` left no record at all when the body also carried
- * an 11-character password, and left one when the password was long enough.
- * Measured: 400 with +0/+0 against 403 with +1/+1.
- *
- * Deliberately permissive. It answers "could this request touch the owner
- * role", not "does it" — the authoritative decision is still the guard inside
- * the transaction, on locked state. A false positive costs one permission
- * resolution on a request that was going to be refused anyway; a false
- * negative is the audit hole.
- */
-function mentionsOwnerRole(input: unknown): boolean {
-  if (typeof input !== 'object' || input === null) return false;
-  const roleKeys = (input as { roleKeys?: unknown }).roleKeys;
-  return Array.isArray(roleKeys) && roleKeys.some((key) => key === OWNER_ROLE_KEY);
-}
-
 export class AdminManagementService {
   constructor(
     private readonly guard: PermissionGuard,
@@ -175,26 +154,6 @@ export class AdminManagementService {
       action: 'admin.create',
       entityId: null,
     });
-    /*
-     * And the ESCALATION gate, on the raw body, when it mentions the owner
-     * role at all.
-     *
-     * The guard of record is still `:216` under the lock — this one cannot be,
-     * because it reads a body nobody has validated. What it fixes is the
-     * record: `admins.permissions.edit` is the permission that governs
-     * privilege itself, and its denial was erasable by an actor holding
-     * `admins.edit` who sent an 11-character password alongside
-     * `roleKeys:['owner']`. The round that moved the first guard here left the
-     * second one expression over — the same shape it was fixing, in the
-     * function it was fixing it in.
-     */
-    if (mentionsOwnerRole(input)) {
-      await this.assertMayAttempt(scope, actor, 'admins.permissions.edit', {
-        action: 'admin.create',
-        entityId: null,
-      });
-    }
-
     const command = createAdminRequestSchema.parse(input);
     const username = adminUsernameSchema.parse(command.username.trim().toLowerCase());
     adminPasswordSchema.parse(command.password);
@@ -511,18 +470,6 @@ export class AdminManagementService {
       action: 'admin.roles_change',
       entityId: targetId,
     });
-    // The escalation gate too, on the raw body, when it mentions the owner
-    // role — same reason as `create`. This covers the GRANT direction, which
-    // is the one a caller chooses. The REMOVE direction is triggered by the
-    // target's authoritative roles rather than by the body, and is recorded as
-    // still open in OQ-3D-02 rather than pre-authorized from an unlocked read
-    // whose answer could be stale.
-    if (mentionsOwnerRole(input)) {
-      await this.assertMayAttempt(scope, actor, 'admins.permissions.edit', {
-        action: 'admin.roles_change',
-        entityId: targetId,
-      });
-    }
     const command = setAdminRolesRequestSchema.parse(input);
 
     // Cheap and state-independent, so it can refuse before any work.

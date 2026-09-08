@@ -361,9 +361,11 @@ neither true nor false`, which cannot tell the two orders apart.
   authorized first — the one operation that mints a credential with roles
   attached. The round that fixed the panels said in three documents that "the
   panel service was the last to follow a rule the others kept"; it was not,
-  and that sentence is corrected here. Pinned by
-  `admin-http.test.ts` › records the denial on create even when the body is
+  and that sentence is corrected here. **The FIRST guard is fixed** and pinned
+  by `admin-http.test.ts` › records the denial on create even when the body is
   nonsense.
+- The SECOND guards are a different problem and are **not** fixed. See
+  "Why the second guards cannot be pre-authorized" below.
 - And once more INSIDE the file that had just been fixed: `create`'s second
   guard, `panels.credentials.rotate`, is gated on the parsed body, so an actor
   holding `panels.edit` but not the rotate permission could suppress the
@@ -380,6 +382,51 @@ Making it uniform means moving every query parse behind the guard, which a
 surface cannot do — it does not resolve permissions — so it means moving the
 parsing into the application services, which is a change across three
 controllers and every query schema, and is not what Phase 3D was asked for.
+
+### Why the second guards cannot be pre-authorized, and what was learned trying
+
+Some refusals depend on a permission that is only KNOWN once the body is
+parsed. `admins.permissions.edit` is required when a request grants or removes
+the owner role; `ADMIN_PRIVILEGE_ESCALATION` is raised when a request confers
+authority the actor does not hold. Which permission applies is a function of
+what the body asks for, so there is no permission to check before the parse —
+only a guess at one.
+
+**A guess was tried, measured, and reverted.** `mentionsOwnerRole` scanned the
+raw body for the owner role and pre-authorized `admins.permissions.edit`. It
+was wrong in both directions, and the second is the reason it is gone:
+
+- Too NARROW. It required `Array.isArray(roleKeys)`, so `roleKeys: 'owner'` as
+  a bare string went back to 400 with no record — the hole it was written to
+  close, one keystroke away.
+- Too WIDE, and harmful. The authoritative guard fires on the locked DELTA
+  adding or removing owner; the guess fired on the body MENTIONING it. So an
+  actor with `admins.edit` editing an existing owner's other roles — who must
+  keep `owner` in the list, or trip the remove gate — was REFUSED an operation
+  the system permits, and the refusal wrote a `DENIED` audit row and an
+  `access.permission_denied` event describing an escalation attempt that never
+  happened. Measured: parent RESOLVED with +0/+0; with the guess REJECTED with
+  +1/+1. In the module whose whole thesis is audit fidelity, and on a row that
+  reaches the Management Alerts page and never resolves.
+
+A false record is worse than a missing one. The guess is reverted.
+
+**What is still open**, all measured at +0/+0 with a malformed body and +1/+1
+with a well-formed one:
+
+- `create` and `setRoles` granting the owner role.
+- `setRoles` removing it, and `setStatus` on an owner — these depend on the
+  TARGET's roles rather than the body, and could be closed authoritatively by
+  moving the parse inside the lock and gating on the locked `current`. That is
+  a restructure of two locked mutations, not a Web Admin change.
+- `assertGrantsNoMorePrivilegeThanHeld`, which covers every delegable role and
+  is called "the more serious of the two" by the code that reports it.
+- `POST /admins/:id/roles` and `POST /admins/:id/status`, where
+  `admins.controller.ts` parses the path id before the service authorizes —
+  the same construct as `GET /notifications/:id` above, on two WRITE routes.
+
+**Trigger to revisit:** the phase that restructures the identity mutations, or
+the first audit review that asks why a denied escalation left no trace.
 
 **Trigger to revisit:** an operator or an auditor asking why a denied attempt
 is missing from the log, or the first phase that adds an endpoint whose denial
@@ -404,7 +451,9 @@ counting denials on the alerts page counts double, permanently, and always has.
 
 **Why it is not fixed here.** It is pre-existing, it is shared by every
 non-transactional caller of `recordMutationDenial` — settings, features,
-templates, notifications and panels alike — and the fix is a decision about
+notifications, panels and the panel monitor (NOT templates, which go through
+`authorizedCommand` and write an audit row only) — and the fix is a decision
+about
 which layer owns the record, which is a platform question rather than a Web
 Admin one. `recordMutationDenial`'s own docblock says it is "called from
 exactly one place per attempt, so a denial produces one row", which is true of

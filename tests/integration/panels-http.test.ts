@@ -1122,6 +1122,12 @@ describe('panel HTTP surface', () => {
      * Pinning 2 and 1 is deliberate and has a cost: adding a THIRD recorder
      * fails this test, and whoever adds one should have to say so here. That
      * the number is two rather than one is itself a defect — see OQ-3D-03.
+     *
+     * Two and one is the PRE-TRANSACTION path, which is what these five
+     * routes take. A denial raised INSIDE `runAuthorizedMutation` writes one
+     * and one, because `guard.check` is passed the transaction and suppresses
+     * its own event. Said here because the earlier wording generalised past
+     * the path it measured.
      */
     const auditDenials = async (): Promise<number> => {
       const rows = await api.container.database.db.execute(
