@@ -321,6 +321,21 @@ describe('the Web Admin V2 surface', () => {
         'until=-005000-01-01T00:00:00.000Z',
         `before=%2B275760-09-13T00:00:00.000Z&beforeId=${OUT_OF_RANGE_CURSOR_ID}`,
         `before=-005000-01-01T00:00:00.000Z&beforeId=${OUT_OF_RANGE_CURSOR_ID}`,
+        /*
+         * YEAR ZERO, which the first fix let through on all three cursors.
+         *
+         * `new Date('0000-01-01T00:00:00Z').toISOString()` is
+         * `'0000-01-01T00:00:00.000Z'` — FOUR digits, not the expanded
+         * `±YYYYYY` form — so a `^\d{4}-` check passes it, and PostgreSQL has
+         * no year zero: `date/time field value out of range`. The round that
+         * closed the two extremes tested both extremes and neither zero, which
+         * is the fixture telling on the author: ~366 days of caller-controlled
+         * values still answered 500, here and on `/panels` and
+         * `/notifications`, the two this endpoint's fix cited as prior art.
+         */
+        'since=0000-01-01T00:00:00.000Z',
+        'until=0000-12-31T23:59:59.999Z',
+        `before=0000-01-01T00:00:00.000Z&beforeId=${OUT_OF_RANGE_CURSOR_ID}`,
       ];
       for (const query of outOfRange) {
         const response = await get(`${CONTROL_ROUTES.opsLog}?${query}`, ownerCookie);
@@ -1019,6 +1034,42 @@ describe('the Web Admin V2 surface', () => {
         ownerCookie,
       );
       expect(response.statusCode).toBe(400);
+    });
+
+    it('refuses a notification cursor at an instant it cannot store', async () => {
+      /*
+       * The THIRD cursor, and the reason the rule is in the contract.
+       *
+       * `isoTimestamp` was `z.iso.datetime()`, which is a shape check and not a
+       * range one — and a commit that fixed `/ops-log` and `/panels` cited this
+       * endpoint as already guarded. It accepted `0000-01-01T00:00:00Z`, which
+       * parses, reaches the driver, and raises `22008`: PostgreSQL has no year
+       * zero. Three cursors, three private copies of one rule, three ways to be
+       * almost right — so `isStorableInstant` is now the only copy.
+       */
+      const id = '01a05e35-c9ad-7e93-bef3-1ed9b55292c8';
+      for (const before of [
+        '0000-01-01T00:00:00.000Z',
+        '%2B275760-09-13T00:00:00.000Z',
+        '-005000-01-01T00:00:00.000Z',
+      ]) {
+        const response = await get(
+          `${CONTROL_ROUTES.notifications}?before=${before}&beforeId=${id}`,
+          ownerCookie,
+        );
+        // 400 EXACTLY, never the 500 the driver would raise.
+        expect(response.statusCode, before).toBe(400);
+      }
+      // A storable instant is still honoured, so the guard did not simply
+      // refuse every cursor.
+      expect(
+        (
+          await get(
+            `${CONTROL_ROUTES.notifications}?before=2026-09-06T08:00:00.000Z&beforeId=${id}`,
+            ownerCookie,
+          )
+        ).statusCode,
+      ).toBe(200);
     });
   });
 

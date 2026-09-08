@@ -435,10 +435,10 @@ export function fetchProviders(): Promise<ProviderListResponse> {
  * client that truncated one looped silently — the exact subtle bug the sentence
  * promised could not happen. The owner resolved the inconsistency in favour of
  * refusing, `panelListQuerySchema` carries the rule, and
- * `panels-http.test.ts` pins it against fourteen malformed cursors — a count
+ * `panels-http.test.ts` pins it against fifteen malformed cursors — a count
  * that test asserts about its own fixture, because this sentence and the
- * falsification record said thirteen while a fourteenth was added and the
- * commit message said fifteen.
+ * falsification record once said thirteen while a fourteenth was added and the
+ * commit message said fifteen. The fifteenth is year zero.
  */
 export function fetchPanels(
   query: { limit?: number; cursor?: string; archived?: PanelListArchivedMode } = {},

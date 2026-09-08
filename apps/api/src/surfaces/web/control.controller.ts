@@ -25,6 +25,7 @@ import {
   uuidV7Schema,
   notificationListQuerySchema,
   NOTIFICATION_PAGE_DEFAULT,
+  storableInstantOrNull,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { singleValued } from './query.js';
@@ -463,33 +464,24 @@ export class ControlController {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * A caller-supplied instant, or null if PostgreSQL would refuse it.
+ * A caller-supplied instant, or null if this API cannot store it.
  *
  * `Number.isNaN` is not the whole test, and believing it was is how three
- * `/ops-log` parameters answered 500. A JavaScript `Date` spans ±271821 years
- * and `timestamptz` does not: `+275760-09-13T00:00:00.000Z` and
- * `-005000-01-01T00:00:00.000Z` are both perfectly good Dates, both reach the
- * driver, and both raise `22008` at the cast — arriving at the caller as
- * `internal.unhandled`.
+ * `/ops-log` parameters answered 500: a JavaScript `Date` spans ±271821 years
+ * and `timestamptz` does not, so `+275760-09-13T00:00:00.000Z` parses, reaches
+ * the driver, and raises `22008`.
  *
- * The sibling cursor in `panels.controller.ts` documents exactly this hazard
- * and guards it — "the four-digit year is load-bearing" — and
- * `/notifications` is guarded by `isoTimestamp` in the schema. `/ops-log` is
- * the third cursor and was the one left behind: the branch's own recurring
- * shape, a rule applied where the author was looking and absent one expression
- * over. `dateParam` was ADDED by this branch to stop `new Date('')` reaching
- * the driver, and its docblock claimed "parsed and refused if malformed" while
- * refusing only one of the two ways to be malformed.
- *
- * The bound is the four-digit year, checked on what the Date PARSED to rather
- * than on the text: `toISOString` renders anything outside year 0001-9999 in
- * the expanded form `±YYYYYY`, so one comparison covers both directions and
- * every spelling that reaches it.
+ * The rule itself is `isStorableInstant` in `@nexa/contracts`, and it is there
+ * rather than here BECAUSE of what happened when it was written locally: this
+ * file grew a `^\d{4}-` check modelled on the panels cursor's, and both were
+ * wrong for year 0000 — `new Date('0000-01-01T00:00:00Z').toISOString()` is
+ * four digits, not the expanded form, and PostgreSQL has no year zero. Three
+ * cursors, three copies, three ways to be almost right. One rule now, in the
+ * contract, used by this endpoint, by the panels cursor, and by
+ * `isoTimestamp`, which `/notifications` parses its own cursor with.
  */
 function instantOrNull(value: string): Date | null {
-  const at = new Date(value);
-  if (Number.isNaN(at.getTime())) return null;
-  return /^\d{4}-/.test(at.toISOString()) ? at : null;
+  return storableInstantOrNull(value);
 }
 
 /**

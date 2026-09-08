@@ -15,6 +15,59 @@ import { z } from 'zod';
 
 export type Instant = Date;
 
+/**
+ * Whether PostgreSQL's `timestamptz` would accept this instant.
+ *
+ * ONE place, because the rule has now been written three times and been wrong
+ * in all three. A JavaScript `Date` spans ±271821 years and `timestamptz` does
+ * not, so a caller-controlled instant that merely PARSES still reaches the
+ * driver and raises `22008` — a 500 on a bad request. Three cursors each grew
+ * their own version of the guard:
+ *
+ *   - `/ops-log` had none at all and answered 500 for five shapes.
+ *   - `/panels` had `^\d{4}-` on the cursor's text.
+ *   - `/notifications` had `z.iso.datetime()`, which is not a range check.
+ *
+ * And the round that fixed the first two copied `^\d{4}-` into the third,
+ * with a docblock asserting it "covers both directions and every spelling".
+ * It does not: `new Date('0000-01-01T00:00:00Z').toISOString()` is
+ * `'0000-01-01T00:00:00.000Z'` — FOUR DIGITS, not the expanded `±YYYYYY` form
+ * — and PostgreSQL has no year zero:
+ *
+ *     ERROR:  date/time field value out of range: "0000-01-01T00:00:00.000Z"
+ *
+ * That is a ~366-day window of caller-controlled values that answered 500 on
+ * all three cursors, INCLUDING the two the fix cited as correct prior art.
+ *
+ * So the predicate lives here, in the frozen contract, beside the type it
+ * bounds — a rule three surfaces need is not a rule any one of them owns. The
+ * bound is year 0001-9999: `toISOString` renders everything outside it in the
+ * expanded form, and year 0000 is the single four-digit rendering PostgreSQL
+ * refuses. Narrower than `timestamptz`'s true range (4713 BC - 294276 AD) and
+ * deliberately so: no correct caller of this API sends a BC instant, and a
+ * bound that is easy to state is a bound that stays right.
+ */
+export function isStorableInstant(at: Instant): boolean {
+  if (Number.isNaN(at.getTime())) return false;
+  const iso = at.toISOString();
+  // Anchored, and `0000` excluded explicitly rather than by arithmetic on the
+  // year: the expanded form carries a leading `+` or `-`, so a plain
+  // four-digit prefix is exactly "inside 0001-9999 or year zero", and year
+  // zero is the one this has to subtract.
+  return /^\d{4}-/.test(iso) && !iso.startsWith('0000-');
+}
+
+/**
+ * The instant this text denotes, or null if it is not one this API can store.
+ *
+ * The text form of `isStorableInstant`, for the surfaces that receive a query
+ * parameter rather than a `Date`.
+ */
+export function storableInstantOrNull(value: string): Instant | null {
+  const at = new Date(value);
+  return isStorableInstant(at) ? at : null;
+}
+
 export const instantSchema = z
   .union([z.iso.datetime({ offset: true }), z.iso.datetime()])
   .transform((value) => new Date(value));

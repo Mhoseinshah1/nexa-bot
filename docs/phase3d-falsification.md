@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 292 citations were checked; this record declares 296 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 296 citations were checked; this record declares 301 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -4055,10 +4055,15 @@ history is newer than this one's. The fixture now writes 2 000 rows for tenant A
 aged a million seconds back and 6 000 for tenant B at the present, and asserts
 on `EXPLAIN (ANALYZE, BUFFERS)`: the right index starts the scan inside tenant
 A's own range, the reversed one walks the whole of tenant B's history first.
-Measured 6 buffers against 49 in isolation and 81 through the suite, stable
-across repeated runs and growing with the other tenant's history — which is
-exactly the cost being bought off. The threshold is 20, with room on both sides
-rather than sitting on the measurement.
+Measured 6 buffers with the keyset index and 81 with its columns reversed,
+stable across repeated runs and growing with the other tenant's history.
+
+(Two corrections in place, both from the next reviewer. This paragraph also
+cited "49 in isolation": that figure came from a standalone SQL probe with a
+differently named index and a different fixture, not from this test in
+isolation, where it is 81 — a reviewer re-ran it and could not reproduce 49,
+correctly. And the query this fixture measured was one NO CALLER ISSUES; see
+round 37, which replaces it with the two the readers actually send.)
 
 ### Four of this round's own tests could not fail
 
@@ -4118,7 +4123,15 @@ and the `before` cursor half.
 Defect class 1 AND class 3 at once. `panels.controller.ts` documents this exact
 hazard at length and guards it — "the four-digit year is load-bearing" —
 `/notifications` is guarded by `isoTimestamp` in its schema, and `/ops-log` is
-the third cursor and the one left behind. And `dateParam` was ADDED by this
+the third cursor and the one left behind.
+
+(Both halves of that sentence were FALSE, and the next reviewer proved it. The
+four-digit year does not bound the range — year 0000 has four digits and
+PostgreSQL has no year zero — and `z.iso.datetime()` is a shape check that
+accepts `0000-01-01T00:00:00Z`. All three cursors answered 500 for that value,
+INCLUDING the two cited here as correct prior art. Left standing and corrected
+here rather than rewritten away, because "the fix cited its own siblings as
+already right, and they were not" is the finding. See round 37.) And `dateParam` was ADDED by this
 branch to stop `new Date('')` reaching the driver: its own docblock claimed
 "parsed and refused if malformed" while refusing one of the two ways to be
 malformed. The existing test refused `since=yesterday`, which is the
@@ -4143,6 +4156,16 @@ is not called until it parses. What the cursor did was JOIN that class, not
 create it — before the owner's decision it was silently ignored, so the request
 reached the service and was denied there. A 400 also tells the caller nothing
 about what they may read, which is why this ordering is the conventional one.
+
+("and so does every other surface here" was FALSE. `POST /settings/:key`,
+`POST /features/:key`, `POST /templates/:key` and `GET /panels/:id` hand the
+raw value to the service and answer 403 to an unprivileged caller sending a
+malformed one — the last of those one route below the one this argued about.
+The true rule is narrower: a QUERY STRING is parsed in the controller and a
+PATH PARAMETER or BODY is handed to the service, which authorizes first. The
+conclusion survives the correction and the sentence did not. Round 37 pins
+BOTH orders, because a uniformity claim with only one half tested is the same
+defect one sentence shorter.)
 
 So the rule is stated where it lives and PINNED for all three parameters at
 once, from an unprivileged and a privileged caller, rather than one of them
@@ -4202,12 +4225,12 @@ was invisible for a commit.
 
 ## The mutations
 
-| #   | rule                                           | mutation                                  | tests that die                                                                                     |
-| --- | ---------------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| AL1 | an instant outside `timestamptz` is REFUSED    | drop the four-digit-year comparison       | `web-admin-v2.test.ts` › refuses an empty filter rather than widening the read                     |
-| AL2 | the attention card dates by `firstSeenAt`      | draw `lastSeenAt`                         | `dashboard.test.tsx` › dates each condition by when it FIRST appeared, which is the order it is in |
-| AL3 | the SCHEMA is the only cursor length bound     | raise `max(512)` to `max(8192)`           | `panels-http.test.ts` › refuses a malformed cursor with a 400 rather than restarting the traversal |
-| AL4 | a request that cannot be READ is refused first | decode `not-a-cursor` instead of throwing | `panels-http.test.ts` › refuses a request it cannot READ before it decides who may read it         |
+| #   | rule                                           | mutation                                  | tests that die                                                                                      |
+| --- | ---------------------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| AL1 | an instant outside `timestamptz` is REFUSED    | drop the four-digit-year comparison       | `web-admin-v2.test.ts` › refuses an empty filter rather than widening the read                      |
+| AL2 | the attention card dates by `firstSeenAt`      | draw `lastSeenAt`                         | `dashboard.test.tsx` › dates each condition by when it FIRST appeared, which is the order it is in  |
+| AL3 | the SCHEMA is the only cursor length bound     | raise `max(512)` to `max(8192)`           | `panels-http.test.ts` › refuses a malformed cursor with a 400 rather than restarting the traversal  |
+| AL4 | a request that cannot be READ is refused first | decode `not-a-cursor` instead of throwing | `panels-http.test.ts` › parses a QUERY before it authorizes, and authorizes before it parses a PATH |
 
 Each applied alone, reverted, and every touched file verified byte-identical by
 sha256 after each — `packages/contracts` rebuilt on both sides of AL3, because
@@ -4215,6 +4238,127 @@ a worktree resolves that package to its `dist` and mutating the source alone
 tests nothing. AL1 fails with `expected 500 to be 400`, which is the finding
 itself. AL4 fails with `expected 403 to be 400`, which is the behaviour the
 parent commit had.
+
+## Round 37 — the nineteenth reviewer, on the round that fixed the eighteenth's
+
+Three confirmed findings. Two of them are the fix from round 36 containing the
+next defect, which is now the fourth consecutive round in which that has
+happened.
+
+### Year zero: the guard was wrong on all three cursors, including the two cited as right
+
+Round 36 bounded `/ops-log` with a four-digit-year check and said so:
+
+> `toISOString` renders anything outside year 0001-9999 in the expanded form
+> `±YYYYYY`, so one comparison covers both directions and every spelling that
+> reaches it.
+
+False for exactly one year. `new Date('0000-01-01T00:00:00Z').toISOString()` is
+`'0000-01-01T00:00:00.000Z'` — four digits, not expanded — and PostgreSQL has
+no year zero:
+
+```
+ERROR:  date/time field value out of range: "0000-01-01T00:00:00.000Z"
+```
+
+A ~366-day window of caller-controlled values, on FIVE parameters across THREE
+endpoints — because the same hole was in the two the fix cited as correct prior
+art. `/panels`' `CURSOR_INSTANT` is `^(\d{4})-…`, and its rollover check
+compares `0000-01-01T00:00:00` against itself and passes. `/notifications`'
+`isoTimestamp` was `z.iso.datetime()`, which is a SHAPE check: verified, it
+accepts `0000-01-01T00:00:00Z` and rejects `+275760-…`.
+
+The fixture is again the author's tell. Round 36 tested `+275760` and `-005000`
+— both extremes, neither zero — on both endpoints it touched.
+
+So the rule is now `isStorableInstant` in `packages/contracts/src/time.ts`, and
+it is THERE rather than in any surface because the defect is not the missing
+`0000` case, it is three private copies of one rule. `isoTimestamp` refines
+with it, `instantOrNull` delegates to it, `decodeInstant` calls it for the
+range half. Mutating the one line kills three tests, one per cursor, each with
+the driver's own error naming a different repository.
+
+### The EXPLAIN test measured a query no caller issues
+
+Round 35's test asked `WHERE tenant_id = $1 ORDER BY first_seen_at DESC`. No
+caller sends that: `alerts.tsx` always sends a `scope` and `dashboard.tsx`
+always sends `MANAGEMENT_CONDITIONS` + `open`, and both become `code = ANY (…)`
+— the predicate that decides the plan, absent from the test written to prove
+the plan. Defect shape 2 at the level of the QUERY rather than the fixture, and
+one the previous round's own two mutations could not expose, because both
+mutations and the test agreed on the wrong question.
+
+The test now measures the two real shapes, built from the contract's own
+catalogues rather than retyped, against a fixture whose codes are interleaved
+as production's are. Measured on it:
+
+- The dashboard shape (`MANAGEMENT_CONDITIONS` + `open`): **11 buffers** with
+  the index, an Index Scan Backward; **921** without it, a Bitmap Heap Scan and
+  a top-N sort over 6 858 rows.
+- The alerts shape (`MANAGEMENT`, unfiltered): **7 buffers** with the index;
+  **899** without it, a sequential scan over 40 000 rows and a top-N sort.
+
+So round 35's claim survives for the real queries and its test did not. Stated
+plainly because the reviewer reached the opposite conclusion — they measured
+the real query against a fixture in which every one of a tenant's rows carried
+a SINGLE code, saw a bitmap scan, and concluded the index serves nothing. That
+did not reproduce here: re-running their fixture shape gives an Index Scan
+Backward at 6 buffers. Two explanations fit and neither is established — their
+scratch database may not have had the index built at all, or a distribution
+that skewed differs from theirs in some way I could not recover — so this
+records the disagreement rather than resolving it, and the honest summary is
+that their CONCLUSION did not reproduce and their METHOD CRITIQUE was correct
+and is what this round fixes.
+
+The threshold moves from 20 to 40, which is between the measured 11 and the
+measured 85 that a reversed index produces on the dashboard shape.
+
+### "Every other surface does the same" was false
+
+Round 36 declined to change the 400-before-403 ordering on the grounds that it
+is uniform. Half of that was true. Verified over real HTTP, an unprivileged
+caller sending a malformed value gets **403** from `POST /settings/:key`,
+`POST /features/:key`, `POST /templates/:key` and `GET /panels/:id` — the last
+one route below the one the claim was about. Those hand the raw value to the
+service, which authorizes first.
+
+The conclusion survives; the sentence did not. The real rule is that a QUERY
+STRING is parsed in the controller — on `/panels`, `/ops-log` and
+`/notifications` alike — and a PATH PARAMETER or BODY is handed to the service.
+The test is renamed to say that and now pins BOTH orders, because a uniformity
+claim with only one half tested is this branch's defect shape in miniature.
+
+### Two corrections to the record itself
+
+`(last_seen_at, id)` survived in the record's own restatement of the
+`CursorPager` finding — a seventh copy of the claim, in the document that
+records the correction of the other six. And round 35's "49 buffers in
+isolation" came from a standalone SQL probe, not from that test in isolation,
+where the figure is 81; the reviewer re-ran it, could not reproduce 49, and was
+right to say so. Both corrected in place, where the claim is.
+
+## The mutations
+
+| #   | rule                                | mutation                                     | tests that die                                                                                                                                                                                                                                    |
+| --- | ----------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AM1 | year zero is not a storable instant | drop `!iso.startsWith('0000-')`              | `web-admin-v2.test.ts` › refuses an empty filter rather than widening the read; › refuses a notification cursor at an instant it cannot store; `panels-http.test.ts` › refuses a malformed cursor with a 400 rather than restarting the traversal |
+| AM2 | the alerts keyset has an index      | delete the entry from `ONLINE_INDEXES`       | `online-indexes.test.ts` › serves the alerts keyset from an index rather than sorting the tenant                                                                                                                                                  |
+| AM3 | that index leads with `tenant_id`   | reverse it to `(first_seen_at,tenant_id,id)` | `online-indexes.test.ts` › serves the alerts keyset from an index rather than sorting the tenant                                                                                                                                                  |
+
+AM1 is the whole finding in one line: it kills one test per cursor, and each
+failure carries the driver's own `22008` naming
+`drizzle-operational-event.reader.ts`, `drizzle-notification.repository.ts` and
+`drizzle-panel.repository.ts` in turn. AM2 and AM3 were each run against a
+database created empty for the mutation, because
+`CREATE INDEX CONCURRENTLY IF NOT EXISTS` matches on NAME and an index left
+over from an earlier run would survive the deletion of its own declaration.
+
+A note for the next reviewer, because this one could not run AL3 or AM1: a
+mutation to `packages/contracts/src` is INERT in a review worktree, whose
+`node_modules` symlinks to the primary checkout and therefore to the primary's
+`dist`. Either rebuild into the primary — which mutates the author's tree, so
+do not — or run those two mutations in the primary checkout, which is where
+both were run here.
 
 ## The microsecond truncation is still open, deliberately
 

@@ -6,6 +6,7 @@ import {
   API_PREFIX,
   CONTROL_ERROR_CODES,
   errors,
+  isStorableInstant,
   PANEL_HEALTH_FRESH_FOR_MS,
   PANEL_ROUTES,
   providerDescriptor,
@@ -63,11 +64,12 @@ const CURSOR_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 /**
  * The exact rendering `pageKeysQuery` produces, and nothing else.
  *
- * The four-digit year is load-bearing: it is what keeps the value inside
- * `timestamptz`'s range. A JavaScript `Date` spans ±271821 years, so
- * `-005000-01-01T00:00:00.000Z` is a perfectly good Date, serialises as
- * `5001-01-01 BC`, and raises `22008` at the `::timestamptz` cast — reaching
- * the caller as the same 500 the uuid check was added to close.
+ * The four-digit year bounds the SHAPE. It does NOT bound the range, which is
+ * what this block claimed for one release: `0000-01-01T00:00:00.000000Z` has
+ * four digits, parses, and raises `22008` at the `::timestamptz` cast, because
+ * PostgreSQL has no year zero. The range is `isStorableInstant`'s, in the
+ * contract, shared with `/ops-log` and `/notifications` — three cursors that
+ * each grew their own copy of this rule and were each wrong somewhere.
  */
 const CURSOR_INSTANT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.\d{6}Z$/;
 
@@ -82,7 +84,9 @@ function decodeInstant(text: string): string | null {
   const at = new Date(
     `${parts[1]}-${parts[2]}-${parts[3]}T${parts[4]}:${parts[5]}:${parts[6]}.000Z`,
   );
-  if (Number.isNaN(at.getTime())) return null;
+  // The RANGE, from the contract. `Number.isNaN` was the whole check here and
+  // let year 0000 through to the driver.
+  if (!isStorableInstant(at)) return null;
   // A date JavaScript silently ROLLS OVER — `2026-02-30` becomes 2 March —
   // and PostgreSQL refuses outright. The regex cannot see that, so the value
   // is compared with what it parsed to.

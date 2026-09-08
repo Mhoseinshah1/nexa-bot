@@ -780,6 +780,10 @@ describe('panel HTTP surface', () => {
       // which raises 22008 at the cast — the same 500 by another route.
       b64(`${created.panel.id}:-005000-01-01T00:00:00.000000Z`),
       b64(`${created.panel.id}:275760-09-13T00:00:00.000000Z`),
+      // YEAR ZERO. Four digits, so the shape regex passes it, and PostgreSQL
+      // has no year zero — the one four-digit rendering it refuses, and the
+      // one the "the four-digit year is load-bearing" docblock did not cover.
+      b64(`${created.panel.id}:0000-01-01T00:00:00.000000Z`),
       // A date JavaScript rolls over and PostgreSQL refuses.
       b64(`${created.panel.id}:2026-02-30T00:00:00.000000Z`),
       b64(`${created.panel.id}:2026-13-01T00:00:00.000000Z`),
@@ -798,7 +802,7 @@ describe('panel HTTP surface', () => {
     // test asserts is a claim about testing with nothing behind it, so the
     // fixture now states its own size and a citation cannot go stale in
     // silence.
-    expect(cursors, 'the cited malformed-cursor count changed').toHaveLength(14);
+    expect(cursors, 'the cited malformed-cursor count changed').toHaveLength(15);
 
     for (const cursor of cursors) {
       const response = await get(
@@ -943,28 +947,36 @@ describe('panel HTTP surface', () => {
     expect((await createPanel(supportCookie, { name: 'Nope' })).statusCode).toBe(403);
   });
 
-  it('refuses a request it cannot READ before it decides who may read it', async () => {
+  it('parses a QUERY before it authorizes, and authorizes before it parses a PATH', async () => {
     /*
-     * A 400 pre-empts the 403, for EVERY malformed query parameter.
+     * Where the 400 sits relative to the 403, stated as it actually is.
      *
-     * Worth pinning because the cursor refusal made it visible: before the
-     * owner's decision an unreadable cursor was silently ignored, so an
-     * unprivileged caller who sent one still reached the service and still got
-     * a 403 with its `access.permission_denied` record. Now the cursor is
-     * refused first — and a reviewer reasonably asked whether that lets a
-     * prober suppress a security record by appending six characters.
+     * The cursor refusal made this visible: before the owner's decision an
+     * unreadable cursor was silently ignored, so an unprivileged caller who
+     * sent one still reached the service and still got a 403 with its
+     * `access.permission_denied` record. Now the cursor is refused first, and
+     * a reviewer asked whether that lets a prober suppress a security record
+     * by appending six characters.
      *
-     * It does not introduce anything: `limit=abc` has always done exactly the
-     * same, through the same schema, on the same line, and so has every other
-     * surface in this codebase — the query is parsed in the controller and the
-     * service that resolves the permission is not called until it parses. What
-     * the cursor did was JOIN that class, not create it.
+     * The first answer given was that this is UNIFORM — "`limit=abc` has
+     * always done the same, and so has every other surface in this codebase".
+     * The second half of that was FALSE, and a later reviewer proved it:
+     * `POST /settings/:key`, `POST /features/:key`, `POST /templates/:key` and
+     * `GET /panels/:id` all hand the raw value to the service and answer 403
+     * to an unprivileged caller sending a malformed one. The sharpest case is
+     * one route down from this one.
      *
-     * So the rule is stated and pinned rather than patched: a request this
-     * server cannot understand is refused before it is authorized, uniformly,
-     * and the two parameters must not drift apart. A 400 also tells the caller
-     * nothing about what they may read, which is why this ordering is the
-     * conventional one.
+     * What is actually true is narrower and is what this pins: a QUERY STRING
+     * is parsed in the controller, on every endpoint that takes one — panels,
+     * `/ops-log`, `/notifications` — and a PATH PARAMETER or a BODY is handed
+     * to the service, which authorizes first. The cursor joined the
+     * query-string class rather than creating it.
+     *
+     * Both orders are pinned here, deliberately, because the finding this
+     * answers is about the DIFFERENCE between them: a claim of uniformity with
+     * only one half tested is exactly the shape this branch keeps producing,
+     * and correcting the sentence without testing the counter-example would
+     * have left the same hole one sentence shorter.
      */
     const denied = await get(PANEL_ROUTES.list, supportCookie);
     expect(denied.statusCode, 'a readable request from an unprivileged caller').toBe(403);
@@ -984,6 +996,19 @@ describe('panel HTTP surface', () => {
         `${query} from a privileged caller`,
       ).toBe(400);
     }
+
+    // And the OTHER order, one route down. A malformed path id is refused by
+    // the SERVICE, which resolves the permission first — so an unprivileged
+    // caller gets 403 and its `access.permission_denied` record, and a
+    // privileged one gets the 400.
+    expect(
+      (await get(PANEL_ROUTES.detail('not-a-uuid'), supportCookie)).statusCode,
+      'a malformed path id from an unprivileged caller',
+    ).toBe(403);
+    expect(
+      (await get(PANEL_ROUTES.detail('not-a-uuid'), ownerCookie)).statusCode,
+      'a malformed path id from a privileged caller',
+    ).toBe(400);
   });
 
   it('refuses an anonymous caller', async () => {

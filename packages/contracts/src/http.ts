@@ -31,6 +31,7 @@ import {
   PROVIDER_FAILURE_KINDS,
   PROVIDER_TYPES,
 } from './provider.js';
+import { isStorableInstant } from './time.js';
 
 /**
  * The HTTP seam.
@@ -358,7 +359,14 @@ export const ADMIN_ROUTES = {
  * is the same mistake one layer up: Jalali is a display concern and this is a
  * wire format.
  */
-const isoTimestamp = z.iso.datetime();
+const isoTimestamp = z.iso.datetime().refine((v) => isStorableInstant(new Date(v)), {
+  // `z.iso.datetime()` is a SHAPE check, not a range one. It accepts
+  // `0000-01-01T00:00:00Z`, which parses, reaches the driver, and raises
+  // `22008` — a 500 on a bad request, on the endpoint the round that guarded
+  // the other two cited as already correct. The rule is `time.ts`'s, so all
+  // three cursors now fail the same way for the same reason.
+  message: 'Not an instant this API can store.',
+});
 const nullableIsoTimestamp = isoTimestamp.nullable();
 
 export const resolvedSettingSchema = z.object({

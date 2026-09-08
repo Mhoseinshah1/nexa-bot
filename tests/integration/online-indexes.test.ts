@@ -4,6 +4,7 @@ import {
   ONLINE_INDEXES,
 } from '../../apps/api/src/infrastructure/persistence/online-indexes';
 import { createDatabase } from '../../apps/api/src/infrastructure/persistence/database';
+import { MANAGEMENT_CONDITION_FAILURE_CODES, MANAGEMENT_EVENT_CODES } from '@nexa/contracts';
 import { createTestContext, tenantA, tenantB, testConfig, type TestContext } from './harness';
 
 /**
@@ -71,9 +72,21 @@ describe('the online index build', () => {
   /**
    * Operational events, straight into the table: this is about the planner.
    *
-   * `agedBy` is what makes the fixture able to tell two index shapes apart.
-   * Rows are written `agedBy` seconds further back, so a caller can put one
-   * tenant's whole history NEWER than another's — see the test below.
+   * Two things here are the assertion rather than scaffolding.
+   *
+   * `agedBy` puts one tenant's whole history NEWER than another's. Without a
+   * second tenant ahead of this one, `(tenant_id, first_seen_at, id)` and
+   * `(first_seen_at, tenant_id, id)` produce identical plans — both scanned
+   * backwards, both named, neither sorting — and the reversed one is not a
+   * keyset index at all.
+   *
+   * The CODES are drawn from the contract's own catalogues and interleaved,
+   * because the readers never send a bare tenant filter: every caller sends a
+   * `scope`, which becomes `code = ANY (...)`. A fixture in which one tenant's
+   * rows all carry ONE code makes that predicate look highly selective and the
+   * planner picks `operational_events_code_idx` and a sort instead — measured,
+   * and it is what made an earlier version of this test measure a query no
+   * caller issues. Production has a mixture; so does this.
    */
   const bulkEvents = async (
     scope: { tenantId: unknown },
@@ -85,16 +98,31 @@ describe('the online index build', () => {
       await client.query(
         `INSERT INTO operational_events
            (id, tenant_id, code, severity, message, dedupe_scope, dedupe_key,
-            occurrence_count, first_seen_at, last_seen_at)
-         SELECT gen_random_uuid(), $1::uuid, 'panel.health.unreachable', 'WARN',
+            occurrence_count, first_seen_at, last_seen_at, resolved_at)
+         SELECT gen_random_uuid(), $1::uuid,
+                ($5::text[])[1 + (g % array_length($5::text[], 1))], 'WARN',
                 $3::text || g, $1::text, $3::text || '-' || g, 1,
                 now() - ((g + $4::int) || ' seconds')::interval,
-                now() - ((g + $4::int) || ' seconds')::interval
+                now() - ((g + $4::int) || ' seconds')::interval,
+                -- A minority resolved, so open=true is a real predicate here
+                -- and not a no-op that every row satisfies.
+                CASE WHEN g % 7 = 0 THEN now() ELSE NULL END
            FROM generate_series(1, $2::int) AS g`,
-        [scope.tenantId, count, tag, agedBy],
+        [scope.tenantId, count, tag, agedBy, [...FIXTURE_CODES]],
       );
     });
   };
+
+  /**
+   * The codes a fixture row may carry: the two the dashboard asks for, plus
+   * routine ones it must not. Interleaved 1-in-N by the insert above.
+   */
+  const FIXTURE_CODES = [
+    ...MANAGEMENT_CONDITION_FAILURE_CODES,
+    'panel.health.unreachable',
+    'panel.health.degraded',
+    'admin.roles_changed',
+  ];
 
   /** `ANALYZE`, once the fixture is complete. */
   const analyse = async (): Promise<void> => {
@@ -105,69 +133,100 @@ describe('the online index build', () => {
     await ctx.container.database.withClient((client) => client.query('ANALYZE operational_events'));
   };
 
+  /** `EXPLAIN (ANALYZE, BUFFERS)`, as one string. */
+  const planOf = async (sql: string, params: readonly unknown[]): Promise<string> =>
+    ctx.container.database.withClient(async (client) => {
+      const { rows } = await client.query<{ 'QUERY PLAN': string }>(
+        `EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF) ${sql}`,
+        [...params],
+      );
+      return rows.map((row) => row['QUERY PLAN']).join('\n');
+    });
+
+  /**
+   * Buffers touched by the whole execution.
+   *
+   * The FIRST `Buffers:` line is the top node's. `Planning:` prints its own
+   * below it even under `SUMMARY OFF`, and counting that would drown the
+   * signal in catalogue lookups.
+   */
+  const buffersIn = (plan: string): number => {
+    const match = /Buffers: shared( hit=(\d+))?( read=(\d+))?/.exec(plan);
+    expect(match, `no buffer accounting in:\n${plan}`).not.toBeNull();
+    return Number(match?.[2] ?? 0) + Number(match?.[4] ?? 0);
+  };
+
   it('serves the alerts keyset from an index rather than sorting the tenant', async () => {
     /*
-     * The index is a CLAIM until the planner is asked.
+     * The index is a CLAIM until the planner is asked the question a CALLER
+     * asks.
      *
-     * `ONLINE_INDEXES` declares shapes and the assertions further down compare
-     * the declaration against `pg_indexes` — which proves the index EXISTS, not
-     * that anything uses it. Nothing in this file ran `EXPLAIN`, so an index
-     * whose column order served no query would be present, VALID, matching,
-     * and useless.
+     * Two separate ways this test could not fail, both found by mutation and
+     * both fixed here.
      *
-     * That is not hypothetical here: the owner's decision moved the alerts
-     * traversal to `(first_seen_at, id)` and the only index on the table was
-     * `(tenant_id, last_seen_at)`. The keyset moved and its index did not, so
-     * the alerts page sorted the tenant's whole event history on every request
-     * with nothing saying so.
+     * ONE: `ONLINE_INDEXES` declares shapes and the assertions further down
+     * compare the declaration against `pg_indexes`, which proves an index
+     * EXISTS and not that anything uses it. So this asks the planner — and the
+     * first version of THAT could not fail either, because a single-tenant
+     * fixture cannot tell `(tenant_id, first_seen_at, id)` from
+     * `(first_seen_at, tenant_id, id)`. Hence the second tenant, whose history
+     * is newer, and the assertion on work done rather than plan shape.
      *
-     * THE FIXTURE IS THE ASSERTION. A single-tenant table cannot tell
-     * `(tenant_id, first_seen_at, id)` from `(first_seen_at, tenant_id, id)`:
-     * both are scanned backwards, both name the index, neither sorts, and the
-     * reversed one — which is not a keyset index at all, because the leading
-     * column is not the one every query filters on — passed a name-and-no-Sort
-     * assertion unchanged. Measured, not assumed.
+     * TWO: it measured `WHERE tenant_id = $1 ORDER BY first_seen_at DESC`,
+     * which NO caller issues. `alerts.tsx` always sends a scope and
+     * `dashboard.tsx` always sends `MANAGEMENT_CONDITIONS` + `open`, and both
+     * become `code = ANY (...)` — the predicate that decides the plan, absent
+     * from the test that was written to prove the plan. A reviewer found it by
+     * measuring the real query against a fixture where it degraded.
      *
-     * So the OTHER tenant's history is newer than this one's. Under the right
-     * index the scan starts inside this tenant's own range; under the reversed
-     * one it must walk the whole of the other tenant's history first. That is
-     * invisible in the plan SHAPE and plain in the work done: 6 buffers
-     * against 49, stable across runs, and growing with the other tenant's
-     * history — which is exactly the cost being bought off.
+     * So the two shapes below ARE the two callers, built from the contract's
+     * own catalogue rather than retyped, and the bare-tenant shape is gone.
+     * Measured on this fixture: 11 and 7 buffers with the index, 921 and 899
+     * without it — a bitmap scan and a sequential scan, each with a top-N sort
+     * over thousands of rows, on a table `ADR-0020` forbids `DELETE` on.
      */
     await bulkEvents(tenantA, 2_000, 1_000_000, 'a');
     await bulkEvents(tenantB, 6_000, 0, 'b');
     await analyse();
 
-    const plan = await ctx.container.database.withClient(async (client) => {
-      const { rows } = await client.query<{ 'QUERY PLAN': string }>(
-        `EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF)
-         SELECT * FROM operational_events
-          WHERE tenant_id = $1::uuid
-          ORDER BY first_seen_at DESC, id DESC
-          LIMIT 50`,
-        [tenantA.tenantId],
+    const shapes: readonly {
+      readonly what: string;
+      readonly sql: string;
+      readonly params: readonly unknown[];
+    }[] = [
+      {
+        what: "the dashboard's attention card",
+        sql: `SELECT * FROM operational_events
+               WHERE tenant_id = $1::uuid AND code = ANY ($2) AND resolved_at IS NULL
+               ORDER BY first_seen_at DESC, id DESC
+               LIMIT 50`,
+        params: [tenantA.tenantId, [...MANAGEMENT_CONDITION_FAILURE_CODES]],
+      },
+      {
+        what: 'the alerts page, unfiltered',
+        sql: `SELECT * FROM operational_events
+               WHERE tenant_id = $1::uuid AND code = ANY ($2)
+               ORDER BY first_seen_at DESC, id DESC
+               LIMIT 50`,
+        params: [tenantA.tenantId, [...MANAGEMENT_EVENT_CODES]],
+      },
+    ];
+
+    for (const shape of shapes) {
+      const plan = await planOf(shape.sql, shape.params);
+      expect(plan, `${shape.what} is not served by the keyset index:\n${plan}`).toContain(
+        'operational_events_tenant_first_seen_page_idx',
       );
-      return rows.map((row) => row['QUERY PLAN']).join('\n');
-    });
-
-    expect(plan, `the alerts keyset is not served by its index:\n${plan}`).toContain(
-      'operational_events_tenant_first_seen_page_idx',
-    );
-    // And no Sort node: an index that is merely SCANNED while the server still
-    // sorts on top of it is the cost this exists to remove.
-    expect(plan, `the tenant's history is still being sorted:\n${plan}`).not.toContain('Sort');
-
-    // The FIRST `Buffers:` line is the top node's, which is the whole
-    // execution. `Planning:` prints its own below it even under `SUMMARY OFF`,
-    // and counting that would drown the signal in catalogue lookups.
-    const buffers = /Buffers: shared( hit=(\d+))?( read=(\d+))?/.exec(plan);
-    expect(buffers, `no buffer accounting in:\n${plan}`).not.toBeNull();
-    const touched = Number(buffers?.[2] ?? 0) + Number(buffers?.[4] ?? 0);
-    // Measured 6 with the keyset index and 49 with its columns reversed. The
-    // threshold sits between them with room on both sides rather than on the
-    // measurement itself.
-    expect(touched, `the scan walked the other tenant's history:\n${plan}`).toBeLessThan(20);
+      // And no Sort node: an index that is merely SCANNED while the server
+      // still sorts on top of it is the cost this exists to remove.
+      expect(plan, `${shape.what} is still being sorted:\n${plan}`).not.toContain('Sort');
+      // Measured 11 and 7 with the index, 921 and 899 without, and 81 with the
+      // index's columns reversed. The threshold sits between them with room on
+      // both sides rather than on the measurement itself.
+      expect(buffersIn(plan), `${shape.what} walked more than its own page:\n${plan}`).toBeLessThan(
+        40,
+      );
+    }
   });
 
   it('leaves every declared index present and valid after migrating', async () => {
