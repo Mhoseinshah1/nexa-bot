@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 301 citations were checked; this record declares 304 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 304 citations were checked; this record declares 306 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -4389,13 +4389,27 @@ service". Both false, and the second one in BOTH directions:
   `opsLogQuerySchema.parse`. So `?limit=abc` is 400 and `?scope=BOGUS` is 403,
   from one caller against one endpoint.
 
+  (`open` is NOT service-parsed. It is `openFlag.parse(query.open)` in the
+  argument list of the service call, so it is evaluated before the call, and
+  `?open=maybe` is a 400 from either caller. Corrected in place: it is the
+  fourth over-general claim in this sequence, it was the one parameter of the
+  four with no assertion behind it, and it was written in the paragraph
+  announcing that this branch would stop stating rules it had not tested.
+  Round 39.)
+
 Both counter-examples are on endpoints round 37's sentence enumerated as
 examples of the rule.
 
 The honest reading is that the ordering is per-PARAMETER and incidental — it
 follows wherever each value happens to be validated, and nothing in this
 codebase decides it. So the tests state no rule now: they pin the cases, in
-both directions, including the two that killed the last one. The consequence —
+both directions, including the two that killed the last one.
+
+("per-PARAMETER" was itself too general, and round 39 corrected it: it is per
+(parameter, MALFORMATION). `singleValued` refuses a REPEATED key in the
+controller, so `?scope=ALL&scope=ALL` is a 400 from a caller for whom
+`?scope=BOGUS` is a 403. Four attempts to state this as a rule, four
+counter-examples, each on a case the rule itself named.) The consequence —
 that a denial record can be suppressed by malforming the request — is written
 down as **OQ-3D-02** rather than argued away a fourth time. What survives from
 the argument is only the part that was always true: a 400 tells the caller
@@ -4485,31 +4499,112 @@ built after them on the same data, which would be 1.2x the threshold rather
 than 2.1x. It kills either way, and anyone tightening the threshold should know
 which number they are standing on.
 
-## The one flake this branch produced, fixed rather than re-run
+## The one flake this branch produced, and the two wrong fixes for it
 
 `web-asset-publication.test.ts` › re-copies after a publication is killed
 mid-copy failed once, in an exact-head gate, on an otherwise unchanged tree —
-and it failed on its own PRECONDITION: `expected 0 to be greater than 0`, the
-anchor that refuses a vacuous pass. The test spawns the publisher, waits to see
-a partially-copied staging tree, and kills it there; `caught` staying 0 means it
+and on its own PRECONDITION: `expected 0 to be greater than 0`, the anchor that
+refuses a vacuous pass. The test spawns the publisher, waits to see a
+partially-copied staging tree, and kills it there; `caught` staying 0 means it
 could not tell a kill inside the copy from a kill after it.
 
-The mechanism, measured rather than assumed: the child starts copying about
-100ms in and finishes about 100ms later, and the loop yielded with
-`await setImmediate` between polls. Under `pnpm verify` the unit project runs 47
-files at once, so the parent's event loop can lose that entire window to its own
-workers. Nothing about the publisher was wrong.
+The window is real and small: the child starts copying about 70ms in and the
+staging tree exists for 20-90ms.
 
-Fixed by spinning SYNCHRONOUSLY, which keeps the parent on-CPU for the window
-that matters and cannot starve against its own event loop. Four full unit-project
-runs green afterwards (777 tests each).
+**Wrong fix one, and its false mechanism.** The loop was changed from
+`await setImmediate` to a synchronous spin, on the argument that yielding "made
+the detection depend on being SCHEDULED" and that spinning "keeps the parent
+on-CPU". Both halves are false, and the next reviewer measured it: a
+`setImmediate` loop never blocks on epoll — it is already a busy loop — and
+over the same 8s it polled MORE often, 81 374 iterations against 74 606. It did
+not remove the miss: the original failure reproduced under 32 spinners on 4
+cores, because a user-space loop cannot keep a process on-CPU when the run
+queue is oversubscribed. And it made the failure mode WORSE, because blocking
+the event loop means the 10s `testTimeout` cannot fire — overruns were reported
+at 26-40s with no diagnostic instead of at 10s with one. Reverted.
 
-The first attempt was to widen the window instead, by growing the bundle from
-200 assets to 3 000 — measured at 255ms, 363ms and 1 202ms for 200, 1 200 and
-3 000. It made the test WORSE: at 3 000 the publisher failed before staging
-anything, so `caught` stayed 0 for a new reason and the run took 43 seconds.
-Recorded because "widen the timing window" is the obvious fix and it was the
-wrong one, and because a retry would have hidden both.
+**Wrong fix two, and a cause that was never measured.** Before that, the bundle
+was grown from 200 assets to 3 000 to widen the window, and abandoned with the
+claim that "the publisher failed before staging anything". That claim was never
+measured and is false: at 3 000 assets the publisher succeeds in 862ms and a
+partial tree is caught in ~150ms. The 43 seconds that prompted the retreat were
+the test's own per-asset byte comparison at the end, which scales with the
+fixture and has nothing to do with the race. Defect class 4 — a claim about
+testing whose probe was never run — inside the entry recording a measurement.
+
+**The fix.** Retry the ARRANGEMENT. "Killed mid-copy" is fixture, not subject:
+each attempt spawns, polls a 2s deadline, and starts over on a fresh root if
+the copy finished before the parent looked. The anchor is untouched — no
+attempt landing inside the copy still leaves `caught` at 0 and still fails —
+and a miss now costs one short attempt instead of the whole budget.
+
+And the retry has its own test, `recovers the arrangement when the first
+attempt looks after the copy is over`, which forces the first attempt to look
+only after the child has exited. Without it the retry would be a branch that
+runs only on an unlucky machine, which is the machine this failed on. Capping
+attempts at one kills that test and only that test.
+
+## Round 39 — the twenty-first reviewer, and the fourth rule about one matrix
+
+Seven findings. Two are the previous round's fix carrying the next defect, in
+the paragraph written to stop that.
+
+### `open` is controller-parsed, and it was the quarter with no assertion
+
+Round 38 wrote that `scope`, `severity`, `code` **and `open`** reach
+`OpsLogService.list` and are therefore a 403 for an unprivileged caller. Three
+of those are true and had assertions. `open` is
+`openFlag.parse(query.open)` INSIDE the argument list of the service call, so
+it is evaluated before the call: `?open=maybe`, `?open=TRUE` and `?open=` are
+all 400 from either caller. The test's service-parsed fixture was exactly the
+three that hold, with `open` left out — so the false quarter of the sentence
+was the quarter nothing checked, in the commit whose stated purpose was to stop
+asserting rules the codebase does not have.
+
+Corrected in four places and the three spellings added to the CONTROLLER-parsed
+loop.
+
+### "Per parameter" was the fourth over-general statement
+
+It is per (parameter, MALFORMATION). `singleValued` refuses a REPEATED key in
+the controller before either path above, so `?scope=ALL&scope=ALL` is a 400
+from a caller for whom `?scope=BOGUS` is a 403 — same parameter, same endpoint,
+same caller, different malformation. Pinned as a pair in the same test, because
+the two answers side by side are the finding.
+
+Four rules, four counter-examples, each on a case the rule itself named. What
+is written down now is a matrix and an open question, not a rule.
+
+### The flake fix was wrong in its mechanism, its effect and its side effect
+
+Covered in full above: the synchronous spin polled LESS than the loop it
+replaced, did not remove the miss it was written to remove, and blocked the
+`testTimeout` that would have reported the overrun. Reverted. The abandoned
+alternative was abandoned on a cause that was never measured and is false. The
+arrangement is retried now, and the retry has a test that forces it.
+
+### Eight of ten `instantSchema` assertions could not fail
+
+Only the two year-zero spellings reach the new refinement; the rest are refused
+by the `z.iso.datetime()` union in front of it and survive its removal. All ten
+discriminate for `isStorableInstant` and `storableInstantOrNull`. The docblock
+said the file pins the rule "at every boundary that decides it" without saying
+for WHICH of the three — the same qualification the same commit had just added
+to the `/notifications` test and did not add here.
+
+## The mutations
+
+| #   | rule                               | mutation                              | tests that die                                                                                                 |
+| --- | ---------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| AP1 | the arrangement is RETRIED         | cap the attempt loop at one           | `web-asset-publication.test.ts` › recovers the arrangement when the first attempt looks after the copy is over |
+| AP2 | `open` is refused before the guard | `query.open === 'true'`, the old cast | `web-admin-v2.test.ts` › splits 400-before-403 INSIDE one endpoint, by parameter                               |
+
+AP1 fails with `a missed first attempt was not recovered: expected 0 to be
+greater than 0` — the same anchor the whole sequence is about, now guarding the
+recovery rather than the arrangement. AP2 fails with
+`open=maybe is parsed in the controller: expected 403 to be 400`, which is the
+finding itself: under the mutation `open` really does reach the guard first,
+which is what round 38 said it already did.
 
 ## The microsecond truncation is still open, deliberately
 

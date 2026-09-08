@@ -1012,20 +1012,32 @@ describe('the Web Admin V2 surface', () => {
 
     it('splits 400-before-403 INSIDE one endpoint, by parameter', async () => {
       /*
-       * The counter-example that killed a rule three rounds running.
+       * The counter-example that killed a rule FOUR rounds running.
        *
-       * `/ops-log` does not have one ordering. `limit`, `since`, `until`,
-       * `before` and `beforeId` are parsed in the CONTROLLER, so a malformed
-       * one is a 400 before the guard runs and leaves no
-       * `access.permission_denied`. `scope`, `severity`, `code` and `open`
-       * reach `OpsLogService.list`, which calls `guard.check` BEFORE
-       * `opsLogQuerySchema.parse` — so those are a 403 for the same caller on
-       * the same request line.
+       * `/ops-log` does not have one ordering, and it is not even one per
+       * parameter — it is one per (parameter, MALFORMATION):
        *
-       * Nothing decides this; it follows wherever each value happens to be
-       * validated. Pinned rather than explained, because the last three
-       * explanations were each falsified by a case exactly like these two, and
-       * the consequence is recorded as OQ-3D-02.
+       *   - `limit`, `since`, `until`, `before`, `beforeId` and `open` are
+       *     parsed in the CONTROLLER, so a malformed one is a 400 before the
+       *     guard and leaves no `access.permission_denied`.
+       *   - `scope`, `severity` and `code` reach `OpsLogService.list`, which
+       *     calls `guard.check` BEFORE `opsLogQuerySchema.parse`, so those are
+       *     a 403 for the same caller on the same request line.
+       *   - and any of them REPEATED is a 400 whichever list it is in, because
+       *     `singleValued` refuses a repeated key in the controller before
+       *     either of the above.
+       *
+       * `open` is the FOURTH over-general claim in this sequence. The round
+       * that wrote this docblock listed it as service-parsed, and it was the
+       * one parameter of the four with no assertion behind it: it is
+       * `openFlag.parse(query.open)` inside the argument list of the service
+       * call, evaluated before the call. Correct where the author was looking,
+       * wrong one expression over, in the paragraph written to stop exactly
+       * that.
+       *
+       * Nothing decides any of this; it follows wherever each value happens to
+       * be validated. Pinned rather than explained — see OQ-3D-02, which no
+       * longer states a rule either.
        */
       const bare = await get(CONTROL_ROUTES.opsLog, supportCookie);
       expect(bare.statusCode, 'a readable request from an unprivileged caller').toBe(403);
@@ -1035,6 +1047,9 @@ describe('the Web Admin V2 surface', () => {
         'limit=abc',
         'since=yesterday',
         'beforeId=oops&before=2026-01-01T00:00:00.000Z',
+        'open=maybe',
+        'open=TRUE',
+        'open=',
       ]) {
         expect(
           (await get(`${CONTROL_ROUTES.opsLog}?${query}`, supportCookie)).statusCode,
@@ -1056,6 +1071,19 @@ describe('the Web Admin V2 surface', () => {
           `${query} from a privileged caller`,
         ).toBe(400);
       }
+
+      // The SAME parameter, malformed a different way: repeated rather than
+      // wrong. `singleValued` refuses it in the controller, so a parameter in
+      // the service-parsed list above answers 400 here — which is why "per
+      // parameter" was itself too general.
+      expect(
+        (await get(`${CONTROL_ROUTES.opsLog}?scope=ALL&scope=ALL`, supportCookie)).statusCode,
+        'a repeated scope is refused before the guard',
+      ).toBe(400);
+      expect(
+        (await get(`${CONTROL_ROUTES.opsLog}?scope=BOGUS`, supportCookie)).statusCode,
+        'while a single malformed scope is not',
+      ).toBe(403);
 
       // And the other direction on the sibling endpoint: a PATH id parsed in
       // the controller, which is what falsified the "paths are authorized

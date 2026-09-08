@@ -333,12 +333,21 @@ it were each falsified by a case on an endpoint the rule named:
 - "A query string is parsed in the controller; a path parameter or body is
   handed to the service." False in both directions —
   `GET /notifications/:id` parses `uuidV7Schema` in the controller, and
-  `/ops-log` splits inside itself: `limit`, `since`, `before` and `beforeId`
-  are controller-parsed while `scope`, `severity`, `code` and `open` reach
-  `OpsLogService.list`, which calls `guard.check` before it parses.
+  `/ops-log` splits inside itself.
+- "Within `/ops-log`, `scope`, `severity`, `code` and `open` are
+  service-parsed." False for `open`, which is `openFlag.parse(query.open)` in
+  the argument list of the service call and therefore evaluated before it. The
+  three that were listed correctly had assertions; the fourth did not.
+- "The ordering is per-PARAMETER." Still too general. It is per
+  (parameter, MALFORMATION): `singleValued` refuses a REPEATED key in the
+  controller, so `?scope=ALL&scope=ALL` is a 400 from a caller for whom
+  `?scope=BOGUS` is a 403 — the same parameter, the same endpoint, the same
+  caller.
 
-The honest reading is that the ordering is per-PARAMETER and incidental: it
-follows wherever each value happens to be validated, and nothing decides it.
+The honest reading is that nothing decides this at all: the ordering follows
+wherever each value happens to be validated, and four attempts to state it as
+a rule were each falsified by a case the rule itself named. It is not stated
+as a rule anywhere any more; the cases are pinned instead.
 Making it uniform means moving every query parse behind the guard, which a
 surface cannot do — it does not resolve permissions — so it means moving the
 parsing into the application services, which is a change across three

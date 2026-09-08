@@ -209,6 +209,92 @@ function partiallyWritten(rootDir: string, expected: number, settled: Set<string
   return 0;
 }
 
+/**
+ * Spawns a publication and stops it PART WAY THROUGH the copy.
+ *
+ * The subject of the test below is what the publisher does with what a killed
+ * run left behind. "Killed mid-copy" is FIXTURE, and the fixture is a race:
+ * the child starts copying about 70ms in and the staging tree exists for
+ * 20-90ms, so a parent that is not scheduled inside that window sees nothing
+ * and `caught` stays 0 — which fails the test's own precondition rather than
+ * its subject. That happened once, in a full gate.
+ *
+ * Two wrong fixes, both measured, both recorded rather than deleted:
+ *
+ * A SYNCHRONOUS SPIN. The argument was that `await setImmediate` "made the
+ * detection depend on being scheduled" and that spinning "keeps the parent
+ * on-CPU". Both false. A `setImmediate` loop never blocks on epoll — it is
+ * already a busy loop — and over the same 8s it polled MORE often, 81 374
+ * iterations against 74 606. It did not remove the miss either: the original
+ * failure reproduced under 32 spinners on 4 cores, because a user-space loop
+ * cannot keep a process on-CPU when the run queue is oversubscribed. And it
+ * made the failure WORSE — blocking the event loop means the 10s
+ * `testTimeout` cannot fire, so an overrun was reported at 26-40s with no
+ * diagnostic instead of at 10s with one.
+ *
+ * A BIGGER BUNDLE, to widen the window. Abandoned on a cause that was never
+ * measured — "the publisher failed before staging anything" — which is false:
+ * at 3 000 assets it publishes in 862ms and a partial tree is caught in
+ * ~150ms. What took 43 seconds was the per-asset byte comparison at the end
+ * of the test, unrelated to the race.
+ *
+ * So neither. RETRY the arrangement: each attempt spawns, polls a short
+ * deadline, and starts over on a fresh root if the copy finished before the
+ * parent looked. The anchor survives — no attempt landing inside the copy
+ * still leaves `caught` at 0 and still fails — and a miss costs one short
+ * attempt rather than the whole budget.
+ *
+ * `missFirst` forces the first attempt to look after the copy has finished,
+ * which is what makes the retry path itself testable rather than a branch
+ * that only runs on an unlucky machine.
+ */
+async function killMidCopy(
+  rootDir: string,
+  incoming: string,
+  expected: number,
+  options: { missFirst?: boolean } = {},
+): Promise<{ caught: number; good: string; died: Promise<void> }> {
+  let good = activeId(rootDir);
+  let settled = new Set(releases(rootDir));
+  let caught = 0;
+  let died: Promise<void> = Promise.resolve();
+
+  for (let attempt = 0; attempt < 6 && caught === 0; attempt += 1) {
+    if (attempt > 0) {
+      // A completed attempt activated a release; start from a clean root so
+      // the caller's assertions still describe ONE killed publication.
+      rmSync(rootDir, { recursive: true, force: true });
+      mkdirSync(rootDir, { recursive: true });
+      run(source('one'), rootDir);
+      good = activeId(rootDir);
+      settled = new Set(releases(rootDir));
+    }
+    const child = spawn(process.execPath, [publisher], {
+      env: { ...process.env, NEXA_WEB_SOURCE_DIR: incoming, NEXA_WEB_ASSET_ROOT: rootDir },
+      stdio: 'ignore',
+    });
+    died = new Promise<void>((resolveExit) => child.on('exit', () => resolveExit()));
+
+    if (options.missFirst === true && attempt === 0) {
+      // Look only once the run is over: the staging tree is gone, so this
+      // attempt cannot catch anything and the retry must.
+      await died;
+      caught = partiallyWritten(rootDir, expected, settled);
+      continue;
+    }
+
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      caught = partiallyWritten(rootDir, expected, settled);
+      if (caught > 0) break;
+      await new Promise((r) => setImmediate(r));
+    }
+    child.kill('SIGKILL');
+    await died;
+  }
+  return { caught, good, died };
+}
+
 describe('publishing the Web Admin bundle', () => {
   it('activates a complete release, named after the bundle it published', () => {
     const rootDir = root();
@@ -317,54 +403,43 @@ describe('publishing the Web Admin bundle', () => {
     expect(readdirSync(rootDir).filter((e) => e.startsWith('.staging-'))).toEqual([]);
   });
 
+  it('recovers the arrangement when the first attempt looks after the copy is over', async () => {
+    /*
+     * The RETRY path, forced.
+     *
+     * Without this the retry is a branch that runs only on an unlucky machine,
+     * and the whole reason it exists is that unlucky machines are where this
+     * test failed. `missFirst` makes the first attempt wait for the child to
+     * exit before it looks — the staging tree is gone by then, so that attempt
+     * catches nothing and a later one has to.
+     *
+     * The anchor is the same as the real test's: if the retry did not work,
+     * `caught` would be 0 here, which is exactly the failure it was written to
+     * remove.
+     */
+    const rootDir = root();
+    run(source('one'), rootDir);
+    const incoming = source('two', 200, 512);
+
+    const { caught, good } = await killMidCopy(rootDir, incoming, 200, { missFirst: true });
+    expect(caught, 'a missed first attempt was not recovered').toBeGreaterThan(0);
+    // And the recovered arrangement is the same state the real test asserts
+    // against: the previous release still current, nothing half-written
+    // activated.
+    expect(activeId(rootDir)).toBe(good);
+    expect(readServedTokens(rootDir)).toEqual(new Set(['one']));
+  });
+
   it('re-copies after a publication is killed mid-copy, rather than activating what it left', async () => {
     const rootDir = root();
     run(source('one'), rootDir);
-    const good = activeId(rootDir);
-
     const incoming = source('two', 200, 512);
-    const settled = new Set(releases(rootDir));
-    const child = spawn(process.execPath, [publisher], {
-      env: { ...process.env, NEXA_WEB_SOURCE_DIR: incoming, NEXA_WEB_ASSET_ROOT: rootDir },
-      stdio: 'ignore',
-    });
-    const died = new Promise<void>((resolveExit) => child.on('exit', () => resolveExit()));
 
     // Kill it PART WAY THROUGH the copy, not merely at some point during the
     // run: a kill that lands after the copy finished proves nothing, and a
     // test that cannot tell the difference would pass under a publisher that
     // wrote straight into the directory it activates.
-    /*
-     * A SYNCHRONOUS spin, deliberately, and this is the second version.
-     *
-     * It yielded with `await setImmediate` between polls, and that made the
-     * detection depend on the parent being SCHEDULED: the child is a separate
-     * process that starts copying about 100ms in and finishes about 100ms
-     * later, and under `pnpm verify` — where the unit project runs 47 files at
-     * once — the parent's event loop can lose that whole window to its own
-     * workers. Measured: it did, once, and `caught` stayed 0, which fails this
-     * test's own precondition rather than its subject. The anchor did its job;
-     * the loop did not.
-     *
-     * Spinning without yielding keeps the parent on-CPU for the ~100ms that
-     * matters. It cannot block anything that needs the event loop in that
-     * window, because nothing here does — `child.on('exit')` is awaited after
-     * the loop, not during it — and the loop exits the moment it sees a partial
-     * tree, so the cost is the copy's duration and not the deadline.
-     *
-     * Deliberately NOT fixed by making the bundle big enough to slow the copy
-     * down: at 3 000 assets the publisher failed before staging anything, so
-     * the window widened and `caught` stayed 0 for a different reason. Measured
-     * too, and a worse test.
-     */
-    let caught = -1;
-    const deadline = Date.now() + 8_000;
-    while (Date.now() < deadline) {
-      caught = partiallyWritten(rootDir, 200, settled);
-      if (caught > 0) break;
-    }
-    child.kill('SIGKILL');
-    await died;
+    const { caught, good } = await killMidCopy(rootDir, incoming, 200);
     expect(caught, 'the kill never landed inside the copy').toBeGreaterThan(0);
 
     // Nothing the killed run left may be activated, and the release that was

@@ -63,6 +63,14 @@ describe('TimePeriod', () => {
  * answered 500 for it. The integration suite pins the three endpoints; this
  * pins the RULE, at every boundary that decides it, because an endpoint test
  * proves the wiring and a boundary is what the wiring gets wrong.
+ *
+ * WHICH assertions discriminate, stated rather than implied: all ten values
+ * discriminate for `isStorableInstant` and `storableInstantOrNull`. For
+ * `instantSchema` only the two year-zero spellings do — the rest are refused
+ * by the `z.iso.datetime()` union in front of the refinement and survive its
+ * removal. They are there as the boundary either side, not as evidence for it,
+ * and saying so is the difference between thirty assertions and fourteen plus
+ * sixteen that cannot fail.
  */
 describe('the storable-instant bound', () => {
   const accepted = [
