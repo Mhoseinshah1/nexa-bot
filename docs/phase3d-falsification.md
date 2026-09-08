@@ -4485,6 +4485,32 @@ built after them on the same data, which would be 1.2x the threshold rather
 than 2.1x. It kills either way, and anyone tightening the threshold should know
 which number they are standing on.
 
+## The one flake this branch produced, fixed rather than re-run
+
+`web-asset-publication.test.ts` › re-copies after a publication is killed
+mid-copy failed once, in an exact-head gate, on an otherwise unchanged tree —
+and it failed on its own PRECONDITION: `expected 0 to be greater than 0`, the
+anchor that refuses a vacuous pass. The test spawns the publisher, waits to see
+a partially-copied staging tree, and kills it there; `caught` staying 0 means it
+could not tell a kill inside the copy from a kill after it.
+
+The mechanism, measured rather than assumed: the child starts copying about
+100ms in and finishes about 100ms later, and the loop yielded with
+`await setImmediate` between polls. Under `pnpm verify` the unit project runs 47
+files at once, so the parent's event loop can lose that entire window to its own
+workers. Nothing about the publisher was wrong.
+
+Fixed by spinning SYNCHRONOUSLY, which keeps the parent on-CPU for the window
+that matters and cannot starve against its own event loop. Four full unit-project
+runs green afterwards (777 tests each).
+
+The first attempt was to widen the window instead, by growing the bundle from
+200 assets to 3 000 — measured at 255ms, 363ms and 1 202ms for 200, 1 200 and
+3 000. It made the test WORSE: at 3 000 the publisher failed before staging
+anything, so `caught` stayed 0 for a new reason and the run took 43 seconds.
+Recorded because "widen the timing window" is the obvious fix and it was the
+wrong one, and because a retry would have hidden both.
+
 ## The microsecond truncation is still open, deliberately
 
 Unchanged by this round, on the owner's instruction. `/ops-log` and

@@ -334,12 +334,34 @@ describe('publishing the Web Admin bundle', () => {
     // run: a kill that lands after the copy finished proves nothing, and a
     // test that cannot tell the difference would pass under a publisher that
     // wrote straight into the directory it activates.
+    /*
+     * A SYNCHRONOUS spin, deliberately, and this is the second version.
+     *
+     * It yielded with `await setImmediate` between polls, and that made the
+     * detection depend on the parent being SCHEDULED: the child is a separate
+     * process that starts copying about 100ms in and finishes about 100ms
+     * later, and under `pnpm verify` — where the unit project runs 47 files at
+     * once — the parent's event loop can lose that whole window to its own
+     * workers. Measured: it did, once, and `caught` stayed 0, which fails this
+     * test's own precondition rather than its subject. The anchor did its job;
+     * the loop did not.
+     *
+     * Spinning without yielding keeps the parent on-CPU for the ~100ms that
+     * matters. It cannot block anything that needs the event loop in that
+     * window, because nothing here does — `child.on('exit')` is awaited after
+     * the loop, not during it — and the loop exits the moment it sees a partial
+     * tree, so the cost is the copy's duration and not the deadline.
+     *
+     * Deliberately NOT fixed by making the bundle big enough to slow the copy
+     * down: at 3 000 assets the publisher failed before staging anything, so
+     * the window widened and `caught` stayed 0 for a different reason. Measured
+     * too, and a worse test.
+     */
     let caught = -1;
     const deadline = Date.now() + 8_000;
     while (Date.now() < deadline) {
       caught = partiallyWritten(rootDir, 200, settled);
       if (caught > 0) break;
-      await new Promise((r) => setImmediate(r));
     }
     child.kill('SIGKILL');
     await died;
