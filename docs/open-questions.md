@@ -388,3 +388,33 @@ the two tests that pin the current matrix together —
 `panels-http.test.ts` › does not decide 400-before-403 by a rule, and the cases
 are pinned one by one, and `web-admin-v2.test.ts` › splits 400-before-403
 INSIDE one endpoint, by parameter.
+
+## OQ-3D-03 — a denial writes its operational event twice
+
+**Status: UNRESOLVED. Recorded rather than fixed on a Web Admin branch.**
+
+Every refusal on a non-transactional guard call writes `access.permission_denied`
+**twice**: `permission-guard.ts` records it whenever no transaction is passed,
+and `recordMutationDenial` records it again for the same attempt.
+`PanelService.authorize` and the other early checks pass no transaction, so both
+fire — measured at two rows per denied request.
+
+That code is in `MANAGEMENT_ONE_SHOT_CODES` and never resolves, so an operator
+counting denials on the alerts page counts double, permanently, and always has.
+
+**Why it is not fixed here.** It is pre-existing, it is shared by every
+non-transactional caller of `recordMutationDenial` — settings, features,
+templates, notifications and panels alike — and the fix is a decision about
+which layer owns the record, which is a platform question rather than a Web
+Admin one. `recordMutationDenial`'s own docblock says it is "called from
+exactly one place per attempt, so a denial produces one row", which is true of
+the audit row and false of the operational event.
+
+**What is pinned meanwhile.** `panels-http.test.ts` › records the denial even
+when the body is nonsense asserts the count EXACTLY — two events and one audit
+row per denial — so neither recorder can disappear unnoticed and whoever
+resolves this has to change that assertion deliberately.
+
+**Trigger to revisit:** the first operator report of an inflated denial count,
+or the first phase that reads `access.permission_denied` for anything but
+display.

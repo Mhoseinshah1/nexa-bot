@@ -292,11 +292,24 @@ describe('admin HTTP surface', () => {
        * correctly twice.
        */
       const cookie = await cookieFor('support', 'the-support-password');
-      const denials = async (): Promise<number> => {
+      /*
+       * BOTH ledgers, because one cannot see the other's recorder disappear.
+       *
+       * The first version of this test counted only the audit rows while its
+       * own docblock and commit message claimed "+1 and +1" — and deleting
+       * `permission-guard`'s operational-event write left it fully green. The
+       * sibling panel test was rewritten in the same commit for exactly that
+       * reason and this one was written to the older standard.
+       */
+      const counts = async (): Promise<{ audit: number; events: number }> => {
         const rows = await api.container.database.db.execute(
-          sql`SELECT count(*)::int AS n FROM audit_logs WHERE after ? 'deniedPermission'`,
+          sql`SELECT
+                (SELECT count(*)::int FROM audit_logs WHERE after ? 'deniedPermission') AS audit,
+                (SELECT count(*)::int FROM operational_events
+                  WHERE code = 'access.permission_denied') AS events`,
         );
-        return Number((rows.rows[0] as { n: number }).n);
+        const row = rows.rows[0] as { audit: number; events: number };
+        return { audit: Number(row.audit), events: Number(row.events) };
       };
       const send = (payload: unknown) =>
         inject({
@@ -306,11 +319,13 @@ describe('admin HTTP surface', () => {
           payload,
         });
 
-      const beforeBad = await denials();
+      const beforeBad = await counts();
       expect((await send({ nonsense: true })).statusCode, 'a malformed body').toBe(403);
-      const bad = (await denials()) - beforeBad;
+      const afterBad = await counts();
+      const bad = afterBad.audit - beforeBad.audit;
+      const badEvents = afterBad.events - beforeBad.events;
 
-      const beforeGood = await denials();
+      const beforeGood = await counts();
       expect(
         (
           await send({
@@ -322,10 +337,14 @@ describe('admin HTTP surface', () => {
         ).statusCode,
         'a well-formed body',
       ).toBe(403);
-      const good = (await denials()) - beforeGood;
+      const afterGood = await counts();
+      const good = afterGood.audit - beforeGood.audit;
+      const goodEvents = afterGood.events - beforeGood.events;
 
-      expect(bad, 'a malformed body left no denial record').toBeGreaterThan(0);
-      expect(bad, 'a malformed body suppressed the denial record').toBe(good);
+      expect(bad, 'a malformed body left no DENIED audit row').toBeGreaterThan(0);
+      expect(badEvents, 'a malformed body left no operational event').toBeGreaterThan(0);
+      expect(bad, 'a malformed body suppressed the audit row').toBe(good);
+      expect(badEvents, 'a malformed body suppressed the operational event').toBe(goodEvents);
       // And no administrator was created by either.
       expect(await api.container.admins.findCredentialsByUsername(tenantA, 'newcomer2')).toBeNull();
     });

@@ -1106,11 +1106,22 @@ describe('panel HTTP surface', () => {
      * that affects both sides of it — the only thing discriminating was the
      * `toBe(403)` inside the loops, which is not what the docblock said.
      *
-     * So each route is measured on its own, and each is required to leave a
-     * denial in BOTH ledgers: the operational event an operator reads on the
-     * alerts page, and the DENIED audit row. Two rows and one audit row is
-     * what a denial writes here today; the floor is one of each, so the test
-     * fails if either recorder is lost and does not fail if a third is added.
+     * So each route is measured on its own, and against BOTH ledgers: the
+     * operational events an operator reads on the alerts page, and the DENIED
+     * audit row.
+     *
+     * The counts are EXACT, not a floor, and that is the second correction.
+     * A floor of one-of-each still could not see either operational-event
+     * recorder disappear, because there are TWO of them — `permission-guard`
+     * records when no transaction is passed, and `recordMutationDenial`
+     * records again — so removing either left one behind and the floor held.
+     * Measured: deleting `recordMutationDenial`'s `opsLog.record` left the
+     * whole integration suite green, which made it a production rule with no
+     * test anywhere.
+     *
+     * Pinning 2 and 1 is deliberate and has a cost: adding a THIRD recorder
+     * fails this test, and whoever adds one should have to say so here. That
+     * the number is two rather than one is itself a defect — see OQ-3D-03.
      */
     const auditDenials = async (): Promise<number> => {
       const rows = await api.container.database.db.execute(
@@ -1136,8 +1147,8 @@ describe('panel HTTP surface', () => {
       const bad = await measure(route, malformedBody, 'malformed');
       const good = await measure(route, wellFormed(routeName(route, id)), 'well-formed');
 
-      expect(bad.events, `${route}: no operational event for a malformed body`).toBeGreaterThan(0);
-      expect(bad.audit, `${route}: no DENIED audit row for a malformed body`).toBeGreaterThan(0);
+      expect(bad.events, `${route}: operational events for a malformed body`).toBe(2);
+      expect(bad.audit, `${route}: DENIED audit rows for a malformed body`).toBe(1);
       expect(bad.events, `${route}: a malformed body suppressed the event`).toBe(good.events);
       expect(bad.audit, `${route}: a malformed body suppressed the audit row`).toBe(good.audit);
     }
@@ -1174,11 +1185,32 @@ describe('panel HTTP surface', () => {
       idempotencyKey,
     });
 
-    const beforeBad = await denials();
+    /*
+     * The PRECONDITION, asserted rather than described.
+     *
+     * This test is only about the second guard, and it is only about it while
+     * `technical` holds `panels.edit` and not `panels.credentials.rotate`. If
+     * that ever changes in `packages/contracts/src/permissions.ts`, both
+     * requests below are refused at the FIRST guard and every assertion still
+     * passes — measured: with `panels.edit` removed from the role AND the
+     * raw-shape guard deleted, this test went green under exactly the
+     * regression it exists to catch. So the two halves of the precondition are
+     * checked here, in this test, where the reader is.
+     */
     expect(
-      (await post(PANEL_ROUTES.create, technicalCookie, body('short'))).statusCode,
-      'a malformed key must not turn the CRITICAL denial into a 400',
-    ).toBe(403);
+      (await createPanel(technicalCookie, { name: 'Technical may create' })).statusCode,
+      'technical must hold panels.edit for this test to be about the second guard',
+    ).toBe(201);
+
+    const beforeBad = await denials();
+    const refusal = await post(PANEL_ROUTES.create, technicalCookie, body('short'));
+    expect(refusal.statusCode, 'a malformed key must not turn the CRITICAL denial into a 400').toBe(
+      403,
+    );
+    expect(
+      refusal.json().error.details?.permission,
+      'the refusal must name the CREDENTIALS permission, not panels.edit',
+    ).toBe('panels.credentials.rotate');
     const bad = (await denials()) - beforeBad;
 
     const beforeGood = await denials();

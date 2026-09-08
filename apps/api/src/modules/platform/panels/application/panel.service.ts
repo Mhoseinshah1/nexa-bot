@@ -526,14 +526,19 @@ export class PanelService {
      * Only when the request actually carries credentials: creating a panel and
      * leaving its credentials for somebody who holds the permission stays a
      * `panels.edit` operation.
+     *
+     * The check itself is now ABOVE, on the raw body, and there is no second
+     * copy of it here. There was one for a round, kept on the stated ground
+     * that "'mentions' is not 'carries' — `{credentials: null}` mentions them
+     * and parses to `undefined`". That is false:
+     * `panelCredentialsInputSchema.optional()` admits `undefined` and not
+     * `null`, so `{credentials: null}` is a `ZodError` and never reaches this
+     * line. And `parsed.credentials !== undefined` can only be true when
+     * `'credentials' in input` was true, so the second guard was unreachable
+     * as a gate — measured: deleting it left the whole integration suite
+     * green. It cost one extra permission resolution per credentials-bearing
+     * create by a permitted caller, and a false sentence defending it.
      */
-    if (parsed.credentials !== undefined) {
-      await this.authorize(scope, actor, PANELS_CREDENTIALS_ROTATE, {
-        action: 'panel.create',
-        entityType: 'Panel',
-        entityId: null,
-      });
-    }
 
     // AFTER the authorization, deliberately.
     //

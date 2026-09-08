@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 310 citations were checked; this record declares 312 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 312 citations were checked; this record declares 313 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -4847,9 +4847,18 @@ as the comparison. The reviewer's exact mutation now fails with
 
 `existsSync(workspace)` cannot fire: `workspace` is a module-level `let` that
 `beforeEach` REASSIGNS, so an orphan resuming after teardown sees the NEXT
-test's directory, which exists. Measured: with the committed guard a forced
-timeout still leaked a tree; with `existsSync(rootDir)` it leaks none. Two
-rounds guarded the wrong variable, in the check written to close this.
+test's directory, which exists. `rootDir` is the parameter, captured at call
+time, and is the right variable. Two rounds guarded the wrong one, in the check
+written to close this.
+
+("with `existsSync(rootDir)` it leaks none" was WRONG, and the next reviewer
+measured it: 6 of 6 forced-timeout runs leaked under the old guard, 5 of 6
+under the new one, and 2 of 6 with the retry block removed ALTOGETHER. So the
+guard helps and does not close it — the dominant residue is the still-live
+spawned publisher, which recreates its asset root after teardown, and no
+`existsSync` on any variable can stop that. Corrected in place: the variable
+choice was right and the measurement attached to it was not, in the same file
+where the same round withdrew a different unreproducible figure.)
 
 ### A citation withdrawn
 
@@ -4881,6 +4890,99 @@ somewhere to start.
 AS2 is the reviewer's own mutation, which left the whole file green before this
 round and now fails naming the route and the ledger that lost its row. AS1
 fails with `a malformed body: expected 400 to be 403`, which is the finding.
+
+## Round 43 — the twenty-fifth reviewer, and the second guard in the function just fixed
+
+Six findings. For the tenth round running the defect is in the fix for the
+round before, and this time it is in the same FUNCTION.
+
+### The escalation gate was left one expression over
+
+`AdminManagementService.create`'s SECOND guard is `admins.permissions.edit` —
+the permission that governs privilege itself — and it is reached through
+`roleKeys.includes(OWNER_ROLE_KEY)`, computed from the PARSED command. The
+round before moved the first guard ahead of the parse and left this one behind
+it, which is structurally the same defect it had just fixed in
+`PanelService.create`, in the function it was editing.
+
+Measured with an actor holding `admins.edit` and not
+`admins.permissions.edit`: `roleKeys:['owner']` with an 11-character password
+→ 400, +0 audit, +0 events; the same body with a long enough password → 403,
++1 and +1. An attempted owner escalation was erasable by sending a short
+password.
+
+Closed the same way as the panels one, on the raw body: `mentionsOwnerRole`
+answers "could this request touch the owner role", not "does it", and the
+authoritative decision is still the guard under the lock. `setRoles` gets the
+same early check for the GRANT direction.
+
+Left OPEN, and recorded rather than guessed: the REMOVE direction, and
+`setStatus` on an owner, are triggered by the TARGET's authoritative roles
+rather than by the body. Pre-authorizing those would mean an unlocked read
+whose answer can be stale — which is the staleness the locked re-check exists
+to avoid — so the record loss there stays in OQ-3D-02 rather than being closed
+by a worse mechanism.
+
+### The floor could not see either operational-event recorder
+
+The previous round's test asserted "one of each ledger" and its docblock
+claimed "the test fails if either recorder is lost". There are TWO
+operational-event recorders — `permission-guard` when no transaction is passed,
+and `recordMutationDenial` — so removing either left one behind and the floor
+held. Measured: deleting `recordMutationDenial`'s `opsLog.record` left the
+whole integration suite green, which made it a production rule with no test
+ANYWHERE.
+
+The counts are exact now, two and one, and the cost is stated: adding a third
+recorder fails the test, and whoever adds one should have to say so. That the
+number is two rather than one is itself a defect — recorded as **OQ-3D-03**,
+not fixed here, because it is pre-existing, shared by every non-transactional
+caller, and a question about which layer owns the record.
+
+### A test that could be disarmed by an unrelated edit
+
+`records the CREDENTIALS denial on create` described its precondition —
+`technical` holds `panels.edit` and not `panels.credentials.rotate` — and never
+asserted it. Measured: with `panels.edit` removed from that role AND the
+raw-shape guard deleted, the test went GREEN under exactly the regression it
+exists to catch, because both requests were then refused at the first guard.
+The precondition is asserted in the test now, and the refusal is required to
+name `panels.credentials.rotate` rather than any 403.
+
+### A dead check kept by a false sentence
+
+The retained `parsed.credentials !== undefined` guard was defended with
+"'mentions' is not 'carries' — `{credentials: null}` mentions them and parses
+to `undefined`". `panelCredentialsInputSchema.optional()` admits `undefined`
+and not `null`, so `{credentials: null}` is a `ZodError` and never reaches it;
+and `parsed.credentials !== undefined` implies `'credentials' in input`, so it
+was unreachable as a gate. Measured: deleting it left the whole integration
+suite green. Removed, with the reasoning kept where it was rather than
+deleted.
+
+### And the admin test was written to the older standard
+
+It counted one ledger while its docblock and the commit message both said
+"+1 and +1" — in the commit whose panel test was rewritten precisely because
+one aggregate cannot see a recorder disappear. Both ledgers now.
+
+### A measurement corrected, again in the file that had just corrected one
+
+"with `existsSync(rootDir)` it leaks none" is wrong: 6 of 6 forced-timeout runs
+leaked under the old guard, 5 of 6 under the new one, and 2 of 6 with the retry
+block removed altogether. The guard helps and does not close it — the residue
+is the still-live publisher recreating its asset root after teardown, which no
+`existsSync` can stop.
+
+## The mutations
+
+| #   | rule                                               | mutation                                           | tests that die                                                            |
+| --- | -------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------- |
+| AT1 | BOTH operational-event recorders write on a denial | delete `opsLog.record` from `recordMutationDenial` | `panels-http.test.ts` › records the denial even when the body is nonsense |
+
+AT1 is the finding: before this round the same mutation left the entire
+integration suite green, and it now fails with
+`/panels: operational events for a malformed body: expected 1 to be 2`.
 
 ## The microsecond truncation is still open, deliberately
 
