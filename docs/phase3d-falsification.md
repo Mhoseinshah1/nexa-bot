@@ -2608,7 +2608,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 215 citations were checked; this record declares 222 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 222 citations were checked; this record declares 229 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -3138,16 +3138,16 @@ nobody had flagged.
 
 ## The mutations
 
-| #   | rule                                                  | mutation                                    | tests that die                                                                                            |
-| --- | ----------------------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| AA1 | masking leaves JSX alone                              | `startsRegex`/`endOfRegex` back to round 31 | `falsification-checker.test.ts` › leaves JSX alone; › reads the real test tree without blanking any of it |
-| AA2 | the notifications pager goes when the permission goes | delete `denied ? 'denied' :`                | `control-plane-pages.test.tsx` › withdraws the notification pager when the permission is lost over rows   |
-| AA3 | …and is not drawn before the first page arrives       | accept `'loading'` in the gate              | `control-plane-pages.test.tsx` › draws no notification pager before the first page has arrived            |
-| AA4 | an empty page keeps the way back (notifications)      | add `rows.length > 0 &&` to the gate        | `control-plane-pages.test.tsx` › keeps the way back when a page turns out to be empty                     |
-| AA5 | an empty page keeps the way back (panels)             | add `rows.length > 0 &&` to the gate        | `panels.test.tsx` › keeps the way back when a fleet page turns out to be empty                            |
-| AA6 | an empty page keeps the way back (alerts)             | add `rows.length > 0 &&` to the gate        | `settings-and-alerts.test.tsx` › keeps the way back when an alerts page turns out to be empty             |
-| AA7 | a timeout and a rate limit are not final answers      | class 408/429 as final                      | `shell-recovery.test.tsx` › keeps asking after %s                                                         |
-| AA8 | a `<summary>` counts as an operable control           | drop `summary` from the selector            | `settings-and-alerts.test.tsx` › withdraws its own refresh once the refusal is final                      |
+| #   | rule                                                  | mutation                                                  | tests that die                                                                                            |
+| --- | ----------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| AA1 | masking leaves JSX alone                              | `startsRegex`/`endOfRegex` back to round 31               | `falsification-checker.test.ts` › leaves JSX alone; › reads the real test tree without blanking any of it |
+| AA2 | the notifications pager goes when the permission goes | delete `!denied &&` from the gate                         | `control-plane-pages.test.tsx` › withdraws the notification pager when the permission is lost over rows   |
+| AA3 | …and is not drawn before the first page arrives       | accept `'loading'` in the gate                            | `control-plane-pages.test.tsx` › draws no notification pager before the first page has arrived            |
+| AA4 | an empty page keeps the way back (notifications)      | add `rows.length > 0 &&` to the gate                      | `control-plane-pages.test.tsx` › keeps the way back when a page turns out to be empty                     |
+| AA5 | an empty page keeps the way back (panels)             | add `rows.length > 0 &&` to the gate                      | `panels.test.tsx` › keeps the way back when a fleet page turns out to be empty                            |
+| AA6 | an empty page keeps the way back (alerts)             | add `rows.length > 0 &&` to the gate                      | `settings-and-alerts.test.tsx` › keeps the way back when an alerts page turns out to be empty             |
+| AA7 | a timeout and a rate limit are not final answers      | class 408/429 as final                                    | `shell-recovery.test.tsx` › keeps asking after %s                                                         |
+| AA8 | a `<summary>` counts as an operable control           | inject an ungated `<summary onClick>` into the error card | `settings-and-alerts.test.tsx` › withdraws its own refresh once the refusal is final                      |
 
 ## The checker probes
 
@@ -3197,3 +3197,86 @@ not fixed, and named here so the next reader does not rediscover it. It is the
 third load-dependent flake recorded on this branch and the first outside the
 real-socket tests; the failure output beyond the name was not captured, which
 is a gap in how the sweep collects evidence rather than a claim about the test.
+
+# Round 33 — the fix for the blind spot was one character wide
+
+The twenty-fourth review found ten defects. The first is round 32's own fix,
+failing in the direction round 32 created.
+
+## An allow-list with one character missing
+
+Round 32 replaced the deny-list in `startsRegex` with an allow-list and wrote
+that "a mis-detection can never blank more than nothing". That was true only of
+mis-detections in the direction it had just closed. `>` was not in the list, so
+`(v) => /['"]/.test(v)` — a concise arrow body, the commonest idiom in the
+language — did not read as a regex; the `'` inside the character class opened a
+PHANTOM STRING, and masking ran to the next quote anywhere in the file.
+Measured: a `describe.skip` that the checker caught (`fail 8 of 222`) went back
+to `ok 222`, exit 0, when one such line was added above it.
+
+The real guard is not the allow-list. **A `'` or `"` string cannot span a
+line**, and `endOfQuote` now says so, exactly as `endOfRegex` already did. That
+makes the claim true in both directions at once: whatever the heuristic decides,
+the damage cannot leave the line. Only once that held was `>` admitted, which is
+what makes an arrow body work.
+
+## A renamed sentinel that left its guard behind
+
+`readChain` re-reads a bracket key from the source when the masked copy yields
+the computed-key sentinel — and the guard still tested for the literal `'skip'`,
+which is what the sentinel used to be called before round 32 renamed it. So the
+re-read never ran, every bracket key stayed `COMPUTED`, and
+`describe['skip'](…)` was reported as **a `.only` marker**: a false statement
+about a file, printed by the check whose entire subject is false statements. It
+also made two of round 32's new unit cases pass for the wrong reason.
+
+## Rules pinned only in pairs, and rules pinned not at all
+
+Round 32's row `AA1` reverted `startsRegex` and `endOfRegex` together. With
+either half present the other is unreachable, so each reverted alone with the
+whole gate green. Seven checker rules are now falsified one at a time, and the
+seven mutations kill seven named tests.
+
+Four more had no test at all: the alias-of-bare-`describe` rule, and all three
+record-level rules (fence tracking in the label loop, fence tracking in the
+stale-count loop, the label pattern). Those two loops sat in the script body
+where no test could reach them; they are one pure `recordIssues` function now,
+with fixtures.
+
+## Two checks that made false claims about the record
+
+The stale-count pattern had no left boundary, so `took 812 ms` read as
+`ok 812` — and this record's genre is timings. The label pattern, widened last
+round to admit `VX`/`WY`, also asserted that every capitalised first cell is a
+row label, so a `| verdict |` table with two `Green` rows failed for a duplicate
+that is not one. A label is now the first cell of a row in a table whose first
+column is `#`.
+
+## One more spelling
+
+`import { describe as d }` needs no local binding and reached neither alias
+pattern. A `d.skip(` suite skipped nine tests with the check reporting `ok`,
+exit 0.
+
+## Two rows in this record were false
+
+`AA2`'s mutation column named `denied ? 'denied' :`, a token the same commit had
+deleted from all three gates — the row reproduces once translated, but as
+written it could not be applied to the tree it certifies. `AA8` cited the
+mutation that was run FIRST, found to be backwards, and then left in the table
+while the corrected experiment went into the prose. Both are restated.
+
+## The mutations
+
+| #   | rule                                               | mutation                               | tests that die                                                                                         |
+| --- | -------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| AB1 | a regex opens after `=>`                           | drop `>` from the allow-list           | `falsification-checker.test.ts` › recognises a regex in a concise arrow body                           |
+| AB2 | a `'`/`"` string cannot span a line                | delete the newline arm of `endOfQuote` | `falsification-checker.test.ts` › lets an unterminated quote blank nothing past its own line           |
+| AB3 | a literal bracket key is read from the source      | guard the re-read on `'skip'` again    | `falsification-checker.test.ts` › reads a literal bracket key rather than calling everything computed  |
+| AB4 | an alias of bare `describe` is not always-skipping | `always.push` for every alias          | `falsification-checker.test.ts` › treats an alias of bare describe as describe, not as always-skipping |
+| AB5 | an import rename rebinds `describe`                | drop the import-rename reader          | `falsification-checker.test.ts` › finds a suite skipped through an import rename                       |
+| AB6 | a label lives in a `#` table                       | treat any table as a label table       | `falsification-checker.test.ts` › does not treat a capitalised word as a label outside a # table       |
+| AB7 | `took 812 ms` is not a citation count              | drop the left boundary                 | `falsification-checker.test.ts` › leaves a row marked (then) alone, and does not read "took" as "ok"   |
+
+Each applied alone and reverted; the script verified byte-identical by sha256
+after each.

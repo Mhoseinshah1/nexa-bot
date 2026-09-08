@@ -45,7 +45,7 @@ const RECORD = 'docs/phase3d-falsification.md';
  * to, which is the point: the number is a claim about this file and should be
  * re-stated deliberately, not drifted into.
  */
-const EXPECTED = 222;
+const EXPECTED = 229;
 /**
  * A table whose last column is one of these is making citations.
  *
@@ -127,8 +127,8 @@ function closeOf(text, open) {
       if (end === -1) return text.length;
       i = end + 1;
     } else if (ch === '"' || ch === "'" || ch === '`') {
-      i = endOfQuote(text, i);
-      if (i >= text.length) return text.length;
+      const close = endOfQuote(text, i);
+      if (close !== i) i = close;
     } else if (ch === '(') {
       depth += 1;
     } else if (ch === ')') {
@@ -162,7 +162,10 @@ function startsRegex(text, at) {
    * So: a regex may follow an operator, an opening bracket, a comma, a
    * semicolon, or a keyword that takes an expression — and nothing else.
    */
-  if ('(,=:[!&|?{;+-*%^~'.includes(prev)) return true;
+  // `>` is here for `=>`. It is also JSX text, which is why it can only be
+  // admitted once a mis-detection is bounded to a single line — see
+  // `endOfQuote`.
+  if ('(,=:[!&|?{;+-*%^~>'.includes(prev)) return true;
   if (/[A-Za-z0-9_$]/.test(prev)) {
     const word = /[A-Za-z0-9_$]+$/.exec(text.slice(0, i + 1));
     return (
@@ -216,8 +219,25 @@ function endOfQuote(text, start) {
   for (let i = start + 1; i < text.length; i += 1) {
     if (text[i] === '\\') i += 1;
     else if (text[i] === quote) return i;
+    /*
+     * A `'` or `"` string cannot span a line, and saying so is what makes a
+     * mis-detection harmless.
+     *
+     * The allow-list added last round left `>` out, so a concise arrow body —
+     * `(v) => /['"]/.test(v)`, the commonest idiom in JavaScript — was not
+     * read as a regex. The `'` inside the character class then opened a
+     * PHANTOM STRING, and masking ran to the next quote anywhere in the file,
+     * inverting parity for everything after it. The commit that added the
+     * allow-list claimed "a mis-detection can never blank more than nothing";
+     * that was true only of mis-detections in the direction it had just fixed.
+     *
+     * Bounding the scan to one line makes it true in BOTH directions: whatever
+     * the heuristic decides, the damage cannot leave the line. A template
+     * literal legitimately spans lines and keeps its multi-line scan.
+     */
+    else if (text[i] === '\n' && quote !== '`') return start;
   }
-  return text.length;
+  return start;
 }
 
 /**
@@ -276,8 +296,12 @@ function maskLiterals(text) {
       i = stop;
     } else if (ch === '"' || ch === "'" || ch === '`') {
       const close = endOfQuote(text, i);
-      blank(i + 1, close);
-      i = Math.min(close + 1, text.length);
+      // `close === i` means it was not a string after all.
+      if (close === i) i += 1;
+      else {
+        blank(i + 1, close);
+        i = close + 1;
+      }
     } else if (ch === '/' && startsRegex(text, i)) {
       const close = endOfRegex(text, i);
       // `close === i` means it was not a regex after all.
@@ -374,6 +398,19 @@ function skippingOpeners(masked, source) {
     if (chain.some((link) => SKIPPING.has(link) || link === COMPUTED)) always.push(match[1]);
     else if (chain.length === 0) describeLike.push(match[1]);
   }
+  /*
+   * `import { describe as d } from 'vitest'` needs no local binding at all,
+   * and is the most idiomatic way to rename it. The two patterns above match
+   * only assignment and destructuring, so this reached neither: a `d.skip(`
+   * suite skipped nine tests with the check reporting `ok`, exit 0.
+   */
+  const imported = /import\s*\{([^}]*)\}\s*from\s*['"`]/g;
+  while ((match = imported.exec(masked)) !== null) {
+    for (const clause of match[1].split(',')) {
+      const renamed = /^\s*describe\s+as\s+([A-Za-z_$][\w$]*)\s*$/.exec(clause);
+      if (renamed !== null) describeLike.push(renamed[1]);
+    }
+  }
   const destructured = /\{([^}]*)\}\s*=\s*describe\b/g;
   while ((match = destructured.exec(masked)) !== null) {
     for (const part of match[1].split(',')) {
@@ -394,7 +431,16 @@ function escapeName(name) {
 /** `chainAfter` over the masked text, with bracket keys read from the source. */
 function readChain(masked, source, from) {
   const onMask = chainAfter(masked, from);
-  if (!onMask.chain.includes('skip')) return onMask;
+  /*
+   * The guard tests for the SENTINEL, which is what a blanked bracket key
+   * yields — and it used to test for the literal `'skip'`, which is what the
+   * sentinel used to be. Renaming the sentinel and leaving the guard behind
+   * made this re-read dead: every bracket key stayed `COMPUTED`, so
+   * `describe['skip'](…)` was reported as a `.only` MARKER, a false statement
+   * about the file printed by the check whose subject is false statements.
+   * It also made two of the new unit cases pass for the wrong reason.
+   */
+  if (!onMask.chain.includes(COMPUTED)) return onMask;
   // A bracket key is blanked in the masked copy, so re-read the chain from the
   // source to tell `describe['skip']` from a genuinely computed key.
   return chainAfter(source, from);
@@ -572,6 +618,52 @@ function onlyMarkers(text) {
   return found;
 }
 
+/**
+ * Row labels that name more than one rule, and transcripts quoting a count
+ * that is no longer this record's.
+ *
+ * Pure, and above `cells`, so the unit suite can reach them. They were inline
+ * in the script body with no fixture anywhere, and all three of the rules they
+ * carry — fence tracking in each loop, and the label pattern — reverted with
+ * the whole gate green.
+ */
+function recordIssues(record, expected) {
+  const labels = new Set();
+  const duplicated = [];
+  const staleCounts = [];
+  let fenced = false;
+  let inLabelTable = false;
+  for (const [index, line] of record.split('\n').entries()) {
+    if (/^\s*```/.test(line)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced) continue;
+    // A label is the first cell of a row in a table whose first column is `#`.
+    // Widening the pattern to admit digit-less labels (`VX`, `WY`) also made it
+    // assert that every capitalised first cell is a label, so a `| verdict |`
+    // table with two `Green` rows failed for a duplicate that is not one.
+    if (/^\|\s*#\s*\|/.test(line)) inLabelTable = true;
+    else if (!line.startsWith('|')) inLabelTable = false;
+    if (line.startsWith('|') && inLabelTable && !/^\|\s*-/.test(line)) {
+      const label = /^\|\s*([A-Z][A-Za-z0-9]*)\s*\|/.exec(line);
+      if (label !== null) {
+        if (labels.has(label[1])) duplicated.push(label[1]);
+        else labels.add(label[1]);
+      }
+    }
+    if (!line.startsWith('|') || line.includes('(then)')) continue;
+    // A LEFT boundary: without it `took 812 ms` reads as `ok 812`, and this
+    // record's genre is timings.
+    for (const quoted of line.matchAll(/(?<![A-Za-z])(?:ok|declares)\s+([0-9]{2,4})/g)) {
+      if (Number(quoted[1]) !== expected) {
+        staleCounts.push(`${index + 1}: ${quoted[0]} — EXPECTED is ${expected}`);
+      }
+    }
+  }
+  return { duplicated, staleCounts };
+}
+
 const cells = (row) =>
   row
     .replace(/^\||\|$/g, '')
@@ -643,71 +735,7 @@ const files = sources('tests');
  * the tests they name have stopped running. Collected before anything else so
  * the run says that rather than reporting a resolved count nobody can trust.
  */
-/*
- * A row label may name only one rule.
- *
- * The record carried `Y1`-`Y4` twice, `U13` twice and `U88` twice, so a
- * citation to any of them resolved to two different rules and neither could be
- * looked up. One of those collisions was created by the round that wrote the
- * table, which is why this is mechanical now rather than a thing to be careful
- * about. Labels are the record's own primary keys.
- */
-const labels = new Set();
-const duplicated = [];
-let labelFenced = false;
-for (const line of readFileSync(RECORD, 'utf8').split('\n')) {
-  /*
-   * Fenced blocks are prose HERE TOO.
-   *
-   * The rule is stated forty lines below, for the table loop, and this loop —
-   * added in the same commit — was a second pass over the raw lines that did
-   * not know about it. A fenced illustration of a table row therefore failed
-   * the run for a duplicate that does not exist. That is the branch's defect
-   * class (right where the author was looking, absent one loop over) occurring
-   * between two loops in one file.
-   */
-  if (/^\s*```/.test(line)) {
-    labelFenced = !labelFenced;
-    continue;
-  }
-  if (labelFenced) continue;
-  // No digit required: `VX`, `VY`, `VZ`, `WX` and `WY` are real labels this
-  // record already carries, and the first version of this check could not see
-  // any of them — so a duplicate among them stayed silent.
-  const label = /^\|\s*([A-Z][A-Za-z0-9]*)\s*\|/.exec(line);
-  if (label === null) continue;
-  if (labels.has(label[1])) duplicated.push(label[1]);
-  else labels.add(label[1]);
-}
-
-/*
- * A transcript quoting the citation count is a claim about EXPECTED.
- *
- * Three consecutive rounds left one stale — round 29 wrote `171`, round 30
- * wrote `ok 194`, round 31 wrote `ok 202` — and round 30 added a STANDING NOTE
- * asking the next round to re-run them. The note failed twice more. A rule
- * that depends on remembering is the thing this record exists to stop
- * believing.
- *
- * So the current rounds' rows are checked. A row that is deliberately
- * historical says `(then)` in the same cell and is left alone, because
- * superseded evidence is evidence of what the check printed AT THE TIME and
- * rewriting it would be the falsification.
- */
-const staleCounts = [];
-let countFenced = false;
-for (const [index, line] of readFileSync(RECORD, 'utf8').split('\n').entries()) {
-  if (/^\s*```/.test(line)) {
-    countFenced = !countFenced;
-    continue;
-  }
-  if (countFenced || !line.startsWith('|') || line.includes('(then)')) continue;
-  for (const quoted of line.matchAll(/(?:ok|declares)\s+([0-9]{2,4})/g)) {
-    if (Number(quoted[1]) !== EXPECTED) {
-      staleCounts.push(`${index + 1}: ${quoted[0]} — EXPECTED is ${EXPECTED}`);
-    }
-  }
-}
+const { duplicated, staleCounts } = recordIssues(readFileSync(RECORD, 'utf8'), EXPECTED);
 
 const only = files.flatMap(([path, text]) => onlyMarkers(text).map((line) => `${path}:${line}`));
 const everything = files.map(([, text]) => text).join('\n');
