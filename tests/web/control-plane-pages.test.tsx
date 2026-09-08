@@ -642,6 +642,67 @@ describe('the notifications page', () => {
    * old gate reads `'loading' !== 'error'` and draws the pager above the "you
    * do not have access" card. That is the state the rule exists for.
    */
+  /**
+   * F2 — the THIRD pager gate, named in round 31's own commit message and
+   * tested at two of the three sites it named.
+   *
+   * The only test touching this gate supplies `denied` from the first render,
+   * which is exactly the shape that commit message rejects: the query is
+   * `enabled: false`, therefore `'loading'`, so the gate closes for the wrong
+   * reason and `denied ? 'denied' :` can be deleted with the entire gate green
+   * — 299 web, 727 unit, lint, format, typecheck, boundaries, i18n, citations.
+   * A rule fixed at two of three sites is the branch's defect class with a
+   * smaller denominator.
+   */
+  it('withdraws the notification pager when the permission is lost over rows', async () => {
+    stubApi([
+      {
+        url: '/notifications',
+        body: { notifications: [notification({ id: 'n1' })], nextCursor: null },
+      },
+    ]);
+    const { rerender } = renderPage(<NotificationsPage mayTest denied={false} />);
+    await screen.findByText('event.panel.unreachable');
+    expect(screen.getByText('نمایش')).toBeInTheDocument();
+
+    rerender(<NotificationsPage mayTest denied />);
+
+    expect(screen.queryByText('نمایش')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'قدیمی‌تر' })).toBeNull();
+  });
+
+  it('draws no notification pager before the first page has arrived', () => {
+    stubApi([
+      {
+        url: '/notifications',
+        body: { notifications: [notification({ id: 'n1' })], nextCursor: null },
+      },
+    ]);
+    renderPage(<NotificationsPage mayTest denied={false} />);
+    expect(screen.queryByText('نمایش')).toBeNull();
+  });
+
+  /**
+   * F3 — the `'empty'` arm, untested at all three gates, and its harm is the
+   * design claim's OTHER direction: no screen hides an action the server
+   * permits.
+   *
+   * Narrowing `['ready', 'empty']` to `['ready']` at all three sites left 299
+   * green. Page forward on a server-supplied cursor onto a page whose rows
+   * have since been resolved, and the state is `'empty'` — so the pager
+   * vanishes and takes the "تازه‌تر" button with it, which is the only way
+   * back. The operator is stranded on an empty page and must reload.
+   */
+  it('keeps the way back when a page turns out to be empty', async () => {
+    stubApi([{ url: '/notifications', body: { notifications: [], nextCursor: null } }]);
+    renderPage(<NotificationsPage mayTest denied={false} />);
+    await screen.findByText('موردی برای نمایش نیست.');
+
+    // Nothing to show, but the pager is how you get off this page.
+    expect(screen.getByText('نمایش')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'تازه‌تر' })).toBeInTheDocument();
+  });
+
   it('takes the notification pager down with the rows it was describing', async () => {
     stubApi([{ url: '/notifications', body: { notifications: [], nextCursor: null } }]);
     renderPage(<NotificationsPage mayTest denied />);

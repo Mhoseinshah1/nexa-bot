@@ -229,6 +229,21 @@ describe('the panel list', () => {
     expect(screen.queryByText('نمایش')).toBeNull();
   });
 
+  /**
+   * F3 — the `'empty'` arm. Narrowing the gate to `['ready']` left 299 green,
+   * and it hides the only way OFF an empty page: paging forward onto rows that
+   * have since been archived leaves `'empty'`, and the "تازه‌تر" button goes
+   * with the pager. That is the design claim's second direction — no screen
+   * hides an action the server permits.
+   */
+  it('keeps the way back when a fleet page turns out to be empty', async () => {
+    stubApi(list([]));
+    renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
+    await screen.findByText('هنوز پنلی ثبت نشده است.');
+    expect(screen.getByText('نمایش')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'تازه‌تر' })).toBeInTheDocument();
+  });
+
   it('distinguishes an empty fleet from a failed request', async () => {
     stubApi(list([]));
     renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);

@@ -277,6 +277,37 @@ describe('the shell in the states a pure function cannot see', () => {
     expect(screen.queryByRole('button', { name: t('web.retry') })).toBeNull();
   });
 
+  /**
+   * F7 — 408 and 429 are NOT final, and the rule had no leg holding that end.
+   *
+   * `finalAnswer` excludes both deliberately: a timeout and a rate limit are
+   * exactly what waiting cures, and `pollSession` keeps asking. Widening
+   * `settled` to class them as final left all 299 tests green, and it makes
+   * the shell print "the server rejected it" and withdraw Retry while the poll
+   * is still running — a screen asserting a final answer the server did not
+   * give. Same argument as the 503 leg: three examples are not a rule.
+   */
+  it.each([
+    ['a timeout', 408],
+    ['a rate limit', 429],
+  ])('keeps asking after %s', async (_label, status) => {
+    stubApi([
+      ...SIGNED_IN.filter((route) => !route.url.includes('/auth/session')),
+      {
+        url: '/auth/session',
+        status,
+        body: {
+          error: { kind: 'internal', code: 'test.slow', message: 'slow', correlationId: 'c' },
+        },
+      },
+    ]);
+    renderShell();
+
+    expect(await screen.findByText(UNAVAILABLE)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: t('web.retry') })).toBeInTheDocument();
+    expect(screen.queryByText(t('web.rejected'))).toBeNull();
+  });
+
   it('keeps the connection copy and the retry for a 503', async () => {
     stubApi([
       ...SIGNED_IN.filter((route) => !route.url.includes('/auth/session')),

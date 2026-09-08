@@ -315,7 +315,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
           offering an enabled "older" that pushed a cursor — changing the query
           key and issuing a fresh request the server had just refused.
         */}
-        {['ready', 'empty'].includes(denied ? 'denied' : queryState(events)) && (
+        {!denied && queryState(events) === 'ready' && (
           <CursorPager
             shown={rows.length}
             hasPrevious={trail.length > 0}
@@ -518,7 +518,7 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
           offering an enabled "older" that pushed a cursor — changing the query
           key and issuing a fresh request the server had just refused.
         */}
-        {['ready', 'empty'].includes(denied ? 'denied' : queryState(notifications)) && (
+        {!denied && queryState(notifications) === 'ready' && (
           <CursorPager
             shown={rows.length}
             hasPrevious={trail.length > 0}

@@ -2480,10 +2480,10 @@ and remain accepted.
 | U98 | selecting a notification does something visible      | drop the detail skeleton                         | `control-plane-pages.test.tsx` › shows the detail is loading rather than nothing at all       |
 | U93 | the scan's mutation exemption fails CLOSED           | a query arriving as a prop renders off `isError` | `state-switch-contract.test.tsx` › renders no view off a bare isError unless it is a mutation |
 
-| #    | rule                                        | mutation                    | what the check prints                                         |
-| ---- | ------------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U88b | the record's citation count is exact        | fence a real citation table | exits 1: 161 citations were checked; this record declares 165 |
-| U92  | a citation must resolve to a test that RUNS | cite an `it.todo` stub      | exits 1: 1 of 166 cited tests do not exist                    |
+| #    | rule                                        | mutation                    | what the check prints                                                |
+| ---- | ------------------------------------------- | --------------------------- | -------------------------------------------------------------------- |
+| U88b | the record's citation count is exact        | fence a real citation table | exits 1: 161 citations were checked; this record declares 165 (then) |
+| U92  | a citation must resolve to a test that RUNS | cite an `it.todo` stub      | exits 1: 1 of 166 cited tests do not exist                           |
 
 **U94 killed nothing on its first run.** The assertion was vacuous: it looked
 for the Refresh button on `NotificationsPage`, which never had one — the button
@@ -2608,7 +2608,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 206 citations were checked; this record declares 213 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 215 citations were checked; this record declares 222 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -2763,10 +2763,10 @@ git and prettier would accept. Its certifying row passed with the rule
 reverted, which is the definition of a test that is not a test. There is one
 rule now, reached through a sentinel blank line, and it can be falsified.
 
-| #   | rule                                                | mutation                                 | what the check prints                                                     |
-| --- | --------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------- |
-| WX  | a skipped suite is skipped however it is spelled    | match the literal `describe.skip(` again | exits **0**: `ok 178`, with 47 tests skipped and every citation resolving |
-| WY  | a table with no separator is checked for at EOF too | drop the one in-loop end-of-table rule   | exits **0**: `ok 178`, with a header-only table appended and unread       |
+| #   | rule                                                | mutation                                 | what the check prints                                                            |
+| --- | --------------------------------------------------- | ---------------------------------------- | -------------------------------------------------------------------------------- |
+| WX  | a skipped suite is skipped however it is spelled    | match the literal `describe.skip(` again | exits **0**: `ok 178`, with 47 tests skipped and every citation resolving (then) |
+| WY  | a table with no separator is checked for at EOF too | drop the one in-loop end-of-table rule   | exits **0**: `ok 178`, with a header-only table appended and unread (then)       |
 
 Read WX and WY the same way as VZ: the mutation makes the check EXIT 0. Green
 is the failure being demonstrated.
@@ -2928,12 +2928,12 @@ test — and the row below is the re-run after one was written.
 Read these the way VZ and WX are read: the mutation makes the check EXIT 0, and
 green is the failure being shown.
 
-| #   | rule                                                  | mutation                            | what the check prints                                                            |
-| --- | ----------------------------------------------------- | ----------------------------------- | -------------------------------------------------------------------------------- |
-| K1  | a suite skipped by bracket access is skipped          | read the chain in dot notation only | exits **0**: `ok 202`, against `52 passed \| 12 skipped (64)`                    |
-| K2  | a comment inside the chain does not hide it           | skip whitespace but not comments    | exits **0**: `ok 202`, with the suite unstripped                                 |
-| K3  | `/[)]/` does not truncate the strip                   | leave regex literals unparsed       | exits **0**: `ok 202`, with the skipped suite's tail citable                     |
-| K4  | `.only` makes every citation in that file meaningless | accept `.only` as "it runs"         | exits **0**: `ok 202`, against `1 passed \| 63 skipped (64)` under `--allowOnly` |
+| #   | rule                                                  | mutation                            | what the check prints                                                         |
+| --- | ----------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------- |
+| K1  | a suite skipped by bracket access is skipped          | read the chain in dot notation only | exits **0**: green, against `52 passed \| 12 skipped (64)`                    |
+| K2  | a comment inside the chain does not hide it           | skip whitespace but not comments    | exits **0**: green, with the suite unstripped                                 |
+| K3  | `/[)]/` does not truncate the strip                   | leave regex literals unparsed       | exits **0**: green, with the skipped suite's tail citable                     |
+| K4  | `.only` makes every citation in that file meaningless | accept `.only` as "it runs"         | exits **0**: green, against `1 passed \| 63 skipped (64)` under `--allowOnly` |
 
 ## A standing note about transcripts that quote the count
 
@@ -3049,3 +3049,151 @@ wrong in kind rather than degree: "56 tests skipped" was the count of
 unresolvable CITATIONS, not of skipped tests, and `1 passed | 60 skipped`
 predates both `allowOnly: false` and the tests added since. All four are
 re-measured.
+
+# Round 32 — the rewrite regressed the thing it rewrote
+
+The twenty-third review found eight defects. The first is the worst kind
+available: round 31's checker rewrite made the checker BLIND, and the commit it
+replaced would have caught what it now misses.
+
+## A rewrite that regressed its own parent
+
+`startsRegex` decided a `/` opened a regex whenever the preceding character was
+not `)`, `]`, `}` or an identifier character. `<` and `"` are neither — and they
+are JSX: `</QueryClientProvider>` and `display="…" />`. `endOfRegex` then ran to
+the newline, returned END OF FILE, and `maskLiterals` blanked everything after
+it. Measured over the committed tree: **4 of 113 test sources went dark from
+some line to EOF**, taking all four `describe(` calls in `shell-recovery.test.tsx`
+with them — a file round 31 was editing. A `describe.skip` on the suite holding
+round 31's own Z6 and Z7 rows printed `ok 213`, exit 0. The PARENT commit's
+checker printed `fail 7 of 213`.
+
+Two changes, and the second matters more than the first. `startsRegex` is an
+ALLOW-list now — a regex may follow an operator, a bracket, a comma, a semicolon
+or a keyword, and nothing else. And `endOfRegex` returns "not a regex" when it
+meets a newline instead of returning the end of the file, so a mis-detection can
+never blank more than nothing.
+
+**The root cause was that 269 rewritten lines had no test.** The script was
+verified by hand-run transcripts pasted into this record, and a transcript is
+run on the file its author is looking at. `tests/unit/falsification-checker.test.ts`
+is the first test this script has ever had: 22 cases over JSX, offset
+preservation, every skip spelling, every alias shape, every `.only` spelling,
+the prose false-positives, and a scan of the real test tree asserting nothing is
+blanked. Reverting `startsRegex` and `endOfRegex` to their round-31 forms kills
+two of them by name.
+
+## Five more spellings, and one bug the alias feature introduced
+
+`const zz = describe; zz.skip(…)`, `const { skip } = describe; skip(…)`,
+`let d; d = describe.skip; d(…)` and `it['on' + 'ly'](…)` all went unread. So
+did `const $d = describe.skip; $d(…)` — and that one was new, created by round
+31's own alias feature: `$` is a legal identifier character and NOT a word
+character, so the generated `\b$d\b` could never match. The opener pattern uses
+identifier-char lookaround now. A computed key is one sentinel honoured by both
+scanners, rather than fail-closed for `describe` and fail-open for `.only`.
+
+## The third pager gate, and the arm nobody supplied
+
+Round 31's commit message says "**three** pager gates carry `denied ? 'denied' :`
+and nothing exercised it", and then tested two of them. Deleting the term at
+`NotificationsPage` left the whole gate green — 299 web, 727 unit, lint, format,
+typecheck, boundaries, i18n, citations.
+
+The `'empty'` arm was untested at all three. Narrowing `['ready', 'empty']` to
+`['ready']` everywhere stayed green, and it hides the design claim's other
+direction: page forward onto rows that have since been resolved and the state is
+`'empty'`, so the pager vanishes and takes the "تازه‌تر" button — the only way
+back — with it.
+
+408 and 429 had no leg either. `finalAnswer` excludes them because a timeout and
+a rate limit are what waiting cures; classing them final made the shell say the
+server rejected the request while `pollSession` was still asking.
+
+## Two checks that were themselves half-built
+
+The duplicate-label check added last round was a second pass over the raw lines
+with no fence tracking, so a fenced ILLUSTRATION of a table row failed the run —
+the same rule stated forty lines below for the table loop, absent in the loop
+the same commit added. Its pattern also required a digit, so `VX`, `VY`, `VZ`,
+`WX` and `WY` were invisible to it and a duplicate among them stayed silent.
+
+The operable-control set was widened to exactly the two shapes the reviewer's
+evidence used, and a `<summary>` still survived — which is not hypothetical,
+because `content.tsx` records that this codebase once shipped a `<summary>` that
+was a retry button. `[tabindex]` is narrowed the other way: `kit.tsx` renders
+`<div role="tabpanel" tabIndex={0}>` as a scroll container, so counting it would
+have failed these tests for a div and then clicked it. What the selector still
+cannot see — a bare `<div onClick>` — is stated in the comment rather than
+implied away.
+
+## A note replaced by a check
+
+Round 30 wrote a standing note asking every future round to re-run any
+transcript quoting the citation count. Rounds 30, 31 and 32 each left one stale
+anyway. The checker enforces it now: a row quoting `ok N` or `declares N` must
+match `EXPECTED`, unless it says `(then)` — which is how a superseded transcript
+records what the check printed AT THE TIME. Turning it on found three stale rows
+nobody had flagged.
+
+## The mutations
+
+| #   | rule                                                  | mutation                                    | tests that die                                                                                            |
+| --- | ----------------------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| AA1 | masking leaves JSX alone                              | `startsRegex`/`endOfRegex` back to round 31 | `falsification-checker.test.ts` › leaves JSX alone; › reads the real test tree without blanking any of it |
+| AA2 | the notifications pager goes when the permission goes | delete `denied ? 'denied' :`                | `control-plane-pages.test.tsx` › withdraws the notification pager when the permission is lost over rows   |
+| AA3 | …and is not drawn before the first page arrives       | accept `'loading'` in the gate              | `control-plane-pages.test.tsx` › draws no notification pager before the first page has arrived            |
+| AA4 | an empty page keeps the way back (notifications)      | add `rows.length > 0 &&` to the gate        | `control-plane-pages.test.tsx` › keeps the way back when a page turns out to be empty                     |
+| AA5 | an empty page keeps the way back (panels)             | add `rows.length > 0 &&` to the gate        | `panels.test.tsx` › keeps the way back when a fleet page turns out to be empty                            |
+| AA6 | an empty page keeps the way back (alerts)             | add `rows.length > 0 &&` to the gate        | `settings-and-alerts.test.tsx` › keeps the way back when an alerts page turns out to be empty             |
+| AA7 | a timeout and a rate limit are not final answers      | class 408/429 as final                      | `shell-recovery.test.tsx` › keeps asking after %s                                                         |
+| AA8 | a `<summary>` counts as an operable control           | drop `summary` from the selector            | `settings-and-alerts.test.tsx` › withdraws its own refresh once the refusal is final                      |
+
+## The checker probes
+
+| #    | defeat or hazard                         | before         | what the check prints         |
+| ---- | ---------------------------------------- | -------------- | ----------------------------- |
+| AA9  | `describe.skip` under a JSX-blanked tail | green, exit 0  | exit 1: 8 of 222 do not exist |
+| AA10 | `it.only` under a JSX-blanked tail       | green, exit 0  | exit 1: 1 `.only` marker      |
+| AA11 | `const zz = describe; zz.skip(…)`        | `ok`, exit 0   | exit 1                        |
+| AA12 | `const { skip } = describe; skip(…)`     | `ok`, exit 0   | exit 1                        |
+| AA13 | `const $d = describe.skip; $d(…)`        | `ok`, exit 0   | exit 1                        |
+| AA14 | `let d; d = describe.skip; d(…)`         | `ok`, exit 0   | exit 1                        |
+| AA15 | `it['on' + 'ly'](…)`                     | `ok`, exit 0   | exit 1                        |
+| AA16 | a fenced ILLUSTRATION of a table row     | exit 1 (wrong) | exit 0                        |
+| AA17 | a duplicate among digit-less labels      | silent         | exit 1                        |
+| AA18 | a transcript quoting a superseded count  | silent         | exit 1 (3 found)              |
+
+Control: `describe.onlyish(` still does not fire.
+
+## Three of this round's own rows did not discriminate, and why
+
+`AA4`, `AA5` and `AA6` were written against the reviewer's mutation —
+narrowing `['ready', 'empty']` to `['ready']` — and all three left 1895 tests
+passing. The reviewer was right that the mutation stays green; the reason was
+not the one either of us assumed.
+
+None of the three pager gates passes `isEmpty` to `queryState`, and it defaults
+to `false`. `'empty'` was therefore **unreachable at every one of them**: an
+empty list yields `'ready'`, the pager draws, and the `'empty'` token was dead.
+So the mutation removed dead code, and tests written to catch it could not.
+
+The token is gone and the gates read `!denied && queryState(q) === 'ready'`,
+which is what they always meant. The rule the tests actually pin — a zero-row
+page keeps its pager, because the "تازه‌تر" button is the only way back — is
+falsified by adding `rows.length > 0 &&`, which kills one named test per gate.
+
+`AA8` was backwards on its first run: the selector was narrowed AND an ungated
+`<summary>` injected, which is the state where the test is SUPPOSED to pass.
+Injecting the `<summary>` with the selector unchanged kills two named tests.
+
+## One flake, recorded rather than re-run away
+
+During the `AA8` run, `web-asset-publication.test.ts › re-copies after a
+publication is killed mid-copy, rather than activating what it left` failed at
+**8116 ms**. In isolation it passes: 3 runs, 20/20 each time. It failed once,
+under a full-suite run concurrent with a mutation sweep. Not reproduced since,
+not fixed, and named here so the next reader does not rediscover it. It is the
+third load-dependent flake recorded on this branch and the first outside the
+real-socket tests; the failure output beyond the name was not captured, which
+is a gap in how the sweep collects evidence rather than a claim about the test.

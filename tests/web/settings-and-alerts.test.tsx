@@ -353,12 +353,30 @@ describe('management alerts', () => {
     const operable = () =>
       Array.from(
         document.querySelectorAll<HTMLElement>(
-          // Widened after a `<div role="button" tabIndex={0} onClick={refetch}>`
-          // and a `<textarea>` both survived all three of these tests. A
-          // keyboard-operable div that refetches costs one
-          // `access.permission_denied` event and one DENIED audit row per
-          // press, two in production — the exact harm, wearing a different tag.
-          'button, select, input, textarea, a[href], [role="button"], [role="link"], [tabindex]',
+          /*
+           * Widened twice, and the second time is the instructive one.
+           *
+           * The first widening added exactly the two shapes the evidence used
+           * — `[role="button"]` and `textarea` — and a `<summary>` still
+           * survived all of these tests. `<summary>` is not hypothetical here:
+           * `content.tsx` records that `setShowHistory(open)` "made the
+           * `<summary>` element a retry button", so this codebase has shipped
+           * that exact shape once already.
+           *
+           * `[tabindex]` is narrowed in the other direction: `kit.tsx` renders
+           * `<div role="tabpanel" tabIndex={0}>` as a scroll container, which
+           * issues nothing. Counting it would fail these tests for a div, and
+           * then click it. The claim is "no operable control", not "no element
+           * with a tabindex".
+           *
+           * What this still cannot see, stated rather than implied: a bare
+           * `<div onClick={…}>`. React attaches the listener rather than an
+           * attribute, so no selector can find it. That shape is a11y-broken
+           * on its own terms and `check:boundaries` is where it belongs.
+           */
+          'button, select, input, textarea, summary, a[href],' +
+            ' [role="button"], [role="link"], [role="menuitem"], [contenteditable],' +
+            ' [tabindex]:not([role="tabpanel"])',
         ),
       ).filter((element) => element.closest('[hidden]') === null);
     expect(operable().map((element) => element.textContent ?? element.tagName)).toEqual([]);
@@ -432,12 +450,30 @@ describe('management alerts', () => {
     const operable = () =>
       Array.from(
         document.querySelectorAll<HTMLElement>(
-          // Widened after a `<div role="button" tabIndex={0} onClick={refetch}>`
-          // and a `<textarea>` both survived all three of these tests. A
-          // keyboard-operable div that refetches costs one
-          // `access.permission_denied` event and one DENIED audit row per
-          // press, two in production — the exact harm, wearing a different tag.
-          'button, select, input, textarea, a[href], [role="button"], [role="link"], [tabindex]',
+          /*
+           * Widened twice, and the second time is the instructive one.
+           *
+           * The first widening added exactly the two shapes the evidence used
+           * — `[role="button"]` and `textarea` — and a `<summary>` still
+           * survived all of these tests. `<summary>` is not hypothetical here:
+           * `content.tsx` records that `setShowHistory(open)` "made the
+           * `<summary>` element a retry button", so this codebase has shipped
+           * that exact shape once already.
+           *
+           * `[tabindex]` is narrowed in the other direction: `kit.tsx` renders
+           * `<div role="tabpanel" tabIndex={0}>` as a scroll container, which
+           * issues nothing. Counting it would fail these tests for a div, and
+           * then click it. The claim is "no operable control", not "no element
+           * with a tabindex".
+           *
+           * What this still cannot see, stated rather than implied: a bare
+           * `<div onClick={…}>`. React attaches the listener rather than an
+           * attribute, so no selector can find it. That shape is a11y-broken
+           * on its own terms and `check:boundaries` is where it belongs.
+           */
+          'button, select, input, textarea, summary, a[href],' +
+            ' [role="button"], [role="link"], [role="menuitem"], [contenteditable],' +
+            ' [tabindex]:not([role="tabpanel"])',
         ),
       ).filter((element) => element.closest('[hidden]') === null);
     expect(operable().map((element) => element.textContent ?? element.tagName)).toEqual([]);
@@ -538,6 +574,18 @@ describe('management alerts', () => {
     stubApi([{ url: '/ops-log', body: { events: [event()], nextCursor: null } }]);
     renderPage(<AlertsPage denied={false} />);
     expect(screen.queryByText('نمایش')).toBeNull();
+  });
+
+  /**
+   * F3 at the alerts gate — same rule, same untested arm.
+   */
+  it('keeps the way back when an alerts page turns out to be empty', async () => {
+    stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
+    renderPage(<AlertsPage denied={false} />);
+    // The page defaults to HISTORY, so this is the filtered emptiness.
+    await screen.findByText(t('web.alerts_empty_filtered'));
+    expect(screen.getByText('نمایش')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'تازه‌تر' })).toBeInTheDocument();
   });
 
   it('asks the server for the management scope', async () => {

@@ -329,7 +329,7 @@ export function PanelsPage({
           offering an enabled "older" that pushed a cursor — changing the query
           key and issuing a fresh request the server had just refused.
         */}
-        {['ready', 'empty'].includes(denied ? 'denied' : queryState(panels)) && (
+        {!denied && queryState(panels) === 'ready' && (
           <CursorPager
             shown={rows.length}
             hasPrevious={cursors.length > 0}

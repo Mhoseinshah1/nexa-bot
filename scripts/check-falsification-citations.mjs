@@ -45,7 +45,7 @@ const RECORD = 'docs/phase3d-falsification.md';
  * to, which is the point: the number is a claim about this file and should be
  * re-stated deliberately, not drifted into.
  */
-const EXPECTED = 213;
+const EXPECTED = 222;
 /**
  * A table whose last column is one of these is making citations.
  *
@@ -115,8 +115,9 @@ function closeOf(text, open) {
     if (ch === '\\') {
       i += 1;
     } else if (ch === '/' && text[i + 1] !== '/' && text[i + 1] !== '*' && startsRegex(text, i)) {
-      i = endOfRegex(text, i);
-      if (i >= text.length) return text.length;
+      const close = endOfRegex(text, i);
+      // Not a regex after all: leave `i` where it is and let the loop advance.
+      if (close !== i) i = close;
     } else if (ch === '/' && text[i + 1] === '/') {
       const newline = text.indexOf('\n', i);
       if (newline === -1) return text.length;
@@ -144,30 +145,49 @@ function startsRegex(text, at) {
   while (i >= 0 && /\s/.test(text[i])) i -= 1;
   if (i < 0) return true;
   const prev = text[i];
-  if (/[)\]}]/.test(prev)) return false;
-  if (!/[A-Za-z0-9_$]/.test(prev)) return true;
-  // An identifier ends here — division — unless it is a keyword that is
-  // followed by an expression. `return /x/` and `case /x/` are regexes.
-  const word = /[A-Za-z0-9_$]+$/.exec(text.slice(0, i + 1));
-  return (
-    word !== null &&
-    [
-      'return',
-      'typeof',
-      'instanceof',
-      'in',
-      'of',
-      'new',
-      'delete',
-      'void',
-      'throw',
-      'case',
-      'do',
-      'else',
-      'yield',
-      'await',
-    ].includes(word[0])
-  );
+  /*
+   * An ALLOW-list, because the deny-list version blinded this script on TSX.
+   *
+   * It previously returned true for anything that was not `)`, `]`, `}` or an
+   * identifier character — which includes `<` and `"`. Those are JSX: `</Foo>`
+   * and `display="…" />`. `endOfRegex` then ran to the newline, returned the
+   * end of the file, and `maskLiterals` blanked everything after it. Measured
+   * on the committed tree: 4 of 113 test sources went dark from some line to
+   * EOF, taking 4 of 4 `describe(` calls in `shell-recovery.test.tsx` with
+   * them, and a `describe.skip` on the suite holding this round's own rows
+   * printed `ok 213`, exit 0. The PARENT commit's checker caught it. A rewrite
+   * that regresses the thing it rewrites is the worst shape available, and it
+   * happened because "not obviously division" was treated as "regex".
+   *
+   * So: a regex may follow an operator, an opening bracket, a comma, a
+   * semicolon, or a keyword that takes an expression — and nothing else.
+   */
+  if ('(,=:[!&|?{;+-*%^~'.includes(prev)) return true;
+  if (/[A-Za-z0-9_$]/.test(prev)) {
+    const word = /[A-Za-z0-9_$]+$/.exec(text.slice(0, i + 1));
+    return (
+      word !== null &&
+      [
+        'return',
+        'typeof',
+        'instanceof',
+        'in',
+        'of',
+        'new',
+        'delete',
+        'void',
+        'throw',
+        'case',
+        'do',
+        'else',
+        'yield',
+        'await',
+      ].includes(word[0])
+    );
+  }
+  // `)`, `]`, `}`, `>`, `<`, a quote, a dot — none of these precede a regex in
+  // code this script will ever read, and three of them are JSX.
+  return false;
 }
 
 /** The index of the `/` closing the regex opened at `start`. */
@@ -181,9 +201,13 @@ function endOfRegex(text, start) {
     // A `/` inside `[...]` is a literal slash, which is the whole reason a
     // character class has to be tracked rather than skipped.
     else if (ch === '/' && !inClass) return i;
-    else if (ch === '\n') return text.length;
+    // A regex literal cannot span a line. Returning the END OF FILE here is
+    // what turned one mis-detected `/` into a blanked remainder; returning
+    // `start` says "this was not a regex", and the caller advances one
+    // character instead of erasing the rest of the source.
+    else if (ch === '\n') return start;
   }
-  return text.length;
+  return start;
 }
 
 /** The index of the quote closing the one at `start`, or the end of the text. */
@@ -206,6 +230,15 @@ function endOfQuote(text, start) {
  * which is the single failure mode it exists to prevent.
  */
 const SKIPPING = new Set(['skip', 'todo', 'skipIf', 'runIf']);
+
+/**
+ * A key this script cannot evaluate, e.g. `it['on' + 'ly']`.
+ *
+ * It counted as skipping for `describe` and as nothing at all for `.only`, so
+ * the same spelling was fail-closed on one scanner and fail-open on the other
+ * — a policy the file states and did not keep. One sentinel, honoured by both.
+ */
+const COMPUTED = '\u0000computed';
 
 /**
  * A copy of a source with every comment, string and regex body blanked.
@@ -247,8 +280,12 @@ function maskLiterals(text) {
       i = Math.min(close + 1, text.length);
     } else if (ch === '/' && startsRegex(text, i)) {
       const close = endOfRegex(text, i);
-      blank(i + 1, close);
-      i = Math.min(close + 1, text.length);
+      // `close === i` means it was not a regex after all.
+      if (close === i) i += 1;
+      else {
+        blank(i + 1, close);
+        i = close + 1;
+      }
     } else {
       i += 1;
     }
@@ -295,7 +332,7 @@ function chainAfter(text, from) {
       // wrong that way fails citations loudly, the other way is green and
       // wrong. NOTE the masked text blanks string BODIES, so the literal is
       // read from the original — see the callers.
-      chain.push(literal === null ? 'skip' : literal[2]);
+      chain.push(literal === null ? COMPUTED : literal[2]);
       i = close;
       continue;
     }
@@ -319,14 +356,39 @@ function chainAfter(text, from) {
  * literal identifier cannot see an alias, and an alias is one line.
  */
 function skippingOpeners(masked, source) {
-  const names = ['describe'];
-  const binding = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*describe\b/g;
+  const always = [];
+  const describeLike = ['describe'];
+  /*
+   * Four alias shapes, because one was handled and four were not.
+   *
+   * `const zz = describe.skip` was read; `const zz = describe` then `zz.skip(…)`,
+   * `const { skip } = describe`, and a plain `d = describe.skip` after a bare
+   * `let d` were not, and each hid a suite with the check reporting `ok`. The
+   * binding is also matched without requiring `const`/`let`/`var` so a later
+   * assignment counts.
+   */
+  const bound = /([A-Za-z_$][\w$]*)\s*=\s*describe\b/g;
   let match;
-  while ((match = binding.exec(masked)) !== null) {
+  while ((match = bound.exec(masked)) !== null) {
     const { chain } = readChain(masked, source, match.index + match[0].length);
-    if (chain.some((link) => SKIPPING.has(link))) names.push(match[1]);
+    if (chain.some((link) => SKIPPING.has(link) || link === COMPUTED)) always.push(match[1]);
+    else if (chain.length === 0) describeLike.push(match[1]);
   }
-  return names;
+  const destructured = /\{([^}]*)\}\s*=\s*describe\b/g;
+  while ((match = destructured.exec(masked)) !== null) {
+    for (const part of match[1].split(',')) {
+      const name = /([A-Za-z_$][\w$]*)\s*$/.exec(part.split(':').pop() ?? '');
+      if (name !== null && SKIPPING.has(/^[A-Za-z_$][\w$]*/.exec(part.trim())?.[0] ?? '')) {
+        always.push(name[1]);
+      }
+    }
+  }
+  return { always, describeLike };
+}
+
+/** A name used inside a generated pattern. `$d` is a legal identifier. */
+function escapeName(name) {
+  return name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /** `chainAfter` over the masked text, with bracket keys read from the source. */
@@ -349,17 +411,29 @@ function readChain(masked, source, from) {
  */
 function withoutSkippedSuites(text) {
   const masked = maskLiterals(text);
-  const openers = skippingOpeners(masked, text);
-  const pattern = new RegExp(`\\b(?:${openers.join('|')})\\b`, 'g');
+  const { always, describeLike } = skippingOpeners(masked, text);
+  const names = [...new Set([...always, ...describeLike])].map(escapeName);
+  /*
+   * Identifier-char lookaround, not `\b`.
+   *
+   * `$` is a legal identifier character and NOT a word character, so
+   * `\b\$d\b` never matches ` $d(` — the boundary needs a word character on
+   * one side. An alias named `$d` therefore stayed invisible after the escaping
+   * fix, which is the alias feature's own bug rather than an inherited one.
+   */
+  const pattern = new RegExp(`(?<![A-Za-z0-9_$])(?:${names.join('|')})(?![A-Za-z0-9_$])`, 'g');
+  const alwaysSkips = new Set(always);
   let out = '';
   let cursor = 0;
   let match;
   while ((match = pattern.exec(masked)) !== null) {
     if (match.index < cursor) continue;
     const { chain, end } = readChain(masked, text, match.index + match[0].length);
-    // A bare alias call — `zz('name', fn)` — is skipped by what it was bound
-    // to, so it needs no skipping link of its own.
-    const skips = match[0] !== 'describe' || chain.some((link) => SKIPPING.has(link));
+    // A name bound to a skipping chain is skipped however it is called; a name
+    // bound to bare `describe` needs a skipping link of its own, exactly as
+    // `describe` does.
+    const skips =
+      alwaysSkips.has(match[0]) || chain.some((link) => SKIPPING.has(link) || link === COMPUTED);
     if (!skips) continue;
     out += text.slice(cursor, match.index);
     cursor = end;
@@ -491,7 +565,7 @@ function onlyMarkers(text) {
   let match;
   while ((match = opener.exec(masked)) !== null) {
     const { chain } = readChain(masked, text, match.index + match[0].length);
-    if (chain.includes('only')) {
+    if (chain.includes('only') || chain.includes(COMPUTED)) {
       found.push(masked.slice(0, match.index).split('\n').length);
     }
   }
@@ -578,14 +652,61 @@ const files = sources('tests');
  * table, which is why this is mechanical now rather than a thing to be careful
  * about. Labels are the record's own primary keys.
  */
-const labels = new Map();
+const labels = new Set();
 const duplicated = [];
+let labelFenced = false;
 for (const line of readFileSync(RECORD, 'utf8').split('\n')) {
-  const label = /^\|\s*([A-Z]+[0-9]+[a-z]?)\s*\|/.exec(line);
+  /*
+   * Fenced blocks are prose HERE TOO.
+   *
+   * The rule is stated forty lines below, for the table loop, and this loop —
+   * added in the same commit — was a second pass over the raw lines that did
+   * not know about it. A fenced illustration of a table row therefore failed
+   * the run for a duplicate that does not exist. That is the branch's defect
+   * class (right where the author was looking, absent one loop over) occurring
+   * between two loops in one file.
+   */
+  if (/^\s*```/.test(line)) {
+    labelFenced = !labelFenced;
+    continue;
+  }
+  if (labelFenced) continue;
+  // No digit required: `VX`, `VY`, `VZ`, `WX` and `WY` are real labels this
+  // record already carries, and the first version of this check could not see
+  // any of them — so a duplicate among them stayed silent.
+  const label = /^\|\s*([A-Z][A-Za-z0-9]*)\s*\|/.exec(line);
   if (label === null) continue;
-  const seen = labels.get(label[1]);
-  if (seen === undefined) labels.set(label[1], line);
-  else duplicated.push(label[1]);
+  if (labels.has(label[1])) duplicated.push(label[1]);
+  else labels.add(label[1]);
+}
+
+/*
+ * A transcript quoting the citation count is a claim about EXPECTED.
+ *
+ * Three consecutive rounds left one stale — round 29 wrote `171`, round 30
+ * wrote `ok 194`, round 31 wrote `ok 202` — and round 30 added a STANDING NOTE
+ * asking the next round to re-run them. The note failed twice more. A rule
+ * that depends on remembering is the thing this record exists to stop
+ * believing.
+ *
+ * So the current rounds' rows are checked. A row that is deliberately
+ * historical says `(then)` in the same cell and is left alone, because
+ * superseded evidence is evidence of what the check printed AT THE TIME and
+ * rewriting it would be the falsification.
+ */
+const staleCounts = [];
+let countFenced = false;
+for (const [index, line] of readFileSync(RECORD, 'utf8').split('\n').entries()) {
+  if (/^\s*```/.test(line)) {
+    countFenced = !countFenced;
+    continue;
+  }
+  if (countFenced || !line.startsWith('|') || line.includes('(then)')) continue;
+  for (const quoted of line.matchAll(/(?:ok|declares)\s+([0-9]{2,4})/g)) {
+    if (Number(quoted[1]) !== EXPECTED) {
+      staleCounts.push(`${index + 1}: ${quoted[0]} — EXPECTED is ${EXPECTED}`);
+    }
+  }
 }
 
 const only = files.flatMap(([path, text]) => onlyMarkers(text).map((line) => `${path}:${line}`));
@@ -791,8 +912,15 @@ if (
   malformed.length > 0 ||
   unstructured.length > 0 ||
   only.length > 0 ||
-  duplicated.length > 0
+  duplicated.length > 0 ||
+  staleCounts.length > 0
 ) {
+  if (staleCounts.length > 0) {
+    console.error(
+      `\x1b[31mfail\x1b[0m  ${staleCounts.length} transcript(s) quote a citation count that is no longer this record's. Re-run them, or mark the row (then):`,
+    );
+    for (const row of staleCounts) console.error(`        ${row}`);
+  }
   if (duplicated.length > 0) {
     console.error(
       `\x1b[31mfail\x1b[0m  ${duplicated.length} row label(s) name more than one rule, so a citation to them resolves to neither:`,
