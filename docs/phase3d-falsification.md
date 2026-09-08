@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 304 citations were checked; this record declares 306 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 307 citations were checked; this record declares 309 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -4523,6 +4523,12 @@ queue is oversubscribed. And it made the failure mode WORSE, because blocking
 the event loop means the 10s `testTimeout` cannot fire — overruns were reported
 at 26-40s with no diagnostic instead of at 10s with one. Reverted.
 
+(That last clause is HALF true, and the next reviewer measured it: under 12
+spinners on 4 cores the REVERTED version also timed out, at ~11.9s, and also
+printed no anchor. The spin's overruns were longer; neither version reported a
+diagnostic. Corrected in place — what actually made the diagnostic reachable is
+in round 40 below, and it is neither loop.)
+
 **Wrong fix two, and a cause that was never measured.** Before that, the bundle
 was grown from 200 assets to 3 000 to widen the window, and abandoned with the
 claim that "the publisher failed before staging anything". That claim was never
@@ -4594,10 +4600,10 @@ to the `/notifications` test and did not add here.
 
 ## The mutations
 
-| #   | rule                               | mutation                              | tests that die                                                                                                 |
-| --- | ---------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| AP1 | the arrangement is RETRIED         | cap the attempt loop at one           | `web-asset-publication.test.ts` › recovers the arrangement when the first attempt looks after the copy is over |
-| AP2 | `open` is refused before the guard | `query.open === 'true'`, the old cast | `web-admin-v2.test.ts` › splits 400-before-403 INSIDE one endpoint, by parameter                               |
+| #   | rule                               | mutation                              | tests that die                                                                                                                            |
+| --- | ---------------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| AP1 | the arrangement is RETRIED         | cap the attempt loop at one           | `web-asset-publication.test.ts` › recovers the arrangement when the first attempt looks after the copy is over                            |
+| AP2 | `open` is refused before the guard | `query.open === 'true'`, the old cast | `web-admin-v2.test.ts` › refuses an open filter that is neither true nor false; › splits 400-before-403 INSIDE one endpoint, by parameter |
 
 AP1 fails with `a missed first attempt was not recovered: expected 0 to be
 greater than 0` — the same anchor the whole sequence is about, now guarding the
@@ -4605,6 +4611,98 @@ recovery rather than the arrangement. AP2 fails with
 `open=maybe is parsed in the controller: expected 403 to be 400`, which is the
 finding itself: under the mutation `open` really does reach the guard first,
 which is what round 38 said it already did.
+
+## Round 40 — the twenty-second reviewer, and the retry that could not report
+
+Eight findings. Two are the previous round's fix being materially worse than
+what it replaced, which is the seventh consecutive round of that shape.
+
+### The retry budget exceeded the timeout it was written to respect
+
+Six attempts of a fixed 2s deadline is 12s against a 10s `testTimeout`. On the
+all-miss path the loop never returned, so `expect(caught, 'the kill never
+landed inside the copy')` was never evaluated and the failure was
+`Test timed out in 10000ms` with no diagnostic — the exact outcome the revert
+one round earlier was performed to avoid. Only five of the six attempts could
+ever start; the sixth was unreachable.
+
+And a timed-out arrangement is not CANCELLED. Vitest rejects the test promise
+and leaves the async function running, so the loop kept spawning publishers and
+rebuilding fixtures after teardown — through the module-level `workspace`,
+which `beforeEach` had already pointed at the NEXT test's directory. Measured:
+one leaked temp tree per timeout, eight of them, and an unrelated sibling
+(`never publishes a pool asset half written`) failing in 2 of 7 runs because
+the orphan's `rm -rf`s starved its polling loop. So on the machine where this
+flakes the gate reported a timeout with no diagnostic PLUS a spurious failure
+in a test that was fine.
+
+Three things fix it, and only the third is the one that mattered:
+
+- **Polling stops when the CHILD EXITS.** Once the run is over the staging tree
+  is gone and no further looking can find it, so a miss costs the child's own
+  lifetime rather than two seconds of spinning.
+- **One wall-clock budget for the whole arrangement**, 2.5s, checked before
+  each attempt and inside each poll, so it cannot overrun what the assertions
+  need. Measured on a forced all-miss: the anchor now reports in 1.3s with its
+  message, against a 10s timeout with none.
+- **The tail was the real cost.** `expect(buffer).toEqual(buffer)` walks two
+  Buffers element by element through deep equality: 200 assets of ~7KB is 1.4M
+  comparisons, milliseconds of I/O and TENS OF SECONDS of matcher on a loaded
+  machine. That is what timed the test out, not the race and not either loop.
+  `Buffer.equals` is the identical assertion at 6ms. Under 12 spinners on 4
+  cores the test went from 3/3 timeouts to 3/3 green.
+
+The reviewer also showed the revert's cited justification was half wrong: the
+reverted version timed out too, at ~11.9s, and also printed no anchor. Both
+loops were indistinguishable in the failure mode the revert was argued on.
+Corrected in place above.
+
+Recorded and NOT fixed: at that same 4x oversubscription a different test,
+`admits exactly one of many processes racing for an abandoned lock`, failed
+once in three runs. It is a separate lock race, it is not in this change's
+path, and CI does not run under that load. Named here so the next person who
+sees it has somewhere to start rather than a re-run.
+
+### The superseded rule survived in the other file
+
+Round 39 corrected "per-PARAMETER" to per (parameter, malformation) — in
+`web-admin-v2.test.ts`, and not in `panels-http.test.ts`, which still said
+"Three rounds, three rules" and "the ordering is per-PARAMETER". OQ-3D-02 names
+BOTH tests as the pair that must change together, and one of them changed. One
+file over, in the sentence written to close exactly that. OQ-3D-02's own
+lead-in also still said "Three successive attempts" above four bullets.
+
+### `until` became the new entry with nothing behind it
+
+The controller-parsed list names six parameters; the loop asserted five.
+`until`'s 400s were pinned only with the privileged cookie, which cannot tell
+controller parsing from service parsing — the identical gap that let round
+38's `open` claim stand. Added.
+
+### Two smaller ones
+
+AP2 kills TWO tests, not the one its row named: the mutation also breaks
+`refuses an open filter that is neither true nor false`, which had pinned
+`open` at 400 all along. So `open` was never "the parameter with no assertion";
+it had no assertion that discriminated WHICH SIDE of the guard it was parsed
+on. And `time.test.ts`'s docblock claimed "thirty assertions and fourteen plus
+sixteen", which is arithmetic no split of that file produces — thirteen
+`instantSchema` assertions, two of which discriminate.
+
+## The mutations
+
+| #   | rule                                         | mutation                                     | tests that die                                                                                                                                                                                          |
+| --- | -------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AQ1 | the anchor is REACHABLE on the all-miss path | `partiallyWritten` returns 0 unconditionally | `web-asset-publication.test.ts` › re-copies after a publication is killed mid-copy, rather than activating what it left; › recovers the arrangement when the first attempt looks after the copy is over |
+
+AQ1 is the finding and its fix in one line. Under the previous version the same
+mutation produced `Test timed out in 10000ms` twice, with no anchor and no
+diagnostic; under this one it produces
+`the kill never landed inside the copy: expected 0 to be greater than 0` and
+`a missed first attempt was not recovered: expected 0 to be greater than 0`, in
+1.3s. A mutation that changes a test from timing out to FAILING FOR ITS NAMED
+REASON is the only evidence that an anchor is load-bearing rather than
+decorative.
 
 ## The microsecond truncation is still open, deliberately
 

@@ -1046,6 +1046,13 @@ describe('the Web Admin V2 surface', () => {
       for (const query of [
         'limit=abc',
         'since=yesterday',
+        // `until` was NAMED in the list above and asserted only with the
+        // privileged cookie elsewhere, which cannot tell controller from
+        // service parsing. That is precisely the gap that let the `open`
+        // claim stand for a round: an enumerated entry with no assertion on
+        // the side that discriminates.
+        'until=soon',
+        'until=',
         'beforeId=oops&before=2026-01-01T00:00:00.000Z',
         'open=maybe',
         'open=TRUE',

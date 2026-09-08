@@ -238,11 +238,33 @@ function partiallyWritten(rootDir: string, expected: number, settled: Set<string
  * ~150ms. What took 43 seconds was the per-asset byte comparison at the end
  * of the test, unrelated to the race.
  *
- * So neither. RETRY the arrangement: each attempt spawns, polls a short
- * deadline, and starts over on a fresh root if the copy finished before the
- * parent looked. The anchor survives — no attempt landing inside the copy
- * still leaves `caught` at 0 and still fails — and a miss costs one short
- * attempt rather than the whole budget.
+ * WRONG FIX THREE, which was the first version of the retry below: six
+ * attempts of a fixed 2s deadline each. `6 x 2s` is 12s against a 10s
+ * `testTimeout`, so on the all-miss path the anchor was never reached and the
+ * failure was `Test timed out in 10000ms` with no diagnostic — the exact
+ * outcome the revert above was performed to avoid, reintroduced by the fix
+ * for it. Worse, vitest's timeout rejects the test promise WITHOUT cancelling
+ * the async function, so the loop kept spawning publishers and rebuilding
+ * fixtures after teardown: it wrote through the module-level `workspace` into
+ * the NEXT test's directory, leaked one temp tree per timeout, and starved an
+ * unrelated sibling into failing. Measured: 3/3 timeouts under 12 spinners on
+ * 4 cores, 8 leaked workspaces, and `never publishes a pool asset half
+ * written` failing in 2 of 7 runs for no reason of its own.
+ *
+ * So the budget is what makes the anchor reachable, and it is bounded twice:
+ *
+ *   - Polling stops when the CHILD EXITS, not at a fixed deadline. Once the
+ *     run is over the staging tree is gone and no further looking can find it,
+ *     so a miss costs the child's own lifetime — about 250ms — instead of two
+ *     seconds of pointless spinning.
+ *   - The whole arrangement gets ONE wall-clock budget, checked before each
+ *     attempt and inside each poll. It cannot overrun whatever is left for the
+ *     assertions, so `caught` reaches the anchor and the anchor reports.
+ *
+ * The baseline source directory is passed IN rather than rebuilt from
+ * `source()`, so a retry cannot write through the module-level `workspace` at
+ * all — the leak above is closed by construction and not only by not timing
+ * out.
  *
  * `missFirst` forces the first attempt to look after the copy has finished,
  * which is what makes the retry path itself testable rather than a branch
@@ -250,6 +272,7 @@ function partiallyWritten(rootDir: string, expected: number, settled: Set<string
  */
 async function killMidCopy(
   rootDir: string,
+  baseline: string,
   incoming: string,
   expected: number,
   options: { missFirst?: boolean } = {},
@@ -258,14 +281,17 @@ async function killMidCopy(
   let settled = new Set(releases(rootDir));
   let caught = 0;
   let died: Promise<void> = Promise.resolve();
+  // Half of what the assertions after this need, and a quarter of the unit
+  // `testTimeout`. Whatever happens inside, the caller gets its answer.
+  const budgetEndsAt = Date.now() + 2_500;
 
-  for (let attempt = 0; attempt < 6 && caught === 0; attempt += 1) {
+  for (let attempt = 0; attempt < 4 && caught === 0 && Date.now() < budgetEndsAt; attempt += 1) {
     if (attempt > 0) {
       // A completed attempt activated a release; start from a clean root so
       // the caller's assertions still describe ONE killed publication.
       rmSync(rootDir, { recursive: true, force: true });
       mkdirSync(rootDir, { recursive: true });
-      run(source('one'), rootDir);
+      run(baseline, rootDir);
       good = activeId(rootDir);
       settled = new Set(releases(rootDir));
     }
@@ -273,7 +299,13 @@ async function killMidCopy(
       env: { ...process.env, NEXA_WEB_SOURCE_DIR: incoming, NEXA_WEB_ASSET_ROOT: rootDir },
       stdio: 'ignore',
     });
-    died = new Promise<void>((resolveExit) => child.on('exit', () => resolveExit()));
+    let exited = false;
+    died = new Promise<void>((resolveExit) => {
+      child.on('exit', () => {
+        exited = true;
+        resolveExit();
+      });
+    });
 
     if (options.missFirst === true && attempt === 0) {
       // Look only once the run is over: the staging tree is gone, so this
@@ -283,8 +315,10 @@ async function killMidCopy(
       continue;
     }
 
-    const deadline = Date.now() + 2_000;
-    while (Date.now() < deadline) {
+    // Until it lands, until the child is gone, or until the budget is spent —
+    // whichever comes first. `exited` is what makes a miss cheap: nothing can
+    // be caught after the run has finished.
+    while (!exited && Date.now() < budgetEndsAt) {
       caught = partiallyWritten(rootDir, expected, settled);
       if (caught > 0) break;
       await new Promise((r) => setImmediate(r));
@@ -418,10 +452,13 @@ describe('publishing the Web Admin bundle', () => {
      * remove.
      */
     const rootDir = root();
-    run(source('one'), rootDir);
+    const baseline = source('one');
+    run(baseline, rootDir);
     const incoming = source('two', 200, 512);
 
-    const { caught, good } = await killMidCopy(rootDir, incoming, 200, { missFirst: true });
+    const { caught, good } = await killMidCopy(rootDir, baseline, incoming, 200, {
+      missFirst: true,
+    });
     expect(caught, 'a missed first attempt was not recovered').toBeGreaterThan(0);
     // And the recovered arrangement is the same state the real test asserts
     // against: the previous release still current, nothing half-written
@@ -432,14 +469,15 @@ describe('publishing the Web Admin bundle', () => {
 
   it('re-copies after a publication is killed mid-copy, rather than activating what it left', async () => {
     const rootDir = root();
-    run(source('one'), rootDir);
+    const baseline = source('one');
+    run(baseline, rootDir);
     const incoming = source('two', 200, 512);
 
     // Kill it PART WAY THROUGH the copy, not merely at some point during the
     // run: a kill that lands after the copy finished proves nothing, and a
     // test that cannot tell the difference would pass under a publisher that
     // wrote straight into the directory it activates.
-    const { caught, good } = await killMidCopy(rootDir, incoming, 200);
+    const { caught, good } = await killMidCopy(rootDir, baseline, incoming, 200);
     expect(caught, 'the kill never landed inside the copy').toBeGreaterThan(0);
 
     // Nothing the killed run left may be activated, and the release that was
@@ -456,9 +494,20 @@ describe('publishing the Web Admin bundle', () => {
       readdirSync(join(incoming, 'assets')).sort(),
     );
     for (const asset of readdirSync(join(activated, 'assets'))) {
-      expect(readFileSync(join(activated, 'assets', asset))).toEqual(
-        readFileSync(join(incoming, 'assets', asset)),
-      );
+      // `Buffer.equals`, NOT `expect(a).toEqual(b)` on two Buffers. The
+      // matcher walks them element by element through deep equality: 200
+      // assets of ~7KB is 1.4M comparisons, which is milliseconds of I/O and
+      // TENS OF SECONDS of matcher on a loaded machine — measured at 34s
+      // under 12 spinners, which is what timed this test out at 10s and made
+      // its diagnostic disappear. The assertion is identical; only its cost
+      // changed.
+      const mismatch = `${asset} was not activated byte-for-byte`;
+      expect(
+        readFileSync(join(activated, 'assets', asset)).equals(
+          readFileSync(join(incoming, 'assets', asset)),
+        ),
+        mismatch,
+      ).toBe(true);
     }
   });
 

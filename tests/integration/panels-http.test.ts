@@ -972,10 +972,16 @@ describe('panel HTTP surface', () => {
      * `opsLogQuerySchema.parse` — so `?scope=BOGUS` is a 403 and `?limit=abc`
      * a 400, from the same caller against the same endpoint.
      *
-     * Three rounds, three rules, three counter-examples. The honest reading is
-     * that the ordering is per-PARAMETER and incidental: it follows wherever
-     * each value happens to be validated, and nothing in this codebase decides
-     * it. So this test states no rule. It pins the cases that exist, in both
+     * FOUR rounds, four rules, four counter-examples — and "per-PARAMETER" was
+     * the fourth of them. It is per (parameter, MALFORMATION): `singleValued`
+     * refuses a REPEATED key in the controller, so `?scope=ALL&scope=ALL` is a
+     * 400 from a caller for whom `?scope=BOGUS` is a 403. The sibling test in
+     * `web-admin-v2.test.ts` pins that pair.
+     *
+     * This paragraph is the reason the correction is worth reading twice: the
+     * round that corrected "per-PARAMETER" corrected it in the OTHER file and
+     * left this one asserting the superseded rule — one file over, in the
+     * sentence written to close exactly that. So this test states no rule. It pins the cases that exist, in both
      * directions, INCLUDING the two that killed the last rule — and the
      * consequence is written down as an open question rather than argued away
      * a fourth time (OQ-3D-02).

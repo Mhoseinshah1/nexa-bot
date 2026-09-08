@@ -324,7 +324,7 @@ disclosure: a `400` tells the caller nothing about what they may read, and
 every path that would reveal something still authorizes first.
 
 **What is not.** Which order the API should have, and whether the inconsistency
-below is worth removing. Three successive attempts to state a RULE governing
+below is worth removing. Four successive attempts to state a RULE governing
 it were each falsified by a case on an endpoint the rule named:
 
 - "It is uniform; every surface parses before authorizing." False —

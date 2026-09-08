@@ -64,13 +64,19 @@ describe('TimePeriod', () => {
  * pins the RULE, at every boundary that decides it, because an endpoint test
  * proves the wiring and a boundary is what the wiring gets wrong.
  *
- * WHICH assertions discriminate, stated rather than implied: all ten values
- * discriminate for `isStorableInstant` and `storableInstantOrNull`. For
- * `instantSchema` only the two year-zero spellings do — the rest are refused
- * by the `z.iso.datetime()` union in front of the refinement and survive its
- * removal. They are there as the boundary either side, not as evidence for it,
- * and saying so is the difference between thirty assertions and fourteen plus
- * sixteen that cannot fail.
+ * WHICH assertions discriminate, stated rather than implied. Every value
+ * discriminates for `isStorableInstant` and `storableInstantOrNull`. For
+ * `instantSchema` only `0000-01-01…` and `0000-12-31…` do: the rest are
+ * refused by the `z.iso.datetime()` union in FRONT of the refinement and
+ * survive its removal — `+000000-…` included, even though it denotes year zero
+ * and IS refused by the rule when it arrives as a `Date`, which is why "the
+ * two year-zero spellings" was an ambiguous way to say it. They are the
+ * boundary either side, not evidence for it.
+ *
+ * (An earlier version of this paragraph said "thirty assertions and fourteen
+ * plus sixteen". No split of this file's counts is that; it was arithmetic
+ * nobody had done. What is true: thirteen `instantSchema` assertions, two of
+ * which discriminate.)
  */
 describe('the storable-instant bound', () => {
   const accepted = [
