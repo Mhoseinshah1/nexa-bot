@@ -424,6 +424,98 @@ describe('the template preview', () => {
     expect(savedBody(api.calls), 'Enter in a preview field must never write').toBeUndefined();
   });
 
+  it('cancels the Enter key, which is what stops the save', async () => {
+    /*
+     * `preventDefault` is half the rule and it had no test.
+     *
+     * The Enter case above asserts that no save was issued — and jsdom does
+     * not implement implicit form submission at all, so that assertion is true
+     * in this fixture whether or not the production code cancels the event.
+     * Deleting `event.preventDefault()` alone survived the entire gate.
+     *
+     * It matters most in the case the `submitter` backstop does NOT cover:
+     * when Save IS rendered, implicit submission clicks it, `submitter` is a
+     * perfectly legitimate element and the guard passes. Cancelling the
+     * keystroke is the only thing between Enter in a sample box and an
+     * unasked-for save of the draft body.
+     *
+     * So this asserts the cancellation itself, on a real event object, rather
+     * than a consequence the environment cannot produce.
+     */
+    withPreview('x');
+    renderPage(<ContentPage mayEdit denied={false} />);
+    await screen.findAllByText(KEY);
+
+    const enter = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      bubbles: true,
+      cancelable: true,
+    });
+    sample().dispatchEvent(enter);
+    expect(enter.defaultPrevented, 'Enter must not reach implicit submission').toBe(true);
+
+    // A key that is not Enter is left alone, so the handler is a rule and not
+    // a blanket "swallow everything the operator types".
+    const letter = new KeyboardEvent('keydown', { key: 'a', bubbles: true, cancelable: true });
+    sample().dispatchEvent(letter);
+    expect(letter.defaultPrevented).toBe(false);
+  });
+
+  it('does not start a second preview while one is in flight', async () => {
+    /*
+     * The button carries `disabled={preview.isPending}`; the Enter handler
+     * added beside it did not, so Enter twice started two mutations.
+     * react-query drops the older RESULT and still runs its `onSuccess`, which
+     * is what records the input the displayed render belongs to — so the late
+     * first response marks the second render as current for the first input.
+     */
+    let landed = 0;
+    const release: ((value: Response) => void)[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: unknown, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes(`/templates/${KEY}/preview`)) {
+          landed += 1;
+          return new Promise<Response>((resolve) => release.push(resolve));
+        }
+        if ((init?.method ?? 'GET') === 'GET' && url.includes('/templates')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ templates: [template()] }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            }),
+          );
+        }
+        return Promise.resolve(new Response('{}', { status: 200 }));
+      }),
+    );
+
+    renderPage(<ContentPage mayEdit denied={false} />);
+    await screen.findAllByText(KEY);
+
+    fireEvent.change(sample(), { target: { value: 'A' } });
+    fireEvent.keyDown(sample(), { key: 'Enter' });
+    await waitFor(() => expect(landed).toBe(1));
+
+    // A second Enter, while the first is still in flight.
+    fireEvent.change(sample(), { target: { value: 'B' } });
+    fireEvent.keyDown(sample(), { key: 'Enter' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(landed, 'the keyboard path must respect the same guard as the button').toBe(1);
+
+    release[0]?.(
+      new Response(JSON.stringify({ rendered: 'RENDER-FOR-A', unresolved: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    // The one render that arrives is the one its input was sent with, and the
+    // sample value has moved on since, so it is correctly marked stale.
+    expect(await screen.findByText('RENDER-FOR-A')).toBeInTheDocument();
+    expect(await screen.findByText(t('web.preview_stale'))).toBeInTheDocument();
+  });
+
   it('ignores a submit that no submit control produced', async () => {
     /*
      * The backstop for the same defect one field later. `submitter` is null

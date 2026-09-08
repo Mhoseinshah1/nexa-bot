@@ -5,7 +5,9 @@ import {
   AUTH_ROUTES,
   CONTROL_ROUTES,
   monitorProfileResponseSchema,
+  CONTROL_ERROR_CODES,
   operationalEventListResponseSchema,
+  PANEL_ROUTES,
   SESSION_COOKIE_NAME,
   systemContext,
   settingListResponseSchema,
@@ -304,6 +306,69 @@ describe('the Web Admin V2 surface', () => {
           (await get(`${CONTROL_ROUTES.opsLog}?${query}`, ownerCookie)).statusCode,
           query,
         ).toBe(200);
+      }
+    });
+
+    /**
+     * `limit` is the sixth sibling, and it was still on truthiness.
+     *
+     * `?limit=` is an empty string, so it answered 200 with the default page
+     * while `?limit=0`, `?limit=-1` and `?limit=many` were all 400 — the same
+     * parameter on the same call, an empty value silently treated as unsent.
+     * The five filters beside it were corrected a round earlier and this one
+     * was left, twenty lines above the comment naming that exact defect class.
+     */
+    it('refuses an empty limit rather than answering with the default page', async () => {
+      expect((await get(`${CONTROL_ROUTES.opsLog}?limit=`, ownerCookie)).statusCode).toBe(400);
+      // The notifications reader spells it the same way, so neither drifts.
+      expect((await get(`${CONTROL_ROUTES.notifications}?limit=`, ownerCookie)).statusCode).toBe(
+        400,
+      );
+      // A well-formed limit still answers.
+      expect((await get(`${CONTROL_ROUTES.opsLog}?limit=5`, ownerCookie)).statusCode).toBe(200);
+    });
+
+    /**
+     * A REPEATED parameter is an array, and one of them reached `.split`.
+     *
+     * `@Query()` was typed `Record<string, string | undefined>` and Fastify's
+     * default parser yields an array when a key repeats, so
+     * `?severity=ERROR&severity=WARN` handed `query.severity.split(',')` an
+     * array and the TypeError fell through the error filter as a 500 — in the
+     * expression rewritten a round earlier to stop a bad parameter becoming
+     * one. Every other parameter survived that input only because it happened
+     * to reach a zod schema first, which is luck rather than a rule.
+     *
+     * A 500 is the assertion that matters here: it means the request reached
+     * code that assumed a string. 400 is the answer a malformed query deserves.
+     */
+    it('refuses a repeated query parameter instead of throwing on it', async () => {
+      for (const query of [
+        'severity=ERROR&severity=WARN',
+        'code=a&code=b',
+        'scope=ALL&scope=MANAGEMENT_CONDITIONS',
+        'limit=5&limit=6',
+        'open=true&open=false',
+      ]) {
+        const response = await get(`${CONTROL_ROUTES.opsLog}?${query}`, ownerCookie);
+        expect(response.statusCode, query).toBe(400);
+      }
+      /*
+       * The other two list endpoints, asserted by the CODE they answer with.
+       *
+       * A status assertion could not fail on `/panels`: nothing there calls a
+       * string method, so `panelListQuerySchema` refuses the array on its own
+       * and answers 400 with or without the guard — measured, by removing the
+       * guard and watching all 36 cases stay green. That is precisely the
+       * "happens to reach a schema first" luck the guard exists to replace, so
+       * what is asserted is that the refusal is the GUARD's, uniformly, and
+       * not whichever validator the value reached first.
+       */
+      for (const route of [CONTROL_ROUTES.notifications, PANEL_ROUTES.list]) {
+        const response = await get(`${route}?limit=5&limit=6`, ownerCookie);
+        expect(response.statusCode, route).toBe(400);
+        expect(response.json().error.code, route).toBe(CONTROL_ERROR_CODES.INVALID_VALUE);
+        expect(response.json().error.message, route).toContain('more than once');
       }
     });
 

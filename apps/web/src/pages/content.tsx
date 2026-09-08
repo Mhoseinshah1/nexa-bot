@@ -253,7 +253,23 @@ function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; m
       showHistory && !(query.state.status === 'error' && finalAnswer(query.state.error)),
   });
 
-  const runPreview = () => preview.mutate({ body: draft, values: sample });
+  /*
+   * The SAME pending guard the button has.
+   *
+   * `<button onClick={runPreview} disabled={preview.isPending}>` refuses a
+   * second preview while one is in flight; the Enter handler added beside it
+   * called straight through, so two preview mutations could run at once.
+   * react-query drops the older one's RESULT but still runs its `onSuccess`,
+   * and `onSuccess` is what records `previewedInput` — so a late first
+   * response marks the displayed second render as current for an input it was
+   * not rendered from. That is "a preview that is not of the thing you are
+   * looking at", which is the one confusion this whole mechanism exists to
+   * end, reintroduced by the fix for a different defect in the same file.
+   */
+  const runPreview = () => {
+    if (preview.isPending) return;
+    preview.mutate({ body: draft, values: sample });
+  };
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();

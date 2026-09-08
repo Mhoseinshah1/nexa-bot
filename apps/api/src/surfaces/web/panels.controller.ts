@@ -21,6 +21,7 @@ import {
 } from '../../modules/platform/providers/infrastructure/adapter-registry.js';
 import { CONTAINER, type Container } from '../../container.js';
 import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { singleValued } from './query.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { PanelView } from '../../modules/platform/panels/application/ports.js';
 
@@ -138,9 +139,15 @@ export class PanelsController {
   @Get(PANEL_ROUTES.list)
   async list(
     @Req() request: FastifyRequest,
-    @Query() query: Record<string, string | undefined>,
+    @Query() raw: Record<string, unknown>,
   ): Promise<PanelListResponse> {
     const { scope, actor } = await this.authenticate(request);
+    // A repeated parameter is an ARRAY, not a string. Nothing here calls a
+    // string method on one — `panelListQuerySchema` refuses it — so this is
+    // not the 500 the ops-log reader had. It is the same lie in the same
+    // shape, and the sibling that was left on it is how the previous round's
+    // defect happened, so it goes through the same guard.
+    const query = singleValued(raw);
     const page = panelListQuerySchema.parse({
       ...(query.limit === undefined ? {} : { limit: query.limit }),
       ...(query.cursor === undefined ? {} : { cursor: query.cursor }),

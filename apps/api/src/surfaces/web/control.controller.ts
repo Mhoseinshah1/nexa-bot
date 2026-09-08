@@ -27,6 +27,7 @@ import {
   NOTIFICATION_PAGE_DEFAULT,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
+import { singleValued } from './query.js';
 import { ReadinessProbe } from './readiness.probe.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
@@ -263,14 +264,22 @@ export class ControlController {
   @Get('ops-log')
   async opsLog(
     @Req() request: FastifyRequest,
-    @Query() query: Record<string, string | undefined>,
+    @Query() raw: Record<string, unknown>,
   ): Promise<OperationalEventListResponse> {
     const { scope, actor } = await this.authenticate(request);
+    const query = singleValued(raw);
     // The size the caller asked for, so the OVER-FETCH below can tell a full
     // last page from a full page with more behind it. Kept in one place: a
     // second spelling of the default would make the pager offer a page that is
     // not there, or hide one that is.
-    const size = query.limit ? opsLogPageSize.parse(query.limit) : OPS_LOG_PAGE_DEFAULT;
+    // `=== undefined`, like every filter below it. `?limit=` is an empty
+    // string and was falsy, so it answered 200 with the default page while
+    // `?limit=0`, `?limit=-1` and `?limit=many` were all 400 — the same
+    // parameter on the same call, an empty value treated as unsent. It is the
+    // sixth sibling of the five corrected a round earlier, and the
+    // `notifications` reader below already spelled it this way.
+    const size =
+      query.limit === undefined ? OPS_LOG_PAGE_DEFAULT : opsLogPageSize.parse(query.limit);
     const found = await this.container.opsLogService.list(scope, actor, {
       // ONE MORE than the caller wants. `found.length === size` cannot
       // distinguish "exactly a page" from "a page and more"; asking for
@@ -333,9 +342,10 @@ export class ControlController {
   @Get('notifications')
   async notifications(
     @Req() request: FastifyRequest,
-    @Query() query: Record<string, string | undefined>,
+    @Query() raw: Record<string, unknown>,
   ): Promise<NotificationListResponse> {
     const { scope, actor } = await this.authenticate(request);
+    const query = singleValued(raw);
     // Parsed, not coerced-then-clamped. `Number('abc')` is NaN, and the
     // service's `Math.min(Math.max(NaN, 1), 200)` is still NaN, which reached
     // the SQL LIMIT and came back as an internal error instead of a bad

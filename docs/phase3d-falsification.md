@@ -2608,7 +2608,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 240 citations were checked; this record declares 264 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 264 citations were checked; this record declares 269 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -3529,3 +3529,98 @@ carrying AD7's revert. It was found by `git status` and the residue grep the
 project rules require before any commit that follows agent work — which is
 exactly the scenario that rule was written for, and the first time on this
 branch it has actually fired.
+
+## A repeated query parameter was a 500, in the line rewritten to stop 500s
+
+`@Query()` was typed `Record<string, string | undefined>` in both list
+controllers, and that was a lie. Fastify's default parser yields an ARRAY when
+a key repeats, so `?severity=ERROR&severity=WARN` handed
+`query.severity.split(',')` an array; the `TypeError` is not a `NexaError`, a
+`ZodError` or an `HttpException`, so the error filter answered
+`500 internal.unhandled`. Measured against the adapter this application
+constructs, on fastify 5.12.1:
+
+```
+{"severity":["ERROR","WARN"],"code":"a","limit":""}
+```
+
+The expression that threw is the one the previous round rewrote to stop
+`new Date('')` reaching the driver. Every other parameter survived the same
+input only because it happened to reach a zod schema before anything called a
+string method on it — luck, not a rule, and `severity` was the single site
+where the luck ran out.
+
+The type is honest now and `singleValued` is the only way from it to the record
+the handlers want. It is shared, so `/panels` goes through it too: nothing there
+calls a string method, so its schema already refused the array, and leaving that
+one on the lie is exactly how the previous round's defect happened.
+
+## The sixth sibling
+
+`?limit=` is an empty string and was falsy, so `GET /ops-log` answered 200 with
+the default page while `?limit=0`, `?limit=-1` and `?limit=many` were all 400 —
+the same parameter on the same call, an empty value silently treated as unsent.
+It is the sixth sibling of the five corrected in the round before, twenty lines
+above the comment naming that defect class, and the `notifications` reader
+below it already spelled it `=== undefined`.
+
+## The fix for the last round's defect introduced this one
+
+The Enter handler added to the preview sample fields called `runPreview`
+directly, while the Preview button beside it carries
+`disabled={preview.isPending}`. So Enter twice started two preview mutations at
+once. react-query drops the older one's RESULT and still runs its `onSuccess`,
+and `onSuccess` is what records `previewedInput` — so a late first response
+marks the displayed second render as current for an input it was not rendered
+from. That is "a preview that is not of the thing you are looking at", which is
+the one confusion the staleness marker exists to end, reintroduced by the fix
+for a different defect in the same file, in the same commit.
+
+## Half of a two-part rule had no test, and could not have had that one
+
+The Enter handler is two rules: it previews, and `preventDefault` is what stops
+the save. `AD7` mutated only the handler as a whole, which the preview
+assertion kills; deleting `event.preventDefault()` alone survived the entire
+gate. The test named for it — "previews on Enter in a sample field, and does
+not save" — cannot detect that, because **jsdom does not implement implicit
+form submission at all**, so its no-save assertion is true in that fixture
+whatever the production code does.
+
+It matters most in the case the `submitter` backstop does NOT cover: when Save
+is rendered, implicit submission clicks it, `submitter` is a legitimate element
+and the guard passes. Cancelling the keystroke is the only thing between Enter
+in a sample box and an unasked-for save. The assertion is now the cancellation
+itself, on a real event object, plus a non-Enter key that must NOT be cancelled
+so the handler is a rule rather than a blanket swallow.
+
+## An assertion of this round's own that could not fail
+
+The repeated-parameter test first asserted a 400 from `/panels`. Measured by
+removing the panels guard and re-running: 36 of 36 still green, because
+`panelListQuerySchema` refuses the array by itself. A status assertion there is
+satisfied by the luck the guard exists to replace. It asserts the error CODE
+and message now — that the refusal is the guard's, uniformly, rather than
+whichever validator the value reached first — and that mutation kills it.
+
+## The mutations
+
+| #   | rule                                         | mutation                                   | tests that die                                                                              |
+| --- | -------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| AE1 | a repeated query parameter is refused        | make the `singleValued` check never fire   | `web-admin-v2.test.ts` › refuses a repeated query parameter instead of throwing on it       |
+| AE2 | `/panels` uses the SAME guard                | cast the raw record instead of guarding it | `web-admin-v2.test.ts` › refuses a repeated query parameter instead of throwing on it       |
+| AE3 | `limit` is present-or-absent                 | back to `query.limit ? … : DEFAULT`        | `web-admin-v2.test.ts` › refuses an empty limit rather than answering with the default page |
+| AE4 | Enter in a sample field is cancelled         | drop `event.preventDefault()`              | `editor-rules.test.tsx` › cancels the Enter key, which is what stops the save               |
+| AE5 | the keyboard path respects the pending guard | drop `if (preview.isPending) return;`      | `editor-rules.test.tsx` › does not start a second preview while one is in flight            |
+
+Each applied alone with an anchor assertion that fails the run if the edit does
+not land, and reverted; every touched file verified byte-identical by sha256
+after each.
+
+`U99` was re-stated from an ASSUMPTION before it was measured. Its row quotes
+the pair the checker prints when this round's own mutation table is fenced, and
+the probe that produces it anchored on the FIRST such table in the file — which
+is a previous round's, now that there are several. Run as written it printed
+`245 / 269`, not the `264 / 269` already in the row. The probe takes the LAST
+table now and the measured pair is the one recorded. The number happened to be
+right; it was written before anything checked it, which is the order of
+operations this record has a standing note about.
