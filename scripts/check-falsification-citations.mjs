@@ -63,7 +63,7 @@ const RECORDS = ['docs/phase3d-falsification.md', 'docs/backup-falsification.md'
  * have to be a map, and a map is a place for a record to be added with no entry
  * and checked against nothing — which is this script's own failure mode.
  */
-const EXPECTED = 433;
+const EXPECTED = 436;
 /**
  * A table whose last column is one of these is making citations.
  *

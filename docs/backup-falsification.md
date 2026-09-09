@@ -88,6 +88,44 @@ defence in depth behind a rule that IS tested.
 | B31 | `pg_restore --exit-on-error` during verification                                  | The sabotaged archive fails at the header, so `pg_restore` exits non-zero with or without the flag; a partially-restorable dump is what would separate them, and constructing one reliably is not something this suite can do | Kept: the tested backstop is the table count, which is what actually makes "restored nothing" a failure         |
 | B29 | Verification decrypts to a second path, not over the dump                         | The decrypted bytes are compared against a checksum taken before encryption, so a wrong decrypt is caught wherever it lands                                                                                                   | Kept as hygiene, and the comment claiming it prevented a tautological verification was CORRECTED — it did not   |
 
+## The operator's commands, added after the audit found no test for them
+
+These rows exist because the commit that added the CLI cited seven manually-run
+command outcomes in its message and committed no test — the exact thing
+`CLAUDE.md` forbids. Writing them exposed two real defects rather than just
+filling a gap, both fixed in the same commit: the argument requirements were
+checked after the container was built, so a missing `--target` needed a database
+connection to be refused; and `verify` called `loadConfig()`, so the one command
+meant to work when the database is broken demanded a `DATABASE_URL` it never
+uses.
+
+| #   | Rule                                                                      | Mutation                                               | Named test                                                                                | Result |
+| --- | ------------------------------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------- | ------ |
+| B34 | A restore with no `--target` is refused, and says why there is no default | the guard → `if (false)`                               | `backup-cli.test.ts` › refuses a restore with no target, and says why there is no default | KILLED |
+| B35 | A restore or a verify with no `--archive` is refused                      | the guard → `if (false)`                               | `backup-cli.test.ts` › refuses a restore or a verify with no archive                      | KILLED |
+| B36 | A flag whose value is another flag is refused                             | drop the `next.startsWith('--')` half of the predicate | `backup-cli.test.ts` › refuses a flag whose value is another flag                         | KILLED |
+
+## The harness ate an uncommitted refactor, and now refuses to
+
+Recorded because it is the sharpest lesson of this phase and it is about the
+tooling rather than the product.
+
+`scripts/falsify.sh` restores with `git checkout --`, which restores the file
+**as committed**. Run against a file with uncommitted edits, it therefore
+deletes them — silently, and while reporting KILLED. It did exactly that to an
+unfinished refactor of `backup.cli.ts` mid-session, and the only reason it was
+noticed is that a later `grep` found the old code back where the new code had
+been.
+
+A harness whose failure mode is deleting the author's work has to refuse rather
+than warn, so it now checks `git diff` and `git ls-files` on the target before
+mutating anything and exits `SETUP-FAILED` on a dirty or untracked file. Proven
+by appending a line to a tracked source file and watching the run refuse:
+
+```
+GUARD  SETUP-FAILED: apps/api/src/backup.cli.ts has uncommitted changes; commit or stash them first
+```
+
 ## Method notes
 
 Two lessons, both earned here.
