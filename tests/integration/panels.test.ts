@@ -1119,6 +1119,31 @@ describe('panels', () => {
     expect(after.health).toBeNull();
   });
 
+  it('reports the capability refusal ahead of a missing credential', async () => {
+    /*
+     * The gate's PLACEMENT, which is a rule of its own: before the credential
+     * read and before the URL check.
+     *
+     * This panel is wrong in two ways at once — no credential, and an adapter
+     * that does not health-check — and only one of them is worth telling the
+     * operator, because setting a credential would change nothing. The cheapest
+     * refusal that cannot be fixed wins; the other two depend on stored state and
+     * this depends on code.
+     *
+     * Without this case the ordering is unpinned: `CREDENTIALS_MISSING` is a
+     * perfectly plausible answer here and the gate could drift below the
+     * credential read with every other test still green.
+     */
+    const { view } = await create(owner, tenantA);
+    await expect(
+      probeWith(
+        view.panel.id,
+        { ok: true, providerVersion: '1.0.0', degraded: false },
+        { supports: () => false },
+      ),
+    ).rejects.toMatchObject({ code: 'panel.capability_unsupported' });
+  });
+
   it('records a probe outcome as health without carrying anything from the panel', async () => {
     const { view } = await create(owner, tenantA, {
       credentials: { username: USERNAME, password: PASSWORD },
