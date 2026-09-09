@@ -520,3 +520,36 @@ Falsified in `docs/phase3d-falsification.md`, round 45: emitting from both
 (AV1) fails the pins as a duplicate, removing the surviving emission (AV2)
 fails them as a missing event, removing the audit write (AV3) fails them as a
 missing audit row.
+
+## OQ-3D-04 — an operational-log outage on the pre-transaction path leaves no audit row
+
+**Status: UNRESOLVED — OPEN, NOT MERGE-BLOCKING. Recorded in round 49 rather
+than decided on a guess.**
+
+Round 48 wrote "both recorders write the audit row first, so an operational
+log that is down costs the event and never the audit row". True of the two
+after-the-fact recorders, and only of them. On the PRE-transaction path — the
+eight early routes, templates' two, and identity's three pre-lock checks,
+which is the path an ordinary unauthorized request actually hits — the GUARD
+writes the event before it has decided to throw the denial. If that write
+fails, `check` rejects with the write's error, no `PERMISSION_DENIED` ever
+exists, and the recorders (which audit only THIS permission's refusal) write
+nothing. The caller sees the outage, not a 403, and the attempt leaves no
+audit row.
+
+Pinned as it is, so the limit is stated by a test rather than a sentence:
+`tests/unit/authorization.test.ts` › PRE-transaction with the operational log
+down: the guard fails before any denial exists.
+
+**Why it is not changed here.** The structural fix is for the guard to catch
+its own write failure, mark the error `recorded: false`, and throw the
+denial — the recorders would then write the audit row first and re-attempt
+the event, whose failure would propagate as it does today. That also changes
+what a VIEW check does during an outage: `list` and `get` have no recorder
+behind them, so their denial would become a quiet 403 with no event, where
+today the outage is loud. Whether a refusal during an outage should be a
+quiet 403 or a loud error is an operator-facing decision, not one to take
+inside a Web Admin branch.
+
+**Trigger to revisit:** the first operational-log outage in production, or
+the phase that gives the guard a logger of its own.

@@ -301,6 +301,72 @@ describe('fresh transactional authorization', () => {
     ).toEqual(['access.permission_denied']);
   }, 30_000);
 
+  it('records a TEMPLATES early refusal as one audit row and one event, and a non-denial as nothing', async () => {
+    // Templates was the last early check on an inline recorder, and its
+    // `catch (denial)` wrote a DENIED row for ANY throw — the operational log
+    // being down, a missing tenant context — a false statement in the one
+    // ledger that must not contain one. It shares the recorder now (round
+    // 49): this permission's refusal is one row and one event, exactly, and
+    // an error that is not a denial leaves no DENIED row at all.
+    const support = await createAdmin(ctx.container, tenantA, {
+      username: 'denied_templates',
+      roleKeys: ['support'],
+    });
+    const deniedRows = async () =>
+      (
+        await ctx.container.database.db
+          .select()
+          .from(auditLogs)
+          .where(and(eq(auditLogs.action, 'templates.set'), eq(auditLogs.actorId, support.id)))
+      ).filter((row) => row.result === 'DENIED');
+    const denialEvents = async () =>
+      (
+        await ctx.container.database.db
+          .select()
+          .from(operationalEvents)
+          .where(eq(operationalEvents.code, 'access.permission_denied'))
+      ).length;
+    const command = (idempotencyKey: string) => ({
+      key: 'ops.notification.operational_event',
+      body: '{severity} — {code}\n{message}',
+      expectedVersion: null,
+      expectedRevision: null,
+      idempotencyKey,
+    });
+
+    await expect(
+      ctx.container.templatesService.set(
+        tenantA,
+        adminActorFor(support),
+        command('templates-early-denial'),
+      ),
+    ).rejects.toMatchObject({ code: 'platform.permission_denied' });
+    expect(await deniedRows(), 'ONE early refusal, ONE audit row').toHaveLength(1);
+    expect(await denialEvents(), 'ONE early refusal, ONE event').toBe(1);
+
+    // Not a denial: the guard itself fails. Nothing may be audited as DENIED.
+    const guard = ctx.container.guard as unknown as {
+      check: (...args: unknown[]) => Promise<void>;
+    };
+    const realCheck = guard.check;
+    guard.check = async () => {
+      throw new Error('the operational log is down');
+    };
+    try {
+      await expect(
+        ctx.container.templatesService.set(
+          tenantA,
+          adminActorFor(support),
+          command('templates-outage'),
+        ),
+      ).rejects.toThrow('the operational log is down');
+    } finally {
+      guard.check = realCheck;
+    }
+    expect(await deniedRows(), 'an outage is not a denial').toHaveLength(1);
+    expect(await denialEvents()).toBe(1);
+  }, 30_000);
+
   it('treats an EXPIRED session as dead, not only a revoked one', async () => {
     /*
      * `isLive` has two halves and only one was tested.

@@ -279,8 +279,10 @@ describe('one denial is one event and one audit row', () => {
     // recorder that swallowed it would hide an outage behind a clean 403.
     const { guard: g } = guard();
     const audit = new RecordingAudit();
+    let auditRowsWhenTheEventWasWritten = -1;
     const down: OperationalEventRecorder = {
       record: async () => {
+        auditRowsWhenTheEventWasWritten = audit.entries.length;
         throw new Error('the operational log is down');
       },
     };
@@ -297,6 +299,65 @@ describe('one denial is one event and one audit row', () => {
     ).rejects.toThrow('the operational log is down');
     expect(audit.entries, 'the audit row must be written before the event').toHaveLength(1);
     expect(audit.entries[0]?.result).toBe('DENIED');
+    // ORDER, not survival: the count captured at the moment the event write
+    // ran. A concurrent pair (`Promise.all`) leaves the row in place and
+    // still fails here.
+    expect(
+      auditRowsWhenTheEventWasWritten,
+      'the audit row was not there yet when the event was written',
+    ).toBe(1);
+  });
+
+  it('an audit failure costs the event, and is what the caller sees', async () => {
+    // The symmetric loss, stated by a test rather than implied: audit first
+    // means an audit writer that is down stops the recorder before the event.
+    // Accepted, because the alternative is an event describing a refusal the
+    // audit log does not contain.
+    const { guard: g, opsLog } = guard();
+    const audit: AuditWriter = {
+      record: async () => {
+        throw new Error('the audit log is down');
+      },
+    };
+    const error = await refusedBy(g, { inside: 'a transaction' });
+    await expect(
+      recordMutationDenial({ guard: g, opsLog, audit }, scope, webAdmin, PERMISSION, denial, error),
+    ).rejects.toThrow('the audit log is down');
+    expect(opsLog.events, 'no event for a refusal the audit log does not hold').toHaveLength(0);
+  });
+
+  it('PRE-transaction with the operational log down: the guard fails before any denial exists', async () => {
+    // The limit of audit-first, stated rather than implied. On the
+    // pre-transaction path the GUARD writes the event, before it has decided
+    // to throw the denial, so an operational log that is down surfaces as
+    // the write's error — not as a 403 — and the recorder never sees a denial
+    // to audit. Loud, and truthful about the outage; but the attempt leaves
+    // no audit row. Recorded as OQ-3D-04; changing it is a decision about
+    // whether a refusal during an outage should be a quiet 403.
+    const down: OperationalEventRecorder = {
+      record: async () => {
+        throw new Error('the operational log is down');
+      },
+    };
+    const g = new PermissionGuard(new GrantsNothingResolver(), down);
+    const audit = new RecordingAudit();
+    let caught: unknown;
+    try {
+      await g.check(scope, webAdmin, PERMISSION);
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as Error).message).toBe('the operational log is down');
+    expect(denialEventRecorded(caught), 'not a denial, so not marked').toBe(false);
+    await recordMutationDenial(
+      { guard: g, opsLog: down, audit },
+      scope,
+      webAdmin,
+      PERMISSION,
+      denial,
+      caught,
+    );
+    expect(audit.entries, 'no denial was thrown, so nothing is audited').toHaveLength(0);
   });
 
   it('writes no audit row for a refusal that is not THIS permission', async () => {

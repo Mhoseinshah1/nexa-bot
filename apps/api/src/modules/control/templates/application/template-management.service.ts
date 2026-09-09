@@ -25,7 +25,10 @@ import {
 
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
-import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
+import {
+  recordMutationDenial,
+  runAuthorizedMutation,
+} from '../../../platform/access/application/authorized-mutation.js';
 import type { FeatureFlagResolver } from '../../features/application/feature-flags.service.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -605,14 +608,20 @@ export class TemplateManagementService {
     try {
       await this.guard.check(scope, actor, TEMPLATES_EDIT);
     } catch (denial) {
-      await this.audit.record(scope, actor, {
-        action,
-        entityType: 'Template',
-        entityId: null,
-        before: null,
-        after: null,
-        result: 'DENIED',
-      });
+      // The recorder shared by every other early check. The inline version
+      // this replaces wrote a DENIED row for ANY throw — an operational log
+      // that was down, a missing tenant context — which is a false statement
+      // in the one ledger that must not contain one. The recorder writes the
+      // row only for THIS permission's refusal, and the event only when the
+      // guard could not (OQ-3D-03).
+      await recordMutationDenial(
+        { guard: this.guard, audit: this.audit, opsLog: this.opsLog },
+        scope,
+        actor,
+        TEMPLATES_EDIT,
+        { action, entityType: 'Template', entityId: null },
+        denial,
+      );
       throw denial;
     }
     return parse();

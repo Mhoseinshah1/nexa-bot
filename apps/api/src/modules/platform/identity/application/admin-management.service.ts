@@ -936,8 +936,9 @@ export class AdminManagementService {
    * legacy system had.
    *
    * Only the audit row is written here. The guard already records the
-   * operational event for a check made outside a transaction; `runLockedMutation`
-   * records it itself because the in-lock check deliberately does not.
+   * operational event for a check made outside a transaction;
+   * `runLockedMutation` records it when the guard reports it did not
+   * (`denialEventRecorded`), which for an in-lock check is always.
    */
   private async assertMayAttempt(
     scope: ScopeContext,
