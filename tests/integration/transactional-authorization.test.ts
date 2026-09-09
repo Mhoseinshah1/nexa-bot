@@ -112,6 +112,36 @@ describe('fresh transactional authorization', () => {
     db().select().from(outboxMessages).where(eq(outboxMessages.eventType, eventType));
 
   /**
+   * ONE operational event for an in-transaction refusal, WARN, naming what
+   * the audit row names and who was refused. On this path the shared
+   * recorder is the only emitter, and its event's CONTENT was pinned by
+   * nothing until round 50 — and by round 50 only in the parametrised
+   * cases; the two literal barrier tests below use it since round 51.
+   */
+  const expectOneWarnDenialEvent = async (
+    label: string,
+    deniedRow: { after: unknown } | undefined,
+  ) => {
+    const events = await db()
+      .select()
+      .from(operationalEvents)
+      .where(eq(operationalEvents.code, 'access.permission_denied'));
+    expect(
+      events.map((event) => event.severity),
+      `${label}: ONE in-transaction refusal, ONE WARN event`,
+    ).toEqual(['WARN']);
+    const context = events[0]?.context as Record<string, unknown> | null;
+    const deniedPermission = (deniedRow?.after as Record<string, unknown> | null)?.[
+      'deniedPermission'
+    ];
+    expect(deniedPermission, `${label}: the audit row names the refused permission`).toBeTypeOf(
+      'string',
+    );
+    expect(context?.['permission']).toBe(deniedPermission);
+    expect(context?.['actorId']).toBe(adminA.id);
+  };
+
+  /**
    * One case per protected control-plane mutation.
    *
    * `mutate` is started but NOT awaited: it must reach the barrier before the
@@ -229,22 +259,8 @@ describe('fresh transactional authorization', () => {
       expect(denied.length, 'the denial left no audit evidence').toBeGreaterThan(0);
 
       // 11. ONE operational event for it, WARN, naming what the audit row
-      //     names and who was refused. On this path the shared recorder is
-      //     the only emitter, and its event's CONTENT was pinned by nothing
-      //     until round 50.
-      const events = await db()
-        .select()
-        .from(operationalEvents)
-        .where(eq(operationalEvents.code, 'access.permission_denied'));
-      expect(
-        events.map((event) => event.severity),
-        `${testCase.name}: ONE in-transaction refusal, ONE WARN event`,
-      ).toEqual(['WARN']);
-      const context = events[0]?.context as Record<string, unknown> | null;
-      expect(context?.['permission']).toBe(
-        (denied[0]?.after as Record<string, unknown> | null)?.['deniedPermission'],
-      );
-      expect(context?.['actorId']).toBe(adminA.id);
+      //     names and who was refused.
+      await expectOneWarnDenialEvent(testCase.name, denied[0]);
     }, 30_000);
   }
 
@@ -530,10 +546,9 @@ describe('fresh transactional authorization', () => {
       audits.filter((row) => row.result === 'SUCCESS'),
       'a SUCCESS audit row was committed for a denied test send',
     ).toEqual([]);
-    expect(
-      audits.filter((row) => row.result === 'DENIED').length,
-      'the denial left no audit evidence',
-    ).toBeGreaterThan(0);
+    const denied = audits.filter((row) => row.result === 'DENIED');
+    expect(denied.length, 'the denial left no audit evidence').toBeGreaterThan(0);
+    await expectOneWarnDenialEvent('notifications.test', denied[0]);
   }, 30_000);
 
   /**
@@ -592,9 +607,8 @@ describe('fresh transactional authorization', () => {
       await outboxRows('TemplateOverrideReverted'),
       'a domain event was committed for a denied revert',
     ).toEqual([]);
-    expect(
-      audits.filter((row) => row.result === 'DENIED').length,
-      'the denial left no audit evidence',
-    ).toBeGreaterThan(0);
+    const denied = audits.filter((row) => row.result === 'DENIED');
+    expect(denied.length, 'the denial left no audit evidence').toBeGreaterThan(0);
+    await expectOneWarnDenialEvent('templates.revert', denied[0]);
   }, 30_000);
 });

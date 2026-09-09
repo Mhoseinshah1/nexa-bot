@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 353 citations were checked; this record declares 361 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 361 citations were checked; this record declares 364 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -5541,6 +5541,51 @@ features and templates). BA2 — 1/16 and 3/9 (`expected 'panels.view' to be
 null to be '<the actor's id>'`). BA4 — 1/9 (`expected { …(18) } to match
 object { entityType: 'Template', …(1) }`). BA5 — 1/9 (`expected ZodError …` —
 the malformed body was parsed before the actor was refused).
+
+## Round 51 — the thirty-second reviewer, and "every case" was three of five
+
+Three confirmed findings, all sentences; no behaviour defect and no rule
+without a discriminating test.
+
+### The event pin was in the parametrised barrier test and not the literal ones
+
+Round 50 wrote "pinned … in every revocation-barrier case". The file has five
+barrier tests: three generated from `CASES` and two written out —
+`notifications.test` and `templates.revert` — which kept an audit floor and
+said nothing about the event. Deleting the shared recorder's event write
+left those two green. One helper now (`expectOneWarnDenialEvent`), used by
+all five, and the same mutation fails all five.
+
+### A comment one module wide, in the file round 50 had just used as the example
+
+Templates' early check said "the recorder shared by every other early
+check"; identity's `assertMayAttempt` is an early check that audits inline.
+Round 50 corrected exactly this over-width in the three sibling comments and
+left the templates one. Corrected; and the siblings' parenthetical now says
+what identity does (audits inline; the guard writes that event) rather than
+what it does not.
+
+### "Every pre-transaction denial was recorded twice"
+
+ADR-0014's addendum, introduced in round 45, said so; it was true of the
+four early checks on the shared recorder and false of identity's and
+templates', which were one and one — round 45's own commit message said
+that. Scoped in the ADR and in OQ-3D-03, whose pinned list now also names
+the round 49–51 pins.
+
+## The mutations
+
+`authorized-mutation.ts` `77795cdc066015a3`, restored after the row. Suite:
+`transactional-authorization.test.ts` (9).
+
+| #   | rule                                                                 | mutation                        | tests that die                                                                                                                                                                                                                                                                |
+| --- | -------------------------------------------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| BB1 | every barrier case leaves ONE WARN event — the literal ones included | the shared recorder never emits | `transactional-authorization.test.ts` › refuses ${testCase.name} when authority is revoked before the transaction; › refuses notifications.test when authority is revoked before the transaction; › refuses templates.revert when authority is revoked before the transaction |
+
+Measured: 5/9 — `settings.set: ONE in-transaction refusal, ONE WARN event:
+expected [] to deeply equal [ 'WARN' ]`, and the same for `features.set`,
+`templates.set`, `notifications.test` and `templates.revert`. Before this
+round the same mutation left the last two green.
 
 ## The microsecond truncation is still open, deliberately
 

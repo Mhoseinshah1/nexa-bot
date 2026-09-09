@@ -454,8 +454,8 @@ INSIDE one endpoint, by parameter.
 `access.permission_denied` event and ONE `DENIED` audit row, on both paths,
 and the counts are pinned exactly.
 
-**What it was.** Every refusal on a non-transactional guard call wrote
-`access.permission_denied` **twice**: `permission-guard.ts` recorded it whenever
+**What it was.** Every refusal on a non-transactional guard call that went
+through the shared recorder wrote `access.permission_denied` **twice**: `permission-guard.ts` recorded it whenever
 no transaction was passed, and `recordMutationDenial` recorded it again for the
 same attempt. `PanelService.authorize` and the other early checks — settings,
 features, notifications — pass no transaction, so both fired: measured at two
@@ -515,7 +515,15 @@ next site would forget, and a field in `details`, which is serialised into the
   (rounds 47 and 48).
 - `tests/unit/authorization.test.ts` › writes the audit row before the event,
   so a failing event write cannot cost it — the shared recorder's order
-  (round 48).
+  (round 48); › an audit failure costs the event, and is what the caller sees
+  (round 49); › IN-transaction: the guard writes nothing, the recorder writes
+  the event and the audit row — WARN, this permission, this actor (round 50).
+- `tests/integration/transactional-authorization.test.ts` › records a
+  TEMPLATES early refusal as one audit row and one event, and a non-denial as
+  nothing — templates on the shared recorder, authorized before parsed
+  (rounds 49–50); and every revocation-barrier case, parametrised and
+  literal, asserts one WARN event naming what the audit row names
+  (rounds 50–51).
 
 Falsified in `docs/phase3d-falsification.md`, round 45: emitting from both
 (AV1) fails the pins as a duplicate, removing the surviving emission (AV2)
