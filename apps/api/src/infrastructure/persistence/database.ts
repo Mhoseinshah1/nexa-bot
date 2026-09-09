@@ -101,10 +101,28 @@ export interface DatabaseTimeouts {
   readonly idleInTransactionTimeoutMs: number;
 }
 
+/**
+ * What to do when a pooled connection dies on its own.
+ *
+ * **Attaching this is not optional**, and the reason is that `pg` turns an
+ * unhandled `'error'` event into an UNCAUGHT EXCEPTION. `EventEmitter` throws for
+ * an unlistened `'error'`, so the process dies — past every `try`/`catch`, past
+ * the shutdown hooks, past the lease release.
+ *
+ * The triggers are ordinary operations, not exotic ones: an operator running
+ * `pg_terminate_backend`, a PostgreSQL restart or package upgrade, a failover, an
+ * OOM-killed backend. Every one of them used to take down the API, the worker and
+ * the monitor rather than leaving them to report NOT READY and reconnect — which
+ * readiness already does, correctly, for a database it cannot reach. `createDatabase`
+ * attaches this in both places `pg` can deliver such an error; see there.
+ */
+export type PoolErrorListener = (error: Error) => void;
+
 export function createDatabase(
   connectionString: string,
   poolMax: number,
   timeouts?: DatabaseTimeouts,
+  onPoolError?: PoolErrorListener,
 ): DatabaseHandle {
   applyPgTypeParsers();
 
@@ -122,6 +140,47 @@ export function createDatabase(
           ].join(' '),
         }
       : {}),
+  });
+  const report =
+    onPoolError ??
+    ((error: Error) => {
+      // The default writes one line to stderr: the short-lived CLIs that build a
+      // handle of their own have no logger, and a connection death that printed
+      // nothing would leave an operator reading "the migration just stopped".
+      process.stderr.write(
+        `a pooled PostgreSQL connection was closed by the server: ${error.message}\n`,
+      );
+    });
+
+  /*
+   * TWO listeners, because a terminated backend is delivered to two different
+   * places depending on whether its client was in use — and only one of them was
+   * covered by the obvious fix.
+   *
+   * An IDLE client: `pg-pool` holds its own `'error'` listener, which removes the
+   * client and re-emits on the pool. So the pool needs a listener.
+   *
+   * A CHECKED-OUT client: `pg-pool` removes that listener for the duration of the
+   * checkout, so between acquire and release the client has NO error listener of
+   * its own — and `Connection terminated unexpectedly` arrives in that window,
+   * before the transaction's `finally` gets to release. So the CLIENT needs a
+   * listener, for its whole life, attached on `connect` before it is ever handed
+   * out.
+   *
+   * Measured, against a real PostgreSQL 16, with `pg_terminate_backend` from a
+   * second connection: with neither, both cases exit the process
+   * (`UNCAUGHT: terminating connection due to administrator command` idle,
+   * `UNCAUGHT: Connection terminated unexpectedly` in a transaction). With only
+   * the pool listener the idle case survives and the in-transaction case still
+   * exits. With both, both survive, the in-flight query rejects, the transaction
+   * rolls back because it never committed, and the next checkout reconnects.
+   *
+   * Neither retries or reconnects: the pool has already discarded the broken
+   * client. The one thing they must not be is silent.
+   */
+  pool.on('error', report);
+  pool.on('connect', (client) => {
+    client.on('error', report);
   });
   const db = drizzle(pool, { schema });
 

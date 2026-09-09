@@ -298,11 +298,25 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const cipher = new AesGcmSecretCipher(keyring, acceptsV1(config, keyring));
   const translator = createTranslator();
 
-  const database = createDatabase(config.DATABASE_URL, config.DATABASE_POOL_MAX, {
-    statementTimeoutMs: config.DATABASE_STATEMENT_TIMEOUT_MS,
-    lockTimeoutMs: config.DATABASE_LOCK_TIMEOUT_MS,
-    idleInTransactionTimeoutMs: config.DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS,
-  });
+  const database = createDatabase(
+    config.DATABASE_URL,
+    config.DATABASE_POOL_MAX,
+    {
+      statementTimeoutMs: config.DATABASE_STATEMENT_TIMEOUT_MS,
+      lockTimeoutMs: config.DATABASE_LOCK_TIMEOUT_MS,
+      idleInTransactionTimeoutMs: config.DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS,
+    },
+    // Through the process logger rather than the default stderr line, so a
+    // connection death is one structured record beside everything else this
+    // process says. See `PoolErrorListener`: without a listener at all, `pg`
+    // turns this into an uncaught exception and the process dies.
+    (error) => {
+      logger.error(
+        { err: error.message },
+        'a pooled PostgreSQL connection was closed by the server',
+      );
+    },
+  );
   const redis = createRedis(config.REDIS_URL);
 
   const uow = new DrizzleUnitOfWork(database.db);
