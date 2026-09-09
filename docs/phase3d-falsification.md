@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 313 citations were checked; this record declares 314 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 314 citations were checked; this record declares 328 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -5066,6 +5066,115 @@ deliberately no mutation row for `mentionsOwnerRole` this round, because there
 is deliberately no `mentionsOwnerRole`: the rule it encoded was not the
 system's rule, and the right record of that is an open question, not a test
 pinning a guess.
+
+## Round 45 — not a reviewer round: the owner closed OQ-3D-03
+
+One instruction rather than a review: a single denied panel mutation must not
+write `access.permission_denied` twice, the fix must be structural rather than
+route-by-route, the tests must be exact single-request deltas pinned
+separately for the audit row and the event, and the pre-authorization guesses
+reverted in round 44 must stay reverted. OQ-3D-02 was to be classified, not
+redesigned.
+
+### The denial path, traced once
+
+`PermissionGuard.check` records the event when no transaction is passed and
+deliberately not otherwise (a second pool connection while holding one
+deadlocks the process at pool exhaustion). `recordMutationDenial` recorded it
+again, unconditionally. Its callers:
+
+- PRE-transaction, `tx` undefined, so the guard had ALREADY written it:
+  `PanelService.authorize` (create, update, credentials, status, test — all
+  five panel writes), `SettingsService.set`, `FeatureFlagsService.set`,
+  `NotificationService.test`. Two events each. Panels was the one measured,
+  and the cause was never panels.
+- IN-transaction, so the guard wrote nothing and the recorder was the only
+  emitter: `runAuthorizedMutation`, and the panel monitor's
+  `uow.run((tx) => guard.check(…, tx))`. One event each; correct, and
+  unchanged.
+- Not through the recorder at all: identity's `assertMayAttempt` (audit row
+  only, the guard's event alongside — one and one already) and templates'
+  `authorizedCommand` (audit row only).
+
+### One authority
+
+The guard marks the error it throws with whether it wrote the event — a
+non-enumerable symbol property, `denialEventRecorded(error)`, that `details`
+serialisation cannot reach — and `recordMutationDenial` writes the event only
+when the guard says it could not. The audit row is the recorder's,
+unconditionally, as before. No caller changed. The two rejected shapes were a
+parameter through every caller (the route-by-route dedupe the instruction
+ruled out, and the next site forgets it) and a field in `details` (which is
+the 403 body).
+
+### The floors this replaces
+
+Round 43 had already found that a floor cannot see two recorders. This round
+found the same floor in two more places: `transactional-authorization.test.ts`
+asserted `events.some(code includes 'denied')` for settings' early refusal,
+and `admin-http.test.ts` asserted `> 0` and `bad === good` — both requests
+doubled alike, so equality held. All four pins are exact now, one and one, for
+ONE request: five panel routes malformed and well-formed, settings, identity,
+and both branches of the guard's decision at the unit level.
+
+Round 43 wrote "the counts are exact now, two and one" and round 44 corrected
+that sentence to the pre-transaction path only. Both were true of the code at
+the time; neither is true now, and neither is rewritten. The panels-http
+docblock that said two-and-one is the one place the old number was corrected
+in place, because that is where the next reader looks.
+
+### OQ-3D-02, classified
+
+Open and not merge-blocking. Every remaining case answers `400` before the
+guard, discloses nothing and changes no state, so it does not weaken
+authorization; and every remaining case needs either the parse moved inside
+the lock of two identity mutations or a permission that only the parsed body
+can name — the one attempt to guess that permission from the raw body is what
+round 44 reverted. Not redesigned.
+
+## The mutations
+
+Every mutation restored byte-identical (`sha256` prefix checked before and
+after: `authorized-mutation.ts` `df3bb6b970d8ad72`, `permission-guard.ts`
+`cd953ba929b5f3fe`, `admin-management.service.ts` `efa681dbe11fe485`).
+
+| #   | rule                                                             | mutation                                       | tests that die                                                                                                                                                                                                                                                                                                                                                                      |
+| --- | ---------------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AV1 | the recorder emits ONLY when the guard could not                 | emit unconditionally (the round-43 code)       | `authorization.test.ts` › PRE-transaction: the guard writes the event, the recorder writes only the audit row; `panels-http.test.ts` › records the denial even when the body is nonsense; `transactional-authorization.test.ts` › records an EARLY refusal the same way in every phase                                                                                              |
+| AV2 | the recorder is the emitter INSIDE a transaction                 | delete the recorder's `opsLog.record`          | `authorization.test.ts` › IN-transaction: the guard writes nothing, the recorder writes the event and the audit row                                                                                                                                                                                                                                                                 |
+| AV3 | the recorder writes the DENIED audit row                         | delete the recorder's `audit.record`           | `authorization.test.ts` › PRE-transaction: the guard writes the event, the recorder writes only the audit row; › IN-transaction: the guard writes nothing, the recorder writes the event and the audit row; `panels-http.test.ts` › records the denial even when the body is nonsense; `transactional-authorization.test.ts` › records an EARLY refusal the same way in every phase |
+| AV4 | identity's early refusal writes the audit row and NOT the event  | emit `denialEvent` from `assertMayAttempt` too | `admin-http.test.ts` › records the denial on create even when the body is nonsense                                                                                                                                                                                                                                                                                                  |
+| AV5 | the guard marks the error TRUTHFULLY — not when it wrote nothing | `defineProperty(…, { value: true })`           | `authorization.test.ts` › IN-transaction: the guard writes nothing, the recorder writes the event and the audit row                                                                                                                                                                                                                                                                 |
+| AV6 | — and not when it did                                            | `defineProperty(…, { value: false })`          | `authorization.test.ts` › PRE-transaction: the guard writes the event, the recorder writes only the audit row; › keeps the marker off the wire; `panels-http.test.ts` › records the denial even when the body is nonsense; `transactional-authorization.test.ts` › records an EARLY refusal the same way in every phase                                                             |
+
+Measured, per mutation, over `authorization.test.ts` (13) and the three
+integration files (72):
+
+- AV1 — unit `to have a length of 1 but got 2`; `/panels: operational events
+for ONE malformed denial: expected 2 to be 1`; `ONE early refusal must emit
+ONE operational event: expected [ 'access.permission_denied', …(1) ] to
+deeply equal [ 'access.permission_denied' ]`. 1/13 and 2/72 fail.
+- AV2 — unit `to have a length of 1 but got +0`; the integration files stay
+  72/72.
+- AV3 — both unit tests `to have a length of 1 but got +0`; `/panels: DENIED
+audit rows for ONE malformed denial: expected +0 to be 1`; `the early
+refusal left no audit evidence: expected [] to have a length of 1 but got
++0`; and the five revocation barrier tests, `the denial left no audit
+evidence`. 2/13 and 8/72 fail.
+- AV4 — `operational events for ONE malformed denial: expected 2 to be 1`;
+  unit stays 13/13, because identity does not go through the recorder, which
+  is why it has its own pin.
+- AV5 — `the guard says it did NOT record: expected true to be false`;
+  integration stays 72/72.
+- AV6 — `the guard says it recorded: expected false to be true`; the panel
+  and settings pins fail as in AV1. 2/13 and 2/72 fail.
+
+AV2 and AV5 leaving the integration suite green is the measured version of a
+sentence that would otherwise be a claim: over HTTP, no early check runs
+inside a transaction, so the branch on which the recorder is the emitter is
+reachable there only by a revocation landing between the early check and the
+lock — the barrier tests — and those assert a floor on the audit row, not the
+event. The unit pins are what hold that branch.
 
 ## The microsecond truncation is still open, deliberately
 

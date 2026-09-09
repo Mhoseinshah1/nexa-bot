@@ -1106,28 +1106,29 @@ describe('panel HTTP surface', () => {
      * that affects both sides of it — the only thing discriminating was the
      * `toBe(403)` inside the loops, which is not what the docblock said.
      *
-     * So each route is measured on its own, and against BOTH ledgers: the
-     * operational events an operator reads on the alerts page, and the DENIED
-     * audit row.
+     * So each route is measured on its own — before, ONE denied request,
+     * after — against BOTH ledgers: the operational events an operator reads
+     * on the alerts page, and the DENIED audit row.
      *
-     * The counts are EXACT, not a floor, and that is the second correction.
-     * A floor of one-of-each still could not see either operational-event
-     * recorder disappear, because there are TWO of them — `permission-guard`
-     * records when no transaction is passed, and `recordMutationDenial`
-     * records again — so removing either left one behind and the floor held.
-     * Measured: deleting `recordMutationDenial`'s `opsLog.record` left the
-     * whole integration suite green, which made it a production rule with no
-     * test anywhere.
+     * The counts are EXACT, and they are ONE and ONE. For a round they were
+     * pinned at TWO events and one audit row, because that is what a denial
+     * wrote: `permission-guard` recorded the event when no transaction was
+     * passed, and `recordMutationDenial` recorded it again. Pinning the
+     * doubled count was truthful about the code and wrong about the system —
+     * `access.permission_denied` never resolves, so an operator counting
+     * denials counted double, permanently (OQ-3D-03, now closed). The guard
+     * is the single authority now: it marks the error it throws when it wrote
+     * the event, and `recordMutationDenial` writes one only when the guard
+     * could not, which is inside a transaction.
      *
-     * Pinning 2 and 1 is deliberate and has a cost: adding a THIRD recorder
-     * fails this test, and whoever adds one should have to say so here. That
-     * the number is two rather than one is itself a defect — see OQ-3D-03.
+     * Exact on purpose. A floor cannot tell one recorder from two — that is
+     * how the duplicate survived every earlier assertion — and it cannot tell
+     * "the surviving recorder was removed" from "the duplicate was removed".
+     * `toBe(1)` fails both ways: at 0 the denial vanished, at 2 it doubled.
      *
-     * Two and one is the PRE-TRANSACTION path, which is what these five
-     * routes take. A denial raised INSIDE `runAuthorizedMutation` writes one
-     * and one, because `guard.check` is passed the transaction and suppresses
-     * its own event. Said here because the earlier wording generalised past
-     * the path it measured.
+     * This is the PRE-TRANSACTION path, which is what these five routes take.
+     * The in-transaction path is pinned at the unit level in
+     * `authorization.test.ts`, where the guard's marker can be set either way.
      */
     const auditDenials = async (): Promise<number> => {
       const rows = await api.container.database.db.execute(
@@ -1153,8 +1154,10 @@ describe('panel HTTP surface', () => {
       const bad = await measure(route, malformedBody, 'malformed');
       const good = await measure(route, wellFormed(routeName(route, id)), 'well-formed');
 
-      expect(bad.events, `${route}: operational events for a malformed body`).toBe(2);
-      expect(bad.audit, `${route}: DENIED audit rows for a malformed body`).toBe(1);
+      expect(bad.events, `${route}: operational events for ONE malformed denial`).toBe(1);
+      expect(bad.audit, `${route}: DENIED audit rows for ONE malformed denial`).toBe(1);
+      expect(good.events, `${route}: operational events for ONE well-formed denial`).toBe(1);
+      expect(good.audit, `${route}: DENIED audit rows for ONE well-formed denial`).toBe(1);
       expect(bad.events, `${route}: a malformed body suppressed the event`).toBe(good.events);
       expect(bad.audit, `${route}: a malformed body suppressed the audit row`).toBe(good.audit);
     }

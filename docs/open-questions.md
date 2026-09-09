@@ -310,7 +310,19 @@ Whoever revisits it changes the comment in `ports.ts` and the exclusion test in
 
 ## OQ-3D-02 — a malformed request refused before the guard leaves no `access.permission_denied`
 
-**Status: UNRESOLVED. Recorded rather than argued away a fourth time.**
+**Status: UNRESOLVED — OPEN, NOT MERGE-BLOCKING. Classified in round 45; recorded
+rather than argued away a fourth time.**
+
+Classified, not redesigned. Merge-blocking would need a production defect that
+weakens authorization or discloses something; this does neither — every
+remaining case is answered `400` before the guard, tells the caller nothing,
+and changes no state. Resolved would need an authoritative fix for each
+remaining case; the ones listed under "What is still open" below need the
+parse moved inside the lock of two identity mutations, or a permission that
+only the parsed body can name, and the one attempt to guess that permission
+from the raw body refused a legitimate operation and wrote a false record for
+it. So it stays open, with its cases pinned one by one, and it does not hold
+the branch.
 
 An unprivileged but authenticated caller who sends a request the server cannot
 parse is answered `400` and no `access.permission_denied` is recorded — that
@@ -438,32 +450,53 @@ INSIDE one endpoint, by parameter.
 
 ## OQ-3D-03 — a denial writes its operational event twice
 
-**Status: UNRESOLVED. Recorded rather than fixed on a Web Admin branch.**
+**Status: RESOLVED (round 45).** One denied request writes ONE
+`access.permission_denied` event and ONE `DENIED` audit row, on both paths,
+and the counts are pinned exactly.
 
-Every refusal on a non-transactional guard call writes `access.permission_denied`
-**twice**: `permission-guard.ts` records it whenever no transaction is passed,
-and `recordMutationDenial` records it again for the same attempt.
-`PanelService.authorize` and the other early checks pass no transaction, so both
-fire — measured at two rows per denied request.
+**What it was.** Every refusal on a non-transactional guard call wrote
+`access.permission_denied` **twice**: `permission-guard.ts` recorded it whenever
+no transaction was passed, and `recordMutationDenial` recorded it again for the
+same attempt. `PanelService.authorize` and the other early checks — settings,
+features, notifications — pass no transaction, so both fired: measured at two
+rows per denied request. The code is in `MANAGEMENT_ONE_SHOT_CODES` and never
+resolves, so an operator counting denials on the alerts page counted double,
+permanently, and always had. Inside `runAuthorizedMutation` (and the panel
+monitor, which checks inside `uow.run`) the guard is passed `tx`, writes
+nothing, and the recorder was the only emitter — one and one, correct.
 
-That code is in `MANAGEMENT_ONE_SHOT_CODES` and never resolves, so an operator
-counting denials on the alerts page counts double, permanently, and always has.
+**What owns the record now.** The GUARD is the single authority for the
+operational event. `PermissionGuard.check` still writes it only when no
+transaction is passed — the reason is unchanged: writing from inside a
+transaction takes a second pool connection while holding one, and deadlocks the
+process at pool exhaustion — and it now marks the error it throws with whether
+it did (`denialEventRecorded`, a non-enumerable symbol property, so it never
+reaches the 403 body). `recordMutationDenial` writes the event only when the
+guard says it could not, and writes the `DENIED` audit row unconditionally, as
+before. No caller changed and no caller decides: the five pre-transaction
+sites and `runAuthorizedMutation` take the same code path they took before.
 
-**Why it is not fixed here.** It is pre-existing, it is shared by every
-non-transactional caller of `recordMutationDenial` — settings, features,
-notifications, panels and the panel monitor (NOT templates, which go through
-`authorizedCommand` and write an audit row only) — and the fix is a decision
-about
-which layer owns the record, which is a platform question rather than a Web
-Admin one. `recordMutationDenial`'s own docblock says it is "called from
-exactly one place per attempt, so a denial produces one row", which is true of
-the audit row and false of the operational event.
+The two alternatives were a parameter (`{ eventRecorded }`) threaded through
+every caller, which is the route-by-route shape the owner ruled out and the
+next site would forget, and a field in `details`, which is serialised into the
+403 body. A symbol on the error is neither.
 
-**What is pinned meanwhile.** `panels-http.test.ts` › records the denial even
-when the body is nonsense asserts the count EXACTLY — two events and one audit
-row per denial — so neither recorder can disappear unnoticed and whoever
-resolves this has to change that assertion deliberately.
+**What is pinned.**
 
-**Trigger to revisit:** the first operator report of an inflated denial count,
-or the first phase that reads `access.permission_denied` for anything but
-display.
+- `tests/unit/authorization.test.ts` › one denial is one event and one audit
+  row — both branches, exactly: pre-transaction (guard event, recorder audit)
+  and in-transaction (recorder event and audit), plus the marker staying off
+  the wire.
+- `tests/integration/panels-http.test.ts` › records the denial even when the
+  body is nonsense — per route, for ONE request, `events === 1` and
+  `audit === 1`, malformed and well-formed, on all five panel writes.
+- `tests/integration/transactional-authorization.test.ts` › records an EARLY
+  refusal the same way in every phase — settings, the shared recorder, exactly
+  one event; the `some(...)` floor it replaces held under the duplicate.
+- `tests/integration/admin-http.test.ts` › records the denial on create even
+  when the body is nonsense — identity, exactly one and one.
+
+Falsified in `docs/phase3d-falsification.md`, round 45: emitting from both
+(AV1) fails the pins as a duplicate, removing the surviving emission (AV2)
+fails them as a missing event, removing the audit write (AV3) fails them as a
+missing audit row.

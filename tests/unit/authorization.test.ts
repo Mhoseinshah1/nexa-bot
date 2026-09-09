@@ -13,9 +13,12 @@ import {
   type ScopeContext,
 } from '@nexa/contracts';
 import {
+  denialEventRecorded,
   PermissionGuard,
   type PermissionResolver,
 } from '../../apps/api/src/modules/platform/access/application/permission-guard';
+import { recordMutationDenial } from '../../apps/api/src/modules/platform/access/application/authorized-mutation';
+import type { AuditEntry, AuditWriter } from '@nexa/contracts';
 
 /**
  * A resolver that grants nothing, so these tests measure the GUARD rather than
@@ -156,5 +159,136 @@ describe('deny by default', () => {
 
     await g.has(scope, systemJobActor('job', CORRELATION), 'maintenance.run');
     expect(resolve).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ONE denial, ONE event, ONE audit row — on both paths.
+ *
+ * OQ-3D-03: for a round, every pre-transaction denial wrote
+ * `access.permission_denied` TWICE. `PermissionGuard.check` recorded it when no
+ * transaction was passed, and `recordMutationDenial` recorded it again for the
+ * same refusal. That code never resolves, so an operator counting denials on
+ * the alerts page counted double, permanently.
+ *
+ * The guard is the single authority now. It marks the error it throws when it
+ * wrote the event; `recordMutationDenial` writes one only when the guard could
+ * not — inside a transaction, where the guard deliberately writes nothing.
+ *
+ * Pinned HERE, at the unit level, because this is the one place both branches
+ * of that decision can be driven directly: over HTTP every early check is the
+ * pre-transaction branch, and the in-transaction branch needs a revocation to
+ * land between the early check and the lock. The integration suite pins the
+ * first branch per route; this pins both, exactly, and the exactness is the
+ * point — a floor cannot tell one recorder from two.
+ */
+describe('one denial is one event and one audit row', () => {
+  class RecordingAudit implements AuditWriter {
+    readonly entries: AuditEntry[] = [];
+    async record(_scope: ScopeContext, _actor: ActorContext, entry: AuditEntry): Promise<void> {
+      this.entries.push(entry);
+    }
+  }
+
+  const PERMISSION = 'panels.edit' as PermissionKey;
+  const denial = { action: 'panel.update', entityType: 'Panel', entityId: 'panel-1' };
+
+  async function refusedBy(theGuard: PermissionGuard, tx: unknown): Promise<unknown> {
+    try {
+      await theGuard.check(scope, webAdmin, PERMISSION, tx);
+    } catch (error) {
+      return error;
+    }
+    throw new Error('the guard granted a permission the resolver does not hold');
+  }
+
+  it('PRE-transaction: the guard writes the event, the recorder writes only the audit row', async () => {
+    const { guard: g, opsLog } = guard();
+    const audit = new RecordingAudit();
+    const error = await refusedBy(g, undefined);
+
+    expect(denialEventRecorded(error), 'the guard says it recorded').toBe(true);
+    expect(opsLog.events.map((e) => e.code)).toEqual(['access.permission_denied']);
+
+    await recordMutationDenial(
+      { guard: g, opsLog, audit },
+      scope,
+      webAdmin,
+      PERMISSION,
+      denial,
+      error,
+    );
+
+    // EXACTLY one. Two is the duplicate this closes; zero is the denial
+    // vanishing. Both are one edit away and both fail here.
+    expect(opsLog.events.filter((e) => e.code === 'access.permission_denied')).toHaveLength(1);
+    expect(audit.entries).toHaveLength(1);
+    expect(audit.entries[0]).toMatchObject({
+      action: 'panel.update',
+      entityType: 'Panel',
+      entityId: 'panel-1',
+      result: 'DENIED',
+      after: { deniedPermission: PERMISSION },
+    });
+  });
+
+  it('IN-transaction: the guard writes nothing, the recorder writes the event and the audit row', async () => {
+    const { guard: g, opsLog } = guard();
+    const audit = new RecordingAudit();
+    const error = await refusedBy(g, { inside: 'a transaction' });
+
+    expect(denialEventRecorded(error), 'the guard says it did NOT record').toBe(false);
+    expect(opsLog.events, 'nothing from inside a transaction').toHaveLength(0);
+
+    await recordMutationDenial(
+      { guard: g, opsLog, audit },
+      scope,
+      webAdmin,
+      PERMISSION,
+      denial,
+      error,
+    );
+
+    // The surviving emitter. Removing it makes this zero, not one.
+    expect(opsLog.events.filter((e) => e.code === 'access.permission_denied')).toHaveLength(1);
+    expect(audit.entries).toHaveLength(1);
+    expect(audit.entries[0]?.result).toBe('DENIED');
+  });
+
+  it('keeps the marker off the wire', async () => {
+    // `details` is serialised into the 403 body. The marker is bookkeeping
+    // between the guard and the recorder, and a client must not see it.
+    const { guard: g } = guard();
+    const error = await refusedBy(g, undefined);
+    expect(denialEventRecorded(error)).toBe(true);
+    expect(Object.keys(error as object)).not.toContain('recorded');
+    expect(JSON.stringify(error)).not.toContain('denialEventRecorded');
+    expect(JSON.stringify((error as { details: unknown }).details)).not.toContain('recorded');
+  });
+
+  it('answers false for an error the guard did not throw', () => {
+    expect(denialEventRecorded(new Error('not a denial'))).toBe(false);
+    expect(denialEventRecorded(null)).toBe(false);
+    expect(denialEventRecorded('denied')).toBe(false);
+  });
+
+  it('writes no audit row for a refusal that is not THIS permission', async () => {
+    // Pre-existing rule of `recordMutationDenial`, restated here so the new
+    // branch cannot widen it: a PERMISSION_DENIED for a different permission
+    // is somebody else's denial, and a missing tenant context is not a denial
+    // at all.
+    const { guard: g, opsLog } = guard();
+    const audit = new RecordingAudit();
+    const error = await refusedBy(g, undefined);
+    await recordMutationDenial(
+      { guard: g, opsLog, audit },
+      scope,
+      webAdmin,
+      'panels.credentials.rotate' as PermissionKey,
+      denial,
+      error,
+    );
+    expect(audit.entries).toHaveLength(0);
+    expect(opsLog.events).toHaveLength(1);
   });
 });

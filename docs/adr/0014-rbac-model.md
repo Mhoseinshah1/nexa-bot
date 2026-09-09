@@ -223,6 +223,12 @@ back with the denial anyway. `AdminManagementService.runLockedMutation` does
 this for all three mutations, and audits the refusal while it is there, which
 `setStatus` and `setRoles` previously did not do at all.
 
+Which case applied is stated by the guard on the error it throws
+(`denialEventRecorded`), so a recorder shared by both paths —
+`recordMutationDenial`, used by every early check in the control plane and
+panels — writes the event only when the guard could not. Before that, every
+pre-transaction denial was recorded twice (Phase 3D, OQ-3D-03).
+
 ### On the triggers
 
 The migration repeats the last-owner rule as `AFTER` constraint triggers. They

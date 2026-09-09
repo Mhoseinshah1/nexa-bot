@@ -341,10 +341,17 @@ describe('admin HTTP surface', () => {
       const good = afterGood.audit - beforeGood.audit;
       const goodEvents = afterGood.events - beforeGood.events;
 
-      expect(bad, 'a malformed body left no DENIED audit row').toBeGreaterThan(0);
-      expect(badEvents, 'a malformed body left no operational event').toBeGreaterThan(0);
-      expect(bad, 'a malformed body suppressed the audit row').toBe(good);
-      expect(badEvents, 'a malformed body suppressed the operational event').toBe(goodEvents);
+      // EXACT, and one and one, for each of the two single requests above.
+      // The floor these replace (`toBeGreaterThan(0)` plus bad === good) could
+      // not see a doubled event — both requests doubled alike — which is how
+      // OQ-3D-03 hid behind this test as well. Identity's early refusal is
+      // `assertMayAttempt` (audit row only) plus the guard's own event, so it
+      // was one and one already; pinned so a change to either recorder
+      // cannot double it or drop it unnoticed.
+      expect(bad, 'DENIED audit rows for ONE malformed denial').toBe(1);
+      expect(badEvents, 'operational events for ONE malformed denial').toBe(1);
+      expect(good, 'DENIED audit rows for ONE well-formed denial').toBe(1);
+      expect(goodEvents, 'operational events for ONE well-formed denial').toBe(1);
       // And no administrator was created by either.
       expect(await api.container.admins.findCredentialsByUsername(tenantA, 'newcomer2')).toBeNull();
     });

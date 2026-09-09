@@ -284,11 +284,21 @@ describe('fresh transactional authorization', () => {
       'the audit row does not name the permission that was refused',
     ).toBe('settings.edit');
 
-    const events = await ctx.container.database.db.select().from(operationalEvents);
+    // EXACTLY one event for the one request above, not "at least one". The
+    // floor this replaces — `events.some(code includes 'denied')` — held while
+    // every early refusal in this module wrote the event TWICE (OQ-3D-03):
+    // `permission-guard` when no transaction is passed, and
+    // `recordMutationDenial` again for the same refusal. Settings shares that
+    // recorder with panels, features and notifications, so the panel test is
+    // not the only place the count has to be exact.
+    const denialEvents = await ctx.container.database.db
+      .select()
+      .from(operationalEvents)
+      .where(eq(operationalEvents.code, 'access.permission_denied'));
     expect(
-      events.some((event) => event.code.includes('denied') || event.code.includes('permission')),
-      'the early refusal emitted no operational event',
-    ).toBe(true);
+      denialEvents.map((event) => event.code),
+      'ONE early refusal must emit ONE operational event',
+    ).toEqual(['access.permission_denied']);
   }, 30_000);
 
   it('treats an EXPIRED session as dead, not only a revoked one', async () => {

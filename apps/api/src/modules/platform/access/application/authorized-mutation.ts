@@ -12,7 +12,7 @@ import { IDENTITY_ERROR_CODES } from '@nexa/contracts';
 import type { AdminSessionId } from '@nexa/contracts';
 import type { SessionRepository } from '../../identity/application/ports.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { PermissionGuard } from './permission-guard.js';
+import { denialEventRecorded, type PermissionGuard } from './permission-guard.js';
 
 export interface MutationDenial {
   readonly action: string;
@@ -99,9 +99,11 @@ export async function runAuthorizedMutation<T>(
  * a permission check. Without this, that early refusal wrote no audit row at
  * all, and a denied credential rotation left nothing behind.
  *
- * Called from exactly one place per attempt, so a denial produces one row: an
- * early refusal never reaches the transaction, and a refusal inside the
- * transaction means the early check passed.
+ * Called from exactly one place per attempt, so a denial produces one AUDIT
+ * row: an early refusal never reaches the transaction, and a refusal inside
+ * the transaction means the early check passed. The operational EVENT is one
+ * too, but not because of this — it is one because the guard says whether it
+ * already wrote it, and this writes it only when the guard could not.
  *
  * This permission's denial, not any denial. `PERMISSION_DENIED` is also how a
  * missing tenant context surfaces, and recording that as
@@ -121,7 +123,16 @@ export async function recordMutationDenial(
     error.kind === 'PERMISSION_DENIED' &&
     error.details['permission'] === permission
   ) {
-    await deps.opsLog.record(scope, deps.guard.denialEvent(actor, permission));
+    // The EVENT belongs to the guard wherever the guard could write it. It
+    // could not from inside a transaction — see `PermissionGuard.check` — and
+    // only then is this the emitter. The guard says which on the error, so
+    // one refusal is one event on both paths and no caller decides it.
+    // The AUDIT row is this function's, unconditionally: the guard never
+    // writes one, and a refused mutation without one is the gap this function
+    // was extracted to close.
+    if (!denialEventRecorded(error)) {
+      await deps.opsLog.record(scope, deps.guard.denialEvent(actor, permission));
+    }
     await deps.audit.record(scope, actor, {
       action: denial.action,
       entityType: denial.entityType,
