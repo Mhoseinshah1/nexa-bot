@@ -41,3 +41,4 @@ ADR says so explicitly.
 | [0024](0024-web-admin-maturity-and-truthfulness.md) | A surface states what it does not yet do                          | Accepted — Phase 3D                          |
 | [0025](0025-backup-pipeline.md)                     | What a backup IS: dump, verify by restore, then deliver           | Accepted — implements 0011                   |
 | [0026](0026-webhook-edge.md)                        | What bounds the Telegram webhook, and what deliberately does not  | Accepted — Architecture Hardening            |
+| [0027](0027-retention.md)                           | What this installation keeps, and for how long                    | Accepted — extends 0020                      |

@@ -99,6 +99,19 @@ class FakeRuns implements BackupRunRepository {
 
   async heartbeat(): Promise<void> {}
 
+  /**
+   * Retention is not the pipeline's concern, and the fake says so.
+   *
+   * The exclusions that make a purge safe are SQL predicates — two of them
+   * subqueries for "the most recent row" — so they are only testable against a
+   * real database. `tests/integration/backup-retention.test.ts` does that; a fake
+   * here that reimplemented them would be testing its own arithmetic, which is
+   * the shape of test this repository keeps finding and deleting.
+   */
+  async purgeFinishedBefore(): Promise<number> {
+    throw new Error('the backup pipeline must never purge run rows');
+  }
+
   async finish(input: {
     id: string;
     state: 'SUCCEEDED' | 'FAILED';

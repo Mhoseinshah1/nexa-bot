@@ -617,3 +617,26 @@ acceptance run harder to interpret, not safer.
 
 **Trigger to revisit:** the VPS acceptance run completing, or the first
 installation that reports unauthenticated traffic on this route.
+
+## `outbox_messages` retention waits on the reporting projections
+
+**Status: OPEN — recorded by the Architecture Hardening pass (ADR-0027).**
+
+A dispatched outbox row is the causal record of a domain event: which event, in
+which transaction, with which correlation id, delivered when. It is the only place
+`correlation_id` survives the queue boundary, which is what ADR-0006 says the
+column is for.
+
+Unlike `request_idempotency` and `processed_messages`, nothing about CORRECTNESS
+needs an old dispatched row — `processed_messages` is what prevents a double
+effect, and this is history. So this is the table whose retention is a reporting
+question, and it is the one to bound first if any of them needs bounding.
+
+**Why it is not decided here.** The row carries the event payload, and the
+reporting projections Phase 4 will add are not designed yet. Choosing an age
+before knowing what reads it would mean choosing it from the only fact available
+— how large the table is — which is how the legacy system's one-button
+"optimisation" came to delete six order classes.
+
+**Trigger to revisit:** the first reporting projection that reads `outbox_messages`,
+or the first installation that reports the table as a storage problem.

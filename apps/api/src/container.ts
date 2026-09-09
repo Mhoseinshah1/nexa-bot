@@ -144,6 +144,7 @@ export interface Container {
   readonly readiness: ReadinessService;
   readonly throttleSweeper: RetentionSweeper;
   readonly sessionSweeper: RetentionSweeper;
+  readonly backupRunSweeper: RetentionSweeper;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
   /**
@@ -789,6 +790,44 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * the pid alone repeats across containers.
    */
   const backupRuns = new DrizzleBackupRunRepository(database.db);
+  /**
+   * Retention for the backup run table — ADR-0027.
+   *
+   * Constructed HERE rather than beside the other two sweepers because it needs
+   * the run repository, which needs the database handle that is built above it.
+   * Not gated on `BACKUP_SCHEDULE_ENABLED`: an installation with the schedule off
+   * still accumulates rows from manual runs, and a table whose policy depends on
+   * a feature flag is a table with no policy on half the installations.
+   *
+   * Every exclusion that makes this safe is in the QUERY, not here — a predicate
+   * a caller has to remember is a predicate some caller will not. See
+   * `purgeFinishedBefore`.
+   */
+  const backupRunSweeper = new RetentionSweeper(
+    {
+      name: 'backup-runs',
+      purge: (now, limit) =>
+        backupRuns.purgeFinishedBefore(
+          new Date(now.getTime() - config.BACKUP_RUN_RETENTION_DAYS * 24 * 3_600_000),
+          limit,
+        ),
+    },
+    clock,
+    logger,
+    {
+      // Daily, not hourly. The other two sweepers bound tables an unauthenticated
+      // caller can grow at will; this one bounds a table that gains a row per
+      // backup, so hourly would be a thousand no-op passes for every row removed.
+      intervalMs: 24 * 3_600_000,
+      initialDelayMs: 60_000,
+      // Smaller batches than the identity sweepers, because the eligible set here
+      // is small by construction and each row carries a subquery for the two
+      // "most recent" exclusions.
+      batchSize: 500,
+      maxBatchesPerTick: 100,
+    },
+  );
+
   const backupTools = new PostgresDatabaseTools({
     databaseUrl: config.DATABASE_URL,
     dumpTimeoutMs: config.BACKUP_DUMP_TIMEOUT_MS,
@@ -855,6 +894,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     readiness,
     throttleSweeper,
     sessionSweeper,
+    backupRunSweeper,
     audit,
     opsLog,
     opsLogWriter,
@@ -933,6 +973,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await notificationDispatcher.stop();
       await throttleSweeper.stop();
       await sessionSweeper.stop();
+      await backupRunSweeper.stop();
       await redis.close();
       await database.close();
     },

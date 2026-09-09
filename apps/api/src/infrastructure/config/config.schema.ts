@@ -574,6 +574,37 @@ export const configSchema = z
       .default(10 * 60_000),
     /** Where the PostgreSQL client tools live, when they are not on PATH. */
     BACKUP_PG_BIN_DIR: z.string().trim().default(''),
+    /**
+     * How long a FINISHED backup run row is kept.
+     *
+     * A year, because the row is the only durable evidence that a backup was
+     * taken, verified against a real restore, and delivered — and the question
+     * "when did this installation last have a provably restorable backup"
+     * is one asked after an incident, not during one. An annual cycle also
+     * covers the audit window an operator is most likely to be asked about.
+     *
+     * It bounds the table rather than rationing it. At one scheduled backup a
+     * day a year is about 365 rows of a few hundred bytes, so this is not a size
+     * control; what it prevents is a table with no policy at all, which is the
+     * state every table in the legacy system was in. A scripted manual backup
+     * loop is the case where the bound does work.
+     *
+     * Four classes of row are NEVER removed whatever this says, and the
+     * exclusions are in the query rather than here — see
+     * `purgeFinishedBefore` and ADR-0027:
+     *
+     *   - a RUNNING row, which IS the installation's backup lock;
+     *   - a row whose delivery outcome was never observed, which is unresolved
+     *     external-effect evidence and the reason the run row exists at all;
+     *   - the most recent SUCCEEDED row, which `lastSucceededAt()` reads to
+     *     decide whether a backup is due;
+     *   - the most recent row of any state, which is the one an operator is
+     *     looking at when something has just gone wrong.
+     *
+     * The floor is a week: anything shorter would start deleting the history a
+     * diagnosis needs while the diagnosis is still happening.
+     */
+    BACKUP_RUN_RETENTION_DAYS: z.coerce.number().int().min(7).max(3650).default(365),
     /** Response bytes kept from a panel. Reading stops the moment it is passed. */
     PANEL_HTTP_MAX_RESPONSE_BYTES: z.coerce
       .number()

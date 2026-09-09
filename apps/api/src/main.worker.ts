@@ -73,6 +73,9 @@ async function main(): Promise<void> {
         // No flag: the sweepers always run.
         ['throttle-sweeper', true, () => container.throttleSweeper.isFresh(now)],
         ['session-sweeper', true, () => container.sessionSweeper.isFresh(now)],
+        // The backup run table's retention. No flag: it bounds a table that
+        // gains rows from manual backups whether the schedule is on or not.
+        ['backup-run-sweeper', true, () => container.backupRunSweeper.isFresh(now)],
         [
           'notification-dispatcher',
           config.NOTIFICATION_DISPATCH_ENABLED,
@@ -126,6 +129,10 @@ async function main(): Promise<void> {
   // the table for the life of the installation.
   container.throttleSweeper.start();
   container.sessionSweeper.start();
+  // And the backup run table's, whose policy is ADR-0027. Started here beside the
+  // others rather than with the backup scheduler: the rows it bounds exist on an
+  // installation with the schedule switched off too.
+  container.backupRunSweeper.start();
 
   // Notification delivery. A poller rather than an outbox consumer, because the
   // relay runs its consumers inside the claim transaction and a send must not

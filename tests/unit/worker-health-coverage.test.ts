@@ -55,7 +55,7 @@ describe('worker health coverage', () => {
     // scan matches nothing, every assertion below would pass vacuously — which
     // is the failure mode `check-boundaries.sh` documents at length.
     const loops = freshnessBearing();
-    expect(loops.length).toBeGreaterThanOrEqual(4);
+    expect(loops.length).toBeGreaterThanOrEqual(5);
     expect(loops).toContain('relay');
     expect(loops).toContain('notificationDispatcher');
   });
