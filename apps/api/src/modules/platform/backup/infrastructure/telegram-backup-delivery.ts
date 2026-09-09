@@ -1,5 +1,6 @@
 import { openAsBlob } from 'node:fs';
 import type { BackupDelivery, DeliveryAttempt } from '../application/ports.js';
+import { assertOutsideTransaction } from '../../../../infrastructure/transaction-boundary.js';
 
 /**
  * Sends a backup to Telegram, and is honest about what it learns.
@@ -40,6 +41,11 @@ export class TelegramBackupDelivery implements BackupDelivery {
     filename: string;
     caption: string;
   }): Promise<DeliveryAttempt> {
+    // An archive upload is the longest-running external call in this codebase.
+    // Inside a transaction it would hold a pooled connection for the length of a
+    // 50 MiB upload over somebody's home connection.
+    assertOutsideTransaction('A backup archive upload');
+
     // `openAsBlob` keeps the file on disk and streams it as the request body,
     // so a 50 MiB archive does not become 50 MiB of heap beside the dump that
     // produced it. At the ceiling that would be survivable; the reason it is
@@ -63,6 +69,7 @@ export class TelegramBackupDelivery implements BackupDelivery {
   }
 
   async sendMessage(text: string): Promise<DeliveryAttempt> {
+    assertOutsideTransaction('A backup delivery message');
     const body = new FormData();
     body.set('chat_id', this.options.chatId);
     body.set('text', text);

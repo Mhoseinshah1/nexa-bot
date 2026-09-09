@@ -134,6 +134,16 @@ directory; the ESLint restricted-import list covers frameworks but not
 four places and enforced in none — which, by this repository's own standard, is
 a rule awaiting its silent reversion.
 
+**Fixed on this branch**, with two mechanisms because neither covers the other.
+`infrastructure/transaction-boundary.ts` holds an `AsyncLocalStorage` that
+`uow.run` and `uow.runSnapshot` mark, and every network and subprocess sink —
+`SafeHttpClient.send`, the notification transport, the backup delivery, the
+`pg_dump`/`pg_restore` subprocess — refuses at RUNTIME wherever the call came
+from. `scripts/check-boundaries.sh` adds three BUILD-time checks: no sink import
+in any `domain/` or `application/` directory, every enumerated sink calls the
+guard, and no file holds a sink without being enumerated. Each of the three was
+verified to fail by introducing the violation it names.
+
 ## E — provider contract hardening
 
 **PARTIALLY SOLVED.** The taxonomy and the separation are in good shape; three

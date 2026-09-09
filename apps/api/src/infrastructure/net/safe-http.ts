@@ -12,6 +12,7 @@ import type {
   ProviderHttpResult,
 } from '@nexa/contracts';
 import { addressAllowed, checkUrl, type UrlPolicyOptions } from './url-policy.js';
+import { assertOutsideTransaction } from '../transaction-boundary.js';
 
 /**
  * The one way anything in this installation makes an outbound provider call.
@@ -262,6 +263,13 @@ export class SafeHttpClient {
   }
 
   async send(baseUrl: string, request: ProviderHttpRequest): Promise<ProviderHttpResult> {
+    // Every outbound call to a panel passes through here, which is why the
+    // transaction guard is here and not at each of the callers. See
+    // `transaction-boundary.ts`: a probe inside a transaction would hold a
+    // pooled connection and the panel's row lock for the length of somebody
+    // else's TLS handshake.
+    assertOutsideTransaction('A panel HTTP request');
+
     // An adapter states a path. An absolute URL here would be an adapter
     // choosing its own destination, which is the thing the whole design
     // removes — so it is refused rather than resolved.
