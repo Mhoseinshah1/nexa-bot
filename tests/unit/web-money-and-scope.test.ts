@@ -243,13 +243,21 @@ describe('the management event scope', () => {
     it('pairs every failure with a recovery, and every recovery with a failure', () => {
       // The naming convention IS the pairing, and both directions are walked so
       // neither a failure without a recovery nor an orphan recovery can be
-      // added. `_exceeded` -> `_ok`, `_invalid` -> `_valid`.
+      // added. `_exceeded` -> `_ok`, `_invalid` -> `_valid`, `_failed` -> `_ok`.
+      //
+      // The third shape arrived with `backup.run_failed`. It is a widening of
+      // the convention, not a loosening of the rule: both directions below are
+      // still total, so a failure with no recovery and an orphan recovery each
+      // still fail. A shape this function does not recognise is still an error
+      // rather than a skip, which is the property that matters.
       const recoveryFor = (code: string): string | null =>
         code.endsWith('_exceeded')
           ? code.replace('_exceeded', '_ok')
           : code.endsWith('_invalid')
             ? code.replace('_invalid', '_valid')
-            : null;
+            : code.endsWith('_failed')
+              ? code.replace('_failed', '_ok')
+              : null;
 
       const recoveries = new Set<string>(MANAGEMENT_CONDITION_RECOVERY_CODES);
       for (const failure of MANAGEMENT_CONDITION_FAILURE_CODES) {
