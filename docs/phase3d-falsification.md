@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 400 citations were checked; this record declares 405 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 405 citations were checked; this record declares 407 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -6146,6 +6146,67 @@ file restored to the hash it started with.
 
 `EXPECTED` is 405. U99 re-measured against this round's table: `400
 citations were checked; this record declares 405`.
+
+## Round 60 — the two body findings, fixed on the owner's correction
+
+The owner superseded the "accepted remaining risk" disposition: both findings
+Codex's seventh and eighth reviews put in their bodies are fixed before the
+merge, and nothing else is touched. No internal review, no Codex request.
+
+- **DA1 — the capacity timestamp advances only after a complete assessment.**
+  `assessCapacity` set `lastCapacityAssessmentAt` as its second statement, so
+  an aggregate that timed out or a condition write that was refused failed
+  that tick — loudly, no progress recorded — and was then not retried for
+  the configured interval, ten minutes by default, while every later tick
+  went on, recorded progress and reported the monitor healthy with an
+  overload unopened or a stale condition unresolved. The assignment is the
+  method's last statement now: a failure leaves the timestamp where it was,
+  the tick still fails, and the next tick retries; a persistently failing
+  assessment retries every tick and every one of those ticks fails, which
+  keeps the monitor unhealthy, which is the signal.
+- **DA2 — a credential write names at least one credential.** Every field
+  of `panelCredentialsInputSchema` was optional, so `{}` — and, since Zod
+  strips unknown keys, `{ api_token: "…" }` — was a valid write: the service
+  upserted a row with every column untouched, made the panel `ELIGIBLE_NOW`,
+  recorded a SUCCESS `panel.credentials.replace` naming no kinds and reported
+  success. The schema refines to "username, password or apiToken present or
+  null"; null keeps its meaning (remove this one) and a create that omits the
+  object still means no credentials. A contract change, in its own commit,
+  as the rule requires.
+
+### The mutations
+
+| #   | rule                                                        | mutation                            | tests that die                                                                                                             |
+| --- | ----------------------------------------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| DA1 | the capacity timestamp advances after a complete assessment | move the assignment back to the top | `panel-monitor-lifecycle.test.ts` › retries a capacity assessment that failed on the next tick, and holds a successful one |
+| DA2 | a credential write names at least one credential            | delete the refinement               | `panels-http.test.ts` › refuses a credential write that names no credential, and writes nothing for it                     |
+
+Measured: DA1 — 1/14, `expected 1 to be 2` (the failed read was not retried
+on the next tick; `panel-monitor.service.ts` `98834218311a6697`). DA2 —
+1/40, `{} was not refused: expected 201 to be 400` (`http.ts`
+`2aef474783ec17dd`). Each file restored to the hash it started with.
+
+**A method lesson, recorded because the first DA2 run was green.** The API
+resolves `@nexa/contracts` through the package's built `dist`, which the
+contracts typecheck emits. Mutating `src/http.ts` and running the suite
+therefore tested the UNMUTATED dist — 40/40 green, a falsification that
+falsified nothing — until the dist was rebuilt after the mutation and again
+after the restore. Every mutation of a contracts source must rebuild the
+package on both sides, and the restore is checked on the source hash AND on
+the refinement being present in `dist/http.js` again (it is, once).
+
+The integration test also pins what a refusal must leave alone: the panel's
+credential timestamps, its `panel_monitor_schedule` row and the count of
+`panel.credentials.replace` audit rows are snapshotted before three refused
+writes (`{}`, a misspelled key, a wrongly-cased key) and compared equal
+after; `credentials: {}` on CREATE is refused the same way; a create that
+omits the object is still a 201; and `{ password: null }` is still accepted
+and still removes the password. The unit test pins the retry and the hold:
+one failed read, a second read on the next tick with the monitor fresh
+again, and no third read inside the interval.
+
+`EXPECTED` is 407. U99 re-measured against this round's table: `405
+citations were checked; this record declares 407`.
 
 ## The microsecond truncation is still open, deliberately
 

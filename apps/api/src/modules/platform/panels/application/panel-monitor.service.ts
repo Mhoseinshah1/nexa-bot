@@ -744,7 +744,7 @@ export class PanelMonitorService {
     ) {
       return;
     }
-    this.lastCapacityAssessmentAt = now.getTime();
+    // The timestamp is advanced at the END of this method, not here. See there.
 
     const over = await this.deps.discovery.overBudgetTenants(this.deps.tenantBudgetUpperBound);
     const overNow = new Set(over.map((row: { tenantId: string }) => row.tenantId));
@@ -848,6 +848,19 @@ export class PanelMonitorService {
         ),
       );
     }
+
+    // Only now, with every read and write above behind us. This was the
+    // second statement of the method, so an aggregate that timed out or a
+    // condition write that was refused failed THIS tick — loudly, no progress
+    // recorded — and was then not retried for the whole interval, ten minutes
+    // by default, while every later tick went on, recorded progress and
+    // reported the monitor healthy with an overload unopened or a stale
+    // condition unresolved. A failure now leaves the timestamp where it was,
+    // the tick still fails loudly, and the next tick tries again. A
+    // persistently failing assessment therefore retries every tick — and
+    // every one of those ticks fails, which keeps the monitor unhealthy,
+    // which is the signal.
+    this.lastCapacityAssessmentAt = now.getTime();
   }
 
   /**

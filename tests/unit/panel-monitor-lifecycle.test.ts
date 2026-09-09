@@ -74,6 +74,9 @@ describe('the panel monitor timer lifecycle', () => {
   let holdClaim: (() => void) | null;
   /** Set to make discovery fail the way an unreachable database does. */
   let claimThrows: boolean;
+  /** Capacity reads attempted, and how many of the next ones should fail. */
+  let budgetReads: number;
+  let budgetReadsToFail: number;
 
   const clock: Clock = { now: () => now };
 
@@ -96,7 +99,14 @@ describe('the panel monitor timer lifecycle', () => {
       dueForTenants: async (): Promise<DuePanel[]> => [],
       refreshTenantBounds: async () => {},
       activePanelCount: async () => 0,
-      overBudgetTenants: async () => [],
+      overBudgetTenants: async () => {
+        budgetReads += 1;
+        if (budgetReadsToFail > 0) {
+          budgetReadsToFail -= 1;
+          throw new Error('the capacity aggregate timed out');
+        }
+        return [];
+      },
     };
   }
 
@@ -139,6 +149,8 @@ describe('the panel monitor timer lifecycle', () => {
     vi.useFakeTimers();
     now = new Date('2026-03-01T12:00:00.000Z');
     claims = 0;
+    budgetReads = 0;
+    budgetReadsToFail = 0;
     reconciles = 0;
     holdClaim = null;
     claimThrows = false;
@@ -367,6 +379,35 @@ describe('the panel monitor timer lifecycle', () => {
     m.start();
     await advance(0);
     expect(m.iterationIsFresh(now.getTime())).toBe(false);
+
+    await m.stop();
+  });
+
+  /**
+   * Codex, reviews seven and eight; fixed on the owner's instruction. The
+   * capacity assessment advanced its timestamp BEFORE its reads and writes, so
+   * an aggregate that failed was not tried again for the configured interval
+   * — ten minutes by default — while every later tick went on and recorded
+   * progress. Now a failed assessment leaves the timestamp alone and the next
+   * tick retries; a successful one holds for the interval.
+   */
+  it('retries a capacity assessment that failed on the next tick, and holds a successful one', async () => {
+    budgetReadsToFail = 1;
+    const m = monitor();
+    m.start();
+    await advance(0);
+    // Attempted, and failed: the tick failed with it and recorded no progress.
+    expect(budgetReads).toBe(1);
+    expect(m.iterationIsFresh(now.getTime())).toBe(false);
+
+    await advance(INTERVAL_MS);
+    // Retried on the very next tick, well inside the ten-minute interval.
+    expect(budgetReads).toBe(2);
+    expect(m.iterationIsFresh(now.getTime())).toBe(true);
+
+    await advance(INTERVAL_MS);
+    // And the one that succeeded holds: no third read inside the interval.
+    expect(budgetReads).toBe(2);
 
     await m.stop();
   });
