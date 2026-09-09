@@ -36,6 +36,8 @@
     "db:seed:dev": "pnpm --filter @nexa/api db:seed:dev",
     "admin:bootstrap:dev": "pnpm --filter @nexa/api admin:bootstrap:dev",
     "provision:dev": "pnpm --filter @nexa/api provision:dev",
+    "backup": "pnpm --filter @nexa/api backup",
+    "backup:dev": "pnpm --filter @nexa/api backup:dev",
     "dev:services": "bash scripts/dev-services.sh",
     "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm check:boundaries && pnpm check:i18n && pnpm check:citations && pnpm check:shell && pnpm test && pnpm test:web && pnpm test:deploy && pnpm build"
   },

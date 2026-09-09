@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type {
   AuditWriter,
   Clock,
@@ -70,6 +71,13 @@ import {
   DrizzleOperationalEventReader,
 } from './modules/platform/opslog/infrastructure/drizzle-operational-event.reader.js';
 import { MonitorProfileService } from './modules/platform/panels/application/monitor-profile.service.js';
+import { BackupService } from './modules/platform/backup/application/backup.service.js';
+import { BackupScheduler } from './modules/platform/backup/application/backup-scheduler.js';
+import { DrizzleBackupRunRepository } from './modules/platform/backup/infrastructure/drizzle-backup-run.repository.js';
+import { KeyringBackupArchiver } from './modules/platform/backup/infrastructure/archiver.js';
+import { PostgresDatabaseTools } from './modules/platform/backup/infrastructure/pg-tools.js';
+import { TelegramBackupDelivery } from './modules/platform/backup/infrastructure/telegram-backup-delivery.js';
+import { FilesystemBackupWorkspaces } from './modules/platform/backup/infrastructure/workspace.js';
 import { OpsLogService } from './modules/platform/opslog/application/opslog.service.js';
 import { DrizzleSettingRepository } from './modules/control/settings/infrastructure/drizzle-settings.repository.js';
 import { SettingsResolver } from './modules/control/settings/application/settings-resolver.js';
@@ -205,6 +213,27 @@ export interface Container {
    * pure capacity functions; it touches no repository and not the monitor.
    */
   readonly monitorProfileService: MonitorProfileService;
+
+  /**
+   * The backup pipeline. ONE service, for the scheduler and the operator alike.
+   *
+   * Constructed in every role, like the monitor, because the container is one
+   * graph. Started — by `backupScheduler` — in exactly one: a dump on the API's
+   * event loop would be a two-hour subprocess beside the webhook.
+   */
+  readonly backup: BackupService;
+  readonly backupScheduler: BackupScheduler;
+  /** Exposed so a test can drive the lock directly, and so `botctl` can list runs. */
+  readonly backupRuns: DrizzleBackupRunRepository;
+  /**
+   * The archive reader and the PostgreSQL tools, for the restore command.
+   *
+   * The SAME instances the pipeline uses, which is the point: an operator's
+   * restore goes through the decryption path the verification proved, not a
+   * second one written for the CLI.
+   */
+  readonly backupArchiver: KeyringBackupArchiver;
+  readonly backupTools: PostgresDatabaseTools;
 
   shutdown(): Promise<void>;
 }
@@ -740,6 +769,53 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     new DrizzleOperationalConditionReader(database.db),
   );
 
+  /**
+   * The backup graph.
+   *
+   * `leaseOwner` identifies THIS PROCESS, so two replicas of the same role hold
+   * distinguishable leases and a takeover can tell whose lock it is reclaiming.
+   * Role plus pid plus randomness: the role alone repeats across replicas, and
+   * the pid alone repeats across containers.
+   */
+  const backupRuns = new DrizzleBackupRunRepository(database.db);
+  const backupTools = new PostgresDatabaseTools({
+    databaseUrl: config.DATABASE_URL,
+    dumpTimeoutMs: config.BACKUP_DUMP_TIMEOUT_MS,
+    restoreTimeoutMs: config.BACKUP_RESTORE_TIMEOUT_MS,
+    binDir: config.BACKUP_PG_BIN_DIR === '' ? undefined : config.BACKUP_PG_BIN_DIR,
+  });
+  const backupArchiver = new KeyringBackupArchiver(keyring);
+  const backup = new BackupService({
+    runs: backupRuns,
+    tools: backupTools,
+    // The SAME keyring the secret cipher uses. One active key encrypts, every
+    // held key decrypts — so an archive taken before a rotation stays readable
+    // after it, which is the property a backup needs more than anything else
+    // in this installation does.
+    archiver: backupArchiver,
+    workspaces: new FilesystemBackupWorkspaces(config.BACKUP_WORK_DIR),
+    delivery: new TelegramBackupDelivery({
+      apiBaseUrl: config.TELEGRAM_API_BASE_URL,
+      token: config.BACKUP_TELEGRAM_BOT_TOKEN,
+      chatId: config.BACKUP_TELEGRAM_CHAT_ID,
+      timeoutMs: config.BACKUP_DELIVERY_TIMEOUT_MS,
+    }),
+    clock,
+    ids,
+    installationId: () => installationTenantId ?? 'unprovisioned',
+    logger,
+    leaseOwner: `${role}:${String(process.pid)}:${randomUUID().slice(0, 8)}`,
+    retainedArchiveHint: config.BACKUP_WORK_DIR,
+  });
+  const backupScheduler = new BackupScheduler({
+    service: backup,
+    runs: backupRuns,
+    clock,
+    intervalMs: config.BACKUP_INTERVAL_MS,
+    tickIntervalMs: config.BACKUP_TICK_MS,
+    logger,
+  });
+
   return {
     config,
     logger,
@@ -823,7 +899,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLogService,
     monitorProfileService,
     panelMonitor,
+    backup,
+    backupScheduler,
+    backupRuns,
+    backupArchiver,
+    backupTools,
     async shutdown() {
+      backupScheduler.stop();
       await relay.stop();
       await panelMonitor.stop();
       await notificationDispatcher.stop();

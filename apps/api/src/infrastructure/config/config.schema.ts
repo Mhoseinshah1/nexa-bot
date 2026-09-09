@@ -493,6 +493,87 @@ export const configSchema = z
     PANEL_MONITOR_BUDGET_RESERVE_PERCENT: z.coerce.number().int().min(0).max(90).default(40),
     /** Where the monitor writes its heartbeat, and how often. */
     PANEL_MONITOR_HEARTBEAT_PATH: z.string().trim().min(1).default('/tmp/nexa-monitor.heartbeat'),
+
+    /**
+     * Backup.
+     *
+     * INSTALLATION configuration, in the environment, not tenant settings. A
+     * dump is of the whole database; a per-tenant switch for it would be a
+     * setting that cannot mean what it says. It also has to be readable by a
+     * CLI that runs before — and during — the failure a backup exists for, and
+     * a settings table is exactly what is unavailable then.
+     */
+    BACKUP_SCHEDULE_ENABLED: booleanish.default(false),
+    /**
+     * How long after the last SUCCESSFUL backup the next one is due.
+     *
+     * Twenty-four hours. Measured from the last verified artifact rather than
+     * from process start, so restarts do not multiply backups and failures do
+     * not reset the clock as though they had worked.
+     */
+    BACKUP_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(15 * 60_000)
+      .max(30 * 24 * 3_600_000)
+      .default(24 * 3_600_000),
+    /** How often the worker asks whether a backup is due. Asking is cheap. */
+    BACKUP_TICK_MS: z.coerce
+      .number()
+      .int()
+      .min(30_000)
+      .max(3_600_000)
+      .default(5 * 60_000),
+    /**
+     * Where run workspaces live.
+     *
+     * On the installation's data volume, never `/tmp`: a plaintext dump is the
+     * database with the encryption taken off, and `/tmp` is world-traversable
+     * on a default host, cleaned by a timer nobody here controls, and often a
+     * tmpfs a real database will not fit in.
+     */
+    BACKUP_WORK_DIR: z.string().trim().min(1).default('/var/lib/nexa/backups'),
+    /**
+     * The Telegram chat the archive is delivered to.
+     *
+     * Empty means delivery is not configured, which is NOT a failure: a run
+     * that dumps, verifies and retains is a backup. ADR-0011's fifth
+     * compensating control is that this chat is dedicated and its membership
+     * reviewed, which is an operational obligation this field cannot enforce
+     * and `docs/backup.md` states.
+     */
+    BACKUP_TELEGRAM_CHAT_ID: z.string().trim().default(''),
+    /**
+     * The bot token used for backup delivery.
+     *
+     * Deliberately its own value rather than the tenant's operational bot. The
+     * destination is an installation-level channel holding the whole database,
+     * and reusing the customer-facing bot's token would mean the credential
+     * that posts backups is the one most widely deployed and most often
+     * rotated. Empty means delivery is not configured.
+     */
+    BACKUP_TELEGRAM_BOT_TOKEN: z.string().trim().default(''),
+    /** Ceilings on the tools. A dump that never ends holds the lock for ever. */
+    BACKUP_DUMP_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(60_000)
+      .max(12 * 3_600_000)
+      .default(2 * 3_600_000),
+    BACKUP_RESTORE_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(60_000)
+      .max(12 * 3_600_000)
+      .default(2 * 3_600_000),
+    BACKUP_DELIVERY_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(10_000)
+      .max(3_600_000)
+      .default(10 * 60_000),
+    /** Where the PostgreSQL client tools live, when they are not on PATH. */
+    BACKUP_PG_BIN_DIR: z.string().trim().default(''),
     /** Response bytes kept from a panel. Reading stops the moment it is passed. */
     PANEL_HTTP_MAX_RESPONSE_BYTES: z.coerce
       .number()
@@ -887,6 +968,24 @@ export const configSchema = z
         message:
           'TELEGRAM_WEBHOOK_SECRET must be at least 16 characters when the webhook is enabled. ' +
           'Every update is authenticated by this header.',
+      });
+    }
+
+    // Half-configured delivery is the failure worth catching here. Neither set
+    // is a deliberate choice — the archive stays on the server and the run says
+    // NOT_ATTEMPTED — but one set without the other is somebody who believes
+    // their backups are being delivered and will find out otherwise during a
+    // disaster.
+    const chat = config.BACKUP_TELEGRAM_CHAT_ID !== '';
+    const token = config.BACKUP_TELEGRAM_BOT_TOKEN !== '';
+    if (chat !== token) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [chat ? 'BACKUP_TELEGRAM_BOT_TOKEN' : 'BACKUP_TELEGRAM_CHAT_ID'],
+        message:
+          'BACKUP_TELEGRAM_CHAT_ID and BACKUP_TELEGRAM_BOT_TOKEN must be set together. Set both to ' +
+          'deliver backups to Telegram, or neither to retain them on the server; one alone is an ' +
+          'installation that believes its backups are leaving the host and they are not.',
       });
     }
   });

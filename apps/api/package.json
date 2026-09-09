@@ -18,10 +18,12 @@
     "clean": "rm -rf dist",
     "admin:bootstrap": "node dist/bootstrap-owner.cli.js",
     "provision": "node dist/provision-installation.cli.js",
+    "backup": "node dist/backup.cli.js",
     "db:migrate:dev": "tsx src/infrastructure/persistence/migrate.ts",
     "db:seed:dev": "tsx src/infrastructure/persistence/seed.ts",
     "admin:bootstrap:dev": "tsx src/bootstrap-owner.cli.ts",
-    "provision:dev": "tsx src/provision-installation.cli.ts"
+    "provision:dev": "tsx src/provision-installation.cli.ts",
+    "backup:dev": "tsx src/backup.cli.ts"
   },
   "dependencies": {
     "@nexa/contracts": "workspace:*",

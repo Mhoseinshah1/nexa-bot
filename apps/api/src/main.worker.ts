@@ -9,10 +9,10 @@ import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.j
 /**
  * Process role: `worker`.
  *
- * Runs the outbox relay, the retention sweeps and the notification dispatcher.
- * Provisioning, reporting projections, broadcasts and backups join them in later
- * phases. Same image, same module graph, different entrypoint — so splitting
- * per-queue deployments later is a config change, not a rewrite.
+ * Runs the outbox relay, the retention sweeps, the notification dispatcher and
+ * the scheduled backup. Provisioning, reporting projections and broadcasts join
+ * them in later phases. Same image, same module graph, different entrypoint —
+ * so splitting per-queue deployments later is a config change, not a rewrite.
  *
  * Shutdown is graceful: the relay stops claiming new work and the current batch
  * either completes or is left unpublished for the next process to redeliver.
@@ -44,10 +44,18 @@ async function main(): Promise<void> {
         await container.database.withClient((client) => client.query('SELECT 1'), {
           deadlineAt: Date.now() + config.WORKER_HEARTBEAT_INTERVAL_MS,
         });
-        return true;
       } catch {
         return false;
       }
+      // "The process exists" is not the claim this file is making. When the
+      // scheduler is enabled it is part of the worker's job, and a scheduler
+      // whose ticks are all throwing has a live timer and does nothing — which
+      // is precisely the shape of failure an unattended backup has to be able
+      // to report rather than sit quietly in.
+      if (config.BACKUP_SCHEDULE_ENABLED && !container.backupScheduler.isFresh(Date.now())) {
+        return false;
+      }
+      return true;
     },
   });
 
@@ -99,6 +107,27 @@ async function main(): Promise<void> {
     container.logger.warn(
       {},
       'notification dispatcher is disabled; operational notifications will queue and not send',
+    );
+  }
+
+  // The scheduled backup. In the worker rather than a role of its own: it is
+  // one subprocess a day, it takes a database lock rather than an outbound
+  // budget, and the monitor's separate role exists because unattended calls to
+  // third-party panels are a different risk from anything here.
+  //
+  // Two replicas both running this is the normal case on a rolling update, and
+  // is safe by construction: the lock is a partial unique index, so the second
+  // one is told BUSY by PostgreSQL rather than by any agreement between them.
+  if (config.BACKUP_SCHEDULE_ENABLED) {
+    container.backupScheduler.start();
+    container.logger.info(
+      { intervalMs: config.BACKUP_INTERVAL_MS, tickMs: config.BACKUP_TICK_MS },
+      'backup scheduler started',
+    );
+  } else {
+    container.logger.warn(
+      {},
+      'the backup scheduler is disabled; no backup will be taken unless one is run by hand',
     );
   }
 
