@@ -475,9 +475,10 @@ reaches the 403 body). `recordMutationDenial` writes the event only when the
 guard says it could not, and writes the `DENIED` audit row unconditionally, as
 before. Identity's `runLockedMutation`, the other after-the-fact recorder, asks
 the same question (round 46) — unobservable while every in-lock check passes
-`tx`, and the reason it will stay one event when one stops. No caller changed and no caller decides: the four pre-transaction
-sites (eight routes: five panel writes, settings, features, notifications) and
-`runAuthorizedMutation` take the same code path they took before.
+`tx`, and the reason it will stay one event when one stops. No caller changed
+and no caller decides: the four pre-transaction sites (eight routes: five panel
+writes, settings, features, notifications) and `runAuthorizedMutation` take the
+same code path they took before.
 
 The two alternatives were a parameter (`{ eventRecorded }`) threaded through
 every caller, which is the route-by-route shape the owner ruled out and the

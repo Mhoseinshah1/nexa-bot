@@ -923,19 +923,6 @@ export class AdminManagementService {
   }
 
   /**
-   * Runs a locked mutation and records a denial once the transaction is gone.
-   *
-   * The guard deliberately does not write its operational event from inside a
-   * transaction: it would take a second pool connection while holding one and
-   * the tenant lock, and the row would roll back with the denial anyway. So the
-   * transactional caller owns it, and records it here — on the pool, after the
-   * rollback, where both are safe.
-   *
-   * The audit row is the more important half. A refused administrative
-   * mutation is exactly the kind of event an operator needs to see later, and
-   * before this it left no trace at all for `setStatus` and `setRoles`.
-   */
-  /**
    * The cheap pre-lock authorization check, with its denial audited.
    *
    * The check itself is only a fast rejection — the decision that counts is
@@ -1044,6 +1031,25 @@ export class AdminManagementService {
     await this.opsLog.record(scope, { code, severity: 'INFO', message, context }, tx);
   }
 
+  /**
+   * Runs a locked mutation and records a denial once the transaction is gone.
+   *
+   * The guard deliberately does not write its operational event from inside a
+   * transaction: it would take a second pool connection while holding one and
+   * the tenant lock, and the row would roll back with the denial anyway. So the
+   * transactional caller records it here — on the pool, after the rollback,
+   * where both are safe — unless the guard reports it already did
+   * (`denialEventRecorded`), which is the question every after-the-fact
+   * recorder asks so that one refusal is one event (OQ-3D-03).
+   *
+   * Not every denial this catches came from the guard. An escalation refusal
+   * (`assertGrantsNoMorePrivilegeThanHeld`, `assertRestoresNoMorePrivilegeThanHeld`)
+   * is thrown by this service, carries no marker, and is recorded here alone.
+   *
+   * The audit row is the more important half. A refused administrative
+   * mutation is exactly the kind of event an operator needs to see later, and
+   * before this it left no trace at all for `setStatus` and `setRoles`.
+   */
   private async runLockedMutation<T>(
     scope: ScopeContext,
     actor: ActorContext,

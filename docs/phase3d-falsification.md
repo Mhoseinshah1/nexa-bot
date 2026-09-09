@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 328 citations were checked; this record declares 339 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 339 citations were checked; this record declares 342 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -5257,6 +5257,67 @@ false`); integration 1/98, the same one-connection timeout.
 event: expected [ 'access.permission_denied', …(1) ] to deeply equal
 [ 'access.permission_denied' ]`.
 - AW3c, `tx` dropped with the check kept — 98/98 green.
+
+## Round 47 — the twenty-eighth reviewer, and the recorder's other caller had no test
+
+Three confirmed findings, all minor, one of them a production rule with no
+test in the function round 46 had just changed.
+
+### The escalation refusal's event was pinned by nothing
+
+`runLockedMutation` catches two kinds of `PERMISSION_DENIED`: the guard's,
+which now carries the marker, and the service's own escalation refusals
+(`assertGrantsNoMorePrivilegeThanHeld`, `assertRestoresNoMorePrivilegeThanHeld`),
+which carry none and for which this function is the ONLY emitter. Round 46's
+justification for consulting the marker rests on that second case, and nothing
+tested it: the reviewer narrowed the emission to denials that name a single
+permission — which every escalation refusal does not — and the whole corpus
+stayed green, 783/783 unit and every runnable integration test. The path the
+code itself calls "the more serious of the two" could lose its operational
+event with no failing test.
+
+`codex-findings-round-2.test.ts` › names the permissions the actor tried to
+confer, not "unknown" now also asserts EXACTLY one `access.permission_denied`
+row for that refusal, naming the first excess permission.
+
+### Two sentences one module too wide, and a docblock on the wrong function
+
+- ADR-0014's addendum said `recordMutationDenial` is "shared by every early
+  check in the control plane". Templates is control plane and goes through
+  `authorizedCommand`, which writes an audit row only — round 45 listed it
+  under "not through the recorder at all", one document over. And the three
+  services that DO share the recorder each carried a comment saying it was
+  "one recorder for every early refusal in the codebase", false for templates
+  and identity since the day it was written. All four corrected.
+- The docblock describing `runLockedMutation` sat above `assertMayAttempt`,
+  followed by a second JSDoc, so it attached to nothing — and it still
+  described the unconditional emission round 46 removed. Moved to the function
+  it describes and rewritten for what it does now, including the non-guard
+  case above.
+
+The reviewer also refuted, on evidence: every in-lock check passes `tx`; no
+path writes the guard's event and then reaches `runLockedMutation`; the
+enumerable-or-not status of the marker is irrelevant to the 403 body because
+the filter serialises `details` alone; every hash cited in rounds 45 and 46
+matches its committed file; and OQ-3D-02's classification stands — no listed
+case changes state or discloses anything.
+
+## The mutations
+
+`admin-management.service.ts` at `73b10ad89a2b4688` (this round's version),
+restored to it after each row. Suites: `codex-findings-round-2.test.ts` and
+`identity-concurrency.test.ts` (111).
+
+| #   | rule                                                        | mutation                                              | tests that die                                                                                                                                                                                  |
+| --- | ----------------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AX1 | a NON-guard denial is recorded by `runLockedMutation` alone | emit only when the denial names a single `permission` | `codex-findings-round-2.test.ts` › names the permissions the actor tried to confer, not "unknown"                                                                                               |
+| AX2 | `runLockedMutation` is the emitter for every in-lock denial | never emit                                            | `codex-findings-round-2.test.ts` › names the permissions the actor tried to confer, not "unknown"; `identity-concurrency.test.ts` › refuses a REMOVE-ONLY setRoles whose actor lost admins.edit |
+
+Measured: AX1 — 1/111, `ONE refused escalation must leave ONE operational
+event: expected [] to deeply equal [ 'access.permission_denied' ]`; before this
+round the same mutation left 111/111 green. AX2 — 2/111, the same message and
+`ONE in-lock refusal must leave ONE operational event: expected [] to deeply
+equal [ 'access.permission_denied' ]`.
 
 ## The microsecond truncation is still open, deliberately
 

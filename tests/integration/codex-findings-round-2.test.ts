@@ -2479,6 +2479,25 @@ describe('an attempted privilege escalation is recorded in full', () => {
     expect(Array.isArray(attempted)).toBe(true);
     expect((attempted ?? []).length).toBeGreaterThan(0);
     expect(row?.after?.['deniedPermission']).not.toBeNull();
+
+    // And EXACTLY one operational event, naming the same permission. An
+    // escalation refusal is thrown by the service, not by the guard, so it
+    // carries no guard marker and `runLockedMutation` is its only emitter.
+    // Nothing pinned that until round 47: dropping the emission for every
+    // non-guard denial — the path the code above calls the more serious of
+    // the two — left the whole corpus green.
+    const events = await ctx.container.database.db.execute(
+      `SELECT code, context FROM operational_events WHERE code = 'access.permission_denied'` as never,
+    );
+    const denialEvents = events.rows as Array<{
+      code: string;
+      context: Record<string, unknown> | null;
+    }>;
+    expect(
+      denialEvents.map((event) => event.code),
+      'ONE refused escalation must leave ONE operational event',
+    ).toEqual(['access.permission_denied']);
+    expect(denialEvents[0]?.context?.['permission']).toBe(attempted?.[0]);
   });
 });
 
