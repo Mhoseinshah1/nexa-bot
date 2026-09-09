@@ -120,8 +120,14 @@ describe('fresh transactional authorization', () => {
    */
   const expectOneWarnDenialEvent = async (
     label: string,
-    deniedRow: { after: unknown } | undefined,
+    denied: readonly { after: unknown }[],
+    permission: string,
   ) => {
+    // EXACTLY one DENIED row (round 52: the floor `> 0` let a doubled row
+    // through), naming the LITERAL permission the case refuses — so the event
+    // is compared against the truth, not against whatever the audit row says.
+    expect(denied, `${label}: ONE in-transaction refusal, ONE DENIED audit row`).toHaveLength(1);
+    const deniedRow = denied[0];
     const events = await db()
       .select()
       .from(operationalEvents)
@@ -134,10 +140,10 @@ describe('fresh transactional authorization', () => {
     const deniedPermission = (deniedRow?.after as Record<string, unknown> | null)?.[
       'deniedPermission'
     ];
-    expect(deniedPermission, `${label}: the audit row names the refused permission`).toBeTypeOf(
-      'string',
+    expect(deniedPermission, `${label}: the audit row names the refused permission`).toBe(
+      permission,
     );
-    expect(context?.['permission']).toBe(deniedPermission);
+    expect(context?.['permission']).toBe(permission);
     expect(context?.['actorId']).toBe(adminA.id);
   };
 
@@ -151,6 +157,7 @@ describe('fresh transactional authorization', () => {
     {
       name: 'settings.set',
       action: 'settings.set',
+      permission: 'settings.edit',
       eventType: 'SettingChanged',
       mutate: () =>
         ctx.container.settingsService.set(tenantA, actorA, {
@@ -170,6 +177,9 @@ describe('fresh transactional authorization', () => {
     {
       name: 'features.set',
       action: 'features.set',
+      // A feature flag's parameters are settings (Phase 2 rule), and so is
+      // the permission that edits it.
+      permission: 'settings.edit',
       eventType: 'FeatureFlagChanged',
       mutate: () =>
         ctx.container.featureFlags.set(tenantA, actorA, {
@@ -188,6 +198,7 @@ describe('fresh transactional authorization', () => {
     {
       name: 'templates.set',
       action: 'templates.set',
+      permission: 'templates.edit',
       eventType: 'TemplateOverrideChanged',
       mutate: () =>
         ctx.container.templatesService.set(tenantA, actorA, {
@@ -260,7 +271,7 @@ describe('fresh transactional authorization', () => {
 
       // 11. ONE operational event for it, WARN, naming what the audit row
       //     names and who was refused.
-      await expectOneWarnDenialEvent(testCase.name, denied[0]);
+      await expectOneWarnDenialEvent(testCase.name, denied, testCase.permission);
     }, 30_000);
   }
 
@@ -548,7 +559,7 @@ describe('fresh transactional authorization', () => {
     ).toEqual([]);
     const denied = audits.filter((row) => row.result === 'DENIED');
     expect(denied.length, 'the denial left no audit evidence').toBeGreaterThan(0);
-    await expectOneWarnDenialEvent('notifications.test', denied[0]);
+    await expectOneWarnDenialEvent('notifications.test', denied, 'settings.edit');
   }, 30_000);
 
   /**
@@ -609,6 +620,6 @@ describe('fresh transactional authorization', () => {
     ).toEqual([]);
     const denied = audits.filter((row) => row.result === 'DENIED');
     expect(denied.length, 'the denial left no audit evidence').toBeGreaterThan(0);
-    await expectOneWarnDenialEvent('templates.revert', denied[0]);
+    await expectOneWarnDenialEvent('templates.revert', denied, 'templates.edit');
   }, 30_000);
 });

@@ -46,7 +46,7 @@ const RECORD = 'docs/phase3d-falsification.md';
  * to, which is the point: the number is a claim about this file and should be
  * re-stated deliberately, not drifted into.
  */
-const EXPECTED = 364;
+const EXPECTED = 377;
 /**
  * A table whose last column is one of these is making citations.
  *

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  type OperationalEventRecorder,
   errors,
   NexaError,
   PLATFORM_ERROR_CODES,
@@ -12,6 +13,7 @@ import {
   type PermissionKey,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
+import { recordMutationDenial } from '../../access/application/authorized-mutation.js';
 import type { OutboxWriter } from '../../eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { hashRequest } from '../../idempotency/infrastructure/drizzle-idempotency-store.js';
@@ -73,6 +75,7 @@ export class RecordPingService {
     private readonly idempotency: IdempotencyStore,
     private readonly clock: Clock,
     private readonly scopeActivity: ScopeActivityReader,
+    private readonly opsLog: OperationalEventRecorder,
   ) {}
 
   async execute(
@@ -80,19 +83,24 @@ export class RecordPingService {
     actor: ActorContext,
     input: unknown,
   ): Promise<RecordPingResult> {
-    // 3. AUTHORIZE — before anything is read or written. A denial is audited by
-    //    the guard as an operational event and recorded below as an audit row.
+    // 3. AUTHORIZE — before anything is read or written. The recorder shared
+    //    by every early check in the control plane and panels writes the
+    //    DENIED audit row for THIS permission's refusal, and the event only
+    //    when the guard could not (OQ-3D-03). The inline version this replaces
+    //    audited ANY throw — an operational log that is down — as a refusal of
+    //    `maintenance.run`, a false statement in the one ledger that must not
+    //    contain one.
     try {
       await this.guard.check(scope, actor, RECORD_PING_PERMISSION);
     } catch (denial) {
-      await this.audit.record(scope, actor, {
-        action: 'system.ping',
-        entityType: 'System',
-        entityId: null,
-        before: null,
-        after: null,
-        result: 'DENIED',
-      });
+      await recordMutationDenial(
+        { guard: this.guard, audit: this.audit, opsLog: this.opsLog },
+        scope,
+        actor,
+        RECORD_PING_PERMISSION,
+        { action: 'system.ping', entityType: 'System', entityId: null },
+        denial,
+      );
       throw denial;
     }
 

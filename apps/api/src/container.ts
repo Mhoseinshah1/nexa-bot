@@ -434,7 +434,16 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     { intervalMs: 3_600_000, initialDelayMs: 60_000, batchSize: 5_000, maxBatchesPerTick: 1_000 },
   );
 
-  const recordPing = new RecordPingService(guard, uow, outbox, audit, idempotency, clock, tenants);
+  const recordPing = new RecordPingService(
+    guard,
+    uow,
+    outbox,
+    audit,
+    idempotency,
+    clock,
+    tenants,
+    opsLog,
+  );
 
   // ---------------------------------------------------------------------------
   // Control plane

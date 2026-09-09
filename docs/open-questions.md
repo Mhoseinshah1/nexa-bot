@@ -521,9 +521,10 @@ next site would forget, and a field in `details`, which is serialised into the
 - `tests/integration/transactional-authorization.test.ts` › records a
   TEMPLATES early refusal as one audit row and one event, and a non-denial as
   nothing — templates on the shared recorder, authorized before parsed
-  (rounds 49–50); and every revocation-barrier case, parametrised and
-  literal, asserts one WARN event naming what the audit row names
-  (rounds 50–51).
+  (rounds 49–50); and every authority-revocation barrier case, parametrised and
+  literal, asserts exactly one DENIED row and one WARN event naming the
+  case's literal permission (rounds 50–52; the session-revocation case has
+  no denial to pin).
 
 Falsified in `docs/phase3d-falsification.md`, round 45: emitting from both
 (AV1) fails the pins as a duplicate, removing the surviving emission (AV2)
@@ -538,8 +539,9 @@ than decided on a guess.**
 Round 48 wrote "both recorders write the audit row first, so an operational
 log that is down costs the event and never the audit row". True of the two
 after-the-fact recorders, and only of them. On the PRE-transaction path — the
-eight early routes, templates' two, and identity's three pre-lock checks,
-which is the path an ordinary unauthorized request actually hits — the GUARD
+eight early routes, templates' two, `system.ping`, identity's three pre-lock
+checks, and every VIEW check, which is the path an ordinary unauthorized
+request actually hits — the GUARD
 writes the event before it has decided to throw the denial. If that write
 fails, `check` rejects with the write's error, no `PERMISSION_DENIED` ever
 exists, and the recorders (which audit only THIS permission's refusal) write

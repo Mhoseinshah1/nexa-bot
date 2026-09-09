@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 361 citations were checked; this record declares 364 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 364 citations were checked; this record declares 377 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -5436,10 +5436,7 @@ count at the moment the event write runs.
 
 ### Templates' early check wrote a DENIED row for ANY throw
 
-The last early check on an inline catch-ANY recorder — identity's
-`assertMayAttempt` still audits inline, filtered on the denial kind, which
-round 50 measured cannot audit anything but this permission's refusal — and
-its `catch (denial)` audited
+The last early check IN THE CONTROL PLANE on an inline catch-ANY recorder — identity's `assertMayAttempt` still audits inline, filtered on the denial kind, which round 50 measured cannot audit anything but this permission's refusal, and `RecordPingService` in the system module carried the same catch-ANY until round 52 — and its `catch (denial)` audited
 whatever was thrown — an operational log that is down, a missing tenant
 context — as a refusal of `templates.edit`: the false-record class round 45
 removed from settings, features and notifications, one module over from
@@ -5549,10 +5546,12 @@ without a discriminating test.
 
 ### The event pin was in the parametrised barrier test and not the literal ones
 
-Round 50 wrote "pinned … in every revocation-barrier case". The file has five
-barrier tests: three generated from `CASES` and two written out —
-`notifications.test` and `templates.revert` — which kept an audit floor and
-said nothing about the event. Deleting the shared recorder's event write
+Round 50 wrote "pinned … in every revocation-barrier case". The file has six
+barrier tests, five of which refuse on revoked AUTHORITY: three generated
+from `CASES` and two written out — `notifications.test` and
+`templates.revert` — which kept an audit floor and said nothing about the
+event. (The sixth refuses a revoked SESSION before the guard runs and has no
+denial to pin.) Deleting the shared recorder's event write
 left those two green. One helper now (`expectOneWarnDenialEvent`), used by
 all five, and the same mutation fails all five.
 
@@ -5586,6 +5585,64 @@ Measured: 5/9 — `settings.set: ONE in-transaction refusal, ONE WARN event:
 expected [] to deeply equal [ 'WARN' ]`, and the same for `features.set`,
 `templates.set`, `notifications.test` and `templates.revert`. Before this
 round the same mutation left the last two green.
+
+## Round 52 — the thirty-third reviewer, and the recorder the sentence had forgotten
+
+Two confirmed findings, both sentences, one of them naming a recorder no
+round had counted; and two of the reviewer's preferences taken, because each
+was a pin one line short of discriminating.
+
+### `RecordPingService` still carried an inline catch-ANY recorder
+
+Round 49 called templates' "the last early check on an inline catch-ANY
+recorder". It was the last in the control plane. The system module's ping —
+wired on the web and Telegram surfaces — audited whatever its early check
+threw as a refusal of `maintenance.run`: an operational log that is down
+became a DENIED row for a denial that never happened, the false-record
+class rounds 45 and 49 removed one module over. The reviewer measured it
+with a scratch probe (guard throwing a generic error → one DENIED row). It
+shares the recorder now; the service gains `opsLog`, wired at its one
+construction site. Round 49's sentence is scoped in place.
+
+### "Five barrier tests" was six
+
+Five refuse on revoked AUTHORITY and use the helper; the sixth refuses a
+revoked SESSION before the guard runs and has no denial to pin. Round 51's
+count sentence and OQ-3D-03's "every revocation-barrier case" now say so.
+
+### Two pins one line short
+
+The barrier helper floored the DENIED audit row at `> 0` — a doubled row
+was green — and compared the event's permission against the audit row's,
+so a consistent lie in both ledgers was green too. It asserts exactly one
+row now and compares both against the case's LITERAL permission. That
+literal immediately caught a wrong assumption of mine: feature flags are
+edited under `settings.edit`, not a `features.edit` that does not exist —
+their parameters are settings, and so is the permission.
+
+## The mutations
+
+`record-ping.service.ts` `4d47ec361885c122`, `authorized-mutation.ts`
+`77795cdc066015a3` (this round's versions), restored after each row. Suites:
+`write-path.test.ts` (8) and `transactional-authorization.test.ts` (9).
+
+| #   | rule                                                     | mutation                                       | tests that die                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --- | -------------------------------------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| RP1 | the ping audits only THIS permission's refusal           | the inline catch-ANY recorder back             | `write-path.test.ts` › denies an actor without the permission, and records the denial; › audits nothing when the guard fails for a reason that is not a denial                                                                                                                                                                                                                                                                         |
+| RP2 | the ping records its early refusal                       | delete the recorder call                       | `write-path.test.ts` › denies an actor without the permission, and records the denial                                                                                                                                                                                                                                                                                                                                                  |
+| BC1 | every barrier case leaves EXACTLY one DENIED row         | the shared recorder writes the audit row twice | `transactional-authorization.test.ts` › refuses ${testCase.name} when authority is revoked before the transaction; › refuses notifications.test when authority is revoked before the transaction; › refuses templates.revert when authority is revoked before the transaction; › records an EARLY refusal the same way in every phase; › records a TEMPLATES early refusal as one audit row and one event, and a non-denial as nothing |
+| BC2 | ...naming the case's LITERAL permission, in both ledgers | audit row and event both name `panels.view`    | `transactional-authorization.test.ts` › refuses ${testCase.name} when authority is revoked before the transaction; › refuses notifications.test when authority is revoked before the transaction; › refuses templates.revert when authority is revoked before the transaction; › records an EARLY refusal the same way in every phase; › records a TEMPLATES early refusal as one audit row and one event, and a non-denial as nothing |
+
+Measured: RP1 — 2/8, `expected { …(18) } to match object { result:
+'DENIED', …(4) }` (the row no longer names the permission) and `an outage is
+not a denial: expected [ { …(18) } ] to have a length of +0 but got 1`. RP2
+— 1/8, `expected [] to have a length of 1 but got +0`. BC1 — 7/9,
+`settings.set: ONE in-transaction refusal, ONE DENIED audit row: expected
+[ …, … ] to have a length of 1 but got 2` and the like; before this round
+the five barrier cases stayed green under it. BC2 — 7/9, `settings.set: the
+audit row names the refused permission: expected 'panels.view' to be
+'settings.edit'` and the like; before this round the five barrier cases
+stayed green under it.
 
 ## The microsecond truncation is still open, deliberately
 

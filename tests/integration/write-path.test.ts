@@ -87,17 +87,58 @@ describe('canonical write path', () => {
       }),
     ).rejects.toThrowError(/maintenance.run/);
 
-    // A denial is auditable and observable, not silent.
+    // A denial is auditable and observable, not silent — and EXACTLY one of
+    // each, naming the permission. The shared recorder (round 52) replaced an
+    // inline catch that audited ANY throw as a refusal.
     const audits = await ctx.container.database.db.select().from(auditLogs);
     expect(audits).toHaveLength(1);
-    expect(audits[0]?.result).toBe('DENIED');
-    expect(audits[0]?.actorType).toBe('CUSTOMER');
+    expect(audits[0]).toMatchObject({
+      result: 'DENIED',
+      actorType: 'CUSTOMER',
+      action: 'system.ping',
+      entityType: 'System',
+      after: { deniedPermission: 'maintenance.run' },
+    });
 
     const events = await ctx.container.database.db.select().from(operationalEvents);
-    expect(events.map((e) => e.code)).toContain('access.permission_denied');
-    expect(events.find((e) => e.code === 'access.permission_denied')?.severity).toBe('WARN');
+    const denials = events.filter((e) => e.code === 'access.permission_denied');
+    expect(denials, 'ONE early refusal, ONE event').toHaveLength(1);
+    expect(denials[0]?.severity).toBe('WARN');
+    expect((denials[0]?.context as Record<string, unknown> | null)?.['permission']).toBe(
+      'maintenance.run',
+    );
 
     // And nothing was written to the outbox.
+    expect(await ctx.container.database.db.select().from(outboxMessages)).toHaveLength(0);
+  });
+
+  it('audits nothing when the guard fails for a reason that is not a denial', async () => {
+    // An operational log that is down surfaces as the guard's own error,
+    // before any denial exists. The inline recorder this service used to
+    // carry wrote a DENIED row for that too — a refusal of `maintenance.run`
+    // that never happened. Not a denial, so not audited (OQ-3D-04 records
+    // the outage path itself).
+    const guard = ctx.container.guard as unknown as {
+      check: (...args: unknown[]) => Promise<void>;
+    };
+    const realCheck = guard.check;
+    guard.check = async () => {
+      throw new Error('the operational log is down');
+    };
+    try {
+      await expect(
+        ctx.container.recordPing.execute(tenantA, customerActor(), {
+          idempotencyKey: 'write-path-outage',
+          source: 'test',
+        }),
+      ).rejects.toThrow('the operational log is down');
+    } finally {
+      guard.check = realCheck;
+    }
+    expect(
+      await ctx.container.database.db.select().from(auditLogs),
+      'an outage is not a denial',
+    ).toHaveLength(0);
     expect(await ctx.container.database.db.select().from(outboxMessages)).toHaveLength(0);
   });
 
