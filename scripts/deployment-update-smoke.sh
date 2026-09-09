@@ -10,10 +10,16 @@
 #
 # Three transitions, in the order that matters:
 #
-#   A -> B          a successful update
+#   A -> B          a successful update, where A and B carry DIFFERENT edge
+#                   configurations: B must be the one the edge is serving
+#                   afterwards, read from a response rather than from disk
 #   B -> BROKEN     a release that starts and never becomes ready: it must NOT
 #                   become current, and B must come back
-#   B -> A          a rollback, which must not touch the database
+#   B -> BAD EDGE   a release whose application is byte-identical to B and whose
+#                   Caddy configuration cannot be loaded: it must NOT become
+#                   current, and B's edge configuration must come back
+#   B -> A          a rollback, which must not touch the database, and which
+#                   must return the EDGE to A's configuration too
 set -euo pipefail
 
 REPO="$(cd -- "$(dirname -- "$0")/.." && pwd)"
@@ -74,6 +80,22 @@ edge_get() {
 }
 edge_serves() {
   compose exec -T caddy wget -q -O /dev/null "http://127.0.0.1:8080$1"
+}
+
+# Which release's EDGE CONFIGURATION is loaded, as a browser sees it.
+#
+# Not "is Caddy healthy", and not "is the right bundle on disk". The staging
+# defect that this exists for had a healthy Caddy, the new bundle published, the
+# new release recorded — and the PREVIOUS release's routing still parsed into the
+# running container's memory. The only way to see that is to ask the edge for a
+# response and read what the configuration put in it.
+#
+# Each release's routes snippet carries `X-Nexa-Edge: <version>`, added by this
+# script when it builds the release, so the answer names a release rather than
+# merely differing.
+edge_config_marker() {
+  compose exec -T caddy wget -q -S -O /dev/null "http://127.0.0.1:8080/" 2>&1 |
+    sed -n 's/.*[Xx]-[Nn]exa-[Ee]dge: *//p' | tr -d '\r' | sed -n '1p'
 }
 
 # The Web Admin as a browser gets it: the document, then every hashed asset the
@@ -139,6 +161,99 @@ build_release() {
 }
 build_release v1.0.0
 build_release v2.0.0
+
+# --- Two DIFFERENT edge configurations, which is the whole point ------------
+#
+# The releases this script built before this point shipped byte-identical Caddy
+# configuration, because they are two builds of one commit. So the transition
+# between them never changed the edge, and the defect that needs catching — the
+# edge NOT adopting the target release's configuration — could not arise. The
+# suite was green through the entire staging incident.
+#
+# v1.0.0 is given the OLD shape, which is what the real staging.9 had:
+#
+#   * `/assets/*` rooted at the activated release rather than at the pool. That
+#     works for a release's own assets and is exactly what breaks across a
+#     deployment — which is why the pool exists.
+#   * a marker header naming the release, so `edge_config_marker` can say WHICH
+#     configuration is loaded rather than only that two differ.
+#
+# v2.0.0 keeps the shipped routing and gets its own marker. Both configurations
+# are functional: a test where the old one is broken would prove that a broken
+# edge is noticed, which is not the question.
+OLD_ROUTES="${ROOT}/routes.v1.caddy"
+NEW_ROUTES="${ROOT}/routes.v2.caddy"
+marked_routes() {
+  local version="$1" destination="$2"
+  cp deploy/caddy/routes.caddy "$destination"
+  # The marker, on every response from the snippet.
+  python3 - "$destination" "$version" <<'PY'
+import sys
+path, version = sys.argv[1], sys.argv[2]
+text = open(path, encoding='utf-8').read()
+needle = '(nexa_routes) {\n\tencode zstd gzip\n'
+assert text.count(needle) == 1, 'the routes snippet does not open the way this expects'
+text = text.replace(
+    needle,
+    '(nexa_routes) {\n\tencode zstd gzip\n\theader X-Nexa-Edge "%s"\n' % version,
+)
+open(path, 'w', encoding='utf-8').write(text)
+PY
+}
+marked_routes v1.0.0 "$OLD_ROUTES"
+marked_routes v2.0.0 "$NEW_ROUTES"
+# v1.0.0's asset root: the activated release, not the pool. One line, and it is
+# the real difference between staging.9 and staging.11.
+python3 - "$OLD_ROUTES" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding='utf-8').read()
+assert text.count('\t\troot * /srv/web/pool\n') == 1, 'the asset root is not where this expects'
+text = text.replace('\t\troot * /srv/web/pool\n', '\t\troot * /srv/web/current\n')
+open(path, 'w', encoding='utf-8').write(text)
+PY
+grep -q 'X-Nexa-Edge "v1.0.0"' "$OLD_ROUTES" || fail "v1.0.0's routes were not marked"
+grep -q 'X-Nexa-Edge "v2.0.0"' "$NEW_ROUTES" || fail "v2.0.0's routes were not marked"
+grep -q 'root \* /srv/web/pool' "$NEW_ROUTES" || fail "v2.0.0's routes lost the pool"
+grep -q 'root \* /srv/web/pool' "$OLD_ROUTES" && fail "v1.0.0's routes still use the pool"
+# Baked into each image, so a ROLLBACK recovers v1.0.0's configuration from
+# v1.0.0's own immutable image — which is where botctl gets it.
+bake_routes() {
+  local version="$1" routes="$2"
+  docker build -t "${IMAGE_REPO}:${version}" -f - "$(dirname "$routes")" >/dev/null <<DOCKERFILE || fail "baking ${version}'s routes failed"
+FROM ${IMAGE_REPO}:${version}
+USER root
+COPY $(basename "$routes") /app/deploy/caddy/routes.caddy
+RUN grep -q 'X-Nexa-Edge' /app/deploy/caddy/routes.caddy
+USER node
+DOCKERFILE
+  docker push --quiet "${IMAGE_REPO}:${version}" >/dev/null || fail "pushing ${version} failed"
+}
+bake_routes v1.0.0 "$OLD_ROUTES"
+bake_routes v2.0.0 "$NEW_ROUTES"
+pass "v1.0.0 and v2.0.0 carry DIFFERENT edge configurations"
+
+# A release whose application is perfect and whose EDGE CONFIGURATION cannot be
+# served. Derived from v2.0.0 so the api, the worker, the monitor and the
+# migrator are byte-identical — the only thing wrong with it is a routes file
+# Caddy will not parse.
+#
+# This is the injected edge failure. It has to back out for the same reason the
+# unready release does: an update that cannot put the target's routing in force
+# has not updated the installation, whatever the containers report. And it is a
+# different branch from v3.0.0-broken, where the API is what fails.
+BAD_ROUTES="${ROOT}/routes.bad.caddy"
+cp "$NEW_ROUTES" "$BAD_ROUTES"
+printf '%s\n' 'this is not a caddy directive {' >>"$BAD_ROUTES"
+docker build -t "${IMAGE_REPO}:v5.0.0-badedge" -f - "$ROOT" >/dev/null <<DOCKERFILE || fail "building the bad-edge release failed"
+FROM ${IMAGE_REPO}:v2.0.0
+USER root
+COPY routes.bad.caddy /app/deploy/caddy/routes.caddy
+USER node
+DOCKERFILE
+docker push --quiet "${IMAGE_REPO}:v5.0.0-badedge" >/dev/null ||
+  fail "pushing the bad-edge release failed"
+pass "v5.0.0-badedge carries an edge configuration Caddy cannot load"
 
 # v2.0.0's HOST ASSETS have to differ from v1.0.0's, or "the update installed
 # the target release's botctl" is unfalsifiable: two builds of the same commit
@@ -209,8 +324,12 @@ install -d -m 0755 "$NEXA_DEPLOY_DIR" "${NEXA_DEPLOY_DIR}/caddy" "$NEXA_LIB_DIR"
 install -d -m 0750 "$NEXA_STATE_DIR" "${NEXA_STATE_DIR}/releases"
 install -d -m 0700 "$NEXA_BACKUP_DIR"
 install -m 0644 deploy/compose.yml "${NEXA_DEPLOY_DIR}/compose.yml"
-install -m 0644 deploy/caddy/Caddyfile deploy/caddy/Caddyfile.ci deploy/caddy/routes.caddy \
-  "${NEXA_DEPLOY_DIR}/caddy/"
+install -m 0644 deploy/caddy/Caddyfile deploy/caddy/Caddyfile.ci "${NEXA_DEPLOY_DIR}/caddy/"
+# v1.0.0's OWN routes, which are not the repository's. An installation runs one
+# release's tooling, and this one is installed at v1.0.0 — so the edge
+# configuration on the host has to be v1.0.0's, or the update below would start
+# from an inconsistency rather than from a working installation.
+install -m 0644 "$OLD_ROUTES" "${NEXA_DEPLOY_DIR}/caddy/routes.caddy"
 # The rest of the host-asset set, exactly as `install.sh` lays it down. Without
 # it there is nothing for the update to capture under v1.0.0, and nothing for
 # the rollback to put back.
@@ -256,6 +375,12 @@ DIGEST_A="$(docker buildx imagetools inspect "${IMAGE_REPO}:v1.0.0" --format '{{
   # only because its subnet happened to equal the application's default.
   printf 'NEXA_DATA_SUBNET=172.31.44.0/24\n'
   printf 'NEXA_CI_HTTP_PORT=%s\n' "$HTTP_PORT"
+  # The edge generation, as `install.sh` records it. Computed by the library
+  # itself rather than restated here, so the value this installation starts
+  # from is the one botctl will compare against.
+  printf 'NEXA_EDGE_CONFIG=%s\n' "$(
+    NEXA_DEPLOY_DIR="$NEXA_DEPLOY_DIR" bash -c ". \"${NEXA_LIB}\"; nexa_edge_config_fingerprint"
+  )"
 } >"${NEXA_CONFIG_DIR}/deploy.env"
 umask 022
 
@@ -313,6 +438,12 @@ case "$serving" in
   *) fail "a fresh install at v1.0.0 serves ${serving}" ;;
 esac
 pass "the edge serves v1.0.0's document and every asset it names (${serving})"
+
+step "the edge is running v1.0.0's own configuration"
+EDGE_MARKER_V1="$(edge_config_marker)"
+[ "$EDGE_MARKER_V1" = "v1.0.0" ] ||
+  fail "the edge reports configuration [${EDGE_MARKER_V1}] at a fresh v1.0.0 install"
+pass "the edge answers with X-Nexa-Edge: ${EDGE_MARKER_V1}"
 
 # The assets v1.0.0's document names, captured NOW. They are re-fetched after
 # the update below: a browser that has the old document and has not asked for
@@ -398,6 +529,38 @@ case "$serving" in
   'bundle=v2 '*) : ;;
   *) fail "after the update the edge still serves ${serving}" ;;
 esac
+
+# --- The edge adopted v2.0.0's CONFIGURATION, not merely its bundle ---------
+#
+# This is the assertion the staging incident needed and nobody had. Everything
+# above it was true on that host: the new release recorded, the new bundle
+# published, every container healthy, readiness passing. What was false is this
+# line, and there was no command that would have said so.
+#
+# Read through the edge, from a response, because that is what a browser gets. A
+# container being HEALTHY is not evidence: v1.0.0's configuration answers `/` with
+# a 200 and passes the healthcheck perfectly while serving the wrong thing.
+EDGE_MARKER_V2="$(edge_config_marker)"
+[ "$EDGE_MARKER_V2" = "v2.0.0" ] ||
+  fail "the update reported success and the edge is still running configuration [${EDGE_MARKER_V2}]; a browser is being served v1.0.0's routing by a server that reports v2.0.0"
+[ "$EDGE_MARKER_V2" != "$EDGE_MARKER_V1" ] ||
+  fail "the edge configuration did not change across the update, so this check proves nothing"
+# And the generation botctl recorded agrees with what is running. deploy.env is
+# what the next `compose up` would start from, so a disagreement here is the
+# defect waiting for the next reboot.
+grep -q '^NEXA_EDGE_CONFIG=sha256:' "${NEXA_CONFIG_DIR}/deploy.env" ||
+  fail "the update did not record an edge configuration generation in deploy.env"
+EDGE_RUNNING="$(docker inspect "$(compose ps -q caddy)" \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^NEXA_EDGE_CONFIG=//p' | sed -n '1p')"
+EDGE_RECORDED="$(sed -n 's/^NEXA_EDGE_CONFIG=//p' "${NEXA_CONFIG_DIR}/deploy.env" | sed -n '1p')"
+[ -n "$EDGE_RUNNING" ] || fail "the running edge carries no configuration generation"
+[ "$EDGE_RUNNING" = "$EDGE_RECORDED" ] ||
+  fail "the running edge was created for ${EDGE_RUNNING} and deploy.env records ${EDGE_RECORDED}"
+# The POOL is what the new configuration added, and it is what the old one did
+# not have. A document fetched before the deployment names assets that only the
+# pool can still serve, and the loop below already re-fetches them — this states
+# the dependency so a reader knows why the two checks are next to each other.
+pass "the edge runs v2.0.0's configuration (X-Nexa-Edge: ${EDGE_MARKER_V2}, generation ${EDGE_RECORDED#sha256:})"
 pass "the edge serves v2.0.0's document and every asset it names (${serving})"
 
 #   1. `current` is a SYMLINK into releases/. A directory of the same name
@@ -527,6 +690,49 @@ done
 pass "a dead monitor backs the release out, and v2.0.0 came back"
 
 # ---------------------------------------------------------------------------
+step "a release whose edge configuration cannot be served must not become current"
+# ---------------------------------------------------------------------------
+# The application half of this release is byte-identical to v2.0.0, so every
+# check in this script that looks at the api, the worker, the monitor or the
+# migration passes on it. What it cannot do is serve the edge — and an
+# installation whose edge cannot serve is one nobody can reach, however healthy
+# its containers are.
+#
+# The host assets are REPLACED before the start, so this also exercises the
+# back-out putting the outgoing release's Caddy configuration back.
+if "$BOTCTL" update v5.0.0-badedge; then
+  fail "an update whose edge configuration cannot be served reported success"
+fi
+[ "$(cat "${NEXA_STATE_DIR}/current")" = "v2.0.0" ] ||
+  fail "a release whose edge cannot serve became current"
+grep -qF "NEXA_IMAGE=${IMAGE_REPO}@${DIGEST_B}" "${NEXA_CONFIG_DIR}/deploy.env" ||
+  fail "deploy.env was repointed at a release whose edge cannot serve"
+# v2.0.0's routes are back on the host. A back-out that left the broken file
+# there would leave an installation that cannot be restarted.
+grep -q 'X-Nexa-Edge "v2.0.0"' "${NEXA_DEPLOY_DIR}/caddy/routes.caddy" ||
+  fail "the back-out did not restore v2.0.0's edge configuration to the host"
+
+waited=0
+until "$BOTCTL" status >/dev/null 2>&1; do
+  [ "$waited" -lt 180 ] || {
+    "$BOTCTL" status || true
+    fail "v2.0.0 did not come back after the bad-edge update"
+  }
+  sleep 3
+  waited=$((waited + 3))
+done
+# And the edge is serving v2.0.0's configuration again, read from a response.
+EDGE_MARKER_AFTER_BAD="$(edge_config_marker)"
+[ "$EDGE_MARKER_AFTER_BAD" = "v2.0.0" ] ||
+  fail "after the bad-edge back-out the edge reports configuration [${EDGE_MARKER_AFTER_BAD}]"
+serving="$(served_bundle)"
+case "$serving" in
+  'bundle=v2 '*) : ;;
+  *) fail "after the bad-edge back-out the edge serves ${serving}" ;;
+esac
+pass "a broken edge configuration backs the release out, and v2.0.0's edge came back"
+
+# ---------------------------------------------------------------------------
 step "rollback v2.0.0 -> v1.0.0"
 # ---------------------------------------------------------------------------
 "$BOTCTL" rollback || fail "the rollback failed"
@@ -564,6 +770,25 @@ case "$activated" in
   *) fail "/srv/web/current is not a symlink into releases/ after the rollback (got: ${activated})" ;;
 esac
 pass "the rollback serves v1.0.0's bundle, coherently (${serving})"
+
+# --- And the edge rolled back too ------------------------------------------
+#
+# The same defect pointing the other way, and the worse one to ship: the
+# application downgraded while the edge keeps serving the newer release's
+# routing. A rollback exists to get an installation back to something that
+# worked, and "v1.0.0's application behind v2.0.0's routes" is a state that
+# never worked and was never tested.
+EDGE_MARKER_BACK="$(edge_config_marker)"
+[ "$EDGE_MARKER_BACK" = "v1.0.0" ] ||
+  fail "the rollback returned the application to v1.0.0 and left the edge running configuration [${EDGE_MARKER_BACK}]"
+EDGE_RECORDED_BACK="$(sed -n 's/^NEXA_EDGE_CONFIG=//p' "${NEXA_CONFIG_DIR}/deploy.env" | sed -n '1p')"
+EDGE_RUNNING_BACK="$(docker inspect "$(compose ps -q caddy)" \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^NEXA_EDGE_CONFIG=//p' | sed -n '1p')"
+[ "$EDGE_RUNNING_BACK" = "$EDGE_RECORDED_BACK" ] ||
+  fail "after the rollback the running edge is ${EDGE_RUNNING_BACK} and deploy.env records ${EDGE_RECORDED_BACK}"
+[ "$EDGE_RECORDED_BACK" != "$EDGE_RECORDED" ] ||
+  fail "the rollback left the edge generation at v2.0.0's value"
+pass "the rollback returned the edge to v1.0.0's configuration (X-Nexa-Edge: ${EDGE_MARKER_BACK})"
 
 # ---------------------------------------------------------------------------
 step "update again, to prove the installation is not stuck"

@@ -3131,4 +3131,206 @@ assert_not_contains 'a recorded set was extracted again' "$(docker_log)" '--entr
 assert_not_contains 'a recovery was announced with nothing to recover' "$BOTCTL_OUTPUT" 'recovering them'
 teardown_root
 
+# =============================================================================
+# The edge adopts the release's own configuration — the staging.9 -> .11 defect
+# =============================================================================
+# What happened on a real staging host, confirmed by the owner:
+#
+#   v0.1.0-staging.9 -> v0.1.0-staging.11. The api, worker and monitor were
+#   updated, the migrations applied, the new Web Admin bundle published, every
+#   container HEALTHY, `botctl update` reported SUCCESS and readiness passed.
+#   And Caddy was still the container from .9, serving .9's routes — whose
+#   asset root was `/srv/web` rather than the `/srv/web/current` +
+#   `/srv/web/pool` pair .11 uses. The server reported .11; every browser got
+#   .9's Web Admin. Only a manual force-recreation fixed it.
+#
+# The cause is not a bug in any one line. The Caddy configuration is a host
+# asset, bind-mounted read-only, and `nexa_activate_release_assets` replaces it
+# on disk — which changes no SERVICE DEFINITION, so `docker compose up -d`
+# correctly decides the caddy service is converged. Caddy does not watch its
+# config and `admin off` leaves nothing to reload through.
+#
+# The fix gives compose a definition that does change: `NEXA_EDGE_CONFIG` in the
+# caddy service's environment, a fingerprint of the activated files. Every case
+# below is about that value being right at every step, including the ones where
+# the update fails.
+#
+# The fake models the edge container's own generation and two ways it can go
+# wrong: `edge_sticky`, where `up -d` leaves it alone (the real defect), and
+# `edge_never`, where even a forced recreation does not adopt it.
+
+# The generation deploy.env records, and the generation the fake edge container
+# is actually running. Equal is the only correct state.
+recorded_edge() { nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_EDGE_CONFIG 2>/dev/null || printf ''; }
+running_edge() { cat "${FAKE_DIR}/edge_running" 2>/dev/null || printf ''; }
+
+edge_host() {
+  setup_root
+  setup_fake_docker
+  seed_release 'v1.0.0' "$DIGEST_A"
+  # The installation starts CONSISTENT, and the label matters: `seed_release`
+  # stages v1.0.0's set under its digest labelled with the version, so the live
+  # files have to carry the same label or a back-out would restore a different
+  # set than the one that was live and every before/after comparison below would
+  # be measuring the fixture rather than the code.
+  write_live_assets v1.0.0
+  seed_image_assets "$DIGEST_B" B
+  fake_set resolve_digest "$DIGEST_B"
+  set_live_edge_generation
+  reset_docker_log
+}
+
+# Put the fake edge container on the generation the LIVE files define, by asking
+# the real library for it. Not a hand-written constant: the fingerprint is a
+# function of file content, and a constant here would stop tracking it.
+set_live_edge_generation() {
+  fake_set edge_running "$(NEXA_DEPLOY_DIR="$NEXA_DEPLOY_DIR" bash -c '
+    . "'"$NEXA_LIB"'" 2>/dev/null
+    nexa_edge_config_fingerprint')"
+}
+
+edge_host
+test_case 'update: the edge ends on the target release'"'"'s configuration generation'
+before="$(running_edge)"
+run_botctl update v2.0.0
+assert_equals 'the update failed' 0 "$BOTCTL_STATUS"
+# The generation CHANGED, which is what says release B's Caddy files are now
+# the ones in force. Without this the case would pass on an installation where
+# nothing about the edge differs between releases.
+assert_fails 'the edge generation did not change at all' test "$before" = "$(running_edge)"
+# And the running container agrees with what was recorded. This is the exact
+# assertion the staging host would have failed: deploy.env said .11, the
+# container was .9's.
+assert_equals 'the running edge does not match what deploy.env records' \
+  "$(recorded_edge)" "$(running_edge)"
+assert_contains 'the update did not report the edge generation' "$BOTCTL_OUTPUT" 'edge configuration is'
+teardown_root
+
+edge_host
+test_case 'update: an edge that `up -d` leaves alone is recreated, and the update still succeeds'
+# THE STAGING DEFECT, reproduced. `up -d` returns zero and changes nothing about
+# the edge container — exactly what compose does for a changed bind-mounted file.
+fake_set edge_sticky 1
+run_botctl update v2.0.0
+assert_equals 'the update failed when the edge needed recreating' 0 "$BOTCTL_STATUS"
+log="$(docker_log)"
+# ONE service, by name. "Do not blindly destroy unrelated containers" is a
+# requirement, not a preference: postgres holds the database.
+assert_contains 'the edge was not force-recreated' "$log" 'up -d --force-recreate --no-deps caddy'
+assert_not_contains 'the forced recreation was not scoped to the edge' "$log" '--force-recreate --no-deps postgres'
+assert_not_contains 'the forced recreation was not scoped to the edge' "$log" '--force-recreate --no-deps redis'
+assert_not_contains 'the whole stack was force-recreated' "$log" 'up -d --force-recreate --remove-orphans'
+assert_equals 'the edge still does not match what deploy.env records' \
+  "$(recorded_edge)" "$(running_edge)"
+assert_contains 'the repair was silent' "$BOTCTL_OUTPUT" 'recreating just that container'
+teardown_root
+
+edge_host
+test_case 'update: an edge that will not adopt the target configuration FAILS the update'
+# The case that makes this honest. Everything else about the release works — the
+# image pulls, the migration runs, the containers are healthy — and the edge
+# cannot be brought onto the target's configuration. A success here is the
+# staging lie: a server reporting the new release while browsers get the old
+# Web Admin.
+fake_set edge_never 1
+run_botctl update v2.0.0
+assert_fails 'the update succeeded with the edge on the wrong configuration' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'the target became current anyway' 'v1.0.0' "$(cat "${NEXA_STATE_DIR}/current")"
+assert_contains 'the failure did not name the edge' "$BOTCTL_OUTPUT" 'edge'
+# The back-out ran: release A's tooling is back on the host.
+assert_equals 'the outgoing release'"'"'s host assets were not restored' 'v1.0.0' "$(installed_label)"
+teardown_root
+
+edge_host
+test_case 'update: a back-out starts the edge under the OUTGOING release'"'"'s generation'
+# The other direction of the same defect. A back-out that brought the edge up
+# under the FAILED release's configuration would leave the previous release's
+# application behind the new release's routes — whose hashed asset names it does
+# not publish.
+outgoing="$(running_edge)"
+fake_set "up_exit_${DIGEST_B}" 1
+run_botctl update v2.0.0
+assert_fails 'the update reported success while the target would not start' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'the outgoing release'"'"'s host assets were not restored' 'v1.0.0' "$(installed_label)"
+assert_equals 'the edge was left on the failed release'"'"'s generation' "$outgoing" "$(running_edge)"
+log="$(docker_log)"
+# The generation is visible per call in the fake's log, so "which generation did
+# the back-out start under" is a question a test can actually ask.
+assert_contains 'no call carried the outgoing generation' "$log" "[edge=${outgoing}]"
+teardown_root
+
+edge_host
+test_case 'update: two releases with identical edge configuration do not recreate the edge'
+# Churn is a cost. Most releases do not change the edge, and recreating it on
+# every update would drop connections and re-bind ports for nothing — so the
+# fingerprint is over CONTENT, and identical content must produce the same
+# value. This is also what stops the mechanism from being a disguised
+# `--force-recreate` on every update.
+# The SAME label, so release B's Caddy files are byte-identical to the live
+# ones. The label is what `write_asset_set` stamps into every file, so a
+# different label is a different edge configuration.
+seed_image_assets "$DIGEST_B" v1.0.0
+before="$(running_edge)"
+run_botctl update v2.0.0
+assert_equals 'the update failed' 0 "$BOTCTL_STATUS"
+assert_equals 'an identical edge configuration produced a different generation' \
+  "$before" "$(running_edge)"
+assert_not_contains 'the edge was recreated for an unchanged configuration' \
+  "$(docker_log)" '--force-recreate'
+teardown_root
+
+edge_host
+test_case 'rollback: the edge returns to the rollback release'"'"'s generation'
+run_botctl update v2.0.0
+assert_equals 'the update failed' 0 "$BOTCTL_STATUS"
+after_update="$(running_edge)"
+reset_docker_log
+run_botctl rollback
+assert_equals 'the rollback failed' 0 "$BOTCTL_STATUS"
+assert_fails 'the edge stayed on the release that was rolled away from' \
+  test "$after_update" = "$(running_edge)"
+assert_equals 'the edge does not match what deploy.env records after the rollback' \
+  "$(recorded_edge)" "$(running_edge)"
+assert_contains 'the rollback did not say which edge configuration is in force' \
+  "$BOTCTL_OUTPUT" "the edge serves"
+teardown_root
+
+edge_host
+test_case 'restart: the edge adopts the configuration that is installed'
+# `botctl status` tells an operator to run `botctl restart` when the running edge
+# disagrees with the host. That advice has to be true, and a plain `up -d` does
+# not make it true — which is the whole defect, one level down.
+fake_set edge_running 'sha256:0000000000000000000000000000000000000000000000000000000000000000'
+run_botctl restart
+assert_equals 'the restart failed' 0 "$BOTCTL_STATUS"
+assert_equals 'the restart left the edge on a stale generation' \
+  "$(recorded_edge)" "$(running_edge)"
+assert_contains 'the restart did not say which edge configuration is in force' \
+  "$BOTCTL_OUTPUT" 'the edge serves'
+teardown_root
+
+edge_host
+test_case 'status: a stale edge is REPORTED, not silent'
+# The staging host's real failure was that nothing said so. Every container
+# healthy, the right version recorded, the wrong Web Admin being served, and no
+# command that would have told the operator.
+fake_set edge_running 'sha256:0000000000000000000000000000000000000000000000000000000000000000'
+run_botctl status
+assert_contains 'status did not report the edge generation' "$BOTCTL_OUTPUT" 'edge configuration:'
+assert_contains 'status did not report the running edge' "$BOTCTL_OUTPUT" 'edge container:'
+assert_contains 'status did not warn about the mismatch' "$BOTCTL_OUTPUT" 'DIFFERENT configuration generation'
+assert_contains 'status did not say what a browser would get' "$BOTCTL_OUTPUT" "previous release's Web Admin"
+assert_contains 'status did not say how to fix it' "$BOTCTL_OUTPUT" "botctl restart"
+teardown_root
+
+edge_host
+test_case 'status: an edge that agrees with the host says so and does not warn'
+# The other direction, so the warning above is not simply always printed.
+run_botctl status
+assert_contains 'status did not report the edge as serving the installed configuration' \
+  "$BOTCTL_OUTPUT" 'serving it'
+assert_not_contains 'status warned about a mismatch that does not exist' \
+  "$BOTCTL_OUTPUT" 'DIFFERENT configuration generation'
+teardown_root
+
 report

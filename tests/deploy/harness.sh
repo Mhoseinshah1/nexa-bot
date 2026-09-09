@@ -373,6 +373,24 @@ setup_fake_docker() {
   printf 'healthy' >"${FAKE_DIR}/api_health"
   printf '0' >"${FAKE_DIR}/stale_run"
   printf '0' >"${FAKE_DIR}/api_gone"
+  # The edge container's own configuration generation.
+  #
+  # `edge_running` is what the fake edge was created with, and a `compose up`
+  # that carries a NEXA_EDGE_CONFIG updates it — which is what a real compose
+  # does when a service's environment changed, because the container is
+  # recreated. Two knobs model the ways that goes wrong:
+  #
+  #   edge_sticky  `up -d` does NOT adopt the new generation. This is the real
+  #                staging defect: the Caddy configuration is a bind-mounted
+  #                file, changing it changes no service definition, and compose
+  #                leaves the container running. An explicit
+  #                `up -d --force-recreate --no-deps caddy` still adopts it.
+  #   edge_never   not even the forced recreation adopts it, so the verification
+  #                fails twice and the update must back out.
+  printf 'unset' >"${FAKE_DIR}/edge_running"
+  printf '0' >"${FAKE_DIR}/edge_sticky"
+  printf '0' >"${FAKE_DIR}/edge_never"
+  printf '0' >"${FAKE_DIR}/edge_recreate_exit"
   printf 'sha256:%s' "$(printf 'a%.0s' {1..64})" >"${FAKE_DIR}/resolve_digest"
   printf '0' >"${FAKE_DIR}/resolve_exit"
 
@@ -401,7 +419,10 @@ if [ -z "$NEXA_IMAGE" ]; then
     NEXA_IMAGE="$(sed -n 's/^NEXA_IMAGE=//p' -- "$_env_file" | sed -n '1p')"
   fi
 fi
-printf '%s [image=%s]\n' "$*" "$NEXA_IMAGE" >>"$DOCKER_LOG"
+# The edge generation is logged beside the image for the same reason the image
+# is: a test has to be able to see which generation a call was made with, and the
+# back-out paths differ from the forward path in exactly that value.
+printf '%s [image=%s] [edge=%s]\n' "$*" "$NEXA_IMAGE" "${NEXA_EDGE_CONFIG:-}" >>"$DOCKER_LOG"
 
 read_state() { cat "${FAKE_DIR}/$1" 2>/dev/null || printf '%s' "$2"; }
 
@@ -445,6 +466,19 @@ case "${1:-}" in
     exit 0
     ;;
   ps)
+    exit 0
+    ;;
+  inspect)
+    # What `nexa_running_edge_config` asks: the environment of the edge
+    # container. Only the one variable it reads is modelled, because that is the
+    # only thing any caller looks at.
+    case "$*" in
+      *Config.Env*)
+        printf 'NEXA_DOMAIN=example.test\n'
+        printf 'NEXA_EDGE_CONFIG=%s\n' "$(read_state edge_running unset)"
+        ;;
+      *) printf '\n' ;;
+    esac
     exit 0
     ;;
   compose)
@@ -578,6 +612,15 @@ case "${1:-}" in
               *) printf '{"Service":"caddy","State":"%s"}\n' "$_caddy_state" ;;
             esac
             ;;
+          *-q*)
+            # `compose ps -q caddy` — the container id the verification then
+            # inspects. Empty when the edge is not running, which is how
+            # `nexa_verify_edge_config` reports "there is nothing serving it".
+            case "$(read_state caddy_state running)" in
+              absent | exited | dead) : ;;
+              *) printf 'fakecaddycontainerid\n' ;;
+            esac
+            ;;
           *)
             printf 'api running healthy\npostgres running healthy\nredis running healthy\n'
             ;;
@@ -587,7 +630,30 @@ case "${1:-}" in
       # Per-image, like health, so "the target will not start but the previous
       # release does" is expressible. With one global value the back-out could
       # never succeed, and the branch that reports it had no coverage.
-      up) exit "$(read_state "up_exit_${NEXA_IMAGE##*@}" "$(read_state up_exit 0)")" ;;
+      up)
+        _up_status="$(read_state "up_exit_${NEXA_IMAGE##*@}" "$(read_state up_exit 0)")"
+        # A forced recreation of JUST the edge, which is what botctl falls back
+        # to when `up -d` left the container alone.
+        case "$*" in
+          *--force-recreate*caddy*)
+            [ "$(read_state edge_recreate_exit 0)" = "0" ] || exit 1
+            if [ "$(read_state edge_never 0)" = "0" ] && [ -n "${NEXA_EDGE_CONFIG:-}" ]; then
+              printf '%s' "$NEXA_EDGE_CONFIG" >"${FAKE_DIR}/edge_running"
+            fi
+            exit "$_up_status"
+            ;;
+        esac
+        # An ordinary `up -d`. It adopts the generation the way a real compose
+        # does when a service's environment changed — unless a test says the
+        # edge is sticky, which is the defect being reproduced.
+        if [ "$_up_status" = "0" ] &&
+          [ "$(read_state edge_sticky 0)" = "0" ] &&
+          [ "$(read_state edge_never 0)" = "0" ] &&
+          [ -n "${NEXA_EDGE_CONFIG:-}" ]; then
+          printf '%s' "$NEXA_EDGE_CONFIG" >"${FAKE_DIR}/edge_running"
+        fi
+        exit "$_up_status"
+        ;;
       run)
         # `--status` is a READ, and the only thing it puts on stdout is one
         # word. Modelled here rather than stubbed at the shell level, so the
