@@ -2487,17 +2487,24 @@ describe('an attempted privilege escalation is recorded in full', () => {
     // non-guard denial — the path the code above calls the more serious of
     // the two — left the whole corpus green.
     const events = await ctx.container.database.db.execute(
-      `SELECT code, context FROM operational_events WHERE code = 'access.permission_denied'` as never,
+      `SELECT code, severity, context FROM operational_events WHERE code = 'access.permission_denied'` as never,
     );
     const denialEvents = events.rows as Array<{
       code: string;
+      severity: string;
       context: Record<string, unknown> | null;
     }>;
     expect(
       denialEvents.map((event) => event.code),
       'ONE refused escalation must leave ONE operational event',
     ).toEqual(['access.permission_denied']);
-    expect(denialEvents[0]?.context?.['permission']).toBe(attempted?.[0]);
+    // The event and the audit row name the SAME permission, the first excess
+    // one, and the event is WARN — the alerts page filters by severity, so an
+    // INFO escalation refusal would be recorded and never seen.
+    expect(row?.after?.['deniedPermission']).toBe(attempted?.[0]);
+    expect(denialEvents[0]?.context?.['permission']).toBe(row?.after?.['deniedPermission']);
+    expect(denialEvents[0]?.severity).toBe('WARN');
+    expect(denialEvents[0]?.context?.['actorId']).toBe(manager.id);
   });
 });
 

@@ -1046,9 +1046,12 @@ export class AdminManagementService {
    * (`assertGrantsNoMorePrivilegeThanHeld`, `assertRestoresNoMorePrivilegeThanHeld`)
    * is thrown by this service, carries no marker, and is recorded here alone.
    *
-   * The audit row is the more important half. A refused administrative
-   * mutation is exactly the kind of event an operator needs to see later, and
-   * before this it left no trace at all for `setStatus` and `setRoles`.
+   * The audit row is the more important half, and it is written FIRST. A
+   * refused administrative mutation is exactly the kind of event an operator
+   * needs to see later, and before this it left no trace at all for
+   * `setStatus` and `setRoles`. The two writes are not atomic; if the event
+   * write fails, the audit row is already there and the write's error is
+   * what the caller sees in place of the 403.
    */
   private async runLockedMutation<T>(
     scope: ScopeContext,
@@ -1071,18 +1074,10 @@ export class AdminManagementService {
         const many = error.details['permissions'];
         const attempted = Array.isArray(many) ? many.map(String) : single ? [String(single)] : [];
 
-        // The guard is the authority on whether the operational event exists
-        // (OQ-3D-03). Every check inside a locked mutation passes `tx`, so the
-        // guard wrote nothing and this is the emitter — but that is a fact
-        // about today's callers, not a rule this function can see, and the
-        // shared recorder learned the hard way that "the guard wrote nothing"
-        // is exactly the sentence that goes false one call site over. Ask.
-        if (!denialEventRecorded(error)) {
-          await this.opsLog.record(
-            scope,
-            this.guard.denialEvent(actor, (attempted[0] ?? 'unknown') as PermissionKey),
-          );
-        }
+        // The audit row FIRST. It is the half an operator needs later, and a
+        // failing operational-event write must not cost it: the two are
+        // separate writes on the pool, nothing makes them atomic, and the
+        // order is the only thing that decides which survives.
         await this.audit.record(scope, actor, {
           action: denial.action,
           entityType: 'Admin',
@@ -1098,6 +1093,18 @@ export class AdminManagementService {
           },
           result: 'DENIED',
         });
+        // The guard is the authority on whether the operational event exists
+        // (OQ-3D-03). Every check inside a locked mutation passes `tx`, so the
+        // guard wrote nothing and this is the emitter — but that is a fact
+        // about today's callers, not a rule this function can see, and the
+        // shared recorder learned the hard way that "the guard wrote nothing"
+        // is exactly the sentence that goes false one call site over. Ask.
+        if (!denialEventRecorded(error)) {
+          await this.opsLog.record(
+            scope,
+            this.guard.denialEvent(actor, (attempted[0] ?? 'unknown') as PermissionKey),
+          );
+        }
       }
       throw error;
     }

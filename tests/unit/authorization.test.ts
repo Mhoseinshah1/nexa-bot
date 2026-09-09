@@ -272,6 +272,33 @@ describe('one denial is one event and one audit row', () => {
     expect(denialEventRecorded('denied')).toBe(false);
   });
 
+  it('writes the audit row before the event, so a failing event write cannot cost it', async () => {
+    // The two writes are not atomic. The audit row is the half an operator
+    // needs later; ordering it first is the only thing that keeps it when the
+    // operational log is down. The write's error still propagates — a
+    // recorder that swallowed it would hide an outage behind a clean 403.
+    const { guard: g } = guard();
+    const audit = new RecordingAudit();
+    const down: OperationalEventRecorder = {
+      record: async () => {
+        throw new Error('the operational log is down');
+      },
+    };
+    const error = await refusedBy(g, { inside: 'a transaction' });
+    await expect(
+      recordMutationDenial(
+        { guard: g, opsLog: down, audit },
+        scope,
+        webAdmin,
+        PERMISSION,
+        denial,
+        error,
+      ),
+    ).rejects.toThrow('the operational log is down');
+    expect(audit.entries, 'the audit row must be written before the event').toHaveLength(1);
+    expect(audit.entries[0]?.result).toBe('DENIED');
+  });
+
   it('writes no audit row for a refusal that is not THIS permission', async () => {
     // Pre-existing rule of `recordMutationDenial`, restated here so the new
     // branch cannot widen it: a PERMISSION_DENIED for a different permission

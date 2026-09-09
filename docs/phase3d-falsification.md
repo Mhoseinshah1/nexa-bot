@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 339 citations were checked; this record declares 342 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 342 citations were checked; this record declares 349 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -5218,14 +5218,14 @@ today's six call sites, not a rule the function can see, and it is the exact
 sentence that was true of `recordMutationDenial` inside a transaction and
 false outside one. It now asks the guard's marker, like the shared recorder.
 
-That change is unobservable in the code as committed, and the record says so
-rather than inventing a row: dropping the check alone leaves every suite green
-(AW3a below). It becomes observable the moment an in-lock check stops passing
-`tx` — which is the failure it exists to survive — so the mutation that pins
-it is the PAIR: drop the check AND drop `tx` from one in-lock site, and the
-identity-concurrency pin (now exact, replacing a `toContain` floor) fails with
-two events. Dropping `tx` alone, with the check in place, stays green, which is
-the hardening doing its job.
+That change was called "unobservable in the code as committed" here, and the
+record pinned it only as a PAIR: drop the check AND drop `tx` from one in-lock
+site, and the identity-concurrency pin (now exact, replacing a `toContain`
+floor) fails with two events; dropping `tx` alone, with the check in place,
+stays green. Round 48 found the sentence false — a committed test can drop
+`tx` itself, the way the one-connection test already re-aims the in-lock check
+— and pinned the rule directly. AW3a's "all green" below was true of the tests
+that existed, not of the rule.
 
 ## The mutations
 
@@ -5318,6 +5318,82 @@ event: expected [] to deeply equal [ 'access.permission_denied' ]`; before this
 round the same mutation left 111/111 green. AX2 — 2/111, the same message and
 `ONE in-lock refusal must leave ONE operational event: expected [] to deeply
 equal [ 'access.permission_denied' ]`.
+
+## Round 48 — the twenty-ninth reviewer, and "unobservable" was a sentence, not a measurement
+
+Four confirmed findings, all minor, all in the identity recorder the two
+previous rounds had just changed.
+
+### Two rules in `runLockedMutation` with no committed test — and a reason that was false
+
+Round 46 said the marker consult was "unobservable in the code as committed"
+and pinned it only as a record-only pair. Round 47 added an audit pin beside
+it and did not notice that the audit row's UNCONDITIONAL write had no test
+either: moving it inside the `if` left 111/111 green. Both were observable
+all along by the construction the one-connection test already uses — re-aim
+the in-lock check and drop `tx`, so the guard writes the event itself and
+marks the error. That is a committed test now:
+`identity-concurrency.test.ts` › records ONE event and ONE audit row when the
+in-lock check has already written the event. It dies under the unconditional
+emission (two events) and under the conditional audit (zero rows). The
+"unobservable" sentences in round 46 and OQ-3D-03 are corrected in place.
+
+### The event's severity and actor were pinned by nothing
+
+An `INFO` escalation refusal was green everywhere, and the alerts page
+filters by severity: recorded, and never seen. Both in-lock pins now assert
+`WARN` and the refused actor's id.
+
+### The audit row and the event could name different permissions
+
+Round 47's pin checked the event against `deniedPermissions[0]` and the audit
+row against nothing; the audit row naming the LAST excess permission was
+green. The pin now ties the two together: the audit row names the first
+excess permission and the event names what the audit row names.
+
+### The event was written before the audit row, in both recorders
+
+"The audit row is the more important half" — and it was written second, so
+an operational log that is down cost it. The two writes are not atomic, and
+their order is the only thing that decides which survives. Both recorders
+write the audit row first now; the event write's error still propagates,
+because a recorder that swallowed it would hide an outage behind a clean 403. Pinned in both: the shared recorder at the unit level with a throwing
+ops log, `runLockedMutation` through the container façade.
+
+### A measurement that was of a broken build
+
+The first sweep this round reported AY2 and AY5 killing ten tests each. They
+had not: the script that moved the audit block anchored on the FIRST
+`audit.record` in the file, which belongs to the password throttle, and the
+ten failures were `adminId is not defined`. Re-anchored to
+`runLockedMutation`, each kills exactly the one test written for it. Ten
+failures for a one-line rule was the tell; a sweep that kills more than its
+rule can explain is measuring something else.
+
+## The mutations
+
+`admin-management.service.ts` `abf0ab1b57fd732e`, `authorized-mutation.ts`
+`77795cdc066015a3` (this round's versions), restored after each row. Suites:
+`identity-concurrency.test.ts` + `codex-findings-round-2.test.ts` (113) and
+`authorization.test.ts` (14).
+
+| #   | rule                                                         | mutation                                                | tests that die                                                                                                                                                                                  |
+| --- | ------------------------------------------------------------ | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AY1 | `runLockedMutation` consults the guard's marker              | emit unconditionally (round 46's AW3a, no longer green) | `identity-concurrency.test.ts` › records ONE event and ONE audit row when the in-lock check has already written the event                                                                       |
+| AY2 | ...and writes the audit row UNCONDITIONALLY                  | audit row inside the `if`                               | `identity-concurrency.test.ts` › records ONE event and ONE audit row when the in-lock check has already written the event                                                                       |
+| AY3 | the in-lock denial event is WARN                             | `severity: 'INFO'`                                      | `codex-findings-round-2.test.ts` › names the permissions the actor tried to confer, not "unknown"; `identity-concurrency.test.ts` › refuses a REMOVE-ONLY setRoles whose actor lost admins.edit |
+| AY4 | the audit row and the event name the FIRST excess permission | `deniedPermission: attempted[attempted.length - 1]`     | `codex-findings-round-2.test.ts` › names the permissions the actor tried to confer, not "unknown"                                                                                               |
+| AY5 | `runLockedMutation` writes the audit row BEFORE the event    | event first                                             | `identity-concurrency.test.ts` › writes the DENIED audit row even when the operational-event write fails                                                                                        |
+| AY6 | `recordMutationDenial` writes the audit row BEFORE the event | event first                                             | `authorization.test.ts` › writes the audit row before the event, so a failing event write cannot cost it                                                                                        |
+
+Measured: AY1 — 1/113, `the guard wrote the event; the recorder must not
+write it again: expected [ 'access.permission_denied', …(1) ] to deeply equal
+[ 'access.permission_denied' ]`. AY2 — 1/113, `the recorder writes the audit
+row whether or not the guard wrote the event: expected [] to have a length of
+1 but got +0`. AY3 — 2/113, `expected 'INFO' to be 'WARN'` twice. AY4 —
+1/113, `expected 'users.wallet.credit' to be 'audit.view'`. AY5 — 1/113,
+`the audit row must be written before the event: expected [] to have a length
+of 1 but got +0`. AY6 — 1/14, the same message.
 
 ## The microsecond truncation is still open, deliberately
 

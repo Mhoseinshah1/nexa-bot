@@ -123,16 +123,11 @@ export async function recordMutationDenial(
     error.kind === 'PERMISSION_DENIED' &&
     error.details['permission'] === permission
   ) {
-    // The EVENT belongs to the guard wherever the guard could write it. It
-    // could not from inside a transaction — see `PermissionGuard.check` — and
-    // only then is this the emitter. The guard says which on the error, so
-    // one refusal is one event on both paths and no caller decides it.
-    // The AUDIT row is this function's, unconditionally: the guard never
-    // writes one, and a refused mutation without one is the gap this function
-    // was extracted to close.
-    if (!denialEventRecorded(error)) {
-      await deps.opsLog.record(scope, deps.guard.denialEvent(actor, permission));
-    }
+    // The AUDIT row is this function's, unconditionally, and it goes FIRST:
+    // the guard never writes one, a refused mutation without one is the gap
+    // this function was extracted to close, and the two writes are not
+    // atomic — if the event write fails, the row an operator needs later must
+    // already be there.
     await deps.audit.record(scope, actor, {
       action: denial.action,
       entityType: denial.entityType,
@@ -141,6 +136,13 @@ export async function recordMutationDenial(
       after: { deniedPermission: permission, reason: error.code },
       result: 'DENIED',
     });
+    // The EVENT belongs to the guard wherever the guard could write it. It
+    // could not from inside a transaction — see `PermissionGuard.check` — and
+    // only then is this the emitter. The guard says which on the error, so
+    // one refusal is one event on both paths and no caller decides it.
+    if (!denialEventRecorded(error)) {
+      await deps.opsLog.record(scope, deps.guard.denialEvent(actor, permission));
+    }
   }
 }
 

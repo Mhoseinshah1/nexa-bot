@@ -474,8 +474,10 @@ it did (`denialEventRecorded`, a non-enumerable symbol property, so it never
 reaches the 403 body). `recordMutationDenial` writes the event only when the
 guard says it could not, and writes the `DENIED` audit row unconditionally, as
 before. Identity's `runLockedMutation`, the other after-the-fact recorder, asks
-the same question (round 46) — unobservable while every in-lock check passes
-`tx`, and the reason it will stay one event when one stops. No caller changed
+the same question (round 46), which is the reason it stays one event when an
+in-lock check stops passing `tx` — pinned directly in round 48. Both recorders
+write the audit row FIRST (round 48): the two writes are not atomic, and the
+order decides which survives an operational log that is down. No caller changed
 and no caller decides: the four pre-transaction sites (eight routes: five panel
 writes, settings, features, notifications) and `runAuthorizedMutation` take the
 same code path they took before.
@@ -499,6 +501,20 @@ next site would forget, and a field in `details`, which is serialised into the
   one event; the `some(...)` floor it replaces held under the duplicate.
 - `tests/integration/admin-http.test.ts` › records the denial on create even
   when the body is nonsense — identity, exactly one and one.
+- `tests/integration/identity-concurrency.test.ts` › refuses a REMOVE-ONLY
+  setRoles whose actor lost admins.edit — the in-lock path, exactly one event,
+  `WARN`, naming the actor (rounds 46 and 48); › records ONE event and ONE
+  audit row when the in-lock check has already written the event — the guard's
+  marker consulted by `runLockedMutation` (round 48); › writes the DENIED
+  audit row even when the operational-event write fails — audit first (round
+  48).
+- `tests/integration/codex-findings-round-2.test.ts` › names the permissions
+  the actor tried to confer, not "unknown" — an escalation refusal, which the
+  guard never sees, leaves exactly one event naming what the audit row names
+  (rounds 47 and 48).
+- `tests/unit/authorization.test.ts` › writes the audit row before the event,
+  so a failing event write cannot cost it — the shared recorder's order
+  (round 48).
 
 Falsified in `docs/phase3d-falsification.md`, round 45: emitting from both
 (AV1) fails the pins as a duplicate, removing the surviving emission (AV2)
