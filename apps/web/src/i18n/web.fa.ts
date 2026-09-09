@@ -380,6 +380,8 @@ export const WEB_FA = {
   'web.dashboard_partial_fleet':
     'این شمارش فقط ۲۰۰ پنل نخست را در بر می‌گیرد؛ ناوگان بزرگ‌تر از یک صفحه است.',
   'web.dashboard_more_conditions': 'شرایط باز دیگر:',
+  // The count is a FLOOR: only the first page of open conditions was read.
+  'web.dashboard_more_conditions_partial': 'شرایط باز دیگر، دست‌کم (فقط صفحهٔ نخست خوانده شد):',
   'web.monitor_over_capacity': 'فراتر از ظرفیت',
   'web.setting_topup_minimum': 'کمینهٔ شارژ کیف پول',
   'web.setting_sales_currency': 'واحد پول فروشگاه',

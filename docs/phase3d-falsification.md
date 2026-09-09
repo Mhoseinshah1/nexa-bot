@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 380 citations were checked; this record declares 391 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 391 citations were checked; this record declares 397 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -5938,6 +5938,70 @@ refusing an edit-only create without credentials (it is pinned: BE1); a
 credential write path without the rotate check; double recording through the
 nested catches (the outer filters on `panels.edit`, the inner on rotate, and
 a pre-transaction refusal throws before the `try`).
+
+## Round 57 — Codex's sixth review, six findings, six confirmed
+
+Requested on `7153513` under the owner's exit rule: the internal loop is
+closed and every finding from here is Codex's or CI's. Review `5153936297`
+left six inline threads. Each was read against the code before anything was
+changed, and each was true.
+
+- **CX1 — `/panels` never refreshes the health it draws** (production behaviour). The detail polled at 90 s for exactly this reason (round 6, N10); the list beside it, same columns, same writer, never ran its query again — `refetchOnWindowFocus` is off globally.
+- **CX2 — the top-up currency select offered two of the five codes its schema accepts** (financial / business). `wallet.topup.minimum` is `moneySchema`; a dollar minimum stored through the API had no option, a controlled select shows its first, and a save rewrote the currency to Toman without anyone choosing it.
+- **CX3 — the needs-attention count ignored `nextCursor`** (production behaviour). `GET /ops-log` answers fifty rows by default; the card said "forty-four other open conditions" for forty-four and for four hundred — the distribution cards had learned this in round 20 and this card had not.
+- **CX4 — the monitor profile never re-read the installation capacity condition** (production behaviour). The only Web Admin surface that can show `scheduler_capacity_exceeded` showed its first answer until navigation.
+- **CX5 — the notification detail stayed on screen after `opslog.view` was revoked** (authorization). The list switched to "no permission" on the session refresh; the detail card, outside that `StateSwitch`, kept the attempts and released claims it had fetched — settled notifications do not poll, so no 403 ever replaced them.
+- **CX6 — a noncanonical cursor spelling was accepted** (production behaviour). `Buffer.from(raw, 'base64url')` skips what it cannot decode, so a real cursor with a character appended, inserted or padded decoded to the original tuple and got a 200 — a value this server never issued, against the rule the decoder states.
+
+CX2 is the only one with a choice in it. The select now offers every code
+the server stores; narrowing the server's schema to Toman and Rial would be a
+contract change and a product decision, and a dropdown does not get to make
+it by omission. `sales.currency` IS narrowed, by its own schema, and its
+editor says so.
+
+The fixes: the list and the profile poll through `pollUnlessFinal` (the list
+at the detail's cadence, the profile once a minute); the select maps
+`CURRENCY_CODES`; the attention card reads `nextCursor` and, when it is set,
+says the count is a floor (`web.dashboard_more_conditions_partial`, a new
+key); the detail query and its four render blocks are gated on `!denied`;
+`decodeCursor` re-encodes the decoded bytes and refuses anything that does
+not reproduce `raw` byte-for-byte. The cursor fixture grew from fifteen to
+eighteen — the three noncanonical spellings of a real cursor — and
+`client.ts`'s cited count says eighteen. Earlier rounds' "fifteen" is what
+the fixture held when they were written.
+
+### The mutations
+
+Each rule reverted in the working tree, its suite run, the file restored and
+its hash compared (`falsify57.out` in the session scratchpad; the hashes are
+quoted here so the restore is checkable against the commit).
+
+| #   | rule                                                             | mutation                                                  | tests that die                                                                                                       |
+| --- | ---------------------------------------------------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| CX1 | the panel list polls                                             | delete its `refetchInterval`                              | `permissions-and-refresh.test.tsx` › re-reads the list so a new health result appears in it                          |
+| CX2 | the top-up select offers every code `moneySchema` accepts        | back to `['IRT', 'IRR']`                                  | `settings-and-alerts.test.tsx` › offers every currency the top-up minimum accepts, and keeps a stored dollar minimum |
+| CX3 | a full first page makes the attention count a floor, and says so | `truncated = false`                                       | `permissions-and-refresh.test.tsx` › says the attention count is a floor when the first page was full                |
+| CX4 | the monitor profile polls                                        | delete its `refetchInterval`                              | `settings-and-alerts.test.tsx` › re-reads the monitor profile while the monitor tab stays open                       |
+| CX5 | the notification detail follows the list's denied state          | remove `!denied` from the query and all four render gates | `control-plane-pages.test.tsx` › hides the notification detail when log access is revoked                            |
+| CX6 | a cursor is ours only if it re-encodes to itself                 | delete the canonical check                                | `panels-http.test.ts` › refuses a malformed cursor with a 400 rather than restarting the traversal                   |
+
+Measured: CX1 — 1/36, `expected 1 to be greater than 1` (`panels.tsx`
+`62afc6135d6b792d`). CX2 — 1/38, `expected 'IRT' to be 'USD'`
+(`settings.tsx` `a7778d004eca22b2`). CX3 — 1/36, `Unable to find an element
+with the text: /دست‌کم/` (`dashboard.tsx` `cb3352d0d8c1d55e`). CX4 — 1/38,
+`expected 1 to be greater than 1` (`system.tsx` `6e0e10408debd2a7`). CX5 —
+1/26, `expected <h2></h2> to be null` (`alerts.tsx` `89f346fc1ec5ced2`). CX6 —
+1/39, `cursor "MDFhMDg2MTQt…" was not refused with a 400: expected 200 to be
+400` (`panels.controller.ts` `9d4e578482db7deb`). Every file restored to the
+hash it started with.
+
+The complete case is pinned too: nine open conditions on one page draw an
+exact count and no "at least" (`says how many conditions the attention card
+did not draw` gained the negative assertion), so the floor wording cannot be
+made unconditional without a failure.
+
+`EXPECTED` is 397. U99 re-measured against this round's table: `391
+citations were checked; this record declares 397`.
 
 ## The microsecond truncation is still open, deliberately
 

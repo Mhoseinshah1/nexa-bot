@@ -794,6 +794,13 @@ describe('panel HTTP surface', () => {
       // TRUNCATED — a real cursor with its tail cut off, which is the shape
       // the owner's decision names and the one a client actually produces.
       firstPage.nextCursor!.slice(0, Math.floor(firstPage.nextCursor!.length / 2)),
+      // NONCANONICAL spellings of a REAL cursor. `Buffer.from(x, 'base64url')`
+      // skips characters it cannot decode, so each of these decoded to the
+      // original tuple and was answered with a 200 — a value this server never
+      // issued, accepted. A cursor is ours only if it re-encodes to itself.
+      `${firstPage.nextCursor!}!`,
+      `${firstPage.nextCursor!.slice(0, 4)}*${firstPage.nextCursor!.slice(4)}`,
+      `${firstPage.nextCursor!}=`,
     ];
 
     // The count is CITED — in `client.ts` and twice in the falsification
@@ -802,7 +809,7 @@ describe('panel HTTP surface', () => {
     // test asserts is a claim about testing with nothing behind it, so the
     // fixture now states its own size and a citation cannot go stale in
     // silence.
-    expect(cursors, 'the cited malformed-cursor count changed').toHaveLength(15);
+    expect(cursors, 'the cited malformed-cursor count changed').toHaveLength(18);
 
     for (const cursor of cursors) {
       const response = await get(

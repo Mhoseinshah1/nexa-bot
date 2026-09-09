@@ -714,6 +714,40 @@ describe('the notifications page', () => {
     expect(screen.queryByText('نمایش')).toBeNull();
   });
 
+  /**
+   * Codex, review five: the list switched to its denied state when the session
+   * refresh took `opslog.view` away, and the detail card beside it went on
+   * showing the attempts it had already fetched — a settled notification no
+   * longer polls, so no 403 ever arrived to replace the cached answer.
+   */
+  it('hides the notification detail when log access is revoked', async () => {
+    stubApi([
+      {
+        url: '/notifications',
+        body: { notifications: [notification({ id: 'n1', status: 'SENT' })], nextCursor: null },
+      },
+      {
+        url: '/notifications/n1',
+        body: {
+          notification: notification({ id: 'n1', status: 'SENT' }),
+          attempts: [],
+          releasedClaims: [],
+        },
+      },
+    ]);
+    const { rerender } = renderPage(<NotificationsPage mayTest denied={false} />);
+    await screen.findByText('event.panel.unreachable');
+    fireEvent.click(screen.getByRole('button', { name: 'event.panel.unreachable' }));
+    await screen.findByRole('heading', { name: 'تلاش‌ها' });
+
+    // The permission is revoked between two session refreshes. The list
+    // says so; the detail must not keep showing what that permission fetched.
+    rerender(<NotificationsPage mayTest denied />);
+
+    expect(screen.getByText(t('web.no_permission'))).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'تلاش‌ها' })).toBeNull();
+  });
+
   it('drops a stale attempts list on a final refusal, and offers no retry', async () => {
     const detail = {
       url: '/notifications/n1',

@@ -4,7 +4,7 @@ import { SettingsPage } from '../../apps/web/src/pages/settings';
 import { AlertsPage } from '../../apps/web/src/pages/alerts';
 import { SystemPage } from '../../apps/web/src/pages/system';
 import { event, renderPage, setting, stubApi } from './harness';
-import { MANAGEMENT_EVENT_CODES } from '@nexa/contracts';
+import { CURRENCY_CODES, MANAGEMENT_EVENT_CODES } from '@nexa/contracts';
 import { t } from '../../apps/web/src/i18n/web.fa';
 
 const settings = (rows: unknown[]) => [{ url: '/settings', body: { settings: rows } }];
@@ -147,6 +147,35 @@ describe('the settings screen', () => {
     ).toBe('IRT');
     expect(screen.getByText(/حداقلِ مخصوص هر درگاه/)).toBeInTheDocument();
     expect(screen.getByText(/هیچ درگاه پرداختی ثبت نشده/)).toBeInTheDocument();
+  });
+
+  /**
+   * Codex, review five: `wallet.topup.minimum` is `moneySchema`, which accepts
+   * five currencies, and this select offered two. A minimum written through
+   * the API in dollars was a valid stored value the screen could neither show
+   * nor keep — a controlled select with no matching option shows its first,
+   * and saving rewrote the currency to Toman. The screen offers what the
+   * server accepts; narrowing the server is a product decision, not an
+   * omission in a dropdown.
+   */
+  it('offers every currency the top-up minimum accepts, and keeps a stored dollar minimum', async () => {
+    stubApi(
+      settings([
+        setting({
+          key: 'wallet.topup.minimum',
+          value: { amountMinor: '500', currency: 'USD' },
+          zeroMeaning: 'DISABLES',
+          configures: null,
+          consumer: 'PLANNED',
+        }),
+      ]),
+    );
+    renderPage(<SettingsPage mayEdit denied={false} />);
+    await screen.findByText('wallet.topup.minimum');
+
+    const select = screen.getByLabelText('واحد پول — کمینهٔ شارژ کیف پول') as HTMLSelectElement;
+    expect(select.value).toBe('USD');
+    expect([...select.options].map((option) => option.value)).toEqual([...CURRENCY_CODES]);
   });
 
   /** Owner revision 1 — the currency every amount inherits. */
@@ -1022,6 +1051,55 @@ describe('system and operations', () => {
   });
 
   const route = { path: '/system', query: new URLSearchParams() };
+
+  /**
+   * Codex, review five: the installation capacity condition is written by the
+   * monitor on its own cycle and this profile is the only Web Admin surface
+   * that can show it. Without an interval the tab said "within capacity"
+   * through an overload, or kept a resolved alarm until navigation.
+   */
+  it('re-reads the monitor profile while the monitor tab stays open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const api = stubApi([
+      {
+        url: '/system/monitor',
+        body: {
+          monitor: {
+            enabled: true,
+            tickMs: 30000,
+            healthyIntervalMs: 180000,
+            retryableIntervalMs: 120000,
+            nonRetryableIntervalMs: 3600000,
+            batchSize: 150,
+            concurrency: 4,
+            tenantsPerTick: 10,
+            probeTenantLimit: 100,
+            probeTenantWindowMs: 300000,
+            probeCooldownMs: 10000,
+            budgetReservePercent: 40,
+            freshForMs: 900000,
+            tenantFreshPanelCeiling: 60,
+            installationFreshPanelCeiling: 900,
+            tenantTurnCeiling: 60,
+            schedulerCapacityExceeded: false,
+          },
+        },
+      },
+    ]);
+    const monitorRoute = { path: '/system', query: new URLSearchParams('section=monitor') };
+    renderPage(<SystemPage route={monitorRoute} permissions={['panels.view', 'admins.view']} />);
+    await screen.findByText(t('web.monitor_within_capacity'));
+
+    const countOf = () => api.calls.filter((call) => call.url.includes('/system/monitor')).length;
+    const before = countOf();
+    expect(before).toBeGreaterThan(0);
+
+    await vi.advanceTimersByTimeAsync(65_000);
+    await waitFor(() => {
+      expect(countOf()).toBeGreaterThan(before);
+    });
+    vi.useRealTimers();
+  });
 
   /** Owner revision 25 — the general logs surface does not exist. */
   it('has no logs page, and says its absence is a decision', async () => {

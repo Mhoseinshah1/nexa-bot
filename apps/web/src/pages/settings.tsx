@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { CURRENCY_CODES } from '@nexa/contracts';
 import type { CurrencyCode, MoneyWire, ResolvedSettingResponse } from '@nexa/contracts';
 import { ApiError, fetchSettings, saveSetting } from '../api/client';
 import { currencyLabel, formatNumber, formatTimestamp } from '../format';
@@ -421,7 +422,18 @@ function MoneyEditor({
             disabled={disabled}
             onChange={(event) => onChange({ ...value, currency: event.target.value })}
           >
-            {(['IRT', 'IRR'] as const).map((code) => (
+            {/*
+              EVERY code `moneySchema` accepts, because that is what the server
+              stores for this key. `sales.currency` is narrowed to Toman and
+              Rial by its own schema and its editor below says so; this key is
+              not, so a minimum written through the API in dollars was a valid
+              stored value this select had no option for — a controlled select
+              with no matching option shows its first one, and saving then
+              rewrote the currency to Toman without anyone choosing it.
+              Narrowing the server schema instead is a product decision this
+              screen does not get to make by omission.
+            */}
+            {CURRENCY_CODES.map((code) => (
               <option key={code} value={code}>
                 {currencyLabel(code)}
               </option>

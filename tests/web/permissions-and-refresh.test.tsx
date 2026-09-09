@@ -1117,5 +1117,75 @@ describe('bounds that were asserted only in comments', () => {
     // test about Intl data rather than about the count.
     expect(more.textContent ?? '').toContain(formatNumber(9 - 6));
     expect(screen.queryByText('condition 8')).toBeNull();
+    // Nine open conditions fit on one page, so the count is exact and the
+    // card must not hedge it.
+    expect(screen.queryByText(/دست‌کم/)).toBeNull();
+  });
+
+  /**
+   * Codex, review five: `GET /ops-log` answers fifty rows by default and the
+   * card asked for one page, then said "forty-four other open conditions"
+   * whether forty-four or four hundred remained. When the server says there
+   * is more, the number is a floor and the sentence has to say so.
+   */
+  it('says the attention count is a floor when the first page was full', async () => {
+    const fullPage = Array.from({ length: 50 }, (_, index) =>
+      event({
+        id: `01a05e35-c9ad-7e93-bef3-1ed9b5529${(100 + index).toString()}`,
+        code: 'settings.stored_value_invalid',
+        message: `condition ${index}`,
+      }),
+    );
+    stubApi([
+      READINESS,
+      { url: '/panels', body: { panels: [], nextCursor: null } },
+      {
+        url: '/ops-log',
+        body: { events: fullPage, nextCursor: { at: '2026-09-06T07:00:00.000Z', id: 'more' } },
+      },
+    ]);
+    renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
+
+    await screen.findByText('condition 0');
+    const more = await screen.findByText(/دست‌کم/);
+    expect(more.textContent ?? '').toContain(formatNumber(50 - 6));
+  });
+});
+
+/**
+ * Codex, review five: the list shows the same health columns as the detail,
+ * written by the same background monitor, and only the detail polled. An
+ * operator watching `/panels` for a panel to recover saw the rows the page was
+ * drawn with for ever.
+ */
+describe('the panel list while it stays open', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const countOf = (calls: readonly { url: string }[], fragment: string) =>
+    calls.filter((call) => call.url.includes(fragment)).length;
+
+  it('re-reads the list so a new health result appears in it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const api = stubApi([
+      {
+        url: '/panels',
+        body: {
+          panels: [panel({ id: '01a05e35-c9ad-7e93-bef3-1ed9b55292c8', name: 'Frankfurt A' })],
+          nextCursor: null,
+        },
+      },
+      { url: '/providers', body: { providers: [] } },
+    ]);
+    renderPage(routeFor('/panels', ['panels.view']));
+    await screen.findByText('Frankfurt A');
+
+    const before = countOf(api.calls, '/panels');
+    expect(before).toBeGreaterThan(0);
+
+    await vi.advanceTimersByTimeAsync(95_000);
+    await waitFor(() => {
+      expect(countOf(api.calls, '/panels')).toBeGreaterThan(before);
+    });
   });
 });

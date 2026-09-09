@@ -64,6 +64,15 @@ import { pollUnlessFinal } from '../polling';
  * the page out-polling the writer.
  */
 const PANEL_DETAIL_REFRESH_MS = 90_000;
+/**
+ * The LIST shows the same health columns as the detail — state, failure,
+ * latency, check time — written by the same background monitor, and it did
+ * not poll. An operator watching `/panels` for a panel to come back saw the
+ * row the page was drawn with for ever, while the detail one click away
+ * refreshed. One cadence for both, for the reason the dashboard gives its two
+ * cards one: two cadences on one subject produce screens that disagree.
+ */
+const PANEL_LIST_REFRESH_MS = PANEL_DETAIL_REFRESH_MS;
 
 /**
  * Panels — the one product surface this release genuinely operates.
@@ -212,6 +221,7 @@ export function PanelsPage({
         ...(archived ? { archived: 'only' as const } : {}),
       }),
     enabled: !denied,
+    refetchInterval: pollUnlessFinal(PANEL_LIST_REFRESH_MS),
   });
 
   const rows = panels.data?.panels ?? [];

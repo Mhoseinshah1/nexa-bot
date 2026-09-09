@@ -270,12 +270,26 @@ function AttentionCard({
              */
             firstSeenAt: string;
           }[];
+          /**
+           * Whether the server held more open conditions than this page.
+           *
+           * `GET /ops-log` answers fifty rows by default and this card asked
+           * for one page, then reported `events.length - 6` as "the other
+           * open conditions" — forty-four, whether forty-four or four
+           * hundred remained. The count on the one card headed "needs
+           * attention" understated an incident exactly when it was large.
+           * The distribution cards learned this lesson first; same rule.
+           */
+          nextCursor: object | null;
         }
       | undefined;
   };
 }) {
   const onLink = useLinkHandler();
   const events = query.data?.events ?? [];
+  // The SERVER's cursor, never a length comparison — the reason is stated
+  // where the distribution cards make the same decision.
+  const truncated = query.data?.nextCursor != null;
 
   return (
     <Card
@@ -327,12 +341,16 @@ function AttentionCard({
             </li>
           ))}
         </ul>
-        {events.length > ATTENTION_SHOWN && (
+        {(events.length > ATTENTION_SHOWN || truncated) && (
           // Six rows with no count read as "there are six". Saying how many
           // were not drawn is the difference between a summary and a lie of
-          // omission on the one card headed "needs attention".
+          // omission on the one card headed "needs attention" — and when the
+          // page was full, the number is a FLOOR and the sentence says so.
           <p className="faint small">
-            {t('web.dashboard_more_conditions')} <Num value={events.length - ATTENTION_SHOWN} />
+            {truncated
+              ? t('web.dashboard_more_conditions_partial')
+              : t('web.dashboard_more_conditions')}{' '}
+            <Num value={Math.max(events.length - ATTENTION_SHOWN, 0)} />
           </p>
         )}
       </StateSwitch>

@@ -179,11 +179,23 @@ function StatusSection() {
  *   - **User synchronisation** does not exist either. The design rule is
  *     recorded so that whoever builds it does not rediscover it.
  */
+/**
+ * The installation capacity condition is written by the MONITOR on its own
+ * cycle, and this response is the only Web Admin surface that can show it.
+ * Without an interval the tab reported "within capacity" through an overload,
+ * or a resolved alarm until navigation — `refetchOnWindowFocus` is off
+ * globally, so returning to the tab did not help. Once a minute: slower than
+ * the readiness card because the condition changes on the monitor's cadence,
+ * not on every probe.
+ */
+const MONITOR_PROFILE_REFRESH_MS = 60_000;
+
 function MonitorSection({ denied }: { denied: boolean }) {
   const monitor = useQuery({
     queryKey: ['monitor-profile'],
     queryFn: fetchMonitorProfile,
     enabled: !denied,
+    refetchInterval: pollUnlessFinal(MONITOR_PROFILE_REFRESH_MS),
   });
   const profile = monitor.data?.monitor;
 

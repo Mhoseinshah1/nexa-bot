@@ -401,7 +401,13 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
   const detail = useQuery({
     queryKey: ['notification', selected],
     queryFn: () => fetchNotification(selected as string),
-    enabled: selected !== null,
+    // And the list's DENIED state. The list switched to "no permission" when
+    // the session refresh took `opslog.view` away; this card sat beside it
+    // showing the attempts and released claims it had already fetched,
+    // indefinitely — a settled notification no longer polls, so no 403 ever
+    // arrived to replace the cached answer. Gated here and at every render
+    // below, for the same reason the pager is.
+    enabled: selected !== null && !denied,
     // The open panel follows the same rule as the list above.
     refetchInterval: pollUnlessFinalWhile<NotificationDetailResponse>(
       3_000,
@@ -563,8 +569,8 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
         here; the comment claiming this site "follows the SAME rule as every
         other query-driven view" was two thirds true.
       */}
-      {selected !== null && detail.isPending && <Skeleton />}
-      {detail.isError && staleAfterError(detail) && (
+      {!denied && selected !== null && detail.isPending && <Skeleton />}
+      {!denied && detail.isError && staleAfterError(detail) && (
         <Banner tone="danger">
           {messageFor(detail.error)}{' '}
           {retryOf(detail) !== undefined && (
@@ -574,7 +580,7 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
           )}
         </Banner>
       )}
-      {queryState(detail) === 'error' && (
+      {!denied && queryState(detail) === 'error' && (
         <Empty
           // The SAME copy rule as `StateSwitch`, and now literally the same
           // function rather than a second copy of its ternaries.
@@ -597,7 +603,7 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
               })}
         />
       )}
-      {queryState(detail) !== 'error' && detail.data && (
+      {!denied && queryState(detail) !== 'error' && detail.data && (
         <Card title={t('web.attempts')}>
           {detail.data.attempts.length === 0 && <Empty title={t('web.empty')} />}
           {detail.data.attempts.length > 0 && (

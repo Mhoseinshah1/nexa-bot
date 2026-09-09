@@ -137,9 +137,15 @@ function decodeCursor(raw: string): PanelCursor {
    * this function is reached — the branch that claimed to stop "a megabyte of
    * base64" could not fire, and its comment described a path that no longer
    * existed. And `Buffer.from(text, 'base64url')` never throws for any string:
-   * it SKIPS characters it cannot decode, so the `catch` was unreachable and
-   * `'!!!not base64!!!'` is refused below for having no separator rather than
-   * by the guard the fixture was written for.
+   * it SKIPS characters it cannot decode, so the `catch` was unreachable, and
+   * `'!!!not base64!!!'` was refused for having no separator rather than by
+   * the guard the fixture was written for. That same skipping also meant a
+   * cursor with junk inserted, appended or padded decoded to the ORIGINAL
+   * tuple and was answered with a 200 — a value this server never issued,
+   * accepted, against the rule stated two paragraphs up. So the decoded bytes
+   * are re-encoded and must reproduce `raw` exactly: `encodeCursor` emits
+   * unpadded base64url, and anything that is not byte-for-byte that spelling
+   * is not ours, whatever it happens to decode to.
    *
    * One bound, in the schema, which is also where the wire contract states it.
    * The cost of that arrangement is stated rather than glossed: an oversize
@@ -148,7 +154,9 @@ function decodeCursor(raw: string): PanelCursor {
    * asserted separately so the two cannot swap unnoticed, and `http.ts` says
    * so where the rule is declared.
    */
-  const decoded = Buffer.from(raw, 'base64url').toString('utf8');
+  const bytes = Buffer.from(raw, 'base64url');
+  if (bytes.toString('base64url') !== raw) throw bad('is not a cursor this server issued');
+  const decoded = bytes.toString('utf8');
   const separator = decoded.indexOf(':');
   // The empty cursor arrives here too. `Buffer.from('', 'base64url')` is empty
   // and `''.indexOf(':')` is -1, so this line refuses `?cursor=` with the same
