@@ -28,8 +28,12 @@ import {
   type RoleId,
   type ScopeContext,
   type UnitOfWork,
+  type ManagementAdminEventCode,
 } from '@nexa/contracts';
-import type { PermissionGuard } from '../../access/application/permission-guard.js';
+import {
+  denialEventRecorded,
+  type PermissionGuard,
+} from '../../access/application/permission-guard.js';
 import type { OutboxWriter } from '../../eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { DrizzleRoleRepository } from '../infrastructure/drizzle-role.repository.js';
@@ -125,19 +129,37 @@ export class AdminManagementService {
     actor: ActorContext,
     input: unknown,
   ): Promise<{ admin: Admin; roleKeys: string[] }> {
-    const command = createAdminRequestSchema.parse(input);
-
-    const username = adminUsernameSchema.parse(command.username.trim().toLowerCase());
-    adminPasswordSchema.parse(command.password);
-
-    // A cheap rejection before the expensive hash, so an unprivileged caller
-    // does not get to spend a KDF per request. It is NOT the authorization —
-    // that is re-run under the lock below, because this one is read on the pool
-    // and can be stale by the time the row is written.
+    /*
+     * BEFORE the parse, and this is the odd arm of its own file.
+     *
+     * `setStatus` and `setRoles` both authorize and then parse; only `create`
+     * was inverted — the one that mints a NEW CREDENTIAL with roles attached.
+     * A `ZodError` is a 400 that never reaches the guard, so an authenticated
+     * caller without `admins.edit` who posted `{nonsense:true}` was answered
+     * 400 and left NO `access.permission_denied` and NO DENIED audit row,
+     * while the same caller posting a well-formed body left both. Measured:
+     * +0 and +0 against +1 and +1.
+     *
+     * The previous round moved the five panel writes for exactly this reason
+     * and said in three documents that the panel service was "the last to
+     * follow a rule the others kept". It was not: this was, in the module with
+     * the highest blast radius on the surface, and in a file that already did
+     * it correctly twice. Correct where the author was looking, wrong one
+     * module over — the same shape the move itself was fixing.
+     *
+     * Still a CHEAP rejection before the expensive hash, so an unprivileged
+     * caller does not get to spend a KDF per request, and still NOT the
+     * authorization of record: that is re-run under the lock below, because
+     * this one is read on the pool and can be stale by the time the row is
+     * written.
+     */
     await this.assertMayAttempt(scope, actor, 'admins.edit', {
       action: 'admin.create',
       entityId: null,
     });
+    const command = createAdminRequestSchema.parse(input);
+    const username = adminUsernameSchema.parse(command.username.trim().toLowerCase());
+    adminPasswordSchema.parse(command.password);
 
     const adminId = this.ids.uuid() as AdminId;
     // Hashing is deliberately outside the transaction: it is intentionally slow,
@@ -257,6 +279,14 @@ export class AdminManagementService {
             result: 'SUCCESS',
           },
           tx,
+        );
+
+        await this.recordAdminChange(
+          scope,
+          tx,
+          'admin.created',
+          `administrator ${username} was created`,
+          { adminId, username, roleKeys },
         );
 
         await this.outbox.write(tx, actor, {
@@ -401,6 +431,14 @@ export class AdminManagementService {
           tx,
         );
 
+        await this.recordAdminChange(
+          scope,
+          tx,
+          'admin.status_changed',
+          `administrator ${target.username} went from ${target.status} to ${command.status}`,
+          { adminId: targetId, from: target.status, to: command.status },
+        );
+
         await this.outbox.write(tx, actor, {
           eventType: 'AdminStatusChanged',
           aggregateType: 'Admin',
@@ -531,6 +569,14 @@ export class AdminManagementService {
             result: 'SUCCESS',
           },
           tx,
+        );
+
+        await this.recordAdminChange(
+          scope,
+          tx,
+          'admin.roles_changed',
+          `administrator ${target.username} had roles changed`,
+          { adminId: target.id, added: delta.added, removed: delta.removed },
         );
 
         await this.outbox.write(tx, actor, {
@@ -760,6 +806,14 @@ export class AdminManagementService {
         },
         tx,
       );
+
+      await this.recordAdminChange(
+        scope,
+        tx,
+        'admin.password_changed',
+        'an administrator changed their own password',
+        { adminId, bySelf: true },
+      );
       await this.outbox.write(tx, actor, {
         eventType: 'AdminPasswordChanged',
         aggregateType: 'Admin',
@@ -869,19 +923,6 @@ export class AdminManagementService {
   }
 
   /**
-   * Runs a locked mutation and records a denial once the transaction is gone.
-   *
-   * The guard deliberately does not write its operational event from inside a
-   * transaction: it would take a second pool connection while holding one and
-   * the tenant lock, and the row would roll back with the denial anyway. So the
-   * transactional caller owns it, and records it here — on the pool, after the
-   * rollback, where both are safe.
-   *
-   * The audit row is the more important half. A refused administrative
-   * mutation is exactly the kind of event an operator needs to see later, and
-   * before this it left no trace at all for `setStatus` and `setRoles`.
-   */
-  /**
    * The cheap pre-lock authorization check, with its denial audited.
    *
    * The check itself is only a fast rejection — the decision that counts is
@@ -895,8 +936,9 @@ export class AdminManagementService {
    * legacy system had.
    *
    * Only the audit row is written here. The guard already records the
-   * operational event for a check made outside a transaction; `runLockedMutation`
-   * records it itself because the in-lock check deliberately does not.
+   * operational event for a check made outside a transaction;
+   * `runLockedMutation` records it when the guard reports it did not
+   * (`denialEventRecorded`), which for an in-lock check is always.
    */
   private async assertMayAttempt(
     scope: ScopeContext,
@@ -958,6 +1000,60 @@ export class AdminManagementService {
     }
   }
 
+  /**
+   * The management-facing operational event for an administrator change.
+   *
+   * Owner revision 24 names administrator changes — adds, removals, role and
+   * permission changes — as belonging on the Web Admin's Management Alerts
+   * page. That page reads `operational_events`; these changes were only ever
+   * written to `audit_logs`, under an `action` that merely LOOKED like an
+   * event code. `MANAGEMENT_EVENT_CODE_PREFIXES = ['admin.']` matched the
+   * audit vocabulary and therefore matched nothing the page could read, so
+   * the requirement was claimed and not delivered.
+   *
+   * Recorded inside the caller's transaction, beside the audit row, so the two
+   * records cannot disagree about whether the change happened.
+   *
+   * NO `dedupeKey`: each of these is a distinct act by a distinct person at a
+   * distinct time, and collapsing "roles changed" onto one row with a counter
+   * would destroy exactly the history an operator opens this page to read.
+   * They are one-shot records, which is why they are in
+   * `MANAGEMENT_EVENT_CODES` and NOT in `MANAGEMENT_CONDITION_CODES`: nothing
+   * resolves them, and the dashboard's "needs attention" card must not fill
+   * with them.
+   */
+  private async recordAdminChange(
+    scope: ScopeContext,
+    tx: TransactionScope,
+    code: ManagementAdminEventCode,
+    message: string,
+    context: Record<string, unknown>,
+  ): Promise<void> {
+    await this.opsLog.record(scope, { code, severity: 'INFO', message, context }, tx);
+  }
+
+  /**
+   * Runs a locked mutation and records a denial once the transaction is gone.
+   *
+   * The guard deliberately does not write its operational event from inside a
+   * transaction: it would take a second pool connection while holding one and
+   * the tenant lock, and the row would roll back with the denial anyway. So the
+   * transactional caller records it here — on the pool, after the rollback,
+   * where both are safe — unless the guard reports it already did
+   * (`denialEventRecorded`), which is the question every after-the-fact
+   * recorder asks so that one refusal is one event (OQ-3D-03).
+   *
+   * Not every denial this catches came from the guard. An escalation refusal
+   * (`assertGrantsNoMorePrivilegeThanHeld`, `assertRestoresNoMorePrivilegeThanHeld`)
+   * is thrown by this service, carries no marker, and is recorded here alone.
+   *
+   * The audit row is the more important half, and it is written FIRST. A
+   * refused administrative mutation is exactly the kind of event an operator
+   * needs to see later, and before this it left no trace at all for
+   * `setStatus` and `setRoles`. The two writes are not atomic; if the event
+   * write fails, the audit row is already there and the write's error is
+   * what the caller sees in place of the 403.
+   */
   private async runLockedMutation<T>(
     scope: ScopeContext,
     actor: ActorContext,
@@ -979,10 +1075,10 @@ export class AdminManagementService {
         const many = error.details['permissions'];
         const attempted = Array.isArray(many) ? many.map(String) : single ? [String(single)] : [];
 
-        await this.opsLog.record(
-          scope,
-          this.guard.denialEvent(actor, (attempted[0] ?? 'unknown') as PermissionKey),
-        );
+        // The audit row FIRST. It is the half an operator needs later, and a
+        // failing operational-event write must not cost it: the two are
+        // separate writes on the pool, nothing makes them atomic, and the
+        // order is the only thing that decides which survives.
         await this.audit.record(scope, actor, {
           action: denial.action,
           entityType: 'Admin',
@@ -998,6 +1094,18 @@ export class AdminManagementService {
           },
           result: 'DENIED',
         });
+        // The guard is the authority on whether the operational event exists
+        // (OQ-3D-03). Every check inside a locked mutation passes `tx`, so the
+        // guard wrote nothing and this is the emitter — but that is a fact
+        // about today's callers, not a rule this function can see, and the
+        // shared recorder learned the hard way that "the guard wrote nothing"
+        // is exactly the sentence that goes false one call site over. Ask.
+        if (!denialEventRecorded(error)) {
+          await this.opsLog.record(
+            scope,
+            this.guard.denialEvent(actor, (attempted[0] ?? 'unknown') as PermissionKey),
+          );
+        }
       }
       throw error;
     }

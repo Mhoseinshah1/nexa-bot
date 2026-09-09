@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -270,6 +271,89 @@ describe('admin HTTP surface', () => {
       expect(response.statusCode).toBe(403);
       expect((response.json() as { error: { kind: string } }).error.kind).toBe('PERMISSION_DENIED');
       expect(await api.container.admins.findCredentialsByUsername(tenantA, 'newcomer')).toBeNull();
+    });
+
+    it('records the denial on create even when the body is nonsense', async () => {
+      /*
+       * `create` was the odd arm of its own file.
+       *
+       * `setStatus` and `setRoles` both authorize and then parse; only
+       * `create` was inverted — the one that mints a NEW CREDENTIAL with roles
+       * attached, "the most privileged act on this surface" by its own
+       * comment. A `ZodError` is a 400 that never reaches the guard, so an
+       * authenticated caller without `admins.edit` who posted `{nonsense}` was
+       * answered 400 and left NO `access.permission_denied` and NO DENIED
+       * audit row, where the same caller posting a well-formed body left both.
+       *
+       * The round before this one moved the five panel writes for exactly this
+       * reason and stated in three documents that the panel service was "the
+       * last to follow a rule the others kept". It was not: this was, in the
+       * module with the highest blast radius, in a file that already did it
+       * correctly twice.
+       */
+      const cookie = await cookieFor('support', 'the-support-password');
+      /*
+       * BOTH ledgers, because one cannot see the other's recorder disappear.
+       *
+       * The first version of this test counted only the audit rows while its
+       * own docblock and commit message claimed "+1 and +1" — and deleting
+       * `permission-guard`'s operational-event write left it fully green. The
+       * sibling panel test was rewritten in the same commit for exactly that
+       * reason and this one was written to the older standard.
+       */
+      const counts = async (): Promise<{ audit: number; events: number }> => {
+        const rows = await api.container.database.db.execute(
+          sql`SELECT
+                (SELECT count(*)::int FROM audit_logs WHERE after ? 'deniedPermission') AS audit,
+                (SELECT count(*)::int FROM operational_events
+                  WHERE code = 'access.permission_denied') AS events`,
+        );
+        const row = rows.rows[0] as { audit: number; events: number };
+        return { audit: Number(row.audit), events: Number(row.events) };
+      };
+      const send = (payload: unknown) =>
+        inject({
+          method: 'POST',
+          url: `${API_PREFIX}${ADMIN_ROUTES.create}`,
+          headers: asAdmin(cookie),
+          payload,
+        });
+
+      const beforeBad = await counts();
+      expect((await send({ nonsense: true })).statusCode, 'a malformed body').toBe(403);
+      const afterBad = await counts();
+      const bad = afterBad.audit - beforeBad.audit;
+      const badEvents = afterBad.events - beforeBad.events;
+
+      const beforeGood = await counts();
+      expect(
+        (
+          await send({
+            username: 'newcomer2',
+            displayName: 'Newcomer Two',
+            password: 'a-perfectly-fine-password',
+            roleKeys: ['support'],
+          })
+        ).statusCode,
+        'a well-formed body',
+      ).toBe(403);
+      const afterGood = await counts();
+      const good = afterGood.audit - beforeGood.audit;
+      const goodEvents = afterGood.events - beforeGood.events;
+
+      // EXACT, and one and one, for each of the two single requests above.
+      // The floor these replace (`toBeGreaterThan(0)` plus bad === good) could
+      // not see a doubled event — both requests doubled alike — which is how
+      // OQ-3D-03 hid behind this test as well. Identity's early refusal is
+      // `assertMayAttempt` (audit row only) plus the guard's own event, so it
+      // was one and one already; pinned so a change to either recorder
+      // cannot double it or drop it unnoticed.
+      expect(bad, 'DENIED audit rows for ONE malformed denial').toBe(1);
+      expect(badEvents, 'operational events for ONE malformed denial').toBe(1);
+      expect(good, 'DENIED audit rows for ONE well-formed denial').toBe(1);
+      expect(goodEvents, 'operational events for ONE well-formed denial').toBe(1);
+      // And no administrator was created by either.
+      expect(await api.container.admins.findCredentialsByUsername(tenantA, 'newcomer2')).toBeNull();
     });
 
     it('refuses reading the admin list without admins.view', async () => {

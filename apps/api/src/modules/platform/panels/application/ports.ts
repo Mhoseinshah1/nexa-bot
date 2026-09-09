@@ -17,6 +17,19 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
  * The only way to reach a credential is `PanelCredentialReader`, which is a
  * different port with a different consumer.
  */
+/**
+ * Which side of the archive a listing walks.
+ *
+ * `LIVE` is the working fleet and every production read that is not the archive
+ * browser. `ARCHIVED` is the restore path — the browser an operator reaches a
+ * retired panel through, which is why it exists at all. `ALL` is neither and is
+ * used only where a caller genuinely wants both, which today is the repository's
+ * own paging tests; it is deliberately NOT reachable from the wire, because
+ * mixing retired panels into the live list is the confusion the archive browser
+ * was added to remove.
+ */
+export type PanelArchiveScope = 'LIVE' | 'ARCHIVED' | 'ALL';
+
 export interface PanelRecord {
   readonly id: string;
   readonly tenantId: string;
@@ -196,7 +209,7 @@ export interface PanelRepository {
    */
   list(
     scope: TenantContext,
-    options: { includeArchived: boolean; limit?: number; cursor?: PanelCursor | null },
+    options: { archived: PanelArchiveScope; limit?: number; cursor?: PanelCursor | null },
     tx?: TransactionScope,
   ): Promise<{ panels: PanelView[]; nextCursor: PanelCursor | null }>;
   find(scope: TenantContext, panelId: string, tx?: TransactionScope): Promise<PanelView | null>;
@@ -237,6 +250,16 @@ export interface PanelRepository {
     status: PanelStatus,
     at: Date,
     tx: TransactionScope,
+    /**
+     * A replacement name, applied in the SAME statement as the status.
+     *
+     * Two statements would put the row through an intermediate state that the
+     * partial unique index rejects: flipping to a live status while the row
+     * still carries the name another panel took collides on
+     * `panels_tenant_name_live_key` before the rename can run. One UPDATE has
+     * no such moment.
+     */
+    name?: string,
   ): Promise<PanelRecord | null>;
   /** Whether a LIVE panel of this tenant already uses the name. */
   nameTaken(

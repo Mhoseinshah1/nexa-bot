@@ -1,0 +1,475 @@
+const iso = (offsetMinutes = 0) =>
+  new Date(Date.parse('2026-09-06T08:00:00.000Z') - offsetMinutes * 60_000).toISOString();
+
+const health = (over = {}) => ({
+  state: 'HEALTHY',
+  checkedAt: iso(2),
+  latencyMs: 42,
+  failure: null,
+  status: 200,
+  providerVersion: '0.8.4',
+  lastHealthyAt: iso(2),
+  stale: false,
+  ...over,
+});
+
+const credential = (configured, at) => ({ configured, lastReplacedAt: configured ? at : null });
+
+const panel = (id, name, over = {}) => ({
+  id,
+  name,
+  providerType: 'marzban',
+  providerName: 'Marzban',
+  baseUrl: `https://${name.toLowerCase().replace(/ /g, '-')}.example/api`,
+  status: 'ACTIVE',
+  capabilities: ['HEALTH_CHECK'],
+  credentials: {
+    username: credential(true, iso(60 * 24 * 30)),
+    password: credential(true, iso(60 * 24 * 30)),
+    apiToken: credential(false, null),
+  },
+  health: health(),
+  createdAt: iso(60 * 24 * 200),
+  updatedAt: iso(60 * 24 * 3),
+  ...over,
+});
+
+export const PANELS = [
+  panel('01a05e35-c9ad-7e93-bef3-1ed9b55292c8', 'Frankfurt A'),
+  panel('01a05e35-c9ad-7e93-bef3-1ed9b55292c9', 'Frankfurt B', {
+    health: health({ state: 'DEGRADED', latencyMs: 2140, failure: null }),
+  }),
+  panel('01a05e35-c9ad-7e93-bef3-1ed9b55292ca', 'Amsterdam', {
+    providerType: 'sanaei',
+    providerName: '3X-UI (MHSanaei)',
+    health: health({
+      state: 'UNREACHABLE',
+      failure: 'TIMEOUT',
+      status: null,
+      latencyMs: null,
+      lastHealthyAt: iso(190),
+      stale: true,
+    }),
+    credentials: {
+      username: credential(true, iso(60 * 24 * 12)),
+      password: credential(false, null),
+      apiToken: credential(true, iso(60 * 24 * 2)),
+    },
+  }),
+  panel('01a05e35-c9ad-7e93-bef3-1ed9b55292cb', 'Tehran Edge', {
+    status: 'DISABLED',
+    health: health({
+      state: 'DISABLED',
+      checkedAt: null,
+      latencyMs: null,
+      status: null,
+      providerVersion: null,
+    }),
+  }),
+  panel('01a05e35-c9ad-7e93-bef3-1ed9b55292cc', 'Stockholm', {
+    providerType: 'sanaei',
+    providerName: '3X-UI (MHSanaei)',
+    health: health({
+      state: 'AUTH_FAILED',
+      failure: 'AUTHENTICATION_REQUIRES_INTERACTION',
+      status: 401,
+      latencyMs: 88,
+    }),
+  }),
+];
+
+const setting = (key, value, over = {}) => ({
+  key,
+  value,
+  source: 'DEFAULT',
+  version: null,
+  updatedAt: null,
+  updatedByAdminId: null,
+  description: `The ${key} setting.`,
+  zeroMeaning: 'NOT_APPLICABLE',
+  mutability: 'RUNTIME',
+  classification: 'PUBLIC',
+  configures: null,
+  consumer: 'ACTIVE',
+  storedValueInvalid: false,
+  ...over,
+});
+
+export const SETTINGS = [
+  setting('ops.notifications.telegram_chat_id', '-1001234567890', {
+    zeroMeaning: 'DISABLES',
+    classification: 'SENSITIVE',
+    configures: 'ops_notifications',
+    source: 'TENANT',
+    version: 3,
+    updatedAt: iso(60 * 24),
+    description:
+      'The Telegram chat that receives operational notifications. Empty means no destination is configured and nothing is sent.',
+  }),
+  setting('ops.notifications.max_attempts', 5, {
+    configures: 'ops_notifications',
+    description:
+      'How many times one notification may be attempted before it is abandoned as failed.',
+  }),
+  setting('sales.currency', 'IRT', {
+    consumer: 'PLANNED',
+    description: 'The currency this tenant sells in.',
+  }),
+  setting('support.accounts', ['@NexaSupport', '@NexaSupport2'], {
+    consumer: 'PLANNED',
+    zeroMeaning: 'DISABLES',
+    source: 'TENANT',
+    version: 2,
+    updatedAt: iso(120),
+    description: 'The support accounts offered to customers, in the order they are offered.',
+  }),
+  setting(
+    'telegram.channels',
+    [
+      { handle: '@NexaChannel', mandatory: true },
+      { handle: '@NexaNews', mandatory: false },
+    ],
+    {
+      consumer: 'PLANNED',
+      zeroMeaning: 'DISABLES',
+      source: 'TENANT',
+      version: 1,
+      updatedAt: iso(300),
+      description:
+        'The channels shown to customers, in order, each flagged as required membership or optional.',
+    },
+  ),
+  setting(
+    'wallet.topup.minimum',
+    { amountMinor: '20000', currency: 'IRT' },
+    {
+      consumer: 'PLANNED',
+      zeroMeaning: 'DISABLES',
+      description: 'The smallest wallet top-up accepted, as an explicit amount and currency.',
+    },
+  ),
+];
+
+export const EVENTS = [
+  {
+    id: 'e1',
+    code: 'admin.roles_change',
+    severity: 'WARN',
+    message: 'Roles for administrator "sara" changed from [support] to [operator].',
+    context: null,
+    occurrenceCount: 1,
+    firstSeenAt: iso(45),
+    lastSeenAt: iso(45),
+    correlationId: 'c1',
+    recoversCode: null,
+    resolvedAt: null,
+    resolvedByEventId: null,
+  },
+  {
+    id: 'e2',
+    code: 'panel.monitor.tenant_budget_exceeded',
+    severity: 'ERROR',
+    message: 'The tenant probe budget cannot keep 84 panels inside the freshness window.',
+    context: null,
+    occurrenceCount: 12,
+    firstSeenAt: iso(600),
+    lastSeenAt: iso(4),
+    correlationId: 'c2',
+    recoversCode: null,
+    resolvedAt: null,
+    resolvedByEventId: null,
+  },
+  {
+    id: 'e3',
+    code: 'auth.login_locked_out',
+    severity: 'WARN',
+    message: 'Sign-in locked out after repeated failures.',
+    context: null,
+    occurrenceCount: 3,
+    firstSeenAt: iso(2000),
+    lastSeenAt: iso(1400),
+    correlationId: 'c3',
+    recoversCode: null,
+    resolvedAt: iso(1300),
+    resolvedByEventId: 'e9',
+  },
+];
+
+export const NOTIFICATIONS = [
+  {
+    id: 'n1',
+    kind: 'OPERATIONAL_EVENT',
+    status: 'SENT',
+    templateKey: 'event.panel.unreachable',
+    attemptCount: 1,
+    maxAttempts: 5,
+    createdAt: iso(90),
+    lastAttemptAt: iso(89),
+    completedAt: iso(89),
+    correlationId: 'c1',
+  },
+  {
+    id: 'n2',
+    kind: 'OPERATIONAL_EVENT',
+    status: 'FAILED',
+    templateKey: 'event.monitor.capacity',
+    attemptCount: 5,
+    maxAttempts: 5,
+    createdAt: iso(400),
+    lastAttemptAt: iso(180),
+    completedAt: iso(180),
+    correlationId: 'c2',
+  },
+  {
+    id: 'n3',
+    kind: 'OPERATIONAL_EVENT',
+    status: 'PENDING',
+    templateKey: 'event.panel.unreachable',
+    attemptCount: 0,
+    maxAttempts: 5,
+    createdAt: iso(3),
+    lastAttemptAt: null,
+    completedAt: null,
+    correlationId: 'c3',
+  },
+];
+
+/**
+ * The archive browser's page.
+ *
+ * Its own rows, not the live ones with a flag: `/panels?archived=only` is a
+ * different collection, and a fixture that returned the working fleet here
+ * would photograph exactly the bug the archived mode was added to remove.
+ */
+export const ARCHIVED_PANELS_PAGE = {
+  panels: [
+    panel('01a05e35-c9ad-7e93-bef3-1ed9b55292f1', 'Retired — Frankfurt C', {
+      status: 'ARCHIVED',
+      health: health({ state: 'DISABLED', latencyMs: null, failure: null }),
+    }),
+    panel('01a05e35-c9ad-7e93-bef3-1ed9b55292f2', 'Retired — Helsinki A', {
+      status: 'ARCHIVED',
+      health: health({ state: 'DISABLED', latencyMs: null, failure: null }),
+    }),
+  ],
+  nextCursor: null,
+};
+
+export const ROUTES = {
+  '/auth/session': {
+    admin: {
+      id: '01a05e35-c9ad-7e93-bef3-1ed9b55292c8',
+      username: 'owner',
+      displayName: 'مدیر اصلی',
+      status: 'ACTIVE',
+      telegramUserId: null,
+      roleKeys: ['owner'],
+      createdAt: iso(60 * 24 * 400),
+      lastLoginAt: iso(5),
+    },
+    permissions: [
+      'panels.view',
+      'panels.edit',
+      'panels.credentials.rotate',
+      'settings.view',
+      'settings.edit',
+      'templates.view',
+      'templates.edit',
+      'opslog.view',
+      'admins.view',
+      'users.view',
+      'services.view',
+      'orders.view',
+      'catalog.view',
+      'payments.view',
+      'resellers.view',
+      'reports.view',
+    ],
+    expiresAt: iso(-60 * 8),
+  },
+  '/system/readiness': {
+    status: 'ok',
+    dependencies: [
+      { name: 'postgres', status: 'up', latencyMs: 3 },
+      { name: 'redis', status: 'up', latencyMs: 1 },
+      { name: 'migrations', status: 'up', detail: '27 applied' },
+      { name: 'outbox-relay', status: 'up', latencyMs: 12 },
+    ],
+  },
+  '/system/monitor': {
+    monitor: {
+      enabled: true,
+      tickMs: 30000,
+      healthyIntervalMs: 180000,
+      retryableIntervalMs: 120000,
+      nonRetryableIntervalMs: 3600000,
+      batchSize: 150,
+      concurrency: 4,
+      tenantsPerTick: 10,
+      probeTenantLimit: 100,
+      probeTenantWindowMs: 300000,
+      probeCooldownMs: 10000,
+      budgetReservePercent: 40,
+      freshForMs: 900000,
+      tenantFreshPanelCeiling: 60,
+      installationFreshPanelCeiling: 900,
+      tenantTurnCeiling: 60,
+      schedulerCapacityExceeded: false,
+    },
+  },
+  '/panels': { panels: PANELS, nextCursor: 'cursor-page-2' },
+  '/providers': {
+    providers: [
+      {
+        key: 'marzban',
+        canonicalName: 'Marzban',
+        credentialShape: 'USERNAME_PASSWORD',
+        capabilities: ['HEALTH_CHECK'],
+        requiredActivationFields: [],
+      },
+      {
+        key: 'sanaei',
+        canonicalName: '3X-UI (MHSanaei)',
+        credentialShape: 'TOKEN_OR_USERNAME_PASSWORD',
+        capabilities: ['HEALTH_CHECK'],
+        requiredActivationFields: ['subscriptionDomain'],
+      },
+    ],
+  },
+  '/settings': { settings: SETTINGS },
+  '/features': {
+    flags: [
+      {
+        key: 'ops_notifications',
+        description: 'Project operational events to the operations destination.',
+        enabled: true,
+        source: 'TENANT',
+        blastRadius: 'LOCAL',
+        version: 2,
+        reason: null,
+        updatedAt: iso(60 * 24 * 5),
+        updatedByAdminId: 'a1',
+        // The governed settings travel WITH the flag, each marked inert when
+        // the flag is off — the whole point of the shape.
+        configuration: SETTINGS.filter((s) => s.configures === 'ops_notifications').map((s) => ({
+          ...s,
+          inert: false,
+        })),
+      },
+      {
+        key: 'template_overrides',
+        description: 'Allow tenant-specific message templates to take effect.',
+        enabled: false,
+        source: 'DEFAULT',
+        blastRadius: 'TENANT_WIDE',
+        version: 1,
+        reason: 'Held off until the copy review finishes.',
+        updatedAt: iso(60 * 24 * 20),
+        updatedByAdminId: null,
+        configuration: [],
+      },
+    ],
+  },
+  '/templates': {
+    templates: [
+      {
+        key: 'event.panel.unreachable',
+        locale: 'fa',
+        description: 'Sent when a panel stops answering.',
+        format: 'PLAIN_TEXT',
+        maxLength: 4096,
+        body: 'پنل {panel_name} در دسترس نیست.',
+        defaultBody: 'پنل {panel_name} در دسترس نیست.',
+        overrideBody: null,
+        source: 'DEFAULT',
+        overrideSuppressed: false,
+        version: null,
+        revision: null,
+        updatedAt: null,
+        updatedByAdminId: null,
+        placeholders: [
+          {
+            token: 'panel_name',
+            type: 'STRING',
+            description: 'The panel that stopped answering.',
+            required: true,
+            repeatable: false,
+          },
+        ],
+      },
+      {
+        key: 'event.monitor.capacity',
+        locale: 'fa',
+        description: 'Sent when the installation cannot keep its fleet fresh.',
+        format: 'PLAIN_TEXT',
+        maxLength: 4096,
+        body: 'ظرفیت پایش کافی نیست: {panel_count} پنل.',
+        defaultBody: 'ظرفیت پایش برای {panel_count} پنل کافی نیست.',
+        overrideBody: 'ظرفیت پایش کافی نیست: {panel_count} پنل.',
+        source: 'TENANT',
+        overrideSuppressed: false,
+        version: 4,
+        revision: 2,
+        updatedAt: iso(60 * 24 * 9),
+        updatedByAdminId: 'a2',
+        placeholders: [
+          {
+            token: 'panel_count',
+            type: 'NUMBER',
+            description: 'How many panels are in the fleet.',
+            required: true,
+            repeatable: false,
+          },
+        ],
+      },
+    ],
+  },
+  // `nextCursor` is part of the response contract; a fixture without it fails
+  // schema parsing in the real client and every capture of an ops-log surface
+  // renders the query error state instead of the page.
+  '/ops-log': { events: EVENTS, nextCursor: null },
+  '/notifications': { notifications: NOTIFICATIONS, nextCursor: null },
+  '/admins': {
+    admins: [
+      {
+        id: 'a1',
+        username: 'owner',
+        displayName: 'مدیر اصلی',
+        status: 'ACTIVE',
+        telegramUserId: null,
+        roleKeys: ['owner'],
+        createdAt: iso(60 * 24 * 400),
+        lastLoginAt: iso(5),
+      },
+      {
+        id: 'a2',
+        username: 'sara',
+        displayName: 'سارا احمدی',
+        status: 'ACTIVE',
+        telegramUserId: null,
+        roleKeys: ['operator'],
+        createdAt: iso(60 * 24 * 120),
+        lastLoginAt: iso(300),
+      },
+      {
+        id: 'a3',
+        username: 'reza',
+        displayName: 'رضا کریمی',
+        status: 'DISABLED',
+        telegramUserId: null,
+        roleKeys: ['support'],
+        createdAt: iso(60 * 24 * 90),
+        lastLoginAt: null,
+      },
+    ],
+  },
+};
+
+export const INFO = {
+  name: 'nexa-bot',
+  version: '0.4.0',
+  commit: '7ba1837e6c2d4a1b9f0e3c5d7a8b9c0d1e2f3a4b',
+  buildTime: iso(60 * 24 * 2),
+  nodeVersion: 'v22.11.0',
+  environment: 'production',
+};

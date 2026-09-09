@@ -21,7 +21,10 @@ import {
   backoffMultiplier,
   baseIntervalMs,
   scheduleAfterProbe,
+  schedulerFreshPanelUpperBound,
   stableSpreadMs,
+  tenantBudgetFreshPanelUpperBound,
+  tenantTurnFreshTenantUpperBound,
   type MonitorCadence,
 } from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
 
@@ -198,6 +201,32 @@ describe('the monitor cadence', () => {
     expect(healthyCadenceFitsFreshness(ceiling, tick)).toBe(true);
     expect(healthyCadenceFitsFreshness(ceiling + 60_000, tick)).toBe(false);
 
+    /*
+     * At EVERY tick, not the one this test happened to pick.
+     *
+     * The two functions were parallel formulas for one rule and disagreed
+     * wherever floating point said they did: `720000 * 1.1` is
+     * `792000.0000000001`, so at `tick = 108000` the schema refused 720001,
+     * advised "at most 720000", and refused 720000 too — the process would not
+     * boot and the instruction it printed could not be followed. Asserting one
+     * tick could not see it, and `tick = 30_000` is not one of the ticks that
+     * breaks.
+     *
+     * Both halves are asserted, because a ceiling that is merely ACCEPTED can
+     * be had by returning 1. It has to be the largest accepted value.
+     */
+    for (let coarse = 1_000; coarse <= 600_000; coarse += 997) {
+      const advised = maxHealthyIntervalMs(coarse);
+      expect(
+        healthyCadenceFitsFreshness(advised, coarse),
+        `tick ${coarse}: the schema advises ${advised} and then refuses it`,
+      ).toBe(true);
+      expect(
+        healthyCadenceFitsFreshness(advised + 1, coarse),
+        `tick ${coarse}: ${advised} is not the largest interval that fits`,
+      ).toBe(false);
+    }
+
     // A long tick shrinks what a healthy interval may be, which is the whole
     // reason this cannot live on either field alone.
     expect(maxHealthyIntervalMs(10 * 60 * 1000)).toBeLessThan(maxHealthyIntervalMs(30_000));
@@ -218,6 +247,66 @@ describe('the monitor cadence', () => {
       }),
     );
     expect(worst + tick).toBeLessThan(PANEL_HEALTH_FRESH_FOR_MS);
+  });
+
+  /**
+   * T21 — the THIRD capacity bound, and the one nothing reported.
+   *
+   * Two panel ceilings say how many PANELS can be kept fresh. Neither says how
+   * many TENANTS the fairness rotation can reach: a tick claims at most
+   * `tenantsPerTick`, so across a freshness window it visits
+   * `tenantsPerTick x (interval / tick)` of them, and a tenant beyond that
+   * waits longer than the interval for its first probe of the cycle. A hundred
+   * single-panel tenants is a hundred panels — far under the 900-panel
+   * scheduler ceiling — so nothing else in the system says the rotation cannot
+   * keep up.
+   */
+  describe('the tenant-turn bound', () => {
+    it('is the rotation arithmetic, at the shipped defaults', () => {
+      // 10 tenants a tick, a 30s tick, a 3-minute interval.
+      expect(tenantTurnFreshTenantUpperBound(10, 30_000, 3 * 60 * 1000)).toBe(60);
+    });
+
+    it('shrank when the healthy interval did, which is how it went unnoticed', () => {
+      // The ten-minute cadence this project shipped before reached 200 tenants
+      // on the same fairness dial; three minutes reaches 60. Nothing about
+      // `PANEL_MONITOR_TENANTS_PER_TICK` changed, and no capacity condition
+      // fires on a fleet that small.
+      expect(tenantTurnFreshTenantUpperBound(10, 30_000, 10 * 60 * 1000)).toBe(200);
+      expect(tenantTurnFreshTenantUpperBound(10, 30_000, 3 * 60 * 1000)).toBeLessThan(
+        tenantTurnFreshTenantUpperBound(10, 30_000, 10 * 60 * 1000),
+      );
+    });
+
+    it('scales with the fairness dial and with a shorter tick', () => {
+      expect(tenantTurnFreshTenantUpperBound(20, 30_000, 3 * 60 * 1000)).toBe(120);
+      expect(tenantTurnFreshTenantUpperBound(10, 15_000, 3 * 60 * 1000)).toBe(120);
+    });
+
+    it('rounds DOWN, because a partial turn is not a turn', () => {
+      // 10 x (100s / 30s) = 33.3 — thirty-three tenants get a turn, not
+      // thirty-four. Rounding up would report capacity the rotation lacks.
+      expect(tenantTurnFreshTenantUpperBound(10, 30_000, 100_000)).toBe(33);
+    });
+
+    it('is independent of the two PANEL ceilings, which is the whole point', () => {
+      // One tenant, one panel each, a hundred tenants: comfortably inside both
+      // panel bounds and outside this one.
+      const tenants = 100;
+      const panels = tenants;
+      expect(
+        schedulerFreshPanelUpperBound(150, 30_000, 3 * 60 * 1000),
+        'the fleet fits the scheduler',
+      ).toBeGreaterThan(panels);
+      expect(
+        tenantBudgetFreshPanelUpperBound(100, 5 * 60 * 1000, 3 * 60 * 1000),
+        'and fits every tenant budget',
+      ).toBeGreaterThanOrEqual(1);
+      expect(
+        tenantTurnFreshTenantUpperBound(10, 30_000, 3 * 60 * 1000),
+        'and still cannot be reached in one window',
+      ).toBeLessThan(tenants);
+    });
   });
 
   it('will not retry a rejected credential inside the lockout floor', () => {

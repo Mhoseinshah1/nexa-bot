@@ -119,6 +119,13 @@ pass "no source tree or build configuration in the runtime image"
 
 # --- 5. The Web Admin bundle, without its source maps -------------------------
 run test -f /app/web/index.html 2>/dev/null || fail "the Web Admin bundle is missing from /app/web"
+# The webfont, by name. `styles.css` asks for it by an unhashed path, and Caddy
+# answers a missing static file with a 404 rather than the SPA document — which
+# is the right answer and a silent one: the page renders in the fallback family
+# and nothing says why. This is where a font that did not ship becomes loud,
+# because it is the last place that can be.
+run test -f /app/web/fonts/Vazirmatn-Variable.woff2 2>/dev/null ||
+  fail "the Web Admin webfont is missing from /app/web/fonts"
 # `-print -quit` rather than `| head -5`. The pipeline runs inside the
 # container's `sh`, which has no `pipefail`, so it was safe — but "safe because
 # the inner shell lacks an option" is not a property the next edit preserves,

@@ -35,6 +35,7 @@ import type {
   ProbeBudget,
   UpdatePanelInput,
   PanelCursor,
+  PanelArchiveScope,
 } from '../application/ports.js';
 
 /**
@@ -107,9 +108,19 @@ export class DrizzlePanelRepository implements PanelRepository {
    */
   static pageKeysQuery(
     scope: TenantContext,
-    options: { includeArchived: boolean; limit: number; cursor: PanelCursor | null },
+    options: { archived: PanelArchiveScope; limit: number; cursor: PanelCursor | null },
   ): SQL {
-    const live = options.includeArchived ? sql`TRUE` : sql`${panels.status} <> 'ARCHIVED'`;
+    // Three predicates, one per scope, each matching an index that exists.
+    // `ARCHIVED` has its own partial index rather than reusing the live one:
+    // `panels_tenant_created_page_idx` is `WHERE status <> 'ARCHIVED'`, so the
+    // archive browser would have had no index at all and paged by sequential
+    // scan over the whole table.
+    const live =
+      options.archived === 'ALL'
+        ? sql`TRUE`
+        : options.archived === 'ARCHIVED'
+          ? sql`${panels.status} = 'ARCHIVED'`
+          : sql`${panels.status} <> 'ARCHIVED'`;
     const after =
       options.cursor === null
         ? sql`TRUE`
@@ -164,8 +175,8 @@ export class DrizzlePanelRepository implements PanelRepository {
    * One page of panels.
    *
    * TWO bounded statements, not one. The keys come first — an index-only walk
-   * of `(name, id)` that reads one row past the page to know whether a next
-   * cursor exists — and only then are the credential and health rows fetched,
+   * of `(created_at, id)` that reads one row past the page to know whether a
+   * next cursor exists — and only then are the credential and health rows fetched,
    * for those ids alone. The single joined query it replaced materialised every
    * live panel of the tenant with both child rows attached before any limit
    * applied, so the expensive part of the work was the part that scaled.
@@ -176,14 +187,14 @@ export class DrizzlePanelRepository implements PanelRepository {
    */
   async list(
     scope: TenantContext,
-    options: { includeArchived: boolean; limit?: number; cursor?: PanelCursor | null },
+    options: { archived: PanelArchiveScope; limit?: number; cursor?: PanelCursor | null },
     tx?: TransactionScope,
   ): Promise<{ panels: PanelView[]; nextCursor: PanelCursor | null }> {
     const executor = executorOf(this.db, tx);
     const limit = options.limit ?? PANEL_PAGE_DEFAULT;
     const keys = await executor.execute<{ id: string; created_at: string }>(
       DrizzlePanelRepository.pageKeysQuery(scope, {
-        includeArchived: options.includeArchived,
+        archived: options.archived,
         limit,
         cursor: options.cursor ?? null,
       }),
@@ -302,6 +313,7 @@ export class DrizzlePanelRepository implements PanelRepository {
     status: PanelStatus,
     at: Date,
     tx: TransactionScope,
+    name?: string,
   ): Promise<PanelRecord | null> {
     let row: typeof panels.$inferSelect | undefined;
     try {
@@ -309,6 +321,11 @@ export class DrizzlePanelRepository implements PanelRepository {
         .update(panels)
         .set({
           status,
+          // ONE statement, so the row never passes through a state the partial
+          // unique index refuses. Restoring under a replacement name in two
+          // statements would first make the row live under the name somebody
+          // else took, and collide before the rename could run.
+          ...(name === undefined ? {} : { name }),
           // The CHECK constraint requires these to agree, so they are set
           // together rather than left to a caller to remember.
           archivedAt: status === 'ARCHIVED' ? at : null,

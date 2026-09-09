@@ -19,6 +19,7 @@ import {
   type TemplateKey,
   type TemplateValues,
   type UnitOfWork,
+  NOTIFICATION_PAGE_DEFAULT,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
@@ -133,11 +134,19 @@ export class NotificationService {
   async list(
     scope: ScopeContext,
     actor: ActorContext,
-    options: { limit?: number; before?: Date } = {},
+    options: { limit?: number; before?: { at: Date; id: string } } = {},
   ): Promise<NotificationIntent[]> {
     await this.guard.check(scope, actor, NOTIFICATIONS_VIEW);
     return this.notifications.list(scope, {
-      limit: Math.min(Math.max(options.limit ?? 50, 1), 200),
+      // 201, not 200. The controller over-fetches ONE row past the page the
+      // caller asked for, so it can tell a full last page from a full page
+      // with more behind it. Clamping at the wire maximum silently ate that
+      // extra row at `limit=200`: `found.length > size` became `200 > 200`,
+      // `nextCursor` came back null, and every row past the two-hundredth was
+      // unreachable — a worse failure than the false cursor the over-fetch was
+      // added to remove. The ops-log path was raised for this reason and this
+      // one was missed.
+      limit: Math.min(Math.max(options.limit ?? NOTIFICATION_PAGE_DEFAULT, 1), 201),
       ...(options.before ? { before: options.before } : {}),
     });
   }
@@ -239,7 +248,9 @@ export class NotificationService {
     try {
       await this.guard.check(scope, actor, 'settings.edit');
     } catch (denial) {
-      // One recorder for every early refusal in the codebase. The inline
+      // The recorder shared by the early checks in settings, features,
+      // notifications, templates, panels and the system ping (identity audits
+      // its early check inline; the guard writes that event). The inline
       // version this replaces wrote a DENIED row for ANY throw — including a
       // missing tenant context, which is not a denial of this permission — and
       // emitted no operational event, so the same refusal was recorded

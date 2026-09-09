@@ -409,7 +409,7 @@ bound outbound traffic.
 
 So a second limiter sits beside it: **one token bucket per tenant**, in
 `panel_probe_budgets`, `capacity` tokens refilled continuously at `capacity`
-per window (`PANEL_PROBE_TENANT_LIMIT`, default 30, and
+per window (`PANEL_PROBE_TENANT_LIMIT`, default 100, and
 `PANEL_PROBE_TENANT_WINDOW_MS`, default five minutes). It is keyed by the
 tenant and nothing else — no panel, no configuration digest, no address — which
 is what makes it immune to the alternation the claim allows. It is one row per

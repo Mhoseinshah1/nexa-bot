@@ -277,3 +277,318 @@ here so the question and its answer stay together.
 | `ADR-0009` §1            | Telegram Login Widget, local credentials, or both, for the Web Admin?            | Username and password. The Login Widget makes Telegram an availability dependency of fixing Telegram, and account recovery becomes unrecoverable locally. `admins.telegram_user_id` is a link, not a credential. | [ADR-0013](adr/0013-web-admin-authentication.md)  |
 | `ADR-0009` §3            | Does a role change take effect next request, or invalidate in-flight sessions?   | Next request. Sessions carry identity, never authority — permissions are resolved per request. Disabling an administrator additionally revokes their live sessions on the spot.                                  | [ADR-0013](adr/0013-web-admin-authentication.md)  |
 | `UNK-ADM-005`            | Can a restricted admin reach admin management and escalate their own privileges? | Not here, whatever they hold: an administrator can never change their own roles or status. The question about the LEGACY system stays unanswered; the answer for ours is settled.                                | [ADR-0014](adr/0014-rbac-model.md)                |
+
+## OQ-3D-01 — is an operator's own probe rate limit management-facing?
+
+**Status: UNRESOLVED. Recorded rather than guessed.**
+
+`panel.probe.limited` / `panel.probe.ok` (`PanelService`) and
+`panel.monitor.tenant_budget_exceeded` / `_ok` (`PanelMonitorService`) are
+structurally twins: tenant-scoped, deduped, opening and closing, over the _same_
+token bucket. The monitor's pair is in `MANAGEMENT_EVENT_CODES`; the operator's
+pair is not.
+
+The asymmetry is deliberate and is argued in `packages/contracts/src/ports.ts`
+and pinned by a test: the monitor's exhaustion is nobody's doing and nobody is
+watching, whereas an operator who presses "test connection" too often is told so
+synchronously, in the response, with a retry-after. Promoting the second would
+put a self-inflicted, self-explaining refusal on the page reserved for things
+nobody has seen yet.
+
+**What is genuinely unknown** is whether an operator would want the _pattern_ —
+a tenant whose manual testing repeatedly exhausts its budget — surfaced as a
+management condition rather than only as individual synchronous refusals and a
+Telegram projection. That is a product question about what the alerts page is
+for, and the owner's revision 21 and 25 answer the general shape of it without
+answering this case.
+
+**Trigger to revisit:** the first report of an operator being surprised that
+repeated probe limiting left no trace on the alerts page, or the first tenant
+large enough that manual testing competes with the monitor for the budget.
+Whoever revisits it changes the comment in `ports.ts` and the exclusion test in
+`tests/unit/web-money-and-scope.test.ts` together.
+
+## OQ-3D-02 — a malformed request refused before the guard leaves no `access.permission_denied`
+
+**Status: UNRESOLVED — OPEN, NOT MERGE-BLOCKING. Classified in round 45; recorded
+rather than argued away a fourth time.**
+
+Classified, not redesigned. Merge-blocking would need a production defect that
+weakens authorization or discloses something; this does neither — every
+remaining case is answered `400` before the guard, tells the caller nothing,
+and changes no state. Resolved would need an authoritative fix for each
+remaining case; the ones listed under "What is still open" below need the
+parse moved inside the lock of two identity mutations, or a permission that
+only the parsed body can name, and the one attempt to guess that permission
+from the raw body refused a legitimate operation and wrote a false record for
+it. So it stays open, with its cases pinned one by one, and it does not hold
+the branch.
+
+An unprivileged but authenticated caller who sends a request the server cannot
+parse is answered `400` and no `access.permission_denied` is recorded — that
+event is written by the guard, and on those paths the guard never runs. The
+same caller sending a well-formed request is answered `403` and the record is
+written. So an operational-log entry that exists to be a security fact about
+people can be suppressed by malforming the request.
+
+**What is settled.** The exposure is the missing audit record, not a
+disclosure: a `400` tells the caller nothing about what they may read, and
+every path that would reveal something still authorizes first.
+
+**What is not.** Which order the API should have, and whether the inconsistency
+below is worth removing. Five successive attempts to state a RULE governing
+it were each falsified by a case on an endpoint the rule named:
+
+- "It is uniform; every surface parses before authorizing." False —
+  `POST /settings/:key`, `POST /features/:key`, `POST /templates/:key` and
+  `GET /panels/:id` hand the raw value to the service, which authorizes first.
+- "A query string is parsed in the controller; a path parameter or body is
+  handed to the service." False in both directions —
+  `GET /notifications/:id` parses `uuidV7Schema` in the controller, and
+  `/ops-log` splits inside itself.
+- "Within `/ops-log`, `scope`, `severity`, `code` and `open` are
+  service-parsed." False for `open`, which is `openFlag.parse(query.open)` in
+  the argument list of the service call and therefore evaluated before it. The
+  three that were listed correctly had assertions that DISCRIMINATED which
+  side of the guard they were parsed on; `open` had assertions but none that
+  did — it was pinned at 400 all along by `refuses an open filter that is
+neither true nor false`, which cannot tell the two orders apart.
+- "The ordering is per-PARAMETER." Still too general. It is per
+  (parameter, MALFORMATION): `singleValued` refuses a REPEATED key in the
+  controller, so `?scope=ALL&scope=ALL` is a 400 from a caller for whom
+  `?scope=BOGUS` is a 403 — the same parameter, the same endpoint, the same
+  caller.
+
+- "A body is handed to the service, which authorizes first." False for every
+  panel WRITE: `PanelService` parsed the body before it authorized on create,
+  update, credentials, status and test, so an unprivileged caller posting
+  `{nonsense:true}` was answered 400 and left no `access.permission_denied` —
+  including on `panels.credentials.rotate`, the CRITICAL permission. **This
+  one was FIXED** rather than recorded, because unlike the query cases the
+  same layer already did it the other way round in settings, features,
+  templates and the notification test. Pinned by
+  `panels-http.test.ts` › records the denial even when the body is nonsense.
+- And the same defect again in `AdminManagementService.create`, which parsed
+  before `assertMayAttempt` while `setStatus` and `setRoles` in the SAME FILE
+  authorized first — the one operation that mints a credential with roles
+  attached. The round that fixed the panels said in three documents that "the
+  panel service was the last to follow a rule the others kept"; it was not,
+  and that sentence is corrected here. **The FIRST guard is fixed** and pinned
+  by `admin-http.test.ts` › records the denial on create even when the body is
+  nonsense.
+- The SECOND guards are a different problem and are **not** fixed. See
+  "Why the second guards cannot be pre-authorized" below.
+- And once more INSIDE the file that had just been fixed: `create`'s second
+  guard, `panels.credentials.rotate`, is gated on the parsed body, so an actor
+  holding `panels.edit` but not the rotate permission could suppress the
+  CRITICAL denial with a malformed idempotency key. Closed by authorizing on
+  the raw body's shape when it mentions credentials at all. Pinned by
+  `panels-http.test.ts` › records the CREDENTIALS denial on create, even with
+  a malformed body.
+
+The honest reading is that nothing decides this at all: the ordering follows
+wherever each value happens to be validated, and five attempts to state it as
+a rule were each falsified by a case the rule itself named. It is not stated
+as a rule anywhere any more; the cases are pinned instead.
+Making it uniform means moving every query parse behind the guard, which a
+surface cannot do — it does not resolve permissions — so it means moving the
+parsing into the application services, which is a change across three
+controllers and every query schema, and is not what Phase 3D was asked for.
+
+### Why the second guards cannot be pre-authorized, and what was learned trying
+
+Some refusals depend on a permission that is only KNOWN once the body is
+parsed. `admins.permissions.edit` is required when a request grants or removes
+the owner role; `ADMIN_PRIVILEGE_ESCALATION` is raised when a request confers
+authority the actor does not hold. Which permission applies is a function of
+what the body asks for, so there is no permission to check before the parse —
+only a guess at one.
+
+**A guess was tried, measured, and reverted.** `mentionsOwnerRole` scanned the
+raw body for the owner role and pre-authorized `admins.permissions.edit`. It
+was wrong in both directions, and the second is the reason it is gone:
+
+- Too NARROW. It required `Array.isArray(roleKeys)`, so `roleKeys: 'owner'` as
+  a bare string went back to 400 with no record — the hole it was written to
+  close, one keystroke away.
+- Too WIDE, and harmful. The authoritative guard fires on the locked DELTA
+  adding or removing owner; the guess fired on the body MENTIONING it. So an
+  actor with `admins.edit` editing an existing owner's other roles — who must
+  keep `owner` in the list, or trip the remove gate — was REFUSED an operation
+  the system permits, and the refusal wrote a `DENIED` audit row and an
+  `access.permission_denied` event describing an escalation attempt that never
+  happened. Measured: parent RESOLVED with +0/+0; with the guess REJECTED with
+  +1/+1. In the module whose whole thesis is audit fidelity, and on a row that
+  reaches the Management Alerts page and never resolves.
+
+A false record is worse than a missing one. The guess is reverted.
+
+**What is still open**, all measured at +0/+0 with a malformed body and +1/+1
+with a well-formed one:
+
+- `create` and `setRoles` granting the owner role.
+- `setRoles` removing it, and `setStatus` on an owner — these depend on the
+  TARGET's roles rather than the body, and could be closed authoritatively by
+  moving the parse inside the lock and gating on the locked `current`. That is
+  a restructure of two locked mutations, not a Web Admin change.
+- `assertGrantsNoMorePrivilegeThanHeld`, which covers every delegable role and
+  is called "the more serious of the two" by the code that reports it.
+- `POST /admins/:id/roles` and `POST /admins/:id/status`, where
+  `admins.controller.ts` parses the path id before the service authorizes —
+  the same construct as `GET /notifications/:id` above, on two WRITE routes.
+
+**Trigger to revisit:** the phase that restructures the identity mutations, or
+the first audit review that asks why a denied escalation left no trace.
+
+**Trigger to revisit:** an operator or an auditor asking why a denied attempt
+is missing from the log, or the first phase that adds an endpoint whose denial
+record is relied on for anything more than reading. Whoever revisits it changes
+the two tests that pin the current matrix together —
+`panels-http.test.ts` › does not decide 400-before-403 by a rule, and the cases
+are pinned one by one, and `web-admin-v2.test.ts` › splits 400-before-403
+INSIDE one endpoint, by parameter.
+
+## OQ-3D-03 — a denial writes its operational event twice
+
+**Status: RESOLVED (round 45).** One denied request writes ONE
+`access.permission_denied` event and ONE `DENIED` audit row, on both paths,
+and the counts are pinned exactly.
+
+**What it was.** Every refusal on a non-transactional guard call that went
+through the shared recorder wrote `access.permission_denied` **twice**: `permission-guard.ts` recorded it whenever
+no transaction was passed, and `recordMutationDenial` recorded it again for the
+same attempt. `PanelService.authorize` and the other early checks — settings,
+features, notifications — pass no transaction, so both fired: measured at two
+rows per denied request. The code is in `MANAGEMENT_ONE_SHOT_CODES` and never
+resolves, so an operator counting denials on the alerts page counted double,
+permanently, and always had. Inside `runAuthorizedMutation` (and the panel
+monitor, which checks inside `uow.run`) the guard is passed `tx`, writes
+nothing, and the recorder was the only emitter — one and one, correct.
+
+**What owns the record now.** The GUARD is the single authority for the
+operational event. `PermissionGuard.check` still writes it only when no
+transaction is passed — the reason is unchanged: writing from inside a
+transaction takes a second pool connection while holding one, and deadlocks the
+process at pool exhaustion — and it now marks the error it throws with whether
+it did (`denialEventRecorded`, a non-enumerable symbol property, so it never
+reaches the 403 body). `recordMutationDenial` writes the event only when the
+guard says it could not, and writes the `DENIED` audit row unconditionally, as
+before. Identity's `runLockedMutation`, the other after-the-fact recorder, asks
+the same question (round 46), which is the reason it stays one event when an
+in-lock check stops passing `tx` — pinned directly in round 48. Both recorders
+write the audit row FIRST (round 48): the two writes are not atomic, and the
+order decides which survives an operational log that is down. No caller decides: the six pre-transaction sites (five panel writes,
+settings, features, notifications, templates' set and revert, and
+`system.ping` on both surfaces — templates joined the shared recorder in
+round 49 and the ping in round 52; the other four were unchanged) and
+`runAuthorizedMutation` take the same code path they took before.
+
+The two alternatives were a parameter (`{ eventRecorded }`) threaded through
+every caller, which is the route-by-route shape the owner ruled out and the
+next site would forget, and a field in `details`, which is serialised into the
+403 body. A symbol on the error is neither.
+
+**What is pinned.**
+
+- `tests/unit/authorization.test.ts` › one denial is one event and one audit
+  row — both branches, exactly: pre-transaction (guard event, recorder audit)
+  and in-transaction (recorder event and audit), plus the marker staying off
+  the wire.
+- `tests/integration/panels-http.test.ts` › records the denial even when the
+  body is nonsense — per route, for ONE request, `events === 1` and
+  `audit === 1`, malformed and well-formed, on all five panel writes.
+- `tests/integration/transactional-authorization.test.ts` › records an EARLY
+  refusal the same way in every phase — settings, the shared recorder, exactly
+  one event; the `some(...)` floor it replaces held under the duplicate.
+- `tests/integration/admin-http.test.ts` › records the denial on create even
+  when the body is nonsense — identity, exactly one and one.
+- `tests/integration/identity-concurrency.test.ts` › refuses a REMOVE-ONLY
+  setRoles whose actor lost admins.edit — the in-lock path, exactly one event,
+  `WARN`, naming the actor (rounds 46 and 48); › records ONE event and ONE
+  audit row when the in-lock check has already written the event — the guard's
+  marker consulted by `runLockedMutation` (round 48); › writes the DENIED
+  audit row even when the operational-event write fails — audit first (round
+  48).
+- `tests/integration/codex-findings-round-2.test.ts` › names the permissions
+  the actor tried to confer, not "unknown" — an escalation refusal, which the
+  guard never sees, leaves exactly one event naming what the audit row names
+  (rounds 47 and 48).
+- `tests/unit/authorization.test.ts` › writes the audit row before the event,
+  so a failing event write cannot cost it — the shared recorder's order
+  (round 48); › an audit failure costs the event, and is what the caller sees
+  (round 49); › IN-transaction: the guard writes nothing, the recorder writes
+  the event and the audit row — WARN, this permission, this actor (round 50).
+- `tests/integration/transactional-authorization.test.ts` › records a
+  TEMPLATES early refusal as one audit row and one event, and a non-denial as
+  nothing — templates on the shared recorder, authorized before parsed
+  (rounds 49–50); and every authority-revocation barrier case, parametrised and
+  literal, asserts exactly one DENIED row and one WARN event naming the
+  case's literal permission (rounds 50–52; the session-revocation case has
+  no denial to pin).
+
+Falsified in `docs/phase3d-falsification.md`, round 45: emitting from both
+(AV1) fails the pins as a duplicate, removing the surviving emission (AV2)
+fails them as a missing event, removing the audit write (AV3) fails them as a
+missing audit row.
+
+## OQ-3D-04 — an operational-log outage on the pre-transaction path leaves no audit row
+
+**Status: UNRESOLVED — OPEN, NOT MERGE-BLOCKING. Recorded in round 49 rather
+than decided on a guess.**
+
+Round 48 wrote "both recorders write the audit row first, so an operational
+log that is down costs the event and never the audit row". True of the two
+after-the-fact recorders, and only of them. On the PRE-transaction path — the
+eight early routes, templates' two, `system.ping`, identity's three pre-lock
+checks, and every VIEW check, which is the path an ordinary unauthorized
+request actually hits — the GUARD
+writes the event before it has decided to throw the denial. If that write
+fails, `check` rejects with the write's error, no `PERMISSION_DENIED` ever
+exists, and the recorders (which audit only THIS permission's refusal) write
+nothing. The caller sees the outage, not a 403, and the attempt leaves no
+audit row.
+
+Pinned as it is, so the limit is stated by a test rather than a sentence:
+`tests/unit/authorization.test.ts` › PRE-transaction with the operational log
+down: the guard fails before any denial exists.
+
+**Why it is not changed here.** The structural fix is for the guard to catch
+its own write failure, mark the error `recorded: false`, and throw the
+denial — the recorders would then write the audit row first and re-attempt
+the event, whose failure would propagate as it does today. That also changes
+what a VIEW check does during an outage: `list` and `get` have no recorder
+behind them, so their denial would become a quiet 403 with no event, where
+today the outage is loud. Whether a refusal during an outage should be a
+quiet 403 or a loud error is an operator-facing decision, not one to take
+inside a Web Admin branch.
+
+**Trigger to revisit:** the first operational-log outage in production, or
+the phase that gives the guard a logger of its own.
+
+## OQ-3D-05 — a write permission without its read permission has no usable screen
+
+**Status: OPEN — OWNER-DEFERRED, not merge-blocking.** Raised by Codex's
+seventh review of PR #15; the owner's disposition is to record it and not to
+decide it at the end of Phase 3D.
+
+`SettingsService.set` authorizes on `settings.edit` alone, and the feature
+flag and template writes on `settings.edit` and `templates.edit` alike. An
+administrator whose role grants the write and whose overrides DENY the read —
+`effective = (role ∪ GRANT) − DENY`, so the combination is reachable — holds
+a capability the Web Admin cannot offer: `/settings`, `/features` and
+`/content` gate the whole page on the view permission, render the denied
+state and hide their navigation entries. The server permits a write the
+screen does not draw.
+
+**Why it is not decided here.** Neither remedy is a Web Admin change. Requiring
+the view permission on the server's write path changes what an existing
+permission grants; drawing a write control without the read means editing a
+value the actor may not see, which is the write-only settings screen the
+registry exists to end. The right answer needs a decision about
+read-before-write — every write here carries an `expectedVersion` read from
+the page — and whether edit should imply view in the override resolver.
+Not a privilege escalation, data loss, tenant isolation or security defect:
+the mismatch denies, it never grants.
+
+**Trigger to revisit:** the first override that produces this combination in
+a real installation, or the phase that revisits the permission catalogue.

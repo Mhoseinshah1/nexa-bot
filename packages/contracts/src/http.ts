@@ -6,9 +6,11 @@ import {
   NOTIFICATION_STATUSES,
   NOTIFICATION_TRANSPORTS,
 } from './notifications.js';
+import { uuidV7Schema } from './ids.js';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
 import {
   SETTING_CLASSIFICATIONS,
+  SETTING_CONSUMERS,
   SETTING_MUTABILITIES,
   SETTING_SOURCES,
   ZERO_MEANINGS,
@@ -29,6 +31,7 @@ import {
   PROVIDER_FAILURE_KINDS,
   PROVIDER_TYPES,
 } from './provider.js';
+import { isStorableInstant } from './time.js';
 
 /**
  * The HTTP seam.
@@ -91,6 +94,66 @@ export const systemReadinessResponseSchema = z.object({
   dependencies: z.array(dependencyStatusSchema),
 });
 export type SystemReadinessResponse = z.infer<typeof systemReadinessResponseSchema>;
+
+/**
+ * What the background panel monitor is actually configured to do.
+ *
+ * Read-only, and it exists because the alternative is a screen that PRINTS a
+ * cadence. The shipped default is three minutes; a deployment can set anything
+ * the schema accepts, and an admin panel that renders "every 3 minutes" from a
+ * constant in its own bundle would be stating a number the installation may not
+ * be running. That is the legacy statistics screen counting CONFIGURED panels
+ * and calling them connected, in a new place.
+ *
+ * The two ceilings are computed SERVER-side by the same functions the monitor's
+ * own capacity conditions use. Recomputing them in the browser would be a
+ * second implementation of the arithmetic, free to disagree with the one that
+ * decides whether an alarm fires.
+ */
+export const monitorProfileSchema = z.object({
+  enabled: z.boolean(),
+  tickMs: z.number().int().positive(),
+  healthyIntervalMs: z.number().int().positive(),
+  retryableIntervalMs: z.number().int().positive(),
+  nonRetryableIntervalMs: z.number().int().positive(),
+  batchSize: z.number().int().positive(),
+  concurrency: z.number().int().positive(),
+  tenantsPerTick: z.number().int().positive(),
+  probeTenantLimit: z.number().int().positive(),
+  probeTenantWindowMs: z.number().int().positive(),
+  probeCooldownMs: z.number().int().positive(),
+  budgetReservePercent: z.number().int().nonnegative(),
+  /** The constant a surface calls a result stale against. */
+  freshForMs: z.number().int().positive(),
+  /** The most panels ONE tenant's probe budget could keep inside that window. */
+  tenantFreshPanelCeiling: z.number().int().nonnegative(),
+  /** The most the scheduler could START on across the whole installation. */
+  installationFreshPanelCeiling: z.number().int().nonnegative(),
+  /**
+   * The most TENANTS the fairness rotation can reach inside one freshness
+   * window — a third bound, independent of the two panel ceilings above.
+   *
+   * A hundred tenants of one panel each is a hundred panels: comfortably under
+   * the installation ceiling, and still more tenants than the rotation can
+   * visit, so their panels go stale with nothing to say so. Reported because
+   * it is the bound that was invisible.
+   */
+  tenantTurnCeiling: z.number().int().nonnegative(),
+  /**
+   * Whether the installation is CURRENTLY over that ceiling.
+   *
+   * The condition itself lives in `operational_events` under `SYSTEM_SCOPE`
+   * with a null tenant, where the tenant-scoped `GET /ops-log` reader cannot
+   * reach it under any scope. Reported here because this response is already
+   * installation-scoped, so it is the one surface that can answer without
+   * weakening that reader's isolation.
+   */
+  schedulerCapacityExceeded: z.boolean(),
+});
+export type MonitorProfile = z.infer<typeof monitorProfileSchema>;
+
+export const monitorProfileResponseSchema = z.object({ monitor: monitorProfileSchema });
+export type MonitorProfileResponse = z.infer<typeof monitorProfileResponseSchema>;
 
 /**
  * Build metadata. Requires an authenticated session.
@@ -296,7 +359,14 @@ export const ADMIN_ROUTES = {
  * is the same mistake one layer up: Jalali is a display concern and this is a
  * wire format.
  */
-const isoTimestamp = z.iso.datetime();
+const isoTimestamp = z.iso.datetime().refine((v) => isStorableInstant(new Date(v)), {
+  // `z.iso.datetime()` is a SHAPE check, not a range one. It accepts
+  // `0000-01-01T00:00:00Z`, which parses, reaches the driver, and raises
+  // `22008` — a 500 on a bad request, on the endpoint the round that guarded
+  // the other two cited as already correct. The rule is `time.ts`'s, so all
+  // three cursors now fail the same way for the same reason.
+  message: 'Not an instant this API can store.',
+});
 const nullableIsoTimestamp = isoTimestamp.nullable();
 
 export const resolvedSettingSchema = z.object({
@@ -322,6 +392,14 @@ export const resolvedSettingSchema = z.object({
   mutability: z.enum(SETTING_MUTABILITIES),
   classification: z.enum(SETTING_CLASSIFICATIONS),
   configures: z.string().nullable(),
+  /**
+   * Whether anything in this release reads the value.
+   *
+   * On the wire so the admin can say "stored, and nothing consumes it yet"
+   * without holding its own list of which keys those are — a list that would go
+   * stale on the release a consumer lands, and go stale silently.
+   */
+  consumer: z.enum(SETTING_CONSUMERS),
   /**
    * A row exists whose value no longer parses against its declaration, so the
    * default is in force. A surface should say so rather than present the
@@ -549,6 +627,29 @@ export type OperationalEventResponse = z.infer<typeof operationalEventSchema>;
 
 export const operationalEventListResponseSchema = z.object({
   events: z.array(operationalEventSchema),
+  /**
+   * The cursor for the next (older) page, or `null` on the last one.
+   *
+   * Returned by the server, which is the only party that can know. A surface
+   * comparing `rows.length` against the size it asked for cannot tell a full
+   * last page from a full page with more behind it, so it offers an "older"
+   * page that does not exist and the operator lands on the empty state — a
+   * false "no open alerts" in the subsystem whose stated rule is that silence
+   * is the one outcome it may not produce.
+   *
+   * It carries `(first_seen_at, id)` — the IMMUTABLE pair — and the list is
+   * ordered by it, `DESC` on both. Not `last_seen_at`: every repeat occurrence
+   * of a deduped condition rewrites that, so a row below the cursor that
+   * recurred jumped above it and appeared on no later page. `lastSeenAt` above
+   * is still the latest occurrence and is what the screen displays; it is
+   * metadata, not a traversal key.
+   *
+   * So this list is ordered by when a condition FIRST appeared. A
+   * most-recently-active ordering is a different view with its own pagination
+   * semantics for a mutable key, and is deliberately not bought by weakening
+   * this one.
+   */
+  nextCursor: z.object({ at: isoTimestamp, id: z.string() }).nullable(),
 });
 export type OperationalEventListResponse = z.infer<typeof operationalEventListResponseSchema>;
 
@@ -568,6 +669,14 @@ export type NotificationResponse = z.infer<typeof notificationSchema>;
 
 export const notificationListResponseSchema = z.object({
   notifications: z.array(notificationSchema),
+  /**
+   * The cursor for the next (older) page, or `null` on the last one.
+   *
+   * Returned rather than derived by the caller, so a surface cannot tell a
+   * full page from the last one by guessing at the page size — the mistake
+   * that had the alerts pager offering an "older" page that did not exist.
+   */
+  nextCursor: z.object({ at: isoTimestamp, id: z.string() }).nullable(),
 });
 /**
  * The bounded page size a notification list accepts.
@@ -579,9 +688,52 @@ export const notificationListResponseSchema = z.object({
  * silently rewritten rather than refused, so a caller could not tell a
  * misspelled request from an honoured one.
  */
-export const notificationListQuerySchema = z.object({
-  limit: z.coerce.number().int().positive().max(200).optional(),
-});
+export const notificationListQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().positive().max(200).optional(),
+    /**
+     * The keyset cursor: the `createdAt` of the oldest intent already shown,
+     * and its id.
+     *
+     * BOTH, because `created_at` is not unique — a `Clock.now()` is captured
+     * once per transaction, so several intents share one microsecond — and a
+     * strict comparison on the timestamp alone skips the rest of a group that
+     * straddles a page boundary. Those rows then appear on no page at all,
+     * which is the defect the operational log had to fix for the same reason.
+     *
+     * Before this existed, the repository accepted `before` and the controller
+     * never parsed it, so the newest page was the ONLY page: past fifty intents
+     * the older ones were unreachable from the Web Admin unless their UUID was
+     * already known.
+     */
+    before: isoTimestamp.optional(),
+    /**
+     * Validated as an ID, not as any string under 64 characters.
+     *
+     * `beforeId=oops` used to reach the repository, which compares it against a
+     * PostgreSQL `uuid` column — so a malformed cursor became a driver error and
+     * a 500 where the caller had sent a bad query parameter and deserved a 400.
+     */
+    beforeId: uuidV7Schema.optional(),
+  })
+  .refine((query) => (query.before === undefined) === (query.beforeId === undefined), {
+    // BOTH halves or neither. A timestamp without its tie-break is the cursor
+    // bug this pair exists to avoid, and the controller silently dropped a
+    // lone half and answered 200 with the NEWEST page — so a paging client
+    // whose cursor was truncated looped on page one instead of being told.
+    message: 'before and beforeId must be supplied together.',
+    path: ['beforeId'],
+  });
+
+/**
+ * The page size a notification list uses when the caller names none.
+ *
+ * Shared, because the controller has to know the size it asked for in order to
+ * decide whether `nextCursor` is set, and the service applies the same default
+ * when it clamps. Two spellings of "50" would make the pager offer a page that
+ * is not there, or hide one that is.
+ */
+export const NOTIFICATION_PAGE_DEFAULT = 50;
 export type NotificationListQuery = z.infer<typeof notificationListQuerySchema>;
 
 export type NotificationListResponse = z.infer<typeof notificationListResponseSchema>;
@@ -689,6 +841,8 @@ export const CONTROL_ROUTES = {
   notificationTest: '/notifications/test',
   /** Readiness with dependency detail. Authenticated; see the schema. */
   systemReadiness: '/system/readiness',
+  /** What the background panel monitor is configured to do. Read-only. */
+  systemMonitor: '/system/monitor',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -765,20 +919,69 @@ export const panelSummarySchema = z.object({
 export type PanelSummaryResponse = z.infer<typeof panelSummarySchema>;
 
 /**
- * A page of panels, and where the next one starts.
+ * Which side of the archive to list.
+ *
+ * `exclude` is the working fleet and the default — an archived panel is retired
+ * and does not belong in the list an operator scans every day.
+ *
+ * `only` exists because "not in the list" turned out to mean "gone". Archiving
+ * removed a panel from the ONE browser the Web Admin has, so the Restore
+ * control on its detail page was reachable only by an operator who had kept the
+ * UUID. A lifecycle with an exit and no way back to the door is a dead end, and
+ * the server could already answer the question.
+ *
+ * Deliberately two values rather than an `includeArchived` boolean: mixing
+ * retired panels into the live list is a different, worse answer to a different
+ * question, and it is the one an operator looking for something to restore
+ * would have to filter by eye.
+ */
+export const PANEL_LIST_ARCHIVED_MODES = ['exclude', 'only'] as const;
+export type PanelListArchivedMode = (typeof PANEL_LIST_ARCHIVED_MODES)[number];
+
+/**
+ * The panel page, and the ONE place that says what an unreadable cursor does.
+ *
+ * A cursor this server cannot decode is a **400**. It never restarts the
+ * traversal.
+ *
+ *   - absent  → the first page
+ *   - valid   → the next page
+ *   - anything else → 400, never a successful-looking answer
+ *
+ * TWO codes, because there are two bounds and saying there is one was not
+ * true: a cursor longer than the `max(512)` below is `request.invalid` from
+ * this schema, and everything that reaches the decoder is
+ * `control.invalid_value`. Both are 400s a client can act on, and both are
+ * asserted separately in `panels-http.test.ts` so the two cannot swap
+ * unnoticed. The length bound lives HERE and only here — the decoder used to
+ * carry a second copy of it, which could not fire and whose comment described
+ * a path that no longer existed.
+ *
+ * This is the house rule for every cursor in this API, and `/ops-log` and
+ * `/notifications` have always followed it. Panels did not: `decodeCursor`
+ * returned `null` for anything unreadable, a null cursor dropped the keyset
+ * predicate, and the endpoint answered 200 with page ONE. A client that
+ * truncated or invented a cursor looped on the first page for ever and was
+ * never told — while the Web Admin's own client docblock promised a 400 that
+ * had never existed. Two defensible rules described in three places that
+ * disagreed, resolved by the owner in favour of refusing.
+ *
+ * The old argument for restarting — that refusing a legal-but-unknown id would
+ * "restart the traversal for ever rather than fail it" — is inverted
+ * deliberately. Failing loudly once is strictly better than looping silently,
+ * because the loop is invisible to everyone including the operator watching it.
  *
  * The list used to return every live panel of the tenant with both child rows
- * joined, so one request materialised the whole collection, sorted it, and
+ * joined, so one request materialised the whole collection, sorted it and
  * serialised it on the event loop. At the stated target of tens of thousands of
- * panels that is a request any administrator can repeat.
- *
- * `nextCursor` is null on the last page. It is opaque on purpose: it encodes
- * `(name, id)`, and a caller that started parsing it would be depending on an
- * ordering this API has not promised.
+ * panels that is a request any administrator can repeat. `nextCursor` is null
+ * on the last page and opaque on purpose — a caller that parsed it would be
+ * depending on an ordering this API has not promised.
  */
 export const panelListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(PANEL_PAGE_MAX).optional(),
   cursor: z.string().max(512).optional(),
+  archived: z.enum(PANEL_LIST_ARCHIVED_MODES).optional(),
 });
 export type PanelListQuery = z.infer<typeof panelListQuerySchema>;
 
@@ -807,11 +1010,34 @@ const panelBaseUrlSchema = z.string().trim().min(1).max(PANEL_BASE_URL_MAX_LENGT
  * `.optional()` and `.nullable()` together are therefore load-bearing rather
  * than permissive, and the service branches on `undefined` versus `null`.
  */
-export const panelCredentialsInputSchema = z.object({
-  username: z.string().min(1).max(512).nullable().optional(),
-  password: z.string().min(1).max(1024).nullable().optional(),
-  apiToken: z.string().min(1).max(4096).nullable().optional(),
-});
+export const panelCredentialsInputSchema = z
+  .object({
+    username: z.string().min(1).max(512).nullable().optional(),
+    password: z.string().min(1).max(1024).nullable().optional(),
+    apiToken: z.string().min(1).max(4096).nullable().optional(),
+  })
+  /*
+   * AT LEAST ONE recognised field, present or null.
+   *
+   * Every field being optional made `{}` a valid credential write — and,
+   * because unknown keys are stripped, so was `{ api_token: "…" }`. The
+   * service then wrote a credential row with every column untouched, made
+   * the panel probe-eligible, recorded a SUCCESS replacement naming no
+   * credential kinds, and told the caller it had succeeded: a write that
+   * changed no secret and said it had. An object that names nothing is a
+   * malformed command, not a no-op. Null keeps its meaning — "remove this
+   * one" — and a create that omits the object entirely still means "no
+   * credentials".
+   */
+  .refine(
+    (input) =>
+      input.username !== undefined || input.password !== undefined || input.apiToken !== undefined,
+    {
+      message:
+        'A credential write names at least one credential: username, password or apiToken. ' +
+        'Null removes one; omit the object to leave them all as they are.',
+    },
+  );
 export type PanelCredentialsInput = z.infer<typeof panelCredentialsInputSchema>;
 
 export const createPanelRequestSchema = z.object({
@@ -849,8 +1075,28 @@ export const setPanelCredentialsRequestSchema = z.object({
 });
 export type SetPanelCredentialsRequest = z.infer<typeof setPanelCredentialsRequestSchema>;
 
+/**
+ * A lifecycle transition, and — only when leaving the archive — a new name.
+ *
+ * The name is here because of a real dead end. `panels_tenant_name_live_key` is
+ * UNIQUE `(tenant_id, name) WHERE status <> 'ARCHIVED'`, so archiving RELEASES
+ * the name and another panel may take it. Restoring then puts the old row back
+ * under that index and collides. `update` refuses every edit to an ARCHIVED
+ * panel with `PANEL_ARCHIVED`, so the operator could not rename it out of the
+ * way either: the panel could never be restored, by any sequence of requests.
+ *
+ * Renaming AS PART OF the restore is the resolution that does not contradict
+ * the archived-edit rule — the row stops being archived in the same
+ * transaction, so this is not an edit to an archived panel. It is accepted only
+ * on a transition out of `ARCHIVED`; sending it with any other status is a
+ * validation error rather than a silently ignored field.
+ */
 export const setPanelStatusRequestSchema = z.object({
   status: z.enum(PANEL_STATUSES),
+  // The SAME schema create and update use. Hand-spelling the bounds here let
+  // a change to `PANEL_NAME_MIN_LENGTH`/`MAX_LENGTH` apply everywhere except a
+  // restore, which would then store a name the rest of the system rejects.
+  name: panelNameSchema.optional(),
   idempotencyKey: z.string().min(8).max(255),
 });
 export type SetPanelStatusRequest = z.infer<typeof setPanelStatusRequestSchema>;

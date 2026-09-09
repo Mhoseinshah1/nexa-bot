@@ -18,6 +18,13 @@
   // among them an assertion comparing a template key against a value outside
   // its own union, which could never be true and had been passing vacuously.
   "compilerOptions": {
+    // The citation checker is a `.mjs` script and the suite imports it
+    // directly. `allowJs` lets TypeScript INFER its exports from the source
+    // rather than from a hand-written `.d.mts` that would be free to drift
+    // from it — and a declaration file that lies is exactly the shape of
+    // defect the suite importing it exists to catch. `checkJs` stays off: the
+    // script is linted and tested, not typechecked.
+    "allowJs": true,
     "noEmit": true,
     "declaration": false,
     "declarationMap": false,
@@ -28,11 +35,21 @@
     "types": ["node"]
   },
   "include": ["tests/**/*.ts"],
-  // ONE entry, and it is not a gap: `session-view.test.ts` imports
-  // `apps/web/src/app.tsx`, so checking it needs `jsx` and the DOM lib, which
-  // the other ~55 test files must NOT have — a node test that names `document`
-  // should not compile. It is checked by `tsconfig.tests.web.json` instead, and
-  // `pnpm typecheck:tests` runs both. A new test that imports a `.tsx` fails
-  // here with TS6142, which is the signal to add it to the web config.
-  "exclude": ["tests/unit/session-view.test.ts"]
+  // Two entries, and neither is a gap. Both are DOM code, both need `jsx` and
+  // the DOM lib, and the other ~55 test files must NOT have those — a node test
+  // that names `document` should not compile. Both are checked by
+  // `tsconfig.tests.web.json` instead, and `pnpm typecheck:tests` runs both
+  // configs, so every test file is covered by exactly one of them.
+  //
+  // `session-view.test.ts` imports `apps/web/src/app.tsx`. `tests/web/` is the
+  // browser suite in its entirety: the web config already includes all of it,
+  // and this config was picking up its two `.ts` files (the rest are `.tsx`,
+  // which the include glob does not match) and checking browser code without
+  // the DOM. That worked only for as long as neither of them named a browser
+  // global — until `setup.ts` had to polyfill `matchMedia`, which jsdom does
+  // not implement and which the full-shell render needs.
+  //
+  // A new test that imports a `.tsx` fails here with TS6142, which is the
+  // signal to add it to the web config.
+  "exclude": ["tests/unit/session-view.test.ts", "tests/web/**"]
 }

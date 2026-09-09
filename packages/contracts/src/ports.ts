@@ -193,6 +193,213 @@ export const OPERATIONAL_SEVERITIES = ['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITIC
 export type OperationalSeverity = (typeof OPERATIONAL_SEVERITIES)[number];
 
 /**
+ * Which slice of the operational log a reader is asking for.
+ *
+ * `ALL` is the whole stream. `MANAGEMENT` is the far smaller set that wants a
+ * person's attention. `MANAGEMENT_CONDITIONS` is narrower still: the subset of
+ * management codes that can actually be CLOSED.
+ *
+ * That third value is not a convenience. A denial and a lockout are facts
+ * about a moment; nothing resolves them, and nothing in this product ever
+ * will, because there is deliberately no "mark as seen". Shown on a card
+ * titled "needs attention" they accumulate for the life of the installation,
+ * and after a month of ordinary misclicks that card is denial noise — which is
+ * exactly the burial the `MANAGEMENT` scope was introduced to prevent, arrived
+ * at from the other direction. So the dashboard asks for conditions, which
+ * open and close, and the alerts page asks for the whole management scope,
+ * where a one-shot record is history rather than an outstanding task.
+ *
+ * The distinction exists because the Web Admin's alerts page is not an
+ * operational history. Routine events — every probe, every health transition,
+ * every delivery attempt — go to the Telegram report group, which is the
+ * human-facing operational stream; a page that mixed the two would bury the six
+ * events an operator must act on under the six thousand they must not.
+ *
+ * It is a SERVER-side scope on purpose. Filtering a page of fifty rows in the
+ * browser yields a page of two, a cursor that has already skipped past
+ * everything else, and paging that silently loses rows — which is the same
+ * class of defect as the cursor tie-break this log already had to fix.
+ */
+export const OPERATIONAL_SCOPES = ['ALL', 'MANAGEMENT', 'MANAGEMENT_CONDITIONS'] as const;
+export type OperationalScope = (typeof OPERATIONAL_SCOPES)[number];
+
+/**
+ * The FAILURE codes: a state the installation is in that an operator can do
+ * something about, and which something later resolves.
+ *
+ * These are what `MANAGEMENT_CONDITIONS` selects, and the distinction from the
+ * recoveries below is not cosmetic. A recovery row is INSERTED, with its own
+ * `resolvedAt` left null — it resolves the preceding FAILURE row, never
+ * itself, and nothing ever resolves a recovery. Including recoveries in the
+ * conditions scope therefore made `scope=MANAGEMENT_CONDITIONS&open=true`
+ * return `panel.monitor.tenant_budget_ok` and `settings.stored_value_valid`
+ * as open conditions, so the dashboard's "needs attention" card stayed
+ * populated by the very rows that say the problem is over.
+ *
+ * That is the same defect this scope was introduced to fix, reintroduced from
+ * the other side: the first version buried the card under unresolvable
+ * denials, and its replacement buried it under unresolvable recoveries.
+ */
+export const MANAGEMENT_CONDITION_FAILURE_CODES = [
+  'panel.monitor.tenant_budget_exceeded',
+  'settings.stored_value_invalid',
+] as const;
+
+/**
+ * The RECOVERY codes, each paired with the failure above that it closes.
+ *
+ * Management history — an operator should be able to see that a condition
+ * ended — but never an open condition, because nothing resolves them.
+ *
+ * `tests/unit/web-money-and-scope.test.ts` › "the condition lifecycle" asserts
+ * the two lists are disjoint and that the pairing is total in both directions,
+ * so a failure cannot be added without its recovery and a recovery cannot leak
+ * into the conditions scope. `tests/integration/web-admin-v2.test.ts` › "never
+ * returns a recovery as an open condition" proves it over the real recorder
+ * and the real endpoint.
+ *
+ * That sentence previously named the unit test for a property it did not
+ * assert — it looped over the UNION and never imported either list, so
+ * re-adding a recovery code to the failure list left it green. The test now
+ * exists; the claim came first, which is the defect this note records.
+ */
+export const MANAGEMENT_CONDITION_RECOVERY_CODES = [
+  'panel.monitor.tenant_budget_ok',
+  'settings.stored_value_valid',
+] as const;
+
+/**
+ * Failures and recoveries together: the codes that participate in the
+ * condition lifecycle at all. NOT the conditions scope — that is the failure
+ * list alone.
+ */
+export const MANAGEMENT_CONDITION_CODES = [
+  ...MANAGEMENT_CONDITION_FAILURE_CODES,
+  ...MANAGEMENT_CONDITION_RECOVERY_CODES,
+] as const;
+
+/**
+ * The four administrator-change codes, as a type.
+ *
+ * Named separately so `AdminManagementService` cannot record a fifth code that
+ * this scope does not carry — the failure the `admin.` prefix hid, in the one
+ * place that could reintroduce it. `MANAGEMENT_ONE_SHOT_CODES` spreads this
+ * rather than restating it, which is what makes that guarantee hold by
+ * construction; declared here, above its use, because a `const` referenced
+ * before its declaration is a temporal dead zone at module evaluation, not a
+ * hoisted binding.
+ */
+export const MANAGEMENT_ADMIN_EVENT_CODES = [
+  'admin.created',
+  'admin.password_changed',
+  'admin.roles_changed',
+  'admin.status_changed',
+] as const;
+export type ManagementAdminEventCode = (typeof MANAGEMENT_ADMIN_EVENT_CODES)[number];
+
+/**
+ * Codes that are records of a moment rather than a state: a denial, a lockout,
+ * an administrator changed. `resolvedAt` is permanently null for these BY
+ * DESIGN — there is no recovery and deliberately no acknowledgement — so a
+ * surface must not render them as "unresolved" or offer them under an
+ * open-only filter as though they were outstanding work.
+ */
+export const MANAGEMENT_ONE_SHOT_CODES = [
+  'access.permission_denied',
+  'auth.login_locked_out',
+  // DERIVED, not re-typed. `MANAGEMENT_ADMIN_EVENT_CODES` is what types
+  // `AdminManagementService.recordAdminChange`, and its whole reason for
+  // existing is that the service cannot record a code this scope does not
+  // carry. Hand-copying the four here severed that: a fifth admin code would
+  // have type-checked, been recordable, and been invisible on the alerts page
+  // — the exact defect the `admin.` prefix used to hide. The spread is the
+  // guarantee.
+  ...MANAGEMENT_ADMIN_EVENT_CODES,
+] as const;
+
+/** Whether a code is a one-shot record rather than a closable condition. */
+export function isOneShotManagementCode(code: string): boolean {
+  return (MANAGEMENT_ONE_SHOT_CODES as readonly string[]).includes(code);
+}
+
+/**
+ * Whether a code is a RECOVERY — a row that closes a failure and is never
+ * closed itself.
+ *
+ * A surface needs this for the same reason it needs the one-shot predicate,
+ * and for one step further along: a recovery's `resolvedAt` is null by design
+ * too, so anything that reads "not resolved" as "still a problem" puts a
+ * warning on the row whose whole message is that the problem ended. Three
+ * kinds, not two.
+ */
+export function isConditionRecoveryCode(code: string): boolean {
+  return (MANAGEMENT_CONDITION_RECOVERY_CODES as readonly string[]).includes(code);
+}
+
+/**
+ * The management scope: conditions, plus the one-shot records about people and
+ * privilege that an operator should be able to find.
+ *
+ * Enumerated rather than prefix-matched, and every entry is a code some
+ * production path actually writes to `operational_events`. That last clause is
+ * the whole discipline of this list. It previously carried four entries that
+ * no recorder emitted — `internal.unhandled` (an HTTP error-response code),
+ * `notification.attempts_exhausted` (a delivery-attempt `errorCode`), and the
+ * two `panel.monitor.scheduler_capacity_*` codes, which ARE recorded but under
+ * `SYSTEM_SCOPE` with a null tenant, where this tenant-scoped reader can never
+ * see them. It also carried an `admin.` PREFIX that matched nothing at all,
+ * because `admin.create`/`admin.roles_change`/`admin.status_change` are audit
+ * `action` values, not event codes. Together they made the page claim four
+ * kinds of coverage it did not have, and no test could tell, because every
+ * test that exercised the scope invented its own code.
+ *
+ * The installation-scoped capacity condition is not lost: it reaches the
+ * operator through `GET /system/monitor`, which is installation-scoped by
+ * construction and so can answer for a row this reader cannot reach.
+ *
+ * Each remaining entry has a reason:
+ *
+ *   - `access.permission_denied`, `auth.login_locked_out` — somebody was
+ *     refused, or locked out. Security facts about people. History, not tasks:
+ *     they are NOT in `MANAGEMENT_CONDITION_CODES`.
+ *   - `admin.created`, `admin.status_changed`, `admin.roles_changed`,
+ *     `admin.password_changed` — owner revision 24 names administrator changes
+ *     as management-facing. They are recorded beside the audit row they
+ *     already produced, in the same transaction, so the page can show them.
+ *     Also history rather than tasks.
+ *   - `panel.monitor.tenant_budget_*` and `settings.stored_value_*` — the
+ *     conditions above, which open and close.
+ *
+ * Deliberately NOT here: `panel.health.*` and `panel.monitor.probe`. A panel
+ * going unreachable and coming back is the routine operational stream, and it
+ * is already visible where it is actionable — on the panel itself, and on the
+ * dashboard. Putting it here would make this page the log the owner asked for
+ * it not to be.
+ *
+ * Deliberately NOT here either, and this was an OMISSION until it was
+ * questioned: `panel.probe.limited` and `panel.probe.ok`. They are a real
+ * condition pair — dedupe-keyed, opened by `PanelService.testConnection` when
+ * the tenant's outbound-probe budget is spent, closed by the next probe that
+ * succeeds — and their twin one lane over, `panel.monitor.tenant_budget_*`,
+ * IS in the conditions scope. The asymmetry is the point rather than an
+ * oversight: the monitor lane runs unattended, so a budget it exhausts is only
+ * ever discoverable from a durable record, while the operator lane exhausts
+ * the budget by a person pressing a button and answers that person with a
+ * `RATE_LIMITED` error in the same second. A management page carries what
+ * nobody has been told; this one has already been told.
+ *
+ * The consequence, stated rather than hidden: an open `panel.probe.limited`
+ * row is reachable from no Web Admin screen, because every screen asks for
+ * `MANAGEMENT` or `MANAGEMENT_CONDITIONS` and owner revision 25 removed the
+ * general log browser. It is in the database and in the Telegram operational
+ * projection, and nowhere else.
+ */
+export const MANAGEMENT_EVENT_CODES = [
+  ...MANAGEMENT_ONE_SHOT_CODES,
+  ...MANAGEMENT_CONDITION_CODES,
+] as const;
+
+/**
  * An operational event: what the system did, as opposed to who changed what.
  *
  * `dedupeKey` collapses repeats into one row with an occurrence counter — the

@@ -209,6 +209,188 @@ function partiallyWritten(rootDir: string, expected: number, settled: Set<string
   return 0;
 }
 
+/**
+ * Spawns a publication and stops it PART WAY THROUGH the copy.
+ *
+ * The subject of the test below is what the publisher does with what a killed
+ * run left behind. "Killed mid-copy" is FIXTURE, and the fixture is a race:
+ * the child starts copying about 70ms in and the staging tree exists for
+ * 20-90ms, so a parent that is not scheduled inside that window sees nothing
+ * and `caught` stays 0 — which fails the test's own precondition rather than
+ * its subject. That happened once, in a full gate.
+ *
+ * Two wrong fixes, both measured, both recorded rather than deleted:
+ *
+ * A SYNCHRONOUS SPIN. The argument was that `await setImmediate` "made the
+ * detection depend on being scheduled" and that spinning "keeps the parent
+ * on-CPU". Both false. A `setImmediate` loop never blocks on epoll — it is
+ * already a busy loop — and over the same 8s it polled MORE often, 81 374
+ * iterations against 74 606. It did not remove the miss either: the original
+ * failure reproduced under 32 spinners on 4 cores, because a user-space loop
+ * cannot keep a process on-CPU when the run queue is oversubscribed. And it
+ * made the failure WORSE — blocking the event loop means the 10s
+ * `testTimeout` cannot fire, so an overrun was reported at 26-40s with no
+ * diagnostic instead of at 10s with one.
+ *
+ * A BIGGER BUNDLE, to widen the window. Abandoned on a cause that was never
+ * measured — "the publisher failed before staging anything" — which is false:
+ * at 3 000 assets it publishes in 862ms and a partial tree is caught in
+ * ~150ms. What took 43 seconds was the per-asset byte comparison at the end
+ * of the test, unrelated to the race.
+ *
+ * WRONG FIX THREE, which was the first version of the retry below: six
+ * attempts of a fixed 2s deadline each. `6 x 2s` is 12s against a 10s
+ * `testTimeout`, so on the all-miss path the anchor was never reached and the
+ * failure was `Test timed out in 10000ms` with no diagnostic — the exact
+ * outcome the revert above was performed to avoid, reintroduced by the fix
+ * for it. Worse, vitest's timeout rejects the test promise WITHOUT cancelling
+ * the async function, so the loop kept spawning publishers and rebuilding
+ * fixtures after teardown: it wrote through the module-level `workspace` into
+ * the NEXT test's directory, leaked one temp tree per timeout, and starved an
+ * unrelated sibling into failing. Measured: 3/3 timeouts under 12 spinners on
+ * 4 cores, 8 leaked workspaces, and `never publishes a pool asset half
+ * written` failing in 2 of 7 runs for no reason of its own.
+ *
+ * So the budget is what makes the anchor reachable, and it is bounded twice:
+ *
+ *   - Polling stops when the CHILD EXITS, not at a fixed deadline. Once the
+ *     run is over the staging tree is gone and no further looking can find it,
+ *     so a miss costs the child's own lifetime — about 250ms — instead of two
+ *     seconds of pointless spinning. This one is an OPTIMISATION and no test
+ *     kills it: removing `!exited` leaves the whole unit project green. Said
+ *     plainly rather than left to look like a rule with no test, because it
+ *     is not a rule — correctness here is the budget below. (An earlier
+ *     version of this line also cited "2.6s instead of 0.8s". A reviewer
+ *     could not reproduce it and measured the mutant as no slower or faster;
+ *     the figure only holds on a run where the kill misses the copy, and it
+ *     is withdrawn rather than left as a number with nothing behind it.)
+ *   - The whole arrangement gets ONE wall-clock budget, checked before each
+ *     attempt and inside each poll. It cannot overrun whatever is left for the
+ *     assertions, so `caught` reaches the anchor and the anchor reports.
+ *
+ * The baseline source directory is passed IN rather than rebuilt from
+ * `source()`, so a retry cannot write into the NEXT test's directory. That
+ * closes the cross-test half. The leak itself was `mkdirSync` re-creating a
+ * torn-down workspace, and it is closed by the `existsSync` check below —
+ * stated separately because an earlier version of this paragraph claimed one
+ * change had closed both, and it had not.
+ *
+ * `missFirst` forces the first attempt to look after the copy has finished,
+ * which is what makes the retry path itself testable rather than a branch
+ * that only runs on an unlucky machine.
+ */
+async function killMidCopy(
+  rootDir: string,
+  baseline: string,
+  incoming: string,
+  expected: number,
+  options: { missFirst?: boolean } = {},
+): Promise<{ caught: number; good: string; died: Promise<void> }> {
+  let good = activeId(rootDir);
+  let settled = new Set(releases(rootDir));
+  let caught = 0;
+  let died: Promise<void> = Promise.resolve();
+  /*
+   * The budget starts when the RETRYING starts, not when the helper is
+   * entered, and that is the whole point of the second assignment below.
+   *
+   * The first version put a single 2.5s budget around everything, including
+   * `missFirst`'s mandatory full publication — so the budget was consumed by
+   * the work it exists to permit. Measured at 24 spinners: the successful
+   * attempt finished with 2057, 882, 1554, 616, 484 and 31 ms left, and at 32
+   * spinners the forced-miss test failed 3 of 4 runs with
+   * `a missed first attempt was not recovered`. That is a SPURIOUS failure
+   * wearing the anchor's message — a message that names a publisher
+   * regression — which is worse than the timeout it replaced, because a
+   * timeout at least does not accuse anything.
+   *
+   * ~2.5s of RETRIES, measured against the assertions that follow: one
+   * 200-asset publication is about 250ms idle, and the whole tail after this
+   * helper is about 260ms. The budget is roughly ten times that, and a
+   * quarter of the unit `testTimeout` — so the caller always gets its answer
+   * and the answer is about the publisher.
+   */
+  let budgetEndsAt = Date.now() + 2_500;
+
+  for (let attempt = 0; attempt < 4 && caught === 0 && Date.now() < budgetEndsAt; attempt += 1) {
+    if (attempt > 0) {
+      /*
+       * The workspace is gone when this test has already been torn down —
+       * which happens when something ELSE times out and vitest leaves this
+       * async function running. Rebuilding into it then RE-CREATES a tree
+       * `afterEach` has deleted, one per timeout, and that is the leak: it was
+       * `mkdirSync` all along, not the `source()` call that an earlier round
+       * claimed to have closed it by removing. Passing `baseline` in closed
+       * the cross-test contamination and not this half, and the docblock
+       * claimed both.
+       *
+       * The guard is on `rootDir`, not `workspace`, and that is the whole
+       * fix. `workspace` is a module-level `let` that `beforeEach` REASSIGNS,
+       * so by the time an orphan resumes it names the NEXT test's directory —
+       * which exists. Two rounds guarded the wrong variable, in the check
+       * written to close this.
+       *
+       * It HELPS and does not close it, and the earlier claim here that "it
+       * leaks none" was wrong: over forced timeouts, 6 of 6 runs leaked under
+       * `existsSync(workspace)`, 5 of 6 under this one, and 2 of 6 with the
+       * retry block removed ALTOGETHER. The residue is the still-live
+       * publisher child, which recreates its asset root after teardown — no
+       * `existsSync` on any variable can stop that. (Corrected in the record
+       * one round ago and left standing here, which is where the next reader
+       * looks.)
+       *
+       * The block stays even though removing it leaks less, and that is a
+       * trade rather than an oversight: the leak is temp directories, and what
+       * the retry prevents is a spurious anchor failure that ACCUSES the
+       * publisher on a loaded machine. A wrong red is worse than a stray
+       * directory.
+       */
+      if (!existsSync(rootDir)) return { caught, good, died };
+      rmSync(rootDir, { recursive: true, force: true });
+      mkdirSync(rootDir, { recursive: true });
+      run(baseline, rootDir);
+      good = activeId(rootDir);
+      settled = new Set(releases(rootDir));
+    }
+    const child = spawn(process.execPath, [publisher], {
+      env: { ...process.env, NEXA_WEB_SOURCE_DIR: incoming, NEXA_WEB_ASSET_ROOT: rootDir },
+      stdio: 'ignore',
+    });
+    let exited = false;
+    died = new Promise<void>((resolveExit) => {
+      child.on('exit', () => {
+        exited = true;
+        resolveExit();
+      });
+    });
+
+    if (options.missFirst === true && attempt === 0) {
+      // Look only once the run is over: the staging tree is gone, so this
+      // attempt cannot catch anything and the retry must.
+      await died;
+      caught = partiallyWritten(rootDir, expected, settled);
+      // And give the retries their full budget back. This attempt is a
+      // deliberate, mandatory miss; charging it to the budget is what made
+      // the forced-miss test fail on a loaded machine for a reason that had
+      // nothing to do with the publisher.
+      budgetEndsAt = Date.now() + 2_500;
+      continue;
+    }
+
+    // Until it lands, until the child is gone, or until the budget is spent —
+    // whichever comes first. `exited` is what makes a miss cheap: nothing can
+    // be caught after the run has finished.
+    while (!exited && Date.now() < budgetEndsAt) {
+      caught = partiallyWritten(rootDir, expected, settled);
+      if (caught > 0) break;
+      await new Promise((r) => setImmediate(r));
+    }
+    child.kill('SIGKILL');
+    await died;
+  }
+  return { caught, good, died };
+}
+
 describe('publishing the Web Admin bundle', () => {
   it('activates a complete release, named after the bundle it published', () => {
     const rootDir = root();
@@ -317,32 +499,47 @@ describe('publishing the Web Admin bundle', () => {
     expect(readdirSync(rootDir).filter((e) => e.startsWith('.staging-'))).toEqual([]);
   });
 
+  it('recovers the arrangement when the first attempt looks after the copy is over', async () => {
+    /*
+     * The RETRY path, forced.
+     *
+     * Without this the retry is a branch that runs only on an unlucky machine,
+     * and the whole reason it exists is that unlucky machines are where this
+     * test failed. `missFirst` makes the first attempt wait for the child to
+     * exit before it looks — the staging tree is gone by then, so that attempt
+     * catches nothing and a later one has to.
+     *
+     * The anchor is the same as the real test's: if the retry did not work,
+     * `caught` would be 0 here, which is exactly the failure it was written to
+     * remove.
+     */
+    const rootDir = root();
+    const baseline = source('one');
+    run(baseline, rootDir);
+    const incoming = source('two', 200, 512);
+
+    const { caught, good } = await killMidCopy(rootDir, baseline, incoming, 200, {
+      missFirst: true,
+    });
+    expect(caught, 'a missed first attempt was not recovered').toBeGreaterThan(0);
+    // And the recovered arrangement is the same state the real test asserts
+    // against: the previous release still current, nothing half-written
+    // activated.
+    expect(activeId(rootDir)).toBe(good);
+    expect(readServedTokens(rootDir)).toEqual(new Set(['one']));
+  });
+
   it('re-copies after a publication is killed mid-copy, rather than activating what it left', async () => {
     const rootDir = root();
-    run(source('one'), rootDir);
-    const good = activeId(rootDir);
-
+    const baseline = source('one');
+    run(baseline, rootDir);
     const incoming = source('two', 200, 512);
-    const settled = new Set(releases(rootDir));
-    const child = spawn(process.execPath, [publisher], {
-      env: { ...process.env, NEXA_WEB_SOURCE_DIR: incoming, NEXA_WEB_ASSET_ROOT: rootDir },
-      stdio: 'ignore',
-    });
-    const died = new Promise<void>((resolveExit) => child.on('exit', () => resolveExit()));
 
     // Kill it PART WAY THROUGH the copy, not merely at some point during the
     // run: a kill that lands after the copy finished proves nothing, and a
     // test that cannot tell the difference would pass under a publisher that
     // wrote straight into the directory it activates.
-    let caught = -1;
-    const deadline = Date.now() + 8_000;
-    while (Date.now() < deadline) {
-      caught = partiallyWritten(rootDir, 200, settled);
-      if (caught > 0) break;
-      await new Promise((r) => setImmediate(r));
-    }
-    child.kill('SIGKILL');
-    await died;
+    const { caught, good } = await killMidCopy(rootDir, baseline, incoming, 200);
     expect(caught, 'the kill never landed inside the copy').toBeGreaterThan(0);
 
     // Nothing the killed run left may be activated, and the release that was
@@ -359,9 +556,20 @@ describe('publishing the Web Admin bundle', () => {
       readdirSync(join(incoming, 'assets')).sort(),
     );
     for (const asset of readdirSync(join(activated, 'assets'))) {
-      expect(readFileSync(join(activated, 'assets', asset))).toEqual(
-        readFileSync(join(incoming, 'assets', asset)),
-      );
+      // `Buffer.equals`, NOT `expect(a).toEqual(b)` on two Buffers. The
+      // matcher walks them element by element through deep equality: 200
+      // assets of ~7KB is 1.4M comparisons, which is milliseconds of I/O and
+      // TENS OF SECONDS of matcher on a loaded machine — measured at 34s
+      // under 12 spinners, which is what timed this test out at 10s and made
+      // its diagnostic disappear. The assertion is identical; only its cost
+      // changed.
+      const mismatch = `${asset} was not activated byte-for-byte`;
+      expect(
+        readFileSync(join(activated, 'assets', asset)).equals(
+          readFileSync(join(incoming, 'assets', asset)),
+        ),
+        mismatch,
+      ).toBe(true);
     }
   });
 

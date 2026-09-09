@@ -20,11 +20,15 @@ import {
   type TemplateViewResponse,
   type TemplateWriteResponse,
   type SystemReadinessResponse,
+  type MonitorProfileResponse,
   type TenantContext,
   uuidV7Schema,
   notificationListQuerySchema,
+  NOTIFICATION_PAGE_DEFAULT,
+  storableInstantOrNull,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
+import { singleValued } from './query.js';
 import { ReadinessProbe } from './readiness.probe.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
@@ -32,6 +36,11 @@ import type { ResolvedSetting } from '../../modules/control/settings/application
 import type { ResolvedFeatureFlag } from '../../modules/control/features/application/feature-flags.service.js';
 import type { TemplateView } from '../../modules/control/templates/application/template-management.service.js';
 import type { OperationalEventRow } from '../../modules/platform/opslog/application/ports.js';
+import {
+  OPS_LOG_PAGE_DEFAULT,
+  openFlag,
+  opsLogPageSize,
+} from '../../modules/platform/opslog/application/opslog.service.js';
 import type {
   DeliveryAttemptRecord,
   NotificationIntent,
@@ -237,21 +246,66 @@ export class ControlController {
     return { status: degraded ? 'degraded' : 'ok', dependencies };
   }
 
+  /**
+   * What the background panel monitor is configured to do.
+   *
+   * Read-only. The cadence and the two capacity ceilings come from the
+   * application service, which computes them with the same functions the
+   * monitor's own capacity conditions use — so the screen and the alarm cannot
+   * disagree about whether a fleet fits.
+   */
+  @Get('system/monitor')
+  async systemMonitor(@Req() request: FastifyRequest): Promise<MonitorProfileResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    return { monitor: await this.container.monitorProfileService.read(scope, actor) };
+  }
+
   // --- Operational events --------------------------------------------------
 
   @Get('ops-log')
   async opsLog(
     @Req() request: FastifyRequest,
-    @Query() query: Record<string, string | undefined>,
+    @Query() raw: Record<string, unknown>,
   ): Promise<OperationalEventListResponse> {
     const { scope, actor } = await this.authenticate(request);
-    const events = await this.container.opsLogService.list(scope, actor, {
-      ...(query.limit ? { limit: Number(query.limit) } : {}),
-      ...(query.code ? { code: query.code } : {}),
-      ...(query.severity ? { severities: query.severity.split(',') } : {}),
-      ...(query.since ? { since: new Date(query.since) } : {}),
-      ...(query.until ? { until: new Date(query.until) } : {}),
-      // The cursor: the `lastSeenAt` of the oldest row already shown, plus its
+    const query = singleValued(raw);
+    // The size the caller asked for, so the OVER-FETCH below can tell a full
+    // last page from a full page with more behind it. Kept in one place: a
+    // second spelling of the default would make the pager offer a page that is
+    // not there, or hide one that is.
+    // `=== undefined`, like every filter below it. `?limit=` is an empty
+    // string and was falsy, so it answered 200 with the default page while
+    // `?limit=0`, `?limit=-1` and `?limit=many` were all 400 — the same
+    // parameter on the same call, an empty value treated as unsent. It is the
+    // sixth sibling of the five corrected a round earlier, and the
+    // `notifications` reader below already spelled it this way.
+    const size =
+      query.limit === undefined ? OPS_LOG_PAGE_DEFAULT : opsLogPageSize.parse(query.limit);
+    const found = await this.container.opsLogService.list(scope, actor, {
+      // ONE MORE than the caller wants. `found.length === size` cannot
+      // distinguish "exactly a page" from "a page and more"; asking for
+      // `size + 1` and returning `size` makes `nextCursor` mean what it says.
+      limit: size + 1,
+      /*
+       * PRESENT or ABSENT, never "truthy or absent".
+       *
+       * `?code=` is an empty string, which is falsy, so every one of these
+       * dropped the key and the read widened to the whole log — a malformed
+       * filter answering 200 with MORE than was asked for. The `open`
+       * parameter below was moved to `=== undefined` for exactly this reason
+       * one round earlier and these four were left behind, which is this
+       * branch's own recurring defect: the rule applied where the author was
+       * looking and absent four lines up.
+       *
+       * `severity=` now reaches the enum and is refused; `code=` reaches
+       * `min(1)` and is refused; the two timestamps are parsed here rather
+       * than handed to `new Date('')`, which is an Invalid Date and a 500.
+       */
+      ...(query.code === undefined ? {} : { code: query.code }),
+      ...(query.severity === undefined ? {} : { severities: query.severity.split(',') }),
+      ...dateParam('since', query.since),
+      ...dateParam('until', query.until),
+      // The cursor: the `firstSeenAt` of the oldest row already shown, plus its
       // id. Rows are ordered by that pair descending, so "older than this" is
       // the next page. An offset would have skipped and duplicated rows as
       // events were recorded underneath the reader; the id breaks ties, without
@@ -262,9 +316,26 @@ export class ControlController {
       // driver and answers 500 where the caller sent a bad query parameter and
       // deserves a 400.
       ...cursorFrom(query.before, query.beforeId),
-      ...(query.open ? { open: query.open === 'true' } : {}),
+      // An explicit true/false, REFUSED otherwise. `query.open === 'true'`
+      // silently turned `open=tru`, `open=TRUE` and `open=1` into `false`, so a
+      // malformed filter answered 200 with the opposite of what was asked for.
+      ...(query.open === undefined ? {} : { open: openFlag.parse(query.open) }),
+      // Narrows to the management-facing codes. Passed straight through and
+      // validated by the service's enum, so an unknown value is a 400 rather
+      // than a silent fall back to the whole log — which would show an alerts
+      // page the routine stream it exists to exclude.
+      // `?scope=` was falsy, so the key was dropped and the schema's `ALL`
+      // default applied: `?scope=BOGUS` was a 400 and `?scope=` a 200 carrying
+      // the routine stream, one line below a comment promising it could not be.
+      ...(query.scope === undefined ? {} : { scope: query.scope }),
     });
-    return { events: events.map(toEventResponse) };
+    const events = found.slice(0, size);
+    const oldest = found.length > size ? events[events.length - 1] : undefined;
+    return {
+      events: events.map(toEventResponse),
+      nextCursor:
+        oldest === undefined ? null : { at: oldest.firstSeenAt.toISOString(), id: oldest.id },
+    };
   }
 
   // --- Notifications -------------------------------------------------------
@@ -272,21 +343,40 @@ export class ControlController {
   @Get('notifications')
   async notifications(
     @Req() request: FastifyRequest,
-    @Query() query: Record<string, string | undefined>,
+    @Query() raw: Record<string, unknown>,
   ): Promise<NotificationListResponse> {
     const { scope, actor } = await this.authenticate(request);
+    const query = singleValued(raw);
     // Parsed, not coerced-then-clamped. `Number('abc')` is NaN, and the
     // service's `Math.min(Math.max(NaN, 1), 200)` is still NaN, which reached
     // the SQL LIMIT and came back as an internal error instead of a bad
     // request; fractional, infinite, zero and negative spellings were silently
     // rewritten rather than refused.
-    const { limit } = notificationListQuerySchema.parse({
+    const { limit, before, beforeId } = notificationListQuerySchema.parse({
       ...(query.limit === undefined ? {} : { limit: query.limit }),
+      ...(query.before === undefined ? {} : { before: query.before }),
+      ...(query.beforeId === undefined ? {} : { beforeId: query.beforeId }),
     });
+    // The page size the caller actually gets, so `nextCursor` below can say
+    // whether there is another page rather than leaving the surface to guess.
+    const size = limit ?? NOTIFICATION_PAGE_DEFAULT;
     const found = await this.container.notifications.list(scope, actor, {
-      ...(limit === undefined ? {} : { limit }),
+      // ONE MORE than the caller wants — see the ops-log reader above for why
+      // `found.length === size` cannot answer this question.
+      limit: size + 1,
+      // Both halves or neither: a timestamp without its tie-break is the
+      // cursor bug this pair exists to avoid.
+      ...(before !== undefined && beforeId !== undefined
+        ? { before: { at: new Date(before), id: beforeId } }
+        : {}),
     });
-    return { notifications: found.map(toNotificationResponse) };
+    const page = found.slice(0, size);
+    const oldest = found.length > size ? page[page.length - 1] : undefined;
+    return {
+      notifications: page.map(toNotificationResponse),
+      nextCursor:
+        oldest === undefined ? null : { at: oldest.createdAt.toISOString(), id: oldest.id },
+    };
   }
 
   @Get('notifications/:id')
@@ -373,13 +463,65 @@ export class ControlController {
  */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * A caller-supplied instant, or null if this API cannot store it.
+ *
+ * `Number.isNaN` is not the whole test, and believing it was is how three
+ * `/ops-log` parameters answered 500: a JavaScript `Date` spans ±271821 years
+ * and `timestamptz` does not, so `+275760-09-13T00:00:00.000Z` parses, reaches
+ * the driver, and raises `22008`.
+ *
+ * The rule itself is `isStorableInstant` in `@nexa/contracts`, and it is there
+ * rather than here BECAUSE of what happened when it was written locally: this
+ * file grew a `^\d{4}-` check modelled on the panels cursor's, and both were
+ * wrong for year 0000 — `new Date('0000-01-01T00:00:00Z').toISOString()` is
+ * four digits, not the expanded form, and PostgreSQL has no year zero. Three
+ * cursors, three copies, three ways to be almost right. One rule now, in the
+ * contract, used by this endpoint, by the panels cursor, and by
+ * `isoTimestamp`, which `/notifications` parses its own cursor with.
+ */
+function instantOrNull(value: string): Date | null {
+  return storableInstantOrNull(value);
+}
+
+/**
+ * A timestamp query parameter: absent, or parsed and refused if malformed.
+ *
+ * Shares the rule `cursorFrom` applies to `before`. Written once because the
+ * two call sites are adjacent and were both wrong in the same way.
+ */
+function dateParam(name: string, value: string | undefined): Record<string, Date> {
+  if (value === undefined) return {};
+  const at = instantOrNull(value);
+  if (at === null) {
+    throw errors.validation(
+      CONTROL_ERROR_CODES.INVALID_VALUE,
+      `The \`${name}\` filter is not a timestamp.`,
+      { [name]: value },
+    );
+  }
+  return { [name]: at };
+}
+
 function cursorFrom(
   before: string | undefined,
   beforeId: string | undefined,
 ): { before?: Date; beforeId?: string } {
+  // BOTH halves or neither, and this is checked before either is parsed. A
+  // lone `before` walked the keyset with no tie-break — the exact defect the
+  // pair exists to prevent — and a lone `beforeId` was dropped entirely and
+  // answered with the newest page, so a client whose cursor was truncated
+  // looped on page one with a 200 instead of being told.
+  if ((before === undefined) !== (beforeId === undefined)) {
+    throw errors.validation(
+      CONTROL_ERROR_CODES.INVALID_VALUE,
+      'The `before` and `beforeId` cursor halves must be supplied together.',
+      { before, beforeId },
+    );
+  }
   if (before === undefined) return {};
-  const at = new Date(before);
-  if (Number.isNaN(at.getTime())) {
+  const at = instantOrNull(before);
+  if (at === null) {
     throw errors.validation(
       CONTROL_ERROR_CODES.INVALID_VALUE,
       'The `before` cursor is not a timestamp.',
@@ -412,6 +554,7 @@ function toSettingResponse(setting: ResolvedSetting): ResolvedSettingResponse {
     mutability: setting.mutability,
     classification: setting.classification,
     configures: setting.configures,
+    consumer: setting.consumer,
     storedValueInvalid: setting.storedValueInvalid,
   };
 }

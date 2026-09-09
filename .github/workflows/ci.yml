@@ -58,6 +58,14 @@ jobs:
       - name: i18n key check
         run: pnpm check:i18n
 
+      # The falsification record cites a test per rule. This resolves every one
+      # of those names against the COMMITTED test sources — which is the half
+      # the mutation harness structurally cannot check, because it verifies the
+      # working tree. One cited test had been run there and never committed,
+      # and the record read exactly like a verified claim.
+      - name: Falsification citations
+        run: pnpm check:citations
+
   test:
     name: Unit and integration tests
     runs-on: ubuntu-latest
@@ -121,6 +129,16 @@ jobs:
 
       - name: Unit tests
         run: pnpm test
+
+      # The Web Admin suite, rendered in jsdom. Its own step because it is its
+      # own vitest project — granting a DOM to the whole corpus would let a
+      # node-only test name a browser global and still pass.
+      #
+      # It runs HERE rather than only in `pnpm verify` locally, because a suite
+      # CI does not run is a suite that rots: it would keep passing on the
+      # machine of whoever last touched it and nowhere else.
+      - name: Web admin tests
+        run: pnpm test:web
 
       # Migrations run in contexts that legitimately have no application
       # secrets — a CI step, an installer before first boot, a restore from

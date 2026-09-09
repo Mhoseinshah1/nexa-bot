@@ -62,6 +62,27 @@ export interface PermissionResolver {
   ): Promise<ReadonlySet<PermissionKey>>;
 }
 
+/**
+ * Set on the error a denial throws, `true` when the guard itself wrote the
+ * `access.permission_denied` event. A symbol-keyed, non-enumerable property:
+ * invisible to `JSON.stringify` and to the error filter, so it never reaches a
+ * client.
+ */
+const DENIAL_EVENT_RECORDED: unique symbol = Symbol('nexa.access.denialEventRecorded');
+
+/**
+ * Whether the guard has ALREADY recorded the operational event for this
+ * denial. The single question a caller that records denials after the fact
+ * has to ask, so that one refusal produces one event whichever path it took.
+ */
+export function denialEventRecorded(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { [DENIAL_EVENT_RECORDED]?: unknown })[DENIAL_EVENT_RECORDED] === true
+  );
+}
+
 export class PermissionGuard {
   constructor(
     private readonly resolver: PermissionResolver,
@@ -92,15 +113,36 @@ export class PermissionGuard {
     // buys nothing even when it does not deadlock. A transactional caller owns
     // recording its own denial, AFTER the transaction unwinds — the pattern
     // `AdminManagementService` uses.
-    if (tx === undefined) {
+    const recorded = tx === undefined;
+    if (recorded) {
       await this.opsLog.record(scope, this.denialEvent(actor, permission));
     }
 
-    throw errors.permissionDenied(
+    const denied = errors.permissionDenied(
       PLATFORM_ERROR_CODES.PERMISSION_DENIED,
       `Missing permission "${permission}".`,
       { permission },
     );
+    /*
+     * The guard is the ONE authority on whether the operational event exists,
+     * and it says so on the error it throws.
+     *
+     * `recordMutationDenial` used to write the event unconditionally, on the
+     * reasoning that the guard writes nothing from inside a transaction. True,
+     * and incomplete: on the PRE-transaction path — every early check in
+     * panels, settings, features and notifications — the guard HAD written
+     * it, so a single denied request produced two
+     * `access.permission_denied` rows. That code never resolves, so an
+     * operator counting denials on the alerts page counted double, permanently
+     * (OQ-3D-03).
+     *
+     * Marking the error rather than adding a parameter, because a parameter
+     * is a decision every caller has to get right and this is a decision the
+     * guard has already made. A symbol so it never reaches the wire: `details`
+     * is serialised into the 403 body, and this is bookkeeping, not an answer.
+     */
+    Object.defineProperty(denied, DENIAL_EVENT_RECORDED, { value: recorded });
+    throw denied;
   }
 
   async has(

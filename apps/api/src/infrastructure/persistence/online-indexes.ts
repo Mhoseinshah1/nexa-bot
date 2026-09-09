@@ -40,6 +40,41 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
     definition:
       'ON "panels" USING btree ("tenant_id","created_at","id") WHERE status <> \'ARCHIVED\'',
   },
+  {
+    /*
+     * The alerts pagination keyset: `(tenant_id, first_seen_at, id)`.
+     *
+     * The owner's decision moved that traversal off `last_seen_at`, which every
+     * repeat occurrence of a deduped condition rewrites. The KEYSET moved and
+     * its index did not — the only index on this table was
+     * `operational_events_tenant_seen_idx` on `(tenant_id, last_seen_at)`, so
+     * the new `ORDER BY first_seen_at DESC, id DESC` matched nothing and the
+     * alerts page sorted the tenant's whole event history on every request.
+     * That is this branch's own recurring shape: the rule applied where the
+     * author was looking and absent one expression over.
+     *
+     * A btree serves a DESC scan of an ASC index backwards, so one index
+     * covers the ordering and the `ROW(first_seen_at, id) < ROW(...)`
+     * continuation. Not partial: unlike panels there is no status split here,
+     * and `resolved_at` deliberately carries no index (see the schema).
+     *
+     * The `(tenant_id, last_seen_at)` index stays — `since`/`until` remain an
+     * ACTIVITY filter on `last_seen_at` and still use it.
+     */
+    name: 'operational_events_tenant_first_seen_page_idx',
+    definition: 'ON "operational_events" USING btree ("tenant_id","first_seen_at","id")',
+  },
+  {
+    // The same keyset for the OTHER side of the archive. The live index above
+    // is partial on `status <> 'ARCHIVED'`, so the archive browser — added so a
+    // retired panel can be found and restored — matched no index at all and
+    // paged by sequential scan over the whole table. Its own partial index
+    // costs nothing on the live path and is small, because the archive is
+    // where panels go to stop being many.
+    name: 'panels_tenant_archived_page_idx',
+    definition:
+      'ON "panels" USING btree ("tenant_id","created_at","id") WHERE status = \'ARCHIVED\'',
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */

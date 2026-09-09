@@ -462,6 +462,69 @@ Nothing consumes a panel yet. There are no purchases, payments, wallet,
 resellers or customer-facing Telegram operations, and no product feature reads a
 panel's health.
 
+## Phase 3D — the production Web Admin V2
+
+On a branch, in review. The approved V2 design as the real Web Admin: panels,
+providers, settings, feature flags, templates, notifications, management
+alerts, system status and administrators, against the production APIs and the
+real authorization model.
+
+The rule the phase is built around is that **no screen asserts a capability the
+server does not have**, and most of the branch's history is the discovery that
+earlier versions of it were not honest enough. Nine navigation entries lead to
+a page that says what is missing and draws no control at all — not a disabled
+button, which would assert "this exists and you lack permission", and not a
+greyed sample table, which would assert "here is your data".
+
+Two independent reviews found the same class of defect the phase exists to
+prevent, in the phase's own work:
+
+- The management-alerts scope declared ten codes, four of which nothing could
+  ever surface — two never recorded as operational events at all, and two
+  recorded under `SYSTEM_SCOPE` with a null tenant where the tenant-scoped
+  reader cannot reach them. An `admin.` PREFIX matched the audit log's `action`
+  vocabulary rather than any event code, so the owner revision it was there to
+  satisfy was claimed and not delivered. Every test over the classification had
+  invented its own codes, so none of it was visible.
+- The dashboard's "needs attention" card filled permanently with permission
+  denials: a fresh row per denial, no dedupe key, no recovery, and no "mark as
+  seen" by design. The scope is now split, and that card carries only
+  conditions something closes.
+- The one write control on the surface drawn without consulting the caller's
+  permission was also the one that WROTE on refusal — an audit `DENIED` row and
+  an unresolvable alert per press.
+
+Three defects were reachable only in production: `style-src 'self'` blocks
+element `style` attributes, so four components rendered wrongly under the
+deployed policy while jsdom, the build and every test stayed green; an
+ambiguous 5xx retired an idempotency key, so a proxy timeout on a test-send
+would queue a second Telegram message; and notification history had no
+continuation past its first page.
+
+### What this phase changed about how the work is checked
+
+Three regression tests could not fail when first written, and each is recorded
+rather than quietly repaired: a cursor test passed twice with the tie-break
+reverted, because intents queued normally get distinct timestamps and both
+implementations walk those correctly; a CSP test asserted on a card header that
+renders while the query is still in flight, so it photographed a skeleton; and
+a permission test looped over elements that do not exist without the
+permission.
+
+`scripts/visual/` is committed because a commit message cited a 69-capture
+visual pass and left no probe behind. It writes its summary beside the captures
+it describes, after a `verification.json` from an earlier run was found on disk
+looking current — the numbers from a stale file were very nearly reported as a
+clean pass.
+
+### Deliberately absent
+
+No Phase 4 Telegram runtime. No purchases, payments, wallet, resellers, orders,
+products, discounts or reports — the nine planned pages describe them and
+implement none of them. Owner revision 24's per-gateway minimum top-up is
+BLOCKED, not deferred: no gateway registry exists for an override to be keyed
+by, and ADR-0024 records that rather than inventing one.
+
 ## Phases 4–8
 
 Not started. Scope in `docs/architecture.md`.

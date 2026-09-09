@@ -877,10 +877,156 @@ describe('actor authority is re-checked under the lock', () => {
     // The denial is also an operational event, recorded AFTER the transaction
     // unwound — writing it from inside would take a second pool connection
     // while holding one and the tenant lock.
+    // EXACTLY one, for the one refused request above. The `toContain` floor
+    // this replaces could not see a second row, and a second row is one call
+    // site away: an in-lock check that stops passing `tx` makes the guard
+    // write the event itself, and `runLockedMutation` must then not write it
+    // again (OQ-3D-03). The guard's marker is what it consults.
+    const events = await ctx.container.database.db.execute(
+      `SELECT code, severity, context FROM operational_events WHERE code = 'access.permission_denied'` as never,
+    );
+    const denialEvents = events.rows as Array<{
+      code: string;
+      severity: string;
+      context: Record<string, unknown> | null;
+    }>;
+    expect(
+      denialEvents.map((row) => row.code),
+      'ONE in-lock refusal must leave ONE operational event',
+    ).toEqual(['access.permission_denied']);
+    // WARN, because the alerts page filters by severity, and naming the actor
+    // who was refused — an event that says "somebody" is not the record.
+    expect(denialEvents[0]?.severity).toBe('WARN');
+    expect(denialEvents[0]?.context?.['actorId']).toBe(manager.id);
+    expect(denialEvents[0]?.context?.['permission']).toBe('admins.edit');
+  });
+
+  it('records ONE event and ONE audit row when the in-lock check has already written the event', async () => {
+    /*
+     * The rule round 46 added to `runLockedMutation` — ask the guard whether
+     * it already wrote the event — is unobservable while every in-lock check
+     * passes `tx`, and was pinned only as a record-only pair. This is the
+     * committed test: the in-lock check is re-aimed at an actor with no
+     * authority AND made to run on the pool (no `tx`), which is exactly the
+     * call-site mistake the rule exists to survive. The guard then writes the
+     * event itself and marks the error; the recorder must write the audit row
+     * and NOT a second event.
+     */
+    const owner = await createAdmin(ctx.container, tenantA, {
+      username: 'marked-owner',
+      roleKeys: ['owner'],
+    });
+    const powerless = await createAdmin(ctx.container, tenantA, {
+      username: 'marked-powerless',
+      roleKeys: ['support'],
+    });
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'marked-target',
+      roleKeys: ['support'],
+    });
+    const guard = ctx.container.guard as unknown as {
+      check: (s: unknown, a: unknown, p: string, tx?: unknown) => Promise<void>;
+    };
+    const realCheck = guard.check.bind(ctx.container.guard);
+    guard.check = async (sc: unknown, a: unknown, permission: string, tx?: unknown) =>
+      tx === undefined
+        ? realCheck(sc, a, permission, tx)
+        : realCheck(sc, adminActorFor(powerless), permission);
+    try {
+      await expect(
+        ctx.container.adminManagement.setRoles(
+          tenantA,
+          adminActorFor(owner),
+          target.id as AdminId,
+          {
+            roleKeys: ['support', 'finance'],
+            reason: 'Denied under the lock, on the pool.',
+          },
+        ),
+      ).rejects.toMatchObject({ code: 'platform.permission_denied' });
+    } finally {
+      guard.check = realCheck;
+    }
+
+    const audits = await ctx.container.database.db
+      .select()
+      .from(auditLogs)
+      .where(eq(auditLogs.action, 'admin.roles_change'));
+    expect(
+      audits.filter((row) => row.result === 'DENIED'),
+      'the recorder writes the audit row whether or not the guard wrote the event',
+    ).toHaveLength(1);
     const events = await ctx.container.database.db.execute(
       `SELECT code FROM operational_events WHERE code = 'access.permission_denied'` as never,
     );
-    expect(JSON.stringify(events)).toContain('access.permission_denied');
+    expect(
+      (events.rows as Array<{ code: string }>).map((row) => row.code),
+      'the guard wrote the event; the recorder must not write it again',
+    ).toEqual(['access.permission_denied']);
+  });
+
+  it('writes the DENIED audit row even when the operational-event write fails', async () => {
+    /*
+     * The two writes are not atomic, and the audit row is the half an
+     * operator needs later. It is written first, so an operational log that
+     * is down costs the event and the clean 403 — the write's error is what
+     * the caller sees — but never the audit row.
+     */
+    const owner = await createAdmin(ctx.container, tenantA, {
+      username: 'down-owner',
+      roleKeys: ['owner'],
+    });
+    const powerless = await createAdmin(ctx.container, tenantA, {
+      username: 'down-powerless',
+      roleKeys: ['support'],
+    });
+    const target = await createAdmin(ctx.container, tenantA, {
+      username: 'down-target',
+      roleKeys: ['support'],
+    });
+    const guard = ctx.container.guard as unknown as {
+      check: (s: unknown, a: unknown, p: string, tx?: unknown) => Promise<void>;
+    };
+    const realCheck = guard.check.bind(ctx.container.guard);
+    // Denied INSIDE the transaction (with `tx`), so the guard writes nothing
+    // and the recorder is the emitter — the write that is about to fail.
+    guard.check = async (sc: unknown, a: unknown, permission: string, tx?: unknown) =>
+      tx === undefined
+        ? realCheck(sc, a, permission, tx)
+        : realCheck(sc, adminActorFor(powerless), permission, tx);
+    const opsLog = ctx.container.opsLog as { record: (...args: unknown[]) => Promise<unknown> };
+    const realRecord = opsLog.record;
+    opsLog.record = async () => {
+      throw new Error('the operational log is down');
+    };
+    try {
+      await expect(
+        ctx.container.adminManagement.setRoles(
+          tenantA,
+          adminActorFor(owner),
+          target.id as AdminId,
+          {
+            roleKeys: ['support', 'finance'],
+            reason: 'Denied while the log is down.',
+          },
+        ),
+      ).rejects.toThrow('the operational log is down');
+    } finally {
+      opsLog.record = realRecord;
+      guard.check = realCheck;
+    }
+
+    const audits = await ctx.container.database.db
+      .select()
+      .from(auditLogs)
+      .where(eq(auditLogs.action, 'admin.roles_change'));
+    expect(
+      audits.filter((row) => row.result === 'DENIED'),
+      'the audit row must be written before the event',
+    ).toHaveLength(1);
+    expect(await ctx.container.admins.roleKeysFor(tenantA, target.id as AdminId)).toEqual([
+      'support',
+    ]);
   });
 
   it('refuses a stale request that is genuinely CONTENDING for the lock', async () => {

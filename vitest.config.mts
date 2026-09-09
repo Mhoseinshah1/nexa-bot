@@ -22,6 +22,20 @@ const shared = {
   globals: false,
   environment: 'node' as const,
   restoreMocks: true,
+  /*
+   * `.only` may not decide what runs, here or in CI.
+   *
+   * Vitest defaults `allowOnly` to `!isCI`, so a stray `it.only` is a hard
+   * failure on GitHub Actions and a SILENT one locally: the file runs a single
+   * test, `pnpm verify` reports success, and the citation checker went on
+   * resolving names into the sixty siblings that no longer ran. Measured:
+   * `1 passed | 60 skipped` alongside `ok 194`, exit 0.
+   *
+   * The gate a contributor runs before pushing should fail for the same
+   * reasons the one in CI does, so this is set explicitly rather than left to
+   * an environment variable.
+   */
+  allowOnly: false,
 };
 
 export default defineConfig({
@@ -37,6 +51,29 @@ export default defineConfig({
           // Unit tests are pure: no database, no Redis, no network. If one of
           // them needs a service, it belongs in the integration project.
           testTimeout: 10_000,
+        },
+      },
+      {
+        plugins: [tsExtensionResolver()],
+        test: {
+          ...shared,
+          /**
+           * The Web Admin, rendered.
+           *
+           * Its own project because it is the one suite that needs a DOM, and
+           * granting `jsdom` to the whole corpus would let a node-only test
+           * name a browser global and still pass. The split mirrors the one
+           * `tsconfig.tests.web.json` already makes for the same reason.
+           *
+           * These render REAL components against a real query client and
+           * assert what an operator would see. A grep over the source would
+           * pass just as happily against a file nothing imports.
+           */
+          name: 'web',
+          environment: 'jsdom',
+          include: ['tests/web/**/*.test.tsx'],
+          setupFiles: ['tests/web/setup.ts'],
+          testTimeout: 15_000,
         },
       },
       {

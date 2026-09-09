@@ -69,6 +69,7 @@ import {
   DrizzleOperationalConditionReader,
   DrizzleOperationalEventReader,
 } from './modules/platform/opslog/infrastructure/drizzle-operational-event.reader.js';
+import { MonitorProfileService } from './modules/platform/panels/application/monitor-profile.service.js';
 import { OpsLogService } from './modules/platform/opslog/application/opslog.service.js';
 import { DrizzleSettingRepository } from './modules/control/settings/infrastructure/drizzle-settings.repository.js';
 import { SettingsResolver } from './modules/control/settings/application/settings-resolver.js';
@@ -198,6 +199,12 @@ export interface Container {
   readonly notificationDispatcher: NotificationDispatcher;
   readonly notificationTransport: NotificationTransport;
   readonly opsLogService: OpsLogService;
+  /**
+   * What the background monitor is configured to do, and what that
+   * configuration can carry. A read of installation configuration plus two
+   * pure capacity functions; it touches no repository and not the monitor.
+   */
+  readonly monitorProfileService: MonitorProfileService;
 
   shutdown(): Promise<void>;
 }
@@ -427,7 +434,16 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     { intervalMs: 3_600_000, initialDelayMs: 60_000, batchSize: 5_000, maxBatchesPerTick: 1_000 },
   );
 
-  const recordPing = new RecordPingService(guard, uow, outbox, audit, idempotency, clock, tenants);
+  const recordPing = new RecordPingService(
+    guard,
+    uow,
+    outbox,
+    audit,
+    idempotency,
+    clock,
+    tenants,
+    opsLog,
+  );
 
   // ---------------------------------------------------------------------------
   // Control plane
@@ -699,6 +715,30 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   );
 
   const opsLogService = new OpsLogService(guard, new DrizzleOperationalEventReader(database.db));
+  const monitorProfileService = new MonitorProfileService(
+    guard,
+    {
+      enabled: config.PANEL_MONITOR_ENABLED,
+      tickMs: config.PANEL_MONITOR_TICK_MS,
+      healthyIntervalMs: config.PANEL_MONITOR_HEALTHY_INTERVAL_MS,
+      retryableIntervalMs: config.PANEL_MONITOR_RETRYABLE_INTERVAL_MS,
+      nonRetryableIntervalMs: config.PANEL_MONITOR_NONRETRYABLE_INTERVAL_MS,
+      batchSize: config.PANEL_MONITOR_BATCH_SIZE,
+      concurrency: config.PANEL_MONITOR_CONCURRENCY,
+      tenantsPerTick: config.PANEL_MONITOR_TENANTS_PER_TICK,
+      probeTenantLimit: config.PANEL_PROBE_TENANT_LIMIT,
+      probeTenantWindowMs: config.PANEL_PROBE_TENANT_WINDOW_MS,
+      // The EFFECTIVE cooldown — the same value `probeCore` is built with, not
+      // the raw setting. A deployment with `PANEL_PROBE_COOLDOWN_MS=1000` and a
+      // 120s HTTP timeout holds each panel for at least 120s, and this
+      // endpoint's whole contract is that it reports what the deployment is
+      // actually running; publishing the raw number made it state a cooldown no
+      // probe obeys.
+      probeCooldownMs: probeCore.probeCooldownMs,
+      budgetReservePercent: config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT,
+    },
+    new DrizzleOperationalConditionReader(database.db),
+  );
 
   return {
     config,
@@ -781,6 +821,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     notificationDispatcher,
     notificationTransport,
     opsLogService,
+    monitorProfileService,
     panelMonitor,
     async shutdown() {
       await relay.stop();

@@ -42,6 +42,22 @@ import {
   type TemplateWriteResponse,
   systemReadinessResponseSchema,
   type SystemReadinessResponse,
+  PANEL_ROUTES,
+  panelListResponseSchema,
+  panelResponseSchema,
+  providerListResponseSchema,
+  testPanelResponseSchema,
+  type PanelCredentialsInput,
+  type PanelListArchivedMode,
+  type PanelListResponse,
+  type PanelResponse,
+  type PanelStatus,
+  type ProviderListResponse,
+  type ProviderType,
+  type TestPanelResponse,
+  type OperationalScope,
+  monitorProfileResponseSchema,
+  type MonitorProfileResponse,
 } from '@nexa/contracts';
 
 /**
@@ -51,6 +67,19 @@ import {
  * A change to a shape in `@nexa/contracts` is therefore a type error here and
  * in the API at the same time — which is the whole reason the seam exists.
  */
+
+/**
+ * What the background panel monitor is configured to do, and what that
+ * configuration can carry.
+ *
+ * Fetched rather than derived. The shipped health cadence is three minutes and
+ * a deployment can set anything the schema accepts; a screen that printed
+ * "every 3 minutes" from a constant in this bundle would be stating a number
+ * the installation may not be running.
+ */
+export function fetchMonitorProfile(): Promise<MonitorProfileResponse> {
+  return authedGet(CONTROL_ROUTES.systemMonitor, monitorProfileResponseSchema);
+}
 
 /** Readiness with dependency detail. Requires a session. */
 export function fetchReadiness(): Promise<SystemReadinessResponse> {
@@ -298,16 +327,44 @@ export function previewTemplate(
 export function fetchOpsLog(query: {
   severity?: string;
   open?: boolean;
-  /** The `lastSeenAt` of the oldest row already shown; returns older ones. */
+  /**
+   * The `firstSeenAt` of the oldest row already shown; returns older ones.
+   *
+   * NOT `lastSeenAt`: every repeat occurrence rewrites that, so a row below
+   * the cursor that recurs would jump above it and appear on no later page.
+   */
   before?: string;
   /** Its id, which breaks ties when several rows share that timestamp. */
   beforeId?: string;
+  /**
+   * `MANAGEMENT` narrows to the codes that want a person's attention.
+   *
+   * Sent to the server rather than applied to the answer: filtering a page of
+   * fifty rows down to two here would leave the cursor having already walked
+   * past the other forty-eight, so paging would drop rows silently.
+   */
+  scope?: OperationalScope;
+  /**
+   * Sent EXPLICITLY, even when it matches the server default.
+   *
+   * `GET /ops-log` now answers with a `nextCursor`, which is what actually
+   * decides whether an "older" page exists — the pager reads that, not the row
+   * count. This is still sent explicitly because the server's default and the
+   * page size the caller renders must be the SAME number: two spellings of
+   * "50" would make the pager offer a page that is not there, or hide one that
+   * is. The comment that used to sit here described the pre-cursor server and
+   * told the next reader to compare lengths, which is the bug the cursor
+   * replaced.
+   */
+  limit?: number;
 }): Promise<OperationalEventListResponse> {
   const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
   if (query.severity) params.set('severity', query.severity);
   if (query.open !== undefined) params.set('open', String(query.open));
   if (query.before) params.set('before', query.before);
   if (query.beforeId) params.set('beforeId', query.beforeId);
+  if (query.scope) params.set('scope', query.scope);
   const suffix = params.toString();
   return authedGet(
     suffix ? `${CONTROL_ROUTES.opsLog}?${suffix}` : CONTROL_ROUTES.opsLog,
@@ -315,8 +372,24 @@ export function fetchOpsLog(query: {
   );
 }
 
-export function fetchNotifications(): Promise<NotificationListResponse> {
-  return authedGet(CONTROL_ROUTES.notifications, notificationListResponseSchema);
+export function fetchNotifications(
+  query: {
+    limit?: number;
+    /** The `createdAt` of the oldest intent already shown; returns older ones. */
+    before?: string;
+    /** Its id, which breaks ties when several intents share that timestamp. */
+    beforeId?: string;
+  } = {},
+): Promise<NotificationListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.before) params.set('before', query.before);
+  if (query.beforeId) params.set('beforeId', query.beforeId);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${CONTROL_ROUTES.notifications}?${suffix}` : CONTROL_ROUTES.notifications,
+    notificationListResponseSchema,
+  );
 }
 
 export function fetchNotification(id: string): Promise<NotificationDetailResponse> {
@@ -331,4 +404,128 @@ export function sendTestNotification(
     { idempotencyKey },
     sendTestNotificationResponseSchema,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Panels and providers
+// ---------------------------------------------------------------------------
+
+/**
+ * The provider catalogue.
+ *
+ * Fetched rather than hardcoded, because a provider is CODE: its capabilities
+ * come from the adapter's descriptor, and a copy of that list in the browser is
+ * a copy that goes stale the release a capability is added. The picker on the
+ * add-panel form is populated from this and from nothing else.
+ */
+export function fetchProviders(): Promise<ProviderListResponse> {
+  return authedGet(PANEL_ROUTES.providers, providerListResponseSchema);
+}
+
+/**
+ * One page of panels.
+ *
+ * `cursor` is opaque and is passed back exactly as received. Parsing it here
+ * would make this client depend on an ordering the API has deliberately not
+ * promised — and the server refuses a cursor it did not mint, so a "clever"
+ * client-side cursor is a 400 rather than a subtle bug.
+ *
+ * That second half was FALSE when it was first written and is true now. The
+ * server used to answer 200 with page one for any unreadable cursor, so a
+ * client that truncated one looped silently — the exact subtle bug the sentence
+ * promised could not happen. The owner resolved the inconsistency in favour of
+ * refusing, `panelListQuerySchema` carries the rule, and
+ * `panels-http.test.ts` pins it against eighteen malformed cursors — a count
+ * that test asserts about its own fixture, because this sentence and the
+ * falsification record once said thirteen while a fourteenth was added and the
+ * commit message said fifteen. The fifteenth is year zero; the last three are
+ * a real cursor with a character appended, inserted and padded, which the
+ * decoder used to accept because base64url decoding skips what it cannot read.
+ */
+export function fetchPanels(
+  query: { limit?: number; cursor?: string; archived?: PanelListArchivedMode } = {},
+): Promise<PanelListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  // Sent only for the archive browser. Omitted means the working fleet, which
+  // is the server's default too — one spelling of the default, not two.
+  if (query.archived !== undefined) params.set('archived', query.archived);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${PANEL_ROUTES.list}?${suffix}` : PANEL_ROUTES.list,
+    panelListResponseSchema,
+  );
+}
+
+export function fetchPanel(id: string): Promise<PanelResponse> {
+  return authedGet(PANEL_ROUTES.detail(id), panelResponseSchema);
+}
+
+export function createPanel(input: {
+  name: string;
+  providerType: ProviderType;
+  baseUrl: string;
+  credentials?: PanelCredentialsInput;
+  idempotencyKey: string;
+}): Promise<PanelResponse> {
+  return post(PANEL_ROUTES.create, input, panelResponseSchema);
+}
+
+export function updatePanel(input: {
+  id: string;
+  name?: string;
+  baseUrl?: string;
+  idempotencyKey: string;
+}): Promise<PanelResponse> {
+  const { id, ...body } = input;
+  return post(PANEL_ROUTES.update(id), body, panelResponseSchema);
+}
+
+/**
+ * Replacing a credential is its own route because it is its own permission:
+ * `panels.credentials.rotate` is CRITICAL and `panels.edit` is HIGH. Folding
+ * them together would force every name change to require the right to rotate.
+ */
+export function setPanelCredentials(input: {
+  id: string;
+  credentials: PanelCredentialsInput;
+  idempotencyKey: string;
+}): Promise<PanelResponse> {
+  const { id, ...body } = input;
+  return post(PANEL_ROUTES.credentials(id), body, panelResponseSchema);
+}
+
+export function setPanelStatus(input: {
+  id: string;
+  status: PanelStatus;
+  /**
+   * A replacement name, accepted by the server ONLY on a transition out of
+   * `ARCHIVED`.
+   *
+   * Archiving releases the panel's name — `panels_tenant_name_live_key` is
+   * partial on `status <> 'ARCHIVED'` — so another panel may take it, and the
+   * restore then answers 409 `panel.name_taken`. Without this the refusal told
+   * the operator to rename the panel and no surface could: `POST /panels/:id`
+   * refuses an archived panel outright, so the panel was unrestorable from the
+   * Web Admin no matter what the API had gained.
+   */
+  name?: string;
+  idempotencyKey: string;
+}): Promise<PanelResponse> {
+  const { id, ...body } = input;
+  return post(PANEL_ROUTES.status(id), body, panelResponseSchema);
+}
+
+/**
+ * A connection test. It is a state-changing command and carries a key like one:
+ * it writes a health row and an audit entry, and `probed: false` in the answer
+ * means the stored health came back without a new probe being made.
+ */
+export function testPanel(input: {
+  id: string;
+  idempotencyKey: string;
+}): Promise<TestPanelResponse> {
+  const { id, ...body } = input;
+  return post(PANEL_ROUTES.test(id), body, testPanelResponseSchema);
 }

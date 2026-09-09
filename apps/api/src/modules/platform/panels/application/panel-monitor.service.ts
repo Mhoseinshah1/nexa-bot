@@ -68,13 +68,23 @@ export const RECOVERED_CODE = 'panel.health.recovered';
 export const RETIRED_CODE = 'panel.health.retired';
 
 /**
- * The code that says a retired panel is being monitored again.
+ * The code that says a panel is no longer retired.
+ *
+ * Recorded on any transition OUT of `ARCHIVED`, not only the one back to
+ * `ACTIVE`: the Web Admin's restore control returns a panel to `DISABLED` so
+ * that nothing silently resumes dialling it, and a recovery keyed on `ACTIVE`
+ * would have left the retirement open through that path — then missed it again
+ * on the later `DISABLED -> ACTIVE` step, whose `before` is no longer archived.
  *
  * Retirement is not permanent — restoring an archived panel is a supported
  * operation — and nothing in the health transitions ever names
- * `panel.health.retired`, so without this it would stay open for ever: an
- * installation monitoring a panel while its operations log says the panel was
- * archived and is not monitored.
+ * `panel.health.retired`, so without this it would stay open for ever, with no
+ * path that can close it: eventually an installation monitoring a panel while
+ * its operations log says the panel was archived and is not monitored.
+ *
+ * "No longer retired" is therefore the claim, not "being monitored again" —
+ * the panel may well be DISABLED, and the status is what says whether it is
+ * probed.
  *
  * Deliberately NOT deduplicated. Its whole job is to close the retirement, and
  * a row of its own would need closing in turn — by the next archive, which
@@ -119,7 +129,13 @@ export function closesPanelCondition(
 /** Operational conditions this loop reports about its own capacity. */
 const TENANT_BUDGET_CONDITION = 'panel.monitor.tenant_budget_exceeded';
 const TENANT_BUDGET_RESOLVED = 'panel.monitor.tenant_budget_ok';
-const SCHEDULER_CONDITION = 'panel.monitor.scheduler_capacity_exceeded';
+/**
+ * Exported so the copy in `monitor-profile.service.ts` can be ASSERTED equal
+ * to it. That copy exists to keep the profile read off this module's graph,
+ * which is a production concern; a test importing both costs nothing and is
+ * the only thing that can stop the two drifting.
+ */
+export const SCHEDULER_CONDITION = 'panel.monitor.scheduler_capacity_exceeded';
 const SCHEDULER_RESOLVED = 'panel.monitor.scheduler_capacity_ok';
 
 /** The installation's own scope: this condition belongs to no single tenant. */
@@ -642,8 +658,9 @@ export class PanelMonitorService {
     } catch (error) {
       if (isNexaError(error) && error.kind === 'PERMISSION_DENIED') {
         // The same trail a refused operator leaves. `recordMutationDenial`
-        // writes the denial event and the DENIED audit row, on the pool,
-        // outside any transaction.
+        // writes the DENIED audit row and then the denial event — the guard
+        // was checked with `tx`, so it wrote none — on the pool, outside any
+        // transaction.
         await recordMutationDenial(
           { opsLog: this.deps.opsLog, audit: this.deps.audit, guard: this.deps.guard },
           tenant,
@@ -727,7 +744,7 @@ export class PanelMonitorService {
     ) {
       return;
     }
-    this.lastCapacityAssessmentAt = now.getTime();
+    // The timestamp is advanced at the END of this method, not here. See there.
 
     const over = await this.deps.discovery.overBudgetTenants(this.deps.tenantBudgetUpperBound);
     const overNow = new Set(over.map((row: { tenantId: string }) => row.tenantId));
@@ -831,6 +848,19 @@ export class PanelMonitorService {
         ),
       );
     }
+
+    // Only now, with every read and write above behind us. This was the
+    // second statement of the method, so an aggregate that timed out or a
+    // condition write that was refused failed THIS tick — loudly, no progress
+    // recorded — and was then not retried for the whole interval, ten minutes
+    // by default, while every later tick went on, recorded progress and
+    // reported the monitor healthy with an overload unopened or a stale
+    // condition unresolved. A failure now leaves the timestamp where it was,
+    // the tick still fails loudly, and the next tick tries again. A
+    // persistently failing assessment therefore retries every tick — and
+    // every one of those ticks fails, which keeps the monitor unhealthy,
+    // which is the signal.
+    this.lastCapacityAssessmentAt = now.getTime();
   }
 
   /**

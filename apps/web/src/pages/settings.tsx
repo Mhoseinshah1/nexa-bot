@@ -1,10 +1,24 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { ResolvedSettingResponse } from '@nexa/contracts';
+import { CURRENCY_CODES } from '@nexa/contracts';
+import type { CurrencyCode, MoneyWire, ResolvedSettingResponse } from '@nexa/contracts';
 import { ApiError, fetchSettings, saveSetting } from '../api/client';
-import { formatTimestamp } from '../format';
+import { currencyLabel, formatNumber, formatTimestamp } from '../format';
+import { finalAnswer } from '../polling';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
+import {
+  Badge,
+  Banner,
+  Card,
+  Field,
+  ListEditor,
+  Ltr,
+  MaturityBadge,
+  PageHead,
+  StateSwitch,
+  Switch,
+} from '../ui/kit';
 
 /**
  * The settings screen.
@@ -16,22 +30,28 @@ import { t, type WebKey } from '../i18n/web.fa';
  * A save carries the version the row was read at. A stale version comes back as
  * a conflict and is shown as one, rather than quietly discarding whatever the
  * other administrator did.
+ *
+ * New in Phase 3D: a key whose registry entry declares `consumer: 'PLANNED'` is
+ * labelled as stored-but-unread. Four of the nine keys are in that state — the
+ * store currency, the support accounts, the channels and the top-up minimum —
+ * and an operator who configures required channel membership needs to know that
+ * nothing enforces it yet. That is the whole reason `consumer` is a declared
+ * field on the frozen registry rather than a list held in this file.
  */
-export function SettingsPage({ mayEdit }: { mayEdit: boolean }) {
-  const settings = useQuery({ queryKey: ['settings'], queryFn: fetchSettings });
+export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: boolean }) {
+  const settings = useQuery({ queryKey: ['settings'], queryFn: fetchSettings, enabled: !denied });
+  const rows = settings.data?.settings ?? [];
 
   return (
-    <section>
-      <h2>{t('web.settings_title')}</h2>
-      <p className="notice">{t('web.settings_intro')}</p>
+    <>
+      <PageHead title={t('web.settings_title')} subtitle={t('web.settings_intro')} maturity="now" />
 
-      {settings.isPending && <p>{t('web.loading')}</p>}
-      {settings.isError && <p className="error">{messageFor(settings.error)}</p>}
-
-      {settings.data?.settings.map((setting) => (
-        <SettingRow key={setting.key} setting={setting} mayEdit={mayEdit} />
-      ))}
-    </section>
+      <StateSwitch query={settings} denied={denied} isEmpty={rows.length === 0}>
+        {rows.map((setting) => (
+          <SettingRow key={setting.key} setting={setting} mayEdit={mayEdit} />
+        ))}
+      </StateSwitch>
+    </>
   );
 }
 
@@ -61,9 +81,7 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
    * shown, and the typing survives to be reapplied.
    */
   const [basis, setBasis] = useState<ResolvedSettingResponse>(setting);
-  const [draft, setDraft] = useState(() => toEditable(setting.value));
-
-  const changedElsewhere = basis.version !== setting.version;
+  const [draft, setDraft] = useState<unknown>(setting.value);
 
   const refresh = async () => {
     await client.invalidateQueries({ queryKey: ['settings'] });
@@ -72,7 +90,7 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
 
   const adopt = (fresh: ResolvedSettingResponse) => {
     setBasis(fresh);
-    setDraft(toEditable(fresh.value));
+    setDraft(fresh.value);
   };
 
   const submission = useSubmissionKey();
@@ -93,8 +111,10 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
       expectedVersion: number | null;
     }) => saveSetting({ key: setting.key, ...command }),
     onSuccess: async (result) => {
-      // Adopt our own write before the refetch lands, so the row does not
-      // report itself as having changed elsewhere.
+      // Adopt our own write, so the next edit is compared against the row this
+      // operator just stored. `changedElsewhere` above is what keeps the row
+      // from reporting ITSELF as changed elsewhere while this settles — adopting
+      // alone does the opposite, which is what the comment here used to claim.
       submission.settle();
       adopt(result.setting);
       await refresh();
@@ -110,77 +130,422 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
     },
   });
 
+  /**
+   * Not while OUR OWN write is settling.
+   *
+   * `adopt(result.setting)` runs before the awaited `refresh()` resolves, so
+   * for the width of that round trip `basis.version` is N+1 while the query
+   * still holds N — and the banner told the operator their own save had been
+   * made "elsewhere", promising a `VERSION_CONFLICT` that could not happen
+   * because `basis.version` was at that moment the newest version there is.
+   * The comment in `save.onSuccess` claimed adopting PREVENTED this; adopting
+   * is what caused it. Same fix as the panel form.
+   */
+  const changedElsewhere = !save.isPending && basis.version !== setting.version;
+
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
     // Snapshotted HERE, at the click, so the retry cannot see a later edit.
-    const command = {
-      value: fromEditable(draft, basis.value),
-      expectedVersion: basis.version,
-    };
+    const command = { value: draft, expectedVersion: basis.version };
     save.mutate({ ...command, idempotencyKey: submission.current(command) });
   };
 
   return (
-    <form className="card" onSubmit={onSubmit}>
-      <h3>
-        <code>{setting.key}</code>
-        {setting.classification === 'SENSITIVE' && (
-          <span className="tag">{t('web.sensitive')}</span>
-        )}
-        {setting.mutability === 'RESTART_REQUIRED' && (
-          <span className="tag">{t('web.restart_required')}</span>
-        )}
-      </h3>
-      <p>{setting.description}</p>
+    <Card
+      title={setting.key}
+      actions={
+        <>
+          {setting.consumer === 'PLANNED' && <MaturityBadge value="ready" />}
+          {setting.classification === 'SENSITIVE' && (
+            <Badge tone="warn">{t('web.sensitive')}</Badge>
+          )}
+          {setting.mutability === 'RESTART_REQUIRED' && (
+            <Badge tone="warn">{t('web.restart_required')}</Badge>
+          )}
+        </>
+      }
+    >
+      <form onSubmit={onSubmit}>
+        <p className="muted small">{setting.description}</p>
 
-      {/* A stored value the registry no longer accepts. The default is in
-          force, and saying so is the difference between this and the legacy
-          screens that show a value nothing is using. */}
-      {setting.storedValueInvalid && <p className="error">{t('web.stored_value_invalid')}</p>}
+        {/* Stored, and nothing reads it. An operator who configures required
+            channel membership has to know that nothing enforces it yet — the
+            legacy pattern this whole registry exists to end is a screen that
+            answers "saved" for a change with no observable effect. */}
+        {setting.consumer === 'PLANNED' && (
+          <Banner tone="info">{t('web.setting_no_consumer')}</Banner>
+        )}
 
-      <label htmlFor={`value-${setting.key}`}>{t('web.value')}</label>
+        {/* A stored value the registry no longer accepts. The default is in
+            force, and saying so is the difference between this and the legacy
+            screens that show a value nothing is using. */}
+        {setting.storedValueInvalid && (
+          <Banner tone="danger">{t('web.stored_value_invalid')}</Banner>
+        )}
+
+        <SettingEditor
+          // Remounting on a new basis is what makes "reload value" reset the
+          // editor's own internal draft as well as the value above it.
+          key={`${setting.key}:${basis.version ?? 0}`}
+          setting={basis}
+          value={draft}
+          onChange={setDraft}
+          disabled={!mayEdit}
+        />
+
+        {changedElsewhere && (
+          <Banner tone="warn">
+            {t('web.changed_elsewhere')}{' '}
+            <button type="button" className="btn ghost sm" onClick={() => adopt(setting)}>
+              {t('web.reload_value')}
+            </button>
+          </Banner>
+        )}
+
+        <dl className="kv">
+          <div>
+            <dt>{t('web.source')}</dt>
+            <dd>
+              {setting.source === 'TENANT' ? t('web.source_tenant') : t('web.source_default')}
+            </dd>
+          </div>
+          <div>
+            <dt>{t('web.zero_meaning')}</dt>
+            <dd>{t(ZERO_MEANING_KEYS[setting.zeroMeaning])}</dd>
+          </div>
+          {setting.updatedAt !== null && (
+            <div>
+              <dt>{t('web.updated_at')}</dt>
+              <dd>{formatTimestamp(setting.updatedAt)}</dd>
+            </div>
+          )}
+        </dl>
+
+        {mayEdit && (
+          <button type="submit" className="btn primary" disabled={save.isPending}>
+            {save.isPending ? t('web.saving') : t('web.save')}
+          </button>
+        )}
+        {save.isError && <ErrorReport error={save.error} />}
+        {/* A no-op says so. The legacy screens answer "✅ updated" either way,
+            and one of them said it three times while nothing changed. */}
+        {save.isSuccess && (
+          <Banner tone={save.data.changed ? 'ok' : 'info'}>
+            {save.data.changed ? t('web.saved') : t('web.unchanged')}
+          </Banner>
+        )}
+      </form>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Editors
+// ---------------------------------------------------------------------------
+
+/**
+ * The control for a key, chosen by the key.
+ *
+ * A list of support accounts is not a JSON blob an operator should have to type
+ * — revision 22 asks for add, remove, reorder and validate, and none of those
+ * is expressible in a text field. The generic editor stays for the scalar keys,
+ * where a text field is genuinely the right control.
+ */
+function SettingEditor({
+  setting,
+  value,
+  onChange,
+  disabled,
+}: {
+  setting: ResolvedSettingResponse;
+  value: unknown;
+  onChange: (next: unknown) => void;
+  disabled: boolean;
+}) {
+  if (setting.key === 'support.accounts') {
+    return <HandleListEditor value={asStringList(value)} onChange={onChange} disabled={disabled} />;
+  }
+  if (setting.key === 'telegram.channels') {
+    return (
+      <ChannelListEditor value={asChannelList(value)} onChange={onChange} disabled={disabled} />
+    );
+  }
+  if (setting.key === 'wallet.topup.minimum') {
+    return <MoneyEditor value={asMoney(value)} onChange={onChange} disabled={disabled} />;
+  }
+  if (setting.key === 'sales.currency') {
+    return <CurrencyEditor value={String(value)} onChange={onChange} disabled={disabled} />;
+  }
+  return <TextEditor setting={setting} onChange={onChange} disabled={disabled} />;
+}
+
+/** Revision 22: support accounts — add, remove, reorder, validate. */
+function HandleListEditor({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: readonly string[];
+  onChange: (next: unknown) => void;
+  disabled: boolean;
+}) {
+  return (
+    <ListEditor
+      items={value}
+      onChange={(next) => onChange([...next])}
+      addLabel={t('web.support_add')}
+      emptyHint={t('web.support_empty')}
+      disabled={disabled}
+      onAdd={() => ''}
+      renderRow={(item, index, update) => (
+        <>
+          {/*
+            The position is part of the label. Three rows all announced as
+            "support handle" leave somebody using a screen reader unable to tell
+            which field they are in — and the ordinal is exactly the thing that
+            distinguishes them, since order is meaningful here.
+          */}
+          <label className="visually-hidden" htmlFor={`support-${index}`}>
+            {`${t('web.support_handle')} ${formatNumber(index + 1)}`}
+          </label>
+          <input
+            id={`support-${index}`}
+            className="input ltr mono"
+            value={item}
+            placeholder="@example"
+            disabled={disabled}
+            onChange={(event) => update(event.target.value)}
+          />
+        </>
+      )}
+    />
+  );
+}
+
+interface Channel {
+  readonly handle: string;
+  readonly mandatory: boolean;
+}
+
+/** Revision 23: channels — add, remove, reorder, and a required-membership flag. */
+function ChannelListEditor({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: readonly Channel[];
+  onChange: (next: unknown) => void;
+  disabled: boolean;
+}) {
+  return (
+    <ListEditor
+      items={value}
+      onChange={(next) => onChange([...next])}
+      addLabel={t('web.channel_add')}
+      emptyHint={t('web.channel_empty')}
+      disabled={disabled}
+      // `mandatory: false` rather than nothing. The flag is required by the
+      // schema precisely so that a channel cannot exist without an answer.
+      onAdd={() => ({ handle: '', mandatory: false })}
+      renderRow={(item, index, update) => (
+        <div className="input-group">
+          <label className="visually-hidden" htmlFor={`channel-${index}`}>
+            {`${t('web.channel_handle')} ${formatNumber(index + 1)}`}
+          </label>
+          <input
+            id={`channel-${index}`}
+            className="input ltr mono grow"
+            value={item.handle}
+            placeholder="@example"
+            disabled={disabled}
+            onChange={(event) => update({ ...item, handle: event.target.value })}
+          />
+          <Switch
+            checked={item.mandatory}
+            disabled={disabled}
+            label={`${t('web.channel_mandatory')} ${formatNumber(index + 1)}`}
+            onChange={(next) => update({ ...item, mandatory: next })}
+          />
+          <span className="muted small nowrap">
+            {item.mandatory ? t('web.channel_mandatory') : t('web.channel_optional')}
+          </span>
+        </div>
+      )}
+    />
+  );
+}
+
+/**
+ * Revision 24: the minimum top-up, as an amount AND a currency.
+ *
+ * Never a bare number. The legacy financial surface has no exchange rate on any
+ * of its seven gateways and Toman implicit everywhere, which is the failure
+ * this shape prevents at the type level.
+ *
+ * The per-gateway override the revision also asks for is not here, and the
+ * banner says why rather than leaving a gap: no payment gateway is registered
+ * anywhere in this system, so there is nothing for an override to be keyed by.
+ */
+function MoneyEditor({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: MoneyWire;
+  onChange: (next: unknown) => void;
+  disabled: boolean;
+}) {
+  return (
+    <>
+      <Banner tone="info" title={t('web.topup_precedence_title')}>
+        {t('web.topup_precedence_body')}
+      </Banner>
+      <div className="input-group">
+        <Field label={t('web.amount_minor')} htmlFor="topup-amount">
+          <input
+            id="topup-amount"
+            className="input ltr mono"
+            inputMode="numeric"
+            value={value.amountMinor}
+            disabled={disabled}
+            onChange={(event) => onChange({ ...value, amountMinor: event.target.value })}
+          />
+        </Field>
+        <Field
+          label={`${t('web.currency')} — ${t('web.setting_topup_minimum')}`}
+          htmlFor="topup-currency"
+        >
+          <select
+            id="topup-currency"
+            className="input"
+            value={value.currency}
+            disabled={disabled}
+            onChange={(event) => onChange({ ...value, currency: event.target.value })}
+          >
+            {/*
+              EVERY code `moneySchema` accepts, because that is what the server
+              stores for this key. `sales.currency` is narrowed to Toman and
+              Rial by its own schema and its editor below says so; this key is
+              not, so a minimum written through the API in dollars was a valid
+              stored value this select had no option for — a controlled select
+              with no matching option shows its first one, and saving then
+              rewrote the currency to Toman without anyone choosing it.
+              Narrowing the server schema instead is a product decision this
+              screen does not get to make by omission.
+            */}
+            {CURRENCY_CODES.map((code) => (
+              <option key={code} value={code}>
+                {currencyLabel(code)}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+    </>
+  );
+}
+
+/** Revision 1: the currency every amount in this admin inherits. */
+function CurrencyEditor({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  onChange: (next: unknown) => void;
+  disabled: boolean;
+}) {
+  return (
+    <Field
+      label={`${t('web.currency')} — ${t('web.setting_sales_currency')}`}
+      htmlFor="sales-currency"
+    >
+      <select
+        id="sales-currency"
+        className="input"
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {(['IRT', 'IRR'] as const).map((code) => (
+          <option key={code} value={code}>
+            {currencyLabel(code as CurrencyCode)}
+          </option>
+        ))}
+      </select>
+    </Field>
+  );
+}
+
+/**
+ * The scalar editor.
+ *
+ * Holds its own STRING while the row above holds the parsed value, because a
+ * half-typed number is a string that is not yet a number: converting on every
+ * keystroke turns `-` into NaN and `1.` into `1`, and the operator's cursor
+ * lands somewhere else.
+ */
+function TextEditor({
+  setting,
+  onChange,
+  disabled,
+}: {
+  setting: ResolvedSettingResponse;
+  onChange: (next: unknown) => void;
+  disabled: boolean;
+}) {
+  const [text, setText] = useState(() => toEditable(setting.value));
+  // The setting's own key, not the word "value". Five `ops.notifications.*`
+  // keys render at once, and labelling every one of them "مقدار" gave the page
+  // five inputs with one accessible name — indistinguishable to anything that
+  // navigates by label, which is the same defect the support-account list had.
+  return (
+    <Field label={`${t('web.value')} — ${setting.key}`} htmlFor={`value-${setting.key}`}>
       <input
         id={`value-${setting.key}`}
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        disabled={!mayEdit}
+        className="input"
+        value={text}
+        disabled={disabled}
+        onChange={(event) => {
+          setText(event.target.value);
+          onChange(fromEditable(event.target.value, setting.value));
+        }}
       />
-
-      {changedElsewhere && (
-        <p className="notice">
-          {t('web.changed_elsewhere')}{' '}
-          <button type="button" className="link" onClick={() => adopt(setting)}>
-            {t('web.reload_value')}
-          </button>
-        </p>
-      )}
-
-      <dl className="meta">
-        <dt>{t('web.source')}</dt>
-        <dd>{setting.source === 'TENANT' ? t('web.source_tenant') : t('web.source_default')}</dd>
-        <dt>{t('web.zero_meaning')}</dt>
-        <dd>{t(ZERO_MEANING_KEYS[setting.zeroMeaning])}</dd>
-        {setting.updatedAt && (
-          <>
-            <dt>{t('web.updated_at')}</dt>
-            <dd>{formatTimestamp(setting.updatedAt)}</dd>
-          </>
-        )}
-      </dl>
-
-      {mayEdit && (
-        <button type="submit" disabled={save.isPending}>
-          {save.isPending ? t('web.saving') : t('web.save')}
-        </button>
-      )}
-      {save.isError && <ErrorReport error={save.error} />}
-      {/* A no-op says so. The legacy screens answer "✅ updated" either way,
-          and one of them said it three times while nothing changed. */}
-      {save.isSuccess && (
-        <p className="notice">{save.data.changed ? t('web.saved') : t('web.unchanged')}</p>
-      )}
-    </form>
+    </Field>
   );
+}
+
+function asStringList(value: unknown): readonly string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function asChannelList(value: unknown): readonly Channel[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (typeof item !== 'object' || item === null) return [];
+    const record = item as Record<string, unknown>;
+    return [
+      {
+        handle: typeof record['handle'] === 'string' ? record['handle'] : '',
+        mandatory: record['mandatory'] === true,
+      },
+    ];
+  });
+}
+
+function asMoney(value: unknown): MoneyWire {
+  if (typeof value === 'object' && value !== null) {
+    const record = value as Record<string, unknown>;
+    return {
+      amountMinor: typeof record['amountMinor'] === 'string' ? record['amountMinor'] : '0',
+      currency: (typeof record['currency'] === 'string'
+        ? record['currency']
+        : 'IRT') as CurrencyCode,
+    };
+  }
+  return { amountMinor: '0', currency: 'IRT' };
 }
 
 /**
@@ -194,15 +559,17 @@ export function ErrorReport({ error }: { error: unknown }) {
   const issues = issuesFrom(error);
   return (
     <>
-      <p className="error">{messageFor(error)}</p>
+      <Banner tone="danger">{messageFor(error)}</Banner>
       {issues.length > 0 && (
-        <ul className="error">
+        <ul className="danger">
           {issues.map((issue, index) => (
             // The index is part of the key: two schema issues can carry the
             // same sentence, and React's own warning for a duplicate key says
             // children "may be duplicated and/or omitted" — which is a good
             // enough reason not to find out which.
-            <li key={`${index}:${issue}`}>{issue}</li>
+            <li key={`${index}:${issue}`}>
+              <Ltr mono={false}>{issue}</Ltr>
+            </li>
           ))}
         </ul>
       )}
@@ -255,11 +622,20 @@ export function issuesFrom(error: unknown): string[] {
   if (!(error instanceof ApiError)) return [];
   const issues = error.details?.issues;
   if (!Array.isArray(issues)) return [];
-  return issues.map((issue) =>
-    typeof issue === 'string'
-      ? issue
-      : ((issue as { detail?: string }).detail ?? JSON.stringify(issue)),
-  );
+  // THREE shapes reach here, and only two were handled. `parseSettingValue`
+  // returns strings; template validation returns `{ kind, detail }`; and the
+  // global error filter returns `{ path, message }` for anything the REQUEST
+  // schema rejects. That third one fell through to `JSON.stringify`, so an
+  // operator saw `{"path":"value.0","message":"..."}` in their error list.
+  return issues.map((issue) => {
+    if (typeof issue === 'string') return issue;
+    const shaped = issue as { detail?: string; message?: string; path?: string };
+    if (shaped.detail !== undefined) return shaped.detail;
+    if (shaped.message !== undefined) {
+      return shaped.path ? `${shaped.path}: ${shaped.message}` : shaped.message;
+    }
+    return JSON.stringify(issue);
+  });
 }
 
 export function messageFor(error: unknown): string {
@@ -273,5 +649,20 @@ export function messageFor(error: unknown): string {
     // only part of the response that says what to change.
     return error.message;
   }
-  return t('web.error');
+  /*
+   * A THIRD copy of the same decision, and it had the same arm wrong.
+   *
+   * `post()` schema-parses a mutation's response, so a mutation can throw a
+   * `ZodError` — the deploy-skew case — and this returned "خطا در ارتباط با
+   * سرور" for it: the server answered, the transport was fine, and the
+   * sentence blamed the connection. `errorCopy` collapsed the two query-view
+   * sites into one rule and did not reach here, which is the same "fixed at
+   * the site the author was looking at" shape one layer down.
+   *
+   * The `ApiError` branch above stays as it is: for a mutation the server's
+   * own message names the offending field, and that is more use to an operator
+   * than any sentence written here. What is corrected is the fall-through,
+   * where there is no message and the old text asserted a cause.
+   */
+  return finalAnswer(error) ? t('web.rejected') : t('web.error');
 }

@@ -1945,7 +1945,19 @@ describe('the panel health monitor', () => {
       // One takes a tenant, the other takes the other or nothing — never the
       // same one twice.
       const all = [...first, ...second];
-      expect(new Set(all).size).toBe(all.length);
+      /*
+       * NOT VACUOUS. `new Set([]).size === 0 === [].length`, so this passed
+       * when both claims returned nothing — which is the most likely shape of
+       * a regression in the claim predicate, and precisely the one the
+       * assertion below it is for.
+       *
+       * Two tenants are due and each call asks for one, so at least one claim
+       * must succeed. Anything less means the query stopped claiming, and this
+       * test should say so rather than agreeing with it.
+       */
+      expect(all.length, 'two due tenants and neither was claimed').toBeGreaterThan(0);
+      expect(all.length).toBeLessThanOrEqual(2);
+      expect(new Set(all).size, 'the same tenant was handed to both replicas').toBe(all.length);
     });
 
     it('puts a tenant bound back where its own schedule says', async () => {
@@ -2816,6 +2828,83 @@ describe('the panel health monitor', () => {
       });
       expect((await retirement())!.resolvedAt).toBeNull();
       expect((await retirement())!.occurrenceCount).toBe(2);
+    });
+
+    /**
+     * The path the Web Admin actually takes, which the ACTIVE-only guard missed.
+     *
+     * The restore control returns a panel to DISABLED rather than ACTIVE, so
+     * that nothing silently resumes dialling a machine an operator archived.
+     * With the recovery keyed on `status === 'ACTIVE'` that transition closed
+     * nothing — and the later DISABLED -> ACTIVE step saw a `before` that was
+     * no longer ARCHIVED, so it did not close it either. The retirement row
+     * was then open for the life of the installation with no path that could
+     * ever close it, and the panel was being probed while the operations log
+     * said it was archived and unmonitored: exactly the state `RESTORED_CODE`
+     * exists to prevent, reached through the only control that offers a
+     * restore.
+     */
+    it('closes the retirement when an archived panel is restored to DISABLED', async () => {
+      const panelId = await createPanel(ownerA, tenantA, 'restored-to-disabled');
+      const retirement = async () =>
+        (
+          await ctx.container.database.db
+            .select()
+            .from(operationalEvents)
+            .where(
+              and(
+                eq(operationalEvents.tenantId, tenantA.tenantId),
+                eq(operationalEvents.code, 'panel.health.retired'),
+              ),
+            )
+        )[0];
+
+      await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
+        status: 'ARCHIVED',
+        idempotencyKey: key(),
+      });
+      expect((await retirement())!.resolvedAt).toBeNull();
+
+      // The Web Admin's restore: ARCHIVED -> DISABLED, not ARCHIVED -> ACTIVE.
+      await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
+        status: 'DISABLED',
+        idempotencyKey: key(),
+      });
+      expect(
+        (await retirement())!.resolvedAt,
+        'a panel restored to DISABLED still says it is retired',
+      ).not.toBeNull();
+
+      // And enabling it afterwards records no second recovery, because the
+      // retirement is already closed — a recovery from nothing is not
+      // information.
+      const before = (
+        await ctx.container.database.db
+          .select({ code: operationalEvents.code })
+          .from(operationalEvents)
+          .where(
+            and(
+              eq(operationalEvents.tenantId, tenantA.tenantId),
+              eq(operationalEvents.code, 'panel.health.restored'),
+            ),
+          )
+      ).length;
+      await service().setStatus(tenantA, adminActorFor(ownerA), panelId, {
+        status: 'ACTIVE',
+        idempotencyKey: key(),
+      });
+      const after = (
+        await ctx.container.database.db
+          .select({ code: operationalEvents.code })
+          .from(operationalEvents)
+          .where(
+            and(
+              eq(operationalEvents.tenantId, tenantA.tenantId),
+              eq(operationalEvents.code, 'panel.health.restored'),
+            ),
+          )
+      ).length;
+      expect(after, 'DISABLED -> ACTIVE is not a restore').toBe(before);
     });
 
     it('announces UNREACHABLE to AUTH_FAILED as a change of remedy', async () => {

@@ -1,5 +1,5 @@
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { OperationalSeverity, ScopeContext } from '@nexa/contracts';
+import type { OperationalScope, OperationalSeverity, ScopeContext } from '@nexa/contracts';
 
 /** An operational event as an operator reads it. */
 export interface OperationalEventRow {
@@ -19,10 +19,25 @@ export interface OperationalEventRow {
 
 export interface OperationalEventQuery {
   readonly limit: number;
-  /** Keyset pagination on `lastSeenAt`, which is also the sort key. */
+  /**
+   * Keyset pagination on `firstSeenAt`, which is also the sort key.
+   *
+   * IMMUTABLE, by owner decision: `lastSeenAt` is rewritten by every repeat
+   * occurrence of a deduped condition, so a row below an operator's cursor
+   * that recurs jumps above it and is returned on no later page.
+   */
   readonly before?: Date | undefined;
   readonly beforeId?: string | undefined;
   readonly severities?: readonly OperationalSeverity[] | undefined;
+  /**
+   * Restrict to the management-facing codes.
+   *
+   * Applied in SQL rather than by the caller, so that a page of `limit` rows is
+   * a page of `limit` MATCHING rows and the cursor advances over the same set
+   * the reader sees. Filtering after the fact would page over the whole log
+   * while displaying a fraction of it.
+   */
+  readonly scope?: OperationalScope | undefined;
   readonly code?: string | undefined;
   readonly since?: Date | undefined;
   /** Half-open `[since, until)`, per the reporting-interval convention. */

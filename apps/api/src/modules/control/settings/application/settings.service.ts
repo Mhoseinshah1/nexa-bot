@@ -119,6 +119,7 @@ export function fromReplayRecord(key: SettingKey, record: SettingReplayRecord): 
     mutability: definition.mutability,
     classification: definition.classification,
     configures: definition.configures,
+    consumer: definition.consumer,
   };
 }
 
@@ -176,7 +177,9 @@ export class SettingsService {
     try {
       await this.guard.check(scope, actor, SETTINGS_EDIT);
     } catch (denial) {
-      // One recorder for every early refusal in the codebase. The inline
+      // The recorder shared by the early checks in settings, features,
+      // notifications, templates, panels and the system ping (identity audits
+      // its early check inline; the guard writes that event). The inline
       // version this replaces wrote a DENIED row for ANY throw — including a
       // missing tenant context, which is not a denial of this permission — and
       // emitted no operational event, so the same refusal was recorded

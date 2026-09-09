@@ -88,8 +88,11 @@ export const MONITOR_SPREAD_FRACTION = 0.1;
  * the standing stock. To keep `n` panels fresh at interval `i` the loop must
  * complete `n / i` probes per unit time, so `n <= refill x i`.
  *
- * With the shipped defaults — 30 tokens per 5 minutes, a 10-minute interval —
- * that is 60. Two caveats that make this a CEILING and not a promise:
+ * With the shipped defaults — 100 tokens per 5 minutes, a 3-minute interval —
+ * that is 60. Both inputs changed when the cadence dropped to three minutes,
+ * and the RESULT did not, which is exactly why this sentence went stale
+ * unnoticed: it read correctly while every number in it was wrong. Two caveats
+ * make it a CEILING and not a promise:
  *
  *   - It assumes the background lane has the whole refill rate. Manual "Test
  *     connection" probes come out of the same bucket, so sustained manual
@@ -112,7 +115,7 @@ export function tenantBudgetFreshPanelUpperBound(
  * A tick discovers at most `batchSize` candidates in total — the batch is a
  * global cap, shared out among the tenants claimed that tick — so across one
  * healthy interval the loop can begin at most `batchSize x (interval / tick)`
- * probes for everybody put together. Defaults: 50 x 20 = 1000.
+ * probes for everybody put together. Defaults: 150 x 6 = 900.
  *
  * NOT a per-tenant figure, and treating it as one hides a whole class of
  * overload: a hundred tenants of twenty panels each is under every per-tenant
@@ -129,6 +132,30 @@ export function schedulerFreshPanelUpperBound(
   healthyIntervalMs: number,
 ): number {
   return Math.floor(batchSize * (healthyIntervalMs / tickMs));
+}
+
+/**
+ * The most tenants the fairness rotation can give a turn to inside one
+ * freshness window.
+ *
+ * The scheduler claims at most `tenantsPerTick` tenants per tick, so across an
+ * interval it reaches `tenantsPerTick x (interval / tick)` of them. A tenant
+ * beyond that number waits longer than the healthy interval for its FIRST
+ * probe of the cycle, and its panels go stale no matter how small they are.
+ *
+ * This is a THIRD bound, independent of the other two, and it was the one
+ * nothing reported. Shortening the healthy interval from ten minutes to three
+ * cut it from 200 tenants to 60 while `PANEL_MONITOR_TENANTS_PER_TICK` stayed
+ * at 10 — and a hundred single-panel tenants is a hundred panels, far under
+ * the 900-panel scheduler ceiling, so no capacity condition fires and nothing
+ * says the rotation cannot keep up. Defaults: 10 x 6 = 60 tenants.
+ */
+export function tenantTurnFreshTenantUpperBound(
+  tenantsPerTick: number,
+  tickMs: number,
+  healthyIntervalMs: number,
+): number {
+  return Math.floor(tenantsPerTick * (healthyIntervalMs / tickMs));
 }
 
 /**
@@ -154,8 +181,27 @@ export function slowProbeLatencyModelFigure(
   return Math.floor(concurrency * (healthyIntervalMs / httpTimeoutMs));
 }
 
+/**
+ * The largest healthy interval this tick admits — DEFINED as the largest value
+ * the predicate below accepts, not as a second formula that ought to agree
+ * with it.
+ *
+ * It was the second formula, and the two disagreed. `720000 * 1.1` is
+ * `792000.0000000001` in IEEE754, so with `PANEL_MONITOR_TICK_MS=108000` the
+ * schema refused `HEALTHY_INTERVAL_MS=720001`, advised "at most 720000", and
+ * then refused 720000 as well: the process would not boot and the instruction
+ * it printed could not be followed.
+ *
+ * Rounding the arithmetic differently would only move the boundary. Two
+ * expressions of one rule disagree wherever floating point says they do, so
+ * there is one expression now and the ceiling is walked down to it. The loop
+ * corrects by at most a millisecond or two and cannot diverge, because it
+ * stops on the same function the schema calls.
+ */
 export function maxHealthyIntervalMs(tickMs: number): number {
-  return Math.floor((PANEL_HEALTH_FRESH_FOR_MS - tickMs) / (1 + MONITOR_SPREAD_FRACTION));
+  let candidate = Math.floor((PANEL_HEALTH_FRESH_FOR_MS - tickMs) / (1 + MONITOR_SPREAD_FRACTION));
+  while (candidate > 0 && !healthyCadenceFitsFreshness(candidate, tickMs)) candidate -= 1;
+  return candidate;
 }
 
 /**

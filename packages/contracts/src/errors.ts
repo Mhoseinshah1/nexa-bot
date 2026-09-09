@@ -265,6 +265,14 @@ export const PANEL_ERROR_CODES = {
   /** A probe was asked for on a panel with no credentials configured. */
   PANEL_CREDENTIALS_MISSING: 'panel.credentials_missing',
   /**
+   * A credential field the provider's shape cannot use.
+   *
+   * Refused rather than stored. An API token on a `USERNAME_PASSWORD` provider
+   * was accepted, encrypted and written, and then ignored by every probe — a
+   * write that reported success and could never take effect.
+   */
+  PANEL_CREDENTIAL_UNSUPPORTED: 'panel.credential_unsupported',
+  /**
    * This tenant has used its outbound-probe capacity for now.
    *
    * The per-panel cooldown is deliberately configuration-aware, so an
