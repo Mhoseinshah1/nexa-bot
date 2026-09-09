@@ -158,6 +158,42 @@ The first attempt at CADDY-01 was run against
 file is a source scan and does not assert the predicate. The row above is the
 same mutation against the suite that does.
 
+## Item I — backup_runs retention
+
+Every row against a real PostgreSQL, because every rule is a SQL predicate and
+two of them are subqueries for "the most recent row".
+
+| #      | Rule                                                             | Mutation                                                       | Named test                                                                                        | Result |
+| ------ | ---------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------ |
+| RET-02 | A run whose delivery outcome was never observed is never removed | delete the `delivery_state <> 'OUTCOME_UNKNOWN'` clause        | `backup-retention.test.ts` › NEVER removes a run whose delivery outcome was never observed        | KILLED |
+| RET-04 | The cutoff is honoured                                           | delete the `finished_at < cutoff` clause                       | `backup-retention.test.ts` › keeps a finished run that is newer than the cutoff                   | KILLED |
+| RET-05 | The most recent SUCCEEDED run is never removed                   | the subquery's `state = 'SUCCEEDED'` → a state no row can have | `backup-retention.test.ts` › NEVER removes the most recent SUCCEEDED run, even when it is ancient | KILLED |
+| RET-06 | Oldest first                                                     | `ORDER BY finished_at ASC` → `DESC`                            | `backup-retention.test.ts` › respects the batch bound and removes the OLDEST rows first           | KILLED |
+| RET-07 | The most recent run of any state is never removed                | delete the second `COALESCE` exclusion                         | `backup-retention.test.ts` › NEVER removes the most recent run of any state                       | KILLED |
+| RET-08 | The batch is bounded by the caller's limit                       | `LIMIT ${limit}` → `LIMIT 1000000`                             | `backup-retention.test.ts` › respects the batch bound and removes the OLDEST rows first           | KILLED |
+
+## A rule that needed TWO reverts, because two clauses enforce it
+
+**A RUNNING run is never removed.** Two independent clauses exclude it, and
+neither can be falsified alone:
+
+- `candidate.finished_at IS NOT NULL` — a RUNNING row has no finish time, which
+  the `backup_runs_finished_at_check` CHECK constraint makes equivalent to its
+  state;
+- `candidate.state <> 'RUNNING'` — the state named directly.
+
+Removing either leaves the other, so each single-line mutation reported SURVIVED
+(RET-01 and RET-03). That is not an untested rule; it is a rule with two guards.
+Removing BOTH kills
+`backup-retention.test.ts` › NEVER removes a RUNNING run, however old.
+
+Recorded this way rather than as two SURVIVED rows, because "the rule has no
+test" and "the rule has two guards" are opposite findings and the harness's
+single-mutation output cannot tell them apart. The second clause is kept
+deliberately: a reader must not have to know about a CHECK constraint in another
+file to see that the installation's backup lock is safe, and a future run state
+that carries a finish time must not quietly become eligible.
+
 ## The harness could not see a contract change
 
 `packages/contracts/package.json` declares `exports: { ".": "./dist/index.js" }`,

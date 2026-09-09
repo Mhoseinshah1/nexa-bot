@@ -303,6 +303,18 @@ is stacked on. None of them is business or audit state; the awkward one is
 `processed_messages`, which is guarded as append-only evidence while being pure
 bookkeeping, so it is the one that could not be swept without a migration.
 
+**Fixed on this branch.** ADR-0027 records all four. `request_idempotency` and
+`processed_messages` are kept for ever for CORRECTNESS reasons rather than for
+want of a decision — deleting an idempotency row loses an obligation rather than
+freeing one, and a `processed_messages` row is what stops a redelivered outbox
+message running its effect twice. `outbox_messages` is named as the one to bound
+first, with the reason it is not bounded yet, in `docs/open-questions.md`.
+`backup_runs` is bounded at `BACKUP_RUN_RETENTION_DAYS` (365, floor 7) with four
+never-prune classes enforced in the query: RUNNING, unresolved
+`OUTCOME_UNKNOWN`, the most recent SUCCEEDED run, and the most recent run of any
+state. Ten integration cases against a real database; six predicates falsified
+individually and the RUNNING rule falsified by removing both of its guards.
+
 ## J — Telegram report group foundation
 
 **ALREADY SOLVED**, and one part of the request should not be carried out.
