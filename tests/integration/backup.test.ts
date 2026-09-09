@@ -6,6 +6,7 @@ import { Client } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { BackupManifest } from '@nexa/contracts';
 import { createTestContext, testConfig, type TestContext } from './harness';
+import { SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { checksumFile } from '../../apps/api/src/modules/platform/backup/infrastructure/archive';
 import { PostgresDatabaseTools } from '../../apps/api/src/modules/platform/backup/infrastructure/pg-tools';
 import { FilesystemBackupWorkspaces } from '../../apps/api/src/modules/platform/backup/infrastructure/workspace';
@@ -113,6 +114,11 @@ describe('backup against a real database', () => {
       clock: context.container.clock,
       ids: context.container.ids,
       installationId: () => 'integration-installation',
+      // The REAL recorder and the seeded tenant, so a failed run's condition is
+      // written to the real `operational_events` table with its real dedupe and
+      // recovery semantics rather than to a fake that agrees with itself.
+      opsLog: context.container.opsLog,
+      scope: () => ({ tenantId: SEED_IDS.tenantA as never, botInstanceId: null }),
       logger: { info() {}, warn() {}, error() {} },
       leaseOwner: overrides.leaseOwner ?? `test:${randomBytes(4).toString('hex')}`,
       retainedArchiveHint: workDir,

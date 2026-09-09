@@ -171,6 +171,11 @@ interface Harness {
     deliveredMessage: string | null;
     leaked: string[];
     cleanupFails: boolean;
+    /** Every operational event the run recorded, in order. */
+    recorded: { code: string; severity: string; dedupeKey?: string; recoversCode?: string }[];
+    /** Null models an installation with no tenant provisioned yet. */
+    scoped: boolean;
+    opsLogThrows: boolean;
   };
 }
 
@@ -194,6 +199,9 @@ function harness(): Harness {
     deliveredMessage: null,
     leaked: [],
     cleanupFails: false,
+    recorded: [],
+    scoped: true,
+    opsLogThrows: false,
   };
 
   const workspace: BackupWorkspace = {
@@ -288,6 +296,29 @@ function harness(): Harness {
       callbackRef: () => 'ref',
     },
     installationId: () => 'installation-1',
+    opsLog: {
+      async record(_scope, event) {
+        if (state.opsLogThrows) throw new Error('the ops log is unreachable');
+        state.recorded.push({
+          code: event.code,
+          severity: event.severity,
+          ...(event.dedupeKey === undefined ? {} : { dedupeKey: event.dedupeKey }),
+          ...(event.recoversCode === undefined ? {} : { recoversCode: event.recoversCode }),
+        });
+        return {
+          id: 'e1',
+          code: event.code,
+          severity: event.severity,
+          message: event.message,
+          occurrenceCount: 1,
+          firstSeenAt: NOW,
+          lastSeenAt: NOW,
+          isNew: true,
+          reopened: false,
+        };
+      },
+    },
+    scope: () => (state.scoped ? { tenantId: 't1' as never, botInstanceId: null } : null),
     logger: { info() {}, warn() {}, error() {} },
     leaseOwner: 'worker:1:aaaa',
     retainedArchiveHint: '/var/lib/nexa/backups',
@@ -513,6 +544,60 @@ describe('the backup pipeline', () => {
       startedAt: null,
       finishedAt: null,
     });
+  });
+
+  it('reports a failed run as an operational condition, not just a log line', async () => {
+    const h = harness();
+    h.state.dumpFails = true;
+    const run = await completed(h, 'SCHEDULED');
+
+    expect(run.state).toBe('FAILED');
+    // The gap Backup V1 shipped with: a failed SCHEDULED backup produced a log
+    // line and a row and nothing else — silent on the channel this installation
+    // built to report failures, for the one subsystem that runs unattended.
+    const failure = h.state.recorded.find((event) => event.code === 'backup.run_failed');
+    expect(failure).toBeDefined();
+    expect(failure?.severity).toBe('ERROR');
+    // ONE installation-wide key, so a nightly failure is one open condition
+    // with a rising count rather than a fresh alert every night.
+    expect(failure?.dedupeKey).toBe('backup.run');
+  });
+
+  it('closes the open failure when a run succeeds', async () => {
+    const h = harness();
+    await completed(h, 'SCHEDULED');
+
+    const recovery = h.state.recorded.find((event) => event.code === 'backup.run_ok');
+    expect(recovery).toBeDefined();
+    expect(recovery?.recoversCode).toBe('backup.run_failed');
+    // A success that did not close the failure would leave an operator with a
+    // permanently open condition and no way to clear it.
+  });
+
+  it('records nothing rather than addressing an alert to nobody', async () => {
+    const h = harness();
+    h.state.scoped = false;
+    h.state.dumpFails = true;
+    const run = await completed(h);
+
+    // A backup can legitimately be taken before a tenant is provisioned.
+    // Inventing a scope would be worse than staying quiet: it would file the
+    // alert against an addressee that does not exist.
+    expect(run.state).toBe('FAILED');
+    expect(h.state.recorded).toEqual([]);
+  });
+
+  it('does not let a failing ops log replace the failure it was reporting', async () => {
+    const h = harness();
+    h.state.dumpFails = true;
+    h.state.opsLogThrows = true;
+    const run = await completed(h);
+
+    // The run's own failure survives. Reporting that failed would otherwise
+    // overwrite the message an operator needs with a message about why they
+    // did not get it.
+    expect(run.state).toBe('FAILED');
+    expect(run.failureMessage).toBe('pg_dump exploded');
   });
 
   it('keeps no secret in a failure message', async () => {

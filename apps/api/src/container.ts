@@ -803,6 +803,17 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
     installationId: () => installationTenantId ?? 'unprovisioned',
+    // The NOTIFYING recorder, deliberately, unlike the dispatcher's raw one.
+    // A backup failure is exactly the kind of thing the projection exists to
+    // put in front of a person, and nothing here consumes the queue it writes
+    // to, so there is no cycle to avoid.
+    opsLog,
+    // Resolved per call: the installation's tenant is a row, so it is not known
+    // while this object is being built.
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
     logger,
     leaseOwner: `${role}:${String(process.pid)}:${randomUUID().slice(0, 8)}`,
     retainedArchiveHint: config.BACKUP_WORK_DIR,

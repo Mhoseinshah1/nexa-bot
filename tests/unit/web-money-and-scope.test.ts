@@ -146,6 +146,14 @@ const RECORDED_BY: Readonly<Record<string, { file: string; needle: string }>> = 
     file: 'apps/api/src/modules/platform/identity/application/admin-management.service.ts',
     needle: "'admin.password_changed'",
   },
+  'backup.run_failed': {
+    file: 'apps/api/src/modules/platform/backup/application/backup.service.ts',
+    needle: "code: 'backup.run_failed'",
+  },
+  'backup.run_ok': {
+    file: 'apps/api/src/modules/platform/backup/application/backup.service.ts',
+    needle: "code: 'backup.run_ok'",
+  },
   'panel.monitor.tenant_budget_exceeded': {
     file: 'apps/api/src/modules/platform/panels/application/panel-monitor.service.ts',
     needle: "const TENANT_BUDGET_CONDITION = 'panel.monitor.tenant_budget_exceeded'",

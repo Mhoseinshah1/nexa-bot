@@ -9,7 +9,7 @@ import {
   type BackupStage,
   type BackupTrigger,
 } from '@nexa/contracts';
-import type { Clock, IdGenerator } from '@nexa/contracts';
+import type { Clock, IdGenerator, OperationalEventRecorder, ScopeContext } from '@nexa/contracts';
 import type {
   BackupArchiver,
   BackupDelivery,
@@ -76,6 +76,24 @@ export interface BackupServiceDeps {
   /** This process's identity, so two replicas hold distinguishable leases. */
   readonly leaseOwner: string;
   /**
+   * Where a failed run is reported, and who it is reported to.
+   *
+   * Backup V1 shipped without this, and the consequence was the worst shape a
+   * gap in this feature can take: a failed SCHEDULED backup produced a log line
+   * and a row, and nothing else. No operational event, so no notification —
+   * silent on the channel this installation built to report failures, for the
+   * one subsystem that runs entirely unattended. An operator would learn their
+   * backups had stopped by looking, and the whole point of a backup is that
+   * nobody looks until it is too late to start.
+   *
+   * The scope is a function because the installation's tenant is resolved after
+   * the container is built. `null` means no tenant is provisioned yet, and a run
+   * in that state records nothing rather than inventing an addressee — a
+   * genuinely possible state, since a backup can be taken before provisioning.
+   */
+  readonly opsLog: OperationalEventRecorder;
+  readonly scope: () => ScopeContext | null;
+  /**
    * Where the archive stays when it is too large to send.
    *
    * Named in the notification rather than logged, so an operator reading the
@@ -83,6 +101,17 @@ export interface BackupServiceDeps {
    */
   readonly retainedArchiveHint: string;
 }
+
+/**
+ * One key for the installation's backup condition.
+ *
+ * Not per-run: a run id would make every nightly failure a NEW condition, so an
+ * operator would get an alert a night and an unresolved list that only grows —
+ * the exact behaviour the legacy log group had, where 60 identical errors in a
+ * day were 60 rows. One key means one open condition with an occurrence count,
+ * and one recovery when it is fixed.
+ */
+const BACKUP_CONDITION_KEY = 'backup.run';
 
 export type BackupOutcome =
   | { readonly kind: 'BUSY'; readonly holder: BackupRunRow }
@@ -261,6 +290,19 @@ export class BackupService {
         );
       }
 
+      // A success CLOSES an open failure. Recorded before the row is finished so
+      // that a crash between the two leaves the condition open rather than
+      // resolved — an operator chasing a backup that is fine costs an hour, and
+      // one who believes a broken backup recovered costs a database.
+      await this.report({
+        code: 'backup.run_ok',
+        severity: 'INFO',
+        message: `Backup ${id} completed and was verified against a real restore.`,
+        context: { backupId: id, trigger, delivery: deliveryState },
+        recoversCode: 'backup.run_failed',
+        recoversDedupeKey: BACKUP_CONDITION_KEY,
+      });
+
       await this.deps.runs.finish({
         id,
         leaseOwner: this.deps.leaseOwner,
@@ -281,6 +323,19 @@ export class BackupService {
       const failureCode = error instanceof NexaError ? error.code : 'backup.failed';
       const failureMessage = error instanceof Error ? error.message : String(error);
       this.deps.logger.error({ backupId: id, stage, failureCode }, 'backup run failed');
+
+      // The operator has to hear about this, and a log line is not hearing.
+      // Deduped on one installation-wide key so a nightly failure is ONE open
+      // condition with a rising occurrence count rather than a new alert every
+      // night — which is the legacy log group's defect, and the reason the
+      // recorder has a dedupe key at all.
+      await this.report({
+        code: 'backup.run_failed',
+        severity: 'ERROR',
+        message: `Backup ${id} failed at ${stage}: ${failureMessage}`,
+        context: { backupId: id, trigger, stage, failureCode },
+        dedupeKey: BACKUP_CONDITION_KEY,
+      });
 
       // Everything goes, archive included. An archive from a run that failed
       // before verification is unproven, and an unproven archive on disk is
@@ -458,6 +513,44 @@ export class BackupService {
       `SHA-256: ${input.manifest.checksum}`,
       `Verified: restored into an empty database, ${input.tableCount} tables`,
     ].join('\n');
+  }
+
+  /**
+   * Records a backup condition, if there is anybody to record it for.
+   *
+   * Never throws into the pipeline. A run that succeeded and could not be
+   * announced is still a run that succeeded, and a run that failed must report
+   * its real failure rather than a secondary one from the reporting itself —
+   * which would replace the message an operator needs with the message about
+   * why they did not get it.
+   */
+  private async report(event: {
+    code: string;
+    severity: 'INFO' | 'ERROR';
+    message: string;
+    context: Record<string, unknown>;
+    dedupeKey?: string;
+    recoversCode?: string;
+    recoversDedupeKey?: string;
+  }): Promise<void> {
+    const scope = this.deps.scope();
+    if (scope === null) {
+      // No tenant provisioned yet. Recording under an invented scope would be
+      // worse than not recording: it would address the alert to nobody.
+      this.deps.logger.warn(
+        { code: event.code },
+        'no installation tenant is provisioned, so this backup condition was not recorded',
+      );
+      return;
+    }
+    try {
+      await this.deps.opsLog.record(scope, event);
+    } catch (error) {
+      this.deps.logger.error(
+        { code: event.code, reason: error instanceof Error ? error.message : String(error) },
+        'failed to record a backup operational event',
+      );
+    }
   }
 
   /**
