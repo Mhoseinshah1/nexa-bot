@@ -287,7 +287,9 @@ describe('fresh transactional authorization', () => {
    * promising a guarantee the code did not provide.
    */
   it('records an EARLY refusal the same way in every phase', async () => {
-    // Four services check a permission before opening a transaction, because
+    // Four services checked a permission before opening a transaction when
+    // this was written (six do now — templates and the ping joined the shared
+    // recorder in rounds 49 and 52), because
     // the replay path and the connection test both act before one exists. The
     // three written in Phase 2 hand-rolled that recording inline and the one
     // written in Phase 3A used `recordMutationDenial`, so an identical refusal

@@ -230,8 +230,9 @@ notifications, templates, panels and the system ping, and `runLockedMutation`
 here — writes the event only
 when the guard could not. Before that, every
 pre-transaction denial that went through the recorder — panels, settings,
-features, notifications — was recorded twice (Phase 3D, OQ-3D-03); identity's
-and templates' early checks, which audited inline, were one and one.
+features, notifications — was recorded twice (Phase 3D, OQ-3D-03); identity's,
+templates' and the system ping's early checks, which audited inline, were one
+and one.
 
 ### On the triggers
 

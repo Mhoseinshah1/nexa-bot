@@ -5169,7 +5169,10 @@ deeply equal [ 'access.permission_denied' ]`. 1/13 and 2/72 fail.
 audit rows for ONE malformed denial: expected +0 to be 1`; `the early
 refusal left no audit evidence: expected [] to have a length of 1 but got
 +0`; and the five revocation barrier tests, `the denial left no audit
-evidence`. 2/13 and 8/72 fail.
+evidence`. 2/13 and 8/72 fail. (Since round 53 the barrier tests fail AV3
+  through the shared helper instead — `ONE in-transaction refusal, ONE
+DENIED audit row: expected [] to have a length of 1 but got +0` — the
+  same mutation, a different message; round 54 re-measured it.)
 - AV4 — `operational events for ONE malformed denial: expected 2 to be 1`;
   unit stays 13/13, because identity does not go through the recorder, which
   is why it has its own pin.
@@ -5674,10 +5677,57 @@ one a reader of the test sees. Scoped in place.
 The BC1 row now also lists `write-path.test.ts` › denies an actor without
 the permission, and records the denial, which the mutation kills as well;
 ADR-0014 and the three sibling comments name the ping among the recorder's
-early checks; the panel monitor's comment says audit-then-event, the order
-since round 48; the two barrier callers' `> 0` floors immediately before the
-helper's exact count are gone; the ping's DENIED row pins `reason` as the
-templates test does. No new mutation row: none of these changes a rule.
+early checks; the panel monitor's comment says audit-then-event, the order since round 48;
+the three `> 0` floors immediately before the helper's exact count — in the
+parametrised case and both literal callers — are gone (round 53's commit
+message said "two"; round 54 counted); the ping's DENIED row pins `reason`
+as the templates test does. No new mutation row: none of these changes a rule.
+
+## Round 54 — the thirty-fifth reviewer, and a count one short in the round that was correcting counts
+
+Two confirmed findings, both counts in sentences; no behaviour defect and no
+rule without a discriminating test. The reviewer reproduced BB1, BC1, BC2,
+AV3, RP1, RP2, AY1, AW1, AW2, AV5 and AV6 with their recorded messages,
+confirmed that removing the barrier floors produces the helper's named
+assertion and never a `TypeError`, re-ran the U99 probe (`377 … declares
+378`), checked every cited hash at all nine commits, and tabulated every
+denial path in the corpus: no path writes zero or two of either ledger.
+
+### "The two `> 0` floors" were three
+
+Round 53 removed the floor before the helper in the parametrised case AND in
+both literal callers — three deletions, three callers — and wrote "two" in
+the record and the commit message. The record is corrected in place; the
+commit message cannot be, so this is its correction.
+
+### "Four services check a permission before opening a transaction"
+
+A comment in the same test file, written in Phase 3A and untouched by this
+series, stated a count in the present tense that is six today. Round 53
+scoped the sentence fifty-five lines below it "because it is the copy a
+reader of the test sees"; the same reader sees this one. Scoped to its date.
+
+### Preferences taken
+
+The templates comment now names the ping among the recorder's early checks
+(round 53 updated the three siblings and not this fourth copy); AV3's
+measured line says how the barrier tests fail it since round 53; ADR-0014's
+one-and-one sentence names the ping's former inline check beside identity's
+and templates'. No rule changed; no new mutation row; the U99 probe is the
+round-53 one.
+
+### CI on 8f6ddea died runner-side, twice
+
+Both workflow runs for the round-53 head (`34337097337` push, `34337102672`
+pull request) concluded `failure` within four seconds of starting; every job
+in both attempts has `runner_id: 0`, an empty runner name, no steps and no
+log (the log download is a 404). The commit changed comments, documentation
+and two test files whose suites pass locally, and the previous head's runs,
+fifteen minutes earlier, were green. Each run was re-run once — the single
+re-run the drive-to-green rules allow for a job that died before any step —
+and died identically. That is the runner-provisioning/account side of GitHub
+Actions, not this branch, and it is not counted as a CI failure of this PR;
+the next push exercises fresh runs on a new head.
 
 ## The microsecond truncation is still open, deliberately
 

@@ -609,8 +609,8 @@ export class TemplateManagementService {
       await this.guard.check(scope, actor, TEMPLATES_EDIT);
     } catch (denial) {
       // The recorder shared by the early checks in settings, features,
-      // notifications and panels (identity audits its early check inline; the
-      // guard writes that event). The inline version
+      // notifications, panels and the system ping (identity audits its early
+      // check inline; the guard writes that event). The inline version
       // this replaces wrote a DENIED row for ANY throw — an operational log
       // that was down, a missing tenant context — which is a false statement
       // in the one ledger that must not contain one. The recorder writes the
