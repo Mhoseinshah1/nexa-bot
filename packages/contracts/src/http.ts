@@ -1010,11 +1010,34 @@ const panelBaseUrlSchema = z.string().trim().min(1).max(PANEL_BASE_URL_MAX_LENGT
  * `.optional()` and `.nullable()` together are therefore load-bearing rather
  * than permissive, and the service branches on `undefined` versus `null`.
  */
-export const panelCredentialsInputSchema = z.object({
-  username: z.string().min(1).max(512).nullable().optional(),
-  password: z.string().min(1).max(1024).nullable().optional(),
-  apiToken: z.string().min(1).max(4096).nullable().optional(),
-});
+export const panelCredentialsInputSchema = z
+  .object({
+    username: z.string().min(1).max(512).nullable().optional(),
+    password: z.string().min(1).max(1024).nullable().optional(),
+    apiToken: z.string().min(1).max(4096).nullable().optional(),
+  })
+  /*
+   * AT LEAST ONE recognised field, present or null.
+   *
+   * Every field being optional made `{}` a valid credential write — and,
+   * because unknown keys are stripped, so was `{ api_token: "…" }`. The
+   * service then wrote a credential row with every column untouched, made
+   * the panel probe-eligible, recorded a SUCCESS replacement naming no
+   * credential kinds, and told the caller it had succeeded: a write that
+   * changed no secret and said it had. An object that names nothing is a
+   * malformed command, not a no-op. Null keeps its meaning — "remove this
+   * one" — and a create that omits the object entirely still means "no
+   * credentials".
+   */
+  .refine(
+    (input) =>
+      input.username !== undefined || input.password !== undefined || input.apiToken !== undefined,
+    {
+      message:
+        'A credential write names at least one credential: username, password or apiToken. ' +
+        'Null removes one; omit the object to leave them all as they are.',
+    },
+  );
 export type PanelCredentialsInput = z.infer<typeof panelCredentialsInputSchema>;
 
 export const createPanelRequestSchema = z.object({

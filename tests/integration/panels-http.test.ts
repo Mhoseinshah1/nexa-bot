@@ -617,6 +617,85 @@ describe('panel HTTP surface', () => {
       expect(response.statusCode).toBe(201);
     });
 
+    /**
+     * Codex, reviews seven and eight; fixed on the owner's instruction. Every
+     * field of the credential object was optional, so `{}` — and, because
+     * unknown keys are stripped, `{ api_token: "…" }` — was a valid write: the
+     * service upserted a row with every column untouched, made the panel
+     * probe-eligible, recorded a SUCCESS replacement naming no kinds, and
+     * reported success. A write that names no credential is refused before it
+     * reaches the lock, and leaves the credential row, the schedule and the
+     * audit log exactly as they were. Null keeps its meaning; a create that
+     * omits the object still means "no credentials".
+     */
+    it('refuses a credential write that names no credential, and writes nothing for it', async () => {
+      const created = panelResponseSchema.parse(
+        (
+          await createPanel(ownerCookie, {
+            name: 'Marzban with nothing to replace',
+            providerType: 'marzban',
+            credentials: { username: USERNAME, password: PASSWORD },
+          })
+        ).json(),
+      );
+      const db = api.container.database.db;
+      const snapshot = async () => {
+        const detail = panelResponseSchema.parse(
+          (await get(PANEL_ROUTES.detail(created.panel.id), ownerCookie)).json(),
+        );
+        const schedule = await db.execute(
+          sql`SELECT next_eligible_at, updated_at FROM panel_monitor_schedule WHERE panel_id = ${created.panel.id}`,
+        );
+        const audit = await db.execute(
+          sql`SELECT count(*)::int AS n FROM audit_logs
+               WHERE entity_id = ${created.panel.id} AND action = 'panel.credentials.replace'`,
+        );
+        return {
+          credentials: detail.panel.credentials,
+          schedule: schedule.rows[0],
+          replacements: (audit.rows[0] as { n: number }).n,
+        };
+      };
+      const before = await snapshot();
+
+      for (const credentials of [{}, { api_token: 'tok-misspelled' }, { Username: 'x' }]) {
+        const response = await post(PANEL_ROUTES.credentials(created.panel.id), ownerCookie, {
+          credentials,
+          idempotencyKey: idempotencyKey(),
+        });
+        const label = JSON.stringify(credentials);
+        expect(response.statusCode, `${label} was not refused`).toBe(400);
+        expect(response.json(), label).toMatchObject({ error: { kind: 'VALIDATION' } });
+      }
+      // Nothing moved: not the credential timestamps, not the schedule, not the
+      // audit log. A refusal that had already written would be cosmetic.
+      expect(await snapshot()).toEqual(before);
+
+      // The same object on CREATE is refused the same way...
+      const emptyOnCreate = await createPanel(ownerCookie, {
+        name: 'Created with an empty credential object',
+        credentials: {},
+      });
+      expect(emptyOnCreate.statusCode).toBe(400);
+      expect(emptyOnCreate.json()).toMatchObject({ error: { kind: 'VALIDATION' } });
+      // ...while OMITTING it is still a panel with no credentials...
+      const withoutCredentials = await createPanel(ownerCookie, {
+        name: 'Created with no credential object',
+      });
+      expect(withoutCredentials.statusCode).toBe(201);
+      // ...and null keeps its meaning: a deliberate removal, accepted and applied.
+      const removed = await post(PANEL_ROUTES.credentials(created.panel.id), ownerCookie, {
+        credentials: { password: null },
+        idempotencyKey: idempotencyKey(),
+      });
+      expect(removed.statusCode).toBeLessThan(400);
+      const after = panelResponseSchema.parse(
+        (await get(PANEL_ROUTES.detail(created.panel.id), ownerCookie)).json(),
+      );
+      expect(after.panel.credentials.password.configured).toBe(false);
+      expect(after.panel.credentials.username.configured).toBe(true);
+    });
+
     it('refuses the same credential on the ROTATE path, not only on create', async () => {
       const created = panelResponseSchema.parse(
         (
