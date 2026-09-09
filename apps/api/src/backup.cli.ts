@@ -195,9 +195,13 @@ async function cmdRestore(
       );
       return 1;
     }
+    // States what was ASKED FOR, not what is happening. The target checks live
+    // in `restoreInto` and run after this line, so an announcement phrased as
+    // "Restoring … into nexa_dev" printed immediately above a refusal to do
+    // exactly that — which reads, to somebody moving fast, like it went ahead.
     process.stdout.write(
-      `Restoring backup ${opened.manifest.backupId} (taken ${opened.manifest.createdAt}) ` +
-        `into "${target}".\n`,
+      `Archive   ${opened.manifest.backupId} (taken ${opened.manifest.createdAt})\n` +
+        `Target    ${target}\n`,
     );
     await container.backupTools.restoreInto({ database: target }, dumpPath);
     process.stdout.write('Restored.\n');
@@ -236,15 +240,23 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  if (error instanceof UsageError) {
-    console.error(error.message);
-    process.exit(64);
-  }
-  if (isNexaError(error)) {
-    console.error(`${error.code}: ${error.message}`);
+// Guarded, like the other maintenance CLIs, so `scripts/check-runtime-cli.sh`
+// can IMPORT this module and prove its whole graph loads from `dist` without a
+// devDependency — which matters more here than for any of them, because this is
+// the command somebody runs while the database is the thing that is broken.
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+  main().catch((error: unknown) => {
+    if (error instanceof UsageError) {
+      console.error(error.message);
+      process.exit(64);
+    }
+    if (isNexaError(error)) {
+      console.error(`${error.code}: ${error.message}`);
+      process.exit(1);
+    }
+    console.error(error);
     process.exit(1);
-  }
-  console.error(error);
-  process.exit(1);
-});
+  });
+}
+
+export { parseArgs, cmdVerify };
