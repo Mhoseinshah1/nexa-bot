@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { dependencyStatusSchema, type DependencyStatus } from '@nexa/contracts';
-import { ReadinessService } from '../../apps/api/src/modules/platform/system/application/readiness.service';
+import {
+  blocksReadiness,
+  ReadinessService,
+} from '../../apps/api/src/modules/platform/system/application/readiness.service';
 
 /**
  * Which dependencies make this process NOT READY, and which are merely reported.
@@ -127,13 +130,23 @@ describe('readiness requirements', () => {
      * the process reports ready, which is the defect this item exists to remove
      * pointing the other way.
      *
-     * Asserted against the SCHEMA rather than the service, because the schema is
-     * what an older client parses and the optionality lives there.
+     * Against the REAL predicate, not a copy of it in this file. An earlier
+     * version of this case restated `d.required !== false` in its own assertion,
+     * which tested the test: mutating the production line to `=== true` left it
+     * green. Every probe in `readiness.service.ts` states the flag, so the only
+     * way to exercise the absent case is to call the predicate directly.
      */
+    expect(blocksReadiness({ name: 'something', status: 'down' })).toBe(true);
+    // The two stated directions, so this is not "everything blocks".
+    expect(blocksReadiness({ name: 'something', status: 'down', required: true })).toBe(true);
+    expect(blocksReadiness({ name: 'something', status: 'down', required: false })).toBe(false);
+    // And up is never blocking, whatever it says about being required.
+    expect(blocksReadiness({ name: 'something', status: 'up', required: true })).toBe(false);
+
+    // The optionality lives in the SCHEMA, which is what an older client parses:
+    // a payload with no `required` is valid and stays absent rather than
+    // acquiring a default that would decide this question silently.
     const parsed = dependencyStatusSchema.parse({ name: 'something', status: 'down' });
     expect(parsed.required).toBeUndefined();
-    // And the aggregation's predicate, stated directly: absent is not exempt.
-    const dependencies: DependencyStatus[] = [{ name: 'something', status: 'down' }];
-    expect(dependencies.some((d) => d.status === 'down' && d.required !== false)).toBe(true);
   });
 });

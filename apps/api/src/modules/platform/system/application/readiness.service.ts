@@ -29,6 +29,26 @@ export type SchemaReadiness =
   | { readonly state: 'DIVERGED'; readonly reason: string };
 
 /**
+ * Whether one dependency's state makes this process NOT READY.
+ *
+ * Exported, and a free function rather than a line inside the aggregation, for
+ * one reason: `required !== false` is a rule with a direction, and as a lambda
+ * inside `run` it could not be tested with a dependency that omits the flag —
+ * every probe in this file states one, so `=== true` would behave identically
+ * and the mutation would survive. Here it can be called with the shape an older
+ * or newer probe actually produces.
+ *
+ * `!== false`, not `=== true`: ABSENT MEANS REQUIRED. A probe that forgot to say
+ * must count, because the safe reading of "unknown" is "this matters". With
+ * `=== true` a dependency added without the flag would be silently optional —
+ * down while the process reports ready, which is the defect item F exists to
+ * remove, pointing the other way.
+ */
+export function blocksReadiness(dependency: DependencyStatus): boolean {
+  return dependency.status === 'down' && dependency.required !== false;
+}
+
+/**
  * The dependencies readiness asks about, as questions rather than as handles.
  *
  * This is the port the fix for C16 exists to create. The readiness computation
@@ -90,18 +110,7 @@ export class ReadinessService {
       this.checkSchema(),
       this.checkOutboxLag(),
     ]);
-    /*
-     * Only a REQUIRED dependency being down makes this process not ready.
-     *
-     * `required !== false` rather than `required === true`: absent means required,
-     * which is the safe reading for a dependency whose probe forgot to say. The
-     * one dependency that says `false` says so deliberately, and `checkCache`
-     * carries the argument.
-     */
-    return {
-      degraded: dependencies.some((d) => d.status === 'down' && d.required !== false),
-      dependencies,
-    };
+    return { degraded: dependencies.some(blocksReadiness), dependencies };
   }
 
   /**
