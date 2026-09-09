@@ -66,7 +66,32 @@ function parseArgs(argv: readonly string[]): Args {
   if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
     throw new UsageError('--limit must be between 1 and 500.');
   }
-  return { command, archive: value('--archive'), target: value('--target'), limit };
+
+  const archive = value('--archive');
+  const target = value('--target');
+
+  // The requirements are checked HERE, not in `main`, for two reasons.
+  //
+  // A missing `--target` should not need a database connection to be refused.
+  // It used to: `main` built the whole container first and only then noticed,
+  // so the one command an operator reaches for when the database is broken
+  // failed on the database rather than on the flag they got wrong.
+  //
+  // And this function is pure, so the refusals are testable. The commit that
+  // added this CLI cited seven manually-run command outcomes and left no test
+  // behind, which is exactly what CLAUDE.md means by a claim being worse than
+  // no claim. These two branches are the ones that message quoted.
+  if ((command === 'verify' || command === 'restore') && archive === null) {
+    throw new UsageError(`${command} needs --archive PATH.`);
+  }
+  if (command === 'restore' && target === null) {
+    throw new UsageError(
+      'restore needs --target DATABASE. There is deliberately no default: a restore ' +
+        'overwrites, and the default would be the database you are running on.',
+    );
+  }
+
+  return { command, archive, target, limit };
 }
 
 async function cmdRun(container: Container): Promise<number> {
@@ -135,8 +160,26 @@ async function cmdList(container: Container, limit: number): Promise<number> {
  * verification failed would be the worst possible time to leave one behind.
  */
 async function cmdVerify(archivePath: string): Promise<number> {
-  const config = loadConfig();
-  const archiver = new KeyringBackupArchiver(resolveKeyring(config));
+  // The KEYRING ONLY, straight from the environment — not `loadConfig()`.
+  //
+  // This command's whole purpose is the case where the database is what is
+  // broken, and `loadConfig()` refuses to return without a valid
+  // `DATABASE_URL`, a `REDIS_URL` and every other setting this command never
+  // touches. So the docblock above said "builds no container" while the code
+  // still demanded a database it does not use: an operator holding an archive
+  // and a dead server could not verify it. A test caught that.
+  //
+  // `resolveKeyring` takes exactly the four keyring variables, so reading them
+  // here is not a second configuration path — it is the same parser, given the
+  // subset this command actually depends on.
+  const archiver = new KeyringBackupArchiver(
+    resolveKeyring({
+      SECRETS_KEYS: process.env.SECRETS_KEYS,
+      SECRETS_ACTIVE_KEY_ID: process.env.SECRETS_ACTIVE_KEY_ID,
+      SECRETS_KEK: process.env.SECRETS_KEK,
+      SECRETS_KEK_ID: process.env.SECRETS_KEK_ID,
+    }),
+  );
 
   const header = await readArchiveHeader(archivePath);
   process.stdout.write(
@@ -218,8 +261,8 @@ async function main(): Promise<void> {
   // is the thing that is broken, which is the only situation anybody verifies
   // an archive in.
   if (args.command === 'verify') {
-    if (args.archive === null) throw new UsageError('verify needs --archive PATH.');
-    process.exit(await cmdVerify(args.archive));
+    // `parseArgs` has already refused a missing `--archive`.
+    process.exit(await cmdVerify(args.archive ?? ''));
   }
 
   const config = loadConfig();
@@ -227,14 +270,8 @@ async function main(): Promise<void> {
   try {
     if (args.command === 'run') process.exit(await cmdRun(container));
     if (args.command === 'list') process.exit(await cmdList(container, args.limit));
-    if (args.archive === null) throw new UsageError('restore needs --archive PATH.');
-    if (args.target === null) {
-      throw new UsageError(
-        'restore needs --target DATABASE. There is deliberately no default: a restore ' +
-          'overwrites, and the default would be the database you are running on.',
-      );
-    }
-    process.exit(await cmdRestore(container, args.archive, args.target));
+    // Both refused by `parseArgs`, before this container was built.
+    process.exit(await cmdRestore(container, args.archive ?? '', args.target ?? ''));
   } finally {
     await container.shutdown();
   }
@@ -259,4 +296,4 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   });
 }
 
-export { parseArgs, cmdVerify };
+export { parseArgs, cmdVerify, UsageError, USAGE };

@@ -9,6 +9,23 @@ cd "$(dirname "$0")/.." || exit 1
 
 LABEL="$1"; FILE="$2"; FROM="$3"; TO="$4"; TEST="$5"; PROJECT="${6:-unit}"
 
+# The file must be COMMITTED and clean before it is mutated.
+#
+# Restore below is `git checkout --`, which restores the file as committed — so
+# running this against a file with uncommitted edits silently destroys them.
+# That is not hypothetical: it ate an unfinished refactor of `backup.cli.ts`
+# mid-session, and the only reason it was noticed is that a later grep found the
+# old code back. A harness whose failure mode is deleting the author's work has
+# to refuse rather than warn.
+if ! git diff --quiet -- "$FILE" || ! git diff --cached --quiet -- "$FILE"; then
+  echo "$LABEL  SETUP-FAILED: $FILE has uncommitted changes; commit or stash them first"
+  exit 1
+fi
+if ! git ls-files --error-unmatch "$FILE" >/dev/null 2>&1; then
+  echo "$LABEL  SETUP-FAILED: $FILE is not tracked, so it cannot be restored"
+  exit 1
+fi
+
 if ! grep -qF -- "$FROM" "$FILE"; then
   echo "$LABEL  SETUP-FAILED: the text to mutate is not in $FILE"
   exit 1
