@@ -31,6 +31,35 @@ if ! grep -qF -- "$FROM" "$FILE"; then
   exit 1
 fi
 
+# A workspace package is consumed as its BUILD OUTPUT, so mutating its source
+# and running a test proves nothing.
+#
+# `packages/contracts/package.json` exports `./dist/index.js`, and
+# `node_modules/@nexa/contracts` links to the package directory. Nothing aliases
+# `@nexa/contracts` to `src` — not `vitest.config.mts`, not any tsconfig at
+# runtime — so a test importing `MAX_REQUESTS_PER_PROBE` reads the COMPILED file.
+# Mutating `packages/contracts/src/provider.ts` leaves that file untouched, the
+# test passes, and this harness reports SURVIVED for a rule that is in fact
+# tested. Measured: two such mutations reported SURVIVED here, and the same two
+# die immediately once dist is rebuilt.
+#
+# `docs/phase3d-falsification.md` already recorded this trap as something the
+# author has to remember. Remembering is not a mechanism — so a mutation under
+# `packages/` now rebuilds that package before the test, and rebuilds it again
+# from the restored source afterwards. Both builds are required: skipping the
+# second leaves a MUTATED dist on disk beside clean source, which is the same
+# class of failure as leaving a mutated file behind and worse, because
+# `git diff` cannot see it.
+PACKAGE=""
+case "$FILE" in
+  packages/*) PACKAGE="@nexa/$(printf '%s' "$FILE" | cut -d/ -f2)" ;;
+esac
+
+rebuild() {
+  [ -n "$PACKAGE" ] || return 0
+  pnpm --filter "$PACKAGE" build >/dev/null 2>&1
+}
+
 python3 - "$FILE" "$FROM" "$TO" <<'PY'
 import sys
 path, frm, to = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -44,12 +73,26 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
+# A mutation that does not COMPILE is not a falsification: the test would fail
+# because the package is broken rather than because the rule is enforced, and
+# that reads as KILLED. Report it as a setup failure instead.
+if ! rebuild; then
+  echo "$LABEL  SETUP-FAILED: $PACKAGE does not build with this mutation applied"
+  git checkout -- "$FILE"
+  rebuild
+  exit 1
+fi
+
 OUT=$(pnpm exec vitest run --project "$PROJECT" "$TEST" 2>&1)
 STATUS=$?
 
 git checkout -- "$FILE"
 if ! git diff --quiet -- "$FILE"; then
   echo "$LABEL  RESTORE-FAILED: $FILE differs after checkout"
+  exit 1
+fi
+if ! rebuild; then
+  echo "$LABEL  RESTORE-FAILED: $PACKAGE does not build from restored source"
   exit 1
 fi
 

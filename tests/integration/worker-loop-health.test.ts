@@ -106,6 +106,28 @@ describe('worker loop health', () => {
 
     it('records no progress for a tick that threw', async () => {
       const dispatcher = context.container.notificationDispatcher;
+
+      /*
+       * Cleared first, and asserted at `now` afterwards.
+       *
+       * The dispatcher is one instance shared across the cases in this file, so
+       * an earlier successful tick has already recorded progress whose slack
+       * window still covers the present moment. The first version of this case
+       * worked around that by asserting an HOUR out — and an hour out no record
+       * of any kind can be fresh, so the assertion held whether this tick
+       * recorded progress or not. It reported KILLED for the deletion of the
+       * recording and SURVIVED for moving the recording BEFORE the await, which
+       * is the mutation that actually reintroduces the bug: a tick that threw
+       * would count as progress.
+       *
+       * `stop()` calls `progress.end()`, which clears both the start instant and
+       * the last tick. From there `isFresh(now)` can become true only by way of
+       * a new record, so the window the assertion reads is this tick's alone.
+       */
+      await dispatcher.stop();
+      const before = context.container.clock.now().getTime();
+      expect(dispatcher.isFresh(before)).toBe(false);
+
       const repository = context.container.notificationRepository as unknown as {
         claimDue: unknown;
       };
@@ -119,19 +141,11 @@ describe('worker loop health', () => {
         repository.claimDue = real;
       }
 
-      // Asserted an hour out, not at `now`. The dispatcher is shared across the
-      // cases in this file, so an earlier successful tick has already recorded
-      // progress and its slack window still covers the present moment — reading
-      // `now` here would be reading that test's tick, not this one's. An hour
-      // is past any recorded tick, so only a NEW record could make it true.
-      //
       // The poll loop catches and reschedules, so from outside the process this
       // failure is invisible — which is exactly the state that used to report
       // healthy for ever, on the one loop that drains the queue by which this
       // installation reports anything being wrong.
-      expect(dispatcher.isFresh(context.container.clock.now().getTime() + 60 * 60 * 1000)).toBe(
-        false,
-      );
+      expect(dispatcher.isFresh(context.container.clock.now().getTime())).toBe(false);
     });
   });
 });

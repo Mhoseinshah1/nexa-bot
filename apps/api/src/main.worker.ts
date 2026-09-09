@@ -4,6 +4,7 @@ import { resolveInstallationTenant } from './bootstrap.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
+import { stalledLoops, type LoopHealth } from './infrastructure/lifecycle/loop-health.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
 
 /**
@@ -61,21 +62,29 @@ async function main(): Promise<void> {
       // that is alive and achieving nothing means the system has lost its
       // ability to say it is broken — and the only symptom is silence, which
       // looks exactly like nothing being wrong.
+      //
+      // The aggregation is `stalledLoops`, in its own file, because as a closure
+      // here it could not be called by any test: replacing its `filter` with an
+      // empty array — a worker that reports healthy whatever its loops are
+      // doing — left the whole suite green.
       const now = container.clock.now().getTime();
-      const loops: readonly (readonly [string, boolean])[] = [
-        ['relay', !config.OUTBOX_RELAY_ENABLED || container.relay.isFresh(now)],
-        ['throttle-sweeper', container.throttleSweeper.isFresh(now)],
-        ['session-sweeper', container.sessionSweeper.isFresh(now)],
+      const loops: readonly LoopHealth[] = [
+        ['relay', config.OUTBOX_RELAY_ENABLED, () => container.relay.isFresh(now)],
+        // No flag: the sweepers always run.
+        ['throttle-sweeper', true, () => container.throttleSweeper.isFresh(now)],
+        ['session-sweeper', true, () => container.sessionSweeper.isFresh(now)],
         [
           'notification-dispatcher',
-          !config.NOTIFICATION_DISPATCH_ENABLED || container.notificationDispatcher.isFresh(now),
+          config.NOTIFICATION_DISPATCH_ENABLED,
+          () => container.notificationDispatcher.isFresh(now),
         ],
         [
           'backup-scheduler',
-          !config.BACKUP_SCHEDULE_ENABLED || container.backupScheduler.isFresh(now),
+          config.BACKUP_SCHEDULE_ENABLED,
+          () => container.backupScheduler.isFresh(now),
         ],
       ];
-      const stalled = loops.filter(([, fresh]) => !fresh).map(([name]) => name);
+      const stalled = stalledLoops(loops);
       if (stalled.length > 0) {
         // Named, because "the worker is unhealthy" sends an operator looking at
         // the whole process when one loop is the answer.
