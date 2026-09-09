@@ -470,6 +470,60 @@ if [ -d "$ADAPTER_DIR" ]; then
   fi
 fi
 
+# --- Every provider failure kind has a producer -------------------------------
+# The same rule as the error-code check above, for the other frozen vocabulary,
+# and it was missing. `PROVIDER_FAILURE_KINDS` has ten entries and every existing
+# test ITERATES the list to assert that consumers handle each one — which is the
+# shape of test that cannot notice a kind nothing produces: remove the one
+# producer of `AUTHENTICATION_REQUIRES_INTERACTION` and every consumer test still
+# passes, because the list still contains it.
+#
+# A dead entry in this list is worse than a dead error code. The kinds drive the
+# monitor's health mapping, its backoff interval and its retry decision, so one
+# that no adapter can produce is a branch nothing exercises in code that dials
+# other people's panels unattended — and it reads, to anyone extending the
+# taxonomy, as a case that has been thought about.
+#
+# Searched in the ADAPTERS and the client only, not in `apps/api/src` as a whole.
+# A kind named in the monitor's switch or in the retryability map is being
+# CONSUMED; only the code that talks to a panel can produce one.
+#
+# `scan_source` drops comment lines, so this paragraph and the long docblocks in
+# `provider.ts` do not count as producers.
+PROVIDER_SOURCES="apps/api/src/modules/platform/providers apps/api/src/infrastructure/net"
+if require_dir "apps/api/src/modules/platform/providers"; then
+  UNPRODUCED_KINDS=""
+  while read -r kind; do
+    [ -n "$kind" ] || continue
+    # shellcheck disable=SC2086
+    produced="$(scan_source "'${kind}'" $PROVIDER_SOURCES | wc -l)"
+    if [ "${produced:-0}" -eq 0 ]; then
+      UNPRODUCED_KINDS="$UNPRODUCED_KINDS $kind"
+    fi
+  done <<EOF
+$(sed -n "/^export const PROVIDER_FAILURE_KINDS = \[/,/^\] as const;/p" packages/contracts/src/provider.ts \
+  | grep -oE "^  '[A-Z_]+'," | tr -d " ',")
+EOF
+  if [ -n "$UNPRODUCED_KINDS" ]; then
+    fail "every provider failure kind has a producer" \
+      "no adapter or HTTP client produces:$UNPRODUCED_KINDS" \
+      "A kind nothing can produce is a branch in the monitor's health mapping, its backoff and its retry decision that nothing exercises."
+  else
+    pass "every provider failure kind is produced by an adapter or the HTTP client"
+  fi
+fi
+
+# The list must not be empty, for the reason `require_dir` exists: a `sed` range
+# that stops matching reads exactly like a vocabulary with no dead entries.
+KIND_COUNT="$(sed -n "/^export const PROVIDER_FAILURE_KINDS = \[/,/^\] as const;/p" \
+  packages/contracts/src/provider.ts | grep -cE "^  '[A-Z_]+'," || true)"
+if [ "${KIND_COUNT:-0}" -lt 5 ]; then
+  fail "The provider failure kinds could not be read from the contract" \
+    "found ${KIND_COUNT:-0}; the check above would pass vacuously. Update this script for the new shape."
+else
+  pass "the provider failure taxonomy was read (${KIND_COUNT} kinds)"
+fi
+
 # --- No network or subprocess sink in a domain or application layer ----------
 # The rule is no network call inside a database transaction, and this is the
 # build-time half of enforcing it. `infrastructure/transaction-boundary.ts` is

@@ -1097,6 +1097,8 @@ function deferralReasonOf(kind: ProbeRefusal['kind']): MonitorDeferralReason {
       return 'BUDGET_EXHAUSTED';
     case 'COOLDOWN':
       return 'COOLDOWN';
+    case 'CAPABILITY_UNSUPPORTED':
+      return 'CAPABILITY_UNSUPPORTED';
     default: {
       const unhandled: never = kind;
       return unhandled;

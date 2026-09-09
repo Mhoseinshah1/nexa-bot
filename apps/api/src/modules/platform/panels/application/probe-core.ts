@@ -4,6 +4,7 @@ import type {
   Clock,
   PanelHealthState,
   PanelStatus,
+  ProviderCapability,
   ProviderConnectionAdapter,
   ProviderCredentials,
   ProviderProbeOutcome,
@@ -73,7 +74,8 @@ export type ProbeRefusal =
   | { readonly kind: 'CREDENTIALS_MISSING' }
   | { readonly kind: 'TARGET_BLOCKED'; readonly refusal: UrlPolicyRefusal }
   | { readonly kind: 'COOLDOWN' }
-  | { readonly kind: 'BUDGET_EXHAUSTED'; readonly retryAfterMs: number };
+  | { readonly kind: 'BUDGET_EXHAUSTED'; readonly retryAfterMs: number }
+  | { readonly kind: 'CAPABILITY_UNSUPPORTED'; readonly capability: ProviderCapability };
 
 export type ProbeAttempt =
   | { readonly probed: false; readonly refusal: ProbeRefusal }
@@ -137,6 +139,29 @@ export async function attemptProbe(
   // type it cannot operate. A panel that cannot be operated does not get a
   // probe attempt, a claim or a budget token.
   const provider = deps.adapters(before.panel.providerType);
+
+  /*
+   * The adapter is ASKED whether it does this, before anything is spent.
+   *
+   * `supports()` has existed on both adapters since Phase 3B with no production
+   * caller: this function probed unconditionally, so the capability array was
+   * published to the Web Admin as a promise the product makes while nothing on
+   * the server consulted it. Vacuous today — both providers declare
+   * `HEALTH_CHECK` — and that is precisely when the gate is cheap, because
+   * installing it after a provider that cannot health-check exists means
+   * discovering the gap through a panel whose health never updates.
+   *
+   * Before the credential read and before the URL check, because it is the
+   * cheapest refusal of the three and the only one that cannot change: the
+   * others depend on stored state, this depends on code.
+   */
+  if (!provider.supports('HEALTH_CHECK')) {
+    return {
+      probed: false,
+      refusal: { kind: 'CAPABILITY_UNSUPPORTED', capability: 'HEALTH_CHECK' },
+    };
+  }
+
   const target = toProviderCredentials(stored, provider.descriptor.credentialShape);
   if (target === null) return { probed: false, refusal: { kind: 'CREDENTIALS_MISSING' } };
 

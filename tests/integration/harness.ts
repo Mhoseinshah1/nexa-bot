@@ -1,5 +1,14 @@
 import { randomBytes } from 'node:crypto';
-import type { ActorContext, AdminId, CorrelationId, RoleId, TenantContext } from '@nexa/contracts';
+import type {
+  ActorContext,
+  AdminId,
+  CorrelationId,
+  ProviderConnectionAdapter,
+  ProviderType,
+  RoleId,
+  TenantContext,
+} from '@nexa/contracts';
+import { providerAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
 import { createContainer, type Container } from '../../apps/api/src/container';
 import { loadConfig } from '../../apps/api/src/infrastructure/config/load-config';
 import type { AppConfig } from '../../apps/api/src/infrastructure/config/config.schema';
@@ -184,4 +193,31 @@ export function adminActorFor(admin: SeededAdmin): ActorContext {
     surface: 'WEB',
     correlationId: 'test-correlation' as CorrelationId,
   };
+}
+
+/**
+ * A real provider adapter with some of its behaviour replaced.
+ *
+ * `Object.assign` onto the REAL instance, never `{ ...providerAdapter(type) }`,
+ * and the difference is not stylistic. The adapters are classes, so `supports`,
+ * and any other method declared on the class rather than assigned in its
+ * constructor, lives on the PROTOTYPE — and object spread copies own enumerable
+ * properties only. A spread therefore produced a stand-in that had silently lost
+ * every prototype method, and passed for as long as nothing called one.
+ *
+ * It stopped passing the moment `attemptProbe` asked `supports('HEALTH_CHECK')`:
+ * seventy-one monitor cases failed at once, on a production change that was
+ * correct. That is the good version of this bug. The bad version is a test that
+ * keeps passing while the production path it claims to cover has gone — which is
+ * what a spread would do for any future method a test does not happen to
+ * exercise.
+ *
+ * Assigning over a method shadows it with an own property, so an override still
+ * wins; everything not named here is the real adapter's own behaviour.
+ */
+export function adapterWith(
+  type: ProviderType,
+  overrides: Partial<ProviderConnectionAdapter>,
+): ProviderConnectionAdapter {
+  return Object.assign(providerAdapter(type), overrides);
 }

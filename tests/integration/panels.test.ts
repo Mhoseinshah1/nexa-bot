@@ -14,16 +14,14 @@ import {
   PANEL_PAGE_MAX,
   panelListQuerySchema,
   type ActorContext,
+  type ProviderConnectionAdapter,
   type ProviderProbeOutcome,
   type ProviderType,
 } from '@nexa/contracts';
 import { DrizzlePanelCredentialStore } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-credentials';
 import type { PanelCursor } from '../../apps/api/src/modules/platform/panels/application/ports';
 import { PanelService } from '../../apps/api/src/modules/platform/panels/application/panel.service';
-import {
-  IMPLEMENTED_PROVIDER_TYPES,
-  providerAdapter,
-} from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
+import { IMPLEMENTED_PROVIDER_TYPES } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
 import { DrizzlePanelRepository } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel.repository';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
 import { AesGcmSecretCipher } from '../../apps/api/src/infrastructure/crypto/secret-cipher';
@@ -31,6 +29,7 @@ import { SECRET_COLUMNS } from '../../apps/api/src/infrastructure/crypto/secret-
 import { rewrapColumn, statusOf } from '../../apps/api/src/secrets.cli';
 import type { SecretKeyring } from '../../apps/api/src/infrastructure/crypto/keyring';
 import {
+  adapterWith,
   adminActorFor,
   createAdmin,
   createTestContext,
@@ -245,15 +244,15 @@ describe('panels', () => {
         urlPolicy: { allowLoopback: true },
         probeCooldownMs: 0,
         probeBudget: { capacity: 10_000, refillPerMs: 1 },
-        adapters: (type: ProviderType) => ({
-          ...providerAdapter(type),
-          // The stop commits WHILE the probe is on the wire, which is the
-          // real ordering rather than a simulated one.
-          probe: async () => {
-            await stop();
-            return { ok: true, providerVersion: '1.0.0', degraded: false };
-          },
-        }),
+        adapters: (type: ProviderType) =>
+          adapterWith(type, {
+            // The stop commits WHILE the probe is on the wire, which is the
+            // real ordering rather than a simulated one.
+            probe: async () => {
+              await stop();
+              return { ok: true, providerVersion: '1.0.0', degraded: false };
+            },
+          }),
         cadence: {
           healthyIntervalMs: 10 * 60 * 1000,
           retryableIntervalMs: 2 * 60 * 1000,
@@ -1077,6 +1076,49 @@ describe('panels', () => {
     ).rejects.toMatchObject({ code: 'panel.credentials_missing' });
   });
 
+  it('refuses to test a panel whose adapter does not do health checks', async () => {
+    /*
+     * Item E-1 on the OPERATOR's path. `attemptProbe` asks the adapter
+     * `supports('HEALTH_CHECK')` before it reads a credential, spends a token or
+     * opens a socket, and `testConnection` turns that refusal into an error the
+     * Web Admin can render.
+     *
+     * The panel is fully configured — a real credential, an allowed address — so
+     * the only reason this refuses is the capability. And `probe` still counts
+     * its calls: an assertion that the outcome was refused proves nothing unless
+     * it also proves nothing was contacted.
+     *
+     * Vacuous in production today, because both registered providers declare
+     * `HEALTH_CHECK`. What it pins is the shape of the answer. Before the branch
+     * existed this refusal fell through to the cooldown case: 200, `probed:
+     * false`, no message — a silent no-op, which is the one outcome an operator
+     * cannot debug.
+     */
+    const { view } = await create(owner, tenantA, {
+      credentials: { username: USERNAME, password: PASSWORD },
+    });
+    const healthy = { ok: true, providerVersion: '1.0.0', degraded: false } as const;
+    let contacted = 0;
+
+    await expect(
+      probeWith(view.panel.id, healthy, {
+        supports: () => false,
+        probe: async () => {
+          contacted += 1;
+          return healthy;
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'panel.capability_unsupported' });
+
+    expect(contacted).toBe(0);
+    // And nothing was claimed about the panel either: no health row appeared,
+    // because nothing was asked of the provider.
+    const after = await ctx.container.panels.get(tenantA, adminActorFor(owner), view.panel.id);
+    // `null` rather than absent: this read builds a view with an explicit empty
+    // health, which is the shape the Web Admin renders as "never checked".
+    expect(after.health).toBeNull();
+  });
+
   it('records a probe outcome as health without carrying anything from the panel', async () => {
     const { view } = await create(owner, tenantA, {
       credentials: { username: USERNAME, password: PASSWORD },
@@ -1220,7 +1262,15 @@ describe('panels', () => {
    * outcome is covered by its unit tests and the client's by `safe-http`; a
    * fake at this seam does not stand in for either.
    */
-  function probeWith(panelId: string, outcome: ProviderProbeOutcome) {
+  function probeWith(
+    panelId: string,
+    outcome: ProviderProbeOutcome,
+    /**
+     * Further adapter behaviour to replace, for the cases whose subject is not
+     * the outcome but whether the probe happens at all.
+     */
+    adapterOverrides: Partial<ProviderConnectionAdapter> = {},
+  ) {
     const scripted = new PanelService({
       repository: new DrizzlePanelRepository(ctx.container.database.db),
       credentials: new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher),
@@ -1250,7 +1300,8 @@ describe('panels', () => {
       // Generous, so these suites — which are about something else — never
       // hit the tenant-wide bound. Its own suite pins it low.
       probeBudget: { capacity: 10_000, refillPerMs: 1 },
-      adapters: (type: ProviderType) => ({ ...providerAdapter(type), probe: async () => outcome }),
+      adapters: (type: ProviderType) =>
+        adapterWith(type, { probe: async () => outcome, ...adapterOverrides }),
       // Every probe writes the panel's next background probe time, so the
       // service needs a cadence even where these tests never read one.
       cadence: {

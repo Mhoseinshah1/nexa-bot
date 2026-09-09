@@ -1264,6 +1264,21 @@ export class PanelService {
           'This panel has no credentials configured. Set them before testing the connection.',
         );
       }
+      if (refusal.kind === 'CAPABILITY_UNSUPPORTED') {
+        // Named, rather than silently folded into the cooldown case below.
+        // Vacuous today — both registered providers declare `HEALTH_CHECK` — but
+        // before this branch existed the refusal reached the `return` at the end
+        // of this block, so the operator pressed Test connection and got a 200
+        // with `probed: false` and no explanation at all.
+        //
+        // The CAPABILITY is named and nothing else is: it is a property of this
+        // release's adapter, not of the operator's panel, so there is nothing
+        // here for them to fix and the message says so.
+        throw errors.preconditionFailed(
+          PANEL_ERROR_CODES.PANEL_CAPABILITY_UNSUPPORTED,
+          'This release cannot check the health of this provider. Nothing was contacted and the panel is unchanged.',
+        );
+      }
       if (refusal.kind === 'TARGET_BLOCKED') {
         throw errors.validation(
           PANEL_ERROR_CODES.PANEL_TARGET_BLOCKED,
@@ -1296,6 +1311,26 @@ export class PanelService {
           details: { retryAfterSeconds },
         });
       }
+      if (refusal.kind !== 'COOLDOWN') {
+        /*
+         * Every refusal kind is handled above, and this is what keeps that true.
+         *
+         * The branches were a chain of `if`s ending in a bare `return`, so the
+         * cooldown case was whatever was left over — and a refusal kind added to
+         * `ProbeRefusal` silently became "cooldown": a 200, `probed: false`, no
+         * message, nothing written. `CAPABILITY_UNSUPPORTED` did exactly that
+         * when it was added, which is how this was found. Now the narrowing makes
+         * `refusal.kind` `never` here, so the next kind added does not compile
+         * until somebody decides what the operator is told.
+         */
+        const unhandled: never = refusal;
+        // No payload in the message: the branch is unreachable by construction,
+        // so the only reader is a developer who has just broken the narrowing,
+        // and the compiler has already told them where.
+        void unhandled;
+        throw new Error('unhandled probe refusal kind');
+      }
+
       // Cooldown. No probe, no health write, no audit entry: nothing happened,
       // and `probed: false` is how the caller is told so. The view carries
       // whatever health is stored, which is what every other read of this panel
