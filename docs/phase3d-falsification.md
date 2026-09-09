@@ -2629,10 +2629,10 @@ contribute no titles now.
 | V5  | a card header states nothing the card withheld         | read `panels.data` directly            | `dashboard.test.tsx` › says nothing about a fleet it could not read                                                                                  |
 | V6  | the scan sees the NEGATED spelling                     | `{!detail.isError && detail.data && (` | `state-switch-contract.test.tsx` › renders no view off a bare isError unless it is a mutation                                                        |
 
-| #    | rule                                     | mutation                    | what the check prints                                         |
-| ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 364 citations were checked; this record declares 377 |
-| U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
+| #    | rule                                     | mutation                              | what the check prints                                         |
+| ---- | ---------------------------------------- | ------------------------------------- | ------------------------------------------------------------- |
+| U99  | the record's citation count is EXACT     | remove the round's own added citation | exits 1: 377 citations were checked; this record declares 378 |
+| U100 | a table at END OF FILE is structured too | append a header-only table            | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
 
@@ -5626,14 +5626,16 @@ their parameters are settings, and so is the permission.
 `77795cdc066015a3` (this round's versions), restored after each row. Suites:
 `write-path.test.ts` (8) and `transactional-authorization.test.ts` (9).
 
-| #   | rule                                                     | mutation                                       | tests that die                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| --- | -------------------------------------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| RP1 | the ping audits only THIS permission's refusal           | the inline catch-ANY recorder back             | `write-path.test.ts` › denies an actor without the permission, and records the denial; › audits nothing when the guard fails for a reason that is not a denial                                                                                                                                                                                                                                                                         |
-| RP2 | the ping records its early refusal                       | delete the recorder call                       | `write-path.test.ts` › denies an actor without the permission, and records the denial                                                                                                                                                                                                                                                                                                                                                  |
-| BC1 | every barrier case leaves EXACTLY one DENIED row         | the shared recorder writes the audit row twice | `transactional-authorization.test.ts` › refuses ${testCase.name} when authority is revoked before the transaction; › refuses notifications.test when authority is revoked before the transaction; › refuses templates.revert when authority is revoked before the transaction; › records an EARLY refusal the same way in every phase; › records a TEMPLATES early refusal as one audit row and one event, and a non-denial as nothing |
-| BC2 | ...naming the case's LITERAL permission, in both ledgers | audit row and event both name `panels.view`    | `transactional-authorization.test.ts` › refuses ${testCase.name} when authority is revoked before the transaction; › refuses notifications.test when authority is revoked before the transaction; › refuses templates.revert when authority is revoked before the transaction; › records an EARLY refusal the same way in every phase; › records a TEMPLATES early refusal as one audit row and one event, and a non-denial as nothing |
+| #   | rule                                                     | mutation                                       | tests that die                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| --- | -------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| RP1 | the ping audits only THIS permission's refusal           | the inline catch-ANY recorder back             | `write-path.test.ts` › denies an actor without the permission, and records the denial; › audits nothing when the guard fails for a reason that is not a denial                                                                                                                                                                                                                                                                                                                                                                |
+| RP2 | the ping records its early refusal                       | delete the recorder call                       | `write-path.test.ts` › denies an actor without the permission, and records the denial                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| BC1 | every barrier case leaves EXACTLY one DENIED row         | the shared recorder writes the audit row twice | `transactional-authorization.test.ts` › refuses ${testCase.name} when authority is revoked before the transaction; › refuses notifications.test when authority is revoked before the transaction; › refuses templates.revert when authority is revoked before the transaction; › records an EARLY refusal the same way in every phase; › records a TEMPLATES early refusal as one audit row and one event, and a non-denial as nothing; `write-path.test.ts` › denies an actor without the permission, and records the denial |
+| BC2 | ...naming the case's LITERAL permission, in both ledgers | audit row and event both name `panels.view`    | `transactional-authorization.test.ts` › refuses ${testCase.name} when authority is revoked before the transaction; › refuses notifications.test when authority is revoked before the transaction; › refuses templates.revert when authority is revoked before the transaction; › records an EARLY refusal the same way in every phase; › records a TEMPLATES early refusal as one audit row and one event, and a non-denial as nothing                                                                                        |
 
-Measured: RP1 — 2/8, `expected { …(18) } to match object { result:
+Measured (the round-53 reviewer added `write-path.test.ts` to BC1's list —
+it dies there too, 1/8 with `expected [ {…}, {…} ] to have a length of 1 but
+got 2`; "7/9" below was true of the barrier suite alone): RP1 — 2/8, `expected { …(18) } to match object { result:
 'DENIED', …(4) }` (the row no longer names the permission) and `an outage is
 not a denial: expected [ { …(18) } ] to have a length of +0 but got 1`. RP2
 — 1/8, `expected [] to have a length of 1 but got +0`. BC1 — 7/9,
@@ -5643,6 +5645,39 @@ the five barrier cases stayed green under it. BC2 — 7/9, `settings.set: the
 audit row names the refused permission: expected 'panels.view' to be
 'settings.edit'` and the like; before this round the five barrier cases
 stayed green under it.
+
+## Round 53 — the thirty-fourth reviewer, and the count one module short
+
+Two confirmed findings, both sentences; no behaviour defect and no rule
+without a discriminating test. The reviewer also reproduced every round-52
+row with its recorded message, ran three mutations of its own against the
+ping (an unconditional emitter, a wrong `entityType`, a wrong permission
+handed to the recorder — each dies), and enumerated every `catch (denial)`
+in `apps/api/src`: all delegate to the shared recorder or filter on the kind
+where the guard cannot throw another kind.
+
+### "Five pre-transaction sites" — six
+
+OQ-3D-03's count sentence was written in round 50 and not touched when the
+ping joined the recorder in round 52, although OQ-3D-04's route list four
+lines away was. Round 46 corrected exactly this class the other way ("five"
+counted the monitor). Six now, the ping named.
+
+### The templates test's comment still called it "the last"
+
+Rounds 50 and 52 corrected "the last early check on an inline recorder" in
+the record's title and section and left the copy in the test itself — the
+one a reader of the test sees. Scoped in place.
+
+### Preferences taken
+
+The BC1 row now also lists `write-path.test.ts` › denies an actor without
+the permission, and records the denial, which the mutation kills as well;
+ADR-0014 and the three sibling comments name the ping among the recorder's
+early checks; the panel monitor's comment says audit-then-event, the order
+since round 48; the two barrier callers' `> 0` floors immediately before the
+helper's exact count are gone; the ping's DENIED row pins `reason` as the
+templates test does. No new mutation row: none of these changes a rule.
 
 ## The microsecond truncation is still open, deliberately
 

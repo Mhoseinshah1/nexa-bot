@@ -658,8 +658,9 @@ export class PanelMonitorService {
     } catch (error) {
       if (isNexaError(error) && error.kind === 'PERMISSION_DENIED') {
         // The same trail a refused operator leaves. `recordMutationDenial`
-        // writes the denial event and the DENIED audit row, on the pool,
-        // outside any transaction.
+        // writes the DENIED audit row and then the denial event — the guard
+        // was checked with `tx`, so it wrote none — on the pool, outside any
+        // transaction.
         await recordMutationDenial(
           { opsLog: this.deps.opsLog, audit: this.deps.audit, guard: this.deps.guard },
           tenant,

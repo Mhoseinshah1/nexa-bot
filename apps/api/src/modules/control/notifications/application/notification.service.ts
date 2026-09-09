@@ -249,8 +249,8 @@ export class NotificationService {
       await this.guard.check(scope, actor, 'settings.edit');
     } catch (denial) {
       // The recorder shared by the early checks in settings, features,
-      // notifications, templates and panels (identity audits its early check
-      // inline; the guard writes that event). The inline
+      // notifications, templates, panels and the system ping (identity audits
+      // its early check inline; the guard writes that event). The inline
       // version this replaces wrote a DENIED row for ANY throw — including a
       // missing tenant context, which is not a denial of this permission — and
       // emitted no operational event, so the same refusal was recorded

@@ -226,7 +226,8 @@ this for all three mutations, and audits the refusal while it is there, which
 Which case applied is stated by the guard on the error it throws
 (`denialEventRecorded`), so an after-the-fact recorder —
 `recordMutationDenial`, shared by the early checks in settings, features,
-notifications, templates and panels, and `runLockedMutation` here — writes the event only
+notifications, templates, panels and the system ping, and `runLockedMutation`
+here — writes the event only
 when the guard could not. Before that, every
 pre-transaction denial that went through the recorder — panels, settings,
 features, notifications — was recorded twice (Phase 3D, OQ-3D-03); identity's

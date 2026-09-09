@@ -97,7 +97,7 @@ describe('canonical write path', () => {
       actorType: 'CUSTOMER',
       action: 'system.ping',
       entityType: 'System',
-      after: { deniedPermission: 'maintenance.run' },
+      after: { deniedPermission: 'maintenance.run', reason: 'platform.permission_denied' },
     });
 
     const events = await ctx.container.database.db.select().from(operationalEvents);
