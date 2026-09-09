@@ -92,6 +92,45 @@ order, against the same mutation and the same database — only the test changed
 A test that cannot fail is worse than a missing one: the missing test is visible
 in a coverage gap, and this one reported a guarantee for two releases.
 
+## Item D — no network or subprocess work inside a transaction
+
+| #    | Rule                                                                  | Mutation                                                         | Named test                                                                                                    | Result |
+| ---- | --------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------ |
+| D-01 | The guard refuses inside a transaction and permits outside one        | invert `if (label === undefined) return`                         | `transaction-boundary.test.ts` › refuses an external call inside a transaction, naming the sink and the scope | KILLED |
+| D-02 | `uow.run` marks its callback as inside a transaction                  | drop the `withinTransaction` wrapper                             | `transaction-boundary.test.ts` › refuses a panel request made inside a real transaction                       | KILLED |
+| D-03 | Every panel HTTP request asks the guard                               | delete the `assertOutsideTransaction` call from `SafeHttpClient` | `transaction-boundary.test.ts` › refuses a panel request made inside a real transaction                       | KILLED |
+| D-04 | The context is scoped to the transaction, not set on the current task | `transactionLabel.run(...)` → `enterWith(...)` then `fn()`       | `transaction-boundary.test.ts` › does not leak the context to work that merely started inside                 | KILLED |
+
+D-01 and D-04 ran against `tests/unit/transaction-boundary.test.ts`; D-02 and D-03
+against `tests/integration/transaction-boundary.test.ts`. Two files share a
+describe name, which is why the rows name the case rather than the file alone.
+
+D-04 is the row worth reading. `enterWith` is the plausible-looking alternative to
+`run`, and it passes every other case in the file: it sets the label for the
+current task and never removes it, so the transaction's own code is guarded
+correctly and everything that runs after it on the same task is ALSO guarded —
+which means a legitimate send after a committed transaction is refused. The only
+case that sees it is the one asserting the context is clean afterwards.
+
+### The build-time half, which has no test file
+
+The three checks in `scripts/check-boundaries.sh` are verified by introducing the
+violation each one names, because a shell check is not reachable from vitest:
+
+- a sink import in an `application/` directory — `import { request } from 'node:https'`
+  in `panels/application/` — is reported as "A domain or application layer reaches
+  a network or subprocess sink directly";
+- a new file importing `node:http` outside the enumerated list is reported as "not
+  covered by the transaction guard check";
+- deleting the guard CALL from `telegram-transport.ts` is reported as "A network or
+  subprocess sink does not refuse to run inside a transaction".
+
+The third of those found a real hole while being written. The check originally
+grepped for the bare identifier, which the file's own `import` line satisfies, so
+deleting the call left it green — measured, then fixed to require
+`assertOutsideTransaction(`. The probe is the reason the check works; it is
+recorded here rather than cited from memory.
+
 ## The harness could not see a contract change
 
 `packages/contracts/package.json` declares `exports: { ".": "./dist/index.js" }`,
