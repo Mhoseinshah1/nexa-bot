@@ -194,6 +194,29 @@ deliberately: a reader must not have to know about a CHECK constraint in another
 file to see that the installation's backup lock is safe, and a future run state
 that carries a finish time must not quietly become eligible.
 
+## Items A, C, K and L — the Phase 4 foundations
+
+These are contracts with no consumer yet, which makes the falsification question
+sharper rather than looser: a rule nothing calls is a rule whose test is the only
+thing holding it, so a surviving mutation here would mean the declaration is
+decoration.
+
+| #       | Rule                                                        | Mutation                                    | Named test                                                                                                  | Result |
+| ------- | ----------------------------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------ |
+| ACKL-01 | The namespace is part of the derived identity               | drop the namespace from the hash input      | `operation-identity.test.ts` › differs per namespace for the same key                                       | KILLED |
+| ACKL-02 | A hasher that is not SHA-256 hex is refused                 | the digest guard → `if (false)`             | `operation-identity.test.ts` › refuses a hasher that does not return SHA-256 hex                            | KILLED |
+| ACKL-03 | Evidence may narrow an unknown outcome to definitive        | delete the `NOT_SENT` narrowing             | `operation-identity.test.ts` › lets evidence narrow an unknown outcome to definitive, and never the reverse | KILLED |
+| ACKL-04 | A lost response is UNKNOWN, not definitive                  | `TIMEOUT: 'UNKNOWN'` → `'DEFINITIVE'`       | `operation-identity.test.ts` › is a DIFFERENT axis from retryability                                        | KILLED |
+| ACKL-05 | A note over budget is refused, never truncated              | the length guard → `if (false)`             | `operation-identity.test.ts` › stays inside the budget, and refuses rather than truncating                  | KILLED |
+| ACKL-06 | A note is recognised by its whole SHAPE, not by a substring | the shape test → `trimmed.includes('TG: ')` | `operation-identity.test.ts` › recognises its own note and refuses to claim somebody else                   | KILLED |
+
+ACKL-06 is the one worth reading. The loose version — "does it mention TG?" —
+passes every case about recognising our own note and fails only on the cases about
+NOT claiming somebody else's: a human note reading `TG: 123456789`, and our note
+with a human's words appended. Those are the cases that matter, because the
+consequence of getting them wrong is overwriting a human's note with no copy
+anywhere.
+
 ## The harness could not see a contract change
 
 `packages/contracts/package.json` declares `exports: { ".": "./dist/index.js" }`,
