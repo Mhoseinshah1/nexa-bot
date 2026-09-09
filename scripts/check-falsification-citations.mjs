@@ -37,7 +37,11 @@ import { basename, join } from 'node:path';
  * rather than a floor: the number is a claim about these files and should be
  * re-stated deliberately when they grow.
  */
-const RECORDS = ['docs/phase3d-falsification.md', 'docs/backup-falsification.md'];
+const RECORDS = [
+  'docs/phase3d-falsification.md',
+  'docs/backup-falsification.md',
+  'docs/hardening-falsification.md',
+];
 /**
  * The fewest citations this record may contain.
  *
@@ -63,7 +67,7 @@ const RECORDS = ['docs/phase3d-falsification.md', 'docs/backup-falsification.md'
  * have to be a map, and a map is a place for a record to be added with no entry
  * and checked against nothing — which is this script's own failure mode.
  */
-const EXPECTED = 436;
+const EXPECTED = 457;
 /**
  * A table whose last column is one of these is making citations.
  *
