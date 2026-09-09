@@ -283,6 +283,76 @@ reading the source; `loop-health.test.ts` proves the check then does something
 with the names. Neither subsumes the other, and the first cannot replace the
 second: a source scan can see a list and not what the list is for.
 
+## Items E-1 and F-1 — the capability gate and the Redis requirement
+
+| #     | Rule                                                            | Mutation                                                          | Named test                                                                                  | Result |
+| ----- | --------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------ |
+| E1-01 | The monitor asks the adapter before it probes                   | the gate's condition → `if (false) {`                             | `panel-monitor.test.ts` › does not probe a provider whose adapter does not do health checks | KILLED |
+| E1-02 | The operator is TOLD, rather than getting a silent 200          | the `CAPABILITY_UNSUPPORTED` branch's condition → `false`         | `panels.test.ts` › refuses to test a panel whose adapter does not do health checks          | KILLED |
+| E1-03 | The refusal defers on the STABLE cadence                        | delete `case 'CAPABILITY_UNSUPPORTED':` from `deferralIntervalMs` | `probe-capability-gate.test.ts` › is STABLE, not transient                                  | KILLED |
+| E1-04 | The scheduler records the reason it actually had                | `deferralReasonOf` returns `'INTERNAL_ERROR'` for it              | `panel-monitor.test.ts` › does not probe a provider whose adapter does not do health checks | KILLED |
+| E1-05 | The gate sits ABOVE the credential read                         | move the gate below `toProviderCredentials`                       | `panels.test.ts` › reports the capability refusal ahead of a missing credential             | KILLED |
+| F1-01 | Only a REQUIRED dependency being down makes a process not ready | drop `&& d.required !== false` from the aggregation               | `readiness-requirements.test.ts` › is STILL READY when Redis is down, and reports it down   | KILLED |
+| F1-02 | Redis is declared NOT required                                  | `this.timed('redis', false, …)` → `true`                          | `readiness-requirements.test.ts` › is STILL READY when Redis is down, and reports it down   | KILLED |
+| F1-03 | An UNSTATED requirement counts as required                      | `required !== false` → `required === true`                        | `readiness-requirements.test.ts` › treats an UNSTATED requirement as required               | KILLED |
+| F1-04 | Redis is still REPORTED down — not made invisible               | the cache probe always returns `{ ok: true }`                     | `readiness-requirements.test.ts` › is STILL READY when Redis is down, and reports it down   | KILLED |
+
+### What E1-01 found that reading did not
+
+The gate was written, the unit test passed, and the integration test failed with
+`deferred: 0` and a schedule row reading `INTERNAL_ERROR`. The CHECK constraint on
+`panel_monitor_schedule.deferred_reason` is built from the contract enum by a
+migration, so a new reason is unwritable until one widens it: the insert violated
+the constraint, the candidate threw, and the monitor recorded the generic scheduler
+failure for a refusal it had understood perfectly well. Migration 0028 is in the
+contract commit for that reason. The unit test could not have found this — the
+constraint is in the database.
+
+It also found a defect in the test harness rather than in the product. Every panel
+suite built its adapter as `{ ...providerAdapter(type), probe }`, and the adapters
+are classes, so `supports` is a PROTOTYPE method that object spread does not copy.
+The stand-in had silently lost every prototype method and passed for as long as
+nothing called one; asking `supports()` failed 71 monitor cases at once, on a
+production change that was correct. `adapterWith` in `tests/integration/harness.ts`
+assigns onto the real instance instead. The bad version of this bug is the one
+where the test keeps passing — which is what a spread would do for any future
+method no test happens to exercise.
+
+### F1-03 is the row that needed the production code changed to be testable
+
+The predicate was a lambda inside `run`, and all four probes in that file state
+`required` explicitly — so `!== false` and `=== true` behave identically there and
+the mutation SURVIVED. The case that claimed to cover it restated the predicate in
+its own assertion, which is the "test that cannot fail" shape: it was green under
+the mutation because it was not reading the production line at all.
+
+`blocksReadiness` is now an exported free function, so it can be called with the
+shape a probe that omits the flag actually produces. That is the only way this rule
+is falsifiable, and the rule matters in exactly one direction: with `=== true` a
+dependency added without the flag is silently optional — down while the process
+reports ready, which is item F's defect pointing the other way.
+
+## Item E-3 — a producer check for the provider failure taxonomy
+
+No test file: it is a build-time check in `scripts/check-boundaries.sh`, like the
+`check:build` half of item D. Both halves were run by hand against a committed tree
+and the tree verified byte-identical afterwards.
+
+Adding `'A_KIND_NOTHING_PRODUCES'` to `PROVIDER_FAILURE_KINDS` makes the check
+report `FAIL  every provider failure kind has a producer`, and the vacuity guard
+beside it still reports `ok … (11 kinds)` — so the two are independent, which is
+the point of having both. Pointing the guard's `sed` range at a constant that does
+not exist makes it report `FAIL  The provider failure kinds could not be read from
+the contract` while the producer check above it reports `ok`: a reader that has
+stopped matching looks exactly like a vocabulary with no dead entries, and that is
+the failure the guard exists to separate.
+
+Ten kinds, ten producers. The reason this check was worth adding to a taxonomy that
+is currently complete is the shape of the tests that already existed: every one
+ITERATES the list to assert consumers handle each kind, which cannot notice a kind
+nothing produces — remove the only producer of `AUTHENTICATION_REQUIRES_INTERACTION`
+and every consumer test still passes, because the list still contains it.
+
 ## Method notes
 
 - Every row was run against a COMMITTED tree. The harness refuses a dirty target

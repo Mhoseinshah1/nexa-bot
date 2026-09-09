@@ -177,6 +177,15 @@ ever branches on a provider type.
   published to the Web Admin as a promise the product makes, and nothing on the
   server consults it. It is vacuous today, which is exactly when the gate is
   cheap to install.
+  **Fixed on this branch**: `attemptProbe` asks `supports('HEALTH_CHECK')` before
+  the credential read and before the URL check, and refuses with a new
+  `CAPABILITY_UNSUPPORTED` deferral reason (migration 0028 widens the CHECK
+  constraint, without which the reason is unwritable and every such panel is
+  recorded as `INTERNAL_ERROR`). The operator's path reports
+  `panel.capability_unsupported` instead of falling through to the cooldown
+  `return`, which answered 200 with `probed: false` and no message at all — and
+  that chain now ends in a `never` assignment, so the next refusal kind cannot
+  silently become "cooldown" either.
 - **E-2 — the probe cooldown floor understates the work it bounds.** The floor is
   `timeout × (1 + retries)`, and its comment says a shorter cooldown "would let a
   second request start while the first is still on the wire". But the deadline is
@@ -193,6 +202,11 @@ ever branches on a provider type.
   the list to assert consumers. `AUTHENTICATION_REQUIRES_INTERACTION` has exactly
   one producer; removing it would leave a live entry in a frozen taxonomy with a
   green suite.
+  **Fixed on this branch**: `scripts/check-boundaries.sh` scans the adapters and
+  the HTTP client — a kind named in the monitor's mapping is being CONSUMED — and
+  carries its own vacuity guard, because a `sed` range that has stopped matching
+  reads exactly like a taxonomy with no dead entries. Both halves were proved able
+  to fail.
 
 ## F — a Redis admission cache
 
@@ -212,6 +226,12 @@ counter by waiting out a cache eviction or a restart".
   outage makes the API healthcheck fail and can roll a release back, for a
   dependency that holds no state and that nothing reads. That is a self-inflicted
   availability gap and an argument _against_ depending on Redis, not for it.
+  **Fixed on this branch**: `DependencyStatus` gains an optional `required`, the
+  cache probe declares `false`, and the aggregation counts only
+  `blocksReadiness(d)` — `status === 'down' && required !== false`, so a probe that
+  forgot to say still counts. Redis is still probed and still reported down to an
+  administrator; making it invisible was the other available mistake. The trigger
+  to flip it back is written beside the value: the first thing that READS Redis.
 - **F-2 — the notification rate ceiling is per-process.** `windowStartedAt` and
   `sentInWindow` are instance fields, so two workers allow twice the configured
   rate and a restart resets the window. ADR-0018 states this plainly. It is the
