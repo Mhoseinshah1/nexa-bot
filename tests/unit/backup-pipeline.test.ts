@@ -48,6 +48,14 @@ class FakeRuns implements BackupRunRepository {
   reclaimed = 0;
   /** When set, `start` reports the installation is already busy. */
   busyWith: BackupRunRow | null = null;
+  /**
+   * Shared with the fake ops log, so the ORDER of the two writes is observable.
+   *
+   * The service records a recovery before finishing the row on purpose: a crash
+   * between the two must leave the condition open rather than resolved. Nothing
+   * could see that order, so swapping the two calls was a silent change.
+   */
+  readonly writes: string[] = [];
 
   async start(input: {
     id: string;
@@ -108,6 +116,7 @@ class FakeRuns implements BackupRunRepository {
     cleanupOk: boolean;
     cleanupDetail?: string | null;
   }): Promise<void> {
+    this.writes.push(`finish:${input.state}`);
     const row = this.rows.get(input.id);
     if (row === undefined) return;
     this.rows.set(input.id, {
@@ -299,6 +308,7 @@ function harness(): Harness {
     opsLog: {
       async record(_scope, event) {
         if (state.opsLogThrows) throw new Error('the ops log is unreachable');
+        runs.writes.push(`report:${event.code}`);
         state.recorded.push({
           code: event.code,
           severity: event.severity,
@@ -572,6 +582,25 @@ describe('the backup pipeline', () => {
     expect(recovery?.recoversCode).toBe('backup.run_failed');
     // A success that did not close the failure would leave an operator with a
     // permanently open condition and no way to clear it.
+  });
+
+  it('records the recovery BEFORE it finishes the row', async () => {
+    const h = harness();
+    await completed(h, 'SCHEDULED');
+
+    /*
+     * The order is the rule, and it is a crash-safety rule rather than a
+     * tidiness one. If the row were finished first and the process died before
+     * the recovery was recorded, the run would read SUCCEEDED while
+     * `backup.run_failed` stayed open — annoying, and self-correcting on the
+     * next run. The other order fails the other way: the condition is resolved
+     * while the row still reads RUNNING, so an operator is told the backup
+     * recovered when the run that was supposed to prove it never finished.
+     *
+     * An hour chasing a backup that is fine is the acceptable cost. Believing a
+     * broken backup recovered is not.
+     */
+    expect(h.runs.writes).toEqual(['report:backup.run_ok', 'finish:SUCCEEDED']);
   });
 
   it('records nothing rather than addressing an alert to nobody', async () => {
