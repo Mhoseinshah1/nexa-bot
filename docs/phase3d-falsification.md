@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 314 citations were checked; this record declares 328 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 328 citations were checked; this record declares 339 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -5134,9 +5134,14 @@ round 44 reverted. Not redesigned.
 
 ## The mutations
 
-Every mutation restored byte-identical (`sha256` prefix checked before and
-after: `authorized-mutation.ts` `df3bb6b970d8ad72`, `permission-guard.ts`
-`cd953ba929b5f3fe`, `admin-management.service.ts` `efa681dbe11fe485`).
+Every mutation restored byte-identical to the file it mutated (`sha256`
+prefix checked before and after: `authorized-mutation.ts` `df3bb6b970d8ad72`,
+`permission-guard.ts` `cd953ba929b5f3fe`, `admin-management.service.ts`
+`efa681dbe11fe485`). `permission-guard.ts` was then edited ONCE MORE before
+the commit — a comment that wrongly listed the monitor among the
+pre-transaction sites — so the committed file hashes to `460ba5b13dde6185`,
+not to the prefix the mutations were checked against. Round 46 found that
+gap and re-ran the guard mutations against the committed file.
 
 | #   | rule                                                             | mutation                                       | tests that die                                                                                                                                                                                                                                                                                                                                                                      |
 | --- | ---------------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -5175,6 +5180,83 @@ inside a transaction, so the branch on which the recorder is the emitter is
 reachable there only by a revocation landing between the early check and the
 lock — the barrier tests — and those assert a floor on the audit row, not the
 event. The unit pins are what hold that branch.
+
+## Round 46 — the twenty-seventh reviewer, and the hash that was of a file never committed
+
+Two confirmed findings, both documentary, and one observation that is the
+class this branch keeps meeting — a rule present in one recorder and absent
+one recorder over.
+
+### The restore check was against a file that was then edited
+
+Round 45 wrote "every mutation restored byte-identical" and cited three
+`sha256` prefixes. The reviewer hashed every committed version of
+`permission-guard.ts` back to its first commit: none hashes to the cited
+`cd953ba929b5f3fe`. The mutations WERE checked against that prefix — and
+then the file was edited once more, a comment correction, before the commit.
+So the sentence cited a probe against a state of the file nobody can check
+out. The record is corrected in place with both prefixes, and the guard
+mutations were re-run this round against the committed file
+(`460ba5b13dde6185`), below.
+
+### "Five pre-transaction sites" counted the monitor
+
+OQ-3D-03's resolution text said "the five pre-transaction sites". There are
+four `recordMutationDenial` call sites that check before a transaction —
+panels, settings, features, notifications — covering eight routes; the fifth
+call site is the monitor's, which checks INSIDE `uow.run` and was never on
+that path. The round-45 section and the commit message counted it correctly;
+the open-questions text did not. Corrected.
+
+### The recorder one module over
+
+`AdminManagementService.runLockedMutation` is a second after-the-fact
+recorder, and it wrote the event unconditionally. It was correct — every
+guard check inside a locked identity mutation passes `tx`, so the guard writes
+nothing and this is the emitter — but "the guard wrote nothing" is a fact about
+today's six call sites, not a rule the function can see, and it is the exact
+sentence that was true of `recordMutationDenial` inside a transaction and
+false outside one. It now asks the guard's marker, like the shared recorder.
+
+That change is unobservable in the code as committed, and the record says so
+rather than inventing a row: dropping the check alone leaves every suite green
+(AW3a below). It becomes observable the moment an in-lock check stops passing
+`tx` — which is the failure it exists to survive — so the mutation that pins
+it is the PAIR: drop the check AND drop `tx` from one in-lock site, and the
+identity-concurrency pin (now exact, replacing a `toContain` floor) fails with
+two events. Dropping `tx` alone, with the check in place, stays green, which is
+the hardening doing its job.
+
+## The mutations
+
+All against the committed files: `permission-guard.ts` `460ba5b13dde6185`,
+`admin-management.service.ts` `3de94021c6cee578` (this round's version).
+Suites: `authorization.test.ts` (13) and the four integration files
+identity-concurrency, admin-http, panels-http, transactional-authorization
+(98). Each file restored to its prefix after each row.
+
+| #   | rule                                               | mutation                                                                     | tests that die                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --- | -------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AW1 | the guard records on the pool, and only there      | `recorded = tx !== undefined` (a consistent inversion)                       | `authorization.test.ts` › is denied a permission outside that set; › records every denial as a WARN operational event naming the actor; › PRE-transaction: the guard writes the event, the recorder writes only the audit row; › IN-transaction: the guard writes nothing, the recorder writes the event and the audit row; › keeps the marker off the wire; › writes no audit row for a refusal that is not THIS permission; `admin-http.test.ts` › records the denial on create even when the body is nonsense; `identity-concurrency.test.ts` › settles a denied locked mutation with only ONE connection available |
+| AW2 | the guard writes NOTHING from inside a transaction | `recorded = true`                                                            | `authorization.test.ts` › IN-transaction: the guard writes nothing, the recorder writes the event and the audit row; `identity-concurrency.test.ts` › settles a denied locked mutation with only ONE connection available                                                                                                                                                                                                                                                                                                                                                                                              |
+| AW3 | `runLockedMutation` consults the guard's marker    | drop the check AND drop `tx` from the `setRoles` in-lock `admins.edit` check | `identity-concurrency.test.ts` › refuses a REMOVE-ONLY setRoles whose actor lost admins.edit                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+
+Measured:
+
+- AW1 — unit 6/13 (`expected [] to include 'access.permission_denied'`,
+  `expected undefined to be 'WARN'`, `the guard says it recorded: expected
+false to be true`, `the guard says it did NOT record: expected true to be
+false`); integration 2/98: `operational events for ONE malformed denial:
+expected +0 to be 1`, and the one-connection test times out at 40 s — the
+  guard writing on the pool from inside a transaction is the deadlock its
+  transactional branch exists to prevent.
+- AW2 — unit 1/13 (`the guard says it did NOT record: expected true to be
+false`); integration 1/98, the same one-connection timeout.
+- AW3a, the check dropped ALONE — 98/98 and 13/13 green. Recorded, not a row.
+- AW3 (the pair) — 1/98: `ONE in-lock refusal must leave ONE operational
+event: expected [ 'access.permission_denied', …(1) ] to deeply equal
+[ 'access.permission_denied' ]`.
+- AW3c, `tx` dropped with the check kept — 98/98 green.
 
 ## The microsecond truncation is still open, deliberately
 

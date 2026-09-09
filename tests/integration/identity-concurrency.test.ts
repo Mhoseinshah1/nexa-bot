@@ -877,10 +877,18 @@ describe('actor authority is re-checked under the lock', () => {
     // The denial is also an operational event, recorded AFTER the transaction
     // unwound — writing it from inside would take a second pool connection
     // while holding one and the tenant lock.
+    // EXACTLY one, for the one refused request above. The `toContain` floor
+    // this replaces could not see a second row, and a second row is one call
+    // site away: an in-lock check that stops passing `tx` makes the guard
+    // write the event itself, and `runLockedMutation` must then not write it
+    // again (OQ-3D-03). The guard's marker is what it consults.
     const events = await ctx.container.database.db.execute(
       `SELECT code FROM operational_events WHERE code = 'access.permission_denied'` as never,
     );
-    expect(JSON.stringify(events)).toContain('access.permission_denied');
+    expect(
+      (events.rows as Array<{ code: string }>).map((row) => row.code),
+      'ONE in-lock refusal must leave ONE operational event',
+    ).toEqual(['access.permission_denied']);
   });
 
   it('refuses a stale request that is genuinely CONTENDING for the lock', async () => {

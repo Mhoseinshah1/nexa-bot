@@ -30,7 +30,10 @@ import {
   type UnitOfWork,
   type ManagementAdminEventCode,
 } from '@nexa/contracts';
-import type { PermissionGuard } from '../../access/application/permission-guard.js';
+import {
+  denialEventRecorded,
+  type PermissionGuard,
+} from '../../access/application/permission-guard.js';
 import type { OutboxWriter } from '../../eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { DrizzleRoleRepository } from '../infrastructure/drizzle-role.repository.js';
@@ -1062,10 +1065,18 @@ export class AdminManagementService {
         const many = error.details['permissions'];
         const attempted = Array.isArray(many) ? many.map(String) : single ? [String(single)] : [];
 
-        await this.opsLog.record(
-          scope,
-          this.guard.denialEvent(actor, (attempted[0] ?? 'unknown') as PermissionKey),
-        );
+        // The guard is the authority on whether the operational event exists
+        // (OQ-3D-03). Every check inside a locked mutation passes `tx`, so the
+        // guard wrote nothing and this is the emitter — but that is a fact
+        // about today's callers, not a rule this function can see, and the
+        // shared recorder learned the hard way that "the guard wrote nothing"
+        // is exactly the sentence that goes false one call site over. Ask.
+        if (!denialEventRecorded(error)) {
+          await this.opsLog.record(
+            scope,
+            this.guard.denialEvent(actor, (attempted[0] ?? 'unknown') as PermissionKey),
+          );
+        }
         await this.audit.record(scope, actor, {
           action: denial.action,
           entityType: 'Admin',
