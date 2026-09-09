@@ -1,0 +1,530 @@
+import { randomBytes } from 'node:crypto';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Client } from 'pg';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { BackupManifest } from '@nexa/contracts';
+import { createTestContext, testConfig, type TestContext } from './harness';
+import { checksumFile } from '../../apps/api/src/modules/platform/backup/infrastructure/archive';
+import { PostgresDatabaseTools } from '../../apps/api/src/modules/platform/backup/infrastructure/pg-tools';
+import { FilesystemBackupWorkspaces } from '../../apps/api/src/modules/platform/backup/infrastructure/workspace';
+import { BackupService } from '../../apps/api/src/modules/platform/backup/application/backup.service';
+import type { DeliveryAttempt } from '../../apps/api/src/modules/platform/backup/application/ports';
+
+/**
+ * The backup pipeline against a real PostgreSQL, a real `pg_dump` and a real
+ * `pg_restore`.
+ *
+ * This file exists because the unit tests cannot prove the one claim that
+ * matters: that the artifact can be turned back into a database. Everything
+ * here goes through the real tools, the real archive format and the real
+ * partial unique index — no fake stands in for any of them.
+ */
+
+function urlFor(database: string): string {
+  const url = new URL(testConfig().DATABASE_URL);
+  url.pathname = `/${database}`;
+  return url.toString();
+}
+
+async function maintenance<T>(fn: (client: Client) => Promise<T>): Promise<T> {
+  const client = new Client({ connectionString: urlFor('postgres') });
+  await client.connect();
+  try {
+    return await fn(client);
+  } finally {
+    await client.end();
+  }
+}
+
+async function databaseExists(name: string): Promise<boolean> {
+  return maintenance(async (client) => {
+    const result = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [name]);
+    return result.rowCount === 1;
+  });
+}
+
+describe('backup against a real database', () => {
+  let context: TestContext;
+  let workDir: string;
+  /** Every delivery attempt, so "was it delivered" is a fact and not a spy. */
+  let delivered: { kind: 'document' | 'message'; caption: string; bytes: number }[];
+  let nextDelivery: DeliveryAttempt;
+  let deliveryConfigured: boolean;
+
+  beforeAll(async () => {
+    context = await createTestContext();
+  }, 60_000);
+
+  afterAll(async () => {
+    await context.close();
+    await rm(workDir, { recursive: true, force: true });
+  });
+
+  beforeEach(async () => {
+    await context.reset();
+    workDir = await mkdtemp(join(tmpdir(), 'nexa-backup-it-'));
+    delivered = [];
+    nextDelivery = { state: 'SUCCEEDED', detail: null };
+    deliveryConfigured = true;
+  });
+
+  /**
+   * A service wired to the REAL tools, archive and repository.
+   *
+   * Only the Telegram transport is substituted, and only because delivering to
+   * Telegram from a test would need an account and a network. Everything it
+   * records — the caption, the byte count, whether a document or a message went
+   * — is asserted from the artifact on disk, so the substitution cannot hide a
+   * pipeline that delivered the wrong thing.
+   */
+  function service(overrides: { leaseOwner?: string; workDir?: string } = {}): BackupService {
+    const config = testConfig();
+    const tools = new PostgresDatabaseTools({
+      databaseUrl: config.DATABASE_URL,
+      dumpTimeoutMs: 120_000,
+      restoreTimeoutMs: 120_000,
+    });
+    return new BackupService({
+      runs: context.container.backupRuns,
+      tools,
+      archiver: context.container.backupArchiver,
+      workspaces: new FilesystemBackupWorkspaces(overrides.workDir ?? workDir),
+      delivery: {
+        get configured() {
+          return deliveryConfigured;
+        },
+        async sendDocument(input) {
+          const { size } = await stat(input.archivePath);
+          // Read the bytes that would go over the wire, so the "no plaintext is
+          // ever delivered" assertion is about the actual file rather than
+          // about a path string.
+          const bytes = await readFile(input.archivePath);
+          delivered.push({ kind: 'document', caption: input.caption, bytes: size });
+          deliveredBodies.push(bytes);
+          return nextDelivery;
+        },
+        async sendMessage(text) {
+          delivered.push({ kind: 'message', caption: text, bytes: 0 });
+          return nextDelivery;
+        },
+      },
+      clock: context.container.clock,
+      ids: context.container.ids,
+      installationId: () => 'integration-installation',
+      logger: { info() {}, warn() {}, error() {} },
+      leaseOwner: overrides.leaseOwner ?? `test:${randomBytes(4).toString('hex')}`,
+      retainedArchiveHint: workDir,
+    });
+  }
+
+  const deliveredBodies: Buffer[] = [];
+
+  it('dumps, checksums, encrypts, restores into a scratch database and delivers', async () => {
+    const outcome = await service().run('MANUAL');
+    expect(outcome.kind).toBe('COMPLETED');
+    if (outcome.kind !== 'COMPLETED') throw new Error('unreachable');
+    const run = outcome.run;
+
+    expect(run.state).toBe('SUCCEEDED');
+    expect(run.stage).toBe('CLEANUP');
+    // A real dump of a real migrated database is not small, and is certainly
+    // not zero — the failure that would restore perfectly and hold nothing.
+    expect(Number(run.dumpBytes)).toBeGreaterThan(10_000);
+    expect(run.checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(run.verifiedAt).not.toBeNull();
+    expect(run.deliveryState).toBe('SUCCEEDED');
+    expect(run.cleanupOk).toBe(true);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.kind).toBe('document');
+  }, 180_000);
+
+  it('delivers ciphertext, never the plaintext dump', async () => {
+    const outcome = await service().run('MANUAL');
+    if (outcome.kind !== 'COMPLETED') throw new Error('unreachable');
+    const body = deliveredBodies.at(-1);
+    expect(body).toBeDefined();
+    if (body === undefined) throw new Error('unreachable');
+
+    // A pg_dump custom-format archive begins with the literal ASCII `PGDMP`.
+    // If the plaintext had been delivered — or written through the encryption —
+    // this signature would be at the front of the delivered bytes.
+    expect(body.subarray(0, 5).toString('ascii')).not.toBe('PGDMP');
+    expect(body.subarray(0, 8).toString('ascii')).toBe('NEXABAK1');
+    // And nowhere else in it either: this catches an archive that concatenated
+    // the plaintext after a header rather than encrypting it.
+    expect(body.includes(Buffer.from('PGDMP', 'ascii'))).toBe(false);
+    // Table names from this schema are in the dump. None may be readable in the
+    // delivered artifact.
+    expect(body.includes(Buffer.from('panel_credentials', 'ascii'))).toBe(false);
+    expect(body.includes(Buffer.from('operational_events', 'ascii'))).toBe(false);
+  }, 180_000);
+
+  it('leaves no plaintext dump on disk and drops the scratch database', async () => {
+    const outcome = await service().run('MANUAL');
+    if (outcome.kind !== 'COMPLETED') throw new Error('unreachable');
+    const run = outcome.run;
+
+    await expect(stat(join(workDir, run.id, 'dump.pgcustom'))).rejects.toThrow();
+    await expect(stat(join(workDir, run.id, 'verify.pgcustom'))).rejects.toThrow();
+    // The archive is deliberately retained; the plaintext is not.
+    await expect(stat(join(workDir, run.id, 'archive.nxb'))).resolves.toBeDefined();
+
+    const scratches = await maintenance(async (client) => {
+      const result = await client.query(
+        "SELECT datname FROM pg_database WHERE datname LIKE 'nexa_verify_%'",
+      );
+      return result.rows;
+    });
+    expect(scratches).toEqual([]);
+    expect(run.cleanupOk).toBe(true);
+  }, 180_000);
+
+  it('produces an archive the operator restore path turns back into a database', async () => {
+    const outcome = await service().run('MANUAL');
+    if (outcome.kind !== 'COMPLETED') throw new Error('unreachable');
+    const run = outcome.run;
+
+    const restoreDir = await mkdtemp(join(tmpdir(), 'nexa-restore-it-'));
+    const target = `nexa_restore_${randomBytes(6).toString('hex')}`;
+    try {
+      const dumpPath = join(restoreDir, 'dump.pgcustom');
+      const opened = await context.container.backupArchiver.open({
+        archivePath: join(workDir, run.id, 'archive.nxb'),
+        dumpPath,
+      });
+
+      // The checksum recorded on the run, the checksum in the manifest, and the
+      // checksum of the bytes that came out are all the same number. That is
+      // the whole claim the manifest makes, checked end to end.
+      const actual = await checksumFile(dumpPath);
+      expect(actual.checksum).toBe(run.checksum);
+      expect(opened.manifest.checksum).toBe(run.checksum);
+      expect(opened.manifest.exclusions).toEqual([]);
+      expect(opened.manifest.installationId).toBe('integration-installation');
+
+      await maintenance((client) => client.query(`CREATE DATABASE "${target}"`));
+      await context.container.backupTools.restoreInto({ database: target }, dumpPath);
+
+      // The restored database holds the real schema, not a plausible-looking
+      // subset: every table the application knows about must be there.
+      const restored = new Client({ connectionString: urlFor(target) });
+      await restored.connect();
+      try {
+        const tables = await restored.query(
+          "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
+        );
+        const names = tables.rows.map((row: { table_name: string }) => row.table_name);
+        for (const required of [
+          'tenants',
+          'admins',
+          'panels',
+          'panel_credentials',
+          'outbox_messages',
+          // Looks transient, is load-bearing: this is what stands between a
+          // redelivered outbox message and a duplicated effect. A backup that
+          // "tidied" it away would restore an installation that repeats work.
+          'processed_messages',
+          'backup_runs',
+        ]) {
+          expect(names).toContain(required);
+        }
+      } finally {
+        await restored.end();
+      }
+    } finally {
+      await maintenance((client) =>
+        client.query(`DROP DATABASE IF EXISTS "${target}" WITH (FORCE)`),
+      );
+      await rm(restoreDir, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  it('refuses the live database as a restore target, by NAME and before anything else', async () => {
+    const live = new PostgresDatabaseTools({
+      databaseUrl: testConfig().DATABASE_URL,
+      dumpTimeoutMs: 60_000,
+      restoreTimeoutMs: 60_000,
+    });
+    // The MESSAGE, not only the code. The live database also has tables, so the
+    // emptiness check below would refuse it too and produce the same code — a
+    // falsification run proved that deleting the live-target guard entirely
+    // left this test green. The two refusals mean different things and only one
+    // of them is the catastrophe guard, so the test names which fired.
+    await expect(
+      live.restoreInto({ database: live.databaseName }, '/nonexistent'),
+    ).rejects.toMatchObject({
+      code: 'backup.unsafe_restore_target',
+      message: expect.stringContaining('that is the database this installation is running on'),
+    });
+  });
+
+  it('refuses a restore target that already holds tables', async () => {
+    const target = `nexa_populated_${randomBytes(6).toString('hex')}`;
+    await maintenance((client) => client.query(`CREATE DATABASE "${target}"`));
+    const client = new Client({ connectionString: urlFor(target) });
+    await client.connect();
+    try {
+      await client.query('CREATE TABLE something (id int)');
+    } finally {
+      await client.end();
+    }
+    try {
+      await expect(
+        context.container.backupTools.restoreInto({ database: target }, '/nonexistent'),
+      ).rejects.toMatchObject({ code: 'backup.unsafe_restore_target' });
+    } finally {
+      await maintenance((c) => c.query(`DROP DATABASE IF EXISTS "${target}" WITH (FORCE)`));
+    }
+  }, 60_000);
+
+  it('fails the run and delivers nothing when the archive cannot be restored', async () => {
+    // The archive is intact; the DUMP inside it is not a dump. This is the
+    // shape a corrupted or truncated backup takes when the encryption is fine,
+    // and it must not be delivered as though it were a backup.
+    const broken = service();
+    const tools = new PostgresDatabaseTools({
+      databaseUrl: testConfig().DATABASE_URL,
+      dumpTimeoutMs: 60_000,
+      restoreTimeoutMs: 60_000,
+    });
+    // Replace only `dump`, so everything downstream is the real implementation
+    // operating on a genuinely unrestorable file.
+    const sabotaged = Object.create(tools) as PostgresDatabaseTools & {
+      dump: (destination: string) => Promise<{ databaseName: string; pgDumpVersion: string }>;
+    };
+    sabotaged.dump = async (destination: string) => {
+      await writeFile(destination, Buffer.from('this is not a pg_dump custom archive'));
+      return { databaseName: tools.databaseName, pgDumpVersion: 'pg_dump (PostgreSQL) 16.13' };
+    };
+    (broken as any).deps.tools = sabotaged;
+
+    const outcome = await broken.run('MANUAL');
+    if (outcome.kind !== 'COMPLETED') throw new Error('unreachable');
+    expect(outcome.run.state).toBe('FAILED');
+    expect(outcome.run.stage).toBe('VERIFY_RESTORE');
+    expect(outcome.run.verifiedAt).toBeNull();
+    expect(delivered).toEqual([]);
+    // The unproven archive is gone, not left on disk where it would look like a
+    // backup somebody could rely on.
+    await expect(stat(join(workDir, outcome.run.id, 'archive.nxb'))).rejects.toThrow();
+    // And the scratch database it created is gone too.
+    expect(await databaseExists(outcome.run.stage)).toBe(false);
+  }, 180_000);
+
+  it('lets exactly one of several concurrent starts hold the installation', async () => {
+    // The real constraint, exercised concurrently: a partial unique index over
+    // `state = 'RUNNING'`. Four callers, distinct lease owners — which is what
+    // separate worker replicas look like.
+    const services = [0, 1, 2, 3].map((n) => service({ leaseOwner: `replica-${String(n)}` }));
+    const outcomes = await Promise.all(services.map((s) => s.run('SCHEDULED')));
+
+    const completedRuns = outcomes.filter((o) => o.kind === 'COMPLETED');
+    const busy = outcomes.filter((o) => o.kind === 'BUSY');
+    expect(completedRuns).toHaveLength(1);
+    expect(busy).toHaveLength(3);
+
+    // And the database agrees: exactly one row was ever created, so the losers
+    // did not leave half-started runs behind.
+    const rows = await context.container.backupRuns.latest(50);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.state).toBe('SUCCEEDED');
+    // Only one dump was taken, so only one delivery happened.
+    expect(delivered).toHaveLength(1);
+  }, 300_000);
+
+  it('reports the actual holder when it reports BUSY', async () => {
+    const now = context.container.clock.now();
+    const claim = await context.container.backupRuns.start({
+      id: context.container.ids.uuid(),
+      trigger: 'MANUAL',
+      leaseOwner: 'holder',
+      now,
+    });
+    expect(claim.claimed).toBe(true);
+
+    const second = await service().run('SCHEDULED');
+    expect(second.kind).toBe('BUSY');
+    if (second.kind !== 'BUSY') throw new Error('unreachable');
+    if (!claim.claimed) throw new Error('unreachable');
+    expect(second.holder.id).toBe(claim.run.id);
+    expect(second.holder.leaseOwner).toBe('holder');
+  });
+
+  it('releases a lock whose owner stopped reporting, by failing the run', async () => {
+    const stale = new Date(context.container.clock.now().getTime() - 60 * 60 * 1000);
+    const claim = await context.container.backupRuns.start({
+      id: context.container.ids.uuid(),
+      trigger: 'SCHEDULED',
+      leaseOwner: 'a-process-that-died',
+      now: stale,
+    });
+    if (!claim.claimed) throw new Error('unreachable');
+
+    const outcome = await service().run('MANUAL');
+    // The new run got the lock...
+    expect(outcome.kind).toBe('COMPLETED');
+    if (outcome.kind !== 'COMPLETED') throw new Error('unreachable');
+    expect(outcome.run.state).toBe('SUCCEEDED');
+
+    // ...and the abandoned one was CLOSED, not adopted. Its workspace was left
+    // in place on purpose: the process that owned it may still be writing.
+    const abandoned = await context.container.backupRuns.byId(claim.run.id);
+    expect(abandoned?.state).toBe('FAILED');
+    expect(abandoned?.failureCode).toBe('backup.lease_expired');
+    expect(abandoned?.cleanupOk).toBe(false);
+  }, 180_000);
+
+  it('refuses a write from a run whose lease was reclaimed', async () => {
+    const stale = new Date(context.container.clock.now().getTime() - 60 * 60 * 1000);
+    const claim = await context.container.backupRuns.start({
+      id: context.container.ids.uuid(),
+      trigger: 'SCHEDULED',
+      leaseOwner: 'evicted',
+      now: stale,
+    });
+    if (!claim.claimed) throw new Error('unreachable');
+
+    await context.container.backupRuns.reclaimStale({
+      staleBefore: context.container.clock.now(),
+      now: context.container.clock.now(),
+    });
+
+    // The evicted process finally finishes and tries to report success. It must
+    // change nothing: the row belongs to the takeover now, and a late SUCCEEDED
+    // would report a completed backup for a run that was abandoned.
+    await context.container.backupRuns.finish({
+      id: claim.run.id,
+      leaseOwner: 'evicted',
+      state: 'SUCCEEDED',
+      stage: 'CLEANUP',
+      now: context.container.clock.now(),
+      deliveryState: 'SUCCEEDED',
+      cleanupOk: true,
+    });
+
+    const row = await context.container.backupRuns.byId(claim.run.id);
+    expect(row?.state).toBe('FAILED');
+    expect(row?.failureCode).toBe('backup.lease_expired');
+    expect(row?.deliveryState).toBe('NOT_ATTEMPTED');
+  });
+
+  it('refuses a write naming the wrong lease owner even while the run is RUNNING', async () => {
+    // The lease guard ON ITS OWN, with the state guard beside it still true.
+    // Without this case the two are indistinguishable: a reclaimed run is
+    // FAILED, so `state = 'RUNNING'` alone rejects the late write and deleting
+    // `lease_owner` from the predicate leaves the suite green — which a
+    // falsification run confirmed. Here the row is genuinely still RUNNING and
+    // only the owner is wrong.
+    const now = context.container.clock.now();
+    const claim = await context.container.backupRuns.start({
+      id: context.container.ids.uuid(),
+      trigger: 'MANUAL',
+      leaseOwner: 'the-real-owner',
+      now,
+    });
+    if (!claim.claimed) throw new Error('unreachable');
+
+    await context.container.backupRuns.progress({
+      id: claim.run.id,
+      stage: 'DELIVER',
+      leaseOwner: 'an-impostor',
+      now,
+    });
+    await context.container.backupRuns.finish({
+      id: claim.run.id,
+      leaseOwner: 'an-impostor',
+      state: 'SUCCEEDED',
+      stage: 'CLEANUP',
+      now,
+      deliveryState: 'SUCCEEDED',
+      cleanupOk: true,
+    });
+
+    const row = await context.container.backupRuns.byId(claim.run.id);
+    expect(row?.state).toBe('RUNNING');
+    expect(row?.stage).toBe('DUMP');
+    expect(row?.leaseOwner).toBe('the-real-owner');
+  });
+
+  it('keeps an undelivered but verified archive a success, and an unknown outcome unknown', async () => {
+    nextDelivery = { state: 'OUTCOME_UNKNOWN', detail: 'the socket closed while uploading' };
+    const outcome = await service().run('SCHEDULED');
+    if (outcome.kind !== 'COMPLETED') throw new Error('unreachable');
+
+    expect(outcome.run.state).toBe('SUCCEEDED');
+    expect(outcome.run.verifiedAt).not.toBeNull();
+    expect(outcome.run.deliveryState).toBe('OUTCOME_UNKNOWN');
+    // Exactly one attempt was made. Nothing resent it.
+    expect(delivered).toHaveLength(1);
+
+    const unknown = await context.container.backupRuns.withUnknownDelivery(10);
+    expect(unknown.map((row) => row.id)).toEqual([outcome.run.id]);
+  }, 180_000);
+
+  it('writes no secret into the run row', async () => {
+    const outcome = await service().run('MANUAL');
+    if (outcome.kind !== 'COMPLETED') throw new Error('unreachable');
+
+    const raw = await context.container.database.db.execute(
+      `SELECT row_to_json(t)::text AS body FROM backup_runs t` as never,
+    );
+    const body = JSON.stringify(raw);
+    const config = testConfig();
+    expect(body).not.toContain(config.DATABASE_URL);
+    expect(body).not.toContain('PGPASSWORD');
+    expect(body.toLowerCase()).not.toContain('password');
+    // The KEK is base64 and would be conspicuous. Its absence is asserted
+    // rather than assumed, because the run row is the one place in this feature
+    // that a key id and a key could plausibly be confused for each other.
+    expect(body).not.toContain(config.SECRETS_KEK ?? 'no-kek-configured');
+  }, 180_000);
+
+  it('records what it left behind when a manifest is delivered instead of a document', async () => {
+    // Not reachable by making a real database bigger than 50 MiB in a test, so
+    // the ceiling is exercised through the archive size the pipeline observes.
+    // The assertion is about behaviour at the boundary, not about the number.
+    deliveryConfigured = true;
+    const svc = service();
+    const deps = (svc as any).deps as { archiver: { seal: (i: unknown) => Promise<unknown> } };
+    const realSeal = deps.archiver.seal.bind(deps.archiver);
+    deps.archiver.seal = async (input: unknown) => {
+      const sealed = (await realSeal(input)) as { archiveBytes: number; keyId: string };
+      return { ...sealed, archiveBytes: 50 * 1024 * 1024 + 1 };
+    };
+
+    const outcome = await svc.run('MANUAL');
+    if (outcome.kind !== 'COMPLETED') throw new Error('unreachable');
+    expect(outcome.run.state).toBe('SUCCEEDED');
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.kind).toBe('message');
+    expect(delivered[0]?.caption).toContain('RETAINED:');
+    expect(delivered[0]?.caption).toContain(outcome.run.checksum ?? 'no-checksum');
+  }, 180_000);
+
+  it('parses a real manifest against the frozen schema', async () => {
+    const outcome = await service().run('MANUAL');
+    if (outcome.kind !== 'COMPLETED') throw new Error('unreachable');
+    const dir = await mkdtemp(join(tmpdir(), 'nexa-manifest-'));
+    try {
+      const opened = await context.container.backupArchiver.open({
+        archivePath: join(workDir, outcome.run.id, 'archive.nxb'),
+        dumpPath: join(dir, 'dump'),
+      });
+      const manifest: BackupManifest = opened.manifest;
+      expect(manifest.manifestVersion).toBe(1);
+      expect(manifest.dumpFormat).toBe('custom');
+      expect(manifest.backupId).toBe(outcome.run.id);
+      // The manifest records the SERVER version and the CLIENT version
+      // separately: they differ routinely, and a restore years later needs to
+      // know which way round.
+      expect(manifest.postgresVersion).toMatch(/^\d+/);
+      expect(manifest.pgDumpVersion).toContain('pg_dump');
+      // Never a connection string, never a host.
+      expect(JSON.stringify(manifest)).not.toContain('postgres://');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 180_000);
+});

@@ -24,7 +24,16 @@ import type { SecretKeyring } from '../../apps/api/src/infrastructure/crypto/key
 const KEY_A = 'ka';
 const KEY_B = 'kb';
 
-function keyringWith(entries: readonly (readonly [string, Buffer])[], active: string): SecretKeyring {
+/** Changes one base64url character to another, keeping the length identical. */
+function flip(value: string): string {
+  const head = value[0] === 'A' ? 'B' : 'A';
+  return head + value.slice(1);
+}
+
+function keyringWith(
+  entries: readonly (readonly [string, Buffer])[],
+  active: string,
+): SecretKeyring {
   return { activeKeyId: active, keys: new Map(entries), format: 'canonical' };
 }
 
@@ -276,15 +285,100 @@ describe('the backup archive format', () => {
     });
   });
 
-  it('produces a different ciphertext for the same input every time', async () => {
-    // The data key and both nonces are random per archive. Identical archives
-    // for identical input would mean a fixed nonce somewhere, which under
-    // AES-GCM is the failure that loses the key rather than merely the message.
+  it('gives every archive fresh key material and fresh nonces', async () => {
     const first = join(dir, 'one.nxb');
     const second = join(dir, 'two.nxb');
     await sealArchive({ dumpPath, archivePath: first, manifest, keyring: ring });
     await sealArchive({ dumpPath, archivePath: second, manifest, keyring: ring });
+
+    const a = (await readArchiveHeader(first)).header;
+    const b = (await readArchiveHeader(second)).header;
+
+    // The NONCES, field by field, not merely "the files differ". Two archives
+    // differ as soon as the data key is fresh, so a whole-file comparison stays
+    // green with a hard-coded IV — which a falsification run confirmed. Under
+    // AES-GCM a repeated nonce is the failure that costs the key rather than
+    // the message, so it is asserted where it lives.
+    expect(a.iv).not.toBe(b.iv);
+    expect(a.wrapIv).not.toBe(b.wrapIv);
+    // And the wrapped key differs, which is what proves the data key is
+    // per-archive rather than derived from the KEK once.
+    expect(a.wrappedKey).not.toBe(b.wrappedKey);
     expect(await readFile(first)).not.toEqual(await readFile(second));
+  });
+
+  it('refuses an archive with ANY header field edited', async () => {
+    // The real guarantee, and it is stated here rather than in a comment
+    // because a comment claiming it went unchecked for a round: every header
+    // field is cryptographically load-bearing, by one mechanism or another.
+    // `keyId` and `backupId` are the key-unwrap's associated data, the three
+    // wrap fields are the wrap itself, `iv` is the payload nonce, and `format`
+    // and `cipher` are literals the schema pins. Editing any one is refused.
+    // A keyring holding BOTH keys, so the `keyId` edit selects a key this
+    // installation really has. Against a single-key ring it would fail as "no
+    // such key", which is a configuration answer rather than a cryptographic
+    // one and would not prove the field is bound.
+    const both = keyringWith(
+      [
+        [KEY_A, keyA],
+        [KEY_B, keyB],
+      ],
+      KEY_A,
+    );
+    await sealArchive({ dumpPath, archivePath, manifest, keyring: both });
+    const original = await readFile(archivePath);
+    const { payloadOffset, header } = await readArchiveHeader(archivePath);
+    const headerText = original.subarray(12, payloadOffset).toString('utf8');
+
+    // Same-length substitutions, so the length prefix stays honest and the only
+    // thing that changed is the value.
+    //
+    // The expected CODE is part of each row, not a loose "it threw something".
+    // A regex accepting either refusal let a real mutation survive: dropping
+    // `backupId` and `keyId` from the key-unwrap's associated data still failed
+    // the run, because the edited id was then caught downstream by the
+    // manifest-versus-header comparison and reported as MALFORMED. Same red,
+    // different mechanism, and the binding under test was gone. Pinning the
+    // code per field is what makes each row name one rule.
+    const AUTH = 'backup.archive_auth_failed';
+    const MALFORMED = 'backup.archive_malformed';
+    const edits: [keyof typeof header, string, string, string][] = [
+      // Bound as the key-unwrap's associated data.
+      ['backupId', '00000000aaaa', '00000000bbbb', AUTH],
+      ['keyId', `"keyId":"${KEY_A}"`, `"keyId":"${KEY_B}"`, AUTH],
+      // The wrap itself.
+      ['wrapIv', `"wrapIv":"${header.wrapIv}"`, `"wrapIv":"${flip(header.wrapIv)}"`, AUTH],
+      [
+        'wrappedKey',
+        `"wrappedKey":"${header.wrappedKey}"`,
+        `"wrappedKey":"${flip(header.wrappedKey)}"`,
+        AUTH,
+      ],
+      ['wrapTag', `"wrapTag":"${header.wrapTag}"`, `"wrapTag":"${flip(header.wrapTag)}"`, AUTH],
+      // The payload nonce.
+      ['iv', `"iv":"${header.iv}"`, `"iv":"${flip(header.iv)}"`, AUTH],
+      // Literals the schema pins, so these are refused before any key is used.
+      ['format', '"format":1', '"format":2', MALFORMED],
+      ['cipher', '"cipher":"aes-256-gcm"', '"cipher":"aes-256-cbc"', MALFORMED],
+    ];
+
+    for (const [field, from, to, code] of edits) {
+      expect(headerText).toContain(from);
+      expect(to.length).toBe(from.length);
+      const edited = Buffer.from(original);
+      edited.write(headerText.replace(from, to), 12, 'utf8');
+      const path = join(dir, `edited-${String(field)}.nxb`);
+      await writeFile(path, edited);
+      // Refused — by whichever mechanism protects that field. What must never
+      // happen is that it decrypts into something the edit chose.
+      await expect(
+        openArchive({
+          archivePath: path,
+          dumpPath: join(dir, `o-${String(field)}`),
+          keyring: both,
+        }),
+      ).rejects.toMatchObject({ code });
+    }
   });
 
   it('carries an empty exclusion list, because nothing is excluded', async () => {

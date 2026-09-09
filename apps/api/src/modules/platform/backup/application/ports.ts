@@ -66,12 +66,19 @@ export interface BackupWorkspace {
   readonly dumpPath: string;
   readonly archivePath: string;
   /**
-   * Where verification decrypts to — a SECOND path, never `dumpPath`.
+   * Where verification decrypts to — a second path, not `dumpPath`.
    *
-   * Decrypting over the dump we are about to checksum would make the
-   * verification tautological: the file it restores would be the file it just
-   * overwrote, so an archive that decrypted to nothing at all would still
-   * restore whatever happened to remain. Two paths keep the comparison real.
+   * HYGIENE, not a correctness rule, and it is labelled that way because the
+   * first version of this comment claimed otherwise: it said sharing the path
+   * would make the verification tautological. It would not. The decrypted bytes
+   * are compared against a checksum taken BEFORE the encryption, so an archive
+   * that decrypted to the wrong thing is caught whichever file it lands in —
+   * and a falsification run confirmed it, with the two paths collapsed into one
+   * and the whole integration suite still green.
+   *
+   * What it actually buys is not destroying an input while it is still held,
+   * which keeps a failed decrypt from leaving one truncated file where two
+   * distinct artifacts were.
    */
   readonly verifyDumpPath: string;
   /** Removes the plaintext dump. Returns what it could not remove. */

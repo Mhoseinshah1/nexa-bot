@@ -33,8 +33,8 @@ class DirectoryWorkspace implements BackupWorkspace {
   constructor(private readonly directory: string) {
     this.dumpPath = join(directory, 'dump.pgcustom');
     this.archivePath = join(directory, 'archive.nxb');
-    // A second path, never `dumpPath`. Decrypting over the file we checksummed
-    // would make the verification tautological.
+    // A second path, so a failed decrypt does not truncate the dump that is
+    // still being held. Hygiene rather than a correctness rule — see the port.
     this.verifyDumpPath = join(directory, 'verify.pgcustom');
   }
 

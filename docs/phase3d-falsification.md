@@ -2629,10 +2629,10 @@ contribute no titles now.
 | V5  | a card header states nothing the card withheld         | read `panels.data` directly            | `dashboard.test.tsx` › says nothing about a fleet it could not read                                                                                  |
 | V6  | the scan sees the NEGATED spelling                     | `{!detail.isError && detail.data && (` | `state-switch-contract.test.tsx` › renders no view off a bare isError unless it is a mutation                                                        |
 
-| #    | rule                                     | mutation                    | what the check prints                                         |
-| ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 405 citations were checked; this record declares 407 |
-| U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
+| #    | rule                                     | mutation                    | what the check prints                                                |
+| ---- | ---------------------------------------- | --------------------------- | -------------------------------------------------------------------- |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 405 citations were checked; this record declares 407 (then) |
+| U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair                    |
 
 ## One flake, recorded rather than re-run away
 
