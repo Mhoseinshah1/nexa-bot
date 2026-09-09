@@ -165,6 +165,8 @@ ever branches on a provider type.
   second probe of the same panel can be granted while the first login sequence is
   still running — against a panel that counts failed logins per IP and username,
   which is the lockout this cooldown exists to prevent.
+  **Fixed on this branch**: `ProviderDescriptor.maxRequestsPerProbe`, the derived
+  `MAX_REQUESTS_PER_PROBE`, and that term added to the floor in `container.ts`.
 - **E-3 — no producer check for the failure taxonomy.** The boundary script fails
   the build for a declared _error code_ with no producer;
   `PROVIDER_FAILURE_KINDS` gets no equivalent, and every existing test iterates

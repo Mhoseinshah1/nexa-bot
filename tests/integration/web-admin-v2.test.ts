@@ -4,6 +4,7 @@ import {
   API_PREFIX,
   AUTH_ROUTES,
   CONTROL_ROUTES,
+  MAX_REQUESTS_PER_PROBE,
   monitorProfileResponseSchema,
   CONTROL_ERROR_CODES,
   operationalEventListResponseSchema,
@@ -1300,12 +1301,21 @@ describe('the Web Admin V2 surface', () => {
      * whose two settings disagree.
      *
      * The probe core floors the cooldown at what one probe can actually spend
-     * on the wire — `max(PANEL_PROBE_COOLDOWN_MS, PANEL_HTTP_TIMEOUT_MS x (1 +
-     * retries))` — because a shorter window would let a second request start
+     * on the wire, because a shorter window would let a second request start
      * while the first is still open. The profile published the RAW setting, so
      * a deployment configured at one second reported a one-second cooldown
      * while every panel was held for the full HTTP budget. The endpoint's whole
      * contract is that it describes what this installation is running.
+     *
+     * The floor itself was then wrong in the same direction, which is why this
+     * case now expects four times what it used to. It read
+     * `PANEL_HTTP_TIMEOUT_MS x (1 + retries)` — ONE request's budget — because
+     * `SafeHttpClient` starts its deadline per request and a probe was assumed
+     * to be one request. A 3X-UI session probe makes four, so at these very
+     * settings the floor was 20s while the probe it bounded could occupy 80s,
+     * and a second probe of the same panel could be granted while the first
+     * login sequence was still on the wire — against a panel that counts failed
+     * logins per address and username.
      *
      * A second app, with its own configuration, because the defect is in what
      * `createContainer` hands to two different objects and no test of either
@@ -1345,7 +1355,16 @@ describe('the Web Admin V2 surface', () => {
 
         // NOT the configured 1000.
         expect(monitor.probeCooldownMs).not.toBe(config.PANEL_PROBE_COOLDOWN_MS);
-        expect(monitor.probeCooldownMs).toBe(20_000);
+        // The literal is the load-bearing assertion. Expressing it only as
+        // `20_000 * MAX_REQUESTS_PER_PROBE` would re-implement the production
+        // formula here, and a test that recomputes the rule it is checking
+        // passes whatever the rule becomes.
+        expect(monitor.probeCooldownMs).toBe(80_000);
+        // And the relationship, so raising a provider's request count without
+        // looking at this file is a failure rather than a silent drift.
+        expect(monitor.probeCooldownMs).toBe(20_000 * MAX_REQUESTS_PER_PROBE);
+        // The rule in one line: a whole probe, not one request of it.
+        expect(monitor.probeCooldownMs).toBeGreaterThan(config.PANEL_HTTP_TIMEOUT_MS);
       } finally {
         await other.close();
       }

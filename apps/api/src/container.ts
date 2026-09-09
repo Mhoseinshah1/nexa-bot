@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { MAX_REQUESTS_PER_PROBE } from '@nexa/contracts';
 import type {
   AuditWriter,
   Clock,
@@ -556,9 +557,19 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // times the budget, and a floor written as one budget would silently stop
     // being a floor. It is the same constant the client is built with, so the
     // two cannot drift.
+    //
+    // And `MAX_REQUESTS_PER_PROBE`, because a probe is not one request. That
+    // was the assumption this floor was built on and it was wrong: the deadline
+    // is per REQUEST, Marzban's probe makes two and 3X-UI's session probe makes
+    // four, so at the defaults the floor was ten seconds while a session probe
+    // could occupy forty. A second probe of the same panel could therefore be
+    // granted while the first login sequence was still on the wire — against a
+    // panel that counts failed logins per address and username, which is the
+    // account lockout this window exists to prevent. Derived from the
+    // descriptors so a new adapter cannot quietly falsify it.
     probeCooldownMs: Math.max(
       config.PANEL_PROBE_COOLDOWN_MS,
-      config.PANEL_HTTP_TIMEOUT_MS * (1 + PANEL_HTTP_RETRIES),
+      config.PANEL_HTTP_TIMEOUT_MS * (1 + PANEL_HTTP_RETRIES) * MAX_REQUESTS_PER_PROBE,
     ),
     probeBudget: {
       capacity: config.PANEL_PROBE_TENANT_LIMIT,
