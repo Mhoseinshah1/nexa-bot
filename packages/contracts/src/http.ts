@@ -49,6 +49,30 @@ export const dependencyStatusSchema = z.object({
   status: z.enum(['up', 'down']),
   detail: z.string().optional(),
   latencyMs: z.number().nonnegative().optional(),
+  /**
+   * Whether this dependency being down makes the process NOT READY.
+   *
+   * Reported rather than implied, because the two are not the same question and
+   * conflating them produced a real availability gap: Redis is probed, and Redis
+   * stores nothing. `createRedis` is constructed, handed to this probe, exported
+   * and closed — four references — and the only command issued anywhere is
+   * `ping`. Every piece of admission, rate-limit and idempotency state is in
+   * PostgreSQL, on purpose: `login_throttle` writes down why, that an attacker
+   * must not be able to clear their own counter by waiting out a cache eviction.
+   *
+   * So a Redis outage used to fail the API's healthcheck and could roll a release
+   * back, for a dependency that holds no state and that nothing reads. That is a
+   * self-inflicted outage, and `docs/hardening-audit.md` § F records it as an
+   * argument against depending on Redis rather than for it.
+   *
+   * An administrator still SEES it down — the detail is the point of the
+   * authenticated endpoint — and the load balancer is no longer told the process
+   * cannot serve traffic it can serve.
+   *
+   * Optional so an older client parses a newer response; absent means required,
+   * which is the safe reading.
+   */
+  required: z.boolean().optional(),
 });
 export type DependencyStatus = z.infer<typeof dependencyStatusSchema>;
 

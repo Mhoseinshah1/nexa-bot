@@ -289,7 +289,11 @@ export function deferralIntervalMs(reason: MonitorDeferralReason): number {
     case 'TARGET_BLOCKED':
     case 'STATUS_NOT_PROBEABLE':
     case 'NOT_AUTHORIZED':
+    case 'CAPABILITY_UNSUPPORTED':
     case 'INTERNAL_ERROR':
+      // `CAPABILITY_UNSUPPORTED` is the most stable of all: it is a property of
+      // the ADAPTER, which is code, so it cannot change without a release.
+      //
       // `INTERNAL_ERROR` is stable for the same reason as the rest: an envelope
       // that will not decrypt this minute will not decrypt in the next one
       // either, so a corrupt row costs its tenant one slot an hour rather than
