@@ -7,19 +7,19 @@ and the notification dispatcher polls Postgres.)
 
 **Phases 0, 1 and 2 are done: foundation, identity and RBAC, then the control
 plane** — templates, settings, feature flags, notifications and the operational
-log. **Phase 3 is in progress**: 3A gave providers, panels, credentials and
-health; 3B added the MHSanaei/3x-ui v3.7.0 adapter; **3C is the current work**
-— a dedicated `monitor` process role that keeps panel health up to date on a
-schedule. There are still no product features: no purchases, payments, wallet,
-resellers or customer-facing Telegram operations, and nothing consumes a panel
-yet. Do not add them without an explicit instruction.
+log. **Phase 3 is done**: 3A gave providers, panels, credentials and health; 3B
+added the MHSanaei/3x-ui v3.7.0 adapter; 3C a dedicated `monitor` process role
+that keeps panel health up to date on a schedule; 3D the Web Admin. **Telegram
+Backup V1 is done** — the disaster-recovery pipeline, ADR-0025 and
+`docs/backup.md`. There are still no product features: no purchases, payments,
+wallet, resellers or customer-facing Telegram operations, and nothing consumes a
+panel yet. Do not add them without an explicit instruction.
 
 **The deployment checkpoint after Phase 2 is done too**: an immutable image,
 a production Compose topology behind Caddy, an Ubuntu installer, and `botctl`
 with update and rollback (ADR-0022, `docs/deployment.md`). It has never been
 run against a real server — `docs/vps-acceptance.md` is the checklist that
-decides that. `BLOCKER-SECRETS-V2` is still open and is the next prerequisite
-before Phase 3.
+decides that. `BLOCKER-SECRETS-V2` is still open.
 
 Three deployment rules that are easy to break by accident:
 
@@ -74,6 +74,28 @@ Three Phase 2 rules that are easy to break by accident:
   closed at the schema, the service and the surface.
 - A feature flag is a boolean; its parameters are settings. Neither registry
   grows a field that belongs to the other.
+
+Four backup rules (ADR-0025), because each names a way to produce a file that
+looks like a backup and is not:
+
+- The stage order is the contract: **DELIVER is reachable only from a
+  VERIFY_RESTORE that passed**. A successful `pg_dump` is a file. Never add a
+  path that delivers without verifying, and never verify the plaintext dump
+  still on disk — verification decrypts the ENCRYPTED archive through
+  `openArchive`, the same function the operator's restore uses.
+- The dump **excludes nothing**. Not by table name, not by prefix, not because a
+  table looks transient — `processed_messages` looks like a cache and is what
+  stops a redelivered outbox message duplicating its effect. An exclusion needs
+  a reason inside the manifest, where a restorer can read it.
+- Delivery has **three** outcomes, and the third is why the run row exists.
+  A 5xx, a 429, a timeout and an unreadable 2xx are `OUTCOME_UNKNOWN`, never
+  "retryable": Telegram can reject a request whose upload it accepted. Nothing
+  resends automatically. Never fold this into `DELIVERY_OUTCOMES` — that enum is
+  the notification dispatcher's and is pinned by a CHECK constraint.
+- One backup at a time is a **partial unique index**, not a process. Two worker
+  replicas is normal on every rolling update. A stale lease is taken over by
+  FAILING the abandoned run, never by adopting it: its files belong to a process
+  that may still be writing them.
 
 One more, learned in Phase 3C:
 
@@ -138,6 +160,7 @@ bash scripts/dev-services.sh   # postgres + redis (docker, or native fallback)
 pnpm db:migrate:dev && pnpm db:seed:dev   # compiled: pnpm build && pnpm db:migrate
 pnpm provision                 # the primary tenant (dev: provision:dev)
 pnpm admin:bootstrap           # first owner, from dist (dev: admin:bootstrap:dev)
+pnpm backup run|list|verify|restore   # the DR pipeline (dev: backup:dev)
 pnpm verify                    # the gate: static, shell, unit, deploy logic, build
 pnpm test:integration          # needs the services above
 pnpm test:exhaustive           # 1341 notification orderings, ~4 min; nightly in CI
