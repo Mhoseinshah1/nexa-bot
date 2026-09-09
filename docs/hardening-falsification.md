@@ -360,6 +360,31 @@ and every consumer test still passes, because the list still contains it.
   `git checkout --`, so it once deleted an unfinished refactor.
 - Integration rows ran against real PostgreSQL 16.13 and the real loops. Unit
   rows are pure.
+- **One failure observed mid-branch was chased to a conclusion rather than
+  dismissed.** A single run of `worker-loop-health.test.ts` was recorded as
+  failing (1 failed / 5 passed) against a case noted as "claims no freshness
+  until it is started". It has not recurred and the note was wrong about the
+  name: **no test in this repository is called that**. The nearest is
+  `loop-progress.test.ts` › "is not fresh before it has started".
+
+  Both were run to determinism: `worker-loop-health.test.ts` **14 consecutive
+  passes** (4 at the time, 10 in one loop afterwards), `loop-progress.test.ts`
+  **25 consecutive passes**. 39 runs, no failure.
+
+  The structural reason a race here is implausible is worth stating, because run
+  counts alone never prove absence: `LoopProgress` takes every timestamp as a
+  PARAMETER — `begin(nowMs)`, `record(nowMs)`, `isFresh(nowMs)` — and reads no
+  clock and sets no timer. The only time that can vary is the caller's, and the
+  assertions in both suites compare against a timestamp captured before the work,
+  so a slow run makes `nowMs - since` more negative rather than crossing the
+  bound. There is no window to lose.
+
+  The most likely explanation is that the run was made against a mid-edit tree:
+  the failure was observed while `probe-core.ts` and `readiness.service.ts` were
+  being rewritten, and an incomplete file is a real failure of the code at that
+  instant rather than nondeterminism. What would change this verdict is one
+  recurrence with a log naming a case that exists.
+
 - `B-04` as first written inserted `await Promise.resolve()` and reported
   SURVIVED. That is a no-op mutation, not a survival: it does not reorder two
   awaited calls. It is recorded here rather than in the table, because a SURVIVED
