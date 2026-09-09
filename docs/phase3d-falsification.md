@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 378 citations were checked; this record declares 380 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 380 citations were checked; this record declares 391 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -5786,6 +5786,25 @@ any response, a restore dead end, scope activity checked outside the panel
 transaction, a web control shown to an actor who cannot use it, any
 `deploy/`↔root compose mixing, and OQ-3D-04's classification.
 
+### GitHub CI on 8bd1df5: BLOCKED BY GITHUB ACTIONS QUOTA / RUNNER AVAILABILITY
+
+Both workflow runs for this head (`34342595499` push, `34342601281` pull
+request) concluded `failure` four seconds after they were created. Every one
+of the five jobs — build, deployment smoke, typecheck/lint/boundaries, unit
+and integration tests, dependency audit — completed in two to three seconds
+with `runner_id: 0`, an empty runner name and no steps: no checkout, no
+install, no test or build step executed. The same signature ended the runs
+on `8f6ddea` and `43c9e84`, and their single permitted re-runs. The owner
+classified it: GitHub Actions is out of account quota or runner
+availability. It is recorded as that, not as a CI, test or product failure,
+and on the owner's instruction no further re-run is spent on it.
+
+The exact-head validation for this head is therefore local: `pnpm verify`
+exit 0 (unit 786, web 330) and `pnpm test:integration` 867/867 on the tree
+that became `8bd1df5`. That does not waive the merge gate. The branch is not
+MERGE-READY until GitHub Actions runs once, green, on the exact head that is
+proposed for merge.
+
 ## The mutations
 
 `panel.service.ts` `43e73bfaa26c265e` (this round's version), restored after
@@ -5800,6 +5819,125 @@ each row. Suite: `transactional-authorization.test.ts` (10);
 Measured: BD1 — 1/10, `a credential was stored on revoked rotate authority:
 expected true to be false`. BD2 — 1/10, `panel.create: ONE in-transaction
 refusal, ONE DENIED audit row: expected [] to have a length of 1 but got +0`.
+
+## Round 56 — the review of the fix: zero confirmed merge-relevant defects, and the loop closes
+
+The owner's exit rule, applied. The thirty-seventh reviewer, fresh context,
+read `8bd1df5` in its own worktree (`/tmp/nb38`, database `nexa_review38`)
+against the merge-relevant classes only — production behaviour,
+authorization, tenant isolation, data, concurrency, idempotency, business
+and deployment correctness, and a test gap that leaves one of those
+materially unprotected — and was asked for the recording matrix, the
+completeness of the in-transaction rotate check across every credential
+write path, a reproduction of BD1 and BD2, the static stage, the file hash
+and `EXPECTED`.
+
+**Confirmed merge-relevant defects: zero.** On the owner's instruction the
+internal adversarial loop stops here; what follows is the evidence and the
+backlog, and the branch proceeds to the PR body and the Codex threads.
+
+### What was measured
+
+The recording matrix, written as a throwaway probe against the worktree and
+not committed (so it is not cited below): an in-transaction rotate refusal
+of `panel.create` leaves one DENIED row and one WARN event, both naming
+`panels.credentials.rotate`; an in-transaction edit refusal (demoted to
+`observer`, with and without credentials) one and one naming `panels.edit`;
+the pre-transaction refusals of each permission one and one. After the
+refusal `panels`, `panel_credentials`, SUCCESS audit rows and
+`request_idempotency` are all empty, and the same idempotency key, retried
+after the permission is restored, creates the panel (`replayed: false`) —
+the refusal consumed nothing. A `panel.name_taken` inside the transaction
+records no denial and surfaces unchanged.
+
+Completeness: `credentials.write` has two callers — `create` and
+`setCredentials`, the latter under `runAuthorizedMutation` for
+`panels.credentials.rotate`; `updatePanelRequestSchema` carries no
+credentials; the only surface caller is `panels.controller.ts`; the monitor
+and the probe core only read; the secrets CLI re-encrypts `panel_credentials`
+ciphertext under a rotated key, the same plaintext, and is not an actor path.
+No other panels mutation takes a second permission.
+
+Static: `pnpm typecheck`, `pnpm lint` and `pnpm format:check` exit 0;
+`pnpm check:citations` resolves 380 citations against `EXPECTED = 380` at
+that head. `git show 8bd1df5:…/panel.service.ts | sha256sum` is
+`43e73bfaa26c265e`, the hash round 55 cites. BD1 and BD2 reproduce: each
+kills `refuses a panel CREATE carrying credentials whose actor lost
+panels.credentials.rotate before the transaction` and nothing else among the
+committed tests.
+
+### The mutations
+
+`panel.service.ts` `43e73bfaa26c265e`, restored byte-for-byte after each
+row. Suites: `transactional-authorization.test.ts` (10), `panels.test.ts` +
+`panels-http.test.ts` (105), run together at 115 committed tests; the
+reviewer's seven-case probe ran beside them and its deaths are not counted
+here.
+
+| #   | rule                                                                 | mutation                          | tests that die                                                                                                                                                                                                                                                                                                                 |
+| --- | -------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| BE1 | the in-transaction rotate check runs only when credentials are given | make it unconditional             | `panels-http.test.ts` › lets the same actor create a panel WITHOUT credentials; › records the CREDENTIALS denial on create, even with a malformed body; `panels.test.ts` › refuses a replay whose permission was revoked in the meantime                                                                                       |
+| BE2 | create's catch records the ROTATE denial, not the EDIT one           | hand the recorder `PANELS_EDIT`   | `transactional-authorization.test.ts` › refuses a panel CREATE carrying credentials whose actor lost panels.credentials.rotate before the transaction                                                                                                                                                                          |
+| BE3 | create's catch rethrows                                              | swallow the error after recording | `panels.test.ts` › refuses to create a panel; › serves the tenant again once it is active; › refuses a duplicate live name within a tenant and allows it across tenants; `transactional-authorization.test.ts` › refuses a panel CREATE carrying credentials whose actor lost panels.credentials.rotate before the transaction |
+| BE4 | the condition is `credentials !== undefined`                         | invert it                         | `transactional-authorization.test.ts` › refuses a panel CREATE carrying credentials whose actor lost panels.credentials.rotate before the transaction; `panels.test.ts` › refuses a replay whose permission was revoked in the meantime; `panels-http.test.ts` › lets the same actor create a panel WITHOUT credentials        |
+
+Measured: BE1 — 3 committed failures, `technical must hold panels.edit for
+this test to be about the second guard: expected 403 to be 201` and
+`Missing permission "panels.credentials.rotate"` where 200/201 was expected.
+BE2 — 1, `panel.create: ONE in-transaction refusal, ONE DENIED audit row:
+expected [] to have a length of 1 but got +0`. BE3 — 4, every refusal
+replaced by `No such panel` (the swallowed error lets `create` fall through
+to a read of a row that was rolled back). BE4 — 3, `a credential was stored
+on revoked rotate authority: expected true to be false` among them.
+
+`EXPECTED` is 391. U99 re-measured against this round's table: `380
+citations were checked; this record declares 391`.
+
+Three mutations left every committed test green. They are recorded as
+findings, classified below, and not omitted:
+
+| #   | mutation                                                       | what dies                                                                                                   |
+| --- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| M3  | move the in-transaction rotate check after `credentials.write` | nothing committed, 115/115 — harmless by rollback; see backlog                                              |
+| M6  | run the in-transaction rotate check on the pool, without `tx`  | nothing committed, 115/115 — harmless at READ COMMITTED; the hazard is pool exhaustion, not in this suite   |
+| M9  | ADD a second recorder for `PANELS_EDIT` beside the ROTATE one  | nothing committed, 136/136 with `codex-findings-round-2.test.ts`; only the uncommitted probe died (`got 2`) |
+
+### Backlog, recorded and not chased
+
+None of these is a confirmed merge-relevant defect under the owner's
+classes, and none restarts the loop.
+
+- **An exact one-and-one pin for an in-transaction `panels.edit` refusal of
+  `panel.create` does not exist in the committed suites.** `CASES` in
+  `transactional-authorization.test.ts` has no `panel.create` entry; the
+  pre-transaction and rotate paths are pinned exactly, and the natural
+  regression direction (BE2, recording EDIT instead of ROTATE) is caught.
+  What is not caught is an ADDED duplicate recorder (M9). The reviewer's
+  probe that catches it was left in the session scratchpad and is NOT
+  committed, so this record claims no coverage for it. Judged not material:
+  the behaviour is measured correct today, and the mutation that reaches it
+  is an addition nobody has a reason to make.
+- The POSITION of the in-transaction rotate check relative to
+  `credentials.write` is unpinned (M3). `credentials.write` is a plain
+  insert on the transaction with no side effect outside it, so a later check
+  still rolls everything back; the only observable difference is that an
+  actor holding `panels.edit` would see `panel.name_taken` before a rotate
+  refusal. Pinnable only with a spy on the credential store.
+- `tx` on the in-transaction rotate check is unpinned (M6). The reason it is
+  there is the pool-exhaustion deadlock `authorized-mutation.ts` documents,
+  which this suite cannot stage.
+- Round 55's sentence "before anything is written" is true; `requireActiveScope`
+  — a read — precedes the check. Wording.
+
+### Refuted
+
+Rollback incomplete after the in-transaction refusal; the idempotency key
+consumed by it; a recording count of zero or two on any of the four paths;
+the new try/catch changing a non-denial error; an unconditional check
+refusing an edit-only create without credentials (it is pinned: BE1); a
+credential write path without the rotate check; double recording through the
+nested catches (the outer filters on `panels.edit`, the inner on rotate, and
+a pre-transaction refusal throws before the `try`).
 
 ## The microsecond truncation is still open, deliberately
 
