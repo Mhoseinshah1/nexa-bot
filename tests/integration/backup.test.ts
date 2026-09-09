@@ -551,12 +551,20 @@ describe('backup against a real database', () => {
       await expect(tools.dump(join(bin, 'out.pgcustom'))).rejects.toMatchObject({
         code: 'backup.tool_failed',
       });
-      // It gave up near its own deadline rather than at the child's. The upper
-      // bound is what makes this a timeout test: without the bound a tool that
-      // simply waited out `sleep 120` would satisfy the rejection above.
+      /*
+       * It gave up near its OWN deadline, not the child's and not the backstop's.
+       *
+       * The upper bound is what makes this a timeout test at all: without it, a
+       * tool that simply waited out `sleep 120` would satisfy the rejection above.
+       * And it is 4s rather than 30s deliberately — the SIGKILL backstop fires 5s
+       * after SIGTERM, so a loose bound cannot tell "terminated promptly" from
+       * "terminated five seconds late by the backstop". Measured: deleting the
+       * `SIGTERM` leaves this case passing under a 30s bound and failing under
+       * this one.
+       */
       const waited = Date.now() - started;
       expect(waited).toBeGreaterThanOrEqual(900);
-      expect(waited).toBeLessThan(30_000);
+      expect(waited).toBeLessThan(4_000);
 
       // And the child is GONE. Asked of the operating system, because the point
       // is the process and not the promise: `kill(pid, 0)` throws ESRCH for a pid
@@ -565,6 +573,71 @@ describe('backup against a real database', () => {
       expect(Number.isInteger(pid)).toBe(true);
       let alive = true;
       for (let attempt = 0; attempt < 60 && alive; attempt += 1) {
+        try {
+          process.kill(pid, 0);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        } catch {
+          alive = false;
+        }
+      }
+      expect(alive).toBe(false);
+    } finally {
+      await rm(bin, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('kills a dump that ignores SIGTERM', async () => {
+    /*
+     * The BACKSTOP, which the case above cannot test: `sleep` dies on SIGTERM, so
+     * removing the `SIGKILL` timer leaves that case green. This child traps SIGTERM
+     * and keeps going, which is the state the backstop exists for — and the reason
+     * it exists is that a dump still running holds a `pg_dump` connection and the
+     * work directory of a run that has already been recorded as failed.
+     *
+     * Two rules, two cases, because one case covering both is a case that passes
+     * when either is deleted.
+     */
+    const bin = await mkdtemp(join(tmpdir(), 'nexa-stubborn-bin-'));
+    try {
+      const pidFile = join(bin, 'pid');
+      const fake = join(bin, 'pg_dump');
+      /*
+       * `trap '' TERM` ignores it outright, and no `exec`, because the shell has to
+       * stay alive to do the ignoring.
+       *
+       * `exec >/dev/null 2>&1` after the pid is written is not tidiness. The
+       * production code settles on the child's `close` event, which waits for the
+       * stdio pipes to close as well as for the process to exit — so a descendant
+       * still holding the inherited stdout keeps the promise pending for ever. A
+       * first version of this fixture backgrounded `sleep` with the pipes
+       * inherited, and the test hung for its full sixty seconds even though the
+       * shell had been killed on time. `pg_dump` and `pg_restore` leave no such
+       * descendant, which is why this is the fixture's problem and not the
+       * product's; handing the orphan `/dev/null` is how the fixture stops lying
+       * about it.
+       */
+      await writeFile(
+        fake,
+        `#!/bin/sh\ntrap '' TERM\necho "$$" > '${pidFile}'\nexec >/dev/null 2>&1\nsleep 120\n`,
+      );
+      await chmod(fake, 0o755);
+
+      const tools = new PostgresDatabaseTools({
+        databaseUrl: testConfig().DATABASE_URL,
+        dumpTimeoutMs: 1_000,
+        restoreTimeoutMs: 1_000,
+        binDir: bin,
+      });
+      await expect(tools.dump(join(bin, 'out.pgcustom'))).rejects.toMatchObject({
+        code: 'backup.tool_failed',
+      });
+
+      const pid = Number((await readFile(pidFile, 'utf8')).trim());
+      expect(Number.isInteger(pid)).toBe(true);
+      // Up to 20s: SIGTERM at 1s, the backstop 5s after that, plus room for a
+      // loaded runner. Without the backstop this child never dies at all.
+      let alive = true;
+      for (let attempt = 0; attempt < 200 && alive; attempt += 1) {
         try {
           process.kill(pid, 0);
           await new Promise((resolve) => setTimeout(resolve, 100));
