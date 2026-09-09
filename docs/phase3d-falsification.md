@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 397 citations were checked; this record declares 400 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 400 citations were checked; this record declares 405 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -6089,6 +6089,63 @@ fast lane without a failure.
 
 `EXPECTED` is 400. U99 re-measured against this round's table: `397
 citations were checked; this record declares 400`.
+
+## Round 59 — Codex's eighth review: three more screens, and a pager that read backwards
+
+Review `5155266800` on `5b0df10`: three inline threads, all confirmed, and the
+same two body findings as round 58 — still confirmed, still unchanged, still
+awaiting the owner's ruling (they are outside the four threads the owner
+ruled on, and the owner's disposition was explicit about scope).
+
+- **CZ1 — the panel pager's labels described the opposite of what they did.**
+  `GET /panels` pages an ASCENDING keyset (`created_at, id`, continuation
+  `>`), so `nextCursor` moves from the oldest page toward newer panels; the
+  shared `CursorPager` labelled that control "older" and the way back "newer",
+  on `/panels` and the archive alike. The ops-log and notification lists walk
+  `before` cursors down a DESC keyset, for which the defaults are right. The
+  pager now takes `nextLabel` / `previousLabel`, the panel lists pass newer /
+  older, and the tests that paged forward by clicking "older" click "newer".
+- **CZ2/CZ3 — the alerts feed re-reads its newest page.** A management event
+  is recorded with no operator action, `refetchOnWindowFocus` is off globally,
+  and this feed is the only Web Admin history for denials, lockouts and
+  administrator changes; a tab left on it showed the page it was drawn with
+  until a filter changed. Thirty seconds, first page only — an older page
+  cannot gain a row.
+- **CZ4 — the administrator roster re-reads itself.** Written by other
+  surfaces, shown as drawn until navigation: a suspended administrator kept
+  reading as active. Once a minute, the monitor profile's cadence.
+
+Same class as rounds 57 and 58, and the same lesson stated once: every
+query-driven view in this shell that shows what a background process or
+another operator writes needs a cadence, and the round-6 rule ("the detail
+polls") was a local fix. The views that poll now: dashboard readiness, panels
+and conditions; the panel list and detail; the monitor profile; the
+notifications list (fast while pending, discovery when settled) and detail
+(while pending); the alerts feed's newest page; the administrator roster.
+The views that deliberately do not: settings, features and templates, which
+are read-before-write with an `expectedVersion` and refuse a stale write
+rather than silently absorbing one; and every cursor page behind a first
+page.
+
+### The mutations
+
+| #   | rule                                                  | mutation                     | tests that die                                                                                                                                                    |
+| --- | ----------------------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CZ1 | the panel pager labels follow its ascending traversal | drop the two label props     | `panels.test.tsx` › labels the forward control newer, because the panel keyset ascends; › pages forward with the cursor the server minted, and never sorts a page |
+| CZ2 | the alerts feed re-reads its newest page              | delete its `refetchInterval` | `settings-and-alerts.test.tsx` › re-reads the newest alerts page while the feed stays open                                                                        |
+| CZ3 | …and only its newest page                             | poll every page              | `settings-and-alerts.test.tsx` › does not poll an older alerts page                                                                                               |
+| CZ4 | the administrator roster re-reads itself              | delete its `refetchInterval` | `settings-and-alerts.test.tsx` › re-reads the administrator roster while its tab stays open                                                                       |
+
+Measured: CZ1 — 2/67, `expect(element).toBeEnabled()` — under the default
+labels the button named "تازه‌تر" is the disabled way-back control, so the
+forward click never lands (`panels.tsx` `77f08c5ce640875f`). CZ2 — 1/41,
+`expected 1 to be greater than 1` (`alerts.tsx` `544649298758a8e4`). CZ3 —
+1/41, `expected 3 to be 1` (`alerts.tsx` `544649298758a8e4`). CZ4 — 1/41,
+`expected 1 to be greater than 1` (`system.tsx` `f00c1572256b2f9a`). Each
+file restored to the hash it started with.
+
+`EXPECTED` is 405. U99 re-measured against this round's table: `400
+citations were checked; this record declares 405`.
 
 ## The microsecond truncation is still open, deliberately
 

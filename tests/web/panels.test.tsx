@@ -74,9 +74,10 @@ describe('the panel list', () => {
       expect(header.querySelector('button')).toBeNull();
     }
 
-    const older = screen.getByRole('button', { name: 'قدیمی‌تر' });
-    expect(older).not.toBeDisabled();
-    older.click();
+    // The forward control on an ASCENDING keyset is NEWER — see the pin below.
+    const newer = screen.getByRole('button', { name: 'تازه‌تر' });
+    expect(newer).not.toBeDisabled();
+    newer.click();
 
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('cursor=opaque-cursor-1'))).toBe(true);
@@ -87,7 +88,33 @@ describe('the panel list', () => {
     stubApi(list([panel()], null));
     renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
     await screen.findByText('Frankfurt A');
-    expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'تازه‌تر' })).toBeDisabled();
+  });
+
+  /**
+   * Codex, review eight: `GET /panels` pages an ASCENDING keyset — oldest
+   * first, `nextCursor` toward newer panels — and the shared pager labelled
+   * the forward control "older" and the way back "newer", the opposite of
+   * what each did. The forward control must say NEWER here and the way back
+   * OLDER, while the descending lists keep the defaults.
+   */
+  it('labels the forward control newer, because the panel keyset ascends', async () => {
+    const api = stubApi(list([panel()], 'opaque-cursor-1'));
+    renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    const forward = screen.getByRole('button', { name: 'تازه‌تر' });
+    const back = screen.getByRole('button', { name: 'قدیمی‌تر' });
+    expect(forward).toBeEnabled();
+    expect(back).toBeDisabled();
+    forward.click();
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.url.includes('cursor=opaque-cursor-1'))).toBe(true);
+    });
+    // And the way back to the first — oldest — page is OLDER.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeEnabled();
+    });
   });
 
   it('shows a permission refusal rather than an empty list', async () => {
@@ -233,8 +260,8 @@ describe('the panel list', () => {
   /**
    * F3 — the `'empty'` arm. Narrowing the gate to `['ready']` left 299 green,
    * and it hides the only way OFF an empty page: paging forward onto rows that
-   * have since been archived leaves `'empty'`, and the "تازه‌تر" button goes
-   * with the pager. That is the design claim's second direction — no screen
+   * have since been archived leaves `'empty'`, and the way-back button — "older"
+   * on this ascending list — goes with the pager. That is the design claim's second direction — no screen
    * hides an action the server permits.
    */
   it('keeps the way back when a fleet page turns out to be empty', async () => {
@@ -242,7 +269,7 @@ describe('the panel list', () => {
     renderPage(<PanelsPage route={LIVE_ROUTE} mayEdit denied={false} />);
     await screen.findByText('هنوز پنلی ثبت نشده است.');
     expect(screen.getByText('نمایش')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'تازه‌تر' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeInTheDocument();
   });
 
   it('distinguishes an empty fleet from a failed request', async () => {

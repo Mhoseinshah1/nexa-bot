@@ -336,8 +336,21 @@ function Duration({ ms }: { ms: number }) {
   );
 }
 
+/**
+ * The roster is written by OTHER surfaces — an owner suspending or re-enabling
+ * an administrator, changing roles, creating one — and this tab showed the
+ * roster it was drawn with until navigation: a suspended administrator kept
+ * reading as active. Once a minute, the monitor profile's cadence.
+ */
+const ADMINS_REFRESH_MS = 60_000;
+
 function AdminsSection({ denied }: { denied: boolean }) {
-  const admins = useQuery({ queryKey: ['admins'], queryFn: fetchAdmins, enabled: !denied });
+  const admins = useQuery({
+    queryKey: ['admins'],
+    queryFn: fetchAdmins,
+    enabled: !denied,
+    refetchInterval: pollUnlessFinal(ADMINS_REFRESH_MS),
+  });
   const rows = admins.data?.admins ?? [];
 
   return (

@@ -34,7 +34,7 @@ import {
   StateSwitch,
   type Column,
 } from '../ui/kit';
-import { pollUnlessFinalWhile } from '../polling';
+import { pollUnlessFinal, pollUnlessFinalWhile } from '../polling';
 
 const SEVERITIES: readonly OperationalSeverity[] = ['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL'];
 
@@ -71,6 +71,15 @@ const SEVERITIES: readonly OperationalSeverity[] = ['DEBUG', 'INFO', 'WARN', 'ER
  * the server can answer it, which is why the response carries `nextCursor`.
  */
 const ALERTS_PAGE_SIZE = 25;
+/**
+ * The newest page of the feed re-reads itself. A management event — a denial,
+ * a lockout, an administrator change, a condition — is recorded with no
+ * operator action, `refetchOnWindowFocus` is off globally, and this feed is
+ * the only Web Admin history for several of those events; a tab left open on
+ * it showed the page it was drawn with until a filter changed. First page only:
+ * an older page is history and cannot gain a row.
+ */
+const ALERTS_REFRESH_MS = 30_000;
 
 export function AlertsPage({ denied }: { denied: boolean }) {
   const [severity, setSeverity] = useState<string>('');
@@ -115,6 +124,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
         ...(cursor ? { before: cursor.at, beforeId: cursor.id } : {}),
       }),
     enabled: !denied,
+    refetchInterval: cursor === undefined ? pollUnlessFinal(ALERTS_REFRESH_MS) : false,
   });
 
   // A filter change starts again from the newest page: keeping the old cursor

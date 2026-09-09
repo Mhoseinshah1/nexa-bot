@@ -330,6 +330,50 @@ describe('management alerts', () => {
    * once. Exactly the shape the round before this one fixed on the panel
    * detail, left standing here.
    */
+  /**
+   * Codex, review eight: a management event is recorded with no operator
+   * action and this feed is the only Web Admin history for several of them,
+   * yet the newest page never re-read itself. First page only — an older page
+   * cannot gain a row.
+   */
+  it('re-reads the newest alerts page while the feed stays open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const api = stubApi([{ url: '/ops-log', body: { events: [event()], nextCursor: null } }]);
+    renderPage(<AlertsPage denied={false} />);
+    await screen.findByText('Roles changed.');
+
+    const asked = api.calls.filter((call) => call.url.includes('/ops-log')).length;
+    expect(asked).toBeGreaterThan(0);
+    await vi.advanceTimersByTimeAsync(35_000);
+    await waitFor(() => {
+      expect(api.calls.filter((call) => call.url.includes('/ops-log')).length).toBeGreaterThan(
+        asked,
+      );
+    });
+    vi.useRealTimers();
+  });
+
+  it('does not poll an older alerts page', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const api = stubApi([
+      {
+        url: '/ops-log',
+        body: { events: [event()], nextCursor: { at: '2026-09-06T07:00:00.000Z', id: 'older' } },
+      },
+    ]);
+    renderPage(<AlertsPage denied={false} />);
+    await screen.findByText('Roles changed.');
+    fireEvent.click(screen.getByRole('button', { name: 'قدیمی‌تر' }));
+    await waitFor(() => {
+      expect(api.calls.filter((call) => call.url.includes('before=')).length).toBeGreaterThan(0);
+    });
+
+    const asked = api.calls.filter((call) => call.url.includes('before=')).length;
+    await vi.advanceTimersByTimeAsync(65_000);
+    expect(api.calls.filter((call) => call.url.includes('before=')).length).toBe(asked);
+    vi.useRealTimers();
+  });
+
   it('withdraws its own refresh once the refusal is final', async () => {
     const route = {
       url: '/ops-log',
@@ -1094,6 +1138,29 @@ describe('system and operations', () => {
     const before = countOf();
     expect(before).toBeGreaterThan(0);
 
+    await vi.advanceTimersByTimeAsync(65_000);
+    await waitFor(() => {
+      expect(countOf()).toBeGreaterThan(before);
+    });
+    vi.useRealTimers();
+  });
+
+  /**
+   * Codex, review eight: the roster is written by other surfaces and this tab
+   * showed the one it was drawn with until navigation — a suspended
+   * administrator kept reading as active.
+   */
+  it('re-reads the administrator roster while its tab stays open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const api = stubApi([{ url: '/admins', body: { admins: [] } }]);
+    const adminsRoute = { path: '/system', query: new URLSearchParams('section=admins') };
+    renderPage(<SystemPage route={adminsRoute} permissions={['panels.view', 'admins.view']} />);
+    const countOf = () => api.calls.filter((call) => call.url.includes('/admins')).length;
+    await waitFor(() => {
+      expect(countOf()).toBeGreaterThan(0);
+    });
+
+    const before = countOf();
     await vi.advanceTimersByTimeAsync(65_000);
     await waitFor(() => {
       expect(countOf()).toBeGreaterThan(before);

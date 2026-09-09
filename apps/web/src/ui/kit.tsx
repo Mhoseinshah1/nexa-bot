@@ -795,18 +795,32 @@ export function DataTable<T>({
  * The cursor is opaque to this component and it stays that way; naming its
  * contents here is what made the sentence wrong, so it no longer does.
  */
+/**
+ * The labels FOLLOW the traversal, and the caller is the one that knows it.
+ *
+ * The ops-log and notification lists walk `before` cursors down a `DESC`
+ * keyset, so their next page is older and the way back is newer — the
+ * defaults. The panel lists walk an `ASC` keyset (`created_at, id` ascending,
+ * continuation `>`), so their next page is NEWER, and this component said
+ * "older" on it and "newer" on the way back: both controls describing the
+ * opposite of what they did, on `/panels` and the archive alike.
+ */
 export function CursorPager({
   onPrevious,
   onNext,
   hasPrevious,
   hasNext,
   shown,
+  nextLabel = 'web.older',
+  previousLabel = 'web.newer',
 }: {
   onPrevious: () => void;
   onNext: () => void;
   hasPrevious: boolean;
   hasNext: boolean;
   shown: number;
+  nextLabel?: WebKey;
+  previousLabel?: WebKey;
 }) {
   return (
     <div className="pager">
@@ -815,10 +829,10 @@ export function CursorPager({
       </span>
       <span className="spacer" />
       <button type="button" className="btn sm" disabled={!hasPrevious} onClick={onPrevious}>
-        {t('web.newer')}
+        {t(previousLabel)}
       </button>
       <button type="button" className="btn sm" disabled={!hasNext} onClick={onNext}>
-        {t('web.older')}
+        {t(nextLabel)}
       </button>
     </div>
   );

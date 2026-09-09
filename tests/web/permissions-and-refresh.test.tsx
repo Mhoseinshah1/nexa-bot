@@ -403,8 +403,9 @@ describe('the archive filter and the cursor that belongs to it', () => {
     );
     await screen.findByText('row 0');
 
-    // Page forward inside the ARCHIVE, so a trail exists.
-    fireEvent.click(screen.getByRole('button', { name: 'قدیمی‌تر' }));
+    // Page forward inside the ARCHIVE, so a trail exists. Forward is NEWER on
+    // the ascending panel keyset.
+    fireEvent.click(screen.getByRole('button', { name: 'تازه‌تر' }));
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('cursor=archived-cursor-1'))).toBe(true);
     });
@@ -479,17 +480,18 @@ describe('the archive filter and the cursor that belongs to it', () => {
       resolve(routeWith('archived=only'), ['panels.view']).element as ReactElement,
     );
     await screen.findByText('row 0');
-    fireEvent.click(screen.getByRole('button', { name: 'قدیمی‌تر' }));
+    fireEvent.click(screen.getByRole('button', { name: 'تازه‌تر' }));
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('cursor='))).toBe(true);
     });
 
     view.rerender(resolve(routeWith(''), ['panels.view']).element as ReactElement);
     await screen.findByText('row 0');
-    // "Newer" would take them back to a position in a list they are no longer
-    // looking at. `CursorPager` always renders both buttons and disables them,
-    // so the assertion is on the disabled state, not on absence.
-    expect(screen.getByRole('button', { name: 'تازه‌تر' })).toBeDisabled();
+    // The way back — "older", on the ascending panel keyset — would take them
+    // to a position in a list they are no longer looking at. `CursorPager`
+    // always renders both buttons and disables them, so the assertion is on
+    // the disabled state, not on absence.
+    expect(screen.getByRole('button', { name: 'قدیمی‌تر' })).toBeDisabled();
   });
 });
 
