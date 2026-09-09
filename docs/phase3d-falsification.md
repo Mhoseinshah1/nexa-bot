@@ -2629,10 +2629,10 @@ contribute no titles now.
 | V5  | a card header states nothing the card withheld         | read `panels.data` directly            | `dashboard.test.tsx` › says nothing about a fleet it could not read                                                                                  |
 | V6  | the scan sees the NEGATED spelling                     | `{!detail.isError && detail.data && (` | `state-switch-contract.test.tsx` › renders no view off a bare isError unless it is a mutation                                                        |
 
-| #    | rule                                     | mutation                              | what the check prints                                         |
-| ---- | ---------------------------------------- | ------------------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | remove the round's own added citation | exits 1: 377 citations were checked; this record declares 378 |
-| U100 | a table at END OF FILE is structured too | append a header-only table            | exits 1: 1 table(s) have no header/separator pair             |
+| #    | rule                                     | mutation                    | what the check prints                                         |
+| ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 378 citations were checked; this record declares 380 |
+| U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
 
@@ -5728,6 +5728,78 @@ re-run the drive-to-green rules allow for a job that died before any step —
 and died identically. That is the runner-provisioning/account side of GitHub
 Actions, not this branch, and it is not counted as a CI failure of this PR;
 the next push exercises fresh runs on a new head.
+
+## Round 55 — the final fresh-context review, and the one merge-relevant finding in eleven rounds
+
+The owner set the stopping criterion after round 54: one final whole-branch
+review, reopening the loop only for a confirmed defect in production
+behaviour, authorization, tenant isolation, data, concurrency, idempotency,
+business or deployment correctness — or a test gap that leaves one of those
+materially unprotected. Everything else is recorded as backlog and does not
+restart the loop.
+
+The thirty-sixth reviewer read the whole production diff against those
+classes, ran the static stages, the unit and web suites and the integration
+suite once, and reverted nineteen production rules across eight classes to
+watch a named test fail. Eighteen did. One confirmed merge-relevant finding.
+
+### `PanelService.create` stored a credential on rotate authority that no longer existed
+
+`runAuthorizedMutation` re-runs the ONE permission it is handed inside the
+transaction. `create` handed it `panels.edit` and checked
+`panels.credentials.rotate` — the CRITICAL permission of the module — only on
+the pool, before the transaction. ADR-0014 names exactly that window as the
+one the in-transaction re-check exists to close; `setCredentials` under the
+identical interleaving was refused. Measured by the reviewer with a barrier
+(owner A parked at the transaction, owner B demotes A to `technical`, which
+holds edit and not rotate; release): the panel, its credential row, a SUCCESS
+audit row and an outbox event all committed. Introduced with rotate-on-create
+on this branch, so incomplete rather than regressive — and merge-relevant.
+
+`create` re-checks `panels.credentials.rotate` with `tx` inside the
+transaction now, before anything is written, when the command carries
+credentials; and records a ROTATE denial beside `runAuthorizedMutation`'s
+EDIT one, each recorder writing only for the permission it is handed, so the
+refusal is recorded exactly once whichever permission refused it.
+
+### Backlog, recorded and not chased
+
+- `panel.service.ts` status request hash includes `name`; no test pins it
+  (removing it left `panels-http` 39/39 green). A replay of a restore key
+  with a different name is answered with the stored view rather than
+  `IDEMPOTENCY_PAYLOAD_MISMATCH`; no write occurs and the view shows the real
+  name. Add the pin when the idempotency store is next touched.
+- `bootstrap-owner-cli.test.ts` spawns the compiled CLI and fails 3/3 in a
+  worktree with no `apps/api/dist`; builds, then passes. Document or build in
+  setup.
+- `monitor-cadence.ts` `maxHealthyIntervalMs` walks a candidate down to 0 for
+  a tick the schema's `min(30_000)` makes unreachable; the advice string could
+  read "at most 0".
+- Two count sentences in the record differ by one from the enumeration they
+  summarise (templates is one site with two routes). Bookkeeping.
+
+The reviewer also refuted, with evidence, the merge-relevant hypotheses it
+tested: cross-tenant reads on the ops-log/alerts/notifications readers, a
+denial marker reaching a client, cursors skipping or repeating rows, an
+archived scope reachable from the wire, a credential or masked stand-in in
+any response, a restore dead end, scope activity checked outside the panel
+transaction, a web control shown to an actor who cannot use it, any
+`deploy/`↔root compose mixing, and OQ-3D-04's classification.
+
+## The mutations
+
+`panel.service.ts` `43e73bfaa26c265e` (this round's version), restored after
+each row. Suite: `transactional-authorization.test.ts` (10);
+`panels-http.test.ts` + `panels.test.ts` 105/105 under the real code.
+
+| #   | rule                                                                | mutation                                     | tests that die                                                                                                                                        |
+| --- | ------------------------------------------------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| BD1 | create re-checks `panels.credentials.rotate` INSIDE the transaction | delete the in-transaction check              | `transactional-authorization.test.ts` › refuses a panel CREATE carrying credentials whose actor lost panels.credentials.rotate before the transaction |
+| BD2 | ...and records that refusal                                         | delete the rotate recorder in create's catch | `transactional-authorization.test.ts` › refuses a panel CREATE carrying credentials whose actor lost panels.credentials.rotate before the transaction |
+
+Measured: BD1 — 1/10, `a credential was stored on revoked rotate authority:
+expected true to be false`. BD2 — 1/10, `panel.create: ONE in-transaction
+refusal, ONE DENIED audit row: expected [] to have a length of 1 but got +0`.
 
 ## The microsecond truncation is still open, deliberately
 

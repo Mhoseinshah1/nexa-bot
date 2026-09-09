@@ -568,77 +568,114 @@ export class PanelService {
 
     const panelId = this.deps.ids.uuid();
     const now = this.deps.clock.now();
+    const denial = { action: 'panel.create', entityType: 'Panel', entityId: null };
 
-    await runAuthorizedMutation(
-      this.mutationDeps(),
-      scope,
-      actor,
-      PANELS_EDIT,
-      { action: 'panel.create', entityType: 'Panel', entityId: null },
-      async (tx) => {
-        await this.requireActiveScope(scope, tx);
-        if (await this.deps.repository.nameTaken(tenant, command.name, null, tx)) {
-          throw errors.conflict(
-            PANEL_ERROR_CODES.PANEL_NAME_TAKEN,
-            'Another panel of this tenant already uses that name.',
+    try {
+      await runAuthorizedMutation(
+        this.mutationDeps(),
+        scope,
+        actor,
+        PANELS_EDIT,
+        denial,
+        async (tx) => {
+          await this.requireActiveScope(scope, tx);
+          /*
+           * The CRITICAL permission, re-checked INSIDE the transaction like the
+           * edit permission above it. `runAuthorizedMutation` re-runs only the
+           * one permission it is handed, so until the final Phase 3D review a
+           * create that carried credentials re-checked `panels.edit` here and
+           * `panels.credentials.rotate` only on the pool, before the
+           * transaction: an administrator whose rotate permission was revoked
+           * between that early check and this commit still stored a credential,
+           * where `setCredentials` under the same interleaving was refused.
+           * Checked before anything is written, so a refusal rolls back a
+           * transaction that has done nothing.
+           */
+          if (command.credentials !== undefined) {
+            await this.deps.guard.check(scope, actor, PANELS_CREDENTIALS_ROTATE, tx);
+          }
+          if (await this.deps.repository.nameTaken(tenant, command.name, null, tx)) {
+            throw errors.conflict(
+              PANEL_ERROR_CODES.PANEL_NAME_TAKEN,
+              'Another panel of this tenant already uses that name.',
+            );
+          }
+          await this.deps.repository.create(
+            tenant,
+            { id: panelId, name: command.name, providerType, baseUrl, at: now },
+            tx,
           );
-        }
-        await this.deps.repository.create(
-          tenant,
-          { id: panelId, name: command.name, providerType, baseUrl, at: now },
-          tx,
-        );
-        // The schedule row is born with the panel and in the same transaction.
-        // A panel with no schedule row is a panel the monitor cannot see, and
-        // "create the row lazily when the monitor first meets it" is how a
-        // panel goes unmonitored until somebody notices.
-        await this.deps.repository.setScheduleEligibility(tenant, panelId, 'ELIGIBLE_NOW', now, tx);
-        if (command.credentials !== undefined) {
-          await this.deps.credentials.write(tenant, panelId, command.credentials, now, tx);
-        }
-        await this.deps.audit.record(
-          scope,
-          actor,
-          {
-            action: 'panel.create',
-            entityType: 'Panel',
-            entityId: panelId,
-            before: null,
-            // Safe fields only. `configured` names WHICH credential kinds were
-            // supplied and never what they were — an audit entry that recorded
-            // the value would be the legacy web admin's cleartext readback
-            // with a timestamp on it.
-            //
-            // The field is `configured` and not `credentialsSet` for a reason
-            // worth keeping: the audit writer redacts any key containing
-            // `credential`, so the more obvious name made this entry read
-            // `[redacted]` and the audit lost the one fact it was recording.
-            // The fix is the name, never the redactor — a key that looks like
-            // it holds a credential SHOULD be redacted, because the next author
-            // to add one will not be as careful as this one. `configured` is
-            // also the word the API's own credential state uses, so the two
-            // surfaces say the same thing.
-            after: {
-              name: command.name,
-              providerType,
-              baseUrl,
-              configured: credentialKindsIn(command.credentials),
+          // The schedule row is born with the panel and in the same transaction.
+          // A panel with no schedule row is a panel the monitor cannot see, and
+          // "create the row lazily when the monitor first meets it" is how a
+          // panel goes unmonitored until somebody notices.
+          await this.deps.repository.setScheduleEligibility(
+            tenant,
+            panelId,
+            'ELIGIBLE_NOW',
+            now,
+            tx,
+          );
+          if (command.credentials !== undefined) {
+            await this.deps.credentials.write(tenant, panelId, command.credentials, now, tx);
+          }
+          await this.deps.audit.record(
+            scope,
+            actor,
+            {
+              action: 'panel.create',
+              entityType: 'Panel',
+              entityId: panelId,
+              before: null,
+              // Safe fields only. `configured` names WHICH credential kinds were
+              // supplied and never what they were — an audit entry that recorded
+              // the value would be the legacy web admin's cleartext readback
+              // with a timestamp on it.
+              //
+              // The field is `configured` and not `credentialsSet` for a reason
+              // worth keeping: the audit writer redacts any key containing
+              // `credential`, so the more obvious name made this entry read
+              // `[redacted]` and the audit lost the one fact it was recording.
+              // The fix is the name, never the redactor — a key that looks like
+              // it holds a credential SHOULD be redacted, because the next author
+              // to add one will not be as careful as this one. `configured` is
+              // also the word the API's own credential state uses, so the two
+              // surfaces say the same thing.
+              after: {
+                name: command.name,
+                providerType,
+                baseUrl,
+                configured: credentialKindsIn(command.credentials),
+              },
+              result: 'SUCCESS',
             },
-            result: 'SUCCESS',
-          },
-          tx,
-        );
-        await rememberOnce(
-          this.deps.idempotency,
-          scope,
-          actor.surface,
-          command.idempotencyKey,
-          requestHash,
-          { panelId },
-          tx,
-        );
-      },
-    );
+            tx,
+          );
+          await rememberOnce(
+            this.deps.idempotency,
+            scope,
+            actor.surface,
+            command.idempotencyKey,
+            requestHash,
+            { panelId },
+            tx,
+          );
+        },
+      );
+    } catch (error) {
+      // `runAuthorizedMutation` recorded an EDIT denial; this records a ROTATE
+      // one. Each recorder writes only for the permission it is handed, so a
+      // refusal is recorded exactly once whichever permission refused it.
+      await recordMutationDenial(
+        this.mutationDeps(),
+        scope,
+        actor,
+        PANELS_CREDENTIALS_ROTATE,
+        denial,
+        error,
+      );
+      throw error;
+    }
 
     return { view: await this.require(tenant, panelId), replayed: false };
   }

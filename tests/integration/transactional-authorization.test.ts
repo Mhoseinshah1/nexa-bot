@@ -6,6 +6,8 @@ import {
   notifications,
   operationalEvents,
   outboxMessages,
+  panelCredentials,
+  panels,
 } from '../../apps/api/src/infrastructure/persistence/schema';
 import {
   adminActorFor,
@@ -428,6 +430,69 @@ describe('fresh transactional authorization', () => {
     }
     expect(await deniedRows(), 'an outage is not a denial').toHaveLength(2);
     expect(await denialEvents()).toBe(2);
+  }, 30_000);
+
+  it('refuses a panel CREATE carrying credentials whose actor lost panels.credentials.rotate before the transaction', async () => {
+    /*
+     * The CRITICAL permission of the panels module, re-checked INSIDE the
+     * transaction — the final Phase 3D review found it was not. `create`
+     * re-ran `panels.edit` under the lock and checked
+     * `panels.credentials.rotate` only on the pool, before the transaction,
+     * so an administrator whose rotate permission was revoked between that
+     * early check and the commit still stored a credential, where
+     * `setCredentials` under the same interleaving was refused. Measured by
+     * the reviewer with exactly this barrier: the panel, its credential row,
+     * a SUCCESS audit row and an outbox event all committed on authority that
+     * no longer existed.
+     *
+     * Owner A is parked at the transaction; owner B demotes A to `technical`,
+     * which holds `panels.edit` and NOT the rotate permission, so the edit
+     * re-check passes and only the rotate re-check can refuse.
+     */
+    const stall = barrierOnNextTransaction();
+    const attempt = ctx.container.panels.create(tenantA, actorA, {
+      name: 'Created on revoked rotate authority',
+      providerType: 'marzban',
+      baseUrl: 'https://panel.example.test',
+      credentials: { username: 'admin', password: 'a-perfectly-fine-password' },
+      idempotencyKey: 'revoked-rotate-on-create',
+    });
+    const settled = attempt.then(
+      () => ({ ok: true }) as const,
+      (error: unknown) => ({ ok: false, error }) as const,
+    );
+    const arrived = await Promise.race([
+      stall.reached.then(() => 'at the barrier' as const),
+      settled.then(() => 'finished early' as const),
+    ]);
+    expect(arrived, 'create never reached its transaction').toBe('at the barrier');
+
+    await ctx.container.adminManagement.setRoles(tenantA, ownerB, adminA.id, {
+      roleKeys: ['technical'],
+      reason: 'Rotate authority revoked mid-request by the owner.',
+    });
+    stall.release();
+    const outcome = await settled;
+
+    expect(outcome.ok, 'a credential was stored on revoked rotate authority').toBe(false);
+    expect(outcome.ok === false && outcome.error).toMatchObject({
+      code: 'platform.permission_denied',
+      details: { permission: 'panels.credentials.rotate' },
+    });
+
+    // Nothing of the panel survives the rollback: no row, no credential.
+    expect(await db().select().from(panels).where(eq(panels.tenantId, tenantA.tenantId))).toEqual(
+      [],
+    );
+    expect(await db().select().from(panelCredentials)).toEqual([]);
+
+    // And the refusal is recorded exactly once in each ledger, naming the
+    // permission that refused it — the ROTATE one, not the edit one that
+    // `runAuthorizedMutation` re-checks.
+    const audits = await auditRows('panel.create');
+    expect(audits.filter((row) => row.result === 'SUCCESS')).toEqual([]);
+    const denied = audits.filter((row) => row.result === 'DENIED');
+    await expectOneWarnDenialEvent('panel.create', denied, 'panels.credentials.rotate');
   }, 30_000);
 
   it('treats an EXPIRED session as dead, not only a revoked one', async () => {
