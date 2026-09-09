@@ -155,10 +155,32 @@ export class BackupService {
       return { kind: 'BUSY', holder: claim.holder };
     }
 
-    const workspace = await this.deps.workspaces.create(id);
     const heartbeat = this.startHeartbeat(id);
 
     let stage: BackupStage = 'DUMP';
+    /*
+     * Created INSIDE the recorded region, because creating it can fail.
+     *
+     * It used to be the statement above the `try`, after the RUNNING row had been
+     * claimed — so a work directory that could not be created threw straight out
+     * of `run()` and left the claim behind. For a disaster-recovery pipeline that
+     * is the worst available shape: no FAILED row, so no `backup.run_failed`
+     * condition and no notification, while the RUNNING row holds the
+     * installation's one-backup-at-a-time lease until it goes stale. Every later
+     * backup is then refused as BUSY or spends its first act reclaiming a lease,
+     * and the only symptom is the absence of backups — which looks exactly like
+     * nothing being wrong.
+     *
+     * The triggers are not exotic: `BACKUP_WORK_DIR` on a full disk, a path that
+     * is not a directory, a volume that did not mount. ADR-0025 notes that this
+     * directory holds three artifacts at once, so it is the first thing to run out
+     * of room.
+     *
+     * `workspace` is therefore `null` until it exists, and the `catch` has to
+     * cope with that: there is nothing to discard when the failure IS that there
+     * is nowhere to discard from.
+     */
+    let workspace: BackupWorkspace | null = null;
     let dumpBytes: bigint | null = null;
     let archiveBytes: bigint | null = null;
     let checksum: string | null = null;
@@ -175,6 +197,7 @@ export class BackupService {
         leaseOwner: this.deps.leaseOwner,
         now: this.deps.clock.now(),
       });
+      workspace = await this.deps.workspaces.create(id);
       const dump = await this.deps.tools.dump(workspace.dumpPath);
 
       // ---- CHECKSUM --------------------------------------------------------
@@ -340,7 +363,14 @@ export class BackupService {
       // Everything goes, archive included. An archive from a run that failed
       // before verification is unproven, and an unproven archive on disk is
       // the thing that stops somebody looking for a real one.
-      const leftovers = [...(await workspace.discardAll()), ...this.deps.tools.leaked];
+      // `workspace` is null when the failure was the workspace itself. The
+      // subprocess leak list is still read: a dump cannot have run without a
+      // workspace, but reading it unconditionally means this line does not become
+      // wrong the day something before the workspace spawns one.
+      const leftovers = [
+        ...(workspace === null ? [] : await workspace.discardAll()),
+        ...this.deps.tools.leaked,
+      ];
       await this.deps.runs.finish({
         id,
         leaseOwner: this.deps.leaseOwner,

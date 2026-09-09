@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from 'pg';
@@ -507,6 +507,129 @@ describe('backup against a real database', () => {
     expect(delivered[0]?.kind).toBe('message');
     expect(delivered[0]?.caption).toContain('RETAINED:');
     expect(delivered[0]?.caption).toContain(outcome.run.checksum ?? 'no-checksum');
+  }, 180_000);
+
+  it('stops a dump that runs past its timeout, and kills the subprocess', async () => {
+    /*
+     * Item M of the hardening audit: the timeout branch in `pg-tools.ts` existed
+     * and nothing reached it, because every test passes a generous timeout — and
+     * the `binDir` hook that would make it reachable was unused.
+     *
+     * So this is the first exercise of the branch, through a REAL subprocess: a
+     * `pg_dump` on `binDir` that sleeps far longer than the timeout allows. The
+     * tool must reject rather than hang, classify it as `BACKUP_TOOL_FAILED`, and
+     * say how long it waited — and it must take the child with it. A dump left
+     * running holds a `pg_dump` connection to the database after the run that
+     * started it has given up, which is the version of this that looks fine in
+     * the application and shows up as a backend nobody can account for.
+     */
+    const bin = await mkdtemp(join(tmpdir(), 'nexa-fake-bin-'));
+    try {
+      const fake = join(bin, 'pg_dump');
+      const pidFile = join(bin, 'pid');
+      /*
+       * The pid file path is BAKED INTO the script rather than passed in the
+       * environment, and that is the production code asserting itself: `pg-tools`
+       * builds a clean environment for the child — PATH, LC_ALL and the PG*
+       * variables only — so nothing this process holds reaches it. A first version
+       * of this test read `$NEXA_FAKE_PIDFILE` and got an empty path.
+       *
+       * The `exec` matters too: without it `sh` would be the child and `sleep` its
+       * grandchild, so killing the child would leave the sleep behind. That is a
+       * real property of the production code, and not the one under test here.
+       */
+      await writeFile(fake, `#!/bin/sh\necho "$$" > '${pidFile}'\nexec sleep 120\n`);
+      await chmod(fake, 0o755);
+
+      const tools = new PostgresDatabaseTools({
+        databaseUrl: testConfig().DATABASE_URL,
+        dumpTimeoutMs: 1_000,
+        restoreTimeoutMs: 1_000,
+        binDir: bin,
+      });
+      const started = Date.now();
+      await expect(tools.dump(join(bin, 'out.pgcustom'))).rejects.toMatchObject({
+        code: 'backup.tool_failed',
+      });
+      // It gave up near its own deadline rather than at the child's. The upper
+      // bound is what makes this a timeout test: without the bound a tool that
+      // simply waited out `sleep 120` would satisfy the rejection above.
+      const waited = Date.now() - started;
+      expect(waited).toBeGreaterThanOrEqual(900);
+      expect(waited).toBeLessThan(30_000);
+
+      // And the child is GONE. Asked of the operating system, because the point
+      // is the process and not the promise: `kill(pid, 0)` throws ESRCH for a pid
+      // that no longer exists.
+      const pid = Number((await readFile(pidFile, 'utf8')).trim());
+      expect(Number.isInteger(pid)).toBe(true);
+      let alive = true;
+      for (let attempt = 0; attempt < 60 && alive; attempt += 1) {
+        try {
+          process.kill(pid, 0);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        } catch {
+          alive = false;
+        }
+      }
+      expect(alive).toBe(false);
+    } finally {
+      await rm(bin, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('fails the run and delivers nothing when the work directory cannot be written', async () => {
+    /*
+     * Item M again: disk exhaustion was modelled for the installer and not for
+     * `BACKUP_WORK_DIR`, which ADR-0025 itself says needs three artifacts on disk
+     * at once.
+     *
+     * A real OS refusal rather than a stubbed one: the work root's parent is a
+     * regular FILE, so `mkdir` inside the production workspace factory fails with
+     * ENOTDIR. Not EACCES-by-chmod, which was the first attempt and proved
+     * nothing — these suites run as root, root ignores directory permissions, and
+     * the backup SUCCEEDED through a mode `0500` directory. A test that can only
+     * pass as an unprivileged user is a test that does not run where it matters.
+     *
+     * ENOSPC specifically needs a size-limited filesystem, and therefore mount
+     * privileges CI may not have. It was exercised by hand against a 1 MiB tmpfs
+     * and the result is recorded in `docs/hardening-falsification.md`; the rule
+     * this case pins is the one both share, which is that a workspace that cannot
+     * be written fails the run at its FIRST stage and delivers nothing.
+     *
+     * What must not happen is the interesting part: a run that cannot write
+     * anywhere must not report success with no artifact, and must not deliver.
+     */
+    const blocker = join(await mkdtemp(join(tmpdir(), 'nexa-backup-blocked-')), 'not-a-directory');
+    try {
+      await writeFile(blocker, 'occupying the path the work root needs');
+      const outcome = await service({ workDir: join(blocker, 'runs') }).run('MANUAL');
+      if (outcome.kind !== 'COMPLETED') throw new Error('unreachable');
+      expect(outcome.run.state).toBe('FAILED');
+      // The first stage, because nothing downstream of it could have run.
+      expect(outcome.run.stage).toBe('DUMP');
+      expect(outcome.run.verifiedAt).toBeNull();
+      expect(outcome.run.deliveryState).toBe('NOT_ATTEMPTED');
+      expect(delivered).toEqual([]);
+      // And the failure is classified and described, not a raw errno left for an
+      // operator to interpret on their own.
+      expect(outcome.run.failureCode).not.toBeNull();
+      expect(outcome.run.failureMessage).not.toBeNull();
+    } finally {
+      await rm(blocker, { recursive: true, force: true });
+    }
+
+    // The lease is RELEASED, which is the operationally important half: the run
+    // row used to be claimed before the workspace existed and outside the
+    // recorded region, so this failure left a RUNNING row holding the
+    // installation's one-backup-at-a-time lock. Every later backup was then
+    // refused as BUSY until the lease went stale — an installation that silently
+    // stops taking backups, which for a disaster-recovery pipeline is the worst
+    // available outcome. A working one, once the disk problem is gone, proves it.
+    const next = await service().run('MANUAL');
+    expect(next.kind).toBe('COMPLETED');
+    if (next.kind !== 'COMPLETED') throw new Error('unreachable');
+    expect(next.run.state).toBe('SUCCEEDED');
   }, 180_000);
 
   it('parses a real manifest against the frozen schema', async () => {
