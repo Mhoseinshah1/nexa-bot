@@ -564,3 +564,31 @@ inside a Web Admin branch.
 
 **Trigger to revisit:** the first operational-log outage in production, or
 the phase that gives the guard a logger of its own.
+
+## OQ-3D-05 — a write permission without its read permission has no usable screen
+
+**Status: OPEN — OWNER-DEFERRED, not merge-blocking.** Raised by Codex's
+seventh review of PR #15; the owner's disposition is to record it and not to
+decide it at the end of Phase 3D.
+
+`SettingsService.set` authorizes on `settings.edit` alone, and the feature
+flag and template writes on `settings.edit` and `templates.edit` alike. An
+administrator whose role grants the write and whose overrides DENY the read —
+`effective = (role ∪ GRANT) − DENY`, so the combination is reachable — holds
+a capability the Web Admin cannot offer: `/settings`, `/features` and
+`/content` gate the whole page on the view permission, render the denied
+state and hide their navigation entries. The server permits a write the
+screen does not draw.
+
+**Why it is not decided here.** Neither remedy is a Web Admin change. Requiring
+the view permission on the server's write path changes what an existing
+permission grants; drawing a write control without the read means editing a
+value the actor may not see, which is the write-only settings screen the
+registry exists to end. The right answer needs a decision about
+read-before-write — every write here carries an `expectedVersion` read from
+the page — and whether edit should imply view in the override resolver.
+Not a privilege escalation, data loss, tenant isolation or security defect:
+the mismatch denies, it never grants.
+
+**Trigger to revisit:** the first override that produces this combination in
+a real installation, or the phase that revisits the permission catalogue.

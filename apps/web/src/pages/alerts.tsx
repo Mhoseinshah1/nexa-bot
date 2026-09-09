@@ -360,6 +360,8 @@ const STATUS_KEYS: Record<string, WebKey> = {
  * is a pager that might as well not exist.
  */
 const NOTIFICATION_PAGE_SIZE = 25;
+/** The discovery lane for a settled first page of notifications. See `pollUnlessFinalWhile`. */
+const NOTIFICATION_DISCOVERY_MS = 30_000;
 
 export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denied: boolean }) {
   const client = useQueryClient();
@@ -392,9 +394,16 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
     // "pending" until they reloaded, which is indistinguishable from a
     // destination that does not work.
     //
-    // Only while something IS pending, so a settled list costs nothing.
-    refetchInterval: pollUnlessFinalWhile<NotificationListResponse>(3_000, (data) =>
-      data.notifications.some((entry) => entry.status === 'PENDING'),
+    // Fast only while something IS pending. A settled FIRST page still polls,
+    // slowly: an operational event queues a new intent with no operator
+    // action, `refetchOnWindowFocus` is off globally, and a tab opened on a
+    // settled list never saw a later delivery until navigation. The cursor
+    // pages behind it are history and do not poll once settled — a new row
+    // appears on the first page, never on an older one.
+    refetchInterval: pollUnlessFinalWhile<NotificationListResponse>(
+      3_000,
+      (data) => data.notifications.some((entry) => entry.status === 'PENDING'),
+      cursor === undefined ? NOTIFICATION_DISCOVERY_MS : undefined,
     ),
   });
 

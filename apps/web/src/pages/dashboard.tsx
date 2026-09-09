@@ -346,11 +346,17 @@ function AttentionCard({
           // were not drawn is the difference between a summary and a lie of
           // omission on the one card headed "needs attention" — and when the
           // page was full, the number is a FLOOR and the sentence says so.
+          //
+          // The floor COUNTS the cursor. A non-null `nextCursor` is the server
+          // proving at least one more row exists beyond this page, so a full
+          // fifty with six drawn is at least forty-five others, not forty-four —
+          // the first version of this sentence hedged the number and still
+          // understated the minimum it had been handed.
           <p className="faint small">
             {truncated
               ? t('web.dashboard_more_conditions_partial')
               : t('web.dashboard_more_conditions')}{' '}
-            <Num value={Math.max(events.length - ATTENTION_SHOWN, 0)} />
+            <Num value={Math.max(events.length - ATTENTION_SHOWN, 0) + (truncated ? 1 : 0)} />
           </p>
         )}
       </StateSwitch>

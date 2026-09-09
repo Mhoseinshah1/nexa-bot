@@ -1448,7 +1448,7 @@ Each survived mutation with all 963 tests green:
 | #   | rule                                                | mutation                                      | test that dies                                                                                         |
 | --- | --------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | U39 | the archive browser asks for the archive            | drop `archived` from the API client           | `permissions-and-refresh.test.tsx` › asks the server for the archive when the archive is what is shown |
-| U40 | a settled delivery list costs nothing               | drop the `unsettled` check                    | `permissions-and-refresh.test.tsx` › stops polling a delivery list once nothing is pending             |
+| U40 | a settled delivery list costs nothing               | drop the `unsettled` check                    | `permissions-and-refresh.test.tsx` › leaves the fast lane once nothing is pending                      |
 | U41 | a filter change starts from the newest page         | drop `setTrail([])`                           | `settings-and-alerts.test.tsx` › starts again from the newest page when the filter changes             |
 | U42 | the attention card counts what it did not draw      | `events.length > ATTENTION_SHOWN` → `false`   | `permissions-and-refresh.test.tsx` › says how many conditions the attention card did not draw          |
 | U43 | the panel form promises an overwrite, not a refusal | swap in `web.changed_elsewhere`               | `panels.test.tsx` › does not revert a concurrent rename when only the other field was edited           |
@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 391 citations were checked; this record declares 397 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 397 citations were checked; this record declares 400 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -6002,6 +6002,93 @@ made unconditional without a failure.
 
 `EXPECTED` is 397. U99 re-measured against this round's table: `391
 citations were checked; this record declares 397`.
+
+## Round 58 — Codex's seventh review, and the owner's disposition of it
+
+Review `5154662507` on `8d23649` (the review of the round-57 head) left four
+inline threads and two findings in its body. The owner read the four threads
+and ruled on each; the two body findings are recorded below as confirmed and
+awaiting a ruling, because they were not among the four the owner saw.
+
+**Fixed now, on the owner's instruction:**
+
+- **CY1 — the attention floor counts the cursor-proven row.** A non-null
+  `nextCursor` is the server proving at least one more open condition exists
+  beyond the page, so a full fifty with six drawn is at least forty-five
+  others; round 57's floor said forty-four, hedged and still understating the
+  minimum it had been handed. `+ 1` when truncated.
+- **CY2/CY3 — a settled first page of notifications keeps a discovery poll.**
+  The list polled every three seconds while something was pending and never
+  otherwise, so a tab opened on a settled list never learned of an intent an
+  operational event queued afterwards until navigation. `pollUnlessFinalWhile`
+  takes a `settledMs` lane; the notifications list passes thirty seconds for
+  the FIRST page only. Cursor pages are history and do not poll once settled —
+  a new row appears at the top of the list, never on an older page.
+
+**Owner-deferred, recorded and not fixed in Phase 3D:**
+
+- **`settings.edit` / `templates.edit` without the matching view permission.**
+  A DENY override on `settings.view` leaves an actor whom `SettingsService.set`
+  authorizes with a page that renders only its denied state and no nav entry
+  (`/features` and `/content` alike). Not a privilege escalation, data loss,
+  tenant-isolation or security defect: a capability/usability mismatch whose
+  clean fix needs a decision about read-before-write and whether edit implies
+  view. Recorded as OQ-3D-05 in `docs/open-questions.md`, OWNER-DEFERRED,
+  non-blocking.
+- **Unknown query parameter names are ignored.** `singleValued` proves every
+  value is a string and returns every name; the controllers rebuild their
+  objects from the recognised keys, so `?scpoe=MANAGEMENT_CONDITIONS` reads
+  as no scope and a misspelled cursor field as no cursor. The Web Admin
+  client sends canonical names; this is robustness for hand-written callers,
+  to be done as one endpoint-wide policy rather than a patch at the end of a
+  phase. NON-BLOCKING API-hardening backlog.
+
+**Confirmed, awaiting the owner's ruling** (in the review body, not the four
+threads the owner ruled on; neither is changed here):
+
+- `assessCapacity` advances `lastCapacityAssessmentAt` BEFORE it reads or
+  writes anything, so a capacity read or condition write that throws (the
+  tick logs it and records no progress for that tick) is not retried for the
+  configured interval — ten minutes by default — while every later tick
+  proceeds and records progress, reporting the monitor healthy with an
+  overload condition unopened or unresolved. Verified in
+  `panel-monitor.service.ts`: the assignment is the second statement of the
+  method. The fix is to advance the timestamp only after a complete
+  assessment; a persistently failing assessment then retries every tick
+  while the tick's own failure keeps the monitor unhealthy, which is the
+  loud signal. Class: deployment / readiness correctness.
+- `panelCredentialsInputSchema` admits `{}` (and, since Zod strips unknown
+  keys, `{ api_token: "…" }`), so `POST /panels/:id/credentials` with no
+  recognised field passes the schema, `credentials.write` upserts a row with
+  every credential column untouched, `setScheduleEligibility` makes the
+  panel `ELIGIBLE_NOW`, a SUCCESS `panel.credentials.replace` audit row is
+  written with no kinds in it, and the caller is told it succeeded. Verified
+  in `panel.service.ts` and `drizzle-panel-credentials.ts`; the Web Admin's
+  own form refuses an empty submit before sending. The fix is a refinement
+  on the contract schema requiring at least one recognised credential field —
+  a `packages/contracts` change, which is its own commit and its own
+  decision. Class: data / audit correctness.
+
+### The mutations
+
+| #   | rule                                         | mutation                             | tests that die                                                                                        |
+| --- | -------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| CY1 | the floor counts the cursor-proven row       | drop the `+ 1`                       | `permissions-and-refresh.test.tsx` › says the attention count is a floor when the first page was full |
+| CY2 | a settled first page keeps a discovery poll  | pass no `settledMs`                  | `permissions-and-refresh.test.tsx` › discovers an intent queued after a settled first page was drawn  |
+| CY3 | the discovery lane is the first page's alone | pass `settledMs` on cursor pages too | `permissions-and-refresh.test.tsx` › does not poll a settled cursor page for discovery                |
+
+Measured: CY1 — 1/38, `expected 'شرایط باز دیگر، دست‌کم (فقط صفحه…' to
+contain '45'` (`dashboard.tsx` `4ca76f6ec8f7104b`). CY2 — 1/38, `Unable to
+find an element with the text: ops.queued-later` (`alerts.tsx`
+`24482d75c3337125`). CY3 — 1/38, `expected 3 to be 1` (the cursor page
+re-read twice in sixty-five seconds; `alerts.tsx` `24482d75c3337125`). Each
+file restored to the hash it started with. The complete case — a settled
+first page asks nothing for twenty-five seconds — is the renamed `leaves the
+fast lane once nothing is pending`, so the discovery lane cannot be made the
+fast lane without a failure.
+
+`EXPECTED` is 400. U99 re-measured against this round's table: `397
+citations were checked; this record declares 400`.
 
 ## The microsecond truncation is still open, deliberately
 

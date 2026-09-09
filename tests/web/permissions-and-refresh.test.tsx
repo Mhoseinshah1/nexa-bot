@@ -1073,7 +1073,7 @@ describe('bounds that were asserted only in comments', () => {
    * seconds for as long as it is open — 1200 requests an hour, per tab, on a
    * single-VPS install.
    */
-  it('stops polling a delivery list once nothing is pending', async () => {
+  it('leaves the fast lane once nothing is pending', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const settled = stubApi([
       {
@@ -1084,9 +1084,76 @@ describe('bounds that were asserted only in comments', () => {
     renderPage(<NotificationsPage mayTest denied={false} />);
     await screen.findByText('ops.settled');
 
+    // Eight three-second cadences without a request: the fast lane is off.
     const asked = countOf(settled.calls, '/notifications');
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(25_000);
     expect(countOf(settled.calls, '/notifications')).toBe(asked);
+  });
+
+  /**
+   * Codex, review seven, owner disposition: a settled FIRST page still has to
+   * DISCOVER. An operational event queues a new intent with no operator
+   * action, `refetchOnWindowFocus` is off globally, and a tab opened on a
+   * settled list never saw a later delivery until navigation. Discriminating
+   * by construction: the new intent is not in the first answer, appears only
+   * in the stub afterwards, and is on screen only if the list asked again.
+   */
+  it('discovers an intent queued after a settled first page was drawn', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubApi([
+      {
+        url: '/notifications',
+        body: { notifications: [notification('SENT', 'ops.settled')], nextCursor: null },
+      },
+    ]);
+    renderPage(<NotificationsPage mayTest denied={false} />);
+    await screen.findByText('ops.settled');
+    expect(screen.queryByText('ops.queued-later')).toBeNull();
+
+    // The event fires while the operator is looking at a settled list.
+    stubApi([
+      {
+        url: '/notifications',
+        body: {
+          notifications: [
+            notification('PENDING', 'ops.queued-later'),
+            notification('SENT', 'ops.settled'),
+          ],
+          nextCursor: null,
+        },
+      },
+    ]);
+
+    await vi.advanceTimersByTimeAsync(35_000);
+    expect(await screen.findByText('ops.queued-later')).toBeInTheDocument();
+  });
+
+  /**
+   * And the discovery lane is the FIRST page's alone. A new row appears at
+   * the top of the list, never on an older cursor page, so a settled cursor
+   * page polling would be requests that can only find what they found.
+   */
+  it('does not poll a settled cursor page for discovery', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const api = stubApi([
+      {
+        url: '/notifications',
+        body: {
+          notifications: [notification('SENT', 'ops.settled')],
+          nextCursor: { at: '2026-09-06T07:00:00.000Z', id: 'older' },
+        },
+      },
+    ]);
+    renderPage(<NotificationsPage mayTest denied={false} />);
+    await screen.findByText('ops.settled');
+    fireEvent.click(screen.getByRole('button', { name: 'قدیمی‌تر' }));
+    await waitFor(() => {
+      expect(countOf(api.calls, 'before=')).toBeGreaterThan(0);
+    });
+
+    const asked = countOf(api.calls, 'before=');
+    await vi.advanceTimersByTimeAsync(65_000);
+    expect(countOf(api.calls, 'before=')).toBe(asked);
   });
 
   /**
@@ -1148,7 +1215,11 @@ describe('bounds that were asserted only in comments', () => {
 
     await screen.findByText('condition 0');
     const more = await screen.findByText(/دست‌کم/);
-    expect(more.textContent ?? '').toContain(formatNumber(50 - 6));
+    // Fifty on the page, six drawn, and the cursor is the server proving at
+    // least one more: forty-five, not forty-four. The first version of the
+    // floor hedged the number and still understated the minimum it had.
+    expect(more.textContent ?? '').toContain(formatNumber(50 - 6 + 1));
+    expect(more.textContent ?? '').not.toContain(formatNumber(50 - 6));
   });
 });
 

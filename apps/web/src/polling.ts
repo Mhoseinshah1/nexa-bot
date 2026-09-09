@@ -123,7 +123,20 @@ export function pollUnlessFinal(ms: number) {
  * revoked goes on satisfying its own condition and goes on asking. The failure
  * check has to come first for the condition to mean anything.
  */
-export function pollUnlessFinalWhile<TData>(ms: number, unsettled: (data: TData) => boolean) {
+/**
+ * `settledMs`, when given, is the DISCOVERY lane: the cadence a settled answer
+ * is re-read at anyway. The notifications list polled only while something
+ * was pending, which was right about cost and wrong about discovery — an
+ * operational event queues a new intent on its own, and a first page that
+ * was settled when the tab opened never learned of it until navigation.
+ * Callers pass it for the page on which new rows APPEAR and leave it off for
+ * the cursor pages behind it, whose history does not change.
+ */
+export function pollUnlessFinalWhile<TData>(
+  ms: number,
+  unsettled: (data: TData) => boolean,
+  settledMs?: number,
+) {
   return (query: PollingQuery): number | false => {
     if (finalAnswer(query.state.error)) return false;
     // Nothing has loaded yet. A transient failure on the FIRST load still has
@@ -134,7 +147,8 @@ export function pollUnlessFinalWhile<TData>(ms: number, unsettled: (data: TData)
     const data = query.state.data as TData | undefined;
     if (data === undefined)
       return query.state.error === null ? false : paced(ms, query.state.error);
-    if (!unsettled(data)) return false;
+    if (!unsettled(data))
+      return settledMs === undefined ? false : paced(settledMs, query.state.error);
     return paced(ms, query.state.error);
   };
 }
