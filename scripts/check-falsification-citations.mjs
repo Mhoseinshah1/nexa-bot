@@ -67,7 +67,7 @@ const RECORDS = [
  * have to be a map, and a map is a place for a record to be added with no entry
  * and checked against nothing — which is this script's own failure mode.
  */
-const EXPECTED = 464;
+const EXPECTED = 466;
 /**
  * A table whose last column is one of these is making citations.
  *
@@ -95,6 +95,43 @@ const CITATION_HEADERS = ['named test', 'test that dies', 'tests that die'];
  * names. The narrowing is gone and the table is declared.
  */
 const NON_CITING_HEADERS = ['what dies', 'what the check prints', 'what it is now'];
+
+/**
+ * Every shell test suite, by path, and the test names it declares.
+ *
+ * Separate from `sources` on purpose, and not merged into it: every other reader
+ * in this file is a TypeScript reader. `maskLiterals`, `withoutSkippedSuites`,
+ * `onlyMarkers` and `unresolvedModifiers` all assume JS syntax, and handing them
+ * bash would not fail loudly — it would return nothing, which reads as "no tests
+ * here" and makes every citation into a shell suite resolve against the empty
+ * set.
+ *
+ * Shell suites exist because the deployment state machine is a shell program:
+ * `tests/deploy/botctl.test.sh` drives the real `botctl` against a fake docker,
+ * and the rules it proves — the update and rollback ordering, the host-asset
+ * activation, the edge-configuration adoption — have no other behavioural test.
+ * Before this they could not be CITED, so they were falsified by hand and the
+ * evidence lived in a commit message. That is the shape this whole script exists
+ * to refuse.
+ *
+ * One declaration form: `test_case '<name>'`, which is the harness's own. A suite
+ * that invents a second way to name a test would be invisible here, so
+ * `harness.sh` is asserted to define exactly this one.
+ */
+function shellSuites(dir) {
+  return readdirSync(dir).flatMap((entry) => {
+    const path = join(dir, entry);
+    if (statSync(path).isDirectory()) return shellSuites(path);
+    if (!/\.test\.sh$/.test(entry)) return [];
+    const text = readFileSync(path, 'utf8');
+    // Single or double quoted, and the name runs to the matching quote. A bash
+    // test name is a literal; nothing here interpolates one.
+    const names = [...text.matchAll(/^\s*test_case\s+(['"])([\s\S]*?)\1/gm)].map(
+      (match) => match[2],
+    );
+    return [[path, names]];
+  });
+}
 
 /** Every test source, by path, so a citation can be checked where it points. */
 function sources(dir) {
@@ -768,6 +805,34 @@ function main() {
    * is read as itself, with its own extension, and the titles are unioned.
    */
   const titlesByPath = new Map(files.map(([path, text]) => [path, titles(text, path)]));
+  /*
+   * And the shell suites, which are tests too.
+   *
+   * `tests/deploy/botctl.test.sh` is the only behavioural test of the update and
+   * rollback state machines — the real `botctl`, against a fake docker — so a
+   * record that cites it is citing the test that actually covers the rule.
+   * Without this the citation resolved against nothing and the row could not be
+   * written at all, which is how those rules ended up falsified by hand with the
+   * evidence only in a commit message.
+   */
+  const shellFound = shellSuites('tests');
+  /*
+   * A guard on the guard, of the kind `check-boundaries.sh` documents at length.
+   * If the harness renames `test_case`, or the suites move, this collector
+   * silently returns nothing — and every citation into a shell suite then
+   * resolves against the empty set and is reported as missing. That failure is at
+   * least loud. The quieter one is a suite that yields ZERO names while another
+   * still yields some, so the count is asserted per suite rather than in total.
+   */
+  for (const [path, names] of shellFound) {
+    if (names.length === 0) {
+      process.stdout.write(
+        `\x1b[31mfail\x1b[0m  ${path} declares no test_case names; this script cannot see its tests.\n`,
+      );
+      process.exit(1);
+    }
+    titlesByPath.set(path, names);
+  }
   const everyTitle = [...titlesByPath.values()].flat();
 
   const missing = [];

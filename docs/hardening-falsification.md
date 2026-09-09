@@ -131,6 +131,33 @@ deleting the call left it green — measured, then fixed to require
 `assertOutsideTransaction(`. The probe is the reason the check works; it is
 recorded here rather than cited from memory.
 
+## The Caddy edge transition — a CONFIRMED staging defect
+
+| #        | Rule                                                                  | Mutation                                                        | Named test                                                                                               | Result |
+| -------- | --------------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------ |
+| CADDY-01 | An edge that will not adopt the target configuration fails the update | delete the SECOND `nexa_verify_edge_config`, return 0           | `botctl.test.sh` › update: an edge that will not adopt the target configuration FAILS the update         | KILLED |
+| CADDY-02 | An edge `up -d` left alone is force-recreated                         | replace the `--force-recreate --no-deps caddy` call with `true` | `botctl.test.sh` › update: an edge that `up -d` leaves alone is recreated, and the update still succeeds | KILLED |
+
+And the whole fix, reverted: restoring the pre-fix behaviour — bring the stack up
+and declare victory, which is what `up -d` alone did — fails SIX of the 174
+checks, among them `update: an edge that will not adopt the target configuration
+FAILS the update`. That is the staging lie, and it is the one a test must refuse.
+
+### The harness learned to run a shell suite
+
+These rows could not be produced by `scripts/falsify.sh` before this branch: it
+ran `vitest` and nothing else, and the deployment state machine's tests are a
+shell suite. So every rule whose only behavioural test lives in
+`tests/deploy/botctl.test.sh` had to be falsified BY HAND — copy the file aside,
+edit it, run the suite, copy it back — which is exactly the procedure the harness
+exists to replace, and exactly how a mutation gets left in a tree.
+
+`PROJECT` now accepts the literal `shell`, which runs the named file with bash.
+The first attempt at CADDY-01 was run against
+`tests/unit/deployment-compose.test.ts` and reported SURVIVED, correctly: that
+file is a source scan and does not assert the predicate. The row above is the
+same mutation against the suite that does.
+
 ## The harness could not see a contract change
 
 `packages/contracts/package.json` declares `exports: { ".": "./dist/index.js" }`,

@@ -83,7 +83,21 @@ if ! rebuild; then
   exit 1
 fi
 
-OUT=$(pnpm exec vitest run --project "$PROJECT" "$TEST" 2>&1)
+# The sixth argument is the vitest PROJECT — or the literal `shell`, which runs
+# the named file with bash instead.
+#
+# Without that, every rule whose only behavioural test is a shell suite had to be
+# falsified by HAND: copy the file aside, edit it, run the suite, copy it back.
+# That is the procedure this harness exists to replace, and doing it by hand is
+# how a mutation gets left in the tree — the failure mode the restore check at
+# the bottom was added for. The deployment state machine's tests are a shell
+# suite (`tests/deploy/botctl.test.sh`), and the edge-configuration rules live
+# there, so "falsifiable" had to include them.
+if [ "$PROJECT" = "shell" ]; then
+  OUT=$(bash "$TEST" 2>&1)
+else
+  OUT=$(pnpm exec vitest run --project "$PROJECT" "$TEST" 2>&1)
+fi
 STATUS=$?
 
 git checkout -- "$FILE"
