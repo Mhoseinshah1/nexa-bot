@@ -150,3 +150,76 @@ describe('RetentionSweeper', () => {
     expect(overlapped).toBe(false);
   });
 });
+
+describe('RetentionSweeper health', () => {
+  const options = {
+    intervalMs: 1_000,
+    initialDelayMs: 10,
+    batchSize: 100,
+    maxBatchesPerTick: 10,
+  };
+
+  /**
+   * Every case drives `sweep()` DIRECTLY and never calls `start()`.
+   *
+   * That is the whole design of these tests. `start()` opens a startup grace
+   * window — one slack interval in which a loop that has not yet ticked still
+   * reports fresh, because at boot the absence of progress is evidence of a
+   * young process rather than a broken loop. A test that starts the sweeper and
+   * then asserts freshness is therefore satisfied by the grace alone, and stays
+   * green with the progress recording deleted. The first version of these tests
+   * did exactly that, and the falsification run reported SURVIVED.
+   *
+   * Unstarted, `isFresh` can only become true by way of a completed sweep, so
+   * the assertion names one rule.
+   */
+  it('is not fresh until a sweep has completed', async () => {
+    const table = backlog(5);
+    const sweeper = new RetentionSweeper({ name: 't', purge: table.purge }, clock, logger, options);
+    const now = clock.now().getTime();
+
+    expect(sweeper.isFresh(now)).toBe(false);
+    await sweeper.sweep();
+    expect(sweeper.isFresh(now)).toBe(true);
+  });
+
+  it('goes stale once sweeps stop, with its timer still alive', async () => {
+    const table = backlog(5);
+    const sweeper = new RetentionSweeper({ name: 't', purge: table.purge }, clock, logger, options);
+    await sweeper.sweep();
+    const now = clock.now().getTime();
+
+    expect(sweeper.isFresh(now + options.intervalMs * 3)).toBe(true);
+    // The failure the health check exists for: nothing threw, nothing stopped,
+    // and the loop is achieving nothing.
+    expect(sweeper.isFresh(now + options.intervalMs * 3 + 1)).toBe(false);
+  });
+
+  it('records no progress for a sweep that threw', async () => {
+    const sweeper = new RetentionSweeper(
+      {
+        name: 't',
+        purge: async () => {
+          throw new Error('the table is unreachable');
+        },
+      },
+      clock,
+      logger,
+      options,
+    );
+    await expect(sweeper.sweep()).rejects.toThrow(/unreachable/);
+    // A caught-and-logged failure is exactly what must NOT count as progress.
+    expect(sweeper.isFresh(clock.now().getTime())).toBe(false);
+  });
+
+  it('stops claiming freshness once stopped', async () => {
+    const table = backlog(1);
+    const sweeper = new RetentionSweeper({ name: 't', purge: table.purge }, clock, logger, options);
+    await sweeper.sweep();
+    expect(sweeper.isFresh(clock.now().getTime())).toBe(true);
+    sweeper.start();
+    await sweeper.stop();
+    // A draining worker is not a working one.
+    expect(sweeper.isFresh(clock.now().getTime())).toBe(false);
+  });
+});

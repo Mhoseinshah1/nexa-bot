@@ -1,4 +1,5 @@
 import type { Clock, Logger } from '@nexa/contracts';
+import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 
 /**
  * Worker-side housekeeping for identity tables that grow on their own.
@@ -57,16 +58,32 @@ export class RetentionSweeper {
   private timer: NodeJS.Timeout | null = null;
   private firstRun: NodeJS.Timeout | null = null;
   private running = false;
+  /**
+   * Whether this sweeper is still sweeping, for the worker's health check.
+   *
+   * Without it a sweeper whose every tick throws logs for ever and the worker
+   * reports healthy — and the two tables these bound grow exactly as if the
+   * sweeper did not exist, which is the failure it was written to prevent.
+   */
+  private readonly progress: LoopProgress;
 
   constructor(
     private readonly task: RetentionTask,
     private readonly clock: Clock,
     private readonly logger: Logger,
     private readonly options: RetentionSweeperOptions,
-  ) {}
+  ) {
+    this.progress = new LoopProgress(options.intervalMs);
+  }
+
+  /** Whether a sweep has completed recently enough. See `LoopProgress`. */
+  isFresh(nowMs: number): boolean {
+    return this.progress.isFresh(nowMs);
+  }
 
   start(): void {
     if (this.timer !== null) return;
+    this.progress.begin(this.clock.now().getTime());
     this.firstRun = setTimeout(() => void this.tick(), this.options.initialDelayMs);
     this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
     // Never hold the process open for a housekeeping timer.
@@ -85,6 +102,9 @@ export class RetentionSweeper {
     }
     // Let an in-flight sweep finish rather than leaving a half-done drain.
     while (this.running) await new Promise((resolve) => setTimeout(resolve, 10));
+    // A stopped sweeper makes no claim. Reporting fresh here would let a
+    // draining worker look like a working one for a whole slack window.
+    this.progress.end();
   }
 
   /**
@@ -99,8 +119,17 @@ export class RetentionSweeper {
       removed += n;
       // A short batch means nothing eligible is left. A full one means there
       // may be more, so keep going rather than waiting out the interval.
-      if (n < this.options.batchSize) return removed;
+      if (n < this.options.batchSize) {
+        // Progress, recorded on a sweep that COMPLETED rather than on the
+        // scheduled tick that called it — a finished sweep is progress whoever
+        // asked for it, and recording it here is what makes the rule reachable
+        // from a test without waiting on a timer. Deliberately not in `tick`'s
+        // catch: a caught-and-logged failure is precisely what this reports.
+        this.progress.record(this.clock.now().getTime());
+        return removed;
+      }
     }
+    this.progress.record(this.clock.now().getTime());
     this.logger.warn(
       { task: this.task.name, removed, maxBatchesPerTick: this.options.maxBatchesPerTick },
       'retention sweep hit its per-tick ceiling with work remaining',

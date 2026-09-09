@@ -21,6 +21,7 @@ import type { SettingsResolver } from '../../settings/application/settings-resol
 import type { TemplateResolver } from '../../templates/application/template-resolver.js';
 import { DEFAULT_TEMPLATE_LOCALE } from '../../templates/application/template-resolver.js';
 import type { NotificationIntent, NotificationRepository, NotificationTransport } from './ports.js';
+import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 
 export interface DispatcherOptions {
   readonly pollIntervalMs: number;
@@ -140,6 +141,18 @@ export interface DispatchTickResult {
 export class NotificationDispatcher {
   private running = false;
   private timer: NodeJS.Timeout | null = null;
+  /**
+   * Whether the dispatcher is still dispatching, for the worker's health check.
+   *
+   * The most consequential of the three loops this was added to. The poll loop
+   * catches every tick error and reschedules, so a dispatcher whose every tick
+   * throws logs for ever and its container reports healthy — while this is the
+   * loop that drains the queue by which the installation reports ANYTHING being
+   * wrong. Silently dead, it means the system has lost its ability to say it is
+   * broken, and the only symptom is silence, which is indistinguishable from
+   * nothing being wrong.
+   */
+  private readonly progress: LoopProgress;
   /** The tick currently running, so `stop` can wait for it. */
   private inFlight: Promise<unknown> | null = null;
   private windowStartedAt = 0;
@@ -197,7 +210,9 @@ export class NotificationDispatcher {
      */
     private readonly opsLog: OperationalEventRecorder,
     private readonly options: DispatcherOptions,
-  ) {}
+  ) {
+    this.progress = new LoopProgress(options.pollIntervalMs);
+  }
 
   /**
    * Says that a sweep's verdict was taken back.
@@ -250,9 +265,15 @@ export class NotificationDispatcher {
     }
   }
 
+  /** Whether a tick has completed recently enough. See `LoopProgress`. */
+  isFresh(nowMs: number): boolean {
+    return this.progress.isFresh(nowMs);
+  }
+
   start(): void {
     if (this.running) return;
     this.running = true;
+    this.progress.begin(this.clock.now().getTime());
     const loop = () => {
       if (!this.running) return;
       this.timer = setTimeout(() => {
@@ -296,6 +317,8 @@ export class NotificationDispatcher {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     await this.inFlight;
+    // A stopped dispatcher makes no claim.
+    this.progress.end();
   }
 
   /**
@@ -312,7 +335,12 @@ export class NotificationDispatcher {
     const running = this.runTick();
     this.inFlight = running;
     try {
-      return await running;
+      const result = await running;
+      // Only a tick that COMPLETED. The poll loop's own catch is deliberately
+      // NOT a place this is recorded: a tick that threw and was logged is
+      // exactly what the health check exists to surface.
+      this.progress.record(this.clock.now().getTime());
+      return result;
     } finally {
       // Only if it is still ours: the poll loop replaces this with its own
       // wrapped promise, and clearing that one would undo the loop's tracking.

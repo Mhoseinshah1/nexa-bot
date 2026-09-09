@@ -19,6 +19,7 @@ import {
   tenants,
 } from '../../../../infrastructure/persistence/schema.js';
 import type { EventConsumer } from '../application/event-consumer.js';
+import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 
 export interface OutboxRelayOptions {
   readonly batchSize: number;
@@ -68,6 +69,18 @@ export interface RelayBatchResult {
 export class OutboxRelay {
   private running = false;
   private timer: NodeJS.Timeout | null = null;
+  /**
+   * Whether the relay is still relaying, for the worker's health check.
+   *
+   * The failure this catches is specific and silent: if `processBatch` HANGS
+   * rather than throwing, `tick` never reaches `scheduleNext`, `running` stays
+   * true so `start()` is a no-op, and nothing restarts it. The worker's
+   * heartbeat keeps writing because `SELECT 1` on another checkout still
+   * succeeds, and the API's outbox-lag probe reports zero lag whenever the
+   * outbox happens to be empty. A dead relay in a quiet period was green
+   * everywhere, and the first sign was five minutes after traffic resumed.
+   */
+  private readonly progress: LoopProgress;
 
   constructor(
     private readonly db: Database,
@@ -84,11 +97,19 @@ export class OutboxRelay {
      * has to be opened on this side of the boundary.
      */
     private readonly database?: DatabaseHandle,
-  ) {}
+  ) {
+    this.progress = new LoopProgress(options.pollIntervalMs);
+  }
+
+  /** Whether a batch has completed recently enough. See `LoopProgress`. */
+  isFresh(nowMs: number): boolean {
+    return this.progress.isFresh(nowMs);
+  }
 
   start(): void {
     if (this.running) return;
     this.running = true;
+    this.progress.begin(this.clock.now().getTime());
     this.scheduleNext(0);
   }
 
@@ -98,6 +119,8 @@ export class OutboxRelay {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    // A stopped relay makes no claim.
+    this.progress.end();
   }
 
   private scheduleNext(delayMs: number): void {
@@ -125,7 +148,7 @@ export class OutboxRelay {
    * instead of waiting on a timer.
    */
   async processBatch(): Promise<RelayBatchResult> {
-    return this.db.transaction(async (tx) => {
+    const result = await this.db.transaction(async (tx) => {
       // Work belonging to a tenant that is not ACTIVE is left UNCLAIMED, not
       // discarded and not marked published. `eligibleForDispatch` below is the
       // one statement of that rule; readiness uses it too, so the two cannot
@@ -203,6 +226,17 @@ export class OutboxRelay {
 
       return { claimed: claimed.length, published, failed };
     });
+    // Progress, recorded on a batch that COMPLETED rather than on the scheduled
+    // tick that called it. A finished batch is progress whoever asked for it,
+    // and recording it here is what makes the rule reachable from a test
+    // without waiting on a timer — `tick` is private and only the timer calls
+    // it, so a rule recorded there could not be isolated by any test, which is
+    // how the first version of this survived its own falsification run.
+    //
+    // Deliberately NOT reached when the batch throws: `tick` catches and logs,
+    // and a caught-and-logged failure is precisely the state this reports.
+    this.progress.record(this.clock.now().getTime());
+    return result;
   }
 
   private async dispatch(

@@ -47,12 +47,39 @@ async function main(): Promise<void> {
       } catch {
         return false;
       }
-      // "The process exists" is not the claim this file is making. When the
-      // scheduler is enabled it is part of the worker's job, and a scheduler
-      // whose ticks are all throwing has a live timer and does nothing — which
-      // is precisely the shape of failure an unattended backup has to be able
-      // to report rather than sit quietly in.
-      if (config.BACKUP_SCHEDULE_ENABLED && !container.backupScheduler.isFresh(Date.now())) {
+      // "The process exists" is not the claim this file is making, and until
+      // now it very nearly was: a database round trip plus the backup
+      // scheduler, while the three loops that do most of this role's work —
+      // the relay, the two sweepers and the dispatcher — were invisible to it.
+      //
+      // Each is consulted only when it is actually running, so a disabled
+      // relay or dispatcher is not reported as a broken one. The sweepers have
+      // no flag; they always run.
+      //
+      // The dispatcher is the one that matters most. It drains the queue by
+      // which this installation reports anything being wrong, so a dispatcher
+      // that is alive and achieving nothing means the system has lost its
+      // ability to say it is broken — and the only symptom is silence, which
+      // looks exactly like nothing being wrong.
+      const now = container.clock.now().getTime();
+      const loops: readonly (readonly [string, boolean])[] = [
+        ['relay', !config.OUTBOX_RELAY_ENABLED || container.relay.isFresh(now)],
+        ['throttle-sweeper', container.throttleSweeper.isFresh(now)],
+        ['session-sweeper', container.sessionSweeper.isFresh(now)],
+        [
+          'notification-dispatcher',
+          !config.NOTIFICATION_DISPATCH_ENABLED || container.notificationDispatcher.isFresh(now),
+        ],
+        [
+          'backup-scheduler',
+          !config.BACKUP_SCHEDULE_ENABLED || container.backupScheduler.isFresh(now),
+        ],
+      ];
+      const stalled = loops.filter(([, fresh]) => !fresh).map(([name]) => name);
+      if (stalled.length > 0) {
+        // Named, because "the worker is unhealthy" sends an operator looking at
+        // the whole process when one loop is the answer.
+        container.logger.error({ stalled }, 'worker loops have stopped making progress');
         return false;
       }
       return true;
