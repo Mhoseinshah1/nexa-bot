@@ -592,3 +592,28 @@ the mismatch denies, it never grants.
 
 **Trigger to revisit:** the first override that produces this combination in
 a real installation, or the phase that revisits the permission catalogue.
+
+## A request-rate bound on the Telegram webhook belongs at the edge, and the edge cannot yet carry one
+
+**Status: OPEN — recorded by the Architecture Hardening pass (item G).**
+
+`/telegram/webhook/:botInstanceId` is the only route an unauthenticated caller
+can usefully reach, and it has no request-rate bound. ADR-0026 records why none
+is added inside the application: every admission counter in this codebase is a
+conditional write in PostgreSQL on purpose, so a limiter here would convert a
+cheap unauthenticated request — one 64 KiB parse and a constant-time digest
+compare — into a database write, making a flood a flood against the one component
+whose loss takes the installation down.
+
+The right place is the front door, which is `deploy/`'s Caddy. Caddy's built-in
+server has no rate limiter, so this needs a plugin in the production image or a
+different front door.
+
+**Why it is not decided here.** Adding an unexercised Caddy plugin to the
+production image is a deployment change, and the deployment checkpoint has never
+been run against a real server — `docs/vps-acceptance.md` is the checklist that
+decides that. Adding one unknown to a topology that already has one makes the
+acceptance run harder to interpret, not safer.
+
+**Trigger to revisit:** the VPS acceptance run completing, or the first
+installation that reports unauthenticated traffic on this route.

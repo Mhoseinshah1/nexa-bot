@@ -38,3 +38,6 @@ ADR says so explicitly.
 | [0021](0021-control-plane-concurrency.md)           | Optimistic per-row versioning, not a tenant-row lock              | Accepted                                     |
 | [0022](0022-deployment-topology.md)                 | Deployment topology, release identity, the update algorithm       | Accepted                                     |
 | [0023](0023-providers-panels-credentials-health.md) | Providers, panels, credentials and health                         | Accepted — Phase 3A                          |
+| [0024](0024-web-admin-maturity-and-truthfulness.md) | A surface states what it does not yet do                          | Accepted — Phase 3D                          |
+| [0025](0025-backup-pipeline.md)                     | What a backup IS: dump, verify by restore, then deliver           | Accepted — implements 0011                   |
+| [0026](0026-webhook-edge.md)                        | What bounds the Telegram webhook, and what deliberately does not  | Accepted — Architecture Hardening            |

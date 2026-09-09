@@ -3,6 +3,10 @@ import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import type { TenantContext } from '@nexa/contracts';
 import { AppModule } from './app.module.js';
+import {
+  TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES,
+  TELEGRAM_WEBHOOK_ROUTE_PREFIX,
+} from './surfaces/telegram/webhook.controller.js';
 import { createContainer, type Container } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { trustProxyOption } from './infrastructure/trusted-proxy.js';
@@ -83,6 +87,34 @@ export async function createApiApp(config: AppConfig = loadConfig()): Promise<Ap
     }),
     { logger: false },
   );
+
+  /*
+   * A smaller body limit on the one route an unauthenticated caller can reach.
+   *
+   * The adapter's 1 MB is sized for Web Admin requests from an operator who has
+   * already signed in. The Telegram webhook is different in kind: the secret
+   * token is checked inside the handler, which means Fastify has already read
+   * and parsed the body by the time the request is rejected. An unauthenticated
+   * caller could therefore hand the process a megabyte of JSON per request and
+   * pay nothing for the 401 it got back.
+   *
+   * An `onRoute` hook rather than a guard or a `content-length` check, because
+   * this has to bound the READ and not the handler. A hook that inspected
+   * `content-length` would be advisory — a chunked request declares no length —
+   * whereas `routeOptions.bodyLimit` is what Fastify's own body reader enforces,
+   * on the stream, whatever the headers say.
+   *
+   * Registered before `app.init()`, which is when Nest adds its routes; after it
+   * the hook would never see them.
+   */
+  app
+    .getHttpAdapter()
+    .getInstance()
+    .addHook('onRoute', (route) => {
+      if (route.url.startsWith(TELEGRAM_WEBHOOK_ROUTE_PREFIX)) {
+        route.bodyLimit = TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES;
+      }
+    });
 
   app.enableShutdownHooks();
   await app.init();

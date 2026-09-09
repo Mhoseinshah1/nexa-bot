@@ -23,9 +23,21 @@ import { currentCorrelationId, newCorrelationId } from '../../infrastructure/log
  *
  * Three shapes are fixed here because everything later copies them:
  *
- *   - The webhook ANSWERS IMMEDIATELY and does the work behind the outbox.
- *     Telegram times a webhook out in seconds; a handler that calls a payment
- *     gateway or a panel inline will eventually be that timeout.
+ *   - No handler here calls an EXTERNAL service inline. Telegram times a
+ *     webhook out in seconds, so a handler that dials a payment gateway or a
+ *     panel while Telegram waits will eventually be that timeout — and a
+ *     timeout makes Telegram redeliver the same update, so the slow path
+ *     becomes a duplicated one.
+ *
+ *     Stated as the rule it is, because the earlier wording — "answers
+ *     immediately and does the work behind the outbox" — described something
+ *     this method does not do. Two database round trips and a write transaction
+ *     are awaited before the 200. That is fine, and it is not "immediately";
+ *     a later author who read the old sentence as a description of the shape
+ *     they were copying would have concluded that awaiting work here was
+ *     already forbidden, or already handled, and neither was true. The outbox
+ *     is where the CONSEQUENCES of an update go, not where the update's own
+ *     handling goes.
  *   - Every update is authenticated by the secret token header, and the
  *     endpoint does not exist at all unless the feature is switched on.
  *   - The route NAMES THE BOT INSTANCE. Telegram's `update_id` is a per-bot
@@ -36,6 +48,30 @@ import { currentCorrelationId, newCorrelationId } from '../../infrastructure/log
  *     update_id)`, and resolving the bot is also what supplies the tenant, so
  *     the update stops running under the system scope.
  */
+/**
+ * The largest body this route will read, in bytes.
+ *
+ * Far below the application-wide 1 MB limit, and that gap is the point: the
+ * global limit is sized for Web Admin requests from an AUTHENTICATED operator,
+ * while this route is reachable by anyone who can find it and the secret token
+ * is checked only after the body has already been read and parsed. So an
+ * unauthenticated caller could hand the process a megabyte of JSON to parse, and
+ * the answer it got back — a 401 — cost it nothing.
+ *
+ * 64 KiB is generous for the traffic this actually carries. Telegram caps a
+ * message at 4096 characters, so the largest realistic update is a long text
+ * plus entities and a forwarded origin: a few tens of kilobytes in the worst
+ * case, and under a kilobyte in the normal one.
+ *
+ * This is a ceiling on ONE request, not a rate limit. There is no rate limit on
+ * this route; see `docs/adr/0026-webhook-edge.md` for why that is a recorded
+ * decision rather than an oversight.
+ */
+export const TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES = 64 * 1024;
+
+/** The route prefix the limit above is applied to, matched by an `onRoute` hook. */
+export const TELEGRAM_WEBHOOK_ROUTE_PREFIX = '/telegram/webhook';
+
 @Controller()
 export class TelegramWebhookController {
   constructor(@Inject(CONTAINER) private readonly container: Container) {}

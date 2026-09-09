@@ -234,6 +234,17 @@ so an update cannot be answered with `index.html`.
 - no source-IP allowlist. Defensible, since the secret is the real control, but
   it should be a stated absence.
 
+**Fixed on this branch**, and ADR-0026 records the decisions: a 64 KiB
+route-scoped body limit enforced on the stream by `routeOptions.bodyLimit`; the
+docblock rewritten to state the rule it was reaching for instead of describing a
+shape the method does not have; the feature-flag case rewritten to post a request
+the route would otherwise answer. The two absences are now decisions with reasons
+rather than silences — no in-application rate limit, because every admission
+counter here is a PostgreSQL write and a limiter would convert a cheap
+unauthenticated request into one; no source-IP allowlist, because one install per
+customer sits behind a front door this codebase cannot see. The edge-side rate
+limit is recorded in `docs/open-questions.md` as still owed.
+
 ## H — worker health and freshness
 
 **PARTIALLY SOLVED.** The mechanism is sound and the two newest loops are

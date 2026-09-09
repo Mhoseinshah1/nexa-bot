@@ -13,7 +13,10 @@ import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { auditLogs, outboxMessages } from '../../apps/api/src/infrastructure/persistence/schema';
 import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
-import { telegramUpdateKey } from '../../apps/api/src/surfaces/telegram/webhook.controller';
+import {
+  TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES,
+  telegramUpdateKey,
+} from '../../apps/api/src/surfaces/telegram/webhook.controller';
 
 const WEBHOOK_SECRET = 'a-sufficiently-long-secret';
 
@@ -443,21 +446,125 @@ describe('telegram webhook when disabled', () => {
   let api: ApiApp;
 
   beforeAll(async () => {
-    const config = testConfig({ TELEGRAM_WEBHOOK_ENABLED: 'false' });
+    const config = testConfig({
+      TELEGRAM_WEBHOOK_ENABLED: 'false',
+      TELEGRAM_WEBHOOK_SECRET: WEBHOOK_SECRET,
+    });
     await migrateOnce(config.DATABASE_URL);
     api = await createApiApp(config);
+    await resetDatabase(api.container.database.db);
+    await seed(api.container.database.db, api.container.cipher);
   });
 
   afterAll(async () => {
     await api?.close();
   });
 
+  /**
+   * The request has to be one the route WOULD answer.
+   *
+   * The first version of this posted to `/telegram/webhook` with no bot instance
+   * in the path. The controller is at `/telegram/webhook/:botInstanceId`, so that
+   * URL 404s whether the controller is registered or not — the case passed under
+   * the exact mutation it existed to catch, and `deployment-compose.test.ts`
+   * already depends on that route shape, which is how the discrepancy was
+   * visible at all.
+   *
+   * So: the real route, a real seeded bot, and the correct secret token. With the
+   * flag ON that exact request is accepted — the `telegram webhook body limit`
+   * block below posts the same shape to the same URL and gets a 201 — which is
+   * what makes the 404 here mean the feature flag and not a mistake in the
+   * request.
+   */
   it('does not expose the route at all', async () => {
-    // 404 rather than 401: a deployment with no bot configured has nothing to probe.
+    // 404 rather than 401: a deployment with the receiver switched off has
+    // nothing to probe, and a 401 would confirm the route exists.
     const response = await api.app
       .getHttpAdapter()
       .getInstance()
-      .inject({ method: 'POST', url: '/telegram/webhook', payload: { update_id: 1 } });
+      .inject({
+        method: 'POST',
+        url: webhookUrl(BOT_A),
+        headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET },
+        payload: { update_id: 1 },
+      } as never);
     expect(response.statusCode).toBe(404);
+  });
+});
+
+describe('telegram webhook body limit', () => {
+  let api: ApiApp;
+
+  beforeAll(async () => {
+    const config = testConfig({
+      TELEGRAM_WEBHOOK_ENABLED: 'true',
+      TELEGRAM_WEBHOOK_SECRET: WEBHOOK_SECRET,
+    });
+    await migrateOnce(config.DATABASE_URL);
+    api = await createApiApp(config);
+    await resetDatabase(api.container.database.db);
+    await seed(api.container.database.db, api.container.cipher);
+  });
+
+  afterAll(async () => {
+    await api?.close();
+  });
+
+  const post = (payload: string, headers: Record<string, string>) =>
+    api.app
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: webhookUrl(BOT_A),
+        headers: { 'content-type': 'application/json', ...headers },
+        payload,
+      } as never);
+
+  /** A syntactically valid update, padded to an exact byte length. */
+  const updateOfSize = (bytes: number): string => {
+    const envelope = JSON.stringify({ update_id: 1, message: { text: '' } });
+    const padding = bytes - envelope.length;
+    return JSON.stringify({ update_id: 1, message: { text: 'x'.repeat(Math.max(padding, 0)) } });
+  };
+
+  it('refuses a body above the route limit before reading it', async () => {
+    /*
+     * 413, and the secret token is DELIBERATELY absent.
+     *
+     * That is the property: the limit has to bite before authentication, because
+     * authentication is what the body-reading precedes. A 401 here would mean
+     * the megabyte had already been read and parsed to find out it was
+     * unauthorised, which is the cost this limit exists to remove.
+     */
+    const response = await post(updateOfSize(TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES + 1_000), {});
+    expect(response.statusCode).toBe(413);
+  });
+
+  it('still refuses an oversized body that declares a small content-length', async () => {
+    // The limit is on the STREAM, not on the header. A guard that read
+    // `content-length` would be advisory, and this is the request that shows it:
+    // Fastify counts the bytes it actually receives.
+    const body = updateOfSize(TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES + 1_000);
+    const response = await post(body, { 'content-length': '20' });
+    expect(response.statusCode).not.toBe(201);
+  });
+
+  it('accepts a body under the limit', async () => {
+    // The other direction, so this is not "always refuse": without it, a limit
+    // of zero would pass the case above.
+    const response = await post(updateOfSize(2_000), {
+      [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET,
+    });
+    // 201, which is Nest's default for a POST and what every other accepted
+    // update in this file asserts. The number is not the point; that the request
+    // was ACCEPTED is.
+    expect(response.statusCode).toBe(201);
+  });
+
+  it('keeps the application-wide limit well above the webhook one', async () => {
+    // Both numbers are load-bearing and they are set in different files. A
+    // webhook limit raised to the global one would silently undo this item.
+    expect(TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES).toBeLessThan(1_048_576);
   });
 });
