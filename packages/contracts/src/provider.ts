@@ -353,6 +353,133 @@ export const PROVIDER_FAILURE_RETRYABLE: Readonly<Record<ProviderFailureKind, bo
 };
 
 /**
+ * Whether the provider's verdict is KNOWN, as a fact about the wire.
+ *
+ * A different question from `PROVIDER_FAILURE_RETRYABLE`, and the difference is
+ * the one this axis exists for. Retryability encodes a DECISION — "trying again
+ * could plausibly help" — and answering it does not require knowing whether the
+ * request arrived. Definiteness is a FACT: did the provider answer?
+ *
+ * Conflating the two is safe while every provider call is a READ. A status probe
+ * that may or may not have reached the panel can simply be repeated. It stops
+ * being safe the moment a call MUTATES, which is Phase 4: a create-user request
+ * that reached the panel and whose response was lost must not be retried, because
+ * the retry creates a second user — and `TIMEOUT` is marked retryable.
+ *
+ * So this is declared now, before the first mutating call exists, rather than
+ * after the first duplicate. It has no consumer yet and that is stated rather
+ * than hidden: `PROVIDER_FAILURE_RETRYABLE` still drives the probe lane, because
+ * a read is correctly governed by retryability alone.
+ *
+ *   - `DEFINITIVE` — the provider answered, or nothing was sent. Either way this
+ *     installation knows what happened on the other side.
+ *   - `UNKNOWN` — a request may have been written to the socket and the verdict
+ *     lost. Nothing may be blindly retried; the next step is reconciliation.
+ *
+ * Two kinds are `UNKNOWN` and the reasoning for each is below. The other eight
+ * are `DEFINITIVE`, and `BLOCKED_TARGET` is the one worth saying out loud: it is
+ * definitive because NOTHING WAS SENT — the URL policy refused before a socket
+ * opened — which is a stronger guarantee than an answer.
+ */
+export const PROVIDER_FAILURE_DEFINITENESS = ['DEFINITIVE', 'UNKNOWN'] as const;
+export type ProviderFailureDefiniteness = (typeof PROVIDER_FAILURE_DEFINITENESS)[number];
+
+export const PROVIDER_FAILURE_DEFINITIVE: Readonly<
+  Record<ProviderFailureKind, ProviderFailureDefiniteness>
+> = {
+  // The panel answered, and what it said was no.
+  AUTHENTICATION_FAILED: 'DEFINITIVE',
+  AUTHENTICATION_REQUIRES_INTERACTION: 'DEFINITIVE',
+  /**
+   * Overloaded, and therefore UNKNOWN.
+   *
+   * `UNREACHABLE` covers both "DNS resolved nothing", which is genuinely
+   * definitive, and a socket error during the RESPONSE phase — the request was
+   * written, the panel may have acted on it, and the answer never arrived.
+   * `safe-http.ts` does not record which of the two happened, so the kind cannot
+   * distinguish them and the safe reading is the pessimistic one.
+   *
+   * Narrowing this is a real improvement and it is not a table edit: it needs the
+   * client to record whether the request reached the socket. Until it does,
+   * calling a lost response definitive would be calling an unknown outcome known,
+   * which is the error that duplicates a provider user.
+   */
+  UNREACHABLE: 'UNKNOWN',
+  /**
+   * The deadline fired. Whether it fired before or after the request body was
+   * written is not recorded, and on a slow panel the second is the likely case.
+   */
+  TIMEOUT: 'UNKNOWN',
+  // The handshake failed, so no request was ever written.
+  TLS_FAILED: 'DEFINITIVE',
+  // Refused by the URL policy before a socket opened. Nothing was sent at all,
+  // which is the strongest form of definitive available.
+  BLOCKED_TARGET: 'DEFINITIVE',
+  // The panel answered 429, which is an answer.
+  RATE_LIMITED: 'DEFINITIVE',
+  // The panel answered and the answer could not be parsed. It ANSWERED, so
+  // whatever it did, it did before replying — a malformed 200 from a mutating
+  // call means the mutation probably happened, and the adapter's job is to say
+  // so rather than to retry.
+  MALFORMED_RESPONSE: 'DEFINITIVE',
+  // A 5xx is an answer. Retryable for a READ; for a mutation an adapter must
+  // still decide whether the provider is idempotent on that path.
+  PROVIDER_ERROR: 'DEFINITIVE',
+  // Refused locally, before anything was sent.
+  UNSUPPORTED_CAPABILITY: 'DEFINITIVE',
+};
+
+/**
+ * Whether this installation's request reached the provider's socket.
+ *
+ * Carried on a result rather than inferred from a kind, because the kind cannot
+ * know: `UNREACHABLE` is returned both for a name that does not resolve and for a
+ * connection that dropped mid-response, and only the client that made the call
+ * can tell those apart.
+ *
+ * Declared here so the shape exists before the first mutating call, and so
+ * `PROVIDER_FAILURE_DEFINITIVE` has a way to be narrowed by evidence rather than
+ * by optimism: a result that reports `requestSent: false` is definitive whatever
+ * its kind says.
+ *
+ *   - `NOT_SENT` — resolution or connection failed before any byte was written.
+ *   - `SENT` — the request was written in full; the response is what went wrong.
+ *   - `UNRECORDED` — the client did not track it. The honest value for every
+ *     result produced today, and the reason this is a three-valued field rather
+ *     than a boolean: `false` would be a claim nothing supports.
+ */
+export const PROVIDER_REQUEST_DELIVERY = ['NOT_SENT', 'SENT', 'UNRECORDED'] as const;
+export type ProviderRequestDelivery = (typeof PROVIDER_REQUEST_DELIVERY)[number];
+
+/**
+ * What this installation knows about one failed provider call.
+ *
+ * `kind` is what went wrong, `requestSent` is what reached the wire, and
+ * `definiteness` is the verdict the two produce together — derived by
+ * `providerFailureDefiniteness` rather than stored, so the two cannot disagree.
+ */
+export interface ProviderFailureFacts {
+  readonly kind: ProviderFailureKind;
+  readonly requestSent: ProviderRequestDelivery;
+}
+
+/**
+ * The verdict for one failure, narrowed by evidence where there is any.
+ *
+ * `NOT_SENT` makes any kind definitive: if nothing was written, nothing happened
+ * on the other side, whatever the error looked like. That is the one direction
+ * evidence may narrow in — `SENT` must NOT make a definitive kind unknown, since
+ * a 429 is a 429 whether or not the request arrived, and treating an answer as
+ * ambiguous would block a retry that is safe.
+ */
+export function providerFailureDefiniteness(
+  facts: ProviderFailureFacts,
+): ProviderFailureDefiniteness {
+  if (facts.requestSent === 'NOT_SENT') return 'DEFINITIVE';
+  return PROVIDER_FAILURE_DEFINITIVE[facts.kind];
+}
+
+/**
  * What a connection probe found. The ONLY thing an adapter tells the
  * application about a panel's reachability.
  *

@@ -59,6 +59,16 @@ failure is a 36-character UUID.
 
 `operationId` does not exist anywhere in the repository.
 
+**Fixed on this branch**, as a contract with no consumer — deliberately.
+`OperationId` is 16 lowercase hex characters DERIVED from the idempotency key under
+a frozen namespace, so the same key always yields the same id in any process after
+any restart with no storage and no lookup. Derivation rather than generation is the
+design: a generated id has to be stored to survive a retry, and the place it would
+be stored is the idempotency row — so a retry that missed that row would silently
+get a new identity, which is how a provider user gets created twice. 64 bits rather
+than 128 because the value is meant to be QUOTED into a 500-character provider
+note and into a message read on a phone.
+
 ## B — durable idempotency on every external side effect
 
 **PARTIALLY SOLVED.** Four outbound sinks exist. Three are durably claimed.
@@ -456,6 +466,15 @@ original conflict narrative including the review's opposing position.
   runs and why it is not a fourth process role; and the eight new error codes,
   in particular the deliberate choice to collapse four cryptographic causes into
   one code and to _not_ collapse the malformed case.
+
+**Fixed on this branch.** The index now carries 0024, 0025, 0026 and 0027.
+ADR-0010's status says what is enforced today and leaves the original sentence
+standing, because the record of when a rule was only a rule is part of what an ADR
+is for. ADR-0009 gains a note that its open question was answered by 0013, and what
+it still decides. ADR-0025 gains all four Backup V1 decisions — including the
+weakest one, stated as the weakest: a restore leaves no durable record at all, and
+an operator who restores a backup and then cannot remember which one has no way to
+find out.
 
 ## What this audit changes about the plan
 

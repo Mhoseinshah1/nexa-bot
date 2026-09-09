@@ -234,3 +234,103 @@ operator's responsibility.
 deliberately no automatic reconciliation in V1: resending a document Telegram may
 already hold is a decision, and the state exists because the system does not know
 enough to make it.
+
+## Four decisions this ADR originally left unrecorded
+
+Added by the Architecture Hardening pass (item N), which found them. Each was a
+real decision taken while the pipeline was written and argued only in a code
+comment, which means the next reader would have found the behaviour and not the
+reasoning.
+
+### The operator's restore deviates from ADR-0010, deliberately
+
+`backup restore` is the most destructive operation this codebase has: it writes a
+dump into a database. ADR-0010's protocol has five steps, and restore performs
+one and a half of them. There is no dry run, no counted preview, no typed
+confirmation phrase, and no audit row.
+
+That is a deviation, not an oversight, and the reasons differ per step:
+
+- **No dry run.** `pg_restore` has no mode that computes the effect without
+  applying it. The closest thing is a restore into a scratch database, and that is
+  not a preview of this operation — it is a different operation with a different
+  target, which is why the pipeline already does it as VERIFICATION.
+- **No counted preview.** The count is "the whole database", and a number that is
+  always the same is not a check.
+- **No typed confirmation.** The CLI is the confirmation: it refuses a live target
+  by name, it refuses a target that already holds tables, and it requires the
+  target to be named explicitly with no default. Three refusals that a typed
+  phrase cannot add to — a phrase proves the operator meant to run the command,
+  and these prove the operator meant to run it HERE.
+- **No audit row.** `audit_logs` is tenant-scoped and a restore is
+  installation-wide, and the operator running it is a shell user rather than an
+  `admins` row. An audit row would have to invent both a scope and an actor, which
+  `CLAUDE.md` forbids in the same sentence. The `backup_runs` row is the record,
+  and for a restore there is not even that — see the next section.
+
+**What is owed:** the Web Admin disaster-recovery surface will have a real
+administrator actor and a real scope, and there the five steps apply in full. This
+deviation covers the CLI only, and the CLI exists because a restore has to be
+possible when the application will not start.
+
+### A restore leaves no durable record, and that is the weakest decision here
+
+`restoreInto` is the one state-changing external effect in this codebase with no
+row saying it happened. It is a human one-shot, run from a shell, and the
+alternative at the time would have been a table with one writer and no reader.
+
+Stated plainly because it is the decision most likely to be wrong: an operator who
+restores a backup and then cannot remember which one has no way to find out. The
+Web Admin recovery surface is where this is fixed, and it is fixed by having a
+recovery REQUEST entity rather than by adding a row to the backup table.
+
+### A failed backup raised no operational event
+
+It raised a log line and a `backup_runs` row, and nothing else — so an unattended
+nightly failure was silent on the one channel built to report failures.
+
+**Corrected by the Architecture Hardening pass** (item B): `backup.run_failed` is
+an operational condition deduped on one installation-wide key, so a nightly
+failure is ONE open condition with a rising occurrence count rather than a new
+alert every night, and `backup.run_ok` closes it. The recovery is recorded before
+the run row is finished, so a crash between the two leaves the condition open
+rather than resolved.
+
+### The scheduler runs in the worker, and is not a fourth process role
+
+Phase 3C added `monitor` as a third role because panel health is a continuous
+obligation with its own cadence, its own budget and its own failure mode, and
+putting it in the worker would have made one process's backlog another's outage.
+
+The backup scheduler is the opposite shape: it fires at most once per interval,
+holds an installation-wide lock while it runs, and has no per-tenant fairness
+question. A fourth role for it would be a container, a healthcheck, a readiness
+entry and a compose service for one `setInterval` — and a role whose only job is
+rare work is a role nobody notices has stopped.
+
+So it lives in the worker, gated on `BACKUP_SCHEDULE_ENABLED`, and the worker's
+readiness consults its freshness like any other loop. What makes that safe is that
+the lock is a partial unique index rather than a process: two worker replicas
+racing a tick is the normal case on every rolling update, and the database decides.
+
+### Eight error codes, and two deliberate choices about their granularity
+
+Four cryptographic causes are COLLAPSED into one code, and the malformed case is
+deliberately NOT collapsed into it.
+
+`backup.archive_auth_failed` covers a wrong key, a flipped ciphertext byte, a
+truncated payload and a forged tag. Those are four different causes and one
+answer: this archive cannot be trusted, do not use it. Distinguishing them would
+tell an attacker which of their guesses was closer, and would tell an operator
+nothing they could act on differently.
+
+`backup.archive_malformed` is separate because it is actionable in a different
+direction: the file is not a Nexa archive at all — a wrong path, a truncated
+download, somebody else's file. The remedy is to find the right file, not to
+question the key.
+
+The ordering between the two is load-bearing and was a real defect: the manifest
+length was validated BEFORE the AEAD tag, so one flipped bit in the first
+ciphertext byte reported `archive_malformed` — acting on attacker-chosen plaintext
+and answering with an oracle. It now records the complaint and drains the stream
+so `decipher.final()` authenticates first.

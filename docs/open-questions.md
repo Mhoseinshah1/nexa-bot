@@ -640,3 +640,59 @@ before knowing what reads it would mean choosing it from the only fact available
 
 **Trigger to revisit:** the first reporting projection that reads `outbox_messages`,
 or the first installation that reports the table as a storage problem.
+
+## Does either provider have a note field on a user at all?
+
+**Status: OPEN — recorded by the Architecture Hardening pass (item L).**
+
+`packages/contracts/src/provider-note.ts` declares the format this installation
+would write on a provider-side user — Telegram id first, no `NEXA` prefix, a
+500-character budget — and nothing writes it, because no adapter has a write path
+to any provider-side user field.
+
+The research corpus says nothing about a provider-side note. Per `CLAUDE.md` that
+is `NOT_EXPOSED` — "the UI did not show it" — and never proof of absence, so:
+
+- **Marzban.** `UNKNOWN` whether a user carries a free-text note, and if so what
+  its length limit is and whether it survives an update that does not mention it.
+- **Sanaei / 3X-UI v3.7.0.** Same three questions. Its client objects carry more
+  fields than Marzban's and some are free text, but none has been observed being
+  used as a note.
+
+The 500-character cap in the contract is therefore a SELF-IMPOSED budget chosen
+to be smaller than any plausible real limit, not a measured constraint. When a
+provider's actual limit is known the smaller of the two wins.
+
+**Why it is not decided here.** Resolving it by reading upstream source is
+possible and is Phase 4D's work, where the first mutating call is written and the
+field can be exercised against the deterministic fake server. Guessing now would
+put a number in a frozen contract on the strength of nothing.
+
+**Trigger to revisit:** Phase 4D, the first provider mutation.
+
+## What a reusable operational log contract should render
+
+**Status: PARTIALLY OPEN — recorded by the Architecture Hardening pass (item K).**
+
+`OperationalSubject` now declares the keys an operational event may be searched
+by, so a second spelling of one fact cannot appear. Two halves remain open, and
+both are stated here rather than implied by the declaration:
+
+1. **Nothing renders it.** The Telegram projector queues exactly five values and
+   the Persian template renders only those, so a subject field would be invisible
+   in the report group today. Declaring the shape still prevents the second
+   spelling; it does not make operators able to see a panel id.
+2. **`message` is stored raw and is what reaches Telegram.** `context` is redacted
+   on write; `message` is not. Today that is safe by author discipline — a real,
+   written-down discipline — but it is an argument rather than a mechanism, and the
+   customer-supplied text Phase 4 introduces is exactly what would land there.
+
+**Why the second is not fixed here.** A redactor on `message` has to be a
+mechanism rather than a rule, which means either a template-key-and-parameters
+shape for every event (so the renderer controls what interpolates) or a redaction
+pass with a declared allowlist. The first is the right answer and it is a change to
+every existing recorder call site; doing it without the Phase 4 events that
+motivate it would mean guessing at the parameter shapes.
+
+**Trigger to revisit:** the first operational event whose message would carry
+customer-supplied text — Phase 4A, when a Telegram update can fail.
