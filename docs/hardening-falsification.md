@@ -74,6 +74,24 @@ docblock explaining its crash-safety reasoning, and the order was not observable
 from any test, so swapping the two calls was a silent change. `FakeRuns` now
 carries a `writes` log that the fake ops log appends to as well.
 
+## Item G — the webhook edge
+
+| #    | Rule                                                              | Mutation                                               | Named test                                                                           | Result |
+| ---- | ----------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------ |
+| G-01 | The webhook's body limit is far below the application-wide one    | `64 * 1024` → `1_048_576`                              | `http-surface.test.ts` › keeps the application-wide limit well above the webhook one | KILLED |
+| G-02 | The limit is actually applied to the route                        | delete `route.bodyLimit = ...` from the `onRoute` hook | `http-surface.test.ts` › refuses a body above the route limit before reading it      | KILLED |
+| G-03 | The route does not exist at all unless the feature is switched on | register the controller unconditionally                | `http-surface.test.ts` › does not expose the route at all                            | KILLED |
+
+G-03 is the row this item exists for, and it is recorded twice on purpose. Run
+against the test AS IT WAS, at `debd0fc~1`, the same mutation reported SURVIVED.
+The case posted to `/telegram/webhook` with no bot instance in the path, and the
+controller is at `/telegram/webhook/:botInstanceId`, so Fastify answered 404
+whether the controller was registered or not. Both results were measured, in that
+order, against the same mutation and the same database — only the test changed.
+
+A test that cannot fail is worse than a missing one: the missing test is visible
+in a coverage gap, and this one reported a guarantee for two releases.
+
 ## The harness could not see a contract change
 
 `packages/contracts/package.json` declares `exports: { ".": "./dist/index.js" }`,
