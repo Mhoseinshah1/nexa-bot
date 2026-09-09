@@ -225,10 +225,26 @@ describe('fresh transactional authorization', () => {
       ).toEqual([]);
 
       // 10. The denial itself is recorded truthfully.
+      const denied = audits.filter((row) => row.result === 'DENIED');
+      expect(denied.length, 'the denial left no audit evidence').toBeGreaterThan(0);
+
+      // 11. ONE operational event for it, WARN, naming what the audit row
+      //     names and who was refused. On this path the shared recorder is
+      //     the only emitter, and its event's CONTENT was pinned by nothing
+      //     until round 50.
+      const events = await db()
+        .select()
+        .from(operationalEvents)
+        .where(eq(operationalEvents.code, 'access.permission_denied'));
       expect(
-        audits.filter((row) => row.result === 'DENIED').length,
-        'the denial left no audit evidence',
-      ).toBeGreaterThan(0);
+        events.map((event) => event.severity),
+        `${testCase.name}: ONE in-transaction refusal, ONE WARN event`,
+      ).toEqual(['WARN']);
+      const context = events[0]?.context as Record<string, unknown> | null;
+      expect(context?.['permission']).toBe(
+        (denied[0]?.after as Record<string, unknown> | null)?.['deniedPermission'],
+      );
+      expect(context?.['actorId']).toBe(adminA.id);
     }, 30_000);
   }
 
@@ -341,8 +357,26 @@ describe('fresh transactional authorization', () => {
         command('templates-early-denial'),
       ),
     ).rejects.toMatchObject({ code: 'platform.permission_denied' });
+    const [row] = await deniedRows();
     expect(await deniedRows(), 'ONE early refusal, ONE audit row').toHaveLength(1);
     expect(await denialEvents(), 'ONE early refusal, ONE event').toBe(1);
+    // The row's shape: the shared recorder names the permission and the
+    // reason, where the inline version wrote `after: null`. A behaviour
+    // change of round 49, stated here.
+    expect(row).toMatchObject({
+      entityType: 'Template',
+      after: { deniedPermission: 'templates.edit', reason: 'platform.permission_denied' },
+    });
+
+    // Authorized BEFORE parsed: a body the schema rejects is still a 403 with
+    // its record, not a 400 with none. The rule every other early check
+    // keeps, pinned here on purpose rather than by a fixture that happens to
+    // omit a required field.
+    await expect(
+      ctx.container.templatesService.set(tenantA, adminActorFor(support), { nonsense: true }),
+    ).rejects.toMatchObject({ code: 'platform.permission_denied' });
+    expect(await deniedRows(), 'a malformed body suppressed the audit row').toHaveLength(2);
+    expect(await denialEvents(), 'a malformed body suppressed the event').toBe(2);
 
     // Not a denial: the guard itself fails. Nothing may be audited as DENIED.
     const guard = ctx.container.guard as unknown as {
@@ -363,8 +397,8 @@ describe('fresh transactional authorization', () => {
     } finally {
       guard.check = realCheck;
     }
-    expect(await deniedRows(), 'an outage is not a denial').toHaveLength(1);
-    expect(await denialEvents()).toBe(1);
+    expect(await deniedRows(), 'an outage is not a denial').toHaveLength(2);
+    expect(await denialEvents()).toBe(2);
   }, 30_000);
 
   it('treats an EXPIRED session as dead, not only a revoked one', async () => {

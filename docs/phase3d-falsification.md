@@ -2631,7 +2631,7 @@ contribute no titles now.
 
 | #    | rule                                     | mutation                    | what the check prints                                         |
 | ---- | ---------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 349 citations were checked; this record declares 353 |
+| U99  | the record's citation count is EXACT     | fence the round's own table | exits 1: 353 citations were checked; this record declares 361 |
 | U100 | a table at END OF FILE is structured too | append a header-only table  | exits 1: 1 table(s) have no header/separator pair             |
 
 ## One flake, recorded rather than re-run away
@@ -5049,7 +5049,11 @@ roles before the lock on either path.
   anchor failure that ACCUSES the publisher, and a wrong red is worse than a
   stray directory.
 - OQ-3D-03 listed templates among `recordMutationDenial`'s callers; templates
-  goes through `authorizedCommand` and writes no operational event.
+  went through `authorizedCommand`, which wrote an audit row only. (This
+  sentence originally said "writes no operational event", which was false
+  when written — the guard wrote the event on that path, so it was one and
+  one — corrected in round 50. Templates joined the shared recorder in
+  round 49.)
 - "two rows and one audit row is what a denial writes here" holds for the
   PRE-TRANSACTION path only; inside `runAuthorizedMutation` it is one and one.
   The pinned counts are right for the path they measure and the sentence
@@ -5432,7 +5436,10 @@ count at the moment the event write runs.
 
 ### Templates' early check wrote a DENIED row for ANY throw
 
-The last early check on an inline recorder, and its `catch (denial)` audited
+The last early check on an inline catch-ANY recorder — identity's
+`assertMayAttempt` still audits inline, filtered on the denial kind, which
+round 50 measured cannot audit anything but this permission's refusal — and
+its `catch (denial)` audited
 whatever was thrown — an operational log that is down, a missing tenant
 context — as a refusal of `templates.edit`: the false-record class round 45
 removed from settings, features and notifications, one module over from
@@ -5470,6 +5477,70 @@ concurrency out. AZ2 — 1/9, `an outage is not a denial: expected [ { …(18) }
 { …(18) } ] to have a length of 1 but got 2`. AZ3 — 1/9, `ONE early refusal,
 ONE audit row: expected [] to have a length of 1 but got +0`. AZ4 — 1/16, the
 AZ1 message.
+
+## Round 50 — the thirty-first reviewer, and the pin round 48 gave one recorder and not the other
+
+Eight confirmed findings, all minor: three missing pins, five sentences.
+
+### The shared recorder's event content was pinned by nothing
+
+Round 48 pinned `WARN`, the permission and the actor for identity's
+recorder. The shared recorder — the ONLY emitter on the `runAuthorizedMutation`
+branch, which is every control-plane and panel mutation refused under its
+lock — kept code-only pins: an `INFO` event, an event naming `panels.view`
+for a settings refusal, or an event naming nobody were all green, across
+the whole corpus. An operator filtering the alerts page by `WARN` would not
+have seen an in-transaction denial. Pinned now at the unit level and in every
+revocation-barrier case (one parametrised test, cited below by its source
+name; settings, features and templates each fail it), against the audit
+row's own `deniedPermission`.
+
+### Templates: a shape change nobody stated, and an order pinned by accident
+
+Moving templates onto the shared recorder changed its early DENIED row from
+`after: null` to `{ deniedPermission, reason }` — a behaviour change round 49
+did not state; no consumer depends on the old shape (grepped), and the new
+test now asserts the new one, `entityType: 'Template'` included (round 49's
+test would have accepted `'Setting'`). And templates' authorize-before-parse
+order was pinned only because one HTTP fixture happens to omit a required
+field: the new test now sends `{ nonsense: true }` on purpose and expects a
+403 with its record, as the panels test does.
+
+### Five sentences one module too wide, three of them re-staled by round 49 itself
+
+Round 47 corrected the settings/features/notifications comments; round 49
+moved templates onto the recorder and made the same three comments wrong
+again ("identity and templates audit theirs inline"). ADR-0014's list and
+OQ-3D-03's "four sites, eight routes" likewise. And round 49's title — "the
+last inline recorder" — overstated: identity's `assertMayAttempt` still
+audits inline, filtered on the denial kind; the reviewer measured that the
+resolver never throws `PERMISSION_DENIED` itself, so that inline recorder
+cannot audit anything but this permission's refusal, which is why it is
+wording rather than code. Round 44's "templates … writes no operational
+event" was false when written (the guard wrote it) and is corrected in place.
+
+## The mutations
+
+`authorized-mutation.ts` `77795cdc066015a3`, `template-management.service.ts`
+`db10d98df8dd5076`, restored after each row. Suites: `authorization.test.ts`
+(16) and `transactional-authorization.test.ts` (9).
+
+| #   | rule                                          | mutation                              | tests that die                                                                                                                                                                                                                         |
+| --- | --------------------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| BA1 | the shared recorder's event is WARN           | `severity: 'INFO'`                    | `authorization.test.ts` › IN-transaction: the guard writes nothing, the recorder writes the event and the audit row; `transactional-authorization.test.ts` › refuses ${testCase.name} when authority is revoked before the transaction |
+| BA2 | ...and names the refused permission           | `denialEvent(actor, 'panels.view')`   | `authorization.test.ts` › IN-transaction: the guard writes nothing, the recorder writes the event and the audit row; `transactional-authorization.test.ts` › refuses ${testCase.name} when authority is revoked before the transaction |
+| BA3 | ...and the refused actor                      | actor `id: null`                      | `authorization.test.ts` › IN-transaction: the guard writes nothing, the recorder writes the event and the audit row; `transactional-authorization.test.ts` › refuses ${testCase.name} when authority is revoked before the transaction |
+| BA4 | templates' early DENIED row is a Template row | `entityType: 'Setting'`               | `transactional-authorization.test.ts` › records a TEMPLATES early refusal as one audit row and one event, and a non-denial as nothing                                                                                                  |
+| BA5 | templates authorizes BEFORE it parses         | `parse()` moved in front of the check | `transactional-authorization.test.ts` › records a TEMPLATES early refusal as one audit row and one event, and a non-denial as nothing                                                                                                  |
+
+Measured: BA1 — 1/16 (`expected { …(5) } to match object { severity: 'WARN',
+context: { …(3) } }`) and 3/9 (`settings.set: ONE in-transaction refusal, ONE
+WARN event: expected [ 'INFO' ] to deeply equal [ 'WARN' ]`, and the same for
+features and templates). BA2 — 1/16 and 3/9 (`expected 'panels.view' to be
+'settings.edit'`, `… to be 'templates.edit'`). BA3 — 1/16 and 3/9 (`expected
+null to be '<the actor's id>'`). BA4 — 1/9 (`expected { …(18) } to match
+object { entityType: 'Template', …(1) }`). BA5 — 1/9 (`expected ZodError …` —
+the malformed body was parsed before the actor was refused).
 
 ## The microsecond truncation is still open, deliberately
 

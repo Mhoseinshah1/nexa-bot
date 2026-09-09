@@ -477,10 +477,11 @@ before. Identity's `runLockedMutation`, the other after-the-fact recorder, asks
 the same question (round 46), which is the reason it stays one event when an
 in-lock check stops passing `tx` — pinned directly in round 48. Both recorders
 write the audit row FIRST (round 48): the two writes are not atomic, and the
-order decides which survives an operational log that is down. No caller changed
-and no caller decides: the four pre-transaction sites (eight routes: five panel
-writes, settings, features, notifications) and `runAuthorizedMutation` take the
-same code path they took before.
+order decides which survives an operational log that is down. No caller decides: the five pre-transaction sites (ten routes: five panel
+writes, settings, features, notifications, and templates' set and revert —
+templates joined the shared recorder in round 49; the other four were
+unchanged) and `runAuthorizedMutation` take the same code path they took
+before.
 
 The two alternatives were a parameter (`{ eventRecorded }`) threaded through
 every caller, which is the route-by-route shape the owner ruled out and the

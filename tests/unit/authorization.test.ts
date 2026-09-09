@@ -253,6 +253,14 @@ describe('one denial is one event and one audit row', () => {
     expect(opsLog.events.filter((e) => e.code === 'access.permission_denied')).toHaveLength(1);
     expect(audit.entries).toHaveLength(1);
     expect(audit.entries[0]?.result).toBe('DENIED');
+    // And WHAT it emits: WARN, this permission, this actor. The alerts page
+    // filters by severity, and an event that names the wrong permission or
+    // nobody is not the record. Round 48 pinned this for identity's recorder
+    // and left the shared one on code-only pins.
+    expect(opsLog.events[0]).toMatchObject({
+      severity: 'WARN',
+      context: { permission: PERMISSION, actorId: 'admin-1', actorType: 'WEB_ADMIN' },
+    });
   });
 
   it('keeps the marker off the wire', async () => {
