@@ -51,6 +51,7 @@ const DESCRIPTOR: ProviderDescriptor = providerDescriptor('marzban') ?? {
   canonicalName: 'Marzban',
   credentialShape: 'USERNAME_PASSWORD',
   capabilities: ['HEALTH_CHECK'],
+  maxRequestsPerProbe: 2,
   requiredActivationFields: [],
 };
 

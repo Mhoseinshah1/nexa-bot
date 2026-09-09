@@ -193,6 +193,29 @@ export interface ProviderDescriptor {
    */
   readonly capabilities: readonly ProviderCapability[];
   /**
+   * The most HTTP requests one probe of this provider can make.
+   *
+   * Scheduling arithmetic, not a protocol fact, and it is here rather than
+   * inferred because the number is a property of the adapter's flow and only
+   * the adapter's author knows it.
+   *
+   * The per-panel cooldown is floored on the wall time a probe can occupy, so a
+   * second probe cannot start while the first is still on the wire. That floor
+   * was computed as one request's budget — `timeout * (1 + retries)` — because
+   * `SafeHttpClient` starts its deadline PER REQUEST, and a probe was assumed
+   * to be one request. For Marzban it is two: a token exchange and a status
+   * read. For 3X-UI's session mode it is four: a CSRF token, a two-factor
+   * pre-check, a login and a status read. At the defaults that made the floor
+   * ten seconds while a session probe could occupy forty, so a second probe of
+   * the same panel could be granted while the first login sequence was still
+   * running — against a panel that counts failed logins per address and
+   * username, which is the account lockout the cooldown exists to prevent.
+   *
+   * Count every `send` on the longest path through the adapter. Too high costs
+   * a longer minimum cooldown; too low reopens the race above, so round up.
+   */
+  readonly maxRequestsPerProbe: number;
+  /**
    * Fields that must be configured before this provider can build a config at
    * all. 3X-UI needs a subscription-link domain; Marzban does not.
    */
@@ -515,6 +538,8 @@ const MARZBAN: ProviderDescriptor = {
   canonicalName: 'Marzban',
   credentialShape: 'USERNAME_PASSWORD',
   capabilities: ['HEALTH_CHECK'],
+  // A token exchange, then a status read.
+  maxRequestsPerProbe: 2,
   requiredActivationFields: [],
 };
 
@@ -553,10 +578,28 @@ const SANAEI: ProviderDescriptor = {
   canonicalName: 'Sanaei (3X-UI)',
   credentialShape: 'TOKEN_OR_USERNAME_PASSWORD',
   capabilities: ['HEALTH_CHECK'],
+  // The SESSION path, which is the longest: CSRF token, two-factor pre-check,
+  // login, status read. The bearer path is one request; the floor takes the
+  // worst case, because a panel configured with a password takes that path and
+  // the cooldown is set once for the provider.
+  maxRequestsPerProbe: 4,
   requiredActivationFields: ['subscriptionDomain'],
 };
 
 export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [MARZBAN, SANAEI];
+
+/**
+ * The most requests any registered provider's probe can make.
+ *
+ * Derived, never restated. The per-panel cooldown is one number for the whole
+ * installation — it is configuration, not per-provider — so it has to be floored
+ * on the worst case across every provider, and a hand-written constant here
+ * would be a second copy that a new adapter silently falsifies.
+ */
+export const MAX_REQUESTS_PER_PROBE: number = PROVIDER_DESCRIPTORS.reduce(
+  (most, descriptor) => Math.max(most, descriptor.maxRequestsPerProbe),
+  1,
+);
 
 const DESCRIPTOR_BY_KEY = new Map<ProviderType, ProviderDescriptor>(
   PROVIDER_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]),
