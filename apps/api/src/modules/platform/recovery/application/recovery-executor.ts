@@ -231,6 +231,28 @@ export class RecoveryExecutor {
         'recovery failed',
       );
       const current = await this.deps.requests.byIdUnscoped(request.id);
+      if (current === null) {
+        /*
+         * The row is not in the database that is live now.
+         *
+         * Reachable only between the renames and the re-assert, which is the one
+         * window where the row an operator would read is in a database that is no
+         * longer addressed. Writing it here is what keeps a failure IN that window
+         * from vanishing: the alternative is a renamed production database and no
+         * record of why.
+         *
+         * The journal on disk is the other half of this, and it is what a restarted
+         * executor reads — this covers the case where the process survives.
+         */
+        await this.deps.requests.reassert({
+          ...request,
+          state: 'FAILED',
+          stage: 'CLEANUP',
+          updatedAt: this.deps.clock.now(),
+          finishedAt: this.deps.clock.now(),
+          failureCode: code,
+        });
+      }
       await this.deps.requests.transition({
         id: request.id,
         from: [
@@ -516,13 +538,34 @@ export class RecoveryExecutor {
     //
     // Every statement from here lands in the RESTORED database, because the
     // connection string resolves to it now. The request's own row is therefore
-    // the one that was in the BACKUP — which does not contain this recovery — so
-    // it is re-asserted. ADR-0028 § 4: without this, the recovery that produced
-    // this database leaves no trace in it.
-    await this.advance(id, ['CUTTING_OVER'], 'RESTARTING', 'READINESS', {
-      cutoverAt: this.deps.clock.now(),
+    // the one that was in the BACKUP — which cannot contain this recovery, since
+    // it had not happened when the backup was taken.
+    //
+    // So the row is WRITTEN rather than updated. ADR-0028 § 4 described this and
+    // the first version of this file did not do it: the next transition was an
+    // ordinary conditional UPDATE, it matched nothing in the restored database,
+    // and three integration cases failed with an absent row. An ADR that
+    // describes a step the code skips is worse than no ADR, because the next
+    // reader believes the step is there.
+    //
+    // `byIdUnscoped` reads from the live handle too, so it is read BEFORE the
+    // write from the in-memory row this method has been carrying — the database
+    // it would read from no longer has it.
+    const reasserted: RecoveryRequestRow = {
+      ...request,
+      state: 'RESTARTING',
+      stage: 'READINESS',
+      updatedAt: this.deps.clock.now(),
+      leaseOwner: this.deps.leaseOwner,
+      leaseHeartbeatAt: this.deps.clock.now(),
+      preRestoreBackupId: emergency.run.id,
+      candidateDatabase: candidate,
       displacedDatabase: displaced,
-    });
+      cutoverAt: this.deps.clock.now(),
+      finishedAt: null,
+      failureCode: null,
+    };
+    await this.deps.requests.reassert(reasserted);
 
     // Readiness is the SAME computation the load balancer gets. A recovery is not
     // successful because `pg_restore` exited zero; it is successful when the
@@ -535,7 +578,7 @@ export class RecoveryExecutor {
       );
     }
 
-    await this.deps.requests.transition({
+    const finished = await this.deps.requests.transition({
       id,
       from: ['RESTARTING'],
       to: 'SUCCEEDED',
@@ -543,6 +586,16 @@ export class RecoveryExecutor {
       leaseOwner: this.deps.leaseOwner,
       patch: { stage: 'DONE' },
     });
+    if (!finished) {
+      // The re-assert wrote RESTARTING with this lease, so this cannot fail for
+      // an ordinary reason — and if it does, the recovery is NOT reported as a
+      // success. A cutover that completed and could not be recorded is a database
+      // an operator has to be told about.
+      throw new RecoveryAbort(
+        'recovery.internal',
+        'The recovery completed and its final state could not be recorded.',
+      );
+    }
   }
 
   /**

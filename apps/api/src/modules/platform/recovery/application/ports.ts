@@ -340,6 +340,29 @@ export interface RecoveryRequestRepository {
     readonly recoveryId: string | null;
   } | null>;
 
+  /**
+   * Writes a request's whole state into whatever database is live NOW.
+   *
+   * The one method here that is an UPSERT rather than a conditional update, and
+   * the reason is the cutover. ADR-0028 § 4: the row lives in the database the
+   * cutover renames away, and the restored candidate carries the rows that were
+   * in the BACKUP — which cannot include this recovery, because it had not
+   * happened when the backup was taken. So immediately after the renames the
+   * executor writes itself into the database it has just made production.
+   *
+   * Without this the recovery that produced a database leaves no trace in it, and
+   * the executor's own next transition has no row to update — which is exactly
+   * what happened: three integration cases failed with an absent row, against an
+   * ADR that described this method as though it existed.
+   *
+   * `ON CONFLICT` because both outcomes are real: absent is the ordinary cutover
+   * case, and present is the case where the restored artifact is a backup taken
+   * DURING this same recovery — possible, because the mandatory pre-restore
+   * backup is taken minutes earlier and an operator could in principle have
+   * chosen it.
+   */
+  reassert(row: RecoveryRequestRow): Promise<void>;
+
   /** Bounded retention, same shape as `backup_runs`: exclusions in the QUERY. */
   purgeFinishedBefore(cutoff: Date, limit: number): Promise<number>;
 }

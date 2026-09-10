@@ -458,6 +458,65 @@ export class DrizzleRecoveryRequestRepository implements RecoveryRequestReposito
   }
 
   /**
+   * Writes the whole row into whatever database is live now. See the port.
+   *
+   * Every column, because this is the only write that has to reconstruct a row
+   * rather than advance one: there is nothing in the target to merge with.
+   */
+  async reassert(row: RecoveryRequestRow): Promise<void> {
+    const values = {
+      id: row.id,
+      tenantId: row.tenantId,
+      source: row.source,
+      state: row.state,
+      stage: row.stage,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      finishedAt: row.finishedAt,
+      requestedByAdminId: row.requestedByAdminId,
+      requestedByLabel: row.requestedByLabel,
+      correlationId: row.correlationId,
+      leaseOwner: row.leaseOwner,
+      leaseHeartbeatAt: row.leaseHeartbeatAt,
+      workspacePath: row.workspacePath,
+      uploadBytes: row.uploadBytes,
+      uploadSha256: row.uploadSha256,
+      clientFilename: row.clientFilename,
+      backupId: row.backupId,
+      artifactChecksum: row.artifactChecksum,
+      archiveKeyId: row.archiveKeyId,
+      verifiedAt: row.verifiedAt,
+      verification: row.verification,
+      restoreTest: row.restoreTest,
+      confirmedAt: row.confirmedAt,
+      confirmedByAdminId: row.confirmedByAdminId,
+      confirmedSessionId: row.confirmedSessionId,
+      confirmedChecksum: row.confirmedChecksum,
+      confirmationExpiresAt: row.confirmationExpiresAt,
+      preRestoreBackupId: row.preRestoreBackupId,
+      candidateDatabase: row.candidateDatabase,
+      displacedDatabase: row.displacedDatabase,
+      cutoverAt: row.cutoverAt,
+      failureCode: row.failureCode,
+    };
+    /*
+     * `requested_by_admin_id` and `confirmed_by_admin_id` are deliberately NOT
+     * foreign keys on this table, which is what makes this write possible: the
+     * administrator who confirmed a recovery may not exist in the database being
+     * restored — they could have been created after the backup was taken — and a
+     * constraint would make the re-assert fail at the one moment it cannot.
+     *
+     * `tenant_id` IS a foreign key, and that one is safe: the installation's
+     * primary tenant is in every backup of it, because it is what the backup is
+     * a backup OF.
+     */
+    await this.db
+      .insert(recoveryRequests)
+      .values(values)
+      .onConflictDoUpdate({ target: recoveryRequests.id, set: values });
+  }
+
+  /**
    * Bounded retention, the same shape as `backup_runs` — exclusions in the
    * QUERY, not in the caller, because a predicate a caller has to remember is a
    * predicate some caller will not.
