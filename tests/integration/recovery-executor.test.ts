@@ -133,12 +133,23 @@ describe('the recovery executor', () => {
    * claims is a row the real path produced — including the confirmation binding,
    * which the executor re-checks.
    */
-  async function confirmedRecovery(): Promise<{ recoveryId: string; backupId: string }> {
+  async function confirmedRecovery(options?: {
+    /**
+     * Run after the backup and before the upload.
+     *
+     * Because one property needs a fact to be true while the ARCHIVE is taken and
+     * false afterwards: a recovery row in a destructive state, which is what a
+     * `PRE_RESTORE` backup's own row is, and which would otherwise hold the
+     * installation's one-at-a-time exclusion and refuse the upload below.
+     */
+    afterBackup?: () => Promise<void>;
+  }): Promise<{ recoveryId: string; backupId: string; archivePath: string }> {
     const outcome = await container.backup.run('MANUAL');
     expect(outcome.kind).toBe('COMPLETED');
     if (outcome.kind !== 'COMPLETED') throw new Error('unreachable');
     expect(outcome.run.state).toBe('SUCCEEDED');
     const backupId = outcome.run.id;
+    await options?.afterBackup?.();
 
     /*
      * A REAL administrator, through the harness's own `createAdmin`.
@@ -177,7 +188,11 @@ describe('the recovery executor', () => {
       artifactChecksum: tested.request.artifactChecksum ?? '',
     });
     expect(confirmed.state).toBe('RESTORE_REQUESTED');
-    return { recoveryId: begun.request.id, backupId };
+    return {
+      recoveryId: begun.request.id,
+      backupId,
+      archivePath: begun.workspace.archivePath,
+    };
   }
 
   it('cuts over for real: two renames, and production is the restored database', async () => {
@@ -623,5 +638,313 @@ describe('the recovery executor', () => {
     expect(current.verdict).toBe('CURRENT');
     expect(current.permitted).toBe(true);
     void recoveryId;
+  });
+
+  it('records the real cutover facts when the failure lands after both renames', async () => {
+    /*
+     * THE ONE FAILURE THAT CANNOT BE RECOVERED FROM A LIE.
+     *
+     * Every arrow before the cutover leaves production untouched, so a failure
+     * path describing the recovery from the row as it was CLAIMED is harmless —
+     * that row carries `cutoverAt: null`, `displacedDatabase: null` and
+     * `candidateDatabase: null`, and before the cutover all three are true. After
+     * the renames every one of them is false, and the one path that writes a row
+     * there is this one: the row the operator reads, and a CRITICAL operational
+     * event, would both say production was untouched while production was in fact
+     * the candidate and the operator's previous data was sitting under a
+     * `nexa_pre_restore_` name recorded nowhere. `purgeFinishedBefore` keeps rows
+     * by `cutover_at`, so that row was also eligible for deletion.
+     *
+     * Reaching the window needs a failure BETWEEN the renames and the re-assert,
+     * which is a process-level accident rather than a state any input produces.
+     * So the re-assert is made to throw once, at the executor's own deps seam —
+     * the same narrowest intervention the compatibility case above uses.
+     * Everything else is the production object, and the renames really happen.
+     */
+    await container.database.db.execute(
+      `INSERT INTO operational_events
+         (id, tenant_id, code, severity, message, occurrence_count, first_seen_at, last_seen_at, correlation_id, dedupe_scope)
+       VALUES ('01900000-0000-7000-8000-0000000000a3', '${tenantA.tenantId}', 'test.marker', 'INFO',
+               'present before the backup', 1, now(), now(), 'exec-test', 'SYSTEM')` as never,
+    );
+
+    const { recoveryId } = await confirmedRecovery();
+
+    type Requests = { reassert: (row: unknown) => Promise<void> };
+    const requests = (container.recoveryExecutor as unknown as { deps: { requests: Requests } })
+      .deps.requests;
+    const real = requests.reassert.bind(requests);
+    let calls = 0;
+    requests.reassert = async (row) => {
+      calls += 1;
+      // The FIRST call is `runStages`' own, immediately after the second rename.
+      // The second is the failure path's, and it must reach the real repository —
+      // a stub that failed both would prove nothing about what gets written.
+      if (calls === 1) throw new Error('the process lost its database between the renames');
+      return real(row);
+    };
+    try {
+      await container.recoveryExecutor.tick();
+    } finally {
+      requests.reassert = real;
+    }
+    // The failure path DID write, rather than the run having failed earlier for
+    // some unrelated reason and never reaching the window under test.
+    expect(calls).toBe(2);
+
+    const row = await container.recoveryRequests.byIdUnscoped(recoveryId);
+    expect(row?.state).toBe('FAILED');
+    expect(row?.failureCode).toBe('recovery.internal');
+    /*
+     * `toBeInstanceOf(Date)` rather than `not.toBeNull()`, deliberately: an ABSENT
+     * row satisfies `expect(undefined).not.toBeNull()`, so the weaker form would
+     * pass in the very world this case exists to rule out — no row at all after a
+     * completed cutover.
+     */
+    expect(row?.cutoverAt).toBeInstanceOf(Date);
+    expect(row?.displacedDatabase).toMatch(/^nexa_pre_restore_/);
+    expect(row?.candidateDatabase).toMatch(/^nexa_candidate_/);
+    expect(row?.preRestoreBackupId).not.toBeNull();
+
+    const displaced = row?.displacedDatabase ?? '';
+    created.push(displaced);
+    // AND THEY ARE FACTS. The row above is only worth asserting if the world it
+    // describes is the world: the displaced database exists under the name it
+    // names, and the live name now serves the restored data.
+    expect(await databaseExists(displaced)).toBe(true);
+    const markers = await queryLive<{ id: string }>(
+      liveName,
+      `SELECT id FROM operational_events WHERE code = 'test.marker' ORDER BY id`,
+    );
+    expect(markers.map((m) => m.id)).toEqual(['01900000-0000-7000-8000-0000000000a3']);
+  });
+
+  it('refuses an archive that is not the artifact the operator confirmed', async () => {
+    const { recoveryId, archivePath } = await confirmedRecovery();
+
+    /*
+     * A SECOND, perfectly sound backup of this installation, swapped into the
+     * workspace after the confirmation.
+     *
+     * This is the substitution nothing else catches. The archive is internally
+     * consistent, so its dump matches its own manifest; the row's two checksum
+     * columns are written from one value in one statement, so comparing them to
+     * each other agrees as it always does; the restore test already passed
+     * against the file that WAS there. Only a comparison of the bytes about to be
+     * restored against the value the operator confirmed can tell these two
+     * archives apart — ADR-0028 § 8, and the reason `decryptForExecutor` takes
+     * the confirmed checksum as a parameter at all.
+     *
+     * A row is written between the two backups so the dumps differ in content and
+     * not merely in a header timestamp.
+     */
+    await container.database.db.execute(
+      `INSERT INTO operational_events
+         (id, tenant_id, code, severity, message, occurrence_count, first_seen_at, last_seen_at, correlation_id, dedupe_scope)
+       VALUES ('01900000-0000-7000-8000-0000000000a4', '${tenantA.tenantId}', 'test.marker', 'INFO',
+               'written after the confirmed artifact', 1, now(), now(), 'exec-test', 'SYSTEM')` as never,
+    );
+    const second = await container.backup.run('MANUAL');
+    expect(second.kind).toBe('COMPLETED');
+    if (second.kind !== 'COMPLETED') throw new Error('unreachable');
+    expect(second.run.state).toBe('SUCCEEDED');
+    /*
+     * And it is SOUND, proved by the pipeline rather than asserted: `verifiedAt`
+     * is set only by a VERIFY_RESTORE that decrypted this ENCRYPTED archive
+     * through `openArchive` and restored it. So the refusal below cannot be the
+     * file being damaged — it is a good archive that nobody confirmed.
+     */
+    expect(second.run.verifiedAt).not.toBeNull();
+    const { copyFile } = await import('node:fs/promises');
+    await copyFile(join(workRoot, second.run.id, 'archive.nxb'), archivePath);
+
+    await container.recoveryExecutor.tick();
+
+    const row = await container.recoveryRequests.byIdUnscoped(recoveryId);
+    expect(row?.state).toBe('FAILED');
+    /*
+     * Under the RESTORE stage's code, because `decryptForExecutor` is called from
+     * inside it and that stage names every way it can fail. The code is not what
+     * makes this case load-bearing — the mutation that removes the comparison
+     * reaches SUCCEEDED, having restored an archive nobody confirmed over
+     * production. What distinguishes a swapped archive from a damaged one here is
+     * the verified second backup above, not the failure code.
+     */
+    expect(row?.failureCode).toBe('recovery.candidate_restore_failed');
+    // The candidate was built and then thrown away; production was never touched.
+    expect(row?.candidateDatabase).not.toBeNull();
+    expect(row?.cutoverAt).toBeNull();
+    expect(row?.displacedDatabase).toBeNull();
+    expect(await databaseExists(liveName)).toBe(true);
+    // And the live database is still the live database: the row written after the
+    // confirmed artifact is still there, which it would not be had the swapped
+    // archive been restored over it.
+    const markers = await queryLive<{ id: string }>(
+      liveName,
+      `SELECT id FROM operational_events WHERE code = 'test.marker' ORDER BY id`,
+    );
+    expect(markers).toHaveLength(1);
+  });
+
+  it('completes a restore whose snapshot carries an outbox older than the lag ceiling', async () => {
+    /*
+     * `outboxLagMs` is the age of the oldest unpublished message, so after a
+     * cutover it is THE AGE OF THE BACKUP — and it cannot recover while the check
+     * is being made, because `RESTARTING` still quiesces the relay. Left in the
+     * executor's readiness verdict, that reports `recovery.readiness_failed` on a
+     * successful restore of any backup older than five minutes, with a CRITICAL
+     * event, on an installation that is in fact serving. An operator reading it
+     * would try to undo a restore that worked.
+     *
+     * The message is planted BEFORE the backup, unpublished, with an `occurred_at`
+     * well beyond `OUTBOX_RELAY_MAX_LAG_MS`, so the restored candidate carries it.
+     * Without it the restored lag is zero and there is nothing for the exclusion
+     * to exclude — which is exactly why this rule went untested.
+     */
+    await container.database.db.execute(
+      `INSERT INTO outbox_messages
+         (id, aggregate_type, aggregate_id, sequence, event_type, payload, actor, correlation_id, occurred_at)
+       VALUES ('01900000-0000-7000-8000-00000000ee18', 'System', 'system', 1, 'SystemPinged', '{}', '{}',
+               'stale-lag-probe', now() - interval '2 hours')` as never,
+    );
+
+    const { recoveryId } = await confirmedRecovery();
+    await container.recoveryExecutor.tick();
+
+    const row = await container.recoveryRequests.byIdUnscoped(recoveryId);
+    expect(row?.failureCode).toBeNull();
+    expect(row?.state).toBe('SUCCEEDED');
+    expect(row?.cutoverAt).not.toBeNull();
+    created.push(row?.displacedDatabase ?? '');
+
+    /*
+     * THE POSITIVE CONTROL, and the half that makes this case mean something: the
+     * restored database really does report the outbox down, right now, on the same
+     * computation the load balancer gets. So the recovery above succeeded WHILE
+     * that probe was failing, rather than on an installation where it happened to
+     * be fine.
+     */
+    const verdict = await container.readiness.run();
+    const outbox = verdict.dependencies.find((dependency) => dependency.name === 'outbox');
+    expect(outbox?.status).toBe('down');
+    // And nothing else is down, so the verdict turned on the outbox alone — a
+    // restored database that failed two probes would make this case pass for the
+    // wrong reason.
+    expect(verdict.dependencies.filter((d) => d.name !== 'outbox' && d.status === 'down')).toEqual(
+      [],
+    );
+  });
+
+  it('cuts over even when the restored snapshot carries a destructive recovery row', async () => {
+    /*
+     * THE ROLLBACK'S OWN SHAPE.
+     *
+     * A `PRE_RESTORE` backup is taken while its recovery row sits in
+     * `PRE_RESTORE_BACKUP`, and the dump excludes nothing — so restoring that
+     * archive, which is precisely what a rollback restores, lands a row inside
+     * `recovery_requests_single_destructive_idx`'s predicate. The re-assert then
+     * writes `RESTARTING` into the same predicate and raises 23505 on the partial
+     * index rather than on the primary key, which `onConflictDoUpdate(id)` does not
+     * cover: a SUCCESSFUL cutover ended as `recovery.internal`.
+     *
+     * The decoy is inserted before the backup and removed from the live database
+     * after it, so it exists in the ARCHIVE and not in the installation — which is
+     * the asymmetry a real rollback has, and which the live database cannot hold
+     * for long anyway, since the exclusion it sits in is the one this recovery
+     * needs.
+     */
+    const decoy = '01900000-0000-7000-8000-0000000000d1';
+    await container.database.db.execute(
+      `INSERT INTO recovery_requests (id, tenant_id, source, state, stage, created_at, updated_at)
+       VALUES ('${decoy}', '${tenantA.tenantId}', 'UPLOAD', 'PRE_RESTORE_BACKUP', 'EMERGENCY_BACKUP',
+               now(), now())` as never,
+    );
+    const { recoveryId } = await confirmedRecovery({
+      afterBackup: async () => {
+        await container.database.db.execute(
+          `DELETE FROM recovery_requests WHERE id = '${decoy}'` as never,
+        );
+      },
+    });
+
+    await container.recoveryExecutor.tick();
+
+    const row = await container.recoveryRequests.byIdUnscoped(recoveryId);
+    expect(row?.failureCode).toBeNull();
+    expect(row?.state).toBe('SUCCEEDED');
+    expect(row?.cutoverAt).not.toBeNull();
+    created.push(row?.displacedDatabase ?? '');
+
+    /*
+     * The snapshot really did carry the decoy — without this the case would pass
+     * against an archive that never contained one — and it is CLOSED rather than
+     * deleted, so an operator can read and date the recovery that was in flight
+     * when the backup was taken.
+     */
+    const closed = await queryLive<{ state: string; stage: string; failure_code: string | null }>(
+      liveName,
+      `SELECT state, stage, failure_code FROM recovery_requests WHERE id = '${decoy}'`,
+    );
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.state).toBe('FAILED');
+    expect(closed[0]?.stage).toBe('CLEANUP');
+    expect(closed[0]?.failure_code).toBe('recovery.lease_expired');
+  });
+
+  it('reconstructs a cutover nothing recorded, from the journal on disk', async () => {
+    /*
+     * The crash the journal exists for: both renames done, and the process gone
+     * before the re-assert.
+     *
+     * Nothing in any database can find this. The row that would describe it was
+     * inside the database the cutover renamed away, and the database that is live
+     * now carries the BACKUP's rows — which cannot contain a recovery that had not
+     * happened when the backup was taken. So `claimOwn` finds nothing, every
+     * ordinary path finds nothing, and without the reconciliation the recovery —
+     * and the name of the displaced database holding the operator's previous data —
+     * is invisible for ever.
+     *
+     * The journal is written by hand because the only way to produce it otherwise
+     * is to kill the process, and a test that kills its own process asserts
+     * nothing afterwards. The FILE is the real one, in the real directory, read by
+     * the real `FileCutoverJournal`.
+     */
+    const orphan = '01900000-0000-7000-8000-0000000000c7';
+    const displaced = 'nexa_pre_restore_orphanc7';
+    const candidate = 'nexa_candidate_orphanc7';
+    const { writeFile, readdir } = await import('node:fs/promises');
+    await writeFile(
+      join(recoveryRoot, `cutover-${orphan}.json`),
+      JSON.stringify({
+        recoveryId: orphan,
+        phase: 'RENAMED',
+        liveDatabase: liveName,
+        candidateDatabase: candidate,
+        displacedDatabase: displaced,
+        at: new Date().toISOString(),
+      }),
+      { mode: 0o600 },
+    );
+    // The state a restarted executor actually wakes up in, and the reason the
+    // assertion below is about a row coming into EXISTENCE rather than changing.
+    expect(await container.recoveryRequests.byIdUnscoped(orphan)).toBeNull();
+
+    await container.recoveryExecutor.tick();
+
+    const row = await container.recoveryRequests.byIdUnscoped(orphan);
+    expect(row?.state).toBe('FAILED');
+    expect(row?.stage).toBe('CLEANUP');
+    expect(row?.failureCode).toBe('recovery.internal');
+    // THE ROLLBACK, which is the one fact that must never be lost.
+    expect(row?.displacedDatabase).toBe(displaced);
+    expect(row?.candidateDatabase).toBe(candidate);
+    // `RENAMED` means both renames completed, so production IS the candidate —
+    // and `cutover_at` is what keeps this row for ever rather than letting
+    // retention purge it.
+    expect(row?.cutoverAt).toBeInstanceOf(Date);
+
+    // The journal is cleared once the facts are somewhere an operator reads them,
+    // so the next tick does not report the same cutover again.
+    expect(await readdir(recoveryRoot)).not.toContain(`cutover-${orphan}.json`);
   });
 });
