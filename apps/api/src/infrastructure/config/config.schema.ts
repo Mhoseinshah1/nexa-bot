@@ -1,11 +1,24 @@
 import { z } from 'zod';
 import { parseKeyring, type SecretKeyring } from '../crypto/keyring.js';
 import { isValidTrustedEntry } from '../trusted-proxy.js';
+import { MAX_REQUESTS_PER_PROBE } from '@nexa/contracts';
 import {
+  effectiveProbeCooldownMs,
   healthyCadenceFitsFreshness,
+  healthyCadenceOutlastsCooldown,
   maxHealthyIntervalMs,
   MONITOR_NONRETRYABLE_FLOOR_MS,
 } from '../../modules/platform/panels/domain/monitor-cadence.js';
+
+/**
+ * The HTTP retry count the panel client is built with.
+ *
+ * Declared here as well as in `container.ts` because the schema has to refuse a
+ * cadence the cooldown cannot honour, and it cannot import the container. A
+ * divergence would make the schema accept a configuration the container then
+ * obeys differently, so `deployment-compose.test.ts` asserts the two agree.
+ */
+const PANEL_HTTP_RETRIES = 0;
 
 /**
  * Environment configuration.
@@ -745,6 +758,41 @@ export const configSchema = z
             'of it for the anti-herd spread, plus one tick of scheduling delay, and that must stay ' +
             `under PANEL_HEALTH_FRESH_FOR_MS. At this tick the interval must be at most ${ceiling}, ` +
             'or lower the tick.',
+        });
+      }
+      // 1b. The healthy interval must outlast the per-panel cooldown floor.
+      //
+      // A cooldown longer than the interval is not a slow monitor; it is a monitor
+      // that does not run. The scheduler finds each panel due, the per-panel claim
+      // refuses every attempt with COOLDOWN, and the configured cadence is silently
+      // not honoured while the process reports itself healthy.
+      //
+      // Reachable only since item E-2 multiplied the floor by the longest probe any
+      // registered provider makes: at PANEL_HTTP_TIMEOUT_MS=120000 the floor is 480s
+      // against a default interval of 180s, and nothing refused that. The number is
+      // `effectiveProbeCooldownMs`, the same expression the container builds the
+      // probe dependencies from, because a floor computed twice is a floor that
+      // disagrees with itself.
+      const cooldownFloor = effectiveProbeCooldownMs({
+        configuredMs: config.PANEL_PROBE_COOLDOWN_MS,
+        timeoutMs: config.PANEL_HTTP_TIMEOUT_MS,
+        retries: PANEL_HTTP_RETRIES,
+        requestsPerProbe: MAX_REQUESTS_PER_PROBE,
+      });
+      if (
+        !healthyCadenceOutlastsCooldown(config.PANEL_MONITOR_HEALTHY_INTERVAL_MS, cooldownFloor)
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['PANEL_MONITOR_HEALTHY_INTERVAL_MS'],
+          message:
+            `PANEL_MONITOR_HEALTHY_INTERVAL_MS=${config.PANEL_MONITOR_HEALTHY_INTERVAL_MS} is shorter ` +
+            `than the per-panel probe cooldown this configuration obeys (${cooldownFloor}ms). The ` +
+            'monitor would find every panel due and then refuse every probe as a cooldown, so the ' +
+            'configured cadence would not be honoured and nothing would say so. The cooldown is the ' +
+            'greater of PANEL_PROBE_COOLDOWN_MS and PANEL_HTTP_TIMEOUT_MS times the longest probe a ' +
+            `registered provider makes (${String(MAX_REQUESTS_PER_PROBE)} requests): raise the ` +
+            `interval to at least ${cooldownFloor}, or lower PANEL_HTTP_TIMEOUT_MS.`,
         });
       }
       // 2. An operator must always outrank the background loop for the last

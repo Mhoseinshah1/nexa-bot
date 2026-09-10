@@ -178,9 +178,26 @@ export function createDatabase(
    * Neither retries or reconnects: the pool has already discarded the broken
    * client. The one thing they must not be is silent.
    */
-  pool.on('error', report);
+  /*
+   * De-duplicated by error IDENTITY, because an idle client's death reaches both
+   * listeners: the client emits, our listener runs, `pg-pool`'s own idle listener
+   * then re-emits THE SAME Error on the pool. Without this a PostgreSQL restart
+   * logs two lines per connection — `2 × poolMax` — and an operator counting them
+   * reads twice the damage.
+   *
+   * A `WeakSet` rather than a flag or a counter: the same object arriving twice is
+   * exactly what is being detected, and holding the errors weakly means a long-lived
+   * pool does not accumulate them.
+   */
+  const alreadyReported = new WeakSet<Error>();
+  const reportOnce = (error: Error): void => {
+    if (alreadyReported.has(error)) return;
+    alreadyReported.add(error);
+    report(error);
+  };
+  pool.on('error', reportOnce);
   pool.on('connect', (client) => {
-    client.on('error', report);
+    client.on('error', reportOnce);
   });
   const db = drizzle(pool, { schema });
 

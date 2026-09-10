@@ -383,11 +383,29 @@ export class BackupService {
       // condition with a rising occurrence count rather than a new alert every
       // night — which is the legacy log group's defect, and the reason the
       // recorder has a dedupe key at all.
+      /*
+       * The MESSAGE is author-controlled; the uncontrolled string goes in `context`.
+       *
+       * This used to interpolate `failureMessage` — an arbitrary `error.message` —
+       * and `message` is the field `operational-event-projector.ts` queues for the
+       * Telegram report group. `docs/hardening-audit.md` § K and
+       * `docs/open-questions.md` both record that `message` reaches Telegram and is
+       * never redacted, and that this is safe "by author discipline". A message
+       * built from a caught exception is the first recorder on this branch that is
+       * not author-controlled, which weakens the premise those documents rest on.
+       *
+       * Nothing reachable today leaks a secret through it — `pg-tools.ts` keeps
+       * stderr, paths and exit codes in `details` and its own messages are fixed
+       * strings — so this is not a disclosure being fixed. It is a channel being
+       * kept closed while it still is one. The stage and the failure CODE are both
+       * closed vocabularies and stay in the message, because they are what makes
+       * the alert actionable; `context` is redacted and is not projected.
+       */
       await this.report({
         code: 'backup.run_failed',
         severity: 'ERROR',
-        message: `Backup ${id} failed at ${stage}: ${failureMessage}`,
-        context: { backupId: id, trigger, stage, failureCode },
+        message: `Backup ${id} failed at ${stage} (${failureCode}).`,
+        context: { backupId: id, trigger, stage, failureCode, failureMessage },
         dedupeKey: BACKUP_CONDITION_KEY,
       });
 

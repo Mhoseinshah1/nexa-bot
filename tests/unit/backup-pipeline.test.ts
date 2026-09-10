@@ -194,7 +194,14 @@ interface Harness {
     leaked: string[];
     cleanupFails: boolean;
     /** Every operational event the run recorded, in order. */
-    recorded: { code: string; severity: string; dedupeKey?: string; recoversCode?: string }[];
+    recorded: {
+      code: string;
+      severity: string;
+      message: string;
+      context?: Record<string, unknown>;
+      dedupeKey?: string;
+      recoversCode?: string;
+    }[];
     /** Null models an installation with no tenant provisioned yet. */
     scoped: boolean;
     opsLogThrows: boolean;
@@ -325,6 +332,8 @@ function harness(): Harness {
         state.recorded.push({
           code: event.code,
           severity: event.severity,
+          message: event.message,
+          ...(event.context === undefined ? {} : { context: event.context }),
           ...(event.dedupeKey === undefined ? {} : { dedupeKey: event.dedupeKey }),
           ...(event.recoversCode === undefined ? {} : { recoversCode: event.recoversCode }),
         });
@@ -642,12 +651,38 @@ describe('the backup pipeline', () => {
     expect(run.failureMessage).toBe('pg_dump exploded');
   });
 
-  it('keeps no secret in a failure message', async () => {
+  it('keeps the uncontrolled exception text out of the OPERATIONAL EVENT message', async () => {
+    /*
+     * `message` is the field `operational-event-projector.ts` queues for the Telegram
+     * report group, and `docs/hardening-audit.md` § K records that it is never
+     * redacted — safe "by author discipline". A message built from a caught
+     * exception is not author-controlled, so the exception text goes in `context`,
+     * which is redacted and is not projected.
+     *
+     * Asserted against the EXCEPTION's own text, which is the thing whose content
+     * nobody here controls. The previous version of this case asserted
+     * `not.toMatch(/postgres:\/\/|PGPASSWORD|SECRETS_/)` against a message built from
+     * a string the fake itself supplies — so it could never fail whatever the
+     * production code did with it.
+     *
+     * The stage and the failure CODE stay in the message, because both are closed
+     * vocabularies and they are what makes the alert actionable.
+     */
     const h = harness();
     h.state.dumpFails = true;
     const run = await completed(h);
+    // The run ROW keeps the full text: it is read by an operator through the API,
+    // not pushed to a chat.
     expect(run.failureMessage).toBe('pg_dump exploded');
-    expect(run.failureMessage).not.toMatch(/postgres:\/\/|PGPASSWORD|SECRETS_/);
+
+    const reported = h.state.recorded.find((event) => event.code === 'backup.run_failed');
+    expect(reported).toBeDefined();
+    expect(reported?.message).not.toContain('pg_dump exploded');
+    expect(reported?.message).toContain('DUMP');
+    expect(reported?.message).toContain(run.failureCode ?? 'no-code');
+    // And it is not simply dropped — an operator reading the event's detail can
+    // still get to it.
+    expect(reported?.context?.failureMessage).toBe('pg_dump exploded');
   });
 });
 

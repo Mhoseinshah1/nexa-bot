@@ -23,6 +23,7 @@ import {
   DrizzlePanelRepository,
 } from './modules/platform/panels/infrastructure/drizzle-panel.repository.js';
 import {
+  effectiveProbeCooldownMs,
   schedulerFreshPanelUpperBound,
   tenantBudgetFreshPanelUpperBound,
 } from './modules/platform/panels/domain/monitor-cadence.js';
@@ -582,10 +583,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // panel that counts failed logins per address and username, which is the
     // account lockout this window exists to prevent. Derived from the
     // descriptors so a new adapter cannot quietly falsify it.
-    probeCooldownMs: Math.max(
-      config.PANEL_PROBE_COOLDOWN_MS,
-      config.PANEL_HTTP_TIMEOUT_MS * (1 + PANEL_HTTP_RETRIES) * MAX_REQUESTS_PER_PROBE,
-    ),
+    probeCooldownMs: effectiveProbeCooldownMs({
+      configuredMs: config.PANEL_PROBE_COOLDOWN_MS,
+      timeoutMs: config.PANEL_HTTP_TIMEOUT_MS,
+      retries: PANEL_HTTP_RETRIES,
+      requestsPerProbe: MAX_REQUESTS_PER_PROBE,
+    }),
     probeBudget: {
       capacity: config.PANEL_PROBE_TENANT_LIMIT,
       refillPerMs: config.PANEL_PROBE_TENANT_LIMIT / config.PANEL_PROBE_TENANT_WINDOW_MS,

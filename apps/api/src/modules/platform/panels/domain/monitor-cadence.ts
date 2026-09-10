@@ -205,6 +205,54 @@ export function maxHealthyIntervalMs(tickMs: number): number {
 }
 
 /**
+ * The per-panel cooldown an installation will actually obey.
+ *
+ * ONE expression, because there were about to be two. The container derives this
+ * to build the probe dependencies and the config schema needs the same number to
+ * refuse a contradictory cadence — and a number computed in two places is a number
+ * that disagrees with itself the first time either side gains a term. It gained
+ * one on this branch: `MAX_REQUESTS_PER_PROBE`, which item E-2 added because a
+ * probe is not one request.
+ *
+ * `PANEL_HTTP_RETRIES` is a term rather than an assumed zero, for the same reason.
+ */
+export function effectiveProbeCooldownMs(input: {
+  readonly configuredMs: number;
+  readonly timeoutMs: number;
+  readonly retries: number;
+  readonly requestsPerProbe: number;
+}): number {
+  return Math.max(
+    input.configuredMs,
+    input.timeoutMs * (1 + input.retries) * input.requestsPerProbe,
+  );
+}
+
+/**
+ * Whether the healthy cadence can actually be obeyed, given the cooldown floor.
+ *
+ * A cooldown longer than the interval is not a slow monitor; it is a monitor that
+ * does not run. The scheduler finds each panel due on its interval, the per-panel
+ * claim refuses every attempt with `COOLDOWN`, and the configured cadence is
+ * silently not honoured while the process reports itself healthy — the schedule
+ * rows fill with transient deferrals and nothing anywhere says the interval is
+ * unreachable.
+ *
+ * It became reachable on this branch. The floor was `timeout × (1 + retries)`, and
+ * E-2 multiplied it by the longest probe any registered provider makes — four, for
+ * 3x-ui's session path — so at `PANEL_HTTP_TIMEOUT_MS=120000` the floor is 480s
+ * against a default interval of 180s. Nothing refused that combination, and the
+ * review of this branch found the gap rather than the defect: this is the check
+ * that makes the new term's consequences visible at boot.
+ */
+export function healthyCadenceOutlastsCooldown(
+  healthyIntervalMs: number,
+  cooldownMs: number,
+): boolean {
+  return cooldownMs <= healthyIntervalMs;
+}
+
+/**
  * Whether a configuration keeps every healthy panel inside the freshness
  * window. The schema refuses the combinations this rejects.
  */

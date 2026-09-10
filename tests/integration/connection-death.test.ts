@@ -86,6 +86,12 @@ describe('a terminated PostgreSQL backend', () => {
     expect(output).not.toContain('NOT REJECTED');
     expect(output).not.toContain('NOT RECOVERED');
     expect(output).toContain('SURVIVED');
+    // REPORTED too, and not only survived. `database.ts` says "the one thing they
+    // must not be is silent", and without this line that claim is unasserted for
+    // this half — `client.on('error', () => {})` would pass the case. The review of
+    // this branch found it.
+    expect(output).toMatch(/^REPORTED: /m);
+    expect(output).not.toContain('SURVIVED reported=0');
     expect(code).toBe(0);
   }, 60_000);
 });
