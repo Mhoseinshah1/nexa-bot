@@ -141,6 +141,30 @@ export class BackupService {
         { reclaimed },
         'closed a backup run whose lease had gone stale; its process is gone',
       );
+      /*
+       * REPORTED, not only logged. Review finding 3.
+       *
+       * A reclaim means a backup was under way and its process died — the worker
+       * was SIGKILLed mid-dump, the container was evicted, the host rebooted. The
+       * row is marked FAILED here, and before this the only trace was a log line:
+       * no condition, no notification. Worse than silent, because the NEXT run
+       * succeeds and reports `backup.run_ok`, which closes a condition that was
+       * never opened — so an installation that lost a backup ends up looking
+       * exactly like one that did not.
+       *
+       * Under the same installation-wide dedupe key as any other failure, so a
+       * crash loop is one rising condition rather than an alert per tick, and a
+       * later success closes it.
+       */
+      await this.report({
+        code: 'backup.run_failed',
+        severity: 'ERROR',
+        message:
+          `${String(reclaimed)} backup run(s) were abandoned by a process that stopped ` +
+          'reporting, and have been closed as failed. Those backups did not complete.',
+        context: { reclaimed },
+        dedupeKey: BACKUP_CONDITION_KEY,
+      });
     }
 
     const id = this.deps.ids.uuid();
@@ -326,6 +350,13 @@ export class BackupService {
         recoversDedupeKey: BACKUP_CONDITION_KEY,
       });
 
+      // Inside the `try`, so a rejection here is caught below and re-finished as
+      // FAILED with a condition — the row does not stay RUNNING holding the
+      // installation's lease. Worth stating because the review of this branch
+      // suspected otherwise, and because the pool-error listener added here changes
+      // what a connection death at this point looks like: the process used to die
+      // and an orchestrator made that visible, and now it survives, so the recorded
+      // failure is the only thing that will say anything.
       await this.deps.runs.finish({
         id,
         leaseOwner: this.deps.leaseOwner,

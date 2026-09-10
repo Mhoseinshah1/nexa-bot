@@ -12,7 +12,7 @@ import { checksumFile } from '../../apps/api/src/modules/platform/backup/infrast
 import { PostgresDatabaseTools } from '../../apps/api/src/modules/platform/backup/infrastructure/pg-tools';
 import { FilesystemBackupWorkspaces } from '../../apps/api/src/modules/platform/backup/infrastructure/workspace';
 import { BackupService } from '../../apps/api/src/modules/platform/backup/application/backup.service';
-import { cmdRun } from '../../apps/api/src/backup.cli';
+import { cmdRun, pointAtInstallation } from '../../apps/api/src/backup.cli';
 import type { DeliveryAttempt } from '../../apps/api/src/modules/platform/backup/application/ports';
 
 /**
@@ -382,6 +382,39 @@ describe('backup against a real database', () => {
     expect(abandoned?.state).toBe('FAILED');
     expect(abandoned?.failureCode).toBe('backup.lease_expired');
     expect(abandoned?.cleanupOk).toBe(false);
+  }, 180_000);
+
+  it('reports an abandoned run rather than only logging it', async () => {
+    /*
+     * Review finding 3, CONFIRMED. A reclaim means a backup was under way and its
+     * process died — the worker SIGKILLed mid-dump, the container evicted, the host
+     * rebooted — and the only trace was a `logger.warn`. No condition, no
+     * notification.
+     *
+     * Worse than silent: the run that does the reclaiming goes on to SUCCEED and
+     * reports `backup.run_ok`, which closes a condition that was never opened. So
+     * an installation that lost a backup ended up looking exactly like one that did
+     * not, which is the failure mode item B exists to remove.
+     *
+     * The run itself succeeding is what makes this case sharp: both events land, in
+     * that order, and the assertion is that the FAILURE was recorded at all.
+     */
+    await pointAtInstallation(context.container);
+    const stale = new Date(context.container.clock.now().getTime() - 60 * 60 * 1000);
+    await context.container.backupRuns.start({
+      id: context.container.ids.uuid(),
+      trigger: 'SCHEDULED',
+      leaseOwner: 'a-process-that-died',
+      now: stale,
+    });
+
+    const outcome = await context.container.backup.run('MANUAL');
+    expect(outcome.kind).toBe('COMPLETED');
+
+    const events = await context.container.database.db.execute(
+      sql`SELECT code FROM operational_events WHERE code = 'backup.run_failed'`,
+    );
+    expect((events.rows as unknown as readonly unknown[]).length).toBe(1);
   }, 180_000);
 
   it('refuses a write from a run whose lease was reclaimed', async () => {
