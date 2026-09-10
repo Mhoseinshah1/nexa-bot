@@ -6,6 +6,7 @@ import {
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
+import { withinTransaction } from '../transaction-boundary.js';
 import type { Database, Executor } from './database.js';
 
 /**
@@ -31,7 +32,13 @@ export class DrizzleUnitOfWork implements UnitOfWork<TransactionScope> {
   constructor(private readonly db: Database) {}
 
   async run<T>(scope: ScopeContext, fn: (tx: TransactionScope) => Promise<T>): Promise<T> {
-    return this.db.transaction(async (tx) => fn({ tx, scope }));
+    // Marked, so a network sink can refuse. See `transaction-boundary.ts`: the
+    // no-network-inside-a-transaction rule was documented in four places and
+    // enforced in none, and the outbox relay runs consumers inside its claim
+    // transaction by design.
+    return withinTransaction(transactionLabelFor(scope), () =>
+      this.db.transaction(async (tx) => fn({ tx, scope })),
+    );
   }
 
   /**
@@ -49,9 +56,11 @@ export class DrizzleUnitOfWork implements UnitOfWork<TransactionScope> {
    * were therefore atomic, and they were not.
    */
   async runSnapshot<T>(scope: ScopeContext, fn: (tx: TransactionScope) => Promise<T>): Promise<T> {
-    return this.db.transaction(async (tx) => fn({ tx, scope }), {
-      isolationLevel: 'repeatable read',
-    });
+    return withinTransaction(transactionLabelFor(scope), () =>
+      this.db.transaction(async (tx) => fn({ tx, scope }), {
+        isolationLevel: 'repeatable read',
+      }),
+    );
   }
 
   /**
@@ -80,6 +89,9 @@ export class DrizzleUnitOfWork implements UnitOfWork<TransactionScope> {
         'runNested was given something that is not a transaction scope; a SAVEPOINT needs a live transaction.',
       );
     }
+    // Not re-marked: a SAVEPOINT runs inside the caller's transaction, which is
+    // already marked. Re-entering would only change the label, and the label of
+    // the outermost transaction is the one an operator needs.
     return tx.tx.transaction(async (nested) => fn({ tx: nested, scope }));
   }
 
@@ -102,6 +114,17 @@ export class DrizzleUnitOfWork implements UnitOfWork<TransactionScope> {
   async withTenant<T>(tenant: TenantContext, fn: (tx: TransactionScope) => Promise<T>): Promise<T> {
     return this.run(tenant, fn);
   }
+}
+
+/**
+ * A name for the transaction a refusal happened inside.
+ *
+ * The tenant, or the system scope's own reason. Not the SQL and not a stack: the
+ * sentence an operator needs is "the Telegram transport sent inside the
+ * tenant:01a0... transaction", and a scope is what identifies that.
+ */
+function transactionLabelFor(scope: ScopeContext): string {
+  return isSystemContext(scope) ? `system:${scope.reason}` : `tenant:${scope.tenantId}`;
 }
 
 /**

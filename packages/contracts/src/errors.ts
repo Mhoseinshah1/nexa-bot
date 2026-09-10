@@ -368,4 +368,20 @@ export const PANEL_ERROR_CODES = {
    * wrong protocol.
    */
   PROVIDER_TYPE_UNSUPPORTED: 'panel.provider_type_unsupported',
+  /**
+   * There IS an adapter for this provider, and it does not perform this operation.
+   *
+   * Distinct from `PROVIDER_TYPE_UNSUPPORTED`, which means there is no adapter at
+   * all, and the operator's next move differs: that one is "this release cannot
+   * talk to this provider", this one is "this release talks to this provider and
+   * cannot do this particular thing with it".
+   *
+   * Vacuous today — both registered providers declare `HEALTH_CHECK` — and the
+   * reason it exists anyway is that the alternative was worse than vacuous. The
+   * refusal had no branch, so it fell through to the cooldown case: the operator
+   * pressed Test connection, the request returned 200 with `probed: false`, and
+   * nothing anywhere said why. A silent no-op is the one outcome an operator
+   * cannot debug.
+   */
+  PANEL_CAPABILITY_UNSUPPORTED: 'panel.capability_unsupported',
 } as const;

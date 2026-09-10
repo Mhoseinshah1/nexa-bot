@@ -592,3 +592,107 @@ the mismatch denies, it never grants.
 
 **Trigger to revisit:** the first override that produces this combination in
 a real installation, or the phase that revisits the permission catalogue.
+
+## A request-rate bound on the Telegram webhook belongs at the edge, and the edge cannot yet carry one
+
+**Status: OPEN — recorded by the Architecture Hardening pass (item G).**
+
+`/telegram/webhook/:botInstanceId` is the only route an unauthenticated caller
+can usefully reach, and it has no request-rate bound. ADR-0026 records why none
+is added inside the application: every admission counter in this codebase is a
+conditional write in PostgreSQL on purpose, so a limiter here would convert a
+cheap unauthenticated request — one 64 KiB parse and a constant-time digest
+compare — into a database write, making a flood a flood against the one component
+whose loss takes the installation down.
+
+The right place is the front door, which is `deploy/`'s Caddy. Caddy's built-in
+server has no rate limiter, so this needs a plugin in the production image or a
+different front door.
+
+**Why it is not decided here.** Adding an unexercised Caddy plugin to the
+production image is a deployment change, and the deployment checkpoint has never
+been run against a real server — `docs/vps-acceptance.md` is the checklist that
+decides that. Adding one unknown to a topology that already has one makes the
+acceptance run harder to interpret, not safer.
+
+**Trigger to revisit:** the VPS acceptance run completing, or the first
+installation that reports unauthenticated traffic on this route.
+
+## `outbox_messages` retention waits on the reporting projections
+
+**Status: OPEN — recorded by the Architecture Hardening pass (ADR-0027).**
+
+A dispatched outbox row is the causal record of a domain event: which event, in
+which transaction, with which correlation id, delivered when. It is the only place
+`correlation_id` survives the queue boundary, which is what ADR-0006 says the
+column is for.
+
+Unlike `request_idempotency` and `processed_messages`, nothing about CORRECTNESS
+needs an old dispatched row — `processed_messages` is what prevents a double
+effect, and this is history. So this is the table whose retention is a reporting
+question, and it is the one to bound first if any of them needs bounding.
+
+**Why it is not decided here.** The row carries the event payload, and the
+reporting projections Phase 4 will add are not designed yet. Choosing an age
+before knowing what reads it would mean choosing it from the only fact available
+— how large the table is — which is how the legacy system's one-button
+"optimisation" came to delete six order classes.
+
+**Trigger to revisit:** the first reporting projection that reads `outbox_messages`,
+or the first installation that reports the table as a storage problem.
+
+## Does either provider have a note field on a user at all?
+
+**Status: OPEN — recorded by the Architecture Hardening pass (item L).**
+
+`packages/contracts/src/provider-note.ts` declares the format this installation
+would write on a provider-side user — Telegram id first, no `NEXA` prefix, a
+500-character budget — and nothing writes it, because no adapter has a write path
+to any provider-side user field.
+
+The research corpus says nothing about a provider-side note. Per `CLAUDE.md` that
+is `NOT_EXPOSED` — "the UI did not show it" — and never proof of absence, so:
+
+- **Marzban.** `UNKNOWN` whether a user carries a free-text note, and if so what
+  its length limit is and whether it survives an update that does not mention it.
+- **Sanaei / 3X-UI v3.7.0.** Same three questions. Its client objects carry more
+  fields than Marzban's and some are free text, but none has been observed being
+  used as a note.
+
+The 500-character cap in the contract is therefore a SELF-IMPOSED budget chosen
+to be smaller than any plausible real limit, not a measured constraint. When a
+provider's actual limit is known the smaller of the two wins.
+
+**Why it is not decided here.** Resolving it by reading upstream source is
+possible and is Phase 4D's work, where the first mutating call is written and the
+field can be exercised against the deterministic fake server. Guessing now would
+put a number in a frozen contract on the strength of nothing.
+
+**Trigger to revisit:** Phase 4D, the first provider mutation.
+
+## What a reusable operational log contract should render
+
+**Status: PARTIALLY OPEN — recorded by the Architecture Hardening pass (item K).**
+
+`OperationalSubject` now declares the keys an operational event may be searched
+by, so a second spelling of one fact cannot appear. Two halves remain open, and
+both are stated here rather than implied by the declaration:
+
+1. **Nothing renders it.** The Telegram projector queues exactly five values and
+   the Persian template renders only those, so a subject field would be invisible
+   in the report group today. Declaring the shape still prevents the second
+   spelling; it does not make operators able to see a panel id.
+2. **`message` is stored raw and is what reaches Telegram.** `context` is redacted
+   on write; `message` is not. Today that is safe by author discipline — a real,
+   written-down discipline — but it is an argument rather than a mechanism, and the
+   customer-supplied text Phase 4 introduces is exactly what would land there.
+
+**Why the second is not fixed here.** A redactor on `message` has to be a
+mechanism rather than a rule, which means either a template-key-and-parameters
+shape for every event (so the renderer controls what interpolates) or a redaction
+pass with a declared allowlist. The first is the right answer and it is a change to
+every existing recorder call site; doing it without the Phase 4 events that
+motivate it would mean guessing at the parameter shapes.
+
+**Trigger to revisit:** the first operational event whose message would carry
+customer-supplied text — Phase 4A, when a Telegram update can fail.

@@ -1,11 +1,24 @@
 import { z } from 'zod';
 import { parseKeyring, type SecretKeyring } from '../crypto/keyring.js';
 import { isValidTrustedEntry } from '../trusted-proxy.js';
+import { MAX_REQUESTS_PER_PROBE } from '@nexa/contracts';
 import {
+  effectiveProbeCooldownMs,
   healthyCadenceFitsFreshness,
+  healthyCadenceOutlastsCooldown,
   maxHealthyIntervalMs,
   MONITOR_NONRETRYABLE_FLOOR_MS,
 } from '../../modules/platform/panels/domain/monitor-cadence.js';
+
+/**
+ * The HTTP retry count the panel client is built with.
+ *
+ * Declared here as well as in `container.ts` because the schema has to refuse a
+ * cadence the cooldown cannot honour, and it cannot import the container. A
+ * divergence would make the schema accept a configuration the container then
+ * obeys differently, so `deployment-compose.test.ts` asserts the two agree.
+ */
+const PANEL_HTTP_RETRIES = 0;
 
 /**
  * Environment configuration.
@@ -574,6 +587,37 @@ export const configSchema = z
       .default(10 * 60_000),
     /** Where the PostgreSQL client tools live, when they are not on PATH. */
     BACKUP_PG_BIN_DIR: z.string().trim().default(''),
+    /**
+     * How long a FINISHED backup run row is kept.
+     *
+     * A year, because the row is the only durable evidence that a backup was
+     * taken, verified against a real restore, and delivered — and the question
+     * "when did this installation last have a provably restorable backup"
+     * is one asked after an incident, not during one. An annual cycle also
+     * covers the audit window an operator is most likely to be asked about.
+     *
+     * It bounds the table rather than rationing it. At one scheduled backup a
+     * day a year is about 365 rows of a few hundred bytes, so this is not a size
+     * control; what it prevents is a table with no policy at all, which is the
+     * state every table in the legacy system was in. A scripted manual backup
+     * loop is the case where the bound does work.
+     *
+     * Four classes of row are NEVER removed whatever this says, and the
+     * exclusions are in the query rather than here — see
+     * `purgeFinishedBefore` and ADR-0027:
+     *
+     *   - a RUNNING row, which IS the installation's backup lock;
+     *   - a row whose delivery outcome was never observed, which is unresolved
+     *     external-effect evidence and the reason the run row exists at all;
+     *   - the most recent SUCCEEDED row, which `lastSucceededAt()` reads to
+     *     decide whether a backup is due;
+     *   - the most recent row of any state, which is the one an operator is
+     *     looking at when something has just gone wrong.
+     *
+     * The floor is a week: anything shorter would start deleting the history a
+     * diagnosis needs while the diagnosis is still happening.
+     */
+    BACKUP_RUN_RETENTION_DAYS: z.coerce.number().int().min(7).max(3650).default(365),
     /** Response bytes kept from a panel. Reading stops the moment it is passed. */
     PANEL_HTTP_MAX_RESPONSE_BYTES: z.coerce
       .number()
@@ -714,6 +758,41 @@ export const configSchema = z
             'of it for the anti-herd spread, plus one tick of scheduling delay, and that must stay ' +
             `under PANEL_HEALTH_FRESH_FOR_MS. At this tick the interval must be at most ${ceiling}, ` +
             'or lower the tick.',
+        });
+      }
+      // 1b. The healthy interval must outlast the per-panel cooldown floor.
+      //
+      // A cooldown longer than the interval is not a slow monitor; it is a monitor
+      // that does not run. The scheduler finds each panel due, the per-panel claim
+      // refuses every attempt with COOLDOWN, and the configured cadence is silently
+      // not honoured while the process reports itself healthy.
+      //
+      // Reachable only since item E-2 multiplied the floor by the longest probe any
+      // registered provider makes: at PANEL_HTTP_TIMEOUT_MS=120000 the floor is 480s
+      // against a default interval of 180s, and nothing refused that. The number is
+      // `effectiveProbeCooldownMs`, the same expression the container builds the
+      // probe dependencies from, because a floor computed twice is a floor that
+      // disagrees with itself.
+      const cooldownFloor = effectiveProbeCooldownMs({
+        configuredMs: config.PANEL_PROBE_COOLDOWN_MS,
+        timeoutMs: config.PANEL_HTTP_TIMEOUT_MS,
+        retries: PANEL_HTTP_RETRIES,
+        requestsPerProbe: MAX_REQUESTS_PER_PROBE,
+      });
+      if (
+        !healthyCadenceOutlastsCooldown(config.PANEL_MONITOR_HEALTHY_INTERVAL_MS, cooldownFloor)
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['PANEL_MONITOR_HEALTHY_INTERVAL_MS'],
+          message:
+            `PANEL_MONITOR_HEALTHY_INTERVAL_MS=${config.PANEL_MONITOR_HEALTHY_INTERVAL_MS} is shorter ` +
+            `than the per-panel probe cooldown this configuration obeys (${cooldownFloor}ms). The ` +
+            'monitor would find every panel due and then refuse every probe as a cooldown, so the ' +
+            'configured cadence would not be honoured and nothing would say so. The cooldown is the ' +
+            'greater of PANEL_PROBE_COOLDOWN_MS and PANEL_HTTP_TIMEOUT_MS times the longest probe a ' +
+            `registered provider makes (${String(MAX_REQUESTS_PER_PROBE)} requests): raise the ` +
+            `interval to at least ${cooldownFloor}, or lower PANEL_HTTP_TIMEOUT_MS.`,
         });
       }
       // 2. An operator must always outrank the background loop for the last

@@ -9,11 +9,15 @@ import {
   systemReadinessResponseSchema,
   TELEGRAM_SECRET_TOKEN_HEADER,
 } from '@nexa/contracts';
+import { eq } from 'drizzle-orm';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { auditLogs, outboxMessages } from '../../apps/api/src/infrastructure/persistence/schema';
 import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
-import { telegramUpdateKey } from '../../apps/api/src/surfaces/telegram/webhook.controller';
+import {
+  TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES,
+  telegramUpdateKey,
+} from '../../apps/api/src/surfaces/telegram/webhook.controller';
 
 const WEBHOOK_SECRET = 'a-sufficiently-long-secret';
 
@@ -348,6 +352,21 @@ describe('HTTP surface', () => {
   });
 });
 
+/**
+ * Readiness when a dependency is down, and which dependencies count.
+ *
+ * This block used to take Redis away and assert 503, which was true until item F
+ * of the hardening audit found that Redis stores nothing in this system: a cache
+ * nothing reads was failing the API's container healthcheck and could roll a
+ * release back. So the Redis scenario still runs and now asserts the OPPOSITE
+ * verdict, and the not-ready case is produced by a dependency that genuinely
+ * matters — an outbox too far behind.
+ *
+ * Keeping both in one block is deliberate: the pair is the property. "Optional
+ * dependency down, still ready" and "required dependency down, not ready" are only
+ * meaningful beside each other, because either alone is satisfied by a readiness
+ * check that always returns the same thing.
+ */
 describe('readiness when a dependency is down', () => {
   let api: ApiApp;
   let cookie: string;
@@ -400,28 +419,111 @@ describe('readiness when a dependency is down', () => {
     return systemReadinessResponseSchema.parse(response.json());
   };
 
+  /**
+   * Pushes the outbox past its lag bound, and puts it back.
+   *
+   * A REQUIRED dependency, unlike Redis, and a real one: an unpublished message
+   * older than `OUTBOX_RELAY_MAX_LAG_MS` means the relay has stopped relaying,
+   * which is a process that cannot be trusted to carry an effect anywhere. The row
+   * is written with raw SQL and a backdated `occurred_at` because the point is the
+   * lag the probe measures, not the writing of it.
+   */
+  const withLaggingOutbox = async (fn: () => Promise<void>): Promise<void> => {
+    const db = api.container.database.db;
+    const id = api.container.ids.uuid();
+    const longAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    // Through the schema object rather than raw SQL, so a NOT NULL column added
+    // later is a type error here instead of a 23502 at run time — which is how the
+    // first version of this helper failed.
+    await db.insert(outboxMessages).values({
+      id,
+      tenantId: null,
+      aggregateType: 'System',
+      aggregateId: 'system',
+      sequence: 1,
+      eventType: 'SystemPinged',
+      eventVersion: 1,
+      payload: {},
+      actor: { id: 'test', type: 'SYSTEM_JOB' },
+      correlationId: 'corr-readiness',
+      occurredAt: longAgo,
+      createdAt: longAgo,
+    });
+    try {
+      await fn();
+    } finally {
+      await db.delete(outboxMessages).where(eq(outboxMessages.id, id));
+    }
+  };
+
   it('stays live while reporting not ready', async () => {
     // This distinction is the entire point of having two endpoints: reporting a
     // dead dependency as "not live" makes an orchestrator restart a healthy
     // process and lose in-flight work.
     const instance = api.app.getHttpAdapter().getInstance();
 
-    const live = await instance.inject({ method: 'GET', url: '/health/live' });
-    expect(live.statusCode).toBe(200);
+    await withLaggingOutbox(async () => {
+      const live = await instance.inject({ method: 'GET', url: '/health/live' });
+      expect(live.statusCode).toBe(200);
 
+      const ready = await instance.inject({ method: 'GET', url: '/health/ready' });
+      expect(ready.statusCode).toBe(503);
+      // The 503 is the whole answer for an anonymous caller. Which dependency
+      // failed is exactly what a stranger does not get, least of all now.
+      expect(Object.keys(ready.json() as object)).toEqual(['status']);
+      expect(healthReadyResponseSchema.parse(ready.json()).status).toBe('degraded');
+    });
+
+    // And it comes back. Without this the case is satisfied by a process that is
+    // never ready, which is the other way to pass it.
+    const recovered = await instance.inject({ method: 'GET', url: '/health/ready' });
+    expect(recovered.statusCode).toBe(200);
+  });
+
+  it('stays READY when only the optional cache is down, and still reports it', async () => {
+    /*
+     * Item F, both halves. Redis is unreachable for this whole block.
+     *
+     * "Still ready" is what stops a self-inflicted outage: the load balancer is no
+     * longer told this process cannot serve traffic it can serve, and a release is
+     * no longer rolled back because a cache nothing reads went away. Every piece of
+     * admission, rate-limit and idempotency state is in PostgreSQL on purpose.
+     *
+     * "Still reports it" is what stops that becoming a lie. Making Redis invisible
+     * would have been the other available mistake.
+     */
+    const instance = api.app.getHttpAdapter().getInstance();
     const ready = await instance.inject({ method: 'GET', url: '/health/ready' });
-    expect(ready.statusCode).toBe(503);
-    // The 503 is the whole answer for an anonymous caller. Which dependency
-    // failed is exactly what a stranger does not get, least of all now.
-    expect(Object.keys(ready.json() as object)).toEqual(['status']);
-    expect(healthReadyResponseSchema.parse(ready.json()).status).toBe('degraded');
+    expect(ready.statusCode).toBe(200);
+    expect(healthReadyResponseSchema.parse(ready.json()).status).toBe('ok');
   });
 
   it('names the failing dependency to an authenticated administrator', async () => {
     const body = await readinessDetail();
-    expect(body.status).toBe('degraded');
-    expect(body.dependencies.find((d) => d.name === 'redis')?.status).toBe('down');
-    expect(body.dependencies.find((d) => d.name === 'postgres')?.status).toBe('up');
+    // Not degraded — Redis is down and not required — and the administrator is
+    // told both facts: which dependency is down, and whether that is why (or, here,
+    // why not) the process is out of rotation.
+    expect(body.status).toBe('ok');
+    const redis = body.dependencies.find((d) => d.name === 'redis');
+    expect(redis?.status).toBe('down');
+    expect(redis?.required).toBe(false);
+    const postgres = body.dependencies.find((d) => d.name === 'postgres');
+    expect(postgres?.status).toBe('up');
+    expect(postgres?.required).toBe(true);
+  });
+
+  it('reports the required dependency as the reason it is not ready', async () => {
+    await withLaggingOutbox(async () => {
+      const body = await readinessDetail();
+      expect(body.status).toBe('degraded');
+      const outbox = body.dependencies.find((d) => d.name === 'outbox');
+      expect(outbox?.status).toBe('down');
+      expect(outbox?.required).toBe(true);
+      // And the optional one being down at the same time does not become the
+      // explanation: an operator reading this must be able to tell which
+      // dependency is keeping the process out of rotation.
+      expect(body.dependencies.find((d) => d.name === 'redis')?.required).toBe(false);
+    });
   });
 
   it('describes the failure from a closed vocabulary, not from the driver', async () => {
@@ -443,21 +545,134 @@ describe('telegram webhook when disabled', () => {
   let api: ApiApp;
 
   beforeAll(async () => {
-    const config = testConfig({ TELEGRAM_WEBHOOK_ENABLED: 'false' });
+    const config = testConfig({
+      TELEGRAM_WEBHOOK_ENABLED: 'false',
+      TELEGRAM_WEBHOOK_SECRET: WEBHOOK_SECRET,
+    });
     await migrateOnce(config.DATABASE_URL);
     api = await createApiApp(config);
+    await resetDatabase(api.container.database.db);
+    await seed(api.container.database.db, api.container.cipher);
   });
 
   afterAll(async () => {
     await api?.close();
   });
 
+  /**
+   * The request has to be one the route WOULD answer.
+   *
+   * The first version of this posted to `/telegram/webhook` with no bot instance
+   * in the path. The controller is at `/telegram/webhook/:botInstanceId`, so that
+   * URL 404s whether the controller is registered or not — the case passed under
+   * the exact mutation it existed to catch, and `deployment-compose.test.ts`
+   * already depends on that route shape, which is how the discrepancy was
+   * visible at all.
+   *
+   * So: the real route, a real seeded bot, and the correct secret token. With the
+   * flag ON that exact request is accepted — the `telegram webhook body limit`
+   * block below posts the same shape to the same URL and gets a 201 — which is
+   * what makes the 404 here mean the feature flag and not a mistake in the
+   * request.
+   */
   it('does not expose the route at all', async () => {
-    // 404 rather than 401: a deployment with no bot configured has nothing to probe.
+    // 404 rather than 401: a deployment with the receiver switched off has
+    // nothing to probe, and a 401 would confirm the route exists.
     const response = await api.app
       .getHttpAdapter()
       .getInstance()
-      .inject({ method: 'POST', url: '/telegram/webhook', payload: { update_id: 1 } });
+      .inject({
+        method: 'POST',
+        url: webhookUrl(BOT_A),
+        headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET },
+        payload: { update_id: 1 },
+      } as never);
     expect(response.statusCode).toBe(404);
+  });
+});
+
+describe('telegram webhook body limit', () => {
+  let api: ApiApp;
+
+  beforeAll(async () => {
+    const config = testConfig({
+      TELEGRAM_WEBHOOK_ENABLED: 'true',
+      TELEGRAM_WEBHOOK_SECRET: WEBHOOK_SECRET,
+    });
+    await migrateOnce(config.DATABASE_URL);
+    api = await createApiApp(config);
+    await resetDatabase(api.container.database.db);
+    await seed(api.container.database.db, api.container.cipher);
+  });
+
+  afterAll(async () => {
+    await api?.close();
+  });
+
+  const post = (payload: string, headers: Record<string, string>) =>
+    api.app
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: webhookUrl(BOT_A),
+        headers: { 'content-type': 'application/json', ...headers },
+        payload,
+      } as never);
+
+  /** A syntactically valid update, padded to an exact byte length. */
+  const updateOfSize = (bytes: number): string => {
+    const envelope = JSON.stringify({ update_id: 1, message: { text: '' } });
+    const padding = bytes - envelope.length;
+    return JSON.stringify({ update_id: 1, message: { text: 'x'.repeat(Math.max(padding, 0)) } });
+  };
+
+  it('refuses a body above the route limit before reading it', async () => {
+    /*
+     * 413, and the secret token is DELIBERATELY absent.
+     *
+     * That is the property: the limit has to bite before authentication, because
+     * authentication is what the body-reading precedes. A 401 here would mean
+     * the megabyte had already been read and parsed to find out it was
+     * unauthorised, which is the cost this limit exists to remove.
+     */
+    const response = await post(updateOfSize(TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES + 1_000), {});
+    expect(response.statusCode).toBe(413);
+  });
+
+  it('still refuses an oversized body that declares a small content-length', async () => {
+    /*
+     * The limit is on the STREAM, not on the header. A guard that read
+     * `content-length` would be advisory, and this is the request that shows it:
+     * Fastify counts the bytes it actually receives.
+     *
+     * `toBe(413)`, not `not.toBe(201)`, and the difference is whether this case can
+     * fail at all. With the route limit REMOVED the request still does not get 201 —
+     * it reaches the end of the body, the received length disagrees with the
+     * declared `content-length`, and Fastify answers 400. So the loose assertion was
+     * green under the exact mutation this case exists to catch, which the review of
+     * this branch found. 413 is the limit refusing; 400 is the length mismatch.
+     */
+    const body = updateOfSize(TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES + 1_000);
+    const response = await post(body, { 'content-length': '20' });
+    expect(response.statusCode).toBe(413);
+  });
+
+  it('accepts a body under the limit', async () => {
+    // The other direction, so this is not "always refuse": without it, a limit
+    // of zero would pass the case above.
+    const response = await post(updateOfSize(2_000), {
+      [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET,
+    });
+    // 201, which is Nest's default for a POST and what every other accepted
+    // update in this file asserts. The number is not the point; that the request
+    // was ACCEPTED is.
+    expect(response.statusCode).toBe(201);
+  });
+
+  it('keeps the application-wide limit well above the webhook one', async () => {
+    // Both numbers are load-bearing and they are set in different files. A
+    // webhook limit raised to the global one would silently undo this item.
+    expect(TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES).toBeLessThan(1_048_576);
   });
 });

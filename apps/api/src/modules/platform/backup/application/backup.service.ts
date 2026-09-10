@@ -9,7 +9,7 @@ import {
   type BackupStage,
   type BackupTrigger,
 } from '@nexa/contracts';
-import type { Clock, IdGenerator } from '@nexa/contracts';
+import type { Clock, IdGenerator, OperationalEventRecorder, ScopeContext } from '@nexa/contracts';
 import type {
   BackupArchiver,
   BackupDelivery,
@@ -76,6 +76,24 @@ export interface BackupServiceDeps {
   /** This process's identity, so two replicas hold distinguishable leases. */
   readonly leaseOwner: string;
   /**
+   * Where a failed run is reported, and who it is reported to.
+   *
+   * Backup V1 shipped without this, and the consequence was the worst shape a
+   * gap in this feature can take: a failed SCHEDULED backup produced a log line
+   * and a row, and nothing else. No operational event, so no notification —
+   * silent on the channel this installation built to report failures, for the
+   * one subsystem that runs entirely unattended. An operator would learn their
+   * backups had stopped by looking, and the whole point of a backup is that
+   * nobody looks until it is too late to start.
+   *
+   * The scope is a function because the installation's tenant is resolved after
+   * the container is built. `null` means no tenant is provisioned yet, and a run
+   * in that state records nothing rather than inventing an addressee — a
+   * genuinely possible state, since a backup can be taken before provisioning.
+   */
+  readonly opsLog: OperationalEventRecorder;
+  readonly scope: () => ScopeContext | null;
+  /**
    * Where the archive stays when it is too large to send.
    *
    * Named in the notification rather than logged, so an operator reading the
@@ -83,6 +101,17 @@ export interface BackupServiceDeps {
    */
   readonly retainedArchiveHint: string;
 }
+
+/**
+ * One key for the installation's backup condition.
+ *
+ * Not per-run: a run id would make every nightly failure a NEW condition, so an
+ * operator would get an alert a night and an unresolved list that only grows —
+ * the exact behaviour the legacy log group had, where 60 identical errors in a
+ * day were 60 rows. One key means one open condition with an occurrence count,
+ * and one recovery when it is fixed.
+ */
+const BACKUP_CONDITION_KEY = 'backup.run';
 
 export type BackupOutcome =
   | { readonly kind: 'BUSY'; readonly holder: BackupRunRow }
@@ -112,6 +141,30 @@ export class BackupService {
         { reclaimed },
         'closed a backup run whose lease had gone stale; its process is gone',
       );
+      /*
+       * REPORTED, not only logged. Review finding 3.
+       *
+       * A reclaim means a backup was under way and its process died — the worker
+       * was SIGKILLed mid-dump, the container was evicted, the host rebooted. The
+       * row is marked FAILED here, and before this the only trace was a log line:
+       * no condition, no notification. Worse than silent, because the NEXT run
+       * succeeds and reports `backup.run_ok`, which closes a condition that was
+       * never opened — so an installation that lost a backup ends up looking
+       * exactly like one that did not.
+       *
+       * Under the same installation-wide dedupe key as any other failure, so a
+       * crash loop is one rising condition rather than an alert per tick, and a
+       * later success closes it.
+       */
+      await this.report({
+        code: 'backup.run_failed',
+        severity: 'ERROR',
+        message:
+          `${String(reclaimed)} backup run(s) were abandoned by a process that stopped ` +
+          'reporting, and have been closed as failed. Those backups did not complete.',
+        context: { reclaimed },
+        dedupeKey: BACKUP_CONDITION_KEY,
+      });
     }
 
     const id = this.deps.ids.uuid();
@@ -126,10 +179,32 @@ export class BackupService {
       return { kind: 'BUSY', holder: claim.holder };
     }
 
-    const workspace = await this.deps.workspaces.create(id);
     const heartbeat = this.startHeartbeat(id);
 
     let stage: BackupStage = 'DUMP';
+    /*
+     * Created INSIDE the recorded region, because creating it can fail.
+     *
+     * It used to be the statement above the `try`, after the RUNNING row had been
+     * claimed — so a work directory that could not be created threw straight out
+     * of `run()` and left the claim behind. For a disaster-recovery pipeline that
+     * is the worst available shape: no FAILED row, so no `backup.run_failed`
+     * condition and no notification, while the RUNNING row holds the
+     * installation's one-backup-at-a-time lease until it goes stale. Every later
+     * backup is then refused as BUSY or spends its first act reclaiming a lease,
+     * and the only symptom is the absence of backups — which looks exactly like
+     * nothing being wrong.
+     *
+     * The triggers are not exotic: `BACKUP_WORK_DIR` on a full disk, a path that
+     * is not a directory, a volume that did not mount. ADR-0025 notes that this
+     * directory holds three artifacts at once, so it is the first thing to run out
+     * of room.
+     *
+     * `workspace` is therefore `null` until it exists, and the `catch` has to
+     * cope with that: there is nothing to discard when the failure IS that there
+     * is nowhere to discard from.
+     */
+    let workspace: BackupWorkspace | null = null;
     let dumpBytes: bigint | null = null;
     let archiveBytes: bigint | null = null;
     let checksum: string | null = null;
@@ -146,6 +221,7 @@ export class BackupService {
         leaseOwner: this.deps.leaseOwner,
         now: this.deps.clock.now(),
       });
+      workspace = await this.deps.workspaces.create(id);
       const dump = await this.deps.tools.dump(workspace.dumpPath);
 
       // ---- CHECKSUM --------------------------------------------------------
@@ -261,6 +337,26 @@ export class BackupService {
         );
       }
 
+      // A success CLOSES an open failure. Recorded before the row is finished so
+      // that a crash between the two leaves the condition open rather than
+      // resolved — an operator chasing a backup that is fine costs an hour, and
+      // one who believes a broken backup recovered costs a database.
+      await this.report({
+        code: 'backup.run_ok',
+        severity: 'INFO',
+        message: `Backup ${id} completed and was verified against a real restore.`,
+        context: { backupId: id, trigger, delivery: deliveryState },
+        recoversCode: 'backup.run_failed',
+        recoversDedupeKey: BACKUP_CONDITION_KEY,
+      });
+
+      // Inside the `try`, so a rejection here is caught below and re-finished as
+      // FAILED with a condition — the row does not stay RUNNING holding the
+      // installation's lease. Worth stating because the review of this branch
+      // suspected otherwise, and because the pool-error listener added here changes
+      // what a connection death at this point looks like: the process used to die
+      // and an orchestrator made that visible, and now it survives, so the recorded
+      // failure is the only thing that will say anything.
       await this.deps.runs.finish({
         id,
         leaseOwner: this.deps.leaseOwner,
@@ -282,10 +378,48 @@ export class BackupService {
       const failureMessage = error instanceof Error ? error.message : String(error);
       this.deps.logger.error({ backupId: id, stage, failureCode }, 'backup run failed');
 
+      // The operator has to hear about this, and a log line is not hearing.
+      // Deduped on one installation-wide key so a nightly failure is ONE open
+      // condition with a rising occurrence count rather than a new alert every
+      // night — which is the legacy log group's defect, and the reason the
+      // recorder has a dedupe key at all.
+      /*
+       * The MESSAGE is author-controlled; the uncontrolled string goes in `context`.
+       *
+       * This used to interpolate `failureMessage` — an arbitrary `error.message` —
+       * and `message` is the field `operational-event-projector.ts` queues for the
+       * Telegram report group. `docs/hardening-audit.md` § K and
+       * `docs/open-questions.md` both record that `message` reaches Telegram and is
+       * never redacted, and that this is safe "by author discipline". A message
+       * built from a caught exception is the first recorder on this branch that is
+       * not author-controlled, which weakens the premise those documents rest on.
+       *
+       * Nothing reachable today leaks a secret through it — `pg-tools.ts` keeps
+       * stderr, paths and exit codes in `details` and its own messages are fixed
+       * strings — so this is not a disclosure being fixed. It is a channel being
+       * kept closed while it still is one. The stage and the failure CODE are both
+       * closed vocabularies and stay in the message, because they are what makes
+       * the alert actionable; `context` is redacted and is not projected.
+       */
+      await this.report({
+        code: 'backup.run_failed',
+        severity: 'ERROR',
+        message: `Backup ${id} failed at ${stage} (${failureCode}).`,
+        context: { backupId: id, trigger, stage, failureCode, failureMessage },
+        dedupeKey: BACKUP_CONDITION_KEY,
+      });
+
       // Everything goes, archive included. An archive from a run that failed
       // before verification is unproven, and an unproven archive on disk is
       // the thing that stops somebody looking for a real one.
-      const leftovers = [...(await workspace.discardAll()), ...this.deps.tools.leaked];
+      // `workspace` is null when the failure was the workspace itself. The
+      // subprocess leak list is still read: a dump cannot have run without a
+      // workspace, but reading it unconditionally means this line does not become
+      // wrong the day something before the workspace spawns one.
+      const leftovers = [
+        ...(workspace === null ? [] : await workspace.discardAll()),
+        ...this.deps.tools.leaked,
+      ];
       await this.deps.runs.finish({
         id,
         leaseOwner: this.deps.leaseOwner,
@@ -458,6 +592,44 @@ export class BackupService {
       `SHA-256: ${input.manifest.checksum}`,
       `Verified: restored into an empty database, ${input.tableCount} tables`,
     ].join('\n');
+  }
+
+  /**
+   * Records a backup condition, if there is anybody to record it for.
+   *
+   * Never throws into the pipeline. A run that succeeded and could not be
+   * announced is still a run that succeeded, and a run that failed must report
+   * its real failure rather than a secondary one from the reporting itself —
+   * which would replace the message an operator needs with the message about
+   * why they did not get it.
+   */
+  private async report(event: {
+    code: string;
+    severity: 'INFO' | 'ERROR';
+    message: string;
+    context: Record<string, unknown>;
+    dedupeKey?: string;
+    recoversCode?: string;
+    recoversDedupeKey?: string;
+  }): Promise<void> {
+    const scope = this.deps.scope();
+    if (scope === null) {
+      // No tenant provisioned yet. Recording under an invented scope would be
+      // worse than not recording: it would address the alert to nobody.
+      this.deps.logger.warn(
+        { code: event.code },
+        'no installation tenant is provisioned, so this backup condition was not recorded',
+      );
+      return;
+    }
+    try {
+      await this.deps.opsLog.record(scope, event);
+    } catch (error) {
+      this.deps.logger.error(
+        { code: event.code, reason: error instanceof Error ? error.message : String(error) },
+        'failed to record a backup operational event',
+      );
+    }
   }
 
   /**

@@ -359,6 +359,32 @@ services:
       # in the Caddyfile.
       NEXA_DOMAIN: ${NEXA_DOMAIN:?NEXA_DOMAIN must be set}
       NEXA_ACME_EMAIL: ${NEXA_ACME_EMAIL:?NEXA_ACME_EMAIL must be set}
+      # The generation of the edge configuration this container was created
+      # for. Caddy never reads it. It is here so that compose RECREATES this
+      # container when the release's Caddy configuration changes.
+      #
+      # The configuration is a host asset, bind-mounted read-only below. An
+      # update replaces those files on disk — and replacing a file inside a bind
+      # mount changes no service definition, so `docker compose up -d` correctly
+      # decides this service is converged and leaves the previous release's
+      # container running with the previous configuration parsed into memory.
+      # Caddy does not watch its config, and `admin off` in the Caddyfile means
+      # there is no reload endpoint either.
+      #
+      # That combination shipped a real staging defect: v0.1.0-staging.9 -> .11
+      # updated the api, worker and monitor, migrated, published the new Web
+      # Admin bundle and reported success, while the edge went on serving .9's
+      # routes — whose asset root was `/srv/web` rather than the
+      # `/srv/web/current` + `/srv/web/pool` pair .11 uses. Every browser got
+      # the old Web Admin from a server that reported the new release.
+      #
+      # `botctl` computes this from the content of the activated files, so the
+      # edge transition becomes an ordinary compose recreation of ONE service —
+      # postgres and redis are untouched — and a rollback recreates it back.
+      # The default is a literal rather than `:?`, because an installation that
+      # predates this has no such key and must still start; it compares unequal
+      # to every real fingerprint, so the first update recreates the edge once.
+      NEXA_EDGE_CONFIG: ${NEXA_EDGE_CONFIG:-unset}
     volumes:
       # The whole directory, read-only: the Caddyfile imports routes.caddy
       # beside it, and a single-file mount would leave that import dangling.

@@ -6,9 +6,9 @@ import { DrizzlePanelCredentialStore } from '../../apps/api/src/modules/platform
 import { DrizzlePanelRepository } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel.repository';
 import { PanelService } from '../../apps/api/src/modules/platform/panels/application/panel.service';
 import type { PanelRepository } from '../../apps/api/src/modules/platform/panels/application/ports';
-import { providerAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
 import {
+  adapterWith,
   adminActorFor,
   createAdmin,
   createTestContext,
@@ -114,13 +114,13 @@ describe('the panel connection-test throttle', () => {
       // Generous, so these suites — which are about something else — never
       // hit the tenant-wide bound. Its own suite pins it low.
       probeBudget: { capacity: 10_000, refillPerMs: 1 },
-      adapters: (type: ProviderType) => ({
-        ...providerAdapter(type),
-        probe: async () => {
-          probes += 1;
-          return answer();
-        },
-      }),
+      adapters: (type: ProviderType) =>
+        adapterWith(type, {
+          probe: async () => {
+            probes += 1;
+            return answer();
+          },
+        }),
       cadence: {
         healthyIntervalMs: 10 * 60 * 1000,
         retryableIntervalMs: 2 * 60 * 1000,

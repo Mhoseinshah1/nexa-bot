@@ -4,6 +4,7 @@ import { resolveInstallationTenant } from './bootstrap.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
+import { stalledLoops, type LoopHealth } from './infrastructure/lifecycle/loop-health.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
 
 /**
@@ -47,12 +48,50 @@ async function main(): Promise<void> {
       } catch {
         return false;
       }
-      // "The process exists" is not the claim this file is making. When the
-      // scheduler is enabled it is part of the worker's job, and a scheduler
-      // whose ticks are all throwing has a live timer and does nothing — which
-      // is precisely the shape of failure an unattended backup has to be able
-      // to report rather than sit quietly in.
-      if (config.BACKUP_SCHEDULE_ENABLED && !container.backupScheduler.isFresh(Date.now())) {
+      // "The process exists" is not the claim this file is making, and until
+      // now it very nearly was: a database round trip plus the backup
+      // scheduler, while the three loops that do most of this role's work —
+      // the relay, the two sweepers and the dispatcher — were invisible to it.
+      //
+      // Each is consulted only when it is actually running, so a disabled
+      // relay or dispatcher is not reported as a broken one. The sweepers have
+      // no flag; they always run.
+      //
+      // The dispatcher is the one that matters most. It drains the queue by
+      // which this installation reports anything being wrong, so a dispatcher
+      // that is alive and achieving nothing means the system has lost its
+      // ability to say it is broken — and the only symptom is silence, which
+      // looks exactly like nothing being wrong.
+      //
+      // The aggregation is `stalledLoops`, in its own file, because as a closure
+      // here it could not be called by any test: replacing its `filter` with an
+      // empty array — a worker that reports healthy whatever its loops are
+      // doing — left the whole suite green.
+      const now = container.clock.now().getTime();
+      const loops: readonly LoopHealth[] = [
+        ['relay', config.OUTBOX_RELAY_ENABLED, () => container.relay.isFresh(now)],
+        // No flag: the sweepers always run.
+        ['throttle-sweeper', true, () => container.throttleSweeper.isFresh(now)],
+        ['session-sweeper', true, () => container.sessionSweeper.isFresh(now)],
+        // The backup run table's retention. No flag: it bounds a table that
+        // gains rows from manual backups whether the schedule is on or not.
+        ['backup-run-sweeper', true, () => container.backupRunSweeper.isFresh(now)],
+        [
+          'notification-dispatcher',
+          config.NOTIFICATION_DISPATCH_ENABLED,
+          () => container.notificationDispatcher.isFresh(now),
+        ],
+        [
+          'backup-scheduler',
+          config.BACKUP_SCHEDULE_ENABLED,
+          () => container.backupScheduler.isFresh(now),
+        ],
+      ];
+      const stalled = stalledLoops(loops);
+      if (stalled.length > 0) {
+        // Named, because "the worker is unhealthy" sends an operator looking at
+        // the whole process when one loop is the answer.
+        container.logger.error({ stalled }, 'worker loops have stopped making progress');
         return false;
       }
       return true;
@@ -90,6 +129,10 @@ async function main(): Promise<void> {
   // the table for the life of the installation.
   container.throttleSweeper.start();
   container.sessionSweeper.start();
+  // And the backup run table's, whose policy is ADR-0027. Started here beside the
+  // others rather than with the backup scheduler: the rows it bounds exist on an
+  // installation with the schedule switched off too.
+  container.backupRunSweeper.start();
 
   // Notification delivery. A poller rather than an outbox consumer, because the
   // relay runs its consumers inside the claim transaction and a send must not

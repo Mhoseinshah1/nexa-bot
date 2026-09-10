@@ -100,6 +100,7 @@ const DESCRIPTOR: ProviderDescriptor = providerDescriptor('sanaei') ?? {
   canonicalName: 'Sanaei (3X-UI)',
   credentialShape: 'TOKEN_OR_USERNAME_PASSWORD',
   capabilities: ['HEALTH_CHECK'],
+  maxRequestsPerProbe: 4,
   requiredActivationFields: ['subscriptionDomain'],
 };
 

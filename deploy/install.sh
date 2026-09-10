@@ -590,6 +590,12 @@ write_deploy_env() {
     printf 'NEXA_DEPLOY_DIR=%s\n' "$NEXA_DEPLOY_DIR"
     printf 'NEXA_EDGE_SUBNET=%s\n' "${NEXA_EDGE_SUBNET:-172.29.0.0/24}"
     printf 'NEXA_DATA_SUBNET=%s\n' "${NEXA_DATA_SUBNET:-172.29.1.0/24}"
+    # The generation of the edge configuration this installation starts with.
+    # `install_assets` has already put the Caddy files on the host, so this is a
+    # fingerprint of what the edge container will actually mount. Recorded here
+    # so the first `botctl update` compares a real generation rather than the
+    # `unset` default, which would recreate the edge for no reason.
+    printf 'NEXA_EDGE_CONFIG=%s\n' "$(nexa_edge_config_fingerprint)"
   } >"$file"
   chmod 0600 "$file"
   nexa_ok "deployment settings recorded"

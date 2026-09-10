@@ -1,8 +1,28 @@
 # ADR-0010 — Protocol for destructive and bulk operations
 
-**Status:** Accepted as a rule. Nothing enforces it yet, because Phase 0 has no
-destructive or bulk operation. It is recorded now so the first one is built
-correctly rather than retrofitted.
+**Status:** Accepted as a rule. **PARTIALLY ENFORCED since Phase 2**, and the
+sentence below was written when nothing was.
+
+What enforces it today, so the status is not a claim:
+
+- Step 4, **audited execution**, is a non-negotiable rather than an aspiration:
+  every write path takes a `ScopeContext` and an `ActorContext`, and the guard
+  records a denial as both an audit row and an operational event.
+- Step 3, **confirmation proportional to blast radius**, is implemented for the
+  two destructive operations that exist. `botctl rollback` states that the
+  database is not restored before it acts, and `backup restore` requires an
+  explicit target, refuses a live one, and refuses a target that already holds
+  tables.
+- Step 5, **recorded result**, is what `backup_runs` is: a row per run carrying
+  what was produced, what verified it and what failed.
+
+What is still only a rule: steps 1 and 2, **dry run** and **counted preview**.
+There is no bulk operation in the codebase to apply them to — the first will be in
+Phase 4 — so they remain recorded-and-unenforced, which is the state the original
+sentence described for all five.
+
+The original sentence is left below rather than rewritten, because the record of
+when a rule was only a rule is part of what an ADR is for.
 
 ## Decision
 

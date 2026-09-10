@@ -10,11 +10,10 @@ import {
 } from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
 import { PanelMonitorService } from '../../apps/api/src/modules/platform/panels/application/panel-monitor.service';
 import { DrizzlePanelRepository } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel.repository';
-import { providerAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
 import { DrizzlePanelCredentialStore } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-credentials';
 import type { TenantContext } from '@nexa/contracts';
-import { createTestContext, SEED_IDS, type TestContext } from './harness';
+import { adapterWith, createTestContext, SEED_IDS, type TestContext } from './harness';
 import { DrizzleOperationalConditionReader } from '../../apps/api/src/modules/platform/opslog/infrastructure/drizzle-operational-event.reader';
 
 /**
@@ -181,13 +180,13 @@ describe('the panel monitor scheduler at scale', () => {
             maxRetries: 0,
           }),
           urlPolicy: { allowLoopback: true },
-          adapters: (type) => ({
-            ...providerAdapter(type),
-            // Instant, so any shortfall measured below is the BUDGET and not
-            // the network — the most favourable latency an installation could
-            // possibly have.
-            probe: async () => ({ ok: true, providerVersion: '1.0.0', degraded: false }),
-          }),
+          adapters: (type) =>
+            adapterWith(type, {
+              // Instant, so any shortfall measured below is the BUDGET and not
+              // the network — the most favourable latency an installation could
+              // possibly have.
+              probe: async () => ({ ok: true, providerVersion: '1.0.0', degraded: false }),
+            }),
           probeCooldownMs: 0,
           probeBudget: options.probeBudget,
           cadence: {

@@ -26,7 +26,6 @@ import {
 } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel.repository';
 import { DrizzleOperationalConditionReader } from '../../apps/api/src/modules/platform/opslog/infrastructure/drizzle-operational-event.reader';
 import { DrizzlePanelCredentialStore } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel-credentials';
-import { providerAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
 import {
   MONITOR_BUDGET_DEFERRAL_CAP_MS,
@@ -37,6 +36,7 @@ import {
 } from '../../apps/api/src/modules/platform/panels/domain/monitor-cadence';
 import type { PanelMonitorRepository } from '../../apps/api/src/modules/platform/panels/application/ports';
 import {
+  adapterWith,
   adminActorFor,
   createAdmin,
   createTestContext,
@@ -139,13 +139,13 @@ describe('the panel health monitor', () => {
         maxRetries: 0,
       }),
       urlPolicy: { allowLoopback: true },
-      adapters: (type: ProviderType) => ({
-        ...providerAdapter(type),
-        probe: async (target) => {
-          probes.push(target.baseUrl);
-          return outcome;
-        },
-      }),
+      adapters: (type: ProviderType) =>
+        adapterWith(type, {
+          probe: async (target) => {
+            probes.push(target.baseUrl);
+            return outcome;
+          },
+        }),
       // No per-panel throttle by default: these tests probe one panel across
       // several ticks to watch a cadence move, and the cooldown has its own
       // suite where it is the subject rather than an obstacle.
@@ -756,14 +756,14 @@ describe('the panel health monitor', () => {
       // The operator's slow manual test, stamped `early`.
       const manual = service({
         clock: { now: () => early },
-        adapters: (type: ProviderType) => ({
-          ...providerAdapter(type),
-          probe: async () => {
-            dialled();
-            await held;
-            return TIMED_OUT;
-          },
-        }),
+        adapters: (type: ProviderType) =>
+          adapterWith(type, {
+            probe: async () => {
+              dialled();
+              await held;
+              return TIMED_OUT;
+            },
+          }),
       }).testConnection(tenantA, adminActorFor(ownerA), panelId, { idempotencyKey: key() });
       await inFlight;
 
@@ -771,10 +771,10 @@ describe('the panel health monitor', () => {
       const fast = monitor({
         probe: {
           clock: { now: () => late },
-          adapters: (type: ProviderType) => ({
-            ...providerAdapter(type),
-            probe: async () => HEALTHY,
-          }),
+          adapters: (type: ProviderType) =>
+            adapterWith(type, {
+              probe: async () => HEALTHY,
+            }),
         },
         discovery: {
           claimTenants: async () => [tenantA.tenantId],
@@ -1576,14 +1576,14 @@ describe('the panel health monitor', () => {
         discovery: onePanel(panelId),
         probe: {
           ...base,
-          adapters: (type: ProviderType) => ({
-            ...providerAdapter(type),
-            probe: async (target) => {
-              probes.push(target.baseUrl);
-              await stopTenantA();
-              return HEALTHY;
-            },
-          }),
+          adapters: (type: ProviderType) =>
+            adapterWith(type, {
+              probe: async (target) => {
+                probes.push(target.baseUrl);
+                await stopTenantA();
+                return HEALTHY;
+              },
+            }),
         },
       });
       await m.tick();
@@ -1696,20 +1696,20 @@ describe('the panel health monitor', () => {
         discovery: onePanel(panelId),
         probe: {
           ...base,
-          adapters: (type: ProviderType) => ({
-            ...providerAdapter(type),
-            probe: async (target) => {
-              probes.push(target.baseUrl);
-              // B, entirely: a second probe that stores AUTH_FAILED and
-              // commits before A reaches its own persistence.
-              now = new Date(now.getTime() + 1_000);
-              outcome = REJECTED;
-              await tick(monitor({ discovery: onePanel(panelId) }));
-              // A finishes LATER, so the database accepts its write.
-              now = new Date(now.getTime() + 1_000);
-              return HEALTHY;
-            },
-          }),
+          adapters: (type: ProviderType) =>
+            adapterWith(type, {
+              probe: async (target) => {
+                probes.push(target.baseUrl);
+                // B, entirely: a second probe that stores AUTH_FAILED and
+                // commits before A reaches its own persistence.
+                now = new Date(now.getTime() + 1_000);
+                outcome = REJECTED;
+                await tick(monitor({ discovery: onePanel(panelId) }));
+                // A finishes LATER, so the database accepts its write.
+                now = new Date(now.getTime() + 1_000);
+                return HEALTHY;
+              },
+            }),
         },
       });
       await slow.tick();
@@ -1846,6 +1846,58 @@ describe('the panel health monitor', () => {
       // And it is genuinely out of the way on the next tick.
       now = new Date(now.getTime() + 60_000);
       expect((await tick()).considered).toBe(0);
+    });
+
+    it('does not probe a provider whose adapter does not do health checks', async () => {
+      /*
+       * Item E-1, driven through the REAL gate: `attemptProbe` asks the adapter
+       * `supports('HEALTH_CHECK')` before it reads a credential, spends a token
+       * or opens a socket.
+       *
+       * The override is on `supports` alone — the rest of the registered Marzban
+       * adapter is untouched — so the only thing this case changes is the answer
+       * the production gate consults. A stub adapter would let the test pass
+       * against a gate that does not exist.
+       *
+       * Vacuous in production today: both registered providers declare
+       * `HEALTH_CHECK`, so no real panel can reach this. That is the point of
+       * testing it now. The state it protects against is a future provider whose
+       * panels would otherwise be dialled on a timer, refused by the adapter
+       * inside `probe`, and counted as a failure the provider never reported.
+       */
+      const panelId = await createPanel(ownerA, tenantA, 'cannot-health-check');
+      const m = monitor({
+        probe: {
+          adapters: (type: ProviderType) =>
+            adapterWith(type, {
+              supports: () => false,
+              probe: async (target) => {
+                probes.push(target.baseUrl);
+                return outcome;
+              },
+            }),
+        },
+      });
+
+      const result = await m.tick();
+      expect(result.deferred).toBe(1);
+      expect(result.probed).toBe(0);
+      // Nothing was asked of the provider, so nothing is claimed about it —
+      // neither a probe nor a health row. An `UNREACHABLE` here would send an
+      // operator to look at a network that is fine.
+      expect(probes).toHaveLength(0);
+      expect(await healthOf(panelId)).toBeUndefined();
+
+      const schedule = await scheduleOf(panelId);
+      expect(schedule?.deferredReason).toBe('CAPABILITY_UNSUPPORTED');
+      // STABLE, because the answer is a property of code and cannot change
+      // without a release. The transient cadence would be a busy loop against a
+      // panel nothing can ever probe, spending its tenant's slot on every pass.
+      expect(schedule!.nextEligibleAt.getTime()).toBe(now.getTime() + MONITOR_STABLE_DEFERRAL_MS);
+
+      // And it really is out of the way, which is the starvation half.
+      now = new Date(now.getTime() + 60_000);
+      expect((await m.tick()).considered).toBe(0);
     });
 
     it('does not hot-loop a panel whose address the policy refuses', async () => {
@@ -2111,17 +2163,17 @@ describe('the panel health monitor', () => {
       const m = monitor({
         concurrency: 3,
         probe: {
-          adapters: (type: ProviderType) => ({
-            ...providerAdapter(type),
-            probe: async (target) => {
-              probes.push(target.baseUrl);
-              inFlight += 1;
-              peak = Math.max(peak, inFlight);
-              await new Promise((resolve) => setTimeout(resolve, 15));
-              inFlight -= 1;
-              return HEALTHY;
-            },
-          }),
+          adapters: (type: ProviderType) =>
+            adapterWith(type, {
+              probe: async (target) => {
+                probes.push(target.baseUrl);
+                inFlight += 1;
+                peak = Math.max(peak, inFlight);
+                await new Promise((resolve) => setTimeout(resolve, 15));
+                inFlight -= 1;
+                return HEALTHY;
+              },
+            }),
         },
       });
       const result = await m.tick();
@@ -2527,15 +2579,15 @@ describe('the panel health monitor', () => {
 
       const m = monitor({
         probe: {
-          adapters: (type: ProviderType) => ({
-            ...providerAdapter(type),
-            probe: async (target) => {
-              probes.push(target.baseUrl);
-              gate.started?.();
-              await inFlight;
-              return REJECTED;
-            },
-          }),
+          adapters: (type: ProviderType) =>
+            adapterWith(type, {
+              probe: async (target) => {
+                probes.push(target.baseUrl);
+                gate.started?.();
+                await inFlight;
+                return REJECTED;
+              },
+            }),
         },
       });
       const running = m.tick();
@@ -2631,15 +2683,15 @@ describe('the panel health monitor', () => {
         discovery,
         probe: {
           clock: { now: () => early },
-          adapters: (type: ProviderType) => ({
-            ...providerAdapter(type),
-            probe: async (target) => {
-              probes.push(target.baseUrl);
-              dialled();
-              await held;
-              return REJECTED;
-            },
-          }),
+          adapters: (type: ProviderType) =>
+            adapterWith(type, {
+              probe: async (target) => {
+                probes.push(target.baseUrl);
+                dialled();
+                await held;
+                return REJECTED;
+              },
+            }),
         },
       });
       const slowTick = slow.tick();
@@ -2649,13 +2701,13 @@ describe('the panel health monitor', () => {
         discovery,
         probe: {
           clock: { now: () => late },
-          adapters: (type: ProviderType) => ({
-            ...providerAdapter(type),
-            probe: async (target) => {
-              probes.push(target.baseUrl);
-              return HEALTHY;
-            },
-          }),
+          adapters: (type: ProviderType) =>
+            adapterWith(type, {
+              probe: async (target) => {
+                probes.push(target.baseUrl);
+                return HEALTHY;
+              },
+            }),
         },
       });
       await fast.tick();
@@ -3105,15 +3157,15 @@ describe('the panel health monitor', () => {
           activePanelCount: async () => 0,
         },
         probe: {
-          adapters: (type: ProviderType) => ({
-            ...providerAdapter(type),
-            probe: async (target) => {
-              probes.push(target.baseUrl);
-              dialled();
-              await held;
-              return HEALTHY;
-            },
-          }),
+          adapters: (type: ProviderType) =>
+            adapterWith(type, {
+              probe: async (target) => {
+                probes.push(target.baseUrl);
+                dialled();
+                await held;
+                return HEALTHY;
+              },
+            }),
         },
       });
       const running = m.tick();
@@ -3154,17 +3206,17 @@ describe('the panel health monitor', () => {
       const m = monitor({
         concurrency: 1,
         probe: {
-          adapters: (type: ProviderType) => ({
-            ...providerAdapter(type),
-            probe: async (target) => {
-              probes.push(target.baseUrl);
-              // Each probe takes longer than the whole freshness window would
-              // allow if only completed TICKS counted.
-              now = new Date(now.getTime() + 30_000 * 4);
-              finished += 1;
-              return HEALTHY;
-            },
-          }),
+          adapters: (type: ProviderType) =>
+            adapterWith(type, {
+              probe: async (target) => {
+                probes.push(target.baseUrl);
+                // Each probe takes longer than the whole freshness window would
+                // allow if only completed TICKS counted.
+                now = new Date(now.getTime() + 30_000 * 4);
+                finished += 1;
+                return HEALTHY;
+              },
+            }),
         },
       });
       const running = m.tick();

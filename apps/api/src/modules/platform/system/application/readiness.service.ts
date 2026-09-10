@@ -29,6 +29,26 @@ export type SchemaReadiness =
   | { readonly state: 'DIVERGED'; readonly reason: string };
 
 /**
+ * Whether one dependency's state makes this process NOT READY.
+ *
+ * Exported, and a free function rather than a line inside the aggregation, for
+ * one reason: `required !== false` is a rule with a direction, and as a lambda
+ * inside `run` it could not be tested with a dependency that omits the flag —
+ * every probe in this file states one, so `=== true` would behave identically
+ * and the mutation would survive. Here it can be called with the shape an older
+ * or newer probe actually produces.
+ *
+ * `!== false`, not `=== true`: ABSENT MEANS REQUIRED. A probe that forgot to say
+ * must count, because the safe reading of "unknown" is "this matters". With
+ * `=== true` a dependency added without the flag would be silently optional —
+ * down while the process reports ready, which is the defect item F exists to
+ * remove, pointing the other way.
+ */
+export function blocksReadiness(dependency: DependencyStatus): boolean {
+  return dependency.status === 'down' && dependency.required !== false;
+}
+
+/**
  * The dependencies readiness asks about, as questions rather than as handles.
  *
  * This is the port the fix for C16 exists to create. The readiness computation
@@ -90,7 +110,7 @@ export class ReadinessService {
       this.checkSchema(),
       this.checkOutboxLag(),
     ]);
-    return { degraded: dependencies.some((d) => d.status === 'down'), dependencies };
+    return { degraded: dependencies.some(blocksReadiness), dependencies };
   }
 
   /**
@@ -122,6 +142,7 @@ export class ReadinessService {
 
   private async timed(
     name: string,
+    required: boolean,
     probe: (deadlineAt: number) => Promise<{ ok: boolean; detail?: string }>,
   ): Promise<DependencyStatus> {
     const started = this.deps.clock.now().getTime();
@@ -143,6 +164,7 @@ export class ReadinessService {
       return {
         name,
         status: result.ok ? 'up' : 'down',
+        required,
         latencyMs: this.deps.clock.now().getTime() - started,
         ...(result.detail ? { detail: result.detail } : {}),
       };
@@ -159,6 +181,7 @@ export class ReadinessService {
       return {
         name,
         status: 'down',
+        required,
         latencyMs: this.deps.clock.now().getTime() - started,
         detail: classifyProbeFailure(error),
       };
@@ -166,17 +189,43 @@ export class ReadinessService {
   }
 
   private checkDatabase(): Promise<DependencyStatus> {
-    return this.timed('postgres', async (deadlineAt) => {
+    return this.timed('postgres', true, async (deadlineAt) => {
       await this.deps.probes.database(deadlineAt);
       return { ok: true };
     });
   }
 
+  /**
+   * Redis, reported and NOT required.
+   *
+   * Redis stores nothing in this system. `createRedis` is constructed, handed to
+   * this probe, exported and closed — four references — and the only command
+   * issued anywhere is `ping`. Every piece of admission, rate-limit and
+   * idempotency state is in PostgreSQL on purpose, and `login_throttle` writes
+   * down the reason: an attacker must not be able to clear their own counter by
+   * waiting out a cache eviction or a restart.
+   *
+   * So a Redis outage used to make this process report NOT READY — failing the
+   * API's container healthcheck, and able to roll a release back — for a
+   * dependency that holds no state and that nothing reads. A self-inflicted
+   * outage, recorded in `docs/hardening-audit.md` § F as an argument against
+   * depending on Redis rather than for it.
+   *
+   * It is still PROBED and still reported down to an administrator, because the
+   * detail is what the authenticated endpoint is for. What changed is that the
+   * load balancer is no longer told this process cannot serve traffic it can
+   * serve.
+   *
+   * **The trigger to flip this back** is the first thing that READS Redis. The
+   * moment any state lives there, `required` becomes `true` in the same commit —
+   * and that is a rule a reader has to apply, not a mechanism, which is why it is
+   * written here beside the value rather than in a document.
+   */
   private checkCache(): Promise<DependencyStatus> {
     // The Redis handle swallows its own connection errors so a blip degrades
     // readiness rather than crashing the process, which means this probe never
     // throws — it still has to say something when the answer is no.
-    return this.timed('redis', async () => {
+    return this.timed('redis', false, async () => {
       const ok = await this.deps.probes.cache();
       return ok ? { ok } : { ok, detail: 'unreachable' };
     });
@@ -192,7 +241,7 @@ export class ReadinessService {
    * account for is not.
    */
   private checkSchema(): Promise<DependencyStatus> {
-    return this.timed('migrations', async (deadlineAt) => {
+    return this.timed('migrations', true, async (deadlineAt) => {
       const verdict = await this.deps.probes.schema(deadlineAt);
       switch (verdict.state) {
         case 'CURRENT':
@@ -216,7 +265,7 @@ export class ReadinessService {
   }
 
   private checkOutboxLag(): Promise<DependencyStatus> {
-    return this.timed('outbox', async (deadlineAt) => {
+    return this.timed('outbox', true, async (deadlineAt) => {
       const lag = await this.deps.probes.outboxLagMs(deadlineAt);
       return { ok: lag <= this.deps.maxOutboxLagMs, detail: `oldest unpublished ${lag}ms` };
     });

@@ -455,8 +455,15 @@ describe('the production Caddy routing', () => {
   it('turns the Caddy admin API off in production as well as in CI', () => {
     const prod = readFileSync(join(__dirname, '../../deploy/caddy/Caddyfile'), 'utf8');
     const ci = readFileSync(join(__dirname, '../../deploy/caddy/Caddyfile.ci'), 'utf8');
-    // Nothing reconfigures Caddy at runtime here — botctl restarts the
-    // container — so the admin endpoint has no consumer in this deployment.
+    // Nothing reconfigures Caddy at runtime here, so the admin endpoint has no
+    // consumer in this deployment.
+    //
+    // The reason given here used to be "botctl restarts the container", and that
+    // was not true: `compose up -d` leaves a container whose service definition
+    // has not changed, and replacing a bind-mounted config file changes none. So
+    // with admin off there was no reload path AND no recreation — which is the
+    // staging defect, and it is now closed by the `NEXA_EDGE_CONFIG` generation
+    // asserted below rather than by turning the admin API on.
     expect(prod).toMatch(/^\s*admin off$/m);
     expect(ci).toMatch(/^\s*admin off$/m);
   });
@@ -596,5 +603,106 @@ describe('the production Caddy routing', () => {
     expect(routes).not.toMatch(/Strict-Transport-Security/);
     const prod = readFileSync(join(__dirname, '../../deploy/caddy/Caddyfile'), 'utf8');
     expect(prod).toMatch(/Strict-Transport-Security "max-age=31536000; includeSubDomains"/);
+  });
+});
+
+/**
+ * The edge adopts the release's own configuration.
+ *
+ * A real staging update — v0.1.0-staging.9 to .11 — updated the api, the worker
+ * and the monitor, applied the migrations, published the new Web Admin bundle,
+ * reported SUCCESS and passed readiness, while Caddy went on serving .9's
+ * routes. Its asset root was `/srv/web`; .11 serves the document from
+ * `/srv/web/current` and the hashed assets from `/srv/web/pool`. The server
+ * reported .11 and every browser got .9's Web Admin.
+ *
+ * Nothing was broken in isolation. The Caddy configuration is a host asset,
+ * bind-mounted read-only; `botctl` replaces those files on disk; replacing a
+ * file inside a bind mount changes no SERVICE DEFINITION, so compose correctly
+ * decides the caddy service is converged; Caddy does not watch its config; and
+ * `admin off` leaves no reload endpoint. Every step is right and the result is
+ * wrong.
+ *
+ * These assertions are about the compose file, because that is where the
+ * mechanism lives and no behavioural test of `botctl` can see it:
+ * `tests/deploy/botctl.test.sh` drives a fake docker, so it proves the state
+ * machine and cannot prove that the service definition compose reads actually
+ * carries the value.
+ */
+describe('the edge configuration generation', () => {
+  const caddy = serviceBlock(compose, 'caddy');
+
+  it('is part of the caddy service definition, so compose recreates it when it changes', () => {
+    // The whole fix in one line. Without this the fingerprint botctl computes
+    // reaches nothing that compose compares, and `up -d` leaves the previous
+    // release's edge container running.
+    expect(caddy).toMatch(/NEXA_EDGE_CONFIG:\s*\$\{NEXA_EDGE_CONFIG:-unset\}/);
+  });
+
+  it('defaults rather than refusing, so an installation that predates it still starts', () => {
+    // `:?` here would make every pre-existing installation unstartable the
+    // moment it picked up this compose file — before any update had a chance to
+    // record a generation. `unset` compares unequal to every real fingerprint,
+    // so the first update recreates the edge once and then it is correct.
+    expect(caddy, 'the edge refuses to start without a generation').not.toMatch(
+      /NEXA_EDGE_CONFIG:\s*\$\{NEXA_EDGE_CONFIG:\?/,
+    );
+  });
+
+  it('is carried by the edge and by nothing else', () => {
+    // Scope is the point. The api, the worker and the monitor must NOT carry it:
+    // an edge-only change would then recreate them too, and a deployment that
+    // restarts the worker because a header was added to a Caddy route is one
+    // whose updates cost more than they should.
+    for (const service of ['api', 'worker', 'monitor', 'postgres', 'redis']) {
+      expect(
+        serviceBlock(compose, service),
+        `${service} would be recreated by an edge-only configuration change`,
+      ).not.toContain('NEXA_EDGE_CONFIG');
+    }
+  });
+
+  it('is computed from the files the edge actually mounts', () => {
+    // The fingerprint has to cover exactly the configuration the container
+    // reads, and the container mounts the whole directory. So the files in the
+    // asset table under `caddy/` are the ones it covers, and this is the
+    // cross-check: a release that adds a third edge file to that directory and
+    // not to the table would change what Caddy loads without changing the
+    // generation — the defect again, with an extra file.
+    const lib = readFileSync(join(__dirname, '../../deploy/bin/nexa-lib.sh'), 'utf8');
+    expect(lib).toContain('nexa_edge_config_files()');
+    // Derived from the asset table, never a second list.
+    const files = /nexa_edge_config_files\(\) \{([\s\S]*?)\n\}/.exec(lib);
+    expect(files, 'nexa_edge_config_files is not a function any more').not.toBeNull();
+    expect(files?.[1], 'the edge file list does not come from the asset table').toContain(
+      'nexa_asset_table',
+    );
+    // And the table really does carry the two files the Caddyfile needs.
+    expect(lib).toContain('caddy/Caddyfile|');
+    expect(lib).toContain('caddy/routes.caddy|');
+    // The mount is the directory, which is why the fingerprint is over all of
+    // its release-owned files rather than over the Caddyfile alone.
+    expect(caddy).toMatch(/caddy:\/etc\/caddy:ro/);
+  });
+
+  it('is recorded by the installer, so the first update compares a real generation', () => {
+    const installer = readFileSync(join(__dirname, '../../deploy/install.sh'), 'utf8');
+    expect(installer).toContain('NEXA_EDGE_CONFIG=%s');
+    expect(installer).toContain('nexa_edge_config_fingerprint');
+  });
+
+  it('fails an update that cannot activate it, rather than reporting success', () => {
+    // The sentence this whole item exists to make unsayable: "updated to X"
+    // while browsers get X-1's Web Admin. `botctl.test.sh` proves the behaviour;
+    // this proves the code path is still reachable from the update at all.
+    const lib = readFileSync(join(__dirname, '../../deploy/bin/nexa-lib.sh'), 'utf8');
+    const botctl = readFileSync(join(__dirname, '../../deploy/bin/botctl'), 'utf8');
+    expect(lib).toContain('nexa_verify_edge_config()');
+    expect(lib).toContain('nexa_bring_up_with_edge()');
+    // One service, not the stack. Recreating everything would restart postgres.
+    expect(lib).toContain('up -d --force-recreate --no-deps caddy');
+    // The update and the rollback both go through it.
+    expect(botctl).toContain('nexa_bring_up_with_edge "$target_image" "$target_edge"');
+    expect(botctl).toContain('nexa_bring_up_with_edge "$previous_image" "$previous_edge"');
   });
 });

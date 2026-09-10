@@ -547,6 +547,172 @@ nexa_acquire_lock() {
   fi
 }
 
+# --- The edge configuration generation ---------------------------------------
+#
+# Why a fingerprint exists at all.
+#
+# The Caddy configuration is a HOST asset: `compose.yml` bind-mounts
+# `${NEXA_DEPLOY_DIR}/caddy` into the container read-only, and
+# `nexa_activate_release_assets` replaces the files in it with the target
+# release's. So after an update the target's `Caddyfile` and `routes.caddy` are
+# on disk — and the container that has them mounted is still the one from the
+# previous release, with the previous configuration already parsed into memory.
+#
+# `docker compose up -d` does not fix that. Compose recreates a container when
+# its SERVICE DEFINITION changes; replacing a file inside a bind mount changes
+# no service definition, so compose correctly concludes that the caddy service
+# is converged and leaves it alone. Caddy does not watch its config either, and
+# this deployment turns its admin API off, so there is nothing to reload
+# through.
+#
+# That is not a theory. On a real staging host, v0.1.0-staging.9 -> .11 updated
+# the api, the worker and the monitor, applied the migrations, published the new
+# Web Admin bundle and reported SUCCESS — while Caddy went on serving the old
+# release's configuration, whose asset root was `/srv/web` rather than the
+# `/srv/web/current` and `/srv/web/pool` pair the new one uses. The server
+# reported .11 and every browser got .9's Web Admin. Only a manual
+# force-recreation of the container fixed it.
+#
+# The fix is to give compose a service definition that DOES change: the caddy
+# service carries `NEXA_EDGE_CONFIG` in its environment, and this is the value.
+# An edge configuration change is then an ordinary compose recreation of one
+# service — no special-casing, no `docker` command of its own, and rollback gets
+# it for free because activating the previous release's assets computes the
+# previous release's fingerprint.
+#
+# It is a TRIGGER, not the source of truth. What Caddy loads is the mounted
+# files; this only decides whether the container is recreated to re-read them,
+# and `nexa_verify_edge_config` below is what proves the recreation happened.
+
+# The files whose content the edge serves from, in a fixed order.
+#
+# Derived from the asset table rather than listed again, so a release that adds
+# a third edge file is covered by the fingerprint without this function being
+# edited — and a file REMOVED from the table stops being part of it, which is
+# the same decision made once.
+nexa_edge_config_files() {
+  local source destination mode
+  while IFS='|' read -r source destination mode; do
+    case "$source" in
+      caddy/*) printf '%s\n' "$destination" ;;
+    esac
+  done <<EOF
+$(nexa_asset_table)
+EOF
+}
+
+# The generation of the edge configuration that is LIVE on this host.
+#
+# Content, not mtime and not a version: two releases with identical edge
+# configuration must produce the same value, or every update would recreate the
+# edge for nothing — and the same release reinstalled must not produce a new one.
+#
+# A missing file is part of the fingerprint rather than an error. An
+# installation that predates an edge file still has a well-defined generation,
+# and the generation changes when that file appears, which is exactly the
+# transition that has to recreate the container.
+nexa_edge_config_fingerprint() {
+  local file hash
+  hash="$(
+    while IFS= read -r file; do
+      if [ -r "$file" ]; then
+        printf '%s:' "$file"
+        sha256sum -- "$file" | cut -d' ' -f1
+      else
+        printf '%s:absent\n' "$file"
+      fi
+    done < <(nexa_edge_config_files) | sha256sum | cut -d' ' -f1
+  )" || return 1
+  [ -n "$hash" ] || return 1
+  printf 'sha256:%s' "$hash"
+}
+
+# The generation the RUNNING edge container was created for.
+#
+# Read out of the container, not off the host: the whole point is to detect a
+# container that is still the previous release's. An installation whose caddy
+# predates this mechanism answers `unset`, which compares unequal to every real
+# fingerprint and therefore gets recreated once — which is correct, and is also
+# how the staging host that found this defect recovers.
+nexa_running_edge_config() {
+  local id
+  id="$(nexa_compose ps -q caddy 2>/dev/null | sed -n '1p')" || return 1
+  [ -n "$id" ] || return 1
+  docker inspect "$id" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null |
+    sed -n 's/^NEXA_EDGE_CONFIG=//p' | sed -n '1p'
+}
+
+# Whether the running edge is serving the configuration we just activated.
+#
+# This is the check that makes a failed edge transition FAIL THE UPDATE rather
+# than be reported as success. It does not trust compose's convergence logic: if
+# `up -d` did not recreate the container for any reason, this says so, and the
+# caller recreates the one service explicitly and asks again.
+#
+# Deliberately narrow. It compares one environment value on one container; it
+# does not restart anything, does not touch postgres or redis, and does not care
+# what else on the host changed.
+nexa_verify_edge_config() {
+  local expected="$1" running
+  [ -n "$expected" ] || nexa_die "internal error: verifying the edge configuration needs a fingerprint."
+  running="$(nexa_running_edge_config || true)"
+  [ "$running" = "$expected" ]
+}
+
+# Bring the stack up on one release AND make the edge serve that release's
+# configuration — or fail.
+#
+# Two steps, because compose's convergence is necessary and not sufficient.
+# `up -d` recreates the edge when the fingerprint in its environment changed,
+# which is the ordinary path and also the one that handles a genuine service
+# definition change. `nexa_verify_edge_config` then asks the RUNNING container
+# which generation it was created for, and that is what makes this honest: it
+# does not trust compose's hashing, it reads the result.
+#
+# If the answer is still wrong, ONE service is force-recreated — not the stack.
+# `--no-deps` so postgres, redis, the api and the worker are not restarted
+# because the edge changed, and a second verification decides the verdict. An
+# edge that still will not adopt the target configuration fails the caller, which
+# is how "the update succeeded" stops being sayable while browsers get the old
+# Web Admin.
+#
+# An EMPTY image means "whatever deploy.env names", which is what every back-out
+# path needs: deploy.env is rewritten only at commit, so until then it still
+# names the outgoing release. Passing an override there would introduce a second
+# source for a fact this installation already records, and the commit ordering
+# exists precisely so that one source is enough.
+#
+# Compose, with the edge generation set and the image override applied only when
+# one was given. Prefix assignments rather than exports in a subshell, so the
+# variables are scoped to the one command and shellcheck does not have to guess.
+nexa_edge_compose() {
+  local image="$1" edge="$2"
+  shift 2
+  if [ -n "$image" ]; then
+    NEXA_IMAGE="$image" NEXA_EDGE_CONFIG="$edge" nexa_compose "$@"
+  else
+    NEXA_EDGE_CONFIG="$edge" nexa_compose "$@"
+  fi
+}
+
+nexa_bring_up_with_edge() {
+  local image="$1" edge="$2"
+  if [ -z "$edge" ]; then
+    nexa_warn "refusing to start the stack without an edge configuration generation."
+    return 1
+  fi
+
+  nexa_edge_compose "$image" "$edge" up -d --remove-orphans || return 1
+  nexa_verify_edge_config "$edge" && return 0
+
+  nexa_warn "the edge is still running a different configuration generation; recreating just that container."
+  nexa_edge_compose "$image" "$edge" up -d --force-recreate --no-deps caddy || return 1
+  nexa_verify_edge_config "$edge" && return 0
+
+  nexa_warn "the edge did not adopt ${edge#sha256:} even after being recreated."
+  return 1
+}
+
 # --- The current-image pointer -----------------------------------------------
 #
 # `deploy.env` names the image compose runs when nobody overrides it. It is NOT
@@ -571,43 +737,91 @@ nexa_acquire_lock() {
 # holding only NEXA_IMAGE, an installation that could not be started, restarted,
 # updated, rolled back, backed up or logged, and an update that printed
 # "ok updated to ...".
-nexa_set_deploy_image() {
-  local image="$1" file="${NEXA_CONFIG_DIR}/deploy.env" tmp status
-  [ -n "$image" ] || nexa_die "refusing to record an empty image reference."
-  case "$image" in
-    *@sha256:*) : ;;
-    *) nexa_die "refusing to record an image reference that is not a digest: ${image}" ;;
-  esac
+# Set one or more keys in deploy.env, in ONE atomic rewrite.
+#
+# One rewrite rather than one per key, and that is not tidiness. The release
+# pointer and the edge-configuration generation are written at the same moment,
+# and two renames have a window between them: interrupted there, deploy.env would
+# name the target's image beside the previous release's edge generation, so the
+# next `compose up` would recreate the edge for the wrong reason and
+# `botctl status` would report a mismatch that does not exist.
+#
+# Arguments are `KEY=VALUE`. A key with no value is refused rather than written
+# empty, because every consumer of this file treats an empty value as "not set"
+# and would then start something other than what was asked for.
+nexa_set_deploy_values() {
+  local file="${NEXA_CONFIG_DIR}/deploy.env" tmp status pair key value
+  [ "$#" -gt 0 ] || nexa_die "internal error: nexa_set_deploy_values needs at least one KEY=VALUE."
+  for pair in "$@"; do
+    key="${pair%%=*}"
+    value="${pair#*=}"
+    case "$pair" in
+      *=*) : ;;
+      *) nexa_die "internal error: ${pair} is not KEY=VALUE." ;;
+    esac
+    [ -n "$key" ] || nexa_die "internal error: refusing to write an empty deploy.env key."
+    [ -n "$value" ] || nexa_die "refusing to record an empty value for ${key} in deploy.env."
+  done
+
   tmp="$(mktemp "${file}.XXXXXX")"
   # Same ownership and mode as the file being replaced, set BEFORE any content
   # is written into place.
   chmod 0600 "$tmp"
 
+  # Every key being set is removed first, then appended, so a key that is
+  # already present is replaced rather than duplicated — and a file that has it
+  # twice (an installation edited by hand) ends up with one.
+  #
   # 0 (lines kept) and 1 (none matched) are both fine. Anything else is an
   # error, and the file we would write is not the file we meant to write.
+  local filter=()
+  for pair in "$@"; do
+    filter+=(-e "^${pair%%=*}=")
+  done
   status=0
-  grep -v '^NEXA_IMAGE=' -- "$file" >"$tmp" || status=$?
+  grep -v "${filter[@]}" -- "$file" >"$tmp" || status=$?
   if [ "$status" -gt 1 ]; then
     rm -f "$tmp"
-    nexa_die "could not read ${file} (grep exited ${status}); deploy.env is UNCHANGED and ${image} was not recorded. Check free space on /var."
+    nexa_die "could not read ${file} (grep exited ${status}); deploy.env is UNCHANGED and nothing was recorded. Check free space on /var."
   fi
-  printf 'NEXA_IMAGE=%s\n' "$image" >>"$tmp" || {
-    rm -f "$tmp"
-    nexa_die "could not write ${file} (is /var full?); deploy.env is UNCHANGED."
-  }
+  for pair in "$@"; do
+    printf '%s\n' "$pair" >>"$tmp" || {
+      rm -f "$tmp"
+      nexa_die "could not write ${file} (is /var full?); deploy.env is UNCHANGED."
+    }
+  done
 
   # The candidate must still be a usable deploy.env. NEXA_DOMAIN is the one
   # compose refuses to start without, so its absence is the cheapest true test
   # of "this file would brick the installation".
   if [ -z "$(nexa_env_value "$tmp" NEXA_DOMAIN)" ]; then
     rm -f "$tmp"
-    nexa_die "the rewritten deploy.env lost NEXA_DOMAIN, so it would not start anything. The original is UNCHANGED and ${image} was not recorded."
+    nexa_die "the rewritten deploy.env lost NEXA_DOMAIN, so it would not start anything. The original is UNCHANGED and nothing was recorded."
   fi
 
   # On disk before the rename: a rename is atomic with respect to other
   # processes, not with respect to power loss.
   sync "$tmp" 2>/dev/null || true
   mv -f "$tmp" "$file"
+}
+
+nexa_set_deploy_image() {
+  local image="$1" edge="${2:-}"
+  [ -n "$image" ] || nexa_die "refusing to record an empty image reference."
+  case "$image" in
+    *@sha256:*) : ;;
+    *) nexa_die "refusing to record an image reference that is not a digest: ${image}" ;;
+  esac
+  # The edge generation is recorded alongside the image when the caller knows
+  # it, because the two are one fact about one release: which bytes run and
+  # which edge configuration they run behind. A caller that does not pass one
+  # leaves whatever is there, which is right for the paths that change only the
+  # image pointer.
+  if [ -n "$edge" ]; then
+    nexa_set_deploy_values "NEXA_IMAGE=${image}" "NEXA_EDGE_CONFIG=${edge}"
+  else
+    nexa_set_deploy_values "NEXA_IMAGE=${image}"
+  fi
 }
 
 # --- Committing a release ----------------------------------------------------
@@ -637,7 +851,7 @@ nexa_set_deploy_image() {
 # `nexa_check_divergence` below detects every non-final row, because "recoverable
 # by re-running the update" is only true if somebody is told.
 nexa_commit_release() {
-  local target="$1" previous="$2" image="$3"
+  local target="$1" previous="$2" image="$3" edge="${4:-}"
   # `current == previous` is not a state this installation can be in, and the
   # cheapest place to say so is before anything is written. A rollback whose
   # pointers are equal rolls back onto itself, reports success, and repoints
@@ -645,7 +859,7 @@ nexa_commit_release() {
   # real target becomes unreachable through the tool and is eventually pruned.
   [ "$target" != "$previous" ] ||
     nexa_die "refusing to record ${target} as both the current release and the rollback target."
-  nexa_set_deploy_image "$image"
+  nexa_set_deploy_image "$image" "$edge"
   nexa_write_atomic "$NEXA_PREVIOUS_FILE" "$previous"
   nexa_write_atomic "$NEXA_CURRENT_FILE" "$target"
 }

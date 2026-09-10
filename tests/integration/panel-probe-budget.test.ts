@@ -13,10 +13,10 @@ import type {
   PanelRepository,
   ProbeBudget,
 } from '../../apps/api/src/modules/platform/panels/application/ports';
-import { providerAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
 import type { UrlPolicyOptions } from '../../apps/api/src/infrastructure/net/url-policy';
 import {
+  adapterWith,
   adminActorFor,
   createAdmin,
   createTestContext,
@@ -130,13 +130,13 @@ describe('the tenant-wide probe budget', () => {
       urlPolicy,
       probeCooldownMs: cooldownMs,
       probeBudget: budget,
-      adapters: (type: ProviderType) => ({
-        ...providerAdapter(type),
-        probe: async () => {
-          probes += 1;
-          return answer();
-        },
-      }),
+      adapters: (type: ProviderType) =>
+        adapterWith(type, {
+          probe: async () => {
+            probes += 1;
+            return answer();
+          },
+        }),
       cadence: {
         healthyIntervalMs: 10 * 60 * 1000,
         retryableIntervalMs: 2 * 60 * 1000,

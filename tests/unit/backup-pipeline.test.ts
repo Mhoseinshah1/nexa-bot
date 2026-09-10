@@ -48,6 +48,14 @@ class FakeRuns implements BackupRunRepository {
   reclaimed = 0;
   /** When set, `start` reports the installation is already busy. */
   busyWith: BackupRunRow | null = null;
+  /**
+   * Shared with the fake ops log, so the ORDER of the two writes is observable.
+   *
+   * The service records a recovery before finishing the row on purpose: a crash
+   * between the two must leave the condition open rather than resolved. Nothing
+   * could see that order, so swapping the two calls was a silent change.
+   */
+  readonly writes: string[] = [];
 
   async start(input: {
     id: string;
@@ -91,6 +99,19 @@ class FakeRuns implements BackupRunRepository {
 
   async heartbeat(): Promise<void> {}
 
+  /**
+   * Retention is not the pipeline's concern, and the fake says so.
+   *
+   * The exclusions that make a purge safe are SQL predicates — two of them
+   * subqueries for "the most recent row" — so they are only testable against a
+   * real database. `tests/integration/backup-retention.test.ts` does that; a fake
+   * here that reimplemented them would be testing its own arithmetic, which is
+   * the shape of test this repository keeps finding and deleting.
+   */
+  async purgeFinishedBefore(): Promise<number> {
+    throw new Error('the backup pipeline must never purge run rows');
+  }
+
   async finish(input: {
     id: string;
     state: 'SUCCEEDED' | 'FAILED';
@@ -108,6 +129,7 @@ class FakeRuns implements BackupRunRepository {
     cleanupOk: boolean;
     cleanupDetail?: string | null;
   }): Promise<void> {
+    this.writes.push(`finish:${input.state}`);
     const row = this.rows.get(input.id);
     if (row === undefined) return;
     this.rows.set(input.id, {
@@ -171,6 +193,18 @@ interface Harness {
     deliveredMessage: string | null;
     leaked: string[];
     cleanupFails: boolean;
+    /** Every operational event the run recorded, in order. */
+    recorded: {
+      code: string;
+      severity: string;
+      message: string;
+      context?: Record<string, unknown>;
+      dedupeKey?: string;
+      recoversCode?: string;
+    }[];
+    /** Null models an installation with no tenant provisioned yet. */
+    scoped: boolean;
+    opsLogThrows: boolean;
   };
 }
 
@@ -194,6 +228,9 @@ function harness(): Harness {
     deliveredMessage: null,
     leaked: [],
     cleanupFails: false,
+    recorded: [],
+    scoped: true,
+    opsLogThrows: false,
   };
 
   const workspace: BackupWorkspace = {
@@ -288,6 +325,32 @@ function harness(): Harness {
       callbackRef: () => 'ref',
     },
     installationId: () => 'installation-1',
+    opsLog: {
+      async record(_scope, event) {
+        if (state.opsLogThrows) throw new Error('the ops log is unreachable');
+        runs.writes.push(`report:${event.code}`);
+        state.recorded.push({
+          code: event.code,
+          severity: event.severity,
+          message: event.message,
+          ...(event.context === undefined ? {} : { context: event.context }),
+          ...(event.dedupeKey === undefined ? {} : { dedupeKey: event.dedupeKey }),
+          ...(event.recoversCode === undefined ? {} : { recoversCode: event.recoversCode }),
+        });
+        return {
+          id: 'e1',
+          code: event.code,
+          severity: event.severity,
+          message: event.message,
+          occurrenceCount: 1,
+          firstSeenAt: NOW,
+          lastSeenAt: NOW,
+          isNew: true,
+          reopened: false,
+        };
+      },
+    },
+    scope: () => (state.scoped ? { tenantId: 't1' as never, botInstanceId: null } : null),
     logger: { info() {}, warn() {}, error() {} },
     leaseOwner: 'worker:1:aaaa',
     retainedArchiveHint: '/var/lib/nexa/backups',
@@ -515,12 +578,111 @@ describe('the backup pipeline', () => {
     });
   });
 
-  it('keeps no secret in a failure message', async () => {
+  it('reports a failed run as an operational condition, not just a log line', async () => {
+    const h = harness();
+    h.state.dumpFails = true;
+    const run = await completed(h, 'SCHEDULED');
+
+    expect(run.state).toBe('FAILED');
+    // The gap Backup V1 shipped with: a failed SCHEDULED backup produced a log
+    // line and a row and nothing else — silent on the channel this installation
+    // built to report failures, for the one subsystem that runs unattended.
+    const failure = h.state.recorded.find((event) => event.code === 'backup.run_failed');
+    expect(failure).toBeDefined();
+    expect(failure?.severity).toBe('ERROR');
+    // ONE installation-wide key, so a nightly failure is one open condition
+    // with a rising count rather than a fresh alert every night.
+    expect(failure?.dedupeKey).toBe('backup.run');
+  });
+
+  it('closes the open failure when a run succeeds', async () => {
+    const h = harness();
+    await completed(h, 'SCHEDULED');
+
+    const recovery = h.state.recorded.find((event) => event.code === 'backup.run_ok');
+    expect(recovery).toBeDefined();
+    expect(recovery?.recoversCode).toBe('backup.run_failed');
+    // A success that did not close the failure would leave an operator with a
+    // permanently open condition and no way to clear it.
+  });
+
+  it('records the recovery BEFORE it finishes the row', async () => {
+    const h = harness();
+    await completed(h, 'SCHEDULED');
+
+    /*
+     * The order is the rule, and it is a crash-safety rule rather than a
+     * tidiness one. If the row were finished first and the process died before
+     * the recovery was recorded, the run would read SUCCEEDED while
+     * `backup.run_failed` stayed open — annoying, and self-correcting on the
+     * next run. The other order fails the other way: the condition is resolved
+     * while the row still reads RUNNING, so an operator is told the backup
+     * recovered when the run that was supposed to prove it never finished.
+     *
+     * An hour chasing a backup that is fine is the acceptable cost. Believing a
+     * broken backup recovered is not.
+     */
+    expect(h.runs.writes).toEqual(['report:backup.run_ok', 'finish:SUCCEEDED']);
+  });
+
+  it('records nothing rather than addressing an alert to nobody', async () => {
+    const h = harness();
+    h.state.scoped = false;
+    h.state.dumpFails = true;
+    const run = await completed(h);
+
+    // A backup can legitimately be taken before a tenant is provisioned.
+    // Inventing a scope would be worse than staying quiet: it would file the
+    // alert against an addressee that does not exist.
+    expect(run.state).toBe('FAILED');
+    expect(h.state.recorded).toEqual([]);
+  });
+
+  it('does not let a failing ops log replace the failure it was reporting', async () => {
+    const h = harness();
+    h.state.dumpFails = true;
+    h.state.opsLogThrows = true;
+    const run = await completed(h);
+
+    // The run's own failure survives. Reporting that failed would otherwise
+    // overwrite the message an operator needs with a message about why they
+    // did not get it.
+    expect(run.state).toBe('FAILED');
+    expect(run.failureMessage).toBe('pg_dump exploded');
+  });
+
+  it('keeps the uncontrolled exception text out of the OPERATIONAL EVENT message', async () => {
+    /*
+     * `message` is the field `operational-event-projector.ts` queues for the Telegram
+     * report group, and `docs/hardening-audit.md` § K records that it is never
+     * redacted — safe "by author discipline". A message built from a caught
+     * exception is not author-controlled, so the exception text goes in `context`,
+     * which is redacted and is not projected.
+     *
+     * Asserted against the EXCEPTION's own text, which is the thing whose content
+     * nobody here controls. The previous version of this case asserted
+     * `not.toMatch(/postgres:\/\/|PGPASSWORD|SECRETS_/)` against a message built from
+     * a string the fake itself supplies — so it could never fail whatever the
+     * production code did with it.
+     *
+     * The stage and the failure CODE stay in the message, because both are closed
+     * vocabularies and they are what makes the alert actionable.
+     */
     const h = harness();
     h.state.dumpFails = true;
     const run = await completed(h);
+    // The run ROW keeps the full text: it is read by an operator through the API,
+    // not pushed to a chat.
     expect(run.failureMessage).toBe('pg_dump exploded');
-    expect(run.failureMessage).not.toMatch(/postgres:\/\/|PGPASSWORD|SECRETS_/);
+
+    const reported = h.state.recorded.find((event) => event.code === 'backup.run_failed');
+    expect(reported).toBeDefined();
+    expect(reported?.message).not.toContain('pg_dump exploded');
+    expect(reported?.message).toContain('DUMP');
+    expect(reported?.message).toContain(run.failureCode ?? 'no-code');
+    // And it is not simply dropped — an operator reading the event's detail can
+    // still get to it.
+    expect(reported?.context?.failureMessage).toBe('pg_dump exploded');
   });
 });
 

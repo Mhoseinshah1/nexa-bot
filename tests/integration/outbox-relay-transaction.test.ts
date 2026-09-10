@@ -257,6 +257,108 @@ describe('the relay commits the claim and the effect together', () => {
     }
   }, 15_000);
 
+  it('leaves nothing behind when the connection dies mid-transaction', async () => {
+    /*
+     * Item M of the hardening audit: `pg_terminate_backend` appeared nowhere in
+     * this repository, so the relay's outer-transaction abort had never been
+     * exercised. Every other failure here is a thrown JavaScript error, which the
+     * savepoint contains — this one takes the transaction itself away.
+     *
+     * The distinction matters because the SAVEPOINT is what makes every test
+     * above work, and a savepoint is a server-side object. A consumer that throws
+     * rolls back to it and the batch transaction stays usable for the attempt
+     * bookkeeping; a backend that is gone cannot roll back to anything, so the
+     * `catch` block's own UPDATE fails too and the failure escapes `processBatch`.
+     *
+     * What must be true afterwards is that NOTHING partial survived: an effect
+     * with no claim would be applied twice on the retry, and a claim with no
+     * effect would suppress the retry that was supposed to produce it. PostgreSQL
+     * gives that for free — the transaction never committed — and this case is
+     * what makes "for free" a measured fact rather than an assumption. It is also
+     * what would catch the relay being restructured so the bookkeeping runs on a
+     * second connection, which would make the attempt count survive a transaction
+     * that rolled back.
+     */
+    await writeEvent();
+    const consumer: EventConsumer = {
+      name: 'test.terminate',
+      subscribesTo: ['SystemPinged'],
+      async handle(event, tx) {
+        // A real effect first, so there is something that COULD survive.
+        await ctx.container.opsLog.record(
+          { tenantId: event.tenantId as never, botInstanceId: null },
+          { code: 'system.ping', severity: 'INFO', message: 'projected before the kill' },
+          tx,
+        );
+        /*
+         * Then the backend serving this very transaction is terminated — from
+         * ANOTHER connection, which is both the realistic shape and the
+         * deterministic one. `pg_terminate_backend(pg_backend_pid())` sends
+         * SIGTERM to oneself, and PostgreSQL acts on it at the next interrupt
+         * check: measured here, that statement returned, the savepoint rolled
+         * back and the batch reported an ordinary `failed: 1`. A self-signal is
+         * not a dead connection.
+         *
+         * `ctx.container.database.db` is the same pool and therefore a DIFFERENT
+         * checkout, which is exactly what a DBA running this by hand, or a
+         * PostgreSQL restart, does to a long-running transaction. The statement
+         * after it is what surfaces the death: the relay must then be unable to
+         * commit anything at all.
+         */
+        const read = await tx.tx.execute(sql`SELECT pg_backend_pid() AS pid`);
+        const pid = (read.rows as unknown as readonly { pid: number }[])[0]?.pid;
+        if (pid === undefined) throw new Error('could not read the backend pid');
+        await ctx.container.database.db.execute(sql`SELECT pg_terminate_backend(${pid})`);
+        await tx.tx.execute(sql`SELECT 1`);
+      },
+    };
+    const relay = relayWith([consumer]);
+    const now = ctx.container.clock.now().getTime();
+
+    // The failure reaches the caller rather than being absorbed into a
+    // `failed: 1` result: a dead connection is not one message's problem.
+    await expect(relay.processBatch()).rejects.toThrow();
+    // Let the socket's close event land, so the assertions below are about what
+    // happened rather than about when it was observed.
+    //
+    // That the PROCESS survives this at all is `connection-death.test.ts`, which
+    // has to spawn a child to assert it. Here the subject is the durable state.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // Nothing of the effect, nothing of the claim.
+    expect(await effects()).toHaveLength(0);
+    expect(await claims()).toHaveLength(0);
+    // And nothing of the bookkeeping either: the attempt count is the one piece
+    // of state that a second connection would have let through, and it did not.
+    // The message is still unpublished, so the next batch retries it.
+    const [message] = await messages();
+    expect(message?.publishedAt).toBeNull();
+    expect(message?.attempts).toBe(0);
+    expect(message?.lastError).toBeNull();
+    /*
+     * A batch that died is not progress — and this relay was never `start()`ed, so
+     * `isFresh` would answer false whether or not `processBatch` recorded anything.
+     * The assertion is therefore about the UNSTARTED relay and nothing more, which
+     * is why it is stated that way rather than as a claim about the dead connection.
+     *
+     * The real coverage for "a batch that threw records no progress" is
+     * `worker-loop-health.test.ts`, where a relay that has completed a batch is
+     * compared against one that has not. An earlier version of this line claimed to
+     * be that coverage; the review of this branch found that it could not fail.
+     */
+    expect(relay.isFresh(now)).toBe(false);
+
+    // The pool recovers, and the retry is an ordinary success — so the kill left
+    // no poisoned state behind either.
+    const after = projecting('test.after-terminate');
+    expect(await relayWith([after]).processBatch()).toEqual({
+      claimed: 1,
+      published: 1,
+      failed: 0,
+    });
+    expect(await effects()).toHaveLength(1);
+  }, 20_000);
+
   it('does not double-count a redelivered message it already applied', async () => {
     // The original at-least-once shape, kept beside the new tests: a crash
     // between the effect's commit and the `published_at` write is impossible

@@ -243,6 +243,23 @@ export type OperationalScope = (typeof OPERATIONAL_SCOPES)[number];
 export const MANAGEMENT_CONDITION_FAILURE_CODES = [
   'panel.monitor.tenant_budget_exceeded',
   'settings.stored_value_invalid',
+  /**
+   * A backup run failed, at whatever stage.
+   *
+   * A condition rather than a one-shot, because it is a STATE an operator can
+   * act on and something later resolves: an installation whose backups have
+   * been failing for a week is in a different situation from one that had a
+   * single bad night, and the difference is whether the row is still open.
+   *
+   * It is here, in the tenant-scoped management scope, and not under
+   * `SYSTEM_SCOPE` beside the monitor's capacity condition — which is recorded
+   * with a null tenant and is therefore invisible to every Web Admin reader,
+   * as the comment on `MANAGEMENT_EVENT_CODES` says at length. A backup that
+   * has stopped working is the last thing that should be discoverable only by
+   * someone who already suspects it. One install serves one customer
+   * (ADR-0001), so the installation's own tenant is the right addressee.
+   */
+  'backup.run_failed',
 ] as const;
 
 /**
@@ -266,6 +283,8 @@ export const MANAGEMENT_CONDITION_FAILURE_CODES = [
 export const MANAGEMENT_CONDITION_RECOVERY_CODES = [
   'panel.monitor.tenant_budget_ok',
   'settings.stored_value_valid',
+  /** A backup run succeeded, closing `backup.run_failed`. */
+  'backup.run_ok',
 ] as const;
 
 /**

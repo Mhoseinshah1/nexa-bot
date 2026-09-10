@@ -106,10 +106,14 @@ export const PANEL_BASE_URL_MAX_LENGTH = 2048;
  *   `COOLDOWN`             a probe of this exact configuration just ran
  *   `BUDGET_EXHAUSTED`     the tenant's outbound capacity is spent
  *   `NOT_AUTHORIZED`       the job may not act for this tenant
+ *   `CAPABILITY_UNSUPPORTED` the adapter does not perform health checks
  *
- * The last three are transient and earn a short deferral; the first three are
- * stable and earn a long one, because retrying them on the healthy cadence is
- * a busy loop that starves the panels a probe could actually help.
+ * `COOLDOWN` and `BUDGET_EXHAUSTED` are the transient pair and earn a short
+ * deferral; every other reason is stable and earns a long one, because retrying
+ * a stable refusal on the healthy cadence is a busy loop that starves the panels
+ * a probe could actually help. `deferralIntervalMs` is where that split lives,
+ * and its switch is exhaustive — a reason added here without a decision there
+ * does not compile.
  */
 export const MONITOR_DEFERRAL_REASONS = [
   'CREDENTIALS_MISSING',
@@ -118,6 +122,24 @@ export const MONITOR_DEFERRAL_REASONS = [
   'COOLDOWN',
   'BUDGET_EXHAUSTED',
   'NOT_AUTHORIZED',
+  /**
+   * The adapter does not declare the capability being asked of it.
+   *
+   * Vacuous today — both registered providers declare `HEALTH_CHECK` — and that
+   * is exactly when the gate is cheap to install. `supports()` exists on both
+   * adapters with NO production caller, so the capability array is published to
+   * the Web Admin as a promise the product makes while nothing on the server
+   * consults it.
+   *
+   * A deferral reason rather than a health state, and rather than a failure kind.
+   * Health is what a provider SAID about a panel; an adapter that cannot ask has
+   * nothing to report, so writing `UNHEALTHY` here would be inventing provider
+   * truth. And it is STABLE, not transient: a provider that cannot health-check
+   * this minute cannot next minute either, so it earns the long deferral for the
+   * same reason `CREDENTIALS_MISSING` does — retrying it on the healthy cadence
+   * is a busy loop that starves the panels a probe could help.
+   */
+  'CAPABILITY_UNSUPPORTED',
   /**
    * The loop failed before it could decide anything about the panel.
    *

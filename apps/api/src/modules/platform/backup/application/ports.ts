@@ -225,6 +225,36 @@ export interface BackupRunRepository {
    * clock as though it had succeeded.
    */
   lastSucceededAt(): Promise<Date | null>;
+
+  /**
+   * Removes at most `limit` FINISHED runs that ended before `cutoff`.
+   *
+   * Returns how many it removed, so the caller can drain in batches.
+   *
+   * Four classes of row are excluded, and every one of them is a correctness
+   * exclusion rather than a preference. They are in the QUERY, not in the
+   * caller: a predicate a caller has to remember is a predicate some caller will
+   * not. ADR-0027 records the decision; the query's own comments record why each
+   * row stays.
+   *
+   *   - `state = 'RUNNING'`. That row IS the installation's backup lock — the
+   *     partial unique index is over it — so deleting one releases a lock a
+   *     process is still holding, and two concurrent dumps would then write the
+   *     same paths.
+   *   - `delivery_state = 'OUTCOME_UNKNOWN'`. Telegram may have accepted an
+   *     upload whose response was lost. Nothing resends automatically and
+   *     nothing resolves it automatically, so the row is the only record that
+   *     an archive may be sitting in a chat; `withUnknownDelivery` is what an
+   *     operator reconciles from. Retained until resolved, indefinitely.
+   *   - the most recent SUCCEEDED run. `lastSucceededAt()` reads it to decide
+   *     whether a backup is due, so removing it makes the scheduler believe no
+   *     backup has ever succeeded — and take one immediately, on a schedule that
+   *     is then wrong for ever after.
+   *   - the most recent run of ANY state. That is the run an operator is looking
+   *     at when something has just gone wrong, and a `backup.run_failed`
+   *     condition with no run to inspect is an alert that cannot be actioned.
+   */
+  purgeFinishedBefore(cutoff: Date, limit: number): Promise<number>;
 }
 
 /**

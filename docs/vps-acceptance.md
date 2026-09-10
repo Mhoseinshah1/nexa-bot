@@ -134,6 +134,16 @@ sudo botctl update v1.0.1
       goes blank and the NEXT update leaves the installation unable to roll
       back at all.
 - [ ] The panel still works and you are still logged in.
+- [ ] **The browser receives the NEW Web Admin**, not the old one. This is the
+      CONFIRMED staging defect of v0.1.0-staging.9 → .11: everything above
+      passed, `botctl update` reported SUCCESS, and Caddy stayed the old
+      long-running container serving the previous release's asset root. A
+      container being HEALTHY is not evidence. Force-reload the panel (Ctrl+F5)
+      and check that a hashed asset from the NEW release is what loads —
+      `curl -sI https://<host>/` plus the `<script src>` in the HTML is enough.
+- [ ] `sudo botctl status` reports the same value for `edge configuration:` and
+      `edge container:`. A difference means the running edge is on another
+      release's config, and status names the command that fixes it.
 - [ ] `/var/lib/nexa/previous` names `v1.0.0`.
 - [ ] The `v1.0.0` release manifest still exists.
 
@@ -153,6 +163,11 @@ sudo botctl rollback
 - [ ] It reports returning to `v1.0.0` and says the database was not touched.
 - [ ] `botctl version` reports `v1.0.0` and its digest.
 - [ ] The panel works.
+- [ ] **The browser receives v1.0.0's Web Admin again**, and
+      `botctl status` agrees about the edge. The edge transition has to be
+      symmetric: an update that moves it forward and a rollback that does not
+      move it back leaves the operator on a UI the running release did not
+      ship.
 - [ ] **Data written under v1.0.1 is still present.** Create something
       identifiable before the rollback — change a setting, send a test
       notification — and confirm it survives.

@@ -14,6 +14,16 @@
  */
 
 export * from './ids.js';
+/**
+ * The identity of one logical external mutation, and the shapes that carry it.
+ *
+ * Declared before any of them has a consumer, which is deliberate: an operation
+ * id that is introduced alongside the first mutating provider call is an operation
+ * id designed around that call. Phase 4 has several, and they have to agree.
+ */
+export * from './operation.js';
+export * from './operational-subject.js';
+export * from './provider-note.js';
 export * from './money.js';
 export * from './time.js';
 export * from './actor.js';

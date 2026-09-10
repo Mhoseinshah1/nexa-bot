@@ -94,7 +94,42 @@ function parseArgs(argv: readonly string[]): Args {
   return { command, archive, target, limit };
 }
 
+/**
+ * Points the container at the installation's primary tenant.
+ *
+ * Without this the CLI's container has `installationTenantId === null` for its
+ * whole life, and every consequence of that is silent: `BackupService.report`
+ * takes its "no tenant provisioned" branch and records NOTHING, so a manual
+ * backup that succeeds cannot close an open `backup.run_failed` condition. The
+ * operator's way out of a nightly-failure alert was to wait for a SCHEDULED run
+ * to succeed, and the log line they got instead asserted something false on a
+ * provisioned installation. The manifest also recorded `installationId:
+ * 'unprovisioned'`, which is the same root cause.
+ *
+ * NOT `resolveInstallationTenant`, which also creates any missing system role.
+ * That is the right thing at a process boot and the wrong thing in a maintenance
+ * command: `backup restore` is run while the database is the thing that is
+ * broken, and a CLI that writes roles on its way to reading a tenant is a CLI
+ * that can fail for a reason unrelated to the backup.
+ *
+ * Failures are SWALLOWED for the same reason. A backup must not be refused
+ * because a tenant lookup failed; losing the condition is the status quo this
+ * fixes, and losing the backup would be worse than the defect.
+ */
+async function pointAtInstallation(container: Container): Promise<void> {
+  try {
+    const primary = await container.tenants.findPrimary();
+    container.setInstallationTenant(primary?.id ?? null);
+  } catch (error) {
+    container.logger.warn(
+      { err: error instanceof Error ? error.message : String(error) },
+      'could not resolve the installation tenant; this run will record no operational condition',
+    );
+  }
+}
+
 async function cmdRun(container: Container): Promise<number> {
+  await pointAtInstallation(container);
   const outcome = await container.backup.run('MANUAL');
   if (outcome.kind === 'BUSY') {
     // Not an error the operator caused, and not something to retry behind their
@@ -296,4 +331,4 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   });
 }
 
-export { parseArgs, cmdVerify, UsageError, USAGE };
+export { parseArgs, cmdVerify, cmdRun, pointAtInstallation, UsageError, USAGE };

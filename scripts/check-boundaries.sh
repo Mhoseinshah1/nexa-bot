@@ -470,6 +470,191 @@ if [ -d "$ADAPTER_DIR" ]; then
   fi
 fi
 
+# --- Every provider failure kind has a producer -------------------------------
+# The same rule as the error-code check above, for the other frozen vocabulary,
+# and it was missing. `PROVIDER_FAILURE_KINDS` has ten entries and every existing
+# test ITERATES the list to assert that consumers handle each one — which is the
+# shape of test that cannot notice a kind nothing produces: remove the one
+# producer of `AUTHENTICATION_REQUIRES_INTERACTION` and every consumer test still
+# passes, because the list still contains it.
+#
+# A dead entry in this list is worse than a dead error code. The kinds drive the
+# monitor's health mapping, its backoff interval and its retry decision, so one
+# that no adapter can produce is a branch nothing exercises in code that dials
+# other people's panels unattended — and it reads, to anyone extending the
+# taxonomy, as a case that has been thought about.
+#
+# Searched in the ADAPTERS and the client only, not in `apps/api/src` as a whole.
+# A kind named in the monitor's switch or in the retryability map is being
+# CONSUMED; only the code that talks to a panel can produce one.
+#
+# `scan_source` drops comment lines, so this paragraph and the long docblocks in
+# `provider.ts` do not count as producers.
+PROVIDER_SOURCES="apps/api/src/modules/platform/providers apps/api/src/infrastructure/net"
+if require_dir "apps/api/src/modules/platform/providers"; then
+  UNPRODUCED_KINDS=""
+  while read -r kind; do
+    [ -n "$kind" ] || continue
+    # shellcheck disable=SC2086
+    produced="$(scan_source "'${kind}'" $PROVIDER_SOURCES | wc -l)"
+    if [ "${produced:-0}" -eq 0 ]; then
+      UNPRODUCED_KINDS="$UNPRODUCED_KINDS $kind"
+    fi
+  done <<EOF
+$(sed -n "/^export const PROVIDER_FAILURE_KINDS = \[/,/^\] as const;/p" packages/contracts/src/provider.ts \
+  | grep -oE "^  '[A-Z_]+'," | tr -d " ',")
+EOF
+  if [ -n "$UNPRODUCED_KINDS" ]; then
+    fail "every provider failure kind has a producer" \
+      "no adapter or HTTP client produces:$UNPRODUCED_KINDS" \
+      "A kind nothing can produce is a branch in the monitor's health mapping, its backoff and its retry decision that nothing exercises."
+  else
+    pass "every provider failure kind is produced by an adapter or the HTTP client"
+  fi
+fi
+
+# The list must not be empty, for the reason `require_dir` exists: a `sed` range
+# that stops matching reads exactly like a vocabulary with no dead entries.
+KIND_COUNT="$(sed -n "/^export const PROVIDER_FAILURE_KINDS = \[/,/^\] as const;/p" \
+  packages/contracts/src/provider.ts | grep -cE "^  '[A-Z_]+'," || true)"
+if [ "${KIND_COUNT:-0}" -lt 5 ]; then
+  fail "The provider failure kinds could not be read from the contract" \
+    "found ${KIND_COUNT:-0}; the check above would pass vacuously. Update this script for the new shape."
+else
+  pass "the provider failure taxonomy was read (${KIND_COUNT} kinds)"
+fi
+
+# --- No network or subprocess sink in a domain or application layer ----------
+# The rule is no network call inside a database transaction, and this is the
+# build-time half of enforcing it. `infrastructure/transaction-boundary.ts` is
+# the runtime half; neither covers the other, which is why there are two.
+#
+# A transaction holds a pooled connection and row locks for its whole duration,
+# so an outbound call inside one ties the pool's availability to somebody else's
+# server — a panel that stops answering becomes every unrelated write in the
+# installation timing out. And a transaction can roll back while a sent request
+# cannot, which is an external side effect with no record that it happened.
+#
+# Application and domain layers declare PORTS; infrastructure implements them.
+# A sink imported directly into one of those layers is both a layering violation
+# and the only way the transaction rule gets broken by accident — the ports the
+# application holds are all implemented by code that now refuses to run inside a
+# transaction, so a direct import is how a future author would get past that
+# without noticing there was anything to get past.
+#
+# Scanned: every `domain/` and `application/` directory under the modules tree.
+# Not scanned: `infrastructure/`, which is where these imports belong, and the
+# surfaces, which are HTTP servers.
+#
+# `scan_source` drops comment lines, so this paragraph's own vocabulary and the
+# explanations in `transaction-boundary.ts` do not trip it.
+LAYER_DIRS=$(find apps/api/src/modules -type d \( -name domain -o -name application \) 2>/dev/null)
+if [ -n "$LAYER_DIRS" ]; then
+  # shellcheck disable=SC2086
+  LAYER_SINKS=$(scan_source \
+    "(from ['\"](node:)?(http|https|net|tls|dgram|child_process|undici|axios|got|node-fetch)['\"]|\brequire\(['\"](node:)?(http|https|net|tls|child_process)['\"]\)|\bfetch\(|\bspawn\(|\bexecFile\(|new XMLHttpRequest)" \
+    $LAYER_DIRS)
+  if [ -n "$LAYER_SINKS" ]; then
+    fail "A domain or application layer reaches a network or subprocess sink directly" "$LAYER_SINKS" \
+         "These layers declare ports; infrastructure implements them. The sinks refuse to run inside a transaction (infrastructure/transaction-boundary.ts) and a direct import is how that gets bypassed."
+  else
+    pass "no domain or application layer reaches a network or subprocess sink directly"
+  fi
+else
+  fail "No domain or application directories were found under apps/api/src/modules" \
+       "The transaction-boundary check would pass vacuously. Update this script for the new layout."
+fi
+
+# --- Every network and subprocess sink refuses to run inside a transaction ---
+# The runtime guard only works where it is CALLED. A new sink — a second HTTP
+# client, an S3 upload, a `pg_basebackup` — would be outside both halves of this
+# rule, and nothing would say so.
+#
+# So the sinks are enumerated here and each is required to call the guard. The
+# list is the thing under review: adding a file to it is a deliberate act, and
+# adding a sink WITHOUT adding it here leaves the file unasserted, which is why
+# the companion check below counts the files that hold a sink at all.
+# The guard must be CALLED, not merely imported.
+#
+# The first version of this grepped for the bare identifier, which the import
+# line satisfies — so a file that imported the guard and never called it passed.
+# Measured: deleting the call from `telegram-transport.ts` left this check green.
+TRANSACTION_GUARD="assertOutsideTransaction("
+SINK_FILES="
+apps/api/src/infrastructure/net/safe-http.ts
+apps/api/src/modules/control/notifications/infrastructure/telegram-transport.ts
+apps/api/src/modules/platform/backup/infrastructure/telegram-backup-delivery.ts
+apps/api/src/modules/platform/backup/infrastructure/pg-tools.ts
+"
+UNGUARDED=""
+for sink in $SINK_FILES; do
+  if [ ! -f "$sink" ]; then
+    UNGUARDED="$UNGUARDED
+$sink (missing — renamed or deleted without updating this check)"
+  elif ! grep -q "$TRANSACTION_GUARD" "$sink"; then
+    UNGUARDED="$UNGUARDED
+$sink"
+  fi
+done
+if [ -n "$UNGUARDED" ]; then
+  fail "A network or subprocess sink does not refuse to run inside a transaction" "$UNGUARDED" \
+       "Call assertOutsideTransaction() at the entry point. See infrastructure/transaction-boundary.ts."
+else
+  pass "every enumerated network and subprocess sink refuses to run inside a transaction"
+fi
+
+# The other direction: a sink FILE that is not on the list above.
+#
+# Without this, the list is a list of the files somebody remembered. With it, a
+# new file that opens a socket or spawns a process fails the build until it is
+# either guarded and listed, or shown not to be a sink.
+#
+# `node:net` and `node:tls` are the awkward pair, because each exports pure
+# predicates alongside the socket constructors. `url-policy.ts` and
+# `trusted-proxy.ts` import `isIP` and nothing else — they are what decides
+# whether an address may be dialled, so demanding a transaction guard from them
+# would be demanding it from the opposite of a sink.
+#
+# So the exemption is derived from the import itself rather than from a list of
+# filenames: a candidate is pure only if EVERY sink-matching line in it binds
+# nothing but the names below. `import { isIP, connect }` is not pure, and
+# neither is a second import line that is. A filename allowlist would have gone
+# stale the first time one of these files grew a socket.
+PURE_NET_BINDINGS='isIP|isIPv4|isIPv6|BlockList|SocketAddress'
+ALL_SINK_FILES=$(scan_source \
+  "(from ['\"](node:)?(http|https|net|tls|dgram|child_process)['\"]|\bopenAsBlob\(|\bfetch\()" \
+  apps/api/src \
+  | cut -d: -f1 | sort -u)
+UNLISTED=""
+for found in $ALL_SINK_FILES; do
+  case "$SINK_FILES" in
+    *"$found"*) continue ;;
+  esac
+  # The lines that made this file a candidate, and whether they are all pure.
+  #
+  # The path prefix is OPTIONAL in the sed: `grep -rn` over a single file omits
+  # the filename and prints `1:import ...`, while over a directory it prints
+  # `path:1:import ...`. A sed that assumed the second shape left `1:` on the
+  # front of every line, nothing matched the purity pattern, and both pure files
+  # were reported as unguarded sinks.
+  CANDIDATE_LINES=$(scan_source \
+    "(from ['\"](node:)?(http|https|net|tls|dgram|child_process)['\"]|\bopenAsBlob\(|\bfetch\()" \
+    "$found" | sed -E 's/^([^:]+:)?[0-9]+://')
+  IMPURE=$(printf '%s\n' "$CANDIDATE_LINES" \
+    | grep -vE "^import \{ *($PURE_NET_BINDINGS)( *, *($PURE_NET_BINDINGS))* *\} from '(node:)?(net|tls)';$" \
+    || true)
+  if [ -n "$IMPURE" ]; then
+    UNLISTED="$UNLISTED
+$found"
+  fi
+done
+if [ -n "$UNLISTED" ]; then
+  fail "A file reaches a network or subprocess sink and is not covered by the transaction guard check" "$UNLISTED" \
+       "Either call assertOutsideTransaction() and add the file to SINK_FILES in this script, or stop importing the sink."
+else
+  pass "every file holding a network or subprocess sink is covered by the guard check"
+fi
+
 # --- The background monitor does not know which provider it is probing -------
 # The monitor asks a repository which panels are due, hands each to the shared
 # probe core, and stores what comes back. Which adapter operates the panel, which

@@ -5,6 +5,7 @@ import type {
   OutboundMessage,
   TransportResult,
 } from '../application/ports.js';
+import { assertOutsideTransaction } from '../../../../infrastructure/transaction-boundary.js';
 
 /**
  * Where the sending credential comes from.
@@ -41,6 +42,12 @@ export class TelegramNotificationTransport implements NotificationTransport {
   ) {}
 
   async send(message: OutboundMessage): Promise<TransportResult> {
+    // The dispatcher commits its claim before calling this, on purpose. The
+    // guard is what keeps that true — see `transaction-boundary.ts`: a send
+    // inside the claim transaction could be rolled back after Telegram had
+    // already delivered the message.
+    assertOutsideTransaction('A Telegram notification send');
+
     if (message.destination.transport !== 'TELEGRAM') {
       return {
         outcome: 'FAILED_PERMANENT',

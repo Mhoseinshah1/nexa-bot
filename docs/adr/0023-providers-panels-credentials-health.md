@@ -397,6 +397,16 @@ the schema, and is raised to `PANEL_HTTP_TIMEOUT_MS` when that is larger — a
 window shorter than a probe can run would let a second request start while the
 first is still on the wire. There is no off switch.
 
+> **Corrected by the Architecture Hardening pass (item E-2).** The reasoning in
+> that paragraph is right and the arithmetic was wrong, so it is left standing
+> rather than edited: the floor was one REQUEST's budget, not one probe's.
+> `SafeHttpClient` starts its deadline per request, and a 3X-UI session probe
+> issues four sequential requests, so at the defaults the floor was ten seconds
+> while the probe it bounded could occupy forty — exactly the overlap the
+> paragraph forbids, permitted by the implementation of the rule that forbids it.
+> The floor now multiplies by `MAX_REQUESTS_PER_PROBE` as well, derived from the
+> provider descriptors. See `docs/hardening-audit.md` § E.
+
 ### A tenant-wide budget of real probes, taken in the same transaction as the claim
 
 The per-panel claim bounds one panel under one configuration. It does not

@@ -297,6 +297,33 @@ cmd_status() {
   [ ! -d "$NEXA_ACTIVATING_DIR" ] ||
     nexa_warn "a host-asset activation was interrupted and has not been restored; the next 'botctl update' or 'botctl rollback' will put the previous set back before proceeding."
 
+  # --- The edge configuration ------------------------------------------------
+  #
+  # Reported because the one time this was wrong, nothing reported it. A staging
+  # update left the previous release's Caddy container running with the previous
+  # release's routes: the API, the worker and the monitor were all the new
+  # release, `botctl version` said the new release, every container was HEALTHY —
+  # and every browser got the old Web Admin. There was no command an operator
+  # could run that would have said so.
+  #
+  # Two values: what the files on the host define, and what the running edge was
+  # created for. Equal is the only good answer; unequal means the container has
+  # not adopted the configuration beside it, and `botctl restart` is the fix.
+  local host_edge running_edge
+  host_edge="$(nexa_edge_config_fingerprint || printf 'unreadable')"
+  running_edge="$(nexa_running_edge_config 2>/dev/null || true)"
+  printf '\nedge configuration: %s\n' "${host_edge#sha256:}"
+  if [ -z "$running_edge" ]; then
+    printf 'edge container:     not running, or predates edge-configuration tracking\n'
+  elif [ "$running_edge" = "$host_edge" ]; then
+    printf 'edge container:     serving it\n'
+  else
+    printf 'edge container:     %s\n' "${running_edge#sha256:}"
+    nexa_warn "the edge is running a DIFFERENT configuration generation from the one on the host."
+    nexa_warn "Browsers may be getting a previous release's Web Admin from a server that reports this one."
+    nexa_warn "Run 'botctl restart' to bring the edge onto the configuration that is installed."
+  fi
+
   status_secrets
 
   printf '\nreadiness: '
@@ -602,6 +629,19 @@ cmd_update() {
   nexa_activate_release_assets "$digest"
   nexa_ok "host assets are ${target}'s"
 
+  # The edge configuration generation the target's assets define, read AFTER
+  # activation because it is the content of the live files that the edge
+  # container mounts.
+  #
+  # This is the term that was missing, and the defect it closes is a real one: a
+  # staging update from v0.1.0-staging.9 to .11 replaced these files, reported
+  # success, and left the previous release's Caddy container serving the
+  # previous release's routes — so the server reported .11 while every browser
+  # got .9's Web Admin. `compose up -d` cannot see a changed bind-mounted file,
+  # and `admin off` means there is nothing to reload. See
+  # `nexa_edge_config_fingerprint`.
+  local target_edge=""
+
   # Put the outgoing release's assets back. Used by every failure path below.
   #
   # In a SUBSHELL, for the reason the backup above is: `nexa_activate_release_assets`
@@ -620,13 +660,62 @@ cmd_update() {
   # first call site forbids, and the operator was then told the installation
   # was consistent. A back-out that cannot put the tooling back must not start
   # anything under the tooling that is there.
+  # The edge generation the back-out must start under. Set by
+  # `restore_host_assets`, because the outgoing release's Caddy configuration is
+  # only back on disk once that has run — and a back-out that started the edge
+  # under the TARGET's generation would leave the previous release's application
+  # behind the failed release's routes, which is the same defect this change
+  # exists to remove, pointing the other way.
+  local current_edge=""
   restore_host_assets() {
-    ( nexa_activate_release_assets "$current_digest" ) && return 0
+    if ( nexa_activate_release_assets "$current_digest" ); then
+      current_edge="$(nexa_edge_config_fingerprint)" || {
+        nexa_warn "${current}'s host assets are back, but its edge configuration could not be fingerprinted."
+        nexa_warn "NOT restarting ${current}: the edge would be recreated under an unknown configuration generation."
+        return 1
+      }
+      return 0
+    fi
     nexa_warn "could not restore ${current}'s host assets; $(nexa_assets_path "$current_digest") holds them."
     nexa_warn "NOT restarting ${current}: ${target}'s compose file is still on the host, and starting ${current} under it would run it in a topology it was never released with."
     return 1
   }
 
+  # Read HERE, not at activation time, because this is the first point at which a
+  # failure can put the outgoing release's assets back.
+  #
+  # It has to run after `nexa_activate_release_assets` — the fingerprint is the
+  # content of the live files the edge container mounts — and it used to run there,
+  # above `restore_host_assets`. So the one failure it can have exited with the
+  # TARGET's botctl, nexa-lib.sh, compose file and Caddy files on the host while the
+  # containers and deploy.env were still the current release's, and said "${current}
+  # is still running and is still the current release" — true of the containers and
+  # false of the tooling. That is a stated invariant of this function
+  # ("every failure from here on restores the current release's assets") and it had
+  # one exception, which the review of this branch found.
+  target_edge="$(nexa_edge_config_fingerprint)" || {
+    restore_host_assets ||
+      nexa_die "cannot fingerprint ${target}'s edge configuration, and ${current}'s host assets could not be put back. ${current} is still running; its tooling is NOT on the host."
+    nexa_die "cannot fingerprint ${target}'s edge configuration, so it cannot be activated. ${current} is still running, its host assets are back, and it is still the current release."
+  }
+  nexa_ok "edge configuration is ${target_edge#sha256:}"
+
+  # Bring the stack up on one release, and make the edge serve that release's
+  # configuration — or fail.
+  #
+  # Two steps, because compose's convergence is necessary and not sufficient.
+  # `up -d` recreates the edge when the fingerprint in its environment changed,
+  # which is the ordinary path and the one that also handles a genuine service
+  # definition change. `nexa_verify_edge_config` then asks the RUNNING container
+  # which generation it was created for, and that is what makes this honest: it
+  # does not trust compose's hashing, it reads the result.
+  #
+  # If the answer is wrong, ONE service is force-recreated — not the stack.
+  # `--no-deps` so postgres, redis, the api and the worker are not restarted
+  # because the edge changed, and a second verification decides the verdict. An
+  # edge that still will not adopt the target configuration fails the caller,
+  # which is how "the update succeeded" stops being sayable while browsers get
+  # the old Web Admin.
   nexa_step "migrating with ${target}'s own migrator"
   if ! NEXA_IMAGE="$target_image" nexa_compose run --rm --no-deps \
     --entrypoint node api dist/infrastructure/persistence/migrate.js; then
@@ -639,8 +728,8 @@ cmd_update() {
 
   # 6. START the target.
   nexa_step "starting ${target}"
-  if ! NEXA_IMAGE="$target_image" nexa_compose up -d --remove-orphans; then
-    nexa_warn "the target release did not start; returning to ${current}."
+  if ! nexa_bring_up_with_edge "$target_image" "$target_edge"; then
+    nexa_warn "the target release did not start, or its edge configuration could not be activated; returning to ${current}."
     # BEFORE the restart, not after: `nexa_compose` reads compose.yml, which is
     # the target's until this puts the outgoing release's back. Restarting
     # ${current} under ${target}'s compose file would bring it up under a
@@ -650,7 +739,11 @@ cmd_update() {
     # operator reads a reassuring message about an installation that is down.
     # And the ASSET restore is the first term: starting ${current} under
     # ${target}'s compose file is not "coming back cleanly".
-    if restore_host_assets && nexa_compose up -d --remove-orphans && nexa_wait_ready; then
+    # No image override, deliberately, and unchanged from before: deploy.env is
+    # only rewritten at COMMIT, so until then it still names ${current}'s image
+    # and that is what the back-out must start. An explicit override here would
+    # be a second source for a fact this file already records.
+    if restore_host_assets && nexa_bring_up_with_edge "" "$current_edge" && nexa_wait_ready; then
       post_migration_reverted
       nexa_die "${target} failed to start. ${current} is running again, is ready, and is still the current release."
     fi
@@ -662,7 +755,7 @@ cmd_update() {
   nexa_step "waiting for readiness"
   if ! NEXA_IMAGE="$target_image" nexa_wait_ready; then
     nexa_warn "${target} started but never became ready; returning to ${current}."
-    if restore_host_assets && nexa_compose up -d --remove-orphans && nexa_wait_ready; then
+    if restore_host_assets && nexa_bring_up_with_edge "" "$current_edge" && nexa_wait_ready; then
       post_migration_reverted
       nexa_die "${target} failed its readiness check. ${current} is running again and is still the current release."
     fi
@@ -690,7 +783,7 @@ cmd_update() {
     # with a message about rollback pointers and deploy.env still naming the
     # old image. The two facts that were missing are the manifest and the image
     # pointer; nothing else about this installation changed.
-    nexa_set_deploy_image "$target_image"
+    nexa_set_deploy_image "$target_image" "$target_edge"
     nexa_ok "re-recorded ${target} (${digest})"
     # An interrupted rollback can leave `previous` equal to `current`. This
     # repair deliberately does not touch `previous`, so that state survives it
@@ -699,7 +792,7 @@ cmd_update() {
     [ "$(nexa_previous_version || true)" != "$target" ] ||
       nexa_warn "the rollback target is also ${target}, so 'botctl rollback' will refuse until that is settled."
   else
-    nexa_commit_release "$target" "$current" "$target_image"
+    nexa_commit_release "$target" "$current" "$target_image" "$target_edge"
     nexa_ok "updated to ${target} (${digest})"
     nexa_ok "rollback target is ${current}"
   fi
@@ -806,6 +899,15 @@ cmd_rollback() {
 
   nexa_activate_release_assets "$digest"
 
+  # ${previous}'s edge configuration, read off the host after its assets are
+  # back. A rollback that left the edge on ${current}'s routes would be the
+  # staging defect pointing the other way: the application downgraded while
+  # every browser kept getting the newer Web Admin, whose hashed assets the
+  # older release does not publish.
+  local previous_edge
+  previous_edge="$(nexa_edge_config_fingerprint)" ||
+    nexa_die "cannot fingerprint ${previous}'s edge configuration, so the edge cannot be rolled back to it. Nothing has been started."
+
   # Both failure paths below do the same thing an UPDATE's do, and for the same
   # reason: put the outgoing release's assets back, then bring its CONTAINERS
   # back, then say which of those two worked.
@@ -822,9 +924,17 @@ cmd_rollback() {
   # The bare `nexa_compose up -d` is deliberate: with the assets restored,
   # deploy.env still names ${current}'s image, because the commit has not
   # happened. It is the same call the update's back-out makes.
+  # The edge generation to start ${current} back under, set by
+  # `restore_current_assets` because that is the moment its Caddy configuration
+  # is back on disk.
+  local current_edge=""
   restore_current_release() {
     if ! restore_current_assets; then
       nexa_warn "NOT restarting ${current}: ${previous}'s compose file is still on the host, and starting ${current} under it would run it in a topology it was never released with."
+      return 1
+    fi
+    if ! current_edge="$(nexa_edge_config_fingerprint)"; then
+      nexa_warn "${current}'s host assets are back, but its edge configuration could not be fingerprinted, so the edge cannot be brought back to it."
       return 1
     fi
     # ${current}'s image BY NAME, from its own manifest — not whatever
@@ -838,12 +948,12 @@ cmd_rollback() {
       nexa_warn "cannot tell which image ${current} is, so it cannot be started again by name."
       return 1
     fi
-    NEXA_IMAGE="$current_image" nexa_compose up -d --remove-orphans &&
+    nexa_bring_up_with_edge "$current_image" "$current_edge" &&
       NEXA_IMAGE="$current_image" nexa_wait_ready
   }
 
-  if ! NEXA_IMAGE="$previous_image" nexa_compose up -d --remove-orphans; then
-    nexa_warn "${previous} did not start; returning to ${current}."
+  if ! nexa_bring_up_with_edge "$previous_image" "$previous_edge"; then
+    nexa_warn "${previous} did not start, or its edge configuration could not be activated; returning to ${current}."
     if restore_current_release; then
       nexa_die "${previous} did not start. ${current} is running again, is ready, and is still the current release. NEITHER release has been deleted; run 'botctl logs'."
     fi
@@ -861,9 +971,10 @@ cmd_rollback() {
   # The pointers swap: the release just left becomes the rollback target, so a
   # rollback can be undone by another rollback. Same ordered commit as an
   # update, for the same reason.
-  nexa_commit_release "$previous" "$current" "$previous_image"
+  nexa_commit_release "$previous" "$current" "$previous_image" "$previous_edge"
 
   nexa_ok "rolled back to ${previous}"
+  nexa_ok "the edge serves ${previous}'s configuration (${previous_edge#sha256:})"
   nexa_ok "the database was not touched"
 }
 
@@ -905,9 +1016,23 @@ cmd_restart() {
   nexa_check_divergence || divergence=$?
   [ "$divergence" -ne 1 ] ||
     nexa_die "refusing to restart while the recorded release and deploy.env disagree, because a restart is exactly what would act on that. Settle it with 'botctl update' first."
-  nexa_compose up -d --remove-orphans
+  # The edge generation the files on the host define. `botctl status` tells an
+  # operator to run this command when the running edge disagrees with them, so
+  # this is the one path that has to make that advice true: a plain `up -d`
+  # leaves the edge container alone, because replacing a bind-mounted file
+  # changes no service definition, and the operator would run the command they
+  # were told to run and see no change.
+  local edge
+  edge="$(nexa_edge_config_fingerprint)" ||
+    nexa_die "cannot fingerprint the edge configuration on this host, so a restart cannot guarantee the edge serves it."
+  nexa_bring_up_with_edge "" "$edge" ||
+    nexa_die "the stack restarted but the edge did not adopt the installed configuration (${edge#sha256:}). Run 'botctl logs caddy'."
   nexa_wait_ready || nexa_die "the stack restarted but the API is not ready."
+  # Persisted, so the next plain `compose up` by anything else starts the edge
+  # under the same generation rather than the one deploy.env happened to carry.
+  nexa_set_deploy_values "NEXA_EDGE_CONFIG=${edge}"
   nexa_ok "restarted"
+  nexa_ok "the edge serves ${edge#sha256:}"
 }
 
 # ---------------------------------------------------------------------------

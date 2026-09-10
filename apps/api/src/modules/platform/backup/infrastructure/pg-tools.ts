@@ -7,6 +7,7 @@ import type {
   RestoreTarget,
   VerifyOutcome,
 } from '../application/ports.js';
+import { assertOutsideTransaction } from '../../../../infrastructure/transaction-boundary.js';
 
 /**
  * The PostgreSQL command-line tools, as an adapter.
@@ -96,6 +97,13 @@ function run(
   env: NodeJS.ProcessEnv,
   timeoutMs: number,
 ): Promise<RunResult> {
+  // `pg_dump` and `pg_restore` open their OWN connections to the database, and
+  // a dump runs for as long as the database is large. Inside a transaction that
+  // would be a connection from the pool waiting on a subprocess which is itself
+  // waiting on the same database — the deadlock-shaped version of the rule in
+  // `transaction-boundary.ts`, not merely the slow one.
+  assertOutsideTransaction(`The ${command} subprocess`);
+
   return new Promise((resolve, reject) => {
     const child = spawn(command, [...args], {
       env,

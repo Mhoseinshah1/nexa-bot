@@ -267,6 +267,86 @@ export class DrizzleBackupRunRepository implements BackupRunRepository {
     return rows.map(toRow);
   }
 
+  /**
+   * Removes finished runs old enough to have no operational value left.
+   *
+   * Bounded, because the caller drains in batches: an unbounded DELETE is one
+   * long statement holding one connection.
+   *
+   * `ctid IN (SELECT ... LIMIT n)` is the same shape the session sweeper uses.
+   * Two sweepers running at once is safe without any coordination: a DELETE of a
+   * row another transaction has already deleted simply matches nothing, so the
+   * worst case is a batch that removes fewer rows than it asked for — and the
+   * caller drains until a batch comes back short, which is still correct. No
+   * lock, no advisory anything, no assumption that one replica is running.
+   *
+   * Ordered OLDEST FIRST. Without an order a bounded batch takes an arbitrary
+   * subset, so a table whose eligible backlog exceeds one pass would have rows
+   * removed in no particular order and the oldest could survive indefinitely.
+   */
+  async purgeFinishedBefore(cutoff: Date, limit: number): Promise<number> {
+    const rows = await this.db
+      .delete(backupRuns)
+      .where(
+        sql`ctid IN (
+          SELECT ctid FROM ${backupRuns} AS candidate
+          WHERE candidate.finished_at IS NOT NULL
+            AND candidate.finished_at < ${cutoff}
+            -- A RUNNING row is the installation's backup lock. The finish-time
+            -- test above already excludes every one of them, because the CHECK
+            -- constraint makes the two equivalent. The state is named anyway: a
+            -- reader must not have to know about that constraint to see that the
+            -- lock is safe, and a future state that carries a finish time must
+            -- not quietly become eligible.
+            AND candidate.state <> 'RUNNING'
+            -- An upload Telegram may have accepted and whose answer was lost.
+            -- Nothing resends and nothing resolves it automatically, so this row
+            -- is the only record that an archive may be in a chat.
+            AND candidate.delivery_state <> 'OUTCOME_UNKNOWN'
+            -- The most recent SUCCEEDED run: the scheduler reads it to decide
+            -- whether a backup is due.
+            --
+            -- The predicate is lastSucceededAt's, CHARACTER FOR CHARACTER,
+            -- including the verified_at test, because that is the row this
+            -- exclusion exists to protect. It used to filter on the state alone,
+            -- and nothing ties SUCCEEDED to a non-null verified_at -- no CHECK
+            -- constraint, only the pipeline's own ordering. So a SUCCEEDED row
+            -- with no verification (a future finish path, a hand-repaired row)
+            -- would absorb this exclusion, the newest VERIFIED success would
+            -- become eligible, and deleting it makes lastSucceededAt return
+            -- null: the scheduler then concludes no backup has ever succeeded and
+            -- derives its whole schedule from the deletion. Two predicates for
+            -- one row is how they come to disagree.
+            AND candidate.id <> COALESCE(
+              (SELECT newest.id FROM ${backupRuns} AS newest
+                WHERE newest.state = 'SUCCEEDED' AND newest.verified_at IS NOT NULL
+                ORDER BY newest.started_at DESC, newest.id DESC
+                LIMIT 1),
+              '00000000-0000-0000-0000-000000000000'::uuid
+            )
+            -- And the most recent FINISHED run: the one being diagnosed.
+            --
+            -- Finished, not "of any state". An in-flight RUNNING row is always the
+            -- newest, and it is already protected by the clause above — so letting
+            -- it absorb this exclusion means the newest row an operator can
+            -- actually read becomes eligible while a backup happens to be running.
+            -- The row this protects is the one somebody opens when something has
+            -- just gone wrong, and a row that has not finished is not that row.
+            AND candidate.id <> COALESCE(
+              (SELECT newest.id FROM ${backupRuns} AS newest
+                WHERE newest.finished_at IS NOT NULL
+                ORDER BY newest.started_at DESC, newest.id DESC
+                LIMIT 1),
+              '00000000-0000-0000-0000-000000000000'::uuid
+            )
+          ORDER BY candidate.finished_at ASC, candidate.id ASC
+          LIMIT ${limit}
+        )`,
+      )
+      .returning({ id: backupRuns.id });
+    return rows.length;
+  }
+
   /** The most recent run that actually produced a verified artifact. */
   async lastSucceededAt(): Promise<Date | null> {
     const [row] = await this.db

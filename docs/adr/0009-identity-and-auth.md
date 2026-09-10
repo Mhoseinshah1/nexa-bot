@@ -56,6 +56,19 @@ when `NODE_ENV=development`.
 The lesson generalises: "trusted by construction" is a claim about the entire
 codebase, and a guard cannot verify it.
 
+## The question this ADR left open has been ANSWERED
+
+ADR-0013 decided it: the Web Admin authenticates with a username and a password,
+against `admins` rows, with a `__Host-` session cookie. The index records 0009 as
+superseded by 0013 for Phase 1, and this note is here because a reader arriving at
+0009 directly — which is what happens when it is cited by a permission or a guard
+comment — would otherwise read an open decision that has been closed for three
+phases.
+
+What 0009 still decides, and 0013 does not revisit: that Phase 0 shipped no
+authentication at all rather than a stub, and the boot guard that refuses
+`AUTH_MODE=none` outside development. Both still hold.
+
 ## What is already built, so Phase 1 does not start from nothing
 
 The permission catalog, role seeds, the DENY-wins resolution rule with expiring
