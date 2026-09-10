@@ -477,6 +477,76 @@ with the pipes inherited and the test hung for its full sixty seconds with the
 shell already killed on time. `pg_dump` and `pg_restore` leave no such descendant,
 which is why that is the fixture's problem and not the product's.
 
+## The adversarial review of this branch
+
+One review of the whole Hardening diff, against the owner's list. It returned
+thirteen findings and **eight were real defects or rules with no test** — including
+one in the fix for item D, which is the pattern `CLAUDE.md` warns about: four review
+rounds on the deployment branch each found their defect inside the fix written for
+the round before.
+
+| #     | Rule the fix establishes                                          | Mutation                                              | Named test                                                                                                       | Result |
+| ----- | ----------------------------------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------ |
+| D-05  | The guard covers the RELAY's claim transaction                    | `withinTransaction(...)` replaced by an identity call | `transaction-boundary.test.ts` › refuses a consumer that sends from inside the RELAY's claim transaction         | KILLED |
+| B-09  | A CLI backup records its operational condition                    | delete `pointAtInstallation(container)` from `cmdRun` | `backup.test.ts` › records the condition when the run comes from the CLI, not only from the worker               | KILLED |
+| B-10  | An abandoned run is REPORTED, not only logged                     | the reclaim reports `backup.run_ok`                   | `backup.test.ts` › reports an abandoned run rather than only logging it                                          | KILLED |
+| E1-06 | No credential is DECRYPTED for a probe that cannot happen         | move the gate below `credentials.read`                | `panels.test.ts` › does not decrypt a credential for a probe that cannot happen                                  | KILLED |
+| R-04  | The retention exclusion protects the most recent VERIFIED success | drop `AND newest.verified_at IS NOT NULL`             | `backup-retention.test.ts` › protects the most recent VERIFIED success, not merely the most recent SUCCEEDED row | KILLED |
+| R-04b | And the most recent FINISHED run, not whatever is newest          | `WHERE newest.finished_at IS NOT NULL` → `WHERE true` | `backup-retention.test.ts` › protects the most recent FINISHED run even while another is RUNNING                 | KILLED |
+| R-06  | The webhook's limit is on the STREAM                              | delete `route.bodyLimit = ...`                        | `http-surface.test.ts` › still refuses an oversized body that declares a small content-length                    | KILLED |
+| R-11  | A cadence the cooldown cannot honour is refused at boot           | `cooldownMs <= healthyIntervalMs` → `true`            | `probe-cooldown-floor.test.ts` › refuses a healthy interval the cooldown cannot honour                           | KILLED |
+| R-12  | A connection killed MID-CHECKOUT is reported, not merely survived | `pool.on('connect', …)` attaches nothing              | `connection-death.test.ts` › does not kill a process whose OPEN TRANSACTION loses its backend                    | KILLED |
+| R-13  | The failure event's message is author-controlled                  | interpolate `failureMessage` into `message` again     | `backup-pipeline.test.ts` › keeps the uncontrolled exception text out of the OPERATIONAL EVENT message           | KILLED |
+
+### The most severe finding was in item D's own fix
+
+`transaction-boundary.ts` names the relay as "the case that makes this urgent
+rather than theoretical: it runs consumers INSIDE the claim transaction, by
+design". And `withinTransaction` was called only from `DrizzleUnitOfWork`, while
+`OutboxRelay.processBatch` opens its transaction on the database handle directly —
+so inside the one transaction the rule exists for, the guard's store was empty and
+every sink permitted the call. **The rule was enforced everywhere except where it
+was needed.**
+
+The unit suite even ran a case under the label `system:relay`, which no production
+code could produce. It read as relay coverage and was not.
+
+### Three tests could not fail, and one of them needed production code changed
+
+- The webhook's stream-vs-header case asserted `not.toBe(201)`. With the route limit
+  removed the request still does not get 201 — the received length disagrees with
+  the declared `content-length` and Fastify answers 400 rather than 413 — so the
+  case was green under the exact mutation it names. `toBe(413)` is the difference
+  between a guard and a decoration, and R-06 above now kills it.
+- The relay's `expect(relay.isFresh(now)).toBe(false)` held because that relay was
+  never `start()`ed, not because a dead batch recorded no progress.
+- `leaves every other table alone` compared an empty `operational_events` to an
+  empty one: 0 against 0, which would have passed if the purge had deleted the
+  whole table.
+- And `keeps no secret in a failure message` asserted `not.toMatch` against a
+  message built from a string the fake itself supplies.
+
+### Two claims were stronger than the code, and both were corrected
+
+E-1's comment, the audit's disposition, row E1-05 and two test comments all said
+the capability gate sat "before the credential read". It did not: `credentials.read`
+ran first, and that is the only function in this codebase that produces a panel
+credential in plaintext. E1-05's mutation could never have caught it, because moving
+the gate below an in-memory shape mapping only changes which refusal is REPORTED.
+
+`worker-health-coverage.test.ts` still carried the sentence "the aggregation is a
+`filter` and needs no test" — recorded in § H as the false comment that let
+`stalledLoops` become `[]` with a green suite — and claimed its scan was derived
+when half of it was a hand-kept list of five file paths, so a loop added in a new
+file was silently out of scope.
+
+### One finding was wrong, and saying so matters
+
+The review suspected the success-path `runs.finish` sat outside the `try`. It does
+not. A comment written while fixing the finding beside it claimed otherwise and was
+removed: a comment asserting a defect that is not there is the same failure as one
+asserting a rule that is not enforced.
+
 ## Method notes
 
 - Every row was run against a COMMITTED tree. The harness refuses a dirty target
