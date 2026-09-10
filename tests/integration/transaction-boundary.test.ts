@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { systemContext } from '@nexa/contracts';
+import { systemContext, systemJobActor } from '@nexa/contracts';
+import { outboxMessages } from '../../apps/api/src/infrastructure/persistence/schema';
+import type { EventConsumer } from '../../apps/api/src/modules/platform/eventing/application/event-consumer';
+import { OutboxRelay } from '../../apps/api/src/modules/platform/eventing/infrastructure/outbox-relay';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
 import { panelUrlPolicy } from '../../apps/api/src/infrastructure/net/installation-policy';
 import { createTestContext, testConfig, type TestContext } from './harness';
@@ -106,6 +109,65 @@ describe('the transaction boundary, end to end', () => {
         await http.send('http://127.0.0.2:9/', { method: 'GET', path: '/status' });
       }),
     ).rejects.toThrow(/inside a database transaction/);
+  });
+
+  it("refuses a consumer that sends from inside the RELAY's claim transaction", async () => {
+    /*
+     * The case item D exists for, and the one its first fix missed.
+     *
+     * `transaction-boundary.ts` names the relay as "the case that makes this
+     * urgent rather than theoretical: it runs consumers INSIDE the claim
+     * transaction, by design". But `withinTransaction` was called only by the unit
+     * of work, and the relay opens its transaction on the database handle
+     * directly — so the guard's store was empty exactly there, and a consumer that
+     * sent was permitted. The rule was enforced everywhere except where it was
+     * needed.
+     *
+     * Driven through the REAL relay and the REAL HTTP client. A consumer is the
+     * only thing in this codebase that runs arbitrary code inside somebody else's
+     * transaction, so nothing else can stand in for it.
+     *
+     * The failure is recorded against the message rather than thrown out of
+     * `processBatch` — a consumer failure rolls back to its savepoint and the
+     * batch continues, which is the relay's own design. So the assertion is on
+     * `failed` and on the message's `last_error`, not on a rejection.
+     */
+    await context.container.uow.run(scope, async (tx) => {
+      await context.container.outbox.write(tx, systemJobActor('tx-boundary', 'corr-tx' as never), {
+        eventType: 'SystemPinged',
+        aggregateType: 'System',
+        aggregateId: 'system',
+        payload: { source: 'test' },
+      });
+    });
+
+    const sending: EventConsumer = {
+      name: 'test.sends-inside-the-relay-transaction',
+      subscribesTo: ['SystemPinged'],
+      async handle() {
+        // A destination this client WOULD dial, so a refusal can only be the
+        // guard: the URL policy RETURNS a failure and the guard THROWS.
+        await http.send('http://127.0.0.2:9/', { method: 'GET', path: '/status' });
+      },
+    };
+    const relay = new OutboxRelay(
+      context.container.database.db,
+      [sending],
+      context.container.clock,
+      context.container.logger,
+      { batchSize: 10, pollIntervalMs: 50, maxLagMs: 300_000 },
+    );
+
+    const result = await relay.processBatch();
+    expect(result.failed).toBe(1);
+    expect(result.published).toBe(0);
+
+    const [message] = await context.container.database.db.select().from(outboxMessages);
+    expect(message?.publishedAt).toBeNull();
+    expect(message?.lastError).toMatch(/inside a database transaction/);
+    // And it names the relay, not a tenant: the batch spans tenants, so a label
+    // naming one of them would name the wrong one.
+    expect(message?.lastError).toMatch(/system:relay/);
   });
 
   it('leaves the context clean once the transaction has returned', async () => {

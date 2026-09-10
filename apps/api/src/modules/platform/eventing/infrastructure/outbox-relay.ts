@@ -13,6 +13,7 @@ import type {
   DatabaseHandle,
   Executor,
 } from '../../../../infrastructure/persistence/database.js';
+import { withinTransaction } from '../../../../infrastructure/transaction-boundary.js';
 import {
   outboxMessages,
   processedMessages,
@@ -148,84 +149,107 @@ export class OutboxRelay {
    * instead of waiting on a timer.
    */
   async processBatch(): Promise<RelayBatchResult> {
-    const result = await this.db.transaction(async (tx) => {
-      // Work belonging to a tenant that is not ACTIVE is left UNCLAIMED, not
-      // discarded and not marked published. `eligibleForDispatch` below is the
-      // one statement of that rule; readiness uses it too, so the two cannot
-      // disagree about what is pending.
-      //
-      // Stopping a tenant now ends its Web Admin logins and its Telegram
-      // intake; a relay that went on dispatching would leave the one half of
-      // the installation that talks to the outside world still talking —
-      // notifications sent, provisioning performed — for an installation
-      // somebody switched off. Skipping rather than dropping is the other half
-      // of that: the messages are still there, in order, when the tenant is
-      // started again. A message with no tenant is platform work and always
-      // eligible.
-      const eligible = eligibleForDispatch(await this.activeTenantIds(tx));
-
-      const claimed = await tx
-        .select()
-        .from(outboxMessages)
-        .where(and(isNull(outboxMessages.publishedAt), eligible))
-        .orderBy(asc(outboxMessages.occurredAt), asc(outboxMessages.sequence))
-        .limit(this.options.batchSize)
-        .for('update', { skipLocked: true });
-
-      let published = 0;
-      let failed = 0;
-
-      for (const row of claimed) {
-        // The eligibility above was evaluated when the row was SELECTed, and
-        // `FOR UPDATE` locked the message, not its tenant — so a stop could
-        // commit between the claim and the dispatch and the delivery would go
-        // out anyway, which is the one thing the pause exists to prevent.
+    /*
+     * MARKED as a transaction, so `assertOutsideTransaction` refuses a consumer
+     * that sends.
+     *
+     * This was the hole in item D's fix. `withinTransaction` is called by the unit
+     * of work, and the relay opens its claim transaction on the database handle
+     * directly — so inside the one transaction `transaction-boundary.ts` names as
+     * "the case that makes this urgent rather than theoretical" the guard's store
+     * was empty and every sink permitted the call. The rule was enforced
+     * everywhere except where it was needed.
+     *
+     * The label is `system:relay` rather than a tenant's, because the batch spans
+     * tenants: it claims whatever is eligible, and a refusal naming one of them
+     * would name the wrong one. `transactionLabelFor` produces the same
+     * `system:<reason>` shape for a system scope.
+     *
+     * Not routed through `uow.run`: the unit of work takes one scope and hands the
+     * callback one `TransactionScope`, and this transaction deliberately has
+     * neither — it reads the tenant table to decide eligibility and dispatches
+     * work belonging to several tenants under a savepoint each.
+     */
+    const result = await withinTransaction('system:relay', () =>
+      this.db.transaction(async (tx) => {
+        // Work belonging to a tenant that is not ACTIVE is left UNCLAIMED, not
+        // discarded and not marked published. `eligibleForDispatch` below is the
+        // one statement of that rule; readiness uses it too, so the two cannot
+        // disagree about what is pending.
         //
-        // Locking the tenant row here holds the answer still for the rest of
-        // this transaction: a status change either committed before this and is
-        // seen, or waits until the dispatch is done. `FOR SHARE` rather than
-        // `FOR UPDATE` because several relay workers may hold this at once —
-        // they are readers of the status, not writers of it.
-        if (row.tenantId !== null && !(await this.tenantIsActive(tx, row.tenantId))) {
-          continue;
-        }
+        // Stopping a tenant now ends its Web Admin logins and its Telegram
+        // intake; a relay that went on dispatching would leave the one half of
+        // the installation that talks to the outside world still talking —
+        // notifications sent, provisioning performed — for an installation
+        // somebody switched off. Skipping rather than dropping is the other half
+        // of that: the messages are still there, in order, when the tenant is
+        // started again. A message with no tenant is platform work and always
+        // eligible.
+        const eligible = eligibleForDispatch(await this.activeTenantIds(tx));
 
-        const event = toDomainEvent(row);
-        try {
-          // A SAVEPOINT per message. Drizzle turns a nested `transaction()` on
-          // a transaction into SAVEPOINT / ROLLBACK TO, so a consumer that
-          // throws takes its claim and its half-written effect back with it —
-          // and the batch transaction is still live for the bookkeeping below.
-          // Without the savepoint the failed statement would have aborted the
-          // whole transaction, and "record the attempt" would itself fail
-          // with `current transaction is aborted`.
-          await tx.transaction(async (attempt) => {
-            await this.dispatch(attempt, event);
-            await attempt
+        const claimed = await tx
+          .select()
+          .from(outboxMessages)
+          .where(and(isNull(outboxMessages.publishedAt), eligible))
+          .orderBy(asc(outboxMessages.occurredAt), asc(outboxMessages.sequence))
+          .limit(this.options.batchSize)
+          .for('update', { skipLocked: true });
+
+        let published = 0;
+        let failed = 0;
+
+        for (const row of claimed) {
+          // The eligibility above was evaluated when the row was SELECTed, and
+          // `FOR UPDATE` locked the message, not its tenant — so a stop could
+          // commit between the claim and the dispatch and the delivery would go
+          // out anyway, which is the one thing the pause exists to prevent.
+          //
+          // Locking the tenant row here holds the answer still for the rest of
+          // this transaction: a status change either committed before this and is
+          // seen, or waits until the dispatch is done. `FOR SHARE` rather than
+          // `FOR UPDATE` because several relay workers may hold this at once —
+          // they are readers of the status, not writers of it.
+          if (row.tenantId !== null && !(await this.tenantIsActive(tx, row.tenantId))) {
+            continue;
+          }
+
+          const event = toDomainEvent(row);
+          try {
+            // A SAVEPOINT per message. Drizzle turns a nested `transaction()` on
+            // a transaction into SAVEPOINT / ROLLBACK TO, so a consumer that
+            // throws takes its claim and its half-written effect back with it —
+            // and the batch transaction is still live for the bookkeeping below.
+            // Without the savepoint the failed statement would have aborted the
+            // whole transaction, and "record the attempt" would itself fail
+            // with `current transaction is aborted`.
+            await tx.transaction(async (attempt) => {
+              await this.dispatch(attempt, event);
+              await attempt
+                .update(outboxMessages)
+                .set({ publishedAt: this.clock.now(), lastError: null })
+                .where(sql`${outboxMessages.id} = ${row.id}`);
+            });
+            published += 1;
+          } catch (error) {
+            failed += 1;
+            const message = error instanceof Error ? error.message : String(error);
+            await tx
               .update(outboxMessages)
-              .set({ publishedAt: this.clock.now(), lastError: null })
+              .set({
+                attempts: sql`${outboxMessages.attempts} + 1`,
+                lastError: message.slice(0, 2000),
+              })
               .where(sql`${outboxMessages.id} = ${row.id}`);
-          });
-          published += 1;
-        } catch (error) {
-          failed += 1;
-          const message = error instanceof Error ? error.message : String(error);
-          await tx
-            .update(outboxMessages)
-            .set({
-              attempts: sql`${outboxMessages.attempts} + 1`,
-              lastError: message.slice(0, 2000),
-            })
-            .where(sql`${outboxMessages.id} = ${row.id}`);
-          this.logger.error(
-            { eventId: event.eventId, eventType: event.eventType, err: message },
-            'Outbox consumer failed; message will be retried',
-          );
+            this.logger.error(
+              { eventId: event.eventId, eventType: event.eventType, err: message },
+              'Outbox consumer failed; message will be retried',
+            );
+          }
         }
-      }
 
-      return { claimed: claimed.length, published, failed };
-    });
+        return { claimed: claimed.length, published, failed };
+      }),
+    );
     // Progress, recorded on a batch that COMPLETED rather than on the scheduled
     // tick that called it. A finished batch is progress whoever asked for it,
     // and recording it here is what makes the rule reachable from a test
