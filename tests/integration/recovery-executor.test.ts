@@ -382,6 +382,34 @@ describe('the recovery executor', () => {
     expect(await databaseExists(liveName)).toBe(true);
   });
 
+  it('refuses a request that reached RESTORE_REQUESTED with no confirmation at all', async () => {
+    /*
+     * The row the executor must not take on trust.
+     *
+     * It is reachable only by something other than `confirm` writing the state —
+     * a hand-written UPDATE, a future code path, a restored database carrying a
+     * row mid-flight — and the binding re-check is what catches it, BEFORE the
+     * clock check below it. That ordering is why the expiry's own null branch is
+     * unreachable and is recorded as such in the falsification record rather than
+     * claimed as tested.
+     */
+    const { recoveryId } = await confirmedRecovery();
+    await container.database.db.execute(
+      `UPDATE recovery_requests
+          SET confirmed_at = NULL, confirmed_by_admin_id = NULL,
+              confirmed_checksum = NULL, confirmation_expires_at = NULL
+        WHERE id = '${recoveryId}'` as never,
+    );
+
+    await container.recoveryExecutor.tick();
+
+    const row = await container.recoveryRequests.byIdUnscoped(recoveryId);
+    expect(row?.state).toBe('FAILED');
+    expect(row?.failureCode).toBe('recovery.confirmation_invalid');
+    expect(row?.cutoverAt).toBeNull();
+    expect(await databaseExists(liveName)).toBe(true);
+  });
+
   it('accepts a confirmation that is still inside its window', async () => {
     /*
      * The positive control for the case above, and it is not ceremony: a clock
