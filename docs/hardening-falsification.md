@@ -59,15 +59,16 @@ KILLED on its own would misrepresent it.
 
 ## Item B — a failed backup is no longer silent
 
-| #    | Rule                                                                    | Mutation                                        | Named test                                                                                        | Result |
-| ---- | ----------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------ |
-| B-01 | A failed run opens an operational condition, not just a log line        | `code: 'backup.run_failed'` → `'backup.run_ok'` | `backup-pipeline.test.ts` › reports a failed run as an operational condition, not just a log line | KILLED |
-| B-02 | A success CLOSES the open failure                                       | delete `recoversCode` / `recoversDedupeKey`     | `backup-pipeline.test.ts` › closes the open failure when a run succeeds                           | KILLED |
-| B-03 | One installation-wide dedupe key, so a nightly failure is ONE condition | `BACKUP_CONDITION_KEY` → a per-run key          | `backup-pipeline.test.ts` › reports a failed run as an operational condition, not just a log line | KILLED |
-| B-04 | A successful run reports at all                                         | delete the whole success `report` call          | `backup-pipeline.test.ts` › closes the open failure when a run succeeds                           | KILLED |
-| B-05 | The recovery is recorded BEFORE the row is finished                     | swap the `report` and `finish` blocks           | `backup-pipeline.test.ts` › records the recovery BEFORE it finishes the row                       | KILLED |
-| B-06 | With no tenant provisioned, nothing is recorded rather than invented    | the `scope === null` guard → an invented scope  | `backup-pipeline.test.ts` › records nothing rather than addressing an alert to nobody             | KILLED |
-| B-07 | A failing ops log does not replace the failure it was reporting         | rethrow from the `catch`                        | `backup-pipeline.test.ts` › does not let a failing ops log replace the failure it was reporting   | KILLED |
+| #    | Rule                                                                           | Mutation                                                | Named test                                                                                         | Result |
+| ---- | ------------------------------------------------------------------------------ | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------ |
+| B-01 | A failed run opens an operational condition, not just a log line               | `code: 'backup.run_failed'` → `'backup.run_ok'`         | `backup-pipeline.test.ts` › reports a failed run as an operational condition, not just a log line  | KILLED |
+| B-02 | A success CLOSES the open failure                                              | delete `recoversCode` / `recoversDedupeKey`             | `backup-pipeline.test.ts` › closes the open failure when a run succeeds                            | KILLED |
+| B-03 | One installation-wide dedupe key, so a nightly failure is ONE condition        | `BACKUP_CONDITION_KEY` → a per-run key                  | `backup-pipeline.test.ts` › reports a failed run as an operational condition, not just a log line  | KILLED |
+| B-04 | A successful run reports at all                                                | delete the whole success `report` call                  | `backup-pipeline.test.ts` › closes the open failure when a run succeeds                            | KILLED |
+| B-05 | The recovery is recorded BEFORE the row is finished                            | swap the `report` and `finish` blocks                   | `backup-pipeline.test.ts` › records the recovery BEFORE it finishes the row                        | KILLED |
+| B-06 | With no tenant provisioned, nothing is recorded rather than invented           | the `scope === null` guard → an invented scope          | `backup-pipeline.test.ts` › records nothing rather than addressing an alert to nobody              | KILLED |
+| B-07 | A failing ops log does not replace the failure it was reporting                | rethrow from the `catch`                                | `backup-pipeline.test.ts` › does not let a failing ops log replace the failure it was reporting    | KILLED |
+| B-08 | A run records what it is attributable to, and a SCHEDULED one invents no human | the repository writes `trigger: 'MANUAL'` for every run | `backup.test.ts` › records what a run is attributable to, and invents no human for a scheduled one | KILLED |
 
 B-05's test did not exist before this run. The rule was in the code with a
 docblock explaining its crash-safety reasoning, and the order was not observable
@@ -282,6 +283,23 @@ switched off permanently unhealthy.
 reading the source; `loop-health.test.ts` proves the check then does something
 with the names. Neither subsumes the other, and the first cannot replace the
 second: a source scan can see a list and not what the list is for.
+
+### B-08 — what accountability for a backup actually rests on
+
+The audit's item B reported that the backup module has no `ScopeContext`, no
+`ActorContext`, no idempotency key and no audit row. All four are true, and
+ADR-0025 now argues each as a decision rather than leaving the grep to speak for
+itself: `backup run` is a CLI on the host, the actor model knows an `admins` row or
+`SYSTEM_JOB`, and a shell user is neither — so recording one would invent an
+administrator or address the run to an unrelated tenant.
+
+So the row asserts the source of accountability that EXISTS, which is the run row's
+trigger, its identity, its bounding times and its lease owner. The mutation forces
+every run to `MANUAL`, which is the shape a false attribution takes: a
+system-triggered run wearing a human's trigger. The same case also asserts that no
+duplicate audit row was invented, because two rows carrying the same id, times,
+trigger and outcome are two rows that come to disagree the first time a failure
+lands between them.
 
 ## Items E-1 and F-1 — the capability gate and the Redis requirement
 
