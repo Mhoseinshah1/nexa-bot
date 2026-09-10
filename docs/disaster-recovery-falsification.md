@@ -154,3 +154,83 @@ the operator's rollback, was lost with it.
 **What F-03 was.** The `Dockerfile` comment cited this test before the test
 existed. A claim about testing that leaves no test behind is worse than no claim,
 so the test it named is now the test that exists.
+
+## The RBAC upgrade hotfix, after v0.1.0-staging.13 was deployed
+
+Seven rules, from the defect the deployed release exposed: the permissions this
+phase added to `ROLE_SEEDS` never reached the installation that already had the
+roles, so `/recovery` rendered and every card in it answered access denied to an
+administrator who had been the owner since the identity release. Migration
+`0031` is the backfill; these are its rules and the tests that die without them.
+
+Produced the same way as the F rows above, and for the same reason: five of the
+mutations live in a MIGRATION and one in the built contracts, neither of which
+`scripts/falsify.sh` reverts. Each was applied by hand to the file named, the
+focused suite was run, the file was restored, and the suite was re-run green.
+
+| #    | Rule                                                                    | Mutation                                                                             | Named test                                                                                                      | Result |
+| ---- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- | ------ |
+| G-01 | Only a role the catalogue seeded is widened                             | `0031_*.sql`: `WHERE r."is_system" = true` → `WHERE true`                            | `recovery-permission-backfill.test.ts` › never widens a role an operator created, even one sharing a seeded key | KILLED |
+| G-02 | A second run inserts nothing rather than failing                        | `0031_*.sql`: drop `ON CONFLICT DO NOTHING`                                          | `recovery-permission-backfill.test.ts` › is idempotent, so a second run is a no-op rather than an error         | KILLED |
+| G-03 | Every tenant the installation holds is served, not only the primary     | `0031_*.sql`: add `AND r."tenant_id" = (SELECT id FROM tenants ORDER BY id LIMIT 1)` | `recovery-permission-backfill.test.ts` › serves every tenant the installation holds, not only the primary one   | KILLED |
+| G-04 | Nothing is granted beyond the pairs `ROLE_SEEDS` assigns                | `0031_*.sql`: add `('operator', 'recovery.restore')`                                 | `recovery-permission-backfill.test.ts` › adds those eight pairs and not one more                                | KILLED |
+| G-05 | The new grant still loses to a DENY override                            | `contracts`: `resolveEffectivePermissions` stops subtracting DENY                    | `recovery-permission-backfill.test.ts` › loses to a DENY override, because resolution subtracts DENY last       | KILLED |
+| G-06 | Every permission a seed gains after the identity release has a backfill | `0031_*.sql`: delete `('technical', 'backup.run')`                                   | `role-seed-backfill-coverage.test.ts` › covers every permission a seeded role gained after the identity release | KILLED |
+| G-07 | The same rule in `0011`, whose test could not fail until this round     | `0011_*.sql`: `WHERE r."is_system" = true` → `WHERE true`                            | `control-plane-invariants.test.ts` › leaves a role an operator created alone, even one sharing a seeded key     | KILLED |
+
+**What G-06 is for.** `ensureSystemRoles` is creation-only on purpose, so a
+permission added to a seed reaches an existing installation only through a
+migration — and nothing checked that the migration was written. Phase 2
+remembered; this phase did not. The rule now has a test: the current seed pairs
+must be covered by the pairs an installation received at the identity release
+(a frozen 107-pair fixture) plus every backfill migration in the tree. Add a
+permission to a seed with no backfill and the unit suite fails naming the pair.
+
+**What G-07 was.** The `0011` case asserted that a custom role sharing a seeded
+key gains nothing, and built that role in the tenant that already had the seeded
+one — where `roles_tenant_key_key` forbids the second row and the insert was
+written `ON CONFLICT DO NOTHING`. The role never existed, so the assertion
+counted the permissions of nothing. Measured: with `WHERE is_system = true`
+deleted from `0011`, the case passed. The fixture now lives in the other tenant
+and its existence is asserted before the migration runs.
+
+### The Codex round on the hotfix
+
+One finding, and it was a real one: `0031`'s journal `when` was stamped
+1789152375597 — a day ahead of the commit, reached by adding 86_400_000 to
+0030's value to be "safely after" it. `drizzle-orm`'s migrator decides what is
+pending by reading ONE row, the greatest `created_at` in
+`drizzle.__drizzle_migrations`, and applying every entry whose `when` exceeds it;
+nothing compares indexes, tags or hashes. A future stamp therefore raises that
+watermark past every timestamp `drizzle-kit generate` would produce for the next
+nineteen hours, and the next migration — Phase 4A's, in this session — would have
+been SKIPPED in silence on every database that had applied 0031. No error, and
+`pnpm db:check` would still have passed, because the schema file and the
+migration files agree with each other; only the database would be behind.
+
+Confirmed by reading the migrator rather than by argument, fixed by stamping the
+entry at the moment it was written, and the two databases that had already
+recorded the bad value had that row removed so the corrected entry applied.
+
+| #    | Rule                                                     | Mutation                                                       | Named test                                                                                           | Result |
+| ---- | -------------------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------ |
+| G-08 | A journal entry is never stamped in the future           | `_journal.json`: 0031's `when` back to 1789152375597           | `migration-journal.test.ts` › never stamps a migration in the future                                 | KILLED |
+| G-09 | `when` strictly increases, because it IS the ordering    | `_journal.json`: 0031's `when` set equal to 0030's             | `migration-journal.test.ts` › has a strictly increasing `when`, which is what the migrator orders by | KILLED |
+| G-10 | The journal names exactly the migration files that exist | `_journal.json`: drop the 0031 entry, leaving an orphan `.sql` | `migration-journal.test.ts` › names exactly the migration files that exist                           | KILLED |
+
+**Not a mutation row, and said so rather than dressed up as one.**
+`tests/integration/migration-ordering.test.ts` demonstrates the skip itself
+against a real PostgreSQL and the real migrator: one release applies a migration
+stamped a day ahead, the next release adds a correct one beside it, and the
+second table is simply absent — permanently, across re-runs. No mutation of this
+repository's code can kill that test, because it characterises a dependency
+rather than a rule of ours, so it earns no row above. It exists because the rules
+in G-08..G-10 are conventions, and a convention whose consequence lives only in a
+comment is a convention somebody relaxes.
+
+Its first version was WRONG in a way worth recording: it wrote both migrations
+into one folder and migrated once, and the later migration ran. On a virgin
+database `lastDbMigration` is undefined and the migrator's condition
+short-circuits to true, so every entry runs whatever its `when`. The future stamp
+costs a fresh installation nothing — which is precisely why CI was green on it,
+and why the defect only reaches a database that has already applied the bad row.

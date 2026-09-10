@@ -159,6 +159,22 @@ Four permissions, and they are four on purpose:
 | `backup.download`  | CRITICAL | the ENCRYPTED archive. Never a plaintext dump                  |
 | `recovery.restore` | CRITICAL | the confirmation that begins a destructive restore             |
 
+Which seeded roles hold them: `owner` all four; `operator` and `observer`
+`backup.view`; `technical` `backup.view` and `backup.run`. Download and restore
+reach the owner alone.
+
+**Upgrading an installation that predates this release.** Seeded roles are
+written when a role is CREATED and never reasserted — deliberately, so that a
+restart cannot restore a permission an operator withdrew — so these four
+permissions do not reach a role that already exists. Migration
+`0031_backup_recovery_role_backfill.sql` inserts exactly the eight
+(role, permission) pairs above into existing SYSTEM roles, in every tenant,
+conflict-free, and touches nothing else: no custom role, no role assignment, no
+permission override, no other permission. It runs as part of the ordinary
+`botctl update`, and a DENY override still beats what it grants. Without it the
+Recovery section renders and every card in it answers access denied — which is
+what a deployed installation did, and the defect that migration exists for.
+
 ### What a restore actually does
 
 Nothing restores into the database serving the request. The sequence is, in
