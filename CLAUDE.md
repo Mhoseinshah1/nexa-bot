@@ -11,7 +11,9 @@ log. **Phase 3 is done**: 3A gave providers, panels, credentials and health; 3B
 added the MHSanaei/3x-ui v3.7.0 adapter; 3C a dedicated `monitor` process role
 that keeps panel health up to date on a schedule; 3D the Web Admin. **Telegram
 Backup V1 is done** — the disaster-recovery pipeline, ADR-0025 and
-`docs/backup.md`. There are still no product features: no purchases, payments,
+`docs/backup.md`. **Web Admin Disaster Recovery is done** — one operational
+section, a fourth `recovery` process role, and a real cutover by database rename
+(ADR-0028). There are still no product features: no purchases, payments,
 wallet, resellers or customer-facing Telegram operations, and nothing consumes a
 panel yet. Do not add them without an explicit instruction.
 
@@ -97,6 +99,36 @@ looks like a backup and is not:
   FAILING the abandoned run, never by adopting it: its files belong to a process
   that may still be writing them.
 
+Five recovery rules (ADR-0028). Each one is a way to produce something that
+looks like a restore and is not:
+
+- **No HTTP request restores into the database serving it.** A request may
+  upload, verify and confirm; the destructive work belongs to the `recovery`
+  process role. Never add a path where a controller calls `pg_restore` against
+  the live database — that is the instruction this whole design exists to obey,
+  and it is one convenience refactor away from being broken.
+- **The cutover is two RENAMES, and nothing drops the displaced database.** The
+  candidate is restored into a new database, validated, and only then renamed
+  into place; the outgoing one survives as `nexa_pre_restore_<id>` and is the
+  rollback. Adding a cleanup that drops it turns a two-rename rollback into a
+  restore from an archive — and it is the only copy of what the restore replaced.
+  It survives the cutover only because of the pool's `'error'` listener: `pg`
+  delivers connection death as an EVENT, and an unlistened one throws.
+- **The quiesce is derived from the recovery row's state**, never from a second
+  flag, and it is enforced at the two places a durable write actually passes —
+  `DrizzleUnitOfWork.run` and `OutboxRelay.processBatch`. `PRE_RESTORE_BACKUP` is
+  deliberately outside the window. A surface ALSO checks on arrival: the gate
+  alone lets a six-stage pipeline run to COMPLETED with its writes refused one at
+  a time, which is how a backup came to be reported as taken during a restore.
+- **The confirmation binds to the artifact's SHA-256 and expires**, and both are
+  checked again by the executor as it claims the work. The phrase is a constant,
+  so storing the phrase proves nothing; the checksum is what makes a confirmation
+  for one archive unable to restore another.
+- **Every state change is a conditional UPDATE naming its `from` states.** There
+  is no `setState`. That one mechanism is what makes a replay, a double-click and
+  two executor replicas all safe, and a convenience setter would quietly remove
+  it from all three.
+
 One more, learned in Phase 3C:
 
 - An operational-event CODE is part of the schema, not a string. `operational_events`
@@ -126,7 +158,8 @@ packages/i18n        the shared Persian catalogue, used by BOTH server and web
 apps/api             src/modules/<context>/{domain,application,infrastructure}
                      src/surfaces/{telegram,web}   src/infrastructure/  (adapters)
                      entrypoints: main.ts (api), main.worker.ts (worker),
-                                  main.monitor.ts (panel health monitor)
+                                  main.monitor.ts (panel health monitor),
+                                  main.recovery.ts (the destructive restore lane)
 apps/web             React admin shell; may import @nexa/contracts and @nexa/i18n only
 ```
 
