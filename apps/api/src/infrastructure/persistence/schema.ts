@@ -39,6 +39,11 @@ import {
   PROVIDER_FAILURE_KINDS,
   PROVIDER_TYPES,
   SOURCE_SURFACES,
+  RECOVERY_ACTIVE_DESTRUCTIVE_STATES,
+  RECOVERY_FAILURE_CODES,
+  RECOVERY_SOURCES,
+  RECOVERY_STAGES,
+  RECOVERY_STATES,
   TEMPLATE_REVISION_ACTIONS,
   TENANT_KINDS,
   TENANT_STATUSES,
@@ -50,7 +55,25 @@ import {
  * status four different ways — `active`, `فعال`, and two emoji-prefixed Persian
  * phrases — because nothing constrained the column.
  */
-function enumCheck(column: string, values: readonly string[]): SQL {
+/**
+ * What an enum literal may contain.
+ *
+ * Letters, digits, underscore, hyphen and DOT. The dot arrived with
+ * `RECOVERY_FAILURE_CODES`, whose members are dotted (`recovery.cutover_failed`)
+ * for the same reason error codes and operational event codes are — they are
+ * namespaced, and flattening them to match a character class would make the
+ * database's vocabulary differ from the contract's.
+ *
+ * Widening it is safe for the reason the original class was narrow: this is not
+ * the escaping. The `'` doubling below is the escaping, and it still runs. This
+ * pattern is the assertion that the input is a compile-time enum literal and
+ * not something derived at runtime, and a dot does not weaken that — a quote, a
+ * backslash, a space, a semicolon and a comment marker are all still refused,
+ * which `tests/unit/schema-ddl-guards.test.ts` asserts one character at a time.
+ */
+const ENUM_LITERAL = /^[A-Za-z0-9_.-]+$/;
+
+export function enumCheck(column: string, values: readonly string[]): SQL {
   // This is the only sql.raw in the codebase. Every argument today is a
   // compile-time literal from a contract enum, which is what makes it safe — so
   // assert that rather than trust it, and escape anyway. A runtime-derived list
@@ -60,7 +83,7 @@ function enumCheck(column: string, values: readonly string[]): SQL {
   }
   const list = values
     .map((value) => {
-      if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+      if (!ENUM_LITERAL.test(value)) {
         throw new Error(`enumCheck: "${value}" is not a plain enum literal.`);
       }
       return `'${value.replace(/'/g, "''")}'`;
@@ -76,13 +99,13 @@ function enumCheck(column: string, values: readonly string[]): SQL {
  * passes on NULL. Relying on that is correct SQL and completely invisible to a
  * reader, so it is stated: this column holds one of these values, or nothing.
  */
-function nullableEnumCheck(column: string, values: readonly string[]): SQL {
+export function nullableEnumCheck(column: string, values: readonly string[]): SQL {
   if (!/^[a-z_][a-z0-9_]*$/.test(column)) {
     throw new Error(`nullableEnumCheck: "${column}" is not a plain column name.`);
   }
   const list = values
     .map((value) => {
-      if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+      if (!ENUM_LITERAL.test(value)) {
         throw new Error(`nullableEnumCheck: "${value}" is not a plain enum literal.`);
       }
       return `'${value.replace(/'/g, "''")}'`;
@@ -1644,6 +1667,203 @@ export const backupRuns = pgTable(
   ],
 );
 
+/**
+ * A recovery request: one attempt to make this installation be a backup again.
+ *
+ * Separate from `backup_runs` on purpose, and `docs/disaster-recovery-audit.md`
+ * § MISSING-2 records the reasoning: a backup run is an artifact's history and a
+ * recovery request is an operation against the installation, and the backup
+ * lock is a partial unique index over `state = 'RUNNING'` that a recovery row
+ * would contend with for no reason.
+ *
+ * `tenant_id NOT NULL` even though a backup covers every tenant. A backup is a
+ * dump of the whole database, so "which tenant may act on it" has one
+ * defensible answer — the tenant that IS the installation — and making that a
+ * column rather than a convention is what turns cross-scope isolation into a
+ * row-level predicate a test can guess against.
+ */
+export const recoveryRequests = pgTable(
+  'recovery_requests',
+  {
+    /** UUIDv7. Appears in a URL, a confirmation binding and a journal file. */
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    source: text('source').notNull(),
+    state: text('state').notNull(),
+    stage: text('stage').notNull(),
+    createdAt: timestamptz('created_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+    finishedAt: timestamptz('finished_at'),
+
+    /**
+     * Who asked, captured as a label at the time.
+     *
+     * A label as well as an id, so the row still names somebody after a rename
+     * or a deletion — the same rule the audit log follows, and for the same
+     * reason: a recovery is read long after the fact.
+     */
+    requestedByAdminId: uuid('requested_by_admin_id'),
+    requestedByLabel: text('requested_by_label'),
+    correlationId: text('correlation_id'),
+
+    /**
+     * The lease, exactly as `backup_runs` holds one.
+     *
+     * A recovery outlives any request, and two executor replicas are the normal
+     * case on a rolling update. A stale lease is taken over by FAILING the
+     * abandoned request, never by adopting it: its candidate database and its
+     * workspace belong to a process that may still be writing them.
+     */
+    leaseOwner: text('lease_owner'),
+    leaseHeartbeatAt: timestamptz('lease_heartbeat_at'),
+
+    /**
+     * Where the uploaded bytes live while this request is alive.
+     *
+     * A path on the installation's own disk, under `RECOVERY_WORK_DIR`, with a
+     * random directory name. Recorded so a crashed executor's debris is
+     * nameable; removed on every terminal path. Not a secret, and not derived
+     * from anything a caller sent.
+     */
+    workspacePath: text('workspace_path'),
+    /** Bytes received, and the digest of the ENCRYPTED container as received. */
+    uploadBytes: bigint('upload_bytes', { mode: 'bigint' }),
+    uploadSha256: text('upload_sha256'),
+    /**
+     * What the browser called the file. Recorded, and acted on NOWHERE.
+     *
+     * Not the path, not the format decision, not the content type. It exists so
+     * an operator can recognise which file they sent, and it is bounded and
+     * sanitised before storage because it is attacker-chosen text that gets
+     * rendered.
+     */
+    clientFilename: text('client_filename'),
+
+    /** From the manifest, once the archive has been authenticated. */
+    backupId: uuid('backup_id'),
+    artifactChecksum: text('artifact_checksum'),
+    archiveKeyId: text('archive_key_id'),
+    verifiedAt: timestamptz('verified_at'),
+    /** The verification and restore-test facts, as recorded. */
+    verification: jsonb('verification'),
+    restoreTest: jsonb('restore_test'),
+
+    /**
+     * The confirmation BINDING. The phrase itself is never stored.
+     *
+     * The phrase is a constant, so storing it would prove nothing; what has to
+     * be durable is what the confirmation was for. `confirmed_checksum` is
+     * re-compared against the artifact at execution time, which is what makes a
+     * confirmation for backup A unable to restore backup B.
+     */
+    confirmedAt: timestamptz('confirmed_at'),
+    confirmedByAdminId: uuid('confirmed_by_admin_id'),
+    confirmedSessionId: uuid('confirmed_session_id'),
+    confirmedChecksum: text('confirmed_checksum'),
+    confirmationExpiresAt: timestamptz('confirmation_expires_at'),
+
+    /** The mandatory pre-restore backup of the installation being replaced. */
+    preRestoreBackupId: uuid('pre_restore_backup_id'),
+
+    /**
+     * The candidate database, and the name the outgoing one was renamed to.
+     *
+     * `displaced_database` is the single most important field on this row after
+     * a cutover: it is how an operator knows production is the new database and
+     * where the old one still is. Not a secret — it is a database name on their
+     * own server — and without it a manual rollback is guesswork.
+     */
+    candidateDatabase: text('candidate_database'),
+    displacedDatabase: text('displaced_database'),
+    cutoverAt: timestamptz('cutover_at'),
+
+    /** A value from `RECOVERY_FAILURE_CODES`. Never a message. */
+    failureCode: text('failure_code'),
+  },
+  (table) => [
+    check('recovery_requests_source_check', enumCheck('source', RECOVERY_SOURCES)),
+    check('recovery_requests_state_check', enumCheck('state', RECOVERY_STATES)),
+    check('recovery_requests_stage_check', enumCheck('stage', RECOVERY_STAGES)),
+    check(
+      'recovery_requests_failure_code_check',
+      nullableEnumCheck('failure_code', RECOVERY_FAILURE_CODES),
+    ),
+    /**
+     * A terminal request has an end; a live one does not. Both directions.
+     *
+     * The interesting failure is the second: a live request with `finished_at`
+     * set is a request something forgot to close, and while it is in a
+     * quiescing state it is holding the installation's writes shut.
+     */
+    check(
+      'recovery_requests_finished_at_check',
+      sql`(state IN ('SUCCEEDED', 'FAILED')) = (finished_at IS NOT NULL)`,
+    ),
+    /**
+     * A cutover implies a displaced database, and vice versa.
+     *
+     * These two are how an operator learns which database is production. A row
+     * carrying one without the other is a row that cannot answer that, which is
+     * the worst state for the field that matters most after a failure.
+     */
+    check(
+      'recovery_requests_cutover_check',
+      sql`(cutover_at IS NULL) = (displaced_database IS NULL)`,
+    ),
+    /**
+     * A confirmation is all four fields or none of them.
+     *
+     * The binding is the security property, so a partial binding must not be
+     * representable: a row with `confirmed_at` and no `confirmed_checksum`
+     * would be a confirmation for anything.
+     */
+    check(
+      'recovery_requests_confirmation_check',
+      sql`num_nonnulls(confirmed_at, confirmed_by_admin_id, confirmed_checksum, confirmation_expires_at) IN (0, 4)`,
+    ),
+    /**
+     * ONE destructive recovery at a time, enforced by PostgreSQL.
+     *
+     * A partial unique index over a constant, exactly like the backup lock. Two
+     * executor replicas is the normal case on every rolling update and two
+     * operators pressing at once is the normal case in an incident; neither has
+     * to agree with the other about anything, because the second INSERT or
+     * UPDATE raises a unique violation.
+     *
+     * The predicate is the DESTRUCTIVE state set, not the live one: an
+     * artifact being verified or restore-tested changes nothing about the
+     * installation, so several of those at once are fine and only the chain
+     * past the confirmation is exclusive.
+     */
+    uniqueIndex('recovery_requests_single_destructive_idx')
+      .on(sql`(true)`)
+      .where(
+        sql.raw(
+          `state IN (${RECOVERY_ACTIVE_DESTRUCTIVE_STATES.map((state) => `'${state}'`).join(', ')})`,
+        ),
+      ),
+    /**
+     * The operator's list keyset: `(tenant_id, created_at, id)`, scope first.
+     *
+     * Declared HERE and not in `ONLINE_INDEXES`, unlike the panels and alerts
+     * keysets, and the difference is the table rather than the index. Those build
+     * concurrently because `botctl update` migrates while the outgoing release is
+     * still serving, so an ordinary `CREATE INDEX` lands a SHARE lock on a live
+     * table. This table is CREATED by the same migration: there is no live data
+     * to lock and nothing else can see it yet, so the build is instant and
+     * drizzle-kit's drift check can see the index — which the online ones
+     * deliberately cannot.
+     *
+     * `id` is in the index because it is in the ORDER BY. A btree serves the
+     * DESC scan of an ASC index backwards, so this one index covers both the
+     * ordering and the `ROW(created_at, id) < ROW(...)` continuation.
+     */
+    index('recovery_requests_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+  ],
+);
+
 export const schema = {
   tenants,
   botInstances,
@@ -1675,6 +1895,7 @@ export const schema = {
   panelMonitorSchedule,
   panelMonitorTenants,
   backupRuns,
+  recoveryRequests,
 };
 
 /** Tables the database itself refuses to UPDATE or DELETE. */
