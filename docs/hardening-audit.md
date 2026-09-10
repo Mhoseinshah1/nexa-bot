@@ -456,7 +456,28 @@ Five failure modes have no test:
   ADR-0025 itself says needs three artifacts on disk at once;
 - Redis unreachable — readiness slows the database checkout and never the cache;
 - and the CLI, which had no test at all. **That one is already fixed** on the
-  Backup V1 branch; the rest are listed here.
+  Backup V1 branch.
+
+**Fixed on this branch**, and two of the four were defects rather than gaps:
+
+- `pg_terminate_backend` — a CONFIRMED defect. `pg` delivers a connection death as
+  an `'error'` EVENT and nothing listened, so it was an uncaught exception that
+  killed the API, the worker or the monitor outright, past the shutdown hooks. Two
+  listeners now, because the idle case and the checked-out case are delivered to
+  two different places and the obvious fix covers only one. Proved in a child
+  process, because "this process is still alive" is not assertable about one's own
+  runner.
+- disk exhaustion of `BACKUP_WORK_DIR` — a CONFIRMED defect. The workspace was
+  created between the RUNNING claim and the `try`, so a directory that could not be
+  created threw out of `run()`, recorded no FAILED row, opened no condition, sent no
+  notification, and left the one-backup-at-a-time lease held until it went stale.
+  An installation that silently stops taking backups. Now created inside the
+  recorded region.
+- a subprocess killed by timeout — the branch works; the `binDir` hook now has a
+  caller, and the two kill rules (prompt SIGTERM, SIGKILL backstop) have a case
+  each because one case covering both was falsifiable by neither.
+- Redis unreachable — covered by item F's readiness cases, which drive the real
+  service with the cache probe answering no.
 
 `.only`, `.skip`, `xit`, `expect(true)` and empty test bodies: **zero
 occurrences** outside the checker's own fixtures.

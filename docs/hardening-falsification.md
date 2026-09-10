@@ -353,6 +353,93 @@ ITERATES the list to assert consumers handle each kind, which cannot notice a ki
 nothing produces — remove the only producer of `AUTHENTICATION_REQUIRES_INTERACTION`
 and every consumer test still passes, because the list still contains it.
 
+## Item M — the failure modes nothing exercised
+
+Item M listed five failure modes with no test. The CLI was already fixed on the
+Backup V1 branch; Redis-unreachable is covered above as `F1-04`. These are the
+other three, and **two of them found defects rather than confirming rules.**
+
+| #    | Rule                                                                     | Mutation                                                | Named test                                                                                      | Result |
+| ---- | ------------------------------------------------------------------------ | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------ |
+| M-01 | An IDLE pooled connection's death does not kill the process              | delete `pool.on('error', report)`                       | `connection-death.test.ts` › does not kill a process whose IDLE pooled connection is terminated | KILLED |
+| M-02 | A connection killed MID-CHECKOUT does not kill the process either        | `pool.on('connect', …)` attaches nothing                | `connection-death.test.ts` › does not kill a process whose OPEN TRANSACTION loses its backend   | KILLED |
+| M-03 | A workspace that cannot be created FAILS the run rather than escaping it | create the workspace before the `try`, as it used to be | `backup.test.ts` › fails the run and delivers nothing when the work directory cannot be written | KILLED |
+| M-04 | A dump past its deadline is stopped PROMPTLY                             | delete `child.kill('SIGTERM')`                          | `backup.test.ts` › stops a dump that runs past its timeout, and kills the subprocess            | KILLED |
+| M-05 | A dump that IGNORES SIGTERM is killed anyway                             | delete the `SIGKILL` backstop timer                     | `backup.test.ts` › kills a dump that ignores SIGTERM                                            | KILLED |
+
+### M-01 and M-02 — the defect was that nobody was listening
+
+`pg_terminate_backend` appeared nowhere in the repository, and testing it found
+that `pg` delivers a connection death as an `'error'` EVENT while nothing in
+`apps/api/src` listened — no `pool.on('error')`, no `uncaughtException` handler.
+`EventEmitter` throws for an unlistened `'error'`, so the death was an uncaught
+exception and the process died, past every `try`/`catch` and past the shutdown
+hooks. Measured before the fix:
+
+    idle client        UNCAUGHT: terminating connection due to administrator command
+    open transaction   UNCAUGHT: Connection terminated unexpectedly
+
+The two rows are separate because the obvious fix covers only one of them. A
+listener on the POOL handles an idle client, whose error `pg-pool` re-emits there;
+it does NOT handle a checked-out client, because `pg-pool` removes its own listener
+for the duration of a checkout and the socket error arrives in that window, before
+the transaction's `finally` can release. Measured: with only `pool.on('error')` the
+idle case survives and the in-transaction case still exits. M-02 is the row that
+proves the second listener is not redundant.
+
+These cases spawn a CHILD PROCESS, because the property is "this process is still
+alive" and no test can assert that about its own runner — vitest handles the
+uncaught exception, reports it beside a test that may still pass, and carries on.
+The child exits 9 on an uncaught exception, 8 if a transaction survived its own
+backend, 7 if the pool could not reconnect, and 0 only when the death was
+reported, the work failed cleanly and a later checkout worked.
+
+### M-03 — disk exhaustion made backups stop silently
+
+`workspaces.create(id)` was the statement between the RUNNING claim and the `try`.
+A work directory that could not be created threw out of `run()` and left the claim
+behind: no FAILED row, therefore no `backup.run_failed` condition and no
+notification, while the RUNNING row held the installation's one-backup-at-a-time
+lease until it went stale. The only symptom was the absence of backups.
+
+The test uses ENOTDIR — a regular file occupying the path the work root needs —
+and not a read-only directory. `chmod 0500` was the first attempt and proved
+nothing: these suites run as root, root ignores directory permissions, and the
+backup SUCCEEDED through a mode `0500` directory. **A test that can only pass as
+an unprivileged user is a test that does not run where it matters.**
+
+ENOSPC itself needs a size-limited filesystem and therefore mount privileges CI may
+not have, so it was exercised BY HAND against a 64 KiB tmpfs with the real
+`PostgresDatabaseTools`. `pg_dump` fails and the tool reports:
+
+    CODE: backup.tool_failed
+    MESSAGE: pg_dump did not complete, so this run produced no artifact.
+
+Classified, and with no path, no connection string and no errno handed onward. That
+throw happens inside the `try`, so it takes the recorded path the suite already
+asserts. A 1 MiB tmpfs was tried first and the dump FITTED — the development
+database dumps to 104 KiB — which is why the figure is 64 KiB.
+
+### M-04 and M-05 — one case that covered two rules covered neither
+
+M-04 first reported SURVIVED. Deleting `child.kill('SIGTERM')` left the timeout
+case green, because the SIGKILL backstop five seconds later still ends the child
+and the upper bound was 30s — wide enough to hide the difference between
+"terminated promptly" and "terminated five seconds late by the backstop". The bound
+is now 4s.
+
+The backstop then needed its own case, because `sleep` dies on SIGTERM: with one
+case, deleting the backstop was invisible. M-05's child traps SIGTERM and keeps
+going, which is the state the backstop exists for.
+
+Its stdio is redirected to `/dev/null` before it sleeps, and that is load-bearing:
+the production code settles on the child's `close` event, which waits for the stdio
+pipes as well as the exit, so an orphan still holding the inherited stdout keeps
+the promise pending for ever. The first version of the fixture backgrounded `sleep`
+with the pipes inherited and the test hung for its full sixty seconds with the
+shell already killed on time. `pg_dump` and `pg_restore` leave no such descendant,
+which is why that is the fixture's problem and not the product's.
+
 ## Method notes
 
 - Every row was run against a COMMITTED tree. The harness refuses a dirty target
