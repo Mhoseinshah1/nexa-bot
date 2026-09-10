@@ -212,6 +212,44 @@ export const PLATFORM_ERROR_CODES = {
    * would be worse than saying so.
    */
   BACKUP_ALREADY_RUNNING: 'backup.already_running',
+
+  /**
+   * A recovery refused something, and the response says only which class.
+   *
+   * ONE code at the HTTP boundary, with the specific `RECOVERY_FAILURE_CODES`
+   * value on the recovery ROW where an authenticated operator reads it beside
+   * the request it belongs to. The split matters because these endpoints are the
+   * ones somebody probes: a distinct HTTP code per cause would let a caller
+   * holding an archive learn, one request at a time, whether it was the key, the
+   * format or the checksum that stopped them — which is the oracle
+   * `BACKUP_ARCHIVE_AUTH_FAILED` exists to avoid, rebuilt at a different layer.
+   */
+  RECOVERY_REFUSED: 'recovery.refused',
+  /**
+   * A destructive recovery already holds the installation.
+   *
+   * A CONFLICT, not a validation error: the caller did nothing wrong, and one
+   * destructive recovery at a time is the invariant working rather than a
+   * failure. Raised from the partial unique index, so it is true across
+   * processes and replicas.
+   */
+  RECOVERY_ALREADY_ACTIVE: 'recovery.already_active',
+  /**
+   * The installation is refusing new durable writes while a recovery runs.
+   *
+   * Deliberately distinguishable from a stopped tenant. An operator who saw
+   * "this tenant is not accepting work" during a restore would go and look at
+   * the tenant, which is the one place the answer is not.
+   */
+  RECOVERY_QUIESCED: 'recovery.quiesced',
+  /**
+   * The typed confirmation is missing, wrong, expired, for another artifact, or
+   * has already been spent.
+   *
+   * One code for all five. The differences are useful to an operator reading
+   * their own recovery row, and to nobody else.
+   */
+  RECOVERY_CONFIRMATION_INVALID: 'recovery.confirmation_invalid',
 } as const;
 
 /**

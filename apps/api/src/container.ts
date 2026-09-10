@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { MAX_REQUESTS_PER_PROBE } from '@nexa/contracts';
 import type {
@@ -76,6 +77,8 @@ import { MonitorProfileService } from './modules/platform/panels/application/mon
 import { BackupService } from './modules/platform/backup/application/backup.service.js';
 import { BackupScheduler } from './modules/platform/backup/application/backup-scheduler.js';
 import { DrizzleBackupRunRepository } from './modules/platform/backup/infrastructure/drizzle-backup-run.repository.js';
+import { DrizzleRecoveryRequestRepository } from './modules/platform/recovery/infrastructure/drizzle-recovery-request.repository.js';
+import type { InstallationWriteGate } from './infrastructure/persistence/write-gate.js';
 import { KeyringBackupArchiver } from './modules/platform/backup/infrastructure/archiver.js';
 import { PostgresDatabaseTools } from './modules/platform/backup/infrastructure/pg-tools.js';
 import { TelegramBackupDelivery } from './modules/platform/backup/infrastructure/telegram-backup-delivery.js';
@@ -320,7 +323,34 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   );
   const redis = createRedis(config.REDIS_URL);
 
-  const uow = new DrizzleUnitOfWork(database.db);
+  /*
+   * The recovery repository is built HERE, above the unit of work, because the
+   * unit of work's write gate reads it.
+   *
+   * That is the only unusual ordering in this container, and it is the shape of
+   * the dependency rather than a convenience: the quiesce has to be enforced
+   * where transactions are opened (ADR-0028 § 5), so the thing that answers
+   * "is the installation quiesced" must exist before the thing that opens them.
+   * It takes only the database handle, so there is nothing circular about it.
+   */
+  const recoveryRequests = new DrizzleRecoveryRequestRepository(database.db);
+  /*
+   * ONE gate implementation, shared by both chokepoints.
+   *
+   * The unit of work and the outbox relay both consult it, and they consult the
+   * SAME object rather than two closures over the same repository — because two
+   * closures is two places the predicate could be written, and the predicate is
+   * "are durable writes refused". A relay that answered that question
+   * differently from the unit of work would be a relay publishing during a
+   * cutover.
+   */
+  const writeGate: InstallationWriteGate = {
+    async quiescedBy(tx) {
+      const lock = await recoveryRequests.installationLock(tx);
+      return lock !== null && lock.quiescing ? lock.recoveryId : null;
+    },
+  };
+  const uow = new DrizzleUnitOfWork(database.db, writeGate);
   const tenants = new DrizzleTenantRepository(database.db);
   const botInstances = new DrizzleBotInstanceRepository(database.db, cipher);
 
@@ -429,6 +459,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       maxLagMs: config.OUTBOX_RELAY_MAX_LAG_MS,
     },
     database,
+    writeGate,
   );
 
   // The readiness computation and the adapters that answer its questions. The
@@ -850,6 +881,23 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     dumpTimeoutMs: config.BACKUP_DUMP_TIMEOUT_MS,
     restoreTimeoutMs: config.BACKUP_RESTORE_TIMEOUT_MS,
     binDir: config.BACKUP_PG_BIN_DIR === '' ? undefined : config.BACKUP_PG_BIN_DIR,
+    /*
+     * The migrator THIS release ships, located from this module's own file.
+     *
+     * Used only to migrate a restored CANDIDATE forward when its schema is
+     * behind (ADR-0028 § 7). Resolved relative to `container.js` rather than from
+     * the working directory or a configuration value, for the reason the build
+     * identity is read from the image: a path an operator could set is a path
+     * that can point at a different release's migrator, and migrating a
+     * candidate with the wrong release's migrations is how a recovery produces a
+     * database no version of this code can serve.
+     *
+     * `.js` because that is what is on disk at runtime in both modes — `dist`
+     * under node, and `tsx`'s loader resolves the same specifier in development.
+     */
+    migratorEntrypoint: fileURLToPath(
+      new URL('./infrastructure/persistence/migrate.js', import.meta.url),
+    ),
   });
   const backupArchiver = new KeyringBackupArchiver(keyring);
   const backup = new BackupService({
