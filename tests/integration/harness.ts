@@ -106,6 +106,14 @@ export async function createTestContext(
   return {
     container,
     async reset() {
+      // In-memory container state has to be reset too, not just the tables.
+      // `installationTenantId` is set by `resolveInstallationTenant` at a process
+      // boot and by `pointAtInstallation` in the backup CLI, and it outlived
+      // `reset()` — so one case that resolved it left the next case's container
+      // already pointed at a tenant, and a case asserting the unresolved STARTING
+      // state failed depending on file order. Reset here rather than in the cases,
+      // because a fixture a case has to remember to clean is one some case will not.
+      container.setInstallationTenant(null);
       await resetDatabase(container.database.db);
       await seed(container.database.db, container.cipher);
     },
