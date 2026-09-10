@@ -6,6 +6,7 @@ import {
   PLATFORM_ERROR_CODES,
   RECOVERY_CONFIRMATION_TTL_MS,
   cutoverPermitted,
+  uuidV7Schema,
   type ActorContext,
   type AuditWriter,
   type Clock,
@@ -569,6 +570,22 @@ export class RecoveryService {
   }
 
   private async require(scope: TenantContext, id: string): Promise<RecoveryRequestRow> {
+    /*
+     * VALIDATED before it reaches a query, and this is not belt-and-braces.
+     *
+     * `recovery_requests.id` is a `uuid` column, so an id that is not one arrives
+     * at PostgreSQL as 22P02 and comes back through the error filter as a 500 —
+     * which lets any authenticated caller turn arbitrary text into an internal
+     * error by putting it in the path. The integration suite found exactly that:
+     * `GET /recoveries/not-a-uuid` answered 500 before this line existed.
+     *
+     * It is the same defect `panels.controller.ts` records having fixed in its
+     * cursor, one layer down, and the reason this check is HERE rather than in the
+     * controller is that the service is what every surface goes through.
+     */
+    if (!uuidV7Schema.safeParse(id).success) {
+      throw errors.notFound(PLATFORM_ERROR_CODES.RECOVERY_REFUSED, 'No such recovery request.');
+    }
     const row = await this.deps.requests.byId(scope.tenantId, id);
     if (row === null) {
       // NOT_FOUND, never PERMISSION_DENIED, for an id belonging to another

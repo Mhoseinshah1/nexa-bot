@@ -155,6 +155,27 @@ class FakeRuns implements BackupRunRepository {
     return this.reclaimed;
   }
 
+  /*
+   * The three methods the Web history needs, which this fake does not exercise.
+   *
+   * Present so the class satisfies the port rather than being cast to it: a
+   * `as unknown as BackupRunRepository` would make every FUTURE method optional
+   * here too, and the next one added would be missing from this fake silently.
+   * They throw rather than returning empty, so a case that started depending on
+   * one fails loudly instead of asserting against a fabricated answer.
+   */
+  async page(): Promise<{ rows: readonly BackupRunRow[]; nextCursor: string | null }> {
+    throw new Error('the pipeline fake does not serve the Web history');
+  }
+
+  async countUnknownDeliveries(): Promise<number> {
+    throw new Error('the pipeline fake does not count deliveries');
+  }
+
+  async active(): Promise<BackupRunRow | null> {
+    throw new Error('the pipeline fake does not report the lock holder');
+  }
+
   async latest(): Promise<readonly BackupRunRow[]> {
     return [...this.rows.values()];
   }
