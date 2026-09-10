@@ -178,7 +178,9 @@ ever branches on a provider type.
   server consults it. It is vacuous today, which is exactly when the gate is
   cheap to install.
   **Fixed on this branch**: `attemptProbe` asks `supports('HEALTH_CHECK')` before
-  the credential read and before the URL check, and refuses with a new
+  the credential read and before the URL check — the first version sat BELOW the
+  read while claiming otherwise, which the review caught, and a case now counts
+  `credentials.read` calls so the claim cannot drift again. It refuses with a new
   `CAPABILITY_UNSUPPORTED` deferral reason (migration 0028 widens the CHECK
   constraint, without which the reason is unwritable and every such panel is
   recorded as `INTERNAL_ERROR`). The operator's path reports

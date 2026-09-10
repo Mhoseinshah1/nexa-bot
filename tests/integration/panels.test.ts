@@ -1144,6 +1144,73 @@ describe('panels', () => {
     ).rejects.toMatchObject({ code: 'panel.capability_unsupported' });
   });
 
+  it('does not decrypt a credential for a probe that cannot happen', async () => {
+    /*
+     * The other half of the placement, and the half the refusal code cannot prove.
+     *
+     * Reporting `capability_unsupported` says only which branch WON. It is equally
+     * satisfied by a gate that sits below `credentials.read`, decrypts the panel's
+     * password, and then refuses — which is what the first version of this gate did
+     * while a comment claimed otherwise.
+     *
+     * `credentials.read` is the only function in this codebase that produces a
+     * panel credential in plaintext, so this counts its calls: zero is the
+     * assertion. A real credential is configured, so a read would succeed if one
+     * were made.
+     */
+    const { view } = await create(owner, tenantA, {
+      credentials: { username: USERNAME, password: PASSWORD },
+    });
+
+    const store = new DrizzlePanelCredentialStore(ctx.container.database.db, ctx.container.cipher);
+    let decryptions = 0;
+    // `Object.create` over the real instance, so `write` and anything else on the
+    // prototype stays real and only `read` is observed. A spread would drop every
+    // prototype method — the same trap `adapterWith` exists for.
+    const counting = Object.create(store) as DrizzlePanelCredentialStore;
+    counting.read = async (scope, panelId) => {
+      decryptions += 1;
+      return store.read(scope, panelId);
+    };
+
+    const service = new PanelService({
+      repository: new DrizzlePanelRepository(ctx.container.database.db),
+      credentials: counting,
+      guard: ctx.container.guard,
+      scopeActivity: ctx.container.tenants,
+      audit: ctx.container.audit,
+      opsLog: ctx.container.opsLog,
+      conditions: new DrizzleOperationalConditionReader(ctx.container.database.db),
+      sessions: ctx.container.sessions,
+      uow: ctx.container.uow,
+      idempotency: ctx.container.idempotency,
+      clock: ctx.container.clock,
+      ids: ctx.container.ids,
+      http: new SafeHttpClient({
+        allowLoopback: true,
+        totalTimeoutMs: 1_000,
+        maxResponseBytes: 1_024,
+        maxRetries: 0,
+      }),
+      urlPolicy: { allowLoopback: true },
+      probeCooldownMs: 0,
+      probeBudget: { capacity: 10_000, refillPerMs: 1 },
+      adapters: (type: ProviderType) => adapterWith(type, { supports: () => false }),
+      cadence: {
+        healthyIntervalMs: 10 * 60 * 1000,
+        retryableIntervalMs: 2 * 60 * 1000,
+        nonRetryableIntervalMs: 60 * 60 * 1000,
+      },
+    });
+
+    await expect(
+      service.testConnection(tenantA, adminActorFor(owner), view.panel.id, {
+        idempotencyKey: key(),
+      }),
+    ).rejects.toMatchObject({ code: 'panel.capability_unsupported' });
+    expect(decryptions).toBe(0);
+  });
+
   it('records a probe outcome as health without carrying anything from the panel', async () => {
     const { view } = await create(owner, tenantA, {
       credentials: { username: USERNAME, password: PASSWORD },

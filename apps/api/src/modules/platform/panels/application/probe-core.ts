@@ -134,7 +134,6 @@ export async function attemptProbe(
     };
   }
 
-  const stored = await deps.credentials.read(tenant, panelId);
   // The adapter is resolved BEFORE anything is spent, and it refuses a provider
   // type it cannot operate. A panel that cannot be operated does not get a
   // probe attempt, a claim or a budget token.
@@ -151,9 +150,18 @@ export async function attemptProbe(
    * installing it after a provider that cannot health-check exists means
    * discovering the gap through a panel whose health never updates.
    *
-   * Before the credential read and before the URL check, because it is the
-   * cheapest refusal of the three and the only one that cannot change: the
-   * others depend on stored state, this depends on code.
+   * ABOVE the credential read, and that placement is the rule rather than a
+   * preference. `credentials.read` is the only function in this codebase that
+   * produces a panel credential in plaintext — it decrypts an AES-GCM envelope —
+   * and doing that for a call that can never be made materialises somebody's panel
+   * password for nothing. The first version of this gate sat below the read and a
+   * comment claimed otherwise; the review that caught it is why the claim and the
+   * code now agree.
+   *
+   * It is also the cheapest refusal and the only one that cannot change: the other
+   * two depend on stored state, this depends on code. So when a panel is wrong in
+   * two ways at once, this is the one worth telling the operator about — setting a
+   * credential would change nothing.
    */
   if (!provider.supports('HEALTH_CHECK')) {
     return {
@@ -162,6 +170,7 @@ export async function attemptProbe(
     };
   }
 
+  const stored = await deps.credentials.read(tenant, panelId);
   const target = toProviderCredentials(stored, provider.descriptor.credentialShape);
   if (target === null) return { probed: false, refusal: { kind: 'CREDENTIALS_MISSING' } };
 

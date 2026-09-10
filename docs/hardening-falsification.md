@@ -309,7 +309,8 @@ lands between them.
 | E1-02 | The operator is TOLD, rather than getting a silent 200          | the `CAPABILITY_UNSUPPORTED` branch's condition → `false`         | `panels.test.ts` › refuses to test a panel whose adapter does not do health checks          | KILLED |
 | E1-03 | The refusal defers on the STABLE cadence                        | delete `case 'CAPABILITY_UNSUPPORTED':` from `deferralIntervalMs` | `probe-capability-gate.test.ts` › is STABLE, not transient                                  | KILLED |
 | E1-04 | The scheduler records the reason it actually had                | `deferralReasonOf` returns `'INTERNAL_ERROR'` for it              | `panel-monitor.test.ts` › does not probe a provider whose adapter does not do health checks | KILLED |
-| E1-05 | The gate sits ABOVE the credential read                         | move the gate below `toProviderCredentials`                       | `panels.test.ts` › reports the capability refusal ahead of a missing credential             | KILLED |
+| E1-05 | The capability refusal wins over a missing credential           | move the gate below `toProviderCredentials`                       | `panels.test.ts` › reports the capability refusal ahead of a missing credential             | KILLED |
+| E1-06 | No credential is DECRYPTED for a probe that cannot happen       | move the gate below `credentials.read`                            | `panels.test.ts` › does not decrypt a credential for a probe that cannot happen             | KILLED |
 | F1-01 | Only a REQUIRED dependency being down makes a process not ready | drop `&& d.required !== false` from the aggregation               | `readiness-requirements.test.ts` › is STILL READY when Redis is down, and reports it down   | KILLED |
 | F1-02 | Redis is declared NOT required                                  | `this.timed('redis', false, …)` → `true`                          | `readiness-requirements.test.ts` › is STILL READY when Redis is down, and reports it down   | KILLED |
 | F1-03 | An UNSTATED requirement counts as required                      | `required !== false` → `required === true`                        | `readiness-requirements.test.ts` › treats an UNSTATED requirement as required               | KILLED |
@@ -335,6 +336,24 @@ production change that was correct. `adapterWith` in `tests/integration/harness.
 assigns onto the real instance instead. The bad version of this bug is the one
 where the test keeps passing — which is what a spread would do for any future
 method no test happens to exercise.
+
+### E1-05 said more than it proved, and E1-06 is the row that proves it
+
+E1-05 was first written as "the gate sits ABOVE the credential read", and the code
+did not do that: `credentials.read` ran first and the gate sat above
+`toProviderCredentials`, an in-memory shape mapping. The comment beside it asserted
+the placement it did not have, and the row asserted a falsification it had not
+performed — the mutation only changes which refusal is REPORTED, so the named case
+cannot distinguish the two placements at all.
+
+That matters because `credentials.read` is the only function in this codebase that
+produces a panel credential in plaintext: it decrypts an AES-GCM envelope. Doing
+that on every monitor tick for a provider whose adapter can never be asked
+materialises somebody's panel password for nothing.
+
+The gate moved above the read, and E1-06 counts the calls: zero, with a real
+credential configured so a read would have succeeded. A refusal CODE can never
+prove this — it says which branch won, not what was spent getting there.
 
 ### F1-03 is the row that needed the production code changed to be testable
 
