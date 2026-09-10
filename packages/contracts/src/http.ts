@@ -1228,7 +1228,16 @@ export const backupRunSummarySchema = z.object({
   verifiedAt: z.iso.datetime().nullable(),
   deliveryState: z.enum(BACKUP_DELIVERY_STATES),
   deliveryAttemptedAt: z.iso.datetime().nullable(),
-  deliveryDetail: z.string().nullable(),
+  /**
+   * WHETHER the delivery recorded a detail, never the detail.
+   *
+   * `backup_runs.delivery_detail` is an `Error.message` from the Telegram
+   * transport, and its commonest value is an ENOENT naming the absolute path of
+   * an encrypted archive. That is the same uncontrolled-string class
+   * `failureCode` below exists to keep out of this response, and it was let
+   * through one field away from the rule that excludes it.
+   */
+  deliveryDetailPresent: z.boolean(),
   /**
    * The failure CODE, and never the failure MESSAGE.
    *
@@ -1241,7 +1250,15 @@ export const backupRunSummarySchema = z.object({
    */
   failureCode: z.string().nullable(),
   cleanupOk: z.boolean(),
-  cleanupDetail: z.string().nullable(),
+  /**
+   * How many artefacts cleanup could not remove. Never their paths.
+   *
+   * The paths are absolute locations of undeleted PLAINTEXT dumps. An operator
+   * needs to know that some remain — which this says — and where they are is a
+   * question for the operational log and the host, not for a body any
+   * `backup.view` holder can read.
+   */
+  cleanupLeftovers: z.number().int().nonnegative(),
   /** Whether the encrypted archive is still on this host and downloadable. */
   archiveAvailable: z.boolean(),
 });

@@ -346,6 +346,8 @@ export const WEB_FA = {
   'web.recovery_delivery_failed': 'ناموفق',
   'web.recovery_delivery_unknown': 'نامعلوم',
   'web.recovery_cleanup_incomplete': 'پاک‌سازی ناقص',
+  'web.recovery_cleanup_hint':
+    'چند فایل موقت روی سرور باقی مانده‌اند و ممکن است دامپ رمزنشده باشند. مسیرها در گزارش عملیاتی سرور است، نه اینجا.',
   'web.recovery_download': 'دریافت آرشیو رمزشده',
   'web.recovery_download_gone': 'فایل محلی دیگر موجود نیست',
   'web.recovery_download_gone_hint':

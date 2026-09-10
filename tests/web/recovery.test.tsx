@@ -49,10 +49,10 @@ function run(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     verifiedAt: '2026-09-09T02:02:00.000Z',
     deliveryState: 'SUCCEEDED',
     deliveryAttemptedAt: '2026-09-09T02:03:00.000Z',
-    deliveryDetail: null,
+    deliveryDetailPresent: false,
     failureCode: null,
     cleanupOk: true,
-    cleanupDetail: null,
+    cleanupLeftovers: 0,
     archiveAvailable: true,
     ...overrides,
   };
@@ -301,9 +301,7 @@ describe('the recovery page', () => {
   });
 
   it('says a cleanup did not complete, because plaintext may still be on disk', async () => {
-    stubApi(
-      routes({ runs: [run({ cleanupOk: false, cleanupDetail: '/var/lib/nexa/backups/x' })] }),
-    );
+    stubApi(routes({ runs: [run({ cleanupOk: false, cleanupLeftovers: 2 })] }));
     renderPage(<RecoveryPage route={route} permissions={ALL} />);
     expect(await screen.findByText('پاک‌سازی ناقص')).toBeInTheDocument();
   });

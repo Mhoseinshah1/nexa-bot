@@ -276,10 +276,10 @@ const backupRun = (id, over = {}) => ({
   verifiedAt: iso(178),
   deliveryState: 'SUCCEEDED',
   deliveryAttemptedAt: iso(177),
-  deliveryDetail: null,
+  deliveryDetailPresent: false,
   failureCode: null,
   cleanupOk: true,
-  cleanupDetail: null,
+  cleanupLeftovers: 0,
   archiveAvailable: true,
   ...over,
 });
@@ -551,7 +551,7 @@ export const ROUTES = {
       backupRun('01a05e35-c9ad-7e93-bef3-1ed9b5529302', {
         startedAt: iso(1620),
         deliveryState: 'OUTCOME_UNKNOWN',
-        deliveryDetail: null,
+        deliveryDetailPresent: false,
       }),
       backupRun('01a05e35-c9ad-7e93-bef3-1ed9b5529303', {
         startedAt: iso(3060),
@@ -574,7 +574,7 @@ export const ROUTES = {
         startedAt: iso(5900),
         trigger: 'PRE_RESTORE',
         cleanupOk: false,
-        cleanupDetail: '/var/lib/nexa/backups/01a05e35/dump.sql',
+        cleanupLeftovers: 1,
       }),
     ],
     nextCursor: null,

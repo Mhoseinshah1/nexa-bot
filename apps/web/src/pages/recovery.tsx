@@ -352,7 +352,7 @@ function LastSuccess({
       */}
       {!newest.cleanupOk && (
         <Banner tone="warn" title={t('web.recovery_cleanup_incomplete')}>
-          {newest.cleanupDetail ?? ''}
+          {t('web.recovery_cleanup_hint')}
         </Banner>
       )}
       <DownloadControl run={newest} mayDownload={mayDownload} />

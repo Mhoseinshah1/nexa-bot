@@ -395,10 +395,31 @@ function toRunSummary(view: BackupRunView): BackupRunSummary {
     verifiedAt: run.verifiedAt?.toISOString() ?? null,
     deliveryState: run.deliveryState,
     deliveryAttemptedAt: run.deliveryAttemptedAt?.toISOString() ?? null,
-    deliveryDetail: run.deliveryDetail,
+    /*
+     * WHETHER there is a delivery detail, never the detail.
+     *
+     * `deliveryDetail` is an `Error.message` from the Telegram transport, which
+     * for the commonest failure is `ENOENT: no such file or directory, open
+     * '/var/lib/nexa/backups/<id>/archive.nxb'` — an absolute path to an
+     * encrypted archive, handed to every LOW `backup.view` holder. It is the same
+     * uncontrolled-message class this builder already excludes `failureMessage`
+     * for; the exclusion was applied to one column and not to the one beside it.
+     * The detail stays on the row and in the operational log, where
+     * `opslog.view` is the permission that governs it.
+     */
+    deliveryDetailPresent: run.deliveryDetail !== null,
     failureCode: run.failureCode,
     cleanupOk: run.cleanupOk,
-    cleanupDetail: run.cleanupDetail,
+    /*
+     * The COUNT of things cleanup could not remove, never their paths.
+     *
+     * `cleanupDetail` is the survivor list from the workspace — absolute paths to
+     * UNDELETED PLAINTEXT DATABASE DUMPS. An operator needs to know some remain,
+     * which the count and the flag say; where they are is an answer for the
+     * operational log and the host, not for a JSON body readable with the lowest
+     * permission in the catalogue and rendered into a browser.
+     */
+    cleanupLeftovers: run.cleanupDetail === null ? 0 : run.cleanupDetail.split(', ').length,
     archiveAvailable: view.archiveAvailable,
   };
 }
