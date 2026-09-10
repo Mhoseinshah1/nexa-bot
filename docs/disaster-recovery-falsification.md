@@ -193,3 +193,44 @@ written `ON CONFLICT DO NOTHING`. The role never existed, so the assertion
 counted the permissions of nothing. Measured: with `WHERE is_system = true`
 deleted from `0011`, the case passed. The fixture now lives in the other tenant
 and its existence is asserted before the migration runs.
+
+### The Codex round on the hotfix
+
+One finding, and it was a real one: `0031`'s journal `when` was stamped
+1789152375597 — a day ahead of the commit, reached by adding 86_400_000 to
+0030's value to be "safely after" it. `drizzle-orm`'s migrator decides what is
+pending by reading ONE row, the greatest `created_at` in
+`drizzle.__drizzle_migrations`, and applying every entry whose `when` exceeds it;
+nothing compares indexes, tags or hashes. A future stamp therefore raises that
+watermark past every timestamp `drizzle-kit generate` would produce for the next
+nineteen hours, and the next migration — Phase 4A's, in this session — would have
+been SKIPPED in silence on every database that had applied 0031. No error, and
+`pnpm db:check` would still have passed, because the schema file and the
+migration files agree with each other; only the database would be behind.
+
+Confirmed by reading the migrator rather than by argument, fixed by stamping the
+entry at the moment it was written, and the two databases that had already
+recorded the bad value had that row removed so the corrected entry applied.
+
+| #    | Rule                                                     | Mutation                                                       | Named test                                                                                           | Result |
+| ---- | -------------------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------ |
+| G-08 | A journal entry is never stamped in the future           | `_journal.json`: 0031's `when` back to 1789152375597           | `migration-journal.test.ts` › never stamps a migration in the future                                 | KILLED |
+| G-09 | `when` strictly increases, because it IS the ordering    | `_journal.json`: 0031's `when` set equal to 0030's             | `migration-journal.test.ts` › has a strictly increasing `when`, which is what the migrator orders by | KILLED |
+| G-10 | The journal names exactly the migration files that exist | `_journal.json`: drop the 0031 entry, leaving an orphan `.sql` | `migration-journal.test.ts` › names exactly the migration files that exist                           | KILLED |
+
+**Not a mutation row, and said so rather than dressed up as one.**
+`tests/integration/migration-ordering.test.ts` demonstrates the skip itself
+against a real PostgreSQL and the real migrator: one release applies a migration
+stamped a day ahead, the next release adds a correct one beside it, and the
+second table is simply absent — permanently, across re-runs. No mutation of this
+repository's code can kill that test, because it characterises a dependency
+rather than a rule of ours, so it earns no row above. It exists because the rules
+in G-08..G-10 are conventions, and a convention whose consequence lives only in a
+comment is a convention somebody relaxes.
+
+Its first version was WRONG in a way worth recording: it wrote both migrations
+into one folder and migrated once, and the later migration ran. On a virgin
+database `lastDbMigration` is undefined and the migrator's condition
+short-circuits to true, so every entry runs whatever its `when`. The future stamp
+costs a fresh installation nothing — which is precisely why CI was green on it,
+and why the defect only reaches a database that has already applied the bad row.
