@@ -121,9 +121,60 @@ COPY --from=builder --chown=node:node /src/apps/web/dist ./web
 # checkout the production host is not required to have.
 COPY --from=builder --chown=node:node /src/deploy ./deploy
 
+# THE POSTGRESQL CLIENT TOOLS, at the server's major version.
+#
+# `pg_dump`, `pg_restore` and `psql` are not optional extras here: the backup
+# pipeline shells out to them for every backup, and the recovery executor's
+# entire job — create a candidate, restore into it, inspect it, rename it into
+# place — is those three binaries. Without them the Web Admin offers four
+# controls that each end in a failed run, and the `recovery` container has
+# nothing it can do. This is Backup V1's dependency; it becomes operator-facing
+# here, which is why it is closed here.
+#
+# VERSION 16, from PGDG, not bookworm's own 15. `pg_dump` refuses a server newer
+# than itself, and `deploy/compose.yml` runs `postgres:16-alpine` — so the
+# distribution's client would fail on the very first dump with a version error.
+# `PG_MAJOR` is asserted against the compose image by a unit test, so the two
+# cannot drift apart silently.
+#
+# The keyring is fetched over HTTPS and dearmored to a file `apt` is told to
+# trust for this one repository, rather than added to the global trust store.
+# `gnupg` and `curl` go again in the same layer, so neither is in the image.
+ARG PG_MAJOR=16
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl gnupg; \
+    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+      | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg; \
+    echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends "postgresql-client-${PG_MAJOR}"; \
+    apt-get purge -y --auto-remove curl gnupg; \
+    rm -rf /var/lib/apt/lists/*; \
+    pg_dump --version; \
+    pg_restore --version; \
+    psql --version
+
+# THE ARTIFACT DIRECTORIES, owned by the user that writes them.
+#
+# `deploy/compose.yml` mounts named volumes here. Docker seeds a fresh named
+# volume from the image's directory at that path — INCLUDING its ownership — and
+# creates a root-owned one if the path does not exist. The application runs as
+# `node` (uid 1000), so without this every backup and every upload fails with
+# EACCES on a correctly installed box: `mkdir` under a root-owned 0755 mount is
+# refused, and the failure looks like a bug in the pipeline rather than a
+# missing directory.
+#
+# 0700, because these hold encrypted archives and, briefly, decrypted database
+# dumps. Nothing else on the host has any business reading them.
+RUN mkdir -p /var/lib/nexa/backups /var/lib/nexa/recovery \
+    && chown -R node:node /var/lib/nexa \
+    && chmod 700 /var/lib/nexa/backups /var/lib/nexa/recovery
+
 # The `node` user (uid 1000) ships with the base image. The application never
 # needs to write to its own filesystem, so nothing here is owned by it for
-# writing — only for reading.
+# writing — only for reading, plus the two artifact directories above.
 USER node
 
 # Exec form, so the process replaces the shell and receives signals directly.

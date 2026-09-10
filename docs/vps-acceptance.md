@@ -209,6 +209,68 @@ Worth doing once, on staging, so the behaviour is known rather than assumed:
       start, and exits non-zero. This is the state an interrupted update leaves,
       and it used to be undetectable. Put the value back afterwards.
 
+## 12b. Restore from the Web Admin, on the real box
+
+This is the part no test can do for you, and it is the reason the rest of this
+document exists: a restore that works in CI and not on your server is a restore
+you do not have. Do it on a box with nothing on it you mind losing, and do it
+BEFORE you need it.
+
+The `recovery` process role has to be running for any of this to complete — it is
+the only thing that performs a restore. Check it first:
+
+```bash
+sudo botctl status            # the recovery container is up
+sudo docker compose -f /opt/nexa/deploy/docker-compose.yml logs --tail=20 recovery
+```
+
+Then, signed in as the owner, open **بکاپ و بازیابی** under **سامانه و عملیات**:
+
+- [ ] The page lists the backups `botctl backup` and the scheduler have taken.
+- [ ] «تهیه بکاپ جدید» produces a new row that reaches `SUCCEEDED` with
+      «بازگردانی واقعی انجام شد» — the run verified itself by restoring.
+- [ ] Pressing it a second time while the first is running reports
+      «یک بکاپ همین حالا در حال اجراست.» and does NOT start a second.
+- [ ] «دریافت آرشیو رمزشده» downloads a file. `file <downloaded>` says `data`,
+      not SQL, and `head -c 8 <downloaded> | xxd` is not readable text. If it
+      reads as SQL, stop: that is a plaintext dump leaving the server.
+
+Now write something you can recognise, so "it restored" is a statement about
+CONTENT rather than about an exit code. A template body is a good choice — it is
+visible in the Web Admin and belongs to no customer:
+
+- [ ] Edit any template, note the exact text, and take a backup AFTER the edit.
+- [ ] Change the same template again to something different.
+- [ ] Upload the archive from the step before, verify it, and read the result:
+      the decrypted manifest's database name, its time, and a restore test
+      reporting tables restored and a migration verdict. Nothing on this screen
+      should contain a key, a connection string or a password.
+- [ ] Type `RESTORE NEXA` exactly. Check that a lower-case `restore nexa` leaves
+      the button disabled.
+- [ ] Confirm. Watch the request's stage advance: the pre-restore backup, the
+      quiesce, the candidate, the cutover, then readiness.
+- [ ] While it is restoring, try to save a setting in another tab. It must be
+      REFUSED, not silently ignored.
+- [ ] When it reports success, the template holds the text from the FIRST edit.
+      That is the only proof that matters.
+- [ ] `sudo -u postgres psql -c "SELECT datname FROM pg_database"` shows a
+      `nexa_pre_restore_*` database. It is your rollback and nothing will remove
+      it. Note its name; drop it only once you are satisfied.
+- [ ] `sudo botctl status` is healthy and `/health/ready` is ready afterwards.
+- [ ] The report group received the recovery's own event, and that message
+      contains identifiers and a code — no stack trace, no file path, no secret.
+
+Then the refusals, because a restore you cannot trust to REFUSE is worse than one
+that does not work:
+
+- [ ] Upload a file that is not a Nexa archive — make one with
+      `head -c 1000 /dev/urandom > junk.nxb`. It must fail with a code and leave
+      nothing behind in the recovery work directory.
+- [ ] Flip one byte in the middle of a real archive and upload it. It must fail
+      authentication — not "succeed with a warning".
+- [ ] `sudo ls -la <RECOVERY_WORK_DIR>` after all of the above: no world-readable
+      files, and no leftover directory for a recovery that failed.
+
 ## 13. Delegation, if you delegate
 
 Only if `botctl` is reachable through `sudo` for a non-root operator:
@@ -227,21 +289,25 @@ status`, the variable is set in **sudo's** own environment, where `env_reset`
 
 ## Sign-off
 
-| Item                                  | Result | Notes |
-| ------------------------------------- | ------ | ----- |
-| Installed from zero                   |        |       |
-| No secret printed or world-readable   |        |       |
-| HTTPS certificate issued              |        |       |
-| Owner login works                     |        |       |
-| Database/Redis not publicly reachable |        |       |
-| Survives reboot unattended            |        |       |
-| Backup verified                       |        |       |
-| Update succeeded                      |        |       |
-| Update lock refused a second writer   |        |       |
-| Rollback succeeded, data intact       |        |       |
-| Update after rollback succeeded       |        |       |
-| Reinstall preserved secrets and data  |        |       |
-| Installer refused a version change    |        |       |
-| A divergent deploy.env was reported   |        |       |
+| Item                                   | Result | Notes |
+| -------------------------------------- | ------ | ----- |
+| Installed from zero                    |        |       |
+| No secret printed or world-readable    |        |       |
+| HTTPS certificate issued               |        |       |
+| Owner login works                      |        |       |
+| Database/Redis not publicly reachable  |        |       |
+| Survives reboot unattended             |        |       |
+| Backup verified                        |        |       |
+| Update succeeded                       |        |       |
+| Update lock refused a second writer    |        |       |
+| Rollback succeeded, data intact        |        |       |
+| Update after rollback succeeded        |        |       |
+| Reinstall preserved secrets and data   |        |       |
+| Installer refused a version change     |        |       |
+| A divergent deploy.env was reported    |        |       |
+| Web Admin restore: content came back   |        |       |
+| Writes were refused during the restore |        |       |
+| The displaced database is still there  |        |       |
+| A corrupt archive was refused          |        |       |
 
 Only when every row passes should this deployment model carry a customer.

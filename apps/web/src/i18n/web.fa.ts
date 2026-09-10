@@ -300,6 +300,104 @@ export const WEB_FA = {
   'web.nav_bots': 'ربات‌ها',
   'web.nav_alerts': 'هشدارهای مدیریتی',
   'web.nav_system': 'سامانه و عملیات',
+  'web.nav_recovery': 'بکاپ و بازیابی',
+
+  // --- Backup and disaster recovery ----------------------------------------
+  'web.recovery_title': 'بکاپ و بازیابی',
+  'web.recovery_intro': 'وضعیت بکاپ‌های این نصب، و بازگرداندن کل نصب از یکی از بکاپ‌های خودش.',
+  'web.recovery_status_title': 'وضعیت بکاپ',
+  'web.recovery_history_title': 'تاریخچه بکاپ‌ها',
+  'web.recovery_last_success_title': 'آخرین بکاپ موفق',
+  'web.recovery_operations_title': 'عملیات بازیابی',
+  'web.recovery_schedule': 'بکاپ خودکار',
+  'web.recovery_schedule_on': 'روشن',
+  'web.recovery_schedule_off': 'خاموش',
+  'web.recovery_schedule_off_hint':
+    'بکاپ خودکار خاموش است. تاریخچه‌ی سالم به‌تنهایی معنایش این نیست که بکاپی گرفته می‌شود.',
+  'web.recovery_interval': 'فاصله‌ی بکاپ‌ها',
+  'web.recovery_last_success': 'آخرین موفقیت',
+  'web.recovery_never': 'هرگز',
+  'web.recovery_running': 'در حال اجرا',
+  'web.recovery_unknown_deliveries': 'ارسال‌های نامعلوم',
+  'web.recovery_unknown_deliveries_hint':
+    'تلگرام ممکن است این فایل‌ها را گرفته باشد یا نگرفته باشد. هیچ‌چیز به‌طور خودکار دوباره ارسال نمی‌شود.',
+  'web.recovery_quiesced': 'نصب در حال بازیابی است و تغییرات را نمی‌پذیرد.',
+  'web.recovery_run_now': 'تهیه بکاپ جدید',
+  'web.recovery_running_now': 'در حال تهیه بکاپ…',
+  'web.recovery_run_busy': 'یک بکاپ همین حالا در حال اجراست.',
+  'web.recovery_run_done': 'بکاپ گرفته شد و با بازگردانی واقعی راستی‌آزمایی شد.',
+  'web.recovery_backup_id': 'شناسه',
+  'web.recovery_trigger': 'آغازگر',
+  'web.recovery_trigger_manual': 'دستی',
+  'web.recovery_trigger_scheduled': 'زمان‌بندی‌شده',
+  'web.recovery_trigger_pre_restore': 'پیش از بازیابی',
+  'web.recovery_state': 'وضعیت',
+  'web.recovery_started': 'شروع',
+  'web.recovery_finished': 'پایان',
+  'web.recovery_dump_size': 'اندازه‌ی دامپ',
+  'web.recovery_archive_size': 'اندازه‌ی آرشیو',
+  'web.recovery_checksum': 'چک‌سام',
+  'web.recovery_verified': 'راستی‌آزمایی',
+  'web.recovery_verified_yes': 'بازگردانی واقعی انجام شد',
+  'web.recovery_verified_no': 'راستی‌آزمایی نشده',
+  'web.recovery_delivery': 'ارسال به تلگرام',
+  'web.recovery_delivery_not_attempted': 'انجام نشد',
+  'web.recovery_delivery_succeeded': 'موفق',
+  'web.recovery_delivery_failed': 'ناموفق',
+  'web.recovery_delivery_unknown': 'نامعلوم',
+  'web.recovery_cleanup_incomplete': 'پاک‌سازی ناقص',
+  'web.recovery_cleanup_hint':
+    'چند فایل موقت روی سرور باقی مانده‌اند و ممکن است دامپ رمزنشده باشند. مسیرها در گزارش عملیاتی سرور است، نه اینجا.',
+  'web.recovery_download': 'دریافت آرشیو رمزشده',
+  'web.recovery_download_gone': 'فایل محلی دیگر موجود نیست',
+  'web.recovery_download_gone_hint':
+    'آرشیو رمزشده روی این سرور نگه داشته نشده است. اگر به تلگرام ارسال شده باشد، همان‌جاست.',
+  'web.recovery_no_backups': 'هنوز هیچ بکاپی روی این نصب گرفته نشده است.',
+  'web.recovery_no_backups_hint': 'تا وقتی بکاپی گرفته نشده باشد، چیزی برای بازگرداندن وجود ندارد.',
+
+  // Upload and verification
+  'web.recovery_upload_title': 'بارگذاری آرشیو',
+  'web.recovery_upload_hint':
+    'فقط آرشیو رمزشده‌ی همین نصب. فایل روی سرور رمزگشایی و راستی‌آزمایی می‌شود؛ کلید هرگز به مرورگر نمی‌آید.',
+  'web.recovery_upload_choose': 'انتخاب فایل',
+  'web.recovery_upload_send': 'بارگذاری',
+  'web.recovery_uploading': 'در حال بارگذاری…',
+  'web.recovery_upload_disabled': 'بارگذاری روی این نصب غیرفعال است.',
+  'web.recovery_upload_too_large': 'این فایل از حد مجاز این نصب بزرگ‌تر است.',
+  'web.recovery_foreign_unsupported': 'پشتیبانی نمی‌شود',
+  'web.recovery_foreign_hint':
+    'بازیابی از آرشیو نصب دیگر پشتیبانی نمی‌شود: کلید آن نصب اینجا نیست، و هیچ فرمی برای وارد کردن کلید وجود ندارد.',
+  'web.recovery_verify': 'راستی‌آزمایی و آزمون بازگردانی',
+  'web.recovery_verifying': 'در حال راستی‌آزمایی…',
+  'web.recovery_verify_hint':
+    'آرشیو رمزگشایی، چک‌سام مقایسه، و با pg_restore واقعی در یک پایگاه‌داده‌ی خالی بازگردانده می‌شود.',
+  'web.recovery_tables_restored': 'جدول بازگردانده‌شده',
+  'web.recovery_migration_verdict': 'وضعیت مهاجرت‌ها',
+  'web.recovery_taken_at': 'زمان تهیه',
+  'web.recovery_source_database': 'پایگاه‌داده',
+
+  // The dangerous half
+  'web.recovery_restore_title': 'بازگرداندن کل نصب',
+  'web.recovery_restore_danger':
+    'این کار پایگاه‌داده‌ی فعلی را با محتوای این آرشیو جایگزین می‌کند. پیش از آن، یک بکاپ اجباری از وضعیت فعلی گرفته و راستی‌آزمایی می‌شود؛ اگر آن بکاپ موفق نشود، بازیابی انجام نمی‌شود.',
+  'web.recovery_confirm_label': 'برای تأیید، عبارت زیر را دقیقاً تایپ کنید',
+  'web.recovery_confirm_button': 'تأیید و شروع بازیابی',
+  'web.recovery_confirm_wrong': 'عبارت تأیید مطابقت ندارد.',
+  'web.recovery_confirmed': 'بازیابی تأیید شد و در صف اجراست.',
+  'web.recovery_confirm_expires': 'اعتبار تأیید',
+  'web.recovery_no_permission_restore':
+    'شما اجازه‌ی بازگرداندن این نصب را ندارید. راستی‌آزمایی آرشیو همچنان ممکن است.',
+
+  // Recovery list
+  'web.recovery_requests_title': 'درخواست‌های بازیابی',
+  'web.recovery_no_requests': 'هیچ درخواست بازیابی‌ای ثبت نشده است.',
+  'web.recovery_requested_by': 'درخواست‌کننده',
+  'web.recovery_stage': 'مرحله',
+  'web.recovery_failure': 'کد خطا',
+  'web.recovery_displaced': 'پایگاه‌داده‌ی جایگزین‌شده',
+  'web.recovery_displaced_hint':
+    'پایگاه‌داده‌ی پیش از بازیابی با این نام روی سرور باقی مانده است. چیزی آن را حذف نمی‌کند.',
+  'web.recovery_cutover_at': 'زمان جابه‌جایی',
 
   // --- Planned surfaces ----------------------------------------------------
   'web.planned_why_title': 'چرا هنوز فعال نیست',

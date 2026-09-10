@@ -213,6 +213,24 @@ export interface BackupRunRepository {
   reclaimStale(input: { readonly staleBefore: Date; readonly now: Date }): Promise<number>;
 
   latest(limit: number): Promise<readonly BackupRunRow[]>;
+  /**
+   * A keyset page of the history, newest first.
+   *
+   * `latest(n)` is a `LIMIT` with no continuation, which is right for a CLI that
+   * prints twenty rows and useless to a Web list that has to page. The keyset is
+   * `(started_at, id)` — the tie-break is not decoration: two runs can share a
+   * start instant on a fast installation, and a cursor on the timestamp alone
+   * silently skips or repeats them, which is the defect the ops-log and panels
+   * cursors each had to fix.
+   */
+  page(input: {
+    readonly limit: number;
+    readonly cursor: { readonly startedAt: Date; readonly id: string } | null;
+  }): Promise<{ readonly rows: readonly BackupRunRow[]; readonly nextCursor: string | null }>;
+  /** How many runs carry an unresolved `OUTCOME_UNKNOWN` delivery. */
+  countUnknownDeliveries(): Promise<number>;
+  /** The run currently holding the installation's backup lock, if any. */
+  active(): Promise<BackupRunRow | null>;
   byId(id: string): Promise<BackupRunRow | null>;
   /** Runs whose delivery outcome was never observed. For reconciliation. */
   withUnknownDelivery(limit: number): Promise<readonly BackupRunRow[]>;

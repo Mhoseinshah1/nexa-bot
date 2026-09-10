@@ -1,3 +1,5 @@
+import { RECOVERY_MACHINE } from './recovery.js';
+
 /**
  * State machines as data.
  *
@@ -121,7 +123,21 @@ export function nextState<TState extends string, TEvent extends string>(
 }
 
 /**
- * Every declared machine, so CI can validate them all. Phase 0 declares none —
- * the business machines arrive with their modules.
+ * Every declared machine, so CI can validate them all.
+ *
+ * Phase 0 declared none and said the business machines arrive with their
+ * modules. `RECOVERY_MACHINE` is the first, and it is registered here rather
+ * than validated privately by its own module so the check is total: a machine
+ * declared and not registered is a machine nothing validates, and the
+ * registration is what a test can walk.
+ *
+ * The import back from `recovery.ts` is not a runtime cycle: that module takes
+ * `StateMachineDefinition` with `import type`, which is erased, so nothing
+ * evaluates in the other direction. Worth stating because the shape looks like
+ * one, and the fix for a cycle that does not exist — moving the import to the
+ * bottom of the file — would be inert (ESM hoists it) while reading as though
+ * it were load-bearing.
  */
-export const STATE_MACHINES: readonly StateMachineDefinition<string, string>[] = [];
+export const STATE_MACHINES: readonly StateMachineDefinition<string, string>[] = [
+  RECOVERY_MACHINE as StateMachineDefinition<string, string>,
+];

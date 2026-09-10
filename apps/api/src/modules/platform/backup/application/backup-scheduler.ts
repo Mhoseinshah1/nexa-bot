@@ -22,6 +22,14 @@ import type { BackupService } from './backup.service.js';
 export interface BackupSchedulerDeps {
   readonly service: BackupService;
   readonly runs: BackupRunRepository;
+  /**
+   * Whether a recovery currently holds the installation.
+   *
+   * A question rather than a repository, so the backup module does not depend on
+   * the recovery module — the same shape `InstallationWriteGate` uses, and for
+   * the same reason.
+   */
+  readonly quiesced: () => Promise<boolean>;
   readonly clock: Clock;
   /** How long after the last successful backup the next one is due. */
   readonly intervalMs: number;
@@ -91,6 +99,34 @@ export class BackupScheduler {
       // reading of "no backup exists", and it is also what makes the first run
       // after an install happen without anybody remembering to ask for one.
       if (now.getTime() < dueAt) {
+        this.lastTickAt = now.getTime();
+        return;
+      }
+
+      /*
+       * NOT DURING A RECOVERY.
+       *
+       * `backup_runs` is written on the database handle rather than through the
+       * unit of work, so no backup write passes either quiesce chokepoint — the
+       * gate cannot stop this one, and the operator's own button is checked at
+       * its surface for exactly that reason. The scheduler is the caller that
+       * needs the check MORE, because nobody is watching it.
+       *
+       * The window is real and small: the recovery's own pre-restore backup
+       * releases the one-at-a-time lock as it finishes, and the executor moves to
+       * QUIESCING immediately after. A scheduler tick landing between those two
+       * starts a full dump against a database that is about to be renamed out
+       * from under it — killed mid-`pg_dump` by the cutover's terminate, or worse
+       * surviving into a stage whose conditional writes then match nothing in the
+       * restored database, delivering an archive to Telegram with no run row
+       * behind it.
+       *
+       * An earlier comment on `BackupAdminService.run` justified leaving the
+       * scheduler unchecked by saying it is the pre-restore backup's own path.
+       * It is not: the executor calls `BackupService.run('PRE_RESTORE')` directly.
+       */
+      if (await this.deps.quiesced()) {
+        this.deps.logger.info({}, 'scheduled backup skipped; a recovery holds the installation');
         this.lastTickAt = now.getTime();
         return;
       }

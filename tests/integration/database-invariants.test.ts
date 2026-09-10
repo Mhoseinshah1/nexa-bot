@@ -149,6 +149,182 @@ describe('database invariants', () => {
     });
   });
 
+  /**
+   * The recovery table's own invariants.
+   *
+   * Every one of these is a state the application is written never to produce,
+   * which is exactly why they are asserted against the DATABASE: a rule enforced
+   * only in application code is a rule a second writer does not have. The
+   * destructive-recovery exclusion in particular is the thing that stops two
+   * operators in an incident, or two executor replicas during a rolling update,
+   * from renaming the production database at the same time.
+   */
+  describe('recovery requests', () => {
+    const TENANT = "'01900000-0000-7000-8000-000000000001'";
+    const insert = (id: string, state: string, extra = ''): string => `
+      INSERT INTO recovery_requests (id, tenant_id, source, state, stage, created_at, updated_at${
+        state === 'SUCCEEDED' || state === 'FAILED' ? ', finished_at' : ''
+      }${extra === '' ? '' : ', ' + extra.split('=')[0]?.trim()})
+      VALUES ('${id}', ${TENANT}, 'UPLOAD', '${state}', 'RECEIVE_UPLOAD', now(), now()${
+        state === 'SUCCEEDED' || state === 'FAILED' ? ', now()' : ''
+      }${extra === '' ? '' : ', ' + (extra.split('=')[1] ?? '').trim()})`;
+
+    it('permits exactly one destructive recovery at a time', async () => {
+      await query(insert('01900000-0000-7000-8000-00000000dd01', 'RESTORING'));
+      // A second one, in a DIFFERENT destructive state: the exclusion is over the
+      // whole destructive set, not over one state, so two different stages of the
+      // chain must still collide.
+      await expect(
+        query(insert('01900000-0000-7000-8000-00000000dd02', 'CUTTING_OVER')),
+      ).rejects.toThrowError(/recovery_requests_single_destructive_idx/);
+    });
+
+    it('permits many recoveries that are only verifying an artifact', async () => {
+      // Verifying and restore-testing change nothing about the installation, so
+      // the exclusion deliberately does not cover them. An index over every live
+      // state would make a second operator unable to check a second archive
+      // while the first was being checked.
+      await query(insert('01900000-0000-7000-8000-00000000dd03', 'VERIFYING'));
+      await query(insert('01900000-0000-7000-8000-00000000dd04', 'RESTORE_TESTING'));
+      await query(insert('01900000-0000-7000-8000-00000000dd05', 'RESTORE_TEST_PASSED'));
+      const { rows } = await query(`SELECT count(*)::int AS n FROM recovery_requests`);
+      expect((rows[0] as { n: number }).n).toBe(3);
+    });
+
+    it('releases the exclusion when the destructive recovery ends', async () => {
+      await query(insert('01900000-0000-7000-8000-00000000dd06', 'RESTORING'));
+      await query(`
+        UPDATE recovery_requests SET state = 'FAILED', finished_at = now(),
+               failure_code = 'recovery.candidate_restore_failed'
+         WHERE id = '01900000-0000-7000-8000-00000000dd06'`);
+      await query(insert('01900000-0000-7000-8000-00000000dd07', 'RESTORING'));
+      const { rows } = await query(
+        `SELECT count(*)::int AS n FROM recovery_requests WHERE state = 'RESTORING'`,
+      );
+      expect((rows[0] as { n: number }).n).toBe(1);
+    });
+
+    it('refuses a live request that claims to have finished', async () => {
+      await expect(
+        query(`
+          INSERT INTO recovery_requests (id, tenant_id, source, state, stage, created_at, updated_at, finished_at)
+          VALUES ('01900000-0000-7000-8000-00000000dd08', ${TENANT}, 'UPLOAD', 'VERIFYING', 'DECRYPT', now(), now(), now())`),
+      ).rejects.toThrowError(/recovery_requests_finished_at_check/);
+    });
+
+    it('refuses a terminal request with no end', async () => {
+      await expect(
+        query(`
+          INSERT INTO recovery_requests (id, tenant_id, source, state, stage, created_at, updated_at)
+          VALUES ('01900000-0000-7000-8000-00000000dd09', ${TENANT}, 'UPLOAD', 'SUCCEEDED', 'DONE', now(), now())`),
+      ).rejects.toThrowError(/recovery_requests_finished_at_check/);
+    });
+
+    it('refuses a cutover with no displaced database', async () => {
+      // The dangerous direction: production IS the restored candidate and the
+      // row does not say where the data it replaced went. Nothing can answer
+      // that question afterwards, because the name is derived from an id and a
+      // prefix the operator has no reason to know.
+      await expect(
+        query(`
+          INSERT INTO recovery_requests (id, tenant_id, source, state, stage, created_at, updated_at, finished_at, cutover_at)
+          VALUES ('01900000-0000-7000-8000-00000000dd0a', ${TENANT}, 'UPLOAD', 'SUCCEEDED', 'DONE', now(), now(), now(), now())`),
+      ).rejects.toThrowError(/recovery_requests_cutover_check/);
+    });
+
+    it('ACCEPTS a displaced database with no cutover, because the cutover reaches that state', async () => {
+      /*
+       * The `RENAMED_OUT` window, and it is a real one rather than a tolerance.
+       *
+       * `ALTER DATABASE` cannot run in a transaction, so a cutover that renamed
+       * the outgoing database and then failed to rename the candidate into place
+       * ends with the displaced name known and no cutover performed —
+       * `CutoverError.outgoingRenamed`. Both reconstruction paths in
+       * `recovery-executor.ts` write that row, and while this constraint refused
+       * it they raised 23514 instead: the recovery went unrecorded, the journal
+       * was never cleared, and every later tick threw inside
+       * `reconcileCutovers` before it could claim anything.
+       */
+      await query(`
+          INSERT INTO recovery_requests (id, tenant_id, source, state, stage, created_at, updated_at, finished_at, displaced_database, failure_code)
+          VALUES ('01900000-0000-7000-8000-00000000dd0b', ${TENANT}, 'UPLOAD', 'FAILED', 'CLEANUP', now(), now(), now(), 'nexa_pre_restore_x', 'recovery.cutover_failed')`);
+      const { rows } = await query(
+        `SELECT displaced_database, cutover_at FROM recovery_requests
+          WHERE id = '01900000-0000-7000-8000-00000000dd0b'`,
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        displaced_database: 'nexa_pre_restore_x',
+        cutover_at: null,
+      });
+    });
+
+    it('refuses a partial confirmation binding', async () => {
+      // A confirmation with a time and no checksum is a confirmation for
+      // anything, which is the one thing the binding exists to prevent.
+      await expect(
+        query(`
+          INSERT INTO recovery_requests (id, tenant_id, source, state, stage, created_at, updated_at, confirmed_at)
+          VALUES ('01900000-0000-7000-8000-00000000dd0c', ${TENANT}, 'UPLOAD', 'RESTORE_REQUESTED', 'AWAIT_CONFIRMATION', now(), now(), now())`),
+      ).rejects.toThrowError(/recovery_requests_confirmation_check/);
+    });
+
+    it('accepts a complete confirmation binding', async () => {
+      await query(`
+        INSERT INTO recovery_requests (id, tenant_id, source, state, stage, created_at, updated_at,
+                                       confirmed_at, confirmed_by_admin_id, confirmed_checksum, confirmation_expires_at)
+        VALUES ('01900000-0000-7000-8000-00000000dd0d', ${TENANT}, 'UPLOAD', 'RESTORE_REQUESTED', 'AWAIT_CONFIRMATION', now(), now(),
+                now(), '01900000-0000-7000-8000-00000000ad01', repeat('a', 64), now() + interval '10 minutes')`);
+      const { rows } = await query(
+        `SELECT confirmed_checksum FROM recovery_requests WHERE id = '01900000-0000-7000-8000-00000000dd0d'`,
+      );
+      expect((rows[0] as { confirmed_checksum: string }).confirmed_checksum).toHaveLength(64);
+    });
+
+    it('refuses a state, a stage and a failure code the contract does not define', async () => {
+      for (const [column, value, constraint] of [
+        ['state', 'ALMOST_DONE', 'recovery_requests_state_check'],
+        ['stage', 'FIDDLING', 'recovery_requests_stage_check'],
+        ['source', 'SOMEWHERE', 'recovery_requests_source_check'],
+      ] as const) {
+        await expect(
+          query(`
+            INSERT INTO recovery_requests (id, tenant_id, source, state, stage, created_at, updated_at)
+            VALUES ('01900000-0000-7000-8000-00000000dd0e', ${TENANT},
+                    ${column === 'source' ? `'${value}'` : "'UPLOAD'"},
+                    ${column === 'state' ? `'${value}'` : "'VERIFYING'"},
+                    ${column === 'stage' ? `'${value}'` : "'DECRYPT'"}, now(), now())`),
+        ).rejects.toThrowError(new RegExp(constraint));
+      }
+      await expect(
+        query(`
+          INSERT INTO recovery_requests (id, tenant_id, source, state, stage, created_at, updated_at, finished_at, failure_code)
+          VALUES ('01900000-0000-7000-8000-00000000dd0f', ${TENANT}, 'UPLOAD', 'FAILED', 'DONE', now(), now(), now(), 'recovery.it_broke')`),
+      ).rejects.toThrowError(/recovery_requests_failure_code_check/);
+    });
+  });
+
+  describe('the widened backup trigger', () => {
+    it('accepts PRE_RESTORE and still refuses an undeclared trigger', async () => {
+      // The migration widens a CHECK derived from a contract enum. Both halves
+      // matter: a widening that forgot the constraint would accept anything.
+      await query(`
+        INSERT INTO backup_runs (id, trigger, state, stage, started_at, lease_owner, lease_heartbeat_at, delivery_state, cleanup_ok)
+        VALUES ('01900000-0000-7000-8000-00000000db01', 'PRE_RESTORE', 'RUNNING', 'DUMP', now(), 'test', now(), 'NOT_ATTEMPTED', true)`);
+      // Terminal, with a finish time, and therefore NOT holding the backup lock:
+      // the trigger check has to be the only constraint this row can violate, or
+      // the case passes for the wrong reason. It did, on the first run — a
+      // SUCCEEDED row with no `finished_at` tripped
+      // `backup_runs_finished_at_check` instead, which would have made this
+      // assertion green with the trigger constraint dropped entirely.
+      await expect(
+        query(`
+          INSERT INTO backup_runs (id, trigger, state, stage, started_at, finished_at, lease_owner, lease_heartbeat_at, delivery_state, cleanup_ok)
+          VALUES ('01900000-0000-7000-8000-00000000db02', 'WHENEVER', 'SUCCEEDED', 'CLEANUP', now(), now(), 'test', now(), 'NOT_ATTEMPTED', true)`),
+      ).rejects.toThrowError(/backup_runs_trigger_check/);
+    });
+  });
+
   describe('idempotency uniqueness', () => {
     it('treats the same key in different tenants as different keys', async () => {
       await ctx.container.database.db.execute(sql`

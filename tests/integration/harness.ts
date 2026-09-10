@@ -84,7 +84,7 @@ export async function resetDatabase(db: Database): Promise<void> {
        admin_roles, role_permissions, roles, admins,
        panel_health, panel_probe_claims, panel_probe_budgets, panel_credentials, panels,
        bot_instances, tenants,
-       backup_runs
+       backup_runs, recovery_requests
      RESTART IDENTITY CASCADE` as never,
   );
 }

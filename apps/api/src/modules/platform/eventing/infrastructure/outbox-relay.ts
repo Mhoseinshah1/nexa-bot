@@ -15,6 +15,10 @@ import type {
 } from '../../../../infrastructure/persistence/database.js';
 import { withinTransaction } from '../../../../infrastructure/transaction-boundary.js';
 import {
+  UNGATED,
+  type InstallationWriteGate,
+} from '../../../../infrastructure/persistence/write-gate.js';
+import {
   outboxMessages,
   processedMessages,
   tenants,
@@ -98,6 +102,17 @@ export class OutboxRelay {
      * has to be opened on this side of the boundary.
      */
     private readonly database?: DatabaseHandle,
+    /**
+     * The installation write gate. See `processBatch`.
+     *
+     * Defaulted to `UNGATED` rather than made required, because this constructor
+     * has seven parameters and a required eighth would have to be threaded
+     * through every test that builds a relay directly — and a test that
+     * constructs one to check batching is not a test about recovery. The
+     * container passes the real gate, and `worker-loop-health.test.ts` asserts
+     * it does, so the default cannot quietly become production's.
+     */
+    private readonly gate: InstallationWriteGate = UNGATED,
   ) {
     this.progress = new LoopProgress(options.pollIntervalMs);
   }
@@ -172,6 +187,32 @@ export class OutboxRelay {
      */
     const result = await withinTransaction('system:relay', () =>
       this.db.transaction(async (tx) => {
+        /*
+         * THE QUIESCE GATE, again, because this transaction is not the unit of
+         * work's.
+         *
+         * The relay is the one durable write path in this codebase that opens its
+         * own transaction on the database handle — which is exactly why item D's
+         * fix missed it, and exactly why the quiesce would miss it too. A relay
+         * that went on publishing during a cutover would be dispatching work
+         * belonging to a database that is about to be replaced, and the consumer
+         * effects it commits would be in the OUTGOING database while the messages
+         * that caused them survive in the restored one.
+         *
+         * Left UNCLAIMED rather than claimed-and-skipped, and returned as an
+         * ordinary empty batch: the messages are still there, in order, when the
+         * recovery finishes — the same treatment a stopped tenant's messages get,
+         * and for the same reason.
+         */
+        const quiescedBy = await this.gate.quiescedBy({ tx });
+        if (quiescedBy !== null) {
+          this.logger.info(
+            { recoveryId: quiescedBy },
+            'outbox relay is idle: a recovery is restoring this installation',
+          );
+          return { claimed: 0, published: 0, failed: 0 };
+        }
+
         // Work belonging to a tenant that is not ACTIVE is left UNCLAIMED, not
         // discarded and not marked published. `eligibleForDispatch` below is the
         // one statement of that rule; readiness uses it too, so the two cannot

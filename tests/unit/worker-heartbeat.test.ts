@@ -101,7 +101,7 @@ describe('the worker heartbeat', () => {
   });
 
   /** The `node -e` one-liner compose runs, for one service. */
-  function containerCheck(service: 'worker' | 'monitor'): string {
+  function containerCheck(service: 'worker' | 'monitor' | 'recovery'): string {
     const compose = parse(read(join(__dirname, '../../deploy/compose.yml'), 'utf8')) as {
       services: Record<
         string,
@@ -150,28 +150,44 @@ describe('the worker heartbeat', () => {
     return result.status;
   }
 
-  describe.each([
+  /**
+   * The heartbeat path each role writes, BY ROLE.
+   *
+   * A table rather than a pair of ternaries, which is what this was: adding the
+   * recovery executor to the two cases below would have meant a third branch in
+   * each of two nested conditionals, and the "and only that one" assertion
+   * compared against ONE other path — so a third role writing the worker's file
+   * would have passed. Now every role is checked against every other.
+   */
+  const HEARTBEATS = [
     { service: 'worker' as const, pathVar: 'WORKER_HEARTBEAT_PATH' },
     { service: 'monitor' as const, pathVar: 'PANEL_MONITOR_HEARTBEAT_PATH' },
-  ])('the $service container check', ({ service, pathVar }) => {
+    // The recovery executor. Its health is the difference between a confirmed
+    // restore that is about to happen and one that will never happen, and those
+    // look identical on the Web Admin — so the container check is the only thing
+    // that can tell them apart.
+    { service: 'recovery' as const, pathVar: 'RECOVERY_HEARTBEAT_PATH' },
+  ];
+
+  describe.each(HEARTBEATS)('the $service container check', ({ service, pathVar }) => {
     const at = (ageMs: number) => `${Date.now() - ageMs}\n`;
 
     it('reads the file the process writes, and only that one', () => {
       const script = containerCheck(service);
-      const defaults = composeDefaults();
-      const expected =
-        service === 'worker'
-          ? defaults.WORKER_HEARTBEAT_PATH
-          : defaults.PANEL_MONITOR_HEARTBEAT_PATH;
-      const other =
-        service === 'worker'
-          ? defaults.PANEL_MONITOR_HEARTBEAT_PATH
-          : defaults.WORKER_HEARTBEAT_PATH;
-      // Two roles writing one file would let a healthy worker mask a dead
-      // monitor.
-      expect(expected).not.toBe(other);
+      const defaults = composeDefaults() as unknown as Record<string, string>;
+      const expected = defaults[pathVar];
+      expect(expected, `no schema default for ${pathVar}`).toBeTruthy();
       expect(script).toContain(expected);
-      expect(script).not.toContain(other);
+      // Two roles writing one file would let a healthy worker mask a dead
+      // monitor — or a dead recovery executor. Checked against EVERY other
+      // role's path rather than against one of them.
+      for (const other of HEARTBEATS) {
+        if (other.service === service) continue;
+        const otherPath = defaults[other.pathVar];
+        expect(otherPath, `no schema default for ${other.pathVar}`).toBeTruthy();
+        expect(otherPath).not.toBe(expected);
+        expect(script, `${service} reads ${other.service}'s heartbeat`).not.toContain(otherPath);
+      }
     });
 
     it('accepts a beat inside three of the DEFAULT interval and rejects one outside', () => {
@@ -220,13 +236,41 @@ describe('the worker heartbeat', () => {
     });
   });
 
-  it('runs the monitor entrypoint from the same image', () => {
+  it('runs every process role from the same image, by entrypoint', () => {
     const compose = parse(read(join(__dirname, '../../deploy/compose.yml'), 'utf8')) as {
-      services: { monitor: { command: string[]; healthcheck: { interval: string } } };
+      services: Record<string, { command: string[]; healthcheck: { interval: string } }>;
     };
     // The SAME image, a different entrypoint. A second image would be a second
     // thing to build, publish, pin by digest and roll back.
-    expect(compose.services.monitor.command).toEqual(['node', 'dist/main.monitor.js']);
-    expect(compose.services.monitor.healthcheck.interval).toBe('10s');
+    for (const [service, entrypoint] of [
+      ['api', 'dist/main.js'],
+      ['worker', 'dist/main.worker.js'],
+      ['monitor', 'dist/main.monitor.js'],
+      ['recovery', 'dist/main.recovery.js'],
+    ] as const) {
+      expect(compose.services[service]?.command, service).toEqual(['node', entrypoint]);
+      expect(compose.services[service]?.healthcheck.interval, service).toBe('10s');
+    }
+  });
+
+  it('requires the recovery executor for readiness, so a dead one is not "ready"', () => {
+    /*
+     * The executor is the ONLY process that performs a restore, so an
+     * installation whose executor is dead accepts a CRITICAL confirmation an
+     * administrator typed by hand and then does nothing with it — and the Web
+     * Admin shows RESTORE_REQUESTED, which is what a restore about to start
+     * looks like too.
+     *
+     * Read from `nexa-lib.sh` rather than restated, because the list is what
+     * `botctl update` and `botctl rollback` actually wait on.
+     */
+    const lib = read(join(__dirname, '../../deploy/bin/nexa-lib.sh'), 'utf8');
+    const declared = /^NEXA_READY_SERVICES="([^"]+)"$/m.exec(lib)?.[1]?.split(/\s+/) ?? [];
+    expect(declared, 'the readiness service list is no longer a plain assignment').not.toHaveLength(
+      0,
+    );
+    for (const service of ['api', 'worker', 'monitor', 'recovery', 'caddy']) {
+      expect(declared, `${service} is not required for readiness`).toContain(service);
+    }
   });
 });

@@ -69,6 +69,28 @@ x-app-common: &app-common
       condition: service_healthy
     redis:
       condition: service_healthy
+  volumes:
+    # THE ARCHIVES, on a named volume shared by every role that touches them.
+    #
+    # Not container-local, and this is load-bearing rather than tidy. The
+    # archive is written by whichever role took the backup — the SCHEDULER runs
+    # in the worker, the operator's button in the api, the pre-restore backup in
+    # the recovery executor — and it is read by the api, which serves the
+    # download, and by the executor, which restores from it. On container-local
+    # disk every one of those crossings fails: a scheduled backup's archive is
+    # invisible to the download that offers it, an uploaded archive is invisible
+    # to the only process that can restore it, and all of it is deleted by the
+    # next `docker compose up -d` that recreates a container.
+    #
+    # The Web Admin would report this truthfully — «فایل محلی دیگر موجود نیست»
+    # for every scheduled backup — which is the honest surface of a broken
+    # deployment rather than a substitute for fixing it.
+    - backups:/var/lib/nexa/backups
+    # The recovery workspace: uploads, and the plaintext a verification decrypts
+    # before it removes it. Separate from the archives because it holds a
+    # DIFFERENT thing with a different lifetime, and ADR-0028 keeps them apart so
+    # a retention pass over one can never reach the other.
+    - recovery:/var/lib/nexa/recovery
   logging:
     driver: json-file
     options:
@@ -344,6 +366,51 @@ services:
       retries: 3
       start_period: 40s
 
+  # The FOURTH process role, and the only one that can replace this
+  # installation's database.
+  #
+  # Its own container because ADR-0028's central rule is that no HTTP request
+  # restores into the database serving it: the api can upload, verify and accept
+  # a confirmation, and the destructive work happens here, outside any request's
+  # lifetime. That is not achievable with a loop inside the api — a restore that
+  # renames the database out from under an in-flight request is a restore whose
+  # own process is one of the sessions it has to terminate.
+  #
+  # It is also the process that QUIESCES the worker and the monitor, which is the
+  # second reason it is not a loop inside either of them: a loop that has to
+  # reason about shutting down the event loop it runs on is complexity in the one
+  # place that must stay simple.
+  #
+  # `restart: unless-stopped`, inherited, and a stale lease taken over by FAILING
+  # the abandoned run rather than adopting it — so a crash mid-restore does not
+  # produce a second executor picking up files the first may still be writing.
+  # Two replicas during a rolling update is the normal case and is safe by the
+  # partial unique index, not by there being one container.
+  recovery:
+    <<: *app-common
+    command: ['node', 'dist/main.recovery.js']
+    # The same heartbeat shape the worker and monitor use, for the same reason:
+    # this process serves no HTTP, so "the container is running" says nothing
+    # about whether it is still claiming work. An executor whose timer fires
+    # while every tick throws is precisely the failure that would leave a
+    # confirmed recovery sitting in RESTORE_REQUESTED for ever — a confirmation
+    # an operator gave that nothing acts on.
+    #
+    # The path and the derivation must agree with config.schema.ts, and a unit
+    # test RUNS this script against the interval bounds the schema accepts.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "const fs=require('fs');const p=process.env.RECOVERY_HEARTBEAT_PATH||'/tmp/nexa-recovery.heartbeat';const i=Number(process.env.WORKER_HEARTBEAT_INTERVAL_MS);const max=(Number.isFinite(i)&&i>0?i:10000)*3;try{const s=fs.readFileSync(p,'utf8').trim();const at=Number(s);process.exit(s!==''&&Number.isFinite(at)&&Date.now()-at<=max?0:1)}catch{process.exit(1)}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
   caddy:
     image: caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
     restart: unless-stopped
@@ -472,5 +539,15 @@ networks:
 volumes:
   pgdata:
   webassets:
+  # The disaster-recovery artifacts. NAMED volumes rather than bind mounts: the
+  # archives are 0600 files written by a container running as a non-root user,
+  # and a host directory would have to be created with matching ownership by the
+  # installer — one more thing to get wrong on a host nobody has seen.
+  #
+  # Neither is pruned by anything. `docs/backup.md` says so where an operator
+  # looks for their disk, and that is the most operationally significant gap in
+  # this pipeline.
+  backups:
+  recovery:
   caddydata:
   caddyconfig:

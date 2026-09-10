@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import type { MonitorProfile } from '@nexa/contracts';
 import { fetchAdmins, fetchInfo, fetchMonitorProfile, fetchReadiness } from '../api/client';
-import { formatTimestamp, splitDuration } from '../format';
-import { t, type WebKey } from '../i18n/web.fa';
+import { formatTimestamp } from '../format';
+import { t } from '../i18n/web.fa';
 import { setQuery, type Route } from '../router';
 import {
   Badge,
@@ -10,6 +10,7 @@ import {
   Card,
   Copyable,
   DataTable,
+  Duration,
   Ident,
   KV,
   Ltr,
@@ -318,21 +319,6 @@ function CapacityView({ profile }: { profile: MonitorProfile }) {
         ]}
       />
     </>
-  );
-}
-
-const UNIT_KEYS: Readonly<Record<'second' | 'minute' | 'hour', WebKey>> = {
-  second: 'web.unit_seconds',
-  minute: 'web.unit_minutes',
-  hour: 'web.unit_hours',
-};
-
-function Duration({ ms }: { ms: number }) {
-  const { value, unit } = splitDuration(ms);
-  return (
-    <span className="nowrap">
-      <Num value={value} /> {t(UNIT_KEYS[unit])}
-    </span>
   );
 }
 

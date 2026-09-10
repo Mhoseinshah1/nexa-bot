@@ -7,6 +7,7 @@ import {
   type UnitOfWork,
 } from '@nexa/contracts';
 import { withinTransaction } from '../transaction-boundary.js';
+import { assertInstallationWritable, type InstallationWriteGate } from './write-gate.js';
 import type { Database, Executor } from './database.js';
 
 /**
@@ -29,7 +30,18 @@ export interface TransactionScope {
 }
 
 export class DrizzleUnitOfWork implements UnitOfWork<TransactionScope> {
-  constructor(private readonly db: Database) {}
+  /**
+   * The write gate is a constructor dependency, not a parameter.
+   *
+   * So that "this unit of work does not gate writes" cannot be the accidental
+   * result of a call site omitting an argument. A process that genuinely has no
+   * recovery module — the migrator — passes `UNGATED` explicitly, which is a
+   * decision a reader can see rather than an `undefined` they have to interpret.
+   */
+  constructor(
+    private readonly db: Database,
+    private readonly gate: InstallationWriteGate,
+  ) {}
 
   async run<T>(scope: ScopeContext, fn: (tx: TransactionScope) => Promise<T>): Promise<T> {
     // Marked, so a network sink can refuse. See `transaction-boundary.ts`: the
@@ -37,7 +49,29 @@ export class DrizzleUnitOfWork implements UnitOfWork<TransactionScope> {
     // enforced in none, and the outbox relay runs consumers inside its claim
     // transaction by design.
     return withinTransaction(transactionLabelFor(scope), () =>
-      this.db.transaction(async (tx) => fn({ tx, scope })),
+      this.db.transaction(async (tx) => {
+        /*
+         * THE QUIESCE GATE, and this is the only place it could go.
+         *
+         * ADR-0028 § 5. Every durable write in this codebase opens its
+         * transaction here, so a recovery that has shut the installation is
+         * enforced by construction rather than by ten call sites remembering to
+         * ask. `CLAUDE.md` records what the alternative costs: panels was the one
+         * module that skipped the scope-activity check, and a tenant an operator
+         * had stopped was given new panels and a background monitor.
+         *
+         * INSIDE the transaction, as its first statement, for the same reason
+         * `runAuthorizedMutation` re-checks the permission here: nothing this
+         * transaction will commit has happened yet, so a quiesce that committed
+         * before this read cannot be overtaken.
+         *
+         * `runSnapshot` below is deliberately NOT gated. It is the
+         * consistent-READ path, and an operator supervising a recovery is
+         * reading.
+         */
+        await assertInstallationWritable(this.gate, scope, { tx, scope });
+        return fn({ tx, scope });
+      }),
     );
   }
 

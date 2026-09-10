@@ -11,7 +11,7 @@ import type { MoneyWire } from '@nexa/contracts';
 import { Icon, type IconName } from './icons';
 import { errorCopy, queryState, retryOf, staleAfterError, type QueryView } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
-import { formatMoney, formatMoneyText, formatNumber } from '../format';
+import { formatMoney, formatMoneyText, formatNumber, splitDuration } from '../format';
 
 /**
  * The production component kit.
@@ -87,6 +87,30 @@ export function Money({ value }: { value: MoneyWire }) {
 /** A count. Grouped, tabular, never shortened to `1.2k`. */
 export function Num({ value }: { value: number }) {
   return <span className="num">{formatNumber(value)}</span>;
+}
+
+/**
+ * A duration, in the largest whole unit it divides into.
+ *
+ * In the kit rather than in a page, because a SECOND copy was about to be
+ * written: the recovery page needs the same rendering of a backup interval that
+ * the system page needs for a monitor cadence, and two copies of a unit mapping
+ * is how one page comes to say "ساعت" where the other says "دقیقه" for the same
+ * number of milliseconds.
+ */
+const DURATION_UNIT_KEYS: Readonly<Record<'second' | 'minute' | 'hour', WebKey>> = {
+  second: 'web.unit_seconds',
+  minute: 'web.unit_minutes',
+  hour: 'web.unit_hours',
+};
+
+export function Duration({ ms }: { ms: number }) {
+  const { value, unit } = splitDuration(ms);
+  return (
+    <span className="nowrap">
+      <Num value={value} /> {t(DURATION_UNIT_KEYS[unit])}
+    </span>
+  );
 }
 
 /* ------------------------------------------------------------------ copy --- */

@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -48,6 +49,11 @@ async function databaseExists(name: string): Promise<boolean> {
   });
 }
 
+/** The compiled migrator's path, as the container resolves it. */
+const MIGRATOR = fileURLToPath(
+  new URL('../../apps/api/src/infrastructure/persistence/migrate.ts', import.meta.url),
+);
+
 describe('backup against a real database', () => {
   let context: TestContext;
   let workDir: string;
@@ -88,6 +94,10 @@ describe('backup against a real database', () => {
       databaseUrl: config.DATABASE_URL,
       dumpTimeoutMs: 120_000,
       restoreTimeoutMs: 120_000,
+      // The migrator this release ships. Only ever used to migrate a restored
+      // CANDIDATE forward; no case here exercises it, and it is required rather
+      // than optional so a process that could need it cannot be built without one.
+      migratorEntrypoint: MIGRATOR,
     });
     return new BackupService({
       runs: context.container.backupRuns,
@@ -254,6 +264,10 @@ describe('backup against a real database', () => {
       databaseUrl: testConfig().DATABASE_URL,
       dumpTimeoutMs: 60_000,
       restoreTimeoutMs: 60_000,
+      // The migrator this release ships. Only ever used to migrate a restored
+      // CANDIDATE forward; no case here exercises it, and it is required rather
+      // than optional so a process that could need it cannot be built without one.
+      migratorEntrypoint: MIGRATOR,
     });
     // The MESSAGE, not only the code. The live database also has tables, so the
     // emptiness check below would refuse it too and produce the same code — a
@@ -296,6 +310,10 @@ describe('backup against a real database', () => {
       databaseUrl: testConfig().DATABASE_URL,
       dumpTimeoutMs: 60_000,
       restoreTimeoutMs: 60_000,
+      // The migrator this release ships. Only ever used to migrate a restored
+      // CANDIDATE forward; no case here exercises it, and it is required rather
+      // than optional so a process that could need it cannot be built without one.
+      migratorEntrypoint: MIGRATOR,
     });
     // Replace only `dump`, so everything downstream is the real implementation
     // operating on a genuinely unrestorable file.
@@ -581,6 +599,10 @@ describe('backup against a real database', () => {
         dumpTimeoutMs: 1_000,
         restoreTimeoutMs: 1_000,
         binDir: bin,
+        // The migrator this release ships. Only ever used to migrate a restored
+        // CANDIDATE forward; no case here exercises it, and it is required rather
+        // than optional so a process that could need it cannot be built without one.
+        migratorEntrypoint: MIGRATOR,
       });
       const started = Date.now();
       await expect(tools.dump(join(bin, 'out.pgcustom'))).rejects.toMatchObject({
@@ -662,6 +684,10 @@ describe('backup against a real database', () => {
         dumpTimeoutMs: 1_000,
         restoreTimeoutMs: 1_000,
         binDir: bin,
+        // The migrator this release ships. Only ever used to migrate a restored
+        // CANDIDATE forward; no case here exercises it, and it is required rather
+        // than optional so a process that could need it cannot be built without one.
+        migratorEntrypoint: MIGRATOR,
       });
       await expect(tools.dump(join(bin, 'out.pgcustom'))).rejects.toMatchObject({
         code: 'backup.tool_failed',

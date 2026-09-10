@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
-import type { TenantContext } from '@nexa/contracts';
+import { RECOVERY_ROUTES, type TenantContext } from '@nexa/contracts';
 import { AppModule } from './app.module.js';
 import {
   TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES,
@@ -107,14 +107,47 @@ export async function createApiApp(config: AppConfig = loadConfig()): Promise<Ap
    * Registered before `app.init()`, which is when Nest adds its routes; after it
    * the hook would never see them.
    */
-  app
-    .getHttpAdapter()
-    .getInstance()
-    .addHook('onRoute', (route) => {
-      if (route.url.startsWith(TELEGRAM_WEBHOOK_ROUTE_PREFIX)) {
-        route.bodyLimit = TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES;
-      }
-    });
+  const fastify = app.getHttpAdapter().getInstance();
+
+  /*
+   * A RAW body parser for the recovery upload, and nothing else.
+   *
+   * Registered for `application/octet-stream` only, and it consumes nothing: the
+   * handler reads `request.raw` itself, counting bytes as it writes them to disk.
+   * A parser that buffered would defeat the point — the archive format streams
+   * precisely because a database does not fit in memory — and a multipart
+   * dependency would be a parsing surface bought to decode a wrapper around the
+   * one thing being sent.
+   *
+   * `done(null, undefined)` rather than `done(null, payload)`: handing the stream
+   * through as `request.body` would give every future handler a second way to
+   * reach it, and there is exactly one endpoint that may.
+   */
+  fastify.addContentTypeParser(
+    'application/octet-stream',
+    (_request, _payload, done: (error: Error | null, body?: unknown) => void) => {
+      done(null, undefined);
+    },
+  );
+
+  fastify.addHook('onRoute', (route) => {
+    if (route.url.startsWith(TELEGRAM_WEBHOOK_ROUTE_PREFIX)) {
+      route.bodyLimit = TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES;
+    }
+    /*
+     * The upload route's own ceiling, raised to the configured maximum.
+     *
+     * Fastify compares a declared `content-length` against `bodyLimit` BEFORE the
+     * handler runs, so without this an archive larger than the adapter's 1 MB
+     * would be refused by the framework — with a 413 that says nothing about this
+     * installation's actual limit — and the handler's own counter would never see
+     * it. The counter is still the authority, because a chunked request declares
+     * no length and this check cannot fire for one.
+     */
+    if (route.url.endsWith(RECOVERY_ROUTES.upload)) {
+      route.bodyLimit = config.RECOVERY_UPLOAD_MAX_BYTES;
+    }
+  });
 
   app.enableShutdownHooks();
   await app.init();

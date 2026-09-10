@@ -15,6 +15,7 @@ import { FeaturesPage } from './pages/features';
 import { ContentPage } from './pages/content';
 import { AlertsPage, NotificationsPage } from './pages/alerts';
 import { SystemPage } from './pages/system';
+import { RecoveryPage } from './pages/recovery';
 import { PlannedPage, PLANNED_SURFACES, type PlannedKey } from './pages/planned';
 
 /**
@@ -303,6 +304,26 @@ export const NAV: readonly NavEntry[] = [
     permission: null,
     group: 'web.navgroup_system',
   },
+  {
+    id: 'recovery',
+    path: '/recovery',
+    label: 'web.nav_recovery',
+    icon: 'database',
+    /*
+     * `backup.view` alone. The page serves four capabilities and gates each one
+     * itself, so requiring the most privileged of them would hide the list from
+     * an operator whose whole job is checking that backups work.
+     *
+     * Not a LIST, unlike `/panels` and `/notifications`: every other capability
+     * here is strictly narrower in audience than `backup.view`, because
+     * `backup.view` is LOW and is in the observer role's read-only set while
+     * `backup.run`, `backup.download` and `recovery.restore` are HIGH or
+     * CRITICAL. There is no actor who holds one of those and not this one —
+     * which is the condition under which a list is needed, and it does not hold.
+     */
+    permission: 'backup.view',
+    group: 'web.navgroup_system',
+  },
 ];
 
 const GROUP_ORDER: readonly WebKey[] = [
@@ -459,6 +480,14 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
       element: <NotificationsPage mayTest={may('settings.edit')} denied={!may('opslog.view')} />,
       crumbs: [{ label: t('web.nav_notifications') }],
       title: t('web.nav_notifications'),
+    };
+  }
+
+  if (route.path === '/recovery') {
+    return {
+      element: <RecoveryPage route={route} permissions={permissions} />,
+      crumbs: [{ label: t('web.nav_recovery') }],
+      title: t('web.nav_recovery'),
     };
   }
 

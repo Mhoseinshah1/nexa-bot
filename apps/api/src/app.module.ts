@@ -7,6 +7,7 @@ import { AuthController } from './surfaces/web/auth.controller.js';
 import { AdminsController } from './surfaces/web/admins.controller.js';
 import { ControlController } from './surfaces/web/control.controller.js';
 import { PanelsController } from './surfaces/web/panels.controller.js';
+import { RecoveryController } from './surfaces/web/recovery.controller.js';
 import { SystemController } from './surfaces/web/system.controller.js';
 import { TelegramWebhookController } from './surfaces/telegram/webhook.controller.js';
 import { CorrelationMiddleware } from './surfaces/web/correlation.middleware.js';
@@ -47,6 +48,7 @@ export class AppModule implements NestModule {
         AdminsController as never,
         ControlController as never,
         PanelsController as never,
+        RecoveryController as never,
       );
     }
 

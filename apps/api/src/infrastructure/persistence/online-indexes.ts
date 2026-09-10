@@ -75,6 +75,30 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
     definition:
       'ON "panels" USING btree ("tenant_id","created_at","id") WHERE status = \'ARCHIVED\'',
   },
+  {
+    /*
+     * The backup history keyset: `(started_at, id)`.
+     *
+     * `backup_runs_started_at_idx` already exists on `started_at` alone, which
+     * serves the scheduler's "when did we last succeed" and served `latest(n)`
+     * well enough because that query had no continuation to satisfy. The Web
+     * history pages with `ROW(started_at, id) < ROW(...)` and orders by both, and
+     * the single-column index cannot carry the tie-break — so without this the
+     * page walk sorts the whole table on every request, which is the exact shape
+     * the alerts keyset hit one release ago.
+     *
+     * No `tenant_id` leading column, and that is not an omission: `backup_runs`
+     * has no tenant column at all, because a backup is a dump of the whole
+     * database. The scope check is on the REQUEST (only the installation's
+     * primary tenant may read this history), not on the row.
+     *
+     * CONCURRENTLY, unlike the recovery keyset declared in `schema.ts`, because
+     * this table is live on every existing installation and `botctl update`
+     * migrates while the outgoing release is still serving.
+     */
+    name: 'backup_runs_started_page_idx',
+    definition: 'ON "backup_runs" USING btree ("started_at","id")',
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */

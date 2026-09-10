@@ -74,18 +74,86 @@ describe('worker health coverage', () => {
     expect(loops).toContain('notificationDispatcher');
   });
 
-  it('names every freshness-bearing loop in the worker health check', () => {
-    const missing = freshnessBearing().filter(
-      (name) => !new RegExp(`container\\.${name}\\.isFresh\\(`).test(worker),
+  /**
+   * Every entrypoint, read from disk rather than listed.
+   *
+   * The rule is "the role that STARTS a loop checks it", not "the worker checks
+   * everything": the panel monitor runs in the `monitor` role and the recovery
+   * executor in the `recovery` role, and each is consulted by its own `main`.
+   *
+   * Derived, because the previous version of this file carried the exception as a
+   * hardcoded `name !== 'panelMonitor'` — so a second role's loop had to be added
+   * to that list by hand, and a loop nobody remembered to exclude failed this
+   * test while a loop nobody remembered to CHECK would have been excluded and
+   * passed. Reading the files removes the list, which is the same correction the
+   * file scan above already records having needed once.
+   */
+  const entrypoints = (): ReadonlyMap<string, string> =>
+    new Map(
+      readdirSync(join(root, 'apps/api/src'), { withFileTypes: true })
+        .filter((entry) => entry.isFile() && /^main(\.\w+)?\.ts$/.test(entry.name))
+        .map((entry) => [entry.name, readFileSync(join(root, 'apps/api/src', entry.name), 'utf8')]),
     );
-    // The panel monitor is deliberately absent: it runs in the `monitor` role,
-    // and `main.monitor.ts` consults it there. Anything else missing here is a
-    // loop the worker starts and cannot tell has stopped.
-    expect(missing.filter((name) => name !== 'panelMonitor')).toEqual([]);
+
+  it('finds every entrypoint, so the scan below cannot pass vacuously', () => {
+    const found = [...entrypoints().keys()].sort();
+    expect(found).toEqual(['main.monitor.ts', 'main.recovery.ts', 'main.ts', 'main.worker.ts']);
+  });
+
+  it('has the role that starts each loop check that loop', () => {
+    const files = entrypoints();
+    const unchecked = freshnessBearing().filter((name) => {
+      const checked = new RegExp(`container\\.${name}\\.(?:isFresh|iterationIsFresh)\\(`);
+      for (const [file, source] of files) {
+        // Only the role that STARTS it is obliged to check it. A role that
+        // neither starts nor checks a loop is correct; a role that starts one and
+        // cannot tell it has stopped is the defect.
+        if (!new RegExp(`container\\.${name}\\.start\\(`).test(source)) continue;
+        if (!checked.test(source)) return true;
+        void file;
+      }
+      return false;
+    });
+    expect(unchecked).toEqual([]);
+  });
+
+  it('leaves no freshness-bearing loop unstarted by every role', () => {
+    // The other half, and the one the rule above cannot see: a loop with an
+    // `isFresh` that NO entrypoint starts is either dead code or a loop somebody
+    // forgot to wire, and both are worth failing on.
+    const files = [...entrypoints().values()];
+    const orphans = freshnessBearing().filter(
+      (name) => !files.some((source) => new RegExp(`container\\.${name}\\.start\\(`).test(source)),
+    );
+    expect(orphans).toEqual([]);
+  });
+
+  it('names every worker-started loop in the worker health check', () => {
+    // The original assertion, kept concrete: these six are the worker's, and
+    // naming them here means a future refactor that moved one out of the worker
+    // has to say so rather than quietly satisfying the derived rule above.
+    for (const name of [
+      'relay',
+      'throttleSweeper',
+      'sessionSweeper',
+      'backupRunSweeper',
+      'recoveryRequestSweeper',
+      'notificationDispatcher',
+      'backupScheduler',
+    ]) {
+      expect(worker, `${name} is not consulted by the worker health check`).toMatch(
+        new RegExp(`container\\.${name}\\.isFresh\\(`),
+      );
+    }
   });
 
   it('checks the monitor loop in the monitor role', () => {
     const monitor = readFileSync(join(root, 'apps/api/src/main.monitor.ts'), 'utf8');
     expect(monitor).toMatch(/panelMonitor\.iterationIsFresh\(/);
+  });
+
+  it('checks the recovery executor in the recovery role', () => {
+    const recovery = readFileSync(join(root, 'apps/api/src/main.recovery.ts'), 'utf8');
+    expect(recovery).toMatch(/recoveryExecutor\.isFresh\(/);
   });
 });

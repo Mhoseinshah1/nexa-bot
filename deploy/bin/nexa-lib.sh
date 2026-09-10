@@ -320,11 +320,21 @@ nexa_pull_release() {
 # root and /health/live through the same routes the public site imports, so it
 # fails when the bundle is missing and when the API handle order has broken.
 #
+# And the RECOVERY executor, on the same argument as the monitor and with a
+# sharper edge. It is the only process that performs a restore, so an
+# installation whose executor is dead offers an administrator a confirmation —
+# a CRITICAL one, typed by hand, for an operation that replaces the database —
+# and then does nothing with it, for ever, with no error anywhere. The Web Admin
+# would show the request sitting in RESTORE_REQUESTED, which is indistinguishable
+# from a restore that is about to start. Its container check reads the heartbeat
+# the process writes only after a database round trip, so "claiming work" is what
+# is being measured rather than "the container exists".
+#
 # The intersection below is what makes adding it safe in both directions: a
 # release whose compose does not define `caddy` simply does not have it
 # required, which is the same rule that lets a rollback to a pre-monitor
-# release still become ready.
-NEXA_READY_SERVICES="api worker monitor caddy"
+# release still become ready — and now a rollback to a pre-recovery one.
+NEXA_READY_SERVICES="api worker monitor recovery caddy"
 
 # The required services that the ACTIVE compose file actually defines.
 #

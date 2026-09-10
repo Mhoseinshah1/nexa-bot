@@ -696,3 +696,42 @@ motivate it would mean guessing at the parameter shapes.
 
 **Trigger to revisit:** the first operational event whose message would carry
 customer-supplied text — Phase 4A, when a Telegram update can fail.
+
+## Restoring a backup taken by a DIFFERENT installation
+
+**Status: OPEN — recorded by the Web Admin Disaster Recovery pass (ADR-0028 § 10).**
+
+An archive's data key is wrapped under the KEK of the installation that wrote it.
+This installation holds its own keyring, so a foreign archive fails at the key —
+`recovery.archive_foreign_key`, which is a distinct code from a corrupt file
+precisely because the two need different actions — and the Web Admin reports it as
+«پشتیبانی نمی‌شود» rather than leaving the option out.
+
+The workaround is real and deliberate: add the other installation's KEK to
+`SECRETS_KEYS`, out of band, restart, and the archive becomes an ordinary one.
+Every held key may decrypt; only the active one encrypts.
+
+**Why there is no feature.** The two shapes a feature would take are both worse
+than the workaround:
+
+1. **A form that accepts a pasted KEK.** Refused outright. It would put a
+   master key in a browser, in a request body, in whatever logs that request,
+   and in the paste buffer of whoever was asked for it — and it would teach
+   operators that handing the key to a web page is a normal thing to do. The
+   owner's instruction for this phase forbade it explicitly, and it would be the
+   wrong answer without the instruction.
+2. **A key-import path with its own storage.** Defensible, and a larger piece of
+   work than it looks: an imported key needs a lifetime, a scope (decrypt-only,
+   never active), an audit trail, a removal path, and a clear answer to what
+   happens to archives sealed under it afterwards. That is a keyring feature, not
+   a recovery feature, and it belongs with whatever first needs more than one
+   installation's keys — migration tooling, or a managed deployment.
+
+**What this means operationally.** Host rebuilt, same keys, archive from the old
+host: works, because the keyring is the same installation's. Host rebuilt with a
+NEW KEK and only the old archives: the old KEK must be recovered and configured,
+or the archives are cryptographically lost. That is the property the encryption
+buys and there is no way to have both.
+
+**Trigger to revisit:** the first deployment that legitimately holds two
+installations' archives — a migration tool, or a managed multi-install operator.

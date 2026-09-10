@@ -9,15 +9,16 @@ the shipped ones.
 
 It is a **measurement**, not an impression. Each visit records:
 
-| Field                            | What a non-zero value means                       |
-| -------------------------------- | ------------------------------------------------- |
-| `horizontalOverflow`             | the page body scrolls sideways                    |
-| `documentScrolledInsteadOfShell` | the whole document scrolled, not the content area |
-| `stillLoadingAfterSettle`        | a skeleton was photographed instead of a screen   |
-| `showingErrorState`              | the page rendered its error state                 |
-| `consoleOrPageErrors`            | a console error or an uncaught exception          |
-| `themeMismatches`                | the requested theme was not the one applied       |
-| `nonRtl`                         | the document was not right-to-left                |
+| Field                                    | What a non-zero value means                                                               |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `horizontalOverflow`                     | the page body scrolls sideways                                                            |
+| `documentScrolledInsteadOfShell`         | the whole document scrolled, not the content area                                         |
+| `stillLoadingAfterSettle`                | a skeleton was photographed instead of a screen                                           |
+| `showingErrorState`                      | the page rendered its error state                                                         |
+| `consoleOrPageErrors`                    | a console error or an uncaught exception                                                  |
+| `themeMismatches`                        | the requested theme was not the one applied                                               |
+| `nonRtl`                                 | the document was not right-to-left                                                        |
+| `capturesRenderingSomethingSecretShaped` | a connection string, a key envelope, a token or a PEM block appeared in the rendered text |
 
 `stillLoadingAfterSettle` and `showingErrorState` are the load-bearing pair.
 Between them they have caught fixture drift **three times** on this branch
@@ -35,6 +36,26 @@ says `LOCAL` — made four routes render a loading skeleton, and the captures
 were reported as a clean pass because nobody had compared them. The check is
 falsifiable: change one fixture field to a value its schema rejects and that
 route comes back `showingError: true`.
+
+The secret scan runs on EVERY capture rather than on the routes that obviously
+handle secrets, because a secret reaches a page through a RESPONSE SHAPE and not
+through a route — so the route that leaks one is by definition the route nobody
+thought to check. It matches against the rendered text, so a database name an
+operator needs to see (`nexa_pre_restore_...`) is not a hit while a URL carrying
+a password is.
+
+## Interactive states
+
+Two captures are REACHED rather than visited, because no URL addresses them:
+
+- **`panel-created`** — the create confirmation an edit-only actor gets, which
+  exists only for an actor holding `panels.edit` and NOT `panels.view`.
+- **`recovery-confirm-armed`** — the restore confirmation, which exists only
+  after an archive has been uploaded and has PASSED a restore test, and whose
+  button is disabled until the exact phrase is typed. The pass drives upload →
+  verify → a near-miss phrase → the exact phrase → confirm, capturing each, and
+  MEASURES the three properties a screenshot cannot prove: disabled at rest,
+  still disabled for `restore nexa`, enabled only for `RESTORE NEXA`.
 
 ## Running it
 

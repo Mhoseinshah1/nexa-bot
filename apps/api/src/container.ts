@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { MAX_REQUESTS_PER_PROBE } from '@nexa/contracts';
 import type {
   AuditWriter,
@@ -36,7 +36,9 @@ import { providerAdapter } from './modules/platform/providers/infrastructure/ada
 import { SystemClock } from './infrastructure/clock.js';
 import { Uuidv7IdGenerator } from './infrastructure/ids.js';
 import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
+import { hostname } from 'node:os';
 import { resolveKeyring } from './infrastructure/crypto/resolve-keyring.js';
+import { blocksReadiness } from './modules/platform/system/application/readiness.service.js';
 import { createLogger } from './infrastructure/logging/logger.js';
 import { createDatabase, type DatabaseHandle } from './infrastructure/persistence/database.js';
 import { createRedis, type RedisHandle } from './infrastructure/redis/redis.js';
@@ -76,6 +78,14 @@ import { MonitorProfileService } from './modules/platform/panels/application/mon
 import { BackupService } from './modules/platform/backup/application/backup.service.js';
 import { BackupScheduler } from './modules/platform/backup/application/backup-scheduler.js';
 import { DrizzleBackupRunRepository } from './modules/platform/backup/infrastructure/drizzle-backup-run.repository.js';
+import { DrizzleRecoveryRequestRepository } from './modules/platform/recovery/infrastructure/drizzle-recovery-request.repository.js';
+import { FilesystemRecoveryWorkspaces } from './modules/platform/recovery/infrastructure/recovery-workspace.js';
+import { FileCutoverJournal } from './modules/platform/recovery/infrastructure/cutover-journal.js';
+import { RecoveryService } from './modules/platform/recovery/application/recovery.service.js';
+import { BackupAdminService } from './modules/platform/recovery/application/backup-admin.service.js';
+import { RecoveryExecutor } from './modules/platform/recovery/application/recovery-executor.js';
+import { expectedMigrations } from './infrastructure/persistence/migration-state.js';
+import type { InstallationWriteGate } from './infrastructure/persistence/write-gate.js';
 import { KeyringBackupArchiver } from './modules/platform/backup/infrastructure/archiver.js';
 import { PostgresDatabaseTools } from './modules/platform/backup/infrastructure/pg-tools.js';
 import { TelegramBackupDelivery } from './modules/platform/backup/infrastructure/telegram-backup-delivery.js';
@@ -120,7 +130,16 @@ import type { NotificationTransport } from './modules/control/notifications/appl
  * panel would then be a slow Telegram response — and must not be woken by a
  * request at all.
  */
-export type ProcessRole = 'api' | 'worker' | 'monitor';
+/**
+ * The process roles, one entrypoint each, one module graph.
+ *
+ * `recovery` is the fourth and it is not the worker, deliberately. A restore
+ * QUIESCES the outbox relay and the notification dispatcher, and a loop that
+ * shares an event loop with the things it is shutting down has to reason about
+ * its own shutdown — which is the one place that reasoning must be simple,
+ * because it is the place that renames the production database. ADR-0028.
+ */
+export type ProcessRole = 'api' | 'worker' | 'monitor' | 'recovery';
 
 export interface Container {
   readonly config: AppConfig;
@@ -146,6 +165,7 @@ export interface Container {
   readonly throttleSweeper: RetentionSweeper;
   readonly sessionSweeper: RetentionSweeper;
   readonly backupRunSweeper: RetentionSweeper;
+  readonly recoveryRequestSweeper: RetentionSweeper;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
   /**
@@ -226,6 +246,12 @@ export interface Container {
    */
   readonly backup: BackupService;
   readonly backupScheduler: BackupScheduler;
+  /** Disaster recovery: the operator's service, and the destructive executor. */
+  readonly recoveryService: RecoveryService;
+  readonly backupAdmin: BackupAdminService;
+  readonly recoveryExecutor: RecoveryExecutor;
+  readonly recoveryRequests: DrizzleRecoveryRequestRepository;
+  readonly recoveryWorkspaces: FilesystemRecoveryWorkspaces;
   /** Exposed so a test can drive the lock directly, and so `botctl` can list runs. */
   readonly backupRuns: DrizzleBackupRunRepository;
   /**
@@ -320,7 +346,34 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   );
   const redis = createRedis(config.REDIS_URL);
 
-  const uow = new DrizzleUnitOfWork(database.db);
+  /*
+   * The recovery repository is built HERE, above the unit of work, because the
+   * unit of work's write gate reads it.
+   *
+   * That is the only unusual ordering in this container, and it is the shape of
+   * the dependency rather than a convenience: the quiesce has to be enforced
+   * where transactions are opened (ADR-0028 § 5), so the thing that answers
+   * "is the installation quiesced" must exist before the thing that opens them.
+   * It takes only the database handle, so there is nothing circular about it.
+   */
+  const recoveryRequests = new DrizzleRecoveryRequestRepository(database.db);
+  /*
+   * ONE gate implementation, shared by both chokepoints.
+   *
+   * The unit of work and the outbox relay both consult it, and they consult the
+   * SAME object rather than two closures over the same repository — because two
+   * closures is two places the predicate could be written, and the predicate is
+   * "are durable writes refused". A relay that answered that question
+   * differently from the unit of work would be a relay publishing during a
+   * cutover.
+   */
+  const writeGate: InstallationWriteGate = {
+    async quiescedBy(tx) {
+      const lock = await recoveryRequests.installationLock(tx);
+      return lock !== null && lock.quiescing ? lock.recoveryId : null;
+    },
+  };
+  const uow = new DrizzleUnitOfWork(database.db, writeGate);
   const tenants = new DrizzleTenantRepository(database.db);
   const botInstances = new DrizzleBotInstanceRepository(database.db, cipher);
 
@@ -429,6 +482,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       maxLagMs: config.OUTBOX_RELAY_MAX_LAG_MS,
     },
     database,
+    writeGate,
   );
 
   // The readiness computation and the adapters that answer its questions. The
@@ -799,13 +853,38 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   );
 
   /**
-   * The backup graph.
+   * This PROCESS's identity, shared by every lease it takes.
    *
-   * `leaseOwner` identifies THIS PROCESS, so two replicas of the same role hold
-   * distinguishable leases and a takeover can tell whose lock it is reclaiming.
-   * Role plus pid plus randomness: the role alone repeats across replicas, and
-   * the pid alone repeats across containers.
+   * So two replicas of the same role hold distinguishable leases and a takeover
+   * can tell whose lock it is reclaiming. Role plus pid plus randomness: the role
+   * alone repeats across replicas, and the pid alone repeats across containers.
+   *
+   * ONE value for the backup lease and the recovery lease, not two. A process
+   * that held two identities could reclaim its own abandoned work under the other
+   * one and believe it was taking over from somebody else — and the recovery
+   * executor's restart path (`claimOwn`) depends on recognising exactly this
+   * string.
+   *
+   * STABLE ACROSS RESTARTS, which is the whole point and which the first version
+   * of this value defeated: it carried the pid and a fresh random suffix, so a
+   * restarted process could never recognise its own lease and `claimOwn` matched
+   * nothing, ever. The comment above said the restart path depended on this
+   * string while the value made the dependency unsatisfiable. The cost was not
+   * theoretical — a recovery executor that died mid-restore left the row in a
+   * quiescing state with a lease nobody could reclaim for fifteen minutes, and a
+   * quiescing state refuses every durable write in the installation. Fifteen
+   * minutes of refused writes, on every crash, is exactly what `claimOwn` was
+   * written to prevent.
+   *
+   * The role plus the HOST is the identity that survives a process restart and
+   * still separates the four roles from each other. In the deployment each role
+   * is its own container and a container's hostname is its id, so two containers
+   * of one role never collide; a container REPLACED by an update gets a new
+   * hostname and correctly falls through to the stale-lease path instead.
    */
+  const leaseOwner = `${role}:${hostname()}`;
+
+  /** The backup graph. */
   const backupRuns = new DrizzleBackupRunRepository(database.db);
   /**
    * Retention for the backup run table — ADR-0027.
@@ -845,11 +924,60 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
   );
 
+  /**
+   * Retention for the recovery request table — ADR-0027's shape, ADR-0028's
+   * exclusions.
+   *
+   * A row that recorded a CUTOVER is excluded in the QUERY and kept for ever: it
+   * is the only record of what the displaced database is called, and an operator
+   * left with a `nexa_pre_restore_*` database and nothing saying what it is
+   * cannot decide whether to drop it.
+   */
+  const recoveryRequestSweeper = new RetentionSweeper(
+    {
+      name: 'recovery-requests',
+      purge: (now, limit) =>
+        recoveryRequests.purgeFinishedBefore(
+          new Date(now.getTime() - config.RECOVERY_RETENTION_DAYS * 24 * 3_600_000),
+          limit,
+        ),
+    },
+    clock,
+    logger,
+    {
+      // Daily, like the backup run sweeper and for the same reason: the eligible
+      // set grows by at most a handful of rows a year on a healthy installation,
+      // so anything more frequent is a thousand no-op passes for every row
+      // removed.
+      intervalMs: 24 * 3_600_000,
+      initialDelayMs: 120_000,
+      batchSize: 500,
+      maxBatchesPerTick: 100,
+    },
+  );
+
   const backupTools = new PostgresDatabaseTools({
     databaseUrl: config.DATABASE_URL,
     dumpTimeoutMs: config.BACKUP_DUMP_TIMEOUT_MS,
     restoreTimeoutMs: config.BACKUP_RESTORE_TIMEOUT_MS,
     binDir: config.BACKUP_PG_BIN_DIR === '' ? undefined : config.BACKUP_PG_BIN_DIR,
+    /*
+     * The migrator THIS release ships, located from this module's own file.
+     *
+     * Used only to migrate a restored CANDIDATE forward when its schema is
+     * behind (ADR-0028 § 7). Resolved relative to `container.js` rather than from
+     * the working directory or a configuration value, for the reason the build
+     * identity is read from the image: a path an operator could set is a path
+     * that can point at a different release's migrator, and migrating a
+     * candidate with the wrong release's migrations is how a recovery produces a
+     * database no version of this code can serve.
+     *
+     * `.js` because that is what is on disk at runtime in both modes — `dist`
+     * under node, and `tsx`'s loader resolves the same specifier in development.
+     */
+    migratorEntrypoint: fileURLToPath(
+      new URL('./infrastructure/persistence/migrate.js', import.meta.url),
+    ),
   });
   const backupArchiver = new KeyringBackupArchiver(keyring);
   const backup = new BackupService({
@@ -882,12 +1010,127 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         ? null
         : { tenantId: installationTenantId, botInstanceId: null },
     logger,
-    leaseOwner: `${role}:${String(process.pid)}:${randomUUID().slice(0, 8)}`,
+    leaseOwner,
     retainedArchiveHint: config.BACKUP_WORK_DIR,
   });
+  /*
+   * The recovery graph.
+   *
+   * The workspace factory and the journal are constructed in every role, because
+   * the API receives uploads and the executor restores them and both need to
+   * address the same directory. The EXECUTOR is constructed everywhere too and
+   * STARTED in exactly one role — the same arrangement `backupScheduler` has, and
+   * for a sharper version of the same reason: a restore that ran in the API
+   * process would quiesce the process serving the operator watching it.
+   */
+  const recoveryWorkspaces = new FilesystemRecoveryWorkspaces(config.RECOVERY_WORK_DIR);
+  const recoveryJournal = new FileCutoverJournal(config.RECOVERY_WORK_DIR);
+  const recoveryService = new RecoveryService({
+    requests: recoveryRequests,
+    workspaces: recoveryWorkspaces,
+    // The SAME archiver the backup pipeline seals with, so one keyring and one
+    // `openArchive`. A recovery that decrypted through its own route would be
+    // proving a path nobody restores through.
+    archiver: backupArchiver,
+    engine: backupTools,
+    guard,
+    audit,
+    opsLog,
+    clock,
+    ids,
+    /*
+     * Read LAZILY, from this release's own migration journal.
+     *
+     * Eager would make the container fail to construct wherever the migrations
+     * directory is not beside the code — which is every unit test. The path is
+     * derived from this module's location for the reason the migrator's is: a
+     * configurable one could point at another release's journal, and a
+     * compatibility verdict computed against the wrong journal is a confident
+     * wrong answer about whether a database can be served.
+     */
+    expected: () => expectedMigrations(fileURLToPath(new URL('../drizzle', import.meta.url))),
+    logger,
+  });
+  /**
+   * The Web Admin's view of the backup pipeline: authorisation and scope only.
+   *
+   * It starts no backup of its own — `run` calls exactly the service the
+   * scheduler and the CLI call — and it is the only place that decides whether an
+   * archive is still on disk, because the repository must not touch the
+   * filesystem and the surface must not build a path.
+   */
+  const backupAdmin = new BackupAdminService({
+    runs: backupRuns,
+    recoveries: recoveryRequests,
+    backup,
+    guard,
+    audit,
+    opsLog,
+    clock,
+    workRoot: config.BACKUP_WORK_DIR,
+    scheduleEnabled: config.BACKUP_SCHEDULE_ENABLED,
+    intervalMs: config.BACKUP_INTERVAL_MS,
+  });
+
+  const recoveryExecutor = new RecoveryExecutor({
+    requests: recoveryRequests,
+    recovery: recoveryService,
+    engine: backupTools,
+    workspaces: recoveryWorkspaces,
+    journal: recoveryJournal,
+    // The unmodified pipeline. `PRE_RESTORE` is a trigger VALUE, not a second
+    // code path: same lock, same six stages, same mandatory verification.
+    backup,
+    /*
+     * The SAME readiness computation the load balancer gets — MINUS the outbox
+     * lag, which is the one probe that cannot mean what it usually means here.
+     *
+     * `outboxLagMs` is the age of the oldest unpublished message, and a restored
+     * database is by construction older than `OUTBOX_RELAY_MAX_LAG_MS` (five
+     * minutes by default). Any message that was unpublished when the dump was
+     * taken — one written moments before it, one in backoff — comes back with
+     * that age, so the lag right after a cutover is the AGE OF THE BACKUP. Worse,
+     * it cannot recover while the check is being made: `RESTARTING` still
+     * quiesces, so the relay is idle and the lag can only grow.
+     *
+     * Left in, this reports `recovery.readiness_failed` on a successful restore
+     * of any backup older than five minutes — which is every backup — after the
+     * renames, with a CRITICAL event, on an installation that is in fact serving.
+     * A false failure at that exact point is the most dangerous wrong answer this
+     * design can give: an operator reading it will try to undo a restore that
+     * worked.
+     *
+     * The other three probes are what "can this installation serve?" means here:
+     * the database answers, Redis answers, and the restored schema matches this
+     * release's migration journal. Lag is a freshness metric, and freshness is
+     * exactly what a restore is not claiming.
+     */
+    readiness: async () => {
+      const { dependencies } = await readiness.run();
+      const blocking = dependencies.filter((dependency) => dependency.name !== 'outbox');
+      return { degraded: blocking.some(blocksReadiness) };
+    },
+    clock,
+    opsLog,
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    leaseOwner,
+    tickIntervalMs: config.RECOVERY_TICK_MS,
+    logger,
+  });
+
   const backupScheduler = new BackupScheduler({
     service: backup,
     runs: backupRuns,
+    // The same predicate the write gate and the operator's button read, from the
+    // same row. Three readers, one source: a second way to ask would eventually
+    // give a third answer.
+    quiesced: async () => {
+      const lock = await recoveryRequests.installationLock();
+      return lock !== null && lock.quiescing;
+    },
     clock,
     intervalMs: config.BACKUP_INTERVAL_MS,
     tickIntervalMs: config.BACKUP_TICK_MS,
@@ -912,6 +1155,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     throttleSweeper,
     sessionSweeper,
     backupRunSweeper,
+    recoveryRequestSweeper,
     audit,
     opsLog,
     opsLogWriter,
@@ -983,14 +1227,21 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     backupRuns,
     backupArchiver,
     backupTools,
+    recoveryService,
+    backupAdmin,
+    recoveryExecutor,
+    recoveryRequests,
+    recoveryWorkspaces,
     async shutdown() {
       backupScheduler.stop();
+      recoveryExecutor.stop();
       await relay.stop();
       await panelMonitor.stop();
       await notificationDispatcher.stop();
       await throttleSweeper.stop();
       await sessionSweeper.stop();
       await backupRunSweeper.stop();
+      await recoveryRequestSweeper.stop();
       await redis.close();
       await database.close();
     },
