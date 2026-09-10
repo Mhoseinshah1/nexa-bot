@@ -260,6 +260,21 @@ export const MANAGEMENT_CONDITION_FAILURE_CODES = [
    * (ADR-0001), so the installation's own tenant is the right addressee.
    */
   'backup.run_failed',
+  /**
+   * A recovery failed, at whatever stage.
+   *
+   * A condition rather than a one-shot for the reason the backup failure is one:
+   * it is a STATE an operator has to act on, and something later resolves it.
+   * The context carries whether the cutover happened and what the displaced
+   * database is called, because after a failed recovery the first question is
+   * which database production is now.
+   *
+   * Deduped PER RECOVERY, unlike `backup.run_failed`, which is deduped
+   * installation-wide. A nightly backup failing twice is one condition; two
+   * recoveries are two operations against two different artifacts, and
+   * collapsing them onto one row would hide the second.
+   */
+  'recovery.run_failed',
 ] as const;
 
 /**
@@ -285,6 +300,15 @@ export const MANAGEMENT_CONDITION_RECOVERY_CODES = [
   'settings.stored_value_valid',
   /** A backup run succeeded, closing `backup.run_failed`. */
   'backup.run_ok',
+  /**
+   * A recovery completed AND the installation reported ready, closing
+   * `recovery.run_failed` for that recovery.
+   *
+   * Both halves. A cutover that completed and left the application unable to
+   * serve is a failed recovery with a renamed database, which is the worst thing
+   * this code could report as a success.
+   */
+  'recovery.run_ok',
 ] as const;
 
 /**

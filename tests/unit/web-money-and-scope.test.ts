@@ -154,6 +154,14 @@ const RECORDED_BY: Readonly<Record<string, { file: string; needle: string }>> = 
     file: 'apps/api/src/modules/platform/backup/application/backup.service.ts',
     needle: "code: 'backup.run_ok'",
   },
+  'recovery.run_failed': {
+    file: 'apps/api/src/modules/platform/recovery/application/recovery-executor.ts',
+    needle: "code: 'recovery.run_failed'",
+  },
+  'recovery.run_ok': {
+    file: 'apps/api/src/modules/platform/recovery/application/recovery-executor.ts',
+    needle: "code: 'recovery.run_ok'",
+  },
   'panel.monitor.tenant_budget_exceeded': {
     file: 'apps/api/src/modules/platform/panels/application/panel-monitor.service.ts',
     needle: "const TENANT_BUDGET_CONDITION = 'panel.monitor.tenant_budget_exceeded'",

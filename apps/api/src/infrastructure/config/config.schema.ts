@@ -587,6 +587,71 @@ export const configSchema = z
       .default(10 * 60_000),
     /** Where the PostgreSQL client tools live, when they are not on PATH. */
     BACKUP_PG_BIN_DIR: z.string().trim().default(''),
+
+    /**
+     * Disaster recovery.
+     *
+     * INSTALLATION configuration for the same reason backup is: a restore is of
+     * the whole database, so a per-tenant switch could not mean what it says, and
+     * the executor has to be configurable in exactly the situation where the
+     * settings table is what is unavailable.
+     */
+    /**
+     * Where uploaded archives live while a recovery is alive.
+     *
+     * A DIFFERENT directory from `BACKUP_WORK_DIR`, defaulting beside it. Sharing
+     * one would put artifacts an operator uploaded in the directory the backup
+     * pipeline creates and removes per-run, and a retention sweep written for one
+     * of those would eventually be applied to the other.
+     */
+    RECOVERY_WORK_DIR: z.string().trim().min(1).default('/var/lib/nexa/recovery'),
+    /**
+     * The ceiling on an uploaded archive, enforced on the STREAM.
+     *
+     * Not on `content-length`: a chunked request declares none, so a
+     * header check would be advisory. The server counts what it writes and stops.
+     *
+     * Two gigabytes by default, which is well past Telegram's 50 MiB document
+     * ceiling — the archives that need uploading are precisely the ones too large
+     * to have been delivered, which an operator retrieved from the host.
+     */
+    RECOVERY_UPLOAD_MAX_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1024)
+      .max(64 * 1024 * 1024 * 1024)
+      .default(2 * 1024 * 1024 * 1024),
+    /** How often the recovery executor asks whether a confirmed request exists. */
+    RECOVERY_TICK_MS: z.coerce.number().int().min(1_000).max(600_000).default(15_000),
+    /**
+     * Where the recovery executor writes its heartbeat.
+     *
+     * Its OWN key, not the monitor's path with a suffix appended. Two roles
+     * sharing a derived path is how a container healthcheck comes to read the
+     * wrong file: the suffix is invisible in the compose file, and an operator
+     * who changed the monitor's path would silently move this one too.
+     */
+    RECOVERY_HEARTBEAT_PATH: z.string().trim().min(1).default('/tmp/nexa-recovery.heartbeat'),
+    /**
+     * Whether an operator may upload an archive at all.
+     *
+     * On by default, and switchable off for an installation that would rather
+     * restore only from its own retained runs. Reported through the capabilities
+     * endpoint so the Web Admin says the feature is off rather than offering a
+     * button the server refuses — which is the same rule as everywhere else here:
+     * hiding what the server serves is the same defect as offering what it
+     * refuses, seen from the other side.
+     */
+    RECOVERY_UPLOAD_ENABLED: booleanish.default(true),
+    /**
+     * How long a FINISHED recovery request row is kept.
+     *
+     * A year, matching `BACKUP_RUN_RETENTION_DAYS`, because the two answer the
+     * same kind of question after an incident. A row that recorded a CUTOVER is
+     * excluded from the sweep entirely and kept for ever: it is the only record
+     * of what the displaced database is called.
+     */
+    RECOVERY_RETENTION_DAYS: z.coerce.number().int().min(7).max(3650).default(365),
     /**
      * How long a FINISHED backup run row is kept.
      *

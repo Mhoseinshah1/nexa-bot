@@ -110,7 +110,13 @@ export class DrizzleBackupRunRepository implements BackupRunRepository {
     }
   }
 
-  private async active(): Promise<BackupRunRow | null> {
+  /**
+   * The run holding the installation's lock, if any.
+   *
+   * Public now, because the Web status card reports it. It was private and used
+   * only to name a BUSY holder; nothing about the query changed.
+   */
+  async active(): Promise<BackupRunRow | null> {
     const [row] = await this.db
       .select()
       .from(backupRuns)
@@ -241,6 +247,56 @@ export class DrizzleBackupRunRepository implements BackupRunRepository {
       .orderBy(desc(backupRuns.startedAt), desc(backupRuns.id))
       .limit(limit);
     return rows.map(toRow);
+  }
+
+  /**
+   * A keyset page of the history, newest first.
+   *
+   * `(started_at, id)` as a ROW comparison rather than spelled out as
+   * `started_at < x OR (started_at = x AND id < y)`: the tuple form is what the
+   * btree can use as an index condition, and the spelled-out form is what
+   * silently degrades to a sort over the whole table.
+   *
+   * One row more than asked for is fetched, which is how the caller learns there
+   * IS a next page without a second COUNT that could disagree with this query.
+   */
+  async page(input: {
+    limit: number;
+    cursor: { startedAt: Date; id: string } | null;
+  }): Promise<{ rows: readonly BackupRunRow[]; nextCursor: string | null }> {
+    const rows = await this.db
+      .select()
+      .from(backupRuns)
+      .where(
+        input.cursor === null
+          ? undefined
+          : sql`(${backupRuns.startedAt}, ${backupRuns.id}) < (${input.cursor.startedAt}, ${input.cursor.id})`,
+      )
+      .orderBy(desc(backupRuns.startedAt), desc(backupRuns.id))
+      .limit(input.limit + 1);
+    const page = rows.slice(0, input.limit).map(toRow);
+    const last = page.at(-1);
+    const nextCursor =
+      rows.length > input.limit && last !== undefined
+        ? `${last.startedAt.toISOString()}|${last.id}`
+        : null;
+    return { rows: page, nextCursor };
+  }
+
+  /**
+   * How many runs carry an unresolved `OUTCOME_UNKNOWN` delivery.
+   *
+   * A COUNT rather than the length of `withUnknownDelivery(limit)`, because that
+   * method is bounded and a count derived from a bounded list reports the bound
+   * as the answer once the backlog exceeds it. The number is on the status card,
+   * where "20" meaning "at least 20" would be a quiet lie.
+   */
+  async countUnknownDeliveries(): Promise<number> {
+    const [row] = await this.db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(backupRuns)
+      .where(eq(backupRuns.deliveryState, 'OUTCOME_UNKNOWN'));
+    return row?.total ?? 0;
   }
 
   async byId(id: string): Promise<BackupRunRow | null> {

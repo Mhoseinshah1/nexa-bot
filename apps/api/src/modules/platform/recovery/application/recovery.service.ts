@@ -494,6 +494,44 @@ export class RecoveryService {
     return this.require(scope, id);
   }
 
+  /**
+   * Decrypts the archive again, for the EXECUTOR, immediately before the real
+   * restore.
+   *
+   * Again, and not reused, because the verification's plaintext was removed the
+   * moment the restore-test finished. A plaintext dump is the database with the
+   * encryption taken off, and a confirmation can legitimately sit for the length
+   * of the TTL — keeping one on disk across that window is precisely what the
+   * encryption exists to prevent.
+   *
+   * The SAME `openArchive` the verification used, so the bytes the executor
+   * restores are produced by the path the verification proved. A second decrypt
+   * route here would mean the thing that was checked and the thing that is
+   * restored came out of different functions.
+   *
+   * On this service rather than in the executor so there is one archiver
+   * dependency and one decrypt call site; the executor holds no keyring.
+   */
+  async decryptForExecutor(recoveryId: string, workspace: RecoveryWorkspace): Promise<void> {
+    const opened = await this.deps.archiver.open({
+      archivePath: workspace.archivePath,
+      dumpPath: workspace.dumpPath,
+    });
+    if (opened.dumpChecksum !== opened.manifest.checksum) {
+      // The archive verified minutes or hours ago and does not now. Something
+      // changed the file on disk, which is the one case where continuing would
+      // restore bytes nobody checked.
+      this.deps.logger.error(
+        { recoveryId },
+        'a recovery archive stopped matching its manifest between verification and restore',
+      );
+      throw this.refuse(
+        'recovery.checksum_mismatch',
+        'The archive no longer matches its manifest.',
+      );
+    }
+  }
+
   // --- Helpers -------------------------------------------------------------
 
   /**
