@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { testConfig } from './harness';
 
@@ -41,6 +42,19 @@ describe('a terminated PostgreSQL backend', () => {
   const probe = fileURLToPath(new URL('../support/terminate-backend-probe.ts', import.meta.url));
   const config = testConfig();
 
+  /**
+   * Where tsx's CLI is, asked of Node rather than assumed.
+   *
+   * `tsx` is a devDependency of `apps/api`, so the require is rooted there. Under
+   * pnpm the real file lives in the virtual store and its path is not predictable
+   * from the repository layout — which is why the hard-coded `.bin` path worked
+   * here and not in CI.
+   */
+  const tsxCli = (): string =>
+    createRequire(fileURLToPath(new URL('../../apps/api/package.json', import.meta.url))).resolve(
+      'tsx/cli',
+    );
+
   interface Run {
     readonly code: number | null;
     readonly output: string;
@@ -48,22 +62,37 @@ describe('a terminated PostgreSQL backend', () => {
 
   const run = (mode: 'idle' | 'transaction'): Promise<Run> =>
     new Promise((resolve) => {
-      // `node_modules/.bin/tsx`, the workspace's own runner. Resolved from this
-      // file rather than taken from PATH so the child runs the same TypeScript
-      // loader the rest of the repository does.
-      const tsx = fileURLToPath(new URL('../../node_modules/.bin/tsx', import.meta.url));
-      const child = spawn(tsx, [probe, mode], {
+      /*
+       * The tsx CLI resolved through NODE's resolver, rooted at `apps/api` — which
+       * is where `tsx` is actually a dependency.
+       *
+       * It used to be the literal path `node_modules/.bin/tsx`. That exists in this
+       * development environment, because pnpm happened to hoist the bin to the
+       * workspace root, and does NOT exist in CI: `spawn` failed with ENOENT, and
+       * because only `'close'` was handled the case sat there until the 60-second
+       * timeout killed it. Two bugs in one line — a path that guessed at pnpm's
+       * layout, and a failure mode that reported as a timeout instead of as the
+       * thing that happened.
+       */
+      const child = spawn(process.execPath, [tsxCli(), probe, mode], {
         env: { ...process.env, DATABASE_URL: config.DATABASE_URL },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let output = '';
       child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')));
       child.stderr.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')));
+      // A spawn that never starts must fail LOUDLY and at once. Without this the
+      // promise never settles and the verdict is "timed out", which says nothing
+      // about the probe and nothing about the product.
+      child.on('error', (error) =>
+        resolve({ code: null, output: `${output}\nSPAWN FAILED: ${error.message}` }),
+      );
       child.on('close', (code) => resolve({ code, output }));
     });
 
   it('does not kill a process whose IDLE pooled connection is terminated', async () => {
     const { code, output } = await run('idle');
+    expect(output).not.toContain('SPAWN FAILED');
     // The exact failure mode, named, so a non-zero exit for some other reason is
     // not mistaken for this one.
     expect(output).not.toContain('UNCAUGHT');
@@ -82,6 +111,7 @@ describe('a terminated PostgreSQL backend', () => {
      * listener has to be on the CLIENT, attached on `connect`.
      */
     const { code, output } = await run('transaction');
+    expect(output).not.toContain('SPAWN FAILED');
     expect(output).not.toContain('UNCAUGHT');
     expect(output).not.toContain('NOT REJECTED');
     expect(output).not.toContain('NOT RECOVERED');

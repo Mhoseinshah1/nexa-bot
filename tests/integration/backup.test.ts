@@ -815,10 +815,35 @@ describe('backup against a real database', () => {
      * this. The other cases in this file construct their own `BackupService` with a
      * hardcoded scope.
      */
-    expect(context.container.installationTenantId).toBeNull();
+    /*
+     * Its OWN context, with a writable work directory.
+     *
+     * `BACKUP_WORK_DIR` defaults to `/var/lib/nexa/backups`, and this case runs the
+     * real pipeline through `container.backup` rather than through the local
+     * `service()` helper that every other case uses — so it is the one case that
+     * obeys that default. This session runs as root and can create that path; the
+     * CI runner cannot, so the run FAILED at DUMP and `cmdRun` returned 1. The case
+     * passed locally for a reason that had nothing to do with what it tests, which
+     * is the same trap the work-directory case above records: a test that only
+     * passes as root does not run where it matters.
+     */
+    const cliWorkDir = await mkdtemp(join(tmpdir(), 'nexa-backup-cli-'));
+    const cli = await createTestContext({ BACKUP_WORK_DIR: cliWorkDir });
+    try {
+      await cli.reset();
+      await runTheCliCase(cli.container);
+    } finally {
+      await cli.close();
+      await rm(cliWorkDir, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  /** The body of the case above, so its context can be closed whatever happens. */
+  async function runTheCliCase(container: TestContext['container']): Promise<void> {
+    expect(container.installationTenantId).toBeNull();
 
     // An open failure, recorded the way the worker's failure path records it.
-    await context.container.opsLog.record(
+    await container.opsLog.record(
       { tenantId: SEED_IDS.tenantA as never, botInstanceId: null },
       {
         code: 'backup.run_failed',
@@ -828,16 +853,16 @@ describe('backup against a real database', () => {
       },
     );
 
-    const code = await cmdRun(context.container);
+    const code = await cmdRun(container);
     expect(code).toBe(0);
     // The tenant is now known, which is what lets the recorder address anything.
-    expect(context.container.installationTenantId).toBe(SEED_IDS.tenantA);
+    expect(container.installationTenantId).toBe(SEED_IDS.tenantA);
 
     // And the success was recorded against it, so the open failure is resolved.
     // By CODE, not by dedupe key: the success report carries `recoversDedupeKey`
     // and no `dedupeKey` of its own, so the recovery row's key is null. A first
     // version of this query filtered on the key and found only the failure.
-    const events = await context.container.database.db.execute(
+    const events = await container.database.db.execute(
       sql`SELECT code, resolved_at FROM operational_events
           WHERE code IN ('backup.run_failed', 'backup.run_ok') ORDER BY code`,
     );
@@ -846,7 +871,7 @@ describe('backup against a real database', () => {
     const ok = rows.find((row) => row.code === 'backup.run_ok');
     expect(ok).toBeDefined();
     expect(failed?.resolved_at).not.toBeNull();
-  }, 180_000);
+  }
 
   it('parses a real manifest against the frozen schema', async () => {
     const outcome = await service().run('MANUAL');
