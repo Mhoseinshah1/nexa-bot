@@ -641,12 +641,21 @@ describe('telegram webhook body limit', () => {
   });
 
   it('still refuses an oversized body that declares a small content-length', async () => {
-    // The limit is on the STREAM, not on the header. A guard that read
-    // `content-length` would be advisory, and this is the request that shows it:
-    // Fastify counts the bytes it actually receives.
+    /*
+     * The limit is on the STREAM, not on the header. A guard that read
+     * `content-length` would be advisory, and this is the request that shows it:
+     * Fastify counts the bytes it actually receives.
+     *
+     * `toBe(413)`, not `not.toBe(201)`, and the difference is whether this case can
+     * fail at all. With the route limit REMOVED the request still does not get 201 —
+     * it reaches the end of the body, the received length disagrees with the
+     * declared `content-length`, and Fastify answers 400. So the loose assertion was
+     * green under the exact mutation this case exists to catch, which the review of
+     * this branch found. 413 is the limit refusing; 400 is the length mismatch.
+     */
     const body = updateOfSize(TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES + 1_000);
     const response = await post(body, { 'content-length': '20' });
-    expect(response.statusCode).not.toBe(201);
+    expect(response.statusCode).toBe(413);
   });
 
   it('accepts a body under the limit', async () => {

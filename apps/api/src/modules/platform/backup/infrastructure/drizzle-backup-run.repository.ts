@@ -305,16 +305,36 @@ export class DrizzleBackupRunRepository implements BackupRunRepository {
             AND candidate.delivery_state <> 'OUTCOME_UNKNOWN'
             -- The most recent SUCCEEDED run: the scheduler reads it to decide
             -- whether a backup is due.
+            --
+            -- The predicate is lastSucceededAt's, CHARACTER FOR CHARACTER,
+            -- including the verified_at test, because that is the row this
+            -- exclusion exists to protect. It used to filter on the state alone,
+            -- and nothing ties SUCCEEDED to a non-null verified_at -- no CHECK
+            -- constraint, only the pipeline's own ordering. So a SUCCEEDED row
+            -- with no verification (a future finish path, a hand-repaired row)
+            -- would absorb this exclusion, the newest VERIFIED success would
+            -- become eligible, and deleting it makes lastSucceededAt return
+            -- null: the scheduler then concludes no backup has ever succeeded and
+            -- derives its whole schedule from the deletion. Two predicates for
+            -- one row is how they come to disagree.
             AND candidate.id <> COALESCE(
               (SELECT newest.id FROM ${backupRuns} AS newest
-                WHERE newest.state = 'SUCCEEDED'
+                WHERE newest.state = 'SUCCEEDED' AND newest.verified_at IS NOT NULL
                 ORDER BY newest.started_at DESC, newest.id DESC
                 LIMIT 1),
               '00000000-0000-0000-0000-000000000000'::uuid
             )
-            -- And the most recent run of any state: the one being diagnosed.
+            -- And the most recent FINISHED run: the one being diagnosed.
+            --
+            -- Finished, not "of any state". An in-flight RUNNING row is always the
+            -- newest, and it is already protected by the clause above — so letting
+            -- it absorb this exclusion means the newest row an operator can
+            -- actually read becomes eligible while a backup happens to be running.
+            -- The row this protects is the one somebody opens when something has
+            -- just gone wrong, and a row that has not finished is not that row.
             AND candidate.id <> COALESCE(
               (SELECT newest.id FROM ${backupRuns} AS newest
+                WHERE newest.finished_at IS NOT NULL
                 ORDER BY newest.started_at DESC, newest.id DESC
                 LIMIT 1),
               '00000000-0000-0000-0000-000000000000'::uuid

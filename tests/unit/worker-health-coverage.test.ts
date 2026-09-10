@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -6,12 +6,19 @@ import { describe, expect, it } from 'vitest';
  * Every loop that can report its own freshness must be consulted by the
  * worker's health check.
  *
- * The aggregation itself is a `filter` and needs no test. The risk that is
- * real, and that no behavioural test can catch, is a loop being OMITTED — added
- * to the container, given an `isFresh`, started by the worker, and never named
- * in the check. That is exactly the state the codebase was in for three loops:
- * the relay, the two sweepers and the dispatcher each had a running timer and
- * no representation in any health signal, and nothing anywhere said so.
+ * The aggregation is `stalledLoops`, and it is tested in `loop-health.test.ts`.
+ * An earlier version of this docblock said it "is a `filter` and needs no test",
+ * which is recorded in `docs/hardening-falsification.md` as the false comment that
+ * let the filter be replaced with `[]` — a worker reporting healthy with every
+ * loop dead — while the whole suite stayed green. The sentence survived into this
+ * file after the branch that refuted it, which the review caught.
+ *
+ * What THIS file covers is the other risk, and no behavioural test can catch it: a
+ * loop being OMITTED — added to the container, given an `isFresh`, started by the
+ * worker, and never named in the check. That is exactly the state the codebase was
+ * in for three loops: the relay, the two sweepers and the dispatcher each had a
+ * running timer and no representation in any health signal, and nothing anywhere
+ * said so.
  *
  * "Remember to add it" is not a mechanism. This reads the SOURCE, the same way
  * `secret-registry.test.ts` reads the schema rather than trusting an import,
@@ -23,25 +30,32 @@ describe('worker health coverage', () => {
   const container = readFileSync(join(root, 'apps/api/src/container.ts'), 'utf8');
   const worker = readFileSync(join(root, 'apps/api/src/main.worker.ts'), 'utf8');
 
+  /** Every `.ts` file under a directory, so the scan below keeps no list. */
+  const sourceFiles = (dir: string): readonly string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) return sourceFiles(path);
+      return entry.isFile() && path.endsWith('.ts') ? [path] : [];
+    });
+
   /**
    * Container members whose class declares `isFresh`.
    *
-   * Found from the container's own interface rather than from a hand-kept list,
-   * so a loop added tomorrow is in scope tomorrow.
+   * BOTH halves are derived. The member scan reads the container's own interface,
+   * and the file scan now walks `apps/api/src` — it used to be a hand-kept list of
+   * five paths, so a freshness-bearing loop added in a NEW file contributed no class
+   * name, its container member was filtered out, and "names every freshness-bearing
+   * loop" passed vacuously for exactly the loop that needed covering. That is the
+   * failure `require_dir` in `check-boundaries.sh` exists to refuse, and the review
+   * of this branch found this file committing it.
    */
   const freshnessBearing = (): readonly string[] => {
     const members = [...container.matchAll(/^ {2}readonly (\w+):\s*([\w<>[\]]+);/gm)].map(
       (match) => ({ name: match[1] ?? '', type: match[2] ?? '' }),
     );
     const classesWithIsFresh = new Set<string>();
-    for (const file of [
-      'apps/api/src/modules/platform/eventing/infrastructure/outbox-relay.ts',
-      'apps/api/src/modules/platform/identity/application/retention-sweeper.ts',
-      'apps/api/src/modules/control/notifications/application/notification-dispatcher.ts',
-      'apps/api/src/modules/platform/backup/application/backup-scheduler.ts',
-      'apps/api/src/modules/platform/panels/application/panel-monitor.service.ts',
-    ]) {
-      const source = readFileSync(join(root, file), 'utf8');
+    for (const file of sourceFiles(join(root, 'apps/api/src'))) {
+      const source = readFileSync(file, 'utf8');
       const declared = [...source.matchAll(/^export class (\w+)/gm)].map((m) => m[1] ?? '');
       if (/^\s{2}(?:iterationIsFresh|isFresh)\(/m.test(source)) {
         for (const name of declared) classesWithIsFresh.add(name);

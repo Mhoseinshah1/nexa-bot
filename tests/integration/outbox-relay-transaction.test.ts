@@ -335,8 +335,17 @@ describe('the relay commits the claim and the effect together', () => {
     expect(message?.publishedAt).toBeNull();
     expect(message?.attempts).toBe(0);
     expect(message?.lastError).toBeNull();
-    // A batch that died is not progress. This is the health half: a relay whose
-    // connections are being killed must go stale rather than report fresh.
+    /*
+     * A batch that died is not progress — and this relay was never `start()`ed, so
+     * `isFresh` would answer false whether or not `processBatch` recorded anything.
+     * The assertion is therefore about the UNSTARTED relay and nothing more, which
+     * is why it is stated that way rather than as a claim about the dead connection.
+     *
+     * The real coverage for "a batch that threw records no progress" is
+     * `worker-loop-health.test.ts`, where a relay that has completed a batch is
+     * compared against one that has not. An earlier version of this line claimed to
+     * be that coverage; the review of this branch found that it could not fail.
+     */
     expect(relay.isFresh(now)).toBe(false);
 
     // The pool recovers, and the retry is an ordinary success — so the kill left

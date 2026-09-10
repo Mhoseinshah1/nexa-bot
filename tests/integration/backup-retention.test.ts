@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createTestContext, type TestContext } from './harness';
+import { SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { backupRuns } from '../../apps/api/src/infrastructure/persistence/schema';
 import { DrizzleBackupRunRepository } from '../../apps/api/src/modules/platform/backup/infrastructure/drizzle-backup-run.repository';
 
@@ -60,6 +61,15 @@ describe('backup run retention', () => {
     startedAt: Date;
     finishedAt: Date | null;
     deliveryState?: string;
+    /**
+     * Whether a SUCCEEDED row carries its verification.
+     *
+     * Defaults to true, because the pipeline only ever writes SUCCEEDED after a
+     * passed verification. It is a parameter because NOTHING IN THE SCHEMA says so
+     * — there is no CHECK tying the two — so the unverified combination is a state
+     * the database admits and a future finish path could produce.
+     */
+    verified?: boolean;
   }): Promise<string> => {
     const id = input.id ?? randomUUID();
     await context.container.database.db.insert(backupRuns).values({
@@ -72,7 +82,7 @@ describe('backup run retention', () => {
       leaseOwner: 'test',
       leaseHeartbeatAt: input.startedAt,
       deliveryState: input.deliveryState ?? 'SUCCEEDED',
-      verifiedAt: input.state === 'SUCCEEDED' ? input.startedAt : null,
+      verifiedAt: input.state === 'SUCCEEDED' && input.verified !== false ? input.startedAt : null,
       cleanupOk: true,
     } as never);
     return id;
@@ -85,6 +95,77 @@ describe('backup run retention', () => {
       .orderBy(backupRuns.startedAt);
     return rows.map((row) => row.id);
   };
+
+  it('protects the most recent VERIFIED success, not merely the most recent SUCCEEDED row', async () => {
+    /*
+     * Review finding 4. The exclusion filtered on the state alone while
+     * `lastSucceededAt()` — the reader it exists to protect — also requires
+     * `verified_at IS NOT NULL`. Two predicates for one row.
+     *
+     * Nothing in the schema ties them: there is no CHECK constraint making a
+     * SUCCEEDED row carry a verification, only the pipeline's own ordering. So an
+     * unverified SUCCEEDED row absorbed the exclusion, the newest VERIFIED success
+     * became eligible, and deleting it makes `lastSucceededAt()` return null — the
+     * scheduler then concludes no backup has ever succeeded and derives its whole
+     * schedule from the deletion. That is exactly the harm ADR-0027 says this
+     * exclusion prevents.
+     *
+     * All three rows are past the cutoff, so only an exclusion can save any of
+     * them. The newest is a FAILED row, and it is there to absorb the
+     * most-recent-finished exclusion — without it the unverified success would be
+     * kept by THAT clause and the case could not tell the two apart.
+     */
+    const verified = await insert({
+      state: 'SUCCEEDED',
+      startedAt: ancient(500),
+      finishedAt: ancient(500),
+    });
+    const unverified = await insert({
+      state: 'SUCCEEDED',
+      startedAt: ancient(400),
+      finishedAt: ancient(400),
+      verified: false,
+    });
+    const newest = await insert({
+      state: 'FAILED',
+      startedAt: ancient(390),
+      finishedAt: ancient(390),
+    });
+
+    await context.container.backupRuns.purgeFinishedBefore(CUTOFF, 100);
+
+    const remaining = await ids();
+    // The verified one survives, because it is the row the scheduler reads.
+    expect(remaining).toContain(verified);
+    // The newest finished row survives too, by the other exclusion — stated so a
+    // reader can see which clause is doing which job.
+    expect(remaining).toContain(newest);
+    // And the unverified success does not get to stand in for the verified one.
+    expect(remaining).not.toContain(unverified);
+  });
+
+  it('protects the most recent FINISHED run even while another is RUNNING', async () => {
+    /*
+     * The same finding's second half. The exclusion ordered over every state, and a
+     * RUNNING row is always the newest — so it absorbed the exclusion meant for "the
+     * run being diagnosed", and the newest row an operator can actually READ became
+     * eligible whenever a backup happened to be in flight.
+     *
+     * A RUNNING row needs no protection from this clause: it is already excluded by
+     * the state test above, which exists because that row is the installation's
+     * backup lock.
+     */
+    const newestFinished = await insert({
+      state: 'FAILED',
+      startedAt: ancient(400),
+      finishedAt: ancient(400),
+    });
+    await insert({ state: 'RUNNING', startedAt: ancient(399), finishedAt: null });
+
+    await context.container.backupRuns.purgeFinishedBefore(CUTOFF, 100);
+
+    expect(await ids()).toContain(newestFinished);
+  });
 
   it('removes a finished run that is old enough', async () => {
     // The ordinary case, and it must work or the table has no policy at all.
@@ -307,18 +388,37 @@ describe('backup run retention', () => {
   });
 
   it('leaves every other table alone', async () => {
-    // A purge that took a neighbouring table with it is the failure mode worth
-    // one cheap assertion: `operational_events` holds the conditions these runs
-    // opened, and it is append-only by trigger.
+    /*
+     * A purge that took a neighbouring table with it is the failure mode worth one
+     * cheap assertion. `operational_events` is the neighbour that matters: it holds
+     * the conditions these runs opened and it is append-only by trigger.
+     *
+     * The row is RECORDED here rather than assumed. The first version of this case
+     * counted an EMPTY table before and after — nothing in this file opens a
+     * condition, because the rows are inserted directly — so it compared 0 to 0 and
+     * would have passed if the purge had deleted the whole table. The review of this
+     * branch found that. One real row is the difference between a guard and a
+     * decoration.
+     */
+    await context.container.opsLog.record(
+      { tenantId: SEED_IDS.tenantA as never, botInstanceId: null },
+      { code: 'backup.run_failed', severity: 'ERROR', message: 'a neighbour to preserve' },
+    );
     await insert({ state: 'SUCCEEDED', startedAt: ancient(30), finishedAt: ancient(30) });
     await insert({ state: 'SUCCEEDED', startedAt: NOW, finishedAt: NOW });
-    const before = await context.container.database.db.execute(
-      sql`SELECT count(*)::int AS n FROM operational_events`,
-    );
+
+    const count = async (): Promise<number> => {
+      const rows = await context.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM operational_events`,
+      );
+      return (rows.rows as unknown as readonly { n: number }[])[0]?.n ?? -1;
+    };
+    const before = await count();
+    // The premise, asserted: without this the comparison below is 0 against 0.
+    expect(before).toBeGreaterThan(0);
+
     await runs.purgeFinishedBefore(CUTOFF, 100);
-    const after = await context.container.database.db.execute(
-      sql`SELECT count(*)::int AS n FROM operational_events`,
-    );
-    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+
+    expect(await count()).toBe(before);
   });
 });
