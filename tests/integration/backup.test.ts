@@ -3,6 +3,7 @@ import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from 'pg';
+import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { BackupManifest } from '@nexa/contracts';
 import { createTestContext, testConfig, type TestContext } from './harness';
@@ -703,6 +704,57 @@ describe('backup against a real database', () => {
     expect(next.kind).toBe('COMPLETED');
     if (next.kind !== 'COMPLETED') throw new Error('unreachable');
     expect(next.run.state).toBe('SUCCEEDED');
+  }, 180_000);
+
+  it('records what a run is attributable to, and invents no human for a scheduled one', async () => {
+    /*
+     * Item B of the hardening audit, and the audit's own wording was that the
+     * backup module has "no ScopeContext, no ActorContext, no idempotency key, no
+     * audit row". That is true, and ADR-0025 now argues each of those as a decision
+     * rather than leaving the grep to speak for itself — so this case asserts the
+     * SOURCE OF ACCOUNTABILITY that actually exists, which is the run row.
+     *
+     * The rule with teeth is the second half: a SCHEDULED run must not acquire a
+     * human. Attribution is by trigger because the trigger is a fact the pipeline
+     * has; an administrator id would have to be invented, and a false attribution
+     * is worse than an absent one. `CLAUDE.md` forbids fabricated actors in the
+     * same sentence as placeholder abstractions.
+     *
+     * Asserting that a ceremonial duplicate audit row DOES NOT exist is deliberate
+     * too: two rows carrying the same id, times, trigger and outcome are two rows
+     * that come to disagree the first time a failure lands between them.
+     */
+    const manual = await service().run('MANUAL');
+    if (manual.kind !== 'COMPLETED') throw new Error('unreachable');
+    const scheduled = await service().run('SCHEDULED');
+    if (scheduled.kind !== 'COMPLETED') throw new Error('unreachable');
+
+    // The trigger is recorded truthfully, both ways round, so the column is
+    // carrying information rather than a constant.
+    expect(manual.run.trigger).toBe('MANUAL');
+    expect(scheduled.run.trigger).toBe('SCHEDULED');
+
+    for (const run of [manual.run, scheduled.run]) {
+      // A stable identity, and the times that bound the run. This is what an
+      // operator reconciling "which backup is this Telegram document" has.
+      expect(run.id).toMatch(/^[0-9a-f-]{36}$/);
+      expect(run.startedAt).toBeInstanceOf(Date);
+      expect(run.finishedAt).toBeInstanceOf(Date);
+      expect(run.finishedAt!.getTime()).toBeGreaterThanOrEqual(run.startedAt.getTime());
+      // The PROCESS identity, which is what the architecture actually knows about
+      // who took the backup. Never a person: nothing in this release knows which.
+      expect(run.leaseOwner === null || typeof run.leaseOwner === 'string').toBe(true);
+      expect(run.checksum).not.toBeNull();
+    }
+
+    // And no audit row was invented for either. `audit_logs` is tenant-scoped and
+    // a backup is installation-wide, so a row here would have to carry a fabricated
+    // scope and a fabricated actor.
+    const audits = await context.container.database.db.execute(
+      sql`SELECT count(*)::int AS total FROM audit_logs
+          WHERE entity_id = ${manual.run.id} OR entity_id = ${scheduled.run.id}`,
+    );
+    expect((audits.rows as unknown as readonly { total: number }[])[0]?.total).toBe(0);
   }, 180_000);
 
   it('parses a real manifest against the frozen schema', async () => {

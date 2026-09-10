@@ -296,6 +296,59 @@ alert every night, and `backup.run_ok` closes it. The recovery is recorded befor
 the run row is finished, so a crash between the two leaves the condition open
 rather than resolved.
 
+### Who a backup is attributable to, and why there is no audit row for a run
+
+The owner's hardening brief asks for a manual backup to be attributable to the
+actual operator "where the architecture has an operator actor". In this release it
+does not, and that is the finding rather than a gap to paper over.
+
+`backup run` is a CLI invoked on the host. The actor model here has exactly two
+kinds of actor — an `admins` row reached through the Web Admin, and `SYSTEM_JOB` —
+and a shell user on the box is neither. Recording one would mean either inventing
+an administrator id or addressing the run to a tenant that has nothing to do with
+it, and `CLAUDE.md` forbids both in the same sentence ("no fabricated actors").
+
+So attribution is by TRIGGER, which is a fact the pipeline actually has:
+
+- `MANUAL` means a human ran the CLI on the host. The record names the host
+  (`lease_owner` is the process identity) and the time. It does not name a person,
+  because nothing in this release knows which person.
+- `SCHEDULED` means the worker's timer fired. It names no human at all, which is
+  the point: a system-triggered run that carried an administrator's name would be a
+  false attribution, and a false one is worse than an absent one.
+
+**`backup_runs` is the accountability record.** A separate generic audit row would
+carry the same id, the same timestamps, the same trigger and the same outcome, and
+would add a scope and an actor that would both have to be invented. Two rows saying
+the same thing is how they come to disagree — one written and one not, when a
+failure lands between them. The tests therefore assert the real source of
+accountability (the run row's trigger, times, lease owner, state and failure code)
+rather than the existence of a ceremonial duplicate.
+
+**What is owed**: the Web Admin's Run Backup Now button has a real `ActorContext`
+and a real permission to check, and there the manual path records who. That is the
+disaster-recovery surface's work, and the record it writes belongs beside the other
+authorized mutations rather than in this table.
+
+### A request-level idempotency key does not apply to `backup run`
+
+`docs/conventions.md` requires an idempotency key on every state-changing command,
+and this one does not have an explicit one. That is a decision.
+
+An idempotency key answers "is this the same request I already handled, and may I
+return the first answer?" For a backup the honest answer to a repeat is no: an
+operator who runs `backup run` twice wants two backups, taken at two times, of two
+states of the database. Suppressing the second as a replay would be wrong, and a
+key that never suppresses anything is ceremony.
+
+What the convention is actually protecting against — two effects where the operator
+asked for one — is handled by the partial unique index on `backup_runs`, which
+admits exactly one RUNNING row per installation. A concurrent second invocation is
+told BUSY and the holder's start time; a sequential second invocation is a second
+backup, which is what was asked for. That is a stronger guarantee than a key,
+because it holds across processes and replicas without either of them agreeing on
+anything.
+
 ### The scheduler runs in the worker, and is not a fourth process role
 
 Phase 3C added `monitor` as a third role because panel health is a continuous
