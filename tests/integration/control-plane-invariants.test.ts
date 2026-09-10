@@ -419,16 +419,24 @@ describe('control-plane invariants', () => {
       expect(rows.rows[0].n).toBe(5);
     });
 
-    it('leaves a role an operator created alone', async () => {
+    it('leaves a role an operator created alone, even one sharing a seeded key', async () => {
       // The create-only rule protects a permission somebody withdrew. A role
       // that was never seeded from the catalogue is not this migration's to
       // widen at all.
+      //
+      // The custom role goes in the OTHER tenant, and its existence is
+      // asserted. The first version of this put it in tenant A with
+      // `ON CONFLICT DO NOTHING`, where `roles_tenant_key_key` forbids a second
+      // role named `operator` — so the insert did nothing, the assertion counted
+      // the permissions of a role that was never created, and the test passed
+      // with `WHERE is_system = true` deleted from the migration. Measured.
       await ctx.container.roles.ensureSystemRoles(tenantA);
       const roleId = ctx.container.ids.uuid();
       await query(`
         INSERT INTO roles (id, tenant_id, key, name, is_system)
-        VALUES ('${roleId}', '${A}', 'operator', 'A custom role that shares a key', false)
-        ON CONFLICT DO NOTHING`);
+        VALUES ('${roleId}', '${B}', 'operator', 'A custom role that shares a seeded key', false)`);
+      const exists = await query(`SELECT count(*)::int AS n FROM roles WHERE id = '${roleId}'`);
+      expect(exists.rows[0].n, 'the fixture role must actually exist').toBe(1);
 
       await query(backfill());
 
@@ -436,6 +444,11 @@ describe('control-plane invariants', () => {
         `SELECT count(*)::int AS n FROM role_permissions WHERE role_id = '${roleId}'`,
       );
       expect(custom.rows[0].n).toBe(0);
+      // And the seeded roles in the other tenant were still served.
+      const seeded = await query(
+        `SELECT count(*)::int AS n FROM role_permissions WHERE tenant_id = '${A}' AND permission_key LIKE 'templates.%'`,
+      );
+      expect(seeded.rows[0].n).toBe(5);
     });
   });
 

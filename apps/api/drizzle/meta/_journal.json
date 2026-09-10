@@ -218,6 +218,13 @@
       "when": 1789065975597,
       "tag": "0030_recovery_displaced_without_cutover",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1789152375597,
+      "tag": "0031_backup_recovery_role_backfill",
+      "breakpoints": true
     }
   ]
 }
