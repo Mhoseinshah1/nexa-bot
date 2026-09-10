@@ -220,19 +220,43 @@ describe('database invariants', () => {
       ).rejects.toThrowError(/recovery_requests_finished_at_check/);
     });
 
-    it('refuses a cutover with no displaced database, and the reverse', async () => {
-      // These two fields are how an operator learns which database is
-      // production. One without the other is a row that cannot answer that.
+    it('refuses a cutover with no displaced database', async () => {
+      // The dangerous direction: production IS the restored candidate and the
+      // row does not say where the data it replaced went. Nothing can answer
+      // that question afterwards, because the name is derived from an id and a
+      // prefix the operator has no reason to know.
       await expect(
         query(`
           INSERT INTO recovery_requests (id, tenant_id, source, state, stage, created_at, updated_at, finished_at, cutover_at)
           VALUES ('01900000-0000-7000-8000-00000000dd0a', ${TENANT}, 'UPLOAD', 'SUCCEEDED', 'DONE', now(), now(), now(), now())`),
       ).rejects.toThrowError(/recovery_requests_cutover_check/);
-      await expect(
-        query(`
-          INSERT INTO recovery_requests (id, tenant_id, source, state, stage, created_at, updated_at, finished_at, displaced_database)
-          VALUES ('01900000-0000-7000-8000-00000000dd0b', ${TENANT}, 'UPLOAD', 'SUCCEEDED', 'DONE', now(), now(), now(), 'nexa_pre_restore_x')`),
-      ).rejects.toThrowError(/recovery_requests_cutover_check/);
+    });
+
+    it('ACCEPTS a displaced database with no cutover, because the cutover reaches that state', async () => {
+      /*
+       * The `RENAMED_OUT` window, and it is a real one rather than a tolerance.
+       *
+       * `ALTER DATABASE` cannot run in a transaction, so a cutover that renamed
+       * the outgoing database and then failed to rename the candidate into place
+       * ends with the displaced name known and no cutover performed —
+       * `CutoverError.outgoingRenamed`. Both reconstruction paths in
+       * `recovery-executor.ts` write that row, and while this constraint refused
+       * it they raised 23514 instead: the recovery went unrecorded, the journal
+       * was never cleared, and every later tick threw inside
+       * `reconcileCutovers` before it could claim anything.
+       */
+      await query(`
+          INSERT INTO recovery_requests (id, tenant_id, source, state, stage, created_at, updated_at, finished_at, displaced_database, failure_code)
+          VALUES ('01900000-0000-7000-8000-00000000dd0b', ${TENANT}, 'UPLOAD', 'FAILED', 'CLEANUP', now(), now(), now(), 'nexa_pre_restore_x', 'recovery.cutover_failed')`);
+      const { rows } = await query(
+        `SELECT displaced_database, cutover_at FROM recovery_requests
+          WHERE id = '01900000-0000-7000-8000-00000000dd0b'`,
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        displaced_database: 'nexa_pre_restore_x',
+        cutover_at: null,
+      });
     });
 
     it('refuses a partial confirmation binding', async () => {

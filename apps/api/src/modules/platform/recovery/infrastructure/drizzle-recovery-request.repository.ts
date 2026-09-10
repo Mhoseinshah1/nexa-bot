@@ -572,12 +572,19 @@ export class DrizzleRecoveryRequestRepository implements RecoveryRequestReposito
    *     The finish-time test already covers this because the CHECK makes the two
    *     equivalent; the state is named anyway, so a reader does not have to know
    *     about that constraint to see the lock is safe.
-   *   - any row with a `cutover_at`. That row names the database production used
-   *     to be, and it is the only record of it — deleting one leaves an operator
-   *     with a `nexa_pre_restore_*` database on their disk and nothing that says
-   *     what it is or whether it may be dropped. Kept indefinitely, like an
-   *     unresolved `OUTCOME_UNKNOWN` delivery, and for the same reason: it is
-   *     the only trace of a thing somebody still has to decide about.
+   *   - any row that NAMES A DISPLACED DATABASE, whether or not it records a
+   *     cutover. That name is the only record of where the data production used
+   *     to hold went — deleting one leaves an operator with a
+   *     `nexa_pre_restore_*` database on their disk and nothing that says what it
+   *     is or whether it may be dropped. Kept indefinitely, like an unresolved
+   *     `OUTCOME_UNKNOWN` delivery, and for the same reason: it is the only trace
+   *     of a thing somebody still has to decide about.
+   *
+   *     `cutover_at` alone is not the test, because a cutover that renamed the
+   *     outgoing database and failed to rename the candidate into place has the
+   *     displaced name and NO cutover — the `RENAMED_OUT` window. Keying retention
+   *     on `cutover_at` would purge exactly the row describing the worst state
+   *     this operation can end in.
    */
   async purgeFinishedBefore(cutoff: Date, limit: number): Promise<number> {
     const rows = await this.db
@@ -591,11 +598,13 @@ export class DrizzleRecoveryRequestRepository implements RecoveryRequestReposito
             sql`, `,
           )})`,
           sql`${recoveryRequests.cutoverAt} IS NULL`,
+          sql`${recoveryRequests.displacedDatabase} IS NULL`,
           sql`${recoveryRequests.id} IN (
             SELECT candidate.id FROM ${recoveryRequests} AS candidate
              WHERE candidate.finished_at IS NOT NULL
                AND candidate.finished_at < ${cutoff}
                AND candidate.cutover_at IS NULL
+               AND candidate.displaced_database IS NULL
              ORDER BY candidate.finished_at ASC, candidate.id ASC
              LIMIT ${limit}
           )`,

@@ -1,0 +1,2 @@
+ALTER TABLE "recovery_requests" DROP CONSTRAINT "recovery_requests_cutover_check";--> statement-breakpoint
+ALTER TABLE "recovery_requests" ADD CONSTRAINT "recovery_requests_cutover_check" CHECK (cutover_at IS NULL OR displaced_database IS NOT NULL);

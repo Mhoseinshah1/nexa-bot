@@ -188,6 +188,31 @@ describe('the production compose topology', () => {
     expect(existsSync(join(__dirname, '../../deploy/bin/publish-web-assets.mjs'))).toBe(true);
   });
 
+  it('installs the PostgreSQL client tools at the server image major version', () => {
+    /*
+     * `pg_dump` REFUSES a server newer than itself.
+     *
+     * So the image's client major and the compose file's server major are one
+     * decision in two files, and a drift between them breaks every backup and
+     * every restore on a correctly installed box — at the first dump, with a
+     * version error, on the pipeline the whole of disaster recovery rests on.
+     * Debian bookworm's own `postgresql-client` is 15, which is why the image
+     * takes PGDG's.
+     *
+     * The Dockerfile's comment CITED this test before it existed. A claim about
+     * testing that leaves no test behind is worse than no claim — CLAUDE.md says
+     * so, and this is the test it names.
+     */
+    const dockerfile = readFileSync(join(__dirname, '../../Dockerfile'), 'utf8');
+    const client = /^ARG PG_MAJOR=(\d+)$/m.exec(dockerfile);
+    expect(client, 'the Dockerfile declares a PG_MAJOR').not.toBeNull();
+    expect(dockerfile).toContain('"postgresql-client-${PG_MAJOR}"');
+
+    const server = /^\s*image: postgres:(\d+)-alpine@sha256:[0-9a-f]{64}$/m.exec(compose);
+    expect(server, 'the compose file pins a digest-addressed postgres image').not.toBeNull();
+    expect(client?.[1]).toBe(server?.[1]);
+  });
+
   it('drops capabilities on every service, including the data ones', () => {
     // Postgres was the one service with the full default set. Its entrypoint
     // needs five capabilities to create and chown PGDATA and then drop to the

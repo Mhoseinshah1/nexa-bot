@@ -947,4 +947,66 @@ describe('the recovery executor', () => {
     // so the next tick does not report the same cutover again.
     expect(await readdir(recoveryRoot)).not.toContain(`cutover-${orphan}.json`);
   });
+
+  it('reconstructs a cutover that renamed the outgoing database and stopped there', async () => {
+    /*
+     * The OTHER journal phase, and the one no constraint would let the executor
+     * record.
+     *
+     * `ALTER DATABASE` cannot run in a transaction, so a cutover that renamed the
+     * outgoing database and then failed to rename the candidate into place ends
+     * with the displaced name known and NO cutover performed — journal phase
+     * `RENAMED_OUT`, `CutoverError.outgoingRenamed`. The reconstruction writes
+     * exactly that row, and `recovery_requests_cutover_check` refused it while it
+     * read `(cutover_at IS NULL) = (displaced_database IS NULL)`: the insert
+     * raised 23514, so the recovery was recorded NOWHERE, the journal was never
+     * cleared, and every later tick threw inside `reconcileCutovers` — which runs
+     * before `reclaimAbandoned` and before any claim, so the executor could never
+     * take another recovery for the life of the process.
+     *
+     * Reachable without anybody making a mistake: a `psql` that loses its
+     * connection after the server committed the second rename reports failure for
+     * a rename that happened, which leaves the live name served by the candidate
+     * and this journal on disk.
+     */
+    const orphan = '01900000-0000-7000-8000-0000000000c9';
+    const displaced = 'nexa_pre_restore_orphanc9';
+    const candidate = 'nexa_candidate_orphanc9';
+    const { writeFile, readdir } = await import('node:fs/promises');
+    await writeFile(
+      join(recoveryRoot, `cutover-${orphan}.json`),
+      JSON.stringify({
+        recoveryId: orphan,
+        phase: 'RENAMED_OUT',
+        liveDatabase: liveName,
+        candidateDatabase: candidate,
+        displacedDatabase: displaced,
+        at: new Date().toISOString(),
+      }),
+      { mode: 0o600 },
+    );
+    expect(await container.recoveryRequests.byIdUnscoped(orphan)).toBeNull();
+
+    await container.recoveryExecutor.tick();
+
+    const row = await container.recoveryRequests.byIdUnscoped(orphan);
+    expect(row?.state).toBe('FAILED');
+    expect(row?.stage).toBe('CLEANUP');
+    // THE ROLLBACK. The operator's previous data is under this name and nothing
+    // else on the installation says so.
+    expect(row?.displacedDatabase).toBe(displaced);
+    expect(row?.candidateDatabase).toBe(candidate);
+    // And NOT a cutover: production is not the candidate, nothing bears the live
+    // name, and a `cutover_at` here would tell an operator the restore is serving.
+    expect(row?.cutoverAt).toBeNull();
+
+    // Cleared, which is what stops the next tick reporting the same cutover — and
+    // which never happened while the write above was refused.
+    expect(await readdir(recoveryRoot)).not.toContain(`cutover-${orphan}.json`);
+
+    // The tick went on to do its other work rather than dying at the top of it.
+    // `reconcileCutovers` runs before `reclaimAbandoned` and before any claim, so
+    // a throw in it is an executor that claims nothing ever again.
+    expect(container.recoveryExecutor.isFresh(container.clock.now().getTime())).toBe(true);
+  });
 });

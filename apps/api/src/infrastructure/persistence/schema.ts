@@ -1802,15 +1802,32 @@ export const recoveryRequests = pgTable(
       sql`(state IN ('SUCCEEDED', 'FAILED')) = (finished_at IS NOT NULL)`,
     ),
     /**
-     * A cutover implies a displaced database, and vice versa.
+     * A cutover implies a displaced database. NOT the reverse.
      *
-     * These two are how an operator learns which database is production. A row
-     * carrying one without the other is a row that cannot answer that, which is
-     * the worst state for the field that matters most after a failure.
+     * These two are how an operator learns which database is production, and the
+     * dangerous direction is the one this refuses: `cutover_at` set with no
+     * displaced name is a row saying production is the restored candidate and not
+     * saying where the data it replaced went.
+     *
+     * The reverse IS representable, because it is a state the cutover genuinely
+     * reaches. `ALTER DATABASE` cannot run in a transaction, so between the two
+     * renames the outgoing database has MOVED and the candidate has not taken its
+     * name — `CutoverError.outgoingRenamed`, journal phase `RENAMED_OUT`. A
+     * recovery that ends there has a displaced database and no cutover, and both
+     * reconstruction paths in `recovery-executor.ts` write exactly that row: the
+     * failure path in `execute`, and `reconcileCutovers` for a journal nothing
+     * recorded. The first version of this check made both of those rows
+     * unrepresentable, so the reconstruction raised 23514 — which left the
+     * recovery unrecorded, the journal uncleared, and every later tick throwing
+     * in `reconcileCutovers` before it could claim anything at all.
+     *
+     * `purgeFinishedBefore` keeps a row with either field set, so the name of the
+     * database holding the operator's previous data survives retention in both
+     * shapes.
      */
     check(
       'recovery_requests_cutover_check',
-      sql`(cutover_at IS NULL) = (displaced_database IS NULL)`,
+      sql`cutover_at IS NULL OR displaced_database IS NOT NULL`,
     ),
     /**
      * A confirmation is all four fields or none of them.

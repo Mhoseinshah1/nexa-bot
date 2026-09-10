@@ -126,3 +126,31 @@ HEADING, which renders outside the query's state switch and therefore before the
 response arrives. Both were asserting over an empty section. Ungating the run
 button left both passing; they now wait on a value the response produced, and
 W-01 and W-02 above are the mutations that prove it.
+
+## The final review round, after the exact-head CI was green
+
+Three rules, added or corrected by the bounded review of PR #18. Produced
+differently from the rows above and said so plainly: `scripts/falsify.sh` reverts
+a predicate in a source file, and two of these rules live in a MIGRATION and in a
+`Dockerfile` rather than in TypeScript. Each mutation below was applied by hand to
+the file named, the focused test was run, the file was restored, and the test was
+re-run green — the same four steps the harness performs, with the mutation in a
+file it cannot reach.
+
+| #    | Rule                                                                             | Mutation                                                                              | Named test                                                                                                | Result |
+| ---- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------ |
+| F-01 | A displaced database with NO cutover is representable — the `RENAMED_OUT` window | `0030_*.sql`: the check back to `(cutover_at IS NULL) = (displaced_database IS NULL)` | `recovery-executor.test.ts` › reconstructs a cutover that renamed the outgoing database and stopped there | KILLED |
+| F-02 | Retention keeps a row naming a displaced database, cutover or not                | delete `displaced_database IS NULL` from both predicates of `purgeFinishedBefore`     | `web-disaster-recovery.test.ts` › never purges a row naming a displaced database, cutover or not          | KILLED |
+| F-03 | The image's PostgreSQL client major IS the compose server's                      | `Dockerfile`: `ARG PG_MAJOR=16` → `15`                                                | `deployment-compose.test.ts` › installs the PostgreSQL client tools at the server image major version     | KILLED |
+
+**What F-01 was.** The check refused the one row both reconstruction paths write
+after a cutover that renamed the outgoing database and failed to rename the
+candidate into place. `reassert` raised 23514, so the recovery was recorded
+nowhere, the journal was never cleared, and every later tick threw inside
+`reconcileCutovers` — which runs before `reclaimAbandoned` and before any claim,
+so the executor would never take another recovery. The displaced name, which is
+the operator's rollback, was lost with it.
+
+**What F-03 was.** The `Dockerfile` comment cited this test before the test
+existed. A claim about testing that leaves no test behind is worse than no claim,
+so the test it named is now the test that exists.

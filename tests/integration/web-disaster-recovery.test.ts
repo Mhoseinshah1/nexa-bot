@@ -876,6 +876,51 @@ describe('web disaster recovery', () => {
     });
   });
 
+  describe('retention', () => {
+    /**
+     * What the sweeper may never remove, and why `cutover_at` alone is the wrong
+     * test for it.
+     *
+     * A row naming a displaced database is the ONLY record of where the data
+     * production used to hold went: the name is a prefix plus a slice of a uuid,
+     * so an operator who loses the row is left with a `nexa_pre_restore_*`
+     * database and nothing saying what it is or whether it may be dropped. That is
+     * true of a completed cutover AND of one that renamed the outgoing database
+     * and stopped there — the `RENAMED_OUT` window, which has the displaced name
+     * and no `cutover_at` at all.
+     */
+    it('never purges a row naming a displaced database, cutover or not', async () => {
+      const insert = async (id: string, displaced: string | null): Promise<void> => {
+        await api.container.database.withClient((client) =>
+          client.query(
+            `INSERT INTO recovery_requests
+               (id, tenant_id, source, state, stage, created_at, updated_at, finished_at,
+                displaced_database, failure_code)
+             VALUES ($1, $2, 'UPLOAD', 'FAILED', 'CLEANUP', $3, $3, $3, $4, 'recovery.cutover_failed')`,
+            [id, tenantA.tenantId, new Date('2020-01-01T00:00:00.000Z'), displaced],
+          ),
+        );
+      };
+      const halfCutOver = '01900000-0000-7000-8000-0000000000a1';
+      const ordinary = '01900000-0000-7000-8000-0000000000a2';
+      await insert(halfCutOver, 'nexa_pre_restore_keepme');
+      await insert(ordinary, null);
+
+      const removed = await api.container.recoveryRequests.purgeFinishedBefore(
+        new Date('2021-01-01T00:00:00.000Z'),
+        100,
+      );
+
+      // The CONTROL: an equally ancient row with no displaced database IS removed,
+      // so this case cannot pass because the sweeper did nothing at all.
+      expect(removed).toBe(1);
+      expect(await api.container.recoveryRequests.byIdUnscoped(ordinary)).toBeNull();
+      const kept = await api.container.recoveryRequests.byIdUnscoped(halfCutOver);
+      expect(kept?.displacedDatabase).toBe('nexa_pre_restore_keepme');
+      expect(kept?.cutoverAt).toBeNull();
+    });
+  });
+
   /** Every file with this basename under a root. For the cleanup assertions. */
   async function findFiles(root: string, basename: string): Promise<string[]> {
     const { readdir } = await import('node:fs/promises');
