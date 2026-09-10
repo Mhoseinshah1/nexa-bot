@@ -58,6 +58,20 @@ import {
   type OperationalScope,
   monitorProfileResponseSchema,
   type MonitorProfileResponse,
+  BACKUP_ROUTES,
+  RECOVERY_ROUTES,
+  backupHistoryResponseSchema,
+  backupStatusResponseSchema,
+  recoveryCapabilitiesResponseSchema,
+  recoveryDetailResponseSchema,
+  recoveryListResponseSchema,
+  runBackupResponseSchema,
+  type BackupHistoryResponse,
+  type BackupStatusResponse,
+  type RecoveryCapabilitiesResponse,
+  type RecoveryDetailResponse,
+  type RecoveryListResponse,
+  type RunBackupResponse,
 } from '@nexa/contracts';
 
 /**
@@ -528,4 +542,120 @@ export function testPanel(input: {
 }): Promise<TestPanelResponse> {
   const { id, ...body } = input;
   return post(PANEL_ROUTES.test(id), body, testPanelResponseSchema);
+}
+
+// ---------------------------------------------------------------------------
+// Backup and disaster recovery
+// ---------------------------------------------------------------------------
+
+export function fetchBackupStatus(): Promise<BackupStatusResponse> {
+  return authedGet(BACKUP_ROUTES.status, backupStatusResponseSchema);
+}
+
+export function fetchBackupHistory(
+  query: { limit?: number; cursor?: string } = {},
+): Promise<BackupHistoryResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  // An empty cursor is OMITTED rather than sent empty: the server refuses a
+  // cursor it did not mint, and `cursor=` is one of those. Sending it would turn
+  // "the first page" into a 400.
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${BACKUP_ROUTES.history}?${suffix}` : BACKUP_ROUTES.history,
+    backupHistoryResponseSchema,
+  );
+}
+
+export function runBackupNow(input: { idempotencyKey: string }): Promise<RunBackupResponse> {
+  return post(BACKUP_ROUTES.run, input, runBackupResponseSchema);
+}
+
+/**
+ * The download URL for an encrypted archive.
+ *
+ * A URL rather than a fetch, because the browser's own navigation is what should
+ * carry a multi-gigabyte file to disk: reading it through `fetch` would buffer
+ * the whole archive in the tab's memory to hand it straight back to a blob, for
+ * a file whose format streams precisely so that nothing has to.
+ *
+ * The session cookie rides the navigation, so this needs no token — which is
+ * also why there is no token here to leak into a URL.
+ */
+export function backupArchiveUrl(id: string): string {
+  return `${API_PREFIX}${BACKUP_ROUTES.download(id)}`;
+}
+
+export function fetchRecoveryCapabilities(): Promise<RecoveryCapabilitiesResponse> {
+  return authedGet(RECOVERY_ROUTES.capabilities, recoveryCapabilitiesResponseSchema);
+}
+
+export function fetchRecoveries(
+  query: { limit?: number; cursor?: string } = {},
+): Promise<RecoveryListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${RECOVERY_ROUTES.list}?${suffix}` : RECOVERY_ROUTES.list,
+    recoveryListResponseSchema,
+  );
+}
+
+export function fetchRecovery(id: string): Promise<RecoveryDetailResponse> {
+  return authedGet(RECOVERY_ROUTES.detail(id), recoveryDetailResponseSchema);
+}
+
+/**
+ * Uploads an encrypted archive as a raw body.
+ *
+ * The `File` is handed to `fetch` directly rather than wrapped in a `FormData`:
+ * the endpoint takes one file and no fields, and a multipart wrapper would mean
+ * the browser buffers and re-encodes a file that may be gigabytes. A `File` IS a
+ * `Blob`, so this streams.
+ *
+ * The declared name travels in a HEADER, and the server treats it as a label to
+ * render and never as a path. Sending it at all is a convenience for an operator
+ * recognising their own file.
+ */
+export async function uploadRecoveryArchive(file: File): Promise<RecoveryDetailResponse> {
+  const response = await fetch(`${API_PREFIX}${RECOVERY_ROUTES.upload}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'content-type': 'application/octet-stream',
+      accept: 'application/json',
+      // `encodeURIComponent` because a header value cannot carry a newline or a
+      // non-ASCII byte, and a filename can carry both. The server decodes,
+      // sanitises and bounds it again — this is about the transport, not trust.
+      'x-nexa-filename': encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) throw toApiError(response.status, payload);
+  return recoveryDetailResponseSchema.parse(payload);
+}
+
+export function verifyRecovery(id: string): Promise<RecoveryDetailResponse> {
+  return post(`${RECOVERY_ROUTES.detail(id)}/verify`, {}, recoveryDetailResponseSchema);
+}
+
+export function confirmRecovery(input: {
+  id: string;
+  phrase: string;
+  artifactChecksum: string;
+  idempotencyKey: string;
+}): Promise<RecoveryDetailResponse> {
+  return post(
+    RECOVERY_ROUTES.confirm(input.id),
+    {
+      phrase: input.phrase,
+      artifactChecksum: input.artifactChecksum,
+      idempotencyKey: input.idempotencyKey,
+    },
+    recoveryDetailResponseSchema,
+  );
 }
