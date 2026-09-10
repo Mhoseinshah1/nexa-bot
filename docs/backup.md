@@ -144,6 +144,93 @@ Every run already verifies by restoring, so this drill is testing the part the
 pipeline cannot test for you: that YOU can do it, with the keys you actually
 hold, on the day it matters.
 
+## Restoring from the Web Admin
+
+The CLI above is one way in. The other is **بکاپ و بازیابی** under **سامانه و
+عملیات** in the Web Admin, which exists because the CLI requires a shell on a
+host — and the day you need a restore most is the day you may not have one.
+
+Four permissions, and they are four on purpose:
+
+| Permission         | Severity | What it buys                                                   |
+| ------------------ | -------- | -------------------------------------------------------------- |
+| `backup.view`      | LOW      | the status, the history, a run's detail, the recovery requests |
+| `backup.run`       | HIGH     | «تهیه بکاپ جدید» — the same pipeline, `trigger: MANUAL`        |
+| `backup.download`  | CRITICAL | the ENCRYPTED archive. Never a plaintext dump                  |
+| `recovery.restore` | CRITICAL | the confirmation that begins a destructive restore             |
+
+### What a restore actually does
+
+Nothing restores into the database serving the request. The sequence is, in
+order, and every step is durable state on a `recovery_requests` row so the
+operation survives a closed browser, a refreshed page, an API restart and the
+executor's own restart:
+
+1. **Upload.** A raw `application/octet-stream` body, streamed to a 0700
+   directory with a random name, counted against `RECOVERY_UPLOAD_MAX_BYTES` as
+   it is written. The declared filename is a label; it never becomes a path.
+2. **Verify.** The container is parsed, the header validated, the key resolved
+   from the server's own keyring, the payload authenticated-decrypted, the
+   SHA-256 compared against the manifest, and the payload checked to BE a
+   `pg_dump` custom archive. The browser never sees a key.
+3. **Restore-test.** A real `pg_restore` into a real, randomly named, freshly
+   created EMPTY database, which is then inspected for tables and a readable
+   migration state and dropped. The plaintext dump is removed.
+4. **Confirm.** `recovery.restore`, plus the phrase `RESTORE NEXA` typed exactly,
+   bound to the artifact's SHA-256 and valid for ten minutes. A confirmation for
+   one archive cannot restore another, and it cannot be replayed.
+5. **Pre-restore backup.** A full backup with `trigger: PRE_RESTORE`, through the
+   unmodified pipeline — dump, encrypt, and verify BY RESTORING. If it does not
+   reach a verified success the recovery aborts here, before anything
+   destructive. There is no break-glass path past this.
+6. **Quiesce.** Durable writes across the installation are refused while the
+   candidate is built, so the restored database cannot be stale on arrival.
+   Reads keep working: an operator supervising a restore is reading.
+7. **Restore the candidate, validate, cut over.** The archive is restored into a
+   NEW database, validated (tables present, migration state readable and
+   compatible, migrated forward if it is merely behind), and only then does
+   production change — by two `ALTER DATABASE ... RENAME TO` statements.
+8. **Readiness.** The same readiness computation the load balancer gets. A
+   recovery is not successful because `pg_restore` exited zero.
+
+### The displaced database, and why nothing drops it
+
+The cutover renames the outgoing database to `nexa_pre_restore_<id>` and renames
+the candidate into its place. **Nothing ever drops the displaced database.** It
+is the rollback: two more renames put it back, with no restore and no archive
+involved, and it is the only copy of the state the restore replaced.
+
+That means disk does not come back by itself. After a recovery you have the
+displaced database, the candidate (now live), and the pre-restore backup's
+archive, and removing the first is a deliberate act taken once you are satisfied:
+
+```bash
+psql -c "SELECT datname FROM pg_database WHERE datname LIKE 'nexa_pre_restore_%'"
+dropdb nexa_pre_restore_<id>        # only when you are sure
+```
+
+### Foreign archives are not supported
+
+An archive from ANOTHER installation cannot be restored here, and the Web Admin
+says so — «پشتیبانی نمی‌شود» — rather than omitting the option. Its data key is
+wrapped under that installation's KEK, which this one does not hold, and the two
+ways to change that are a form that accepts a pasted key (refused: see ADR-0028)
+and a key-import feature that does not exist. Move the KEK into `SECRETS_KEYS`
+deliberately, out of band, and the archive becomes an ordinary one.
+
+### What the Web path does NOT do
+
+**It does not restart anything.** The cutover needs no configuration change —
+the connection string resolves to the renamed database — but the worker, the
+monitor and the recovery executor are separate processes holding their own
+pools, and their own pool error listeners are what let them survive it. A
+`botctl` restart afterwards is still the tidier operational choice.
+
+**It does not delete a displaced database, a candidate left by a refusal, or an
+uploaded archive's workspace after success.** Debris is reported on the row and
+in the operational log rather than cleaned up silently; a recovery that removed
+its own evidence would be a recovery nobody could audit.
+
 ## Relationship to `botctl backup`
 
 `deploy/bin/botctl backup` is the deployment tool's own dump — a `pg_dump` taken

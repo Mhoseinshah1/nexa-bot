@@ -167,7 +167,7 @@ for line in text.splitlines():
         service = line.strip().rstrip(":")
     if "published:" in line and service:
         published.setdefault(service, []).append(line.strip())
-for name in ("postgres", "redis", "api", "worker", "monitor"):
+for name in ("postgres", "redis", "api", "worker", "monitor", "recovery"):
     if published.get(name):
         problems.append(f"{name} publishes a host port: {published[name]}")
 if not published.get("caddy"):
@@ -278,7 +278,7 @@ print("healthy" if "healthy" in [e.get("Health") or "" for e in running] else ""
 done
 pass "the API is ready"
 
-# The worker AND the monitor, not the API alone.
+# The worker, the monitor AND the recovery executor — not the API alone.
 #
 # Both write a heartbeat file that their container healthcheck reads, and the
 # monitor's proves more than existence: it is written only when a round trip to
@@ -289,7 +289,12 @@ pass "the API is ready"
 #
 # This is also the signal `botctl` waits on, so a failure here is a release
 # that `nexa_wait_ready` would refuse.
-for service in worker monitor; do
+# The executor joins them because it is the only process that can restore this
+# installation, and its heartbeat is written on the same terms: after a database
+# round trip, inside a loop that completed. An executor that comes up healthy
+# here is the Web Admin's restore path having a process to land in — without it
+# the confirmation an operator types is accepted and never acted on.
+for service in worker monitor recovery; do
   waited=0
   until [ "$(compose ps --format json "$service" 2>/dev/null | SERVICE="$service" python3 -c '
 import json, os, sys

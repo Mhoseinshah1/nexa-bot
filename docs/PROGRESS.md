@@ -579,6 +579,87 @@ from the Telegram channel. Those two are the next backup work.
 
 No automatic reconciliation of an `OUTCOME_UNKNOWN` delivery, on purpose.
 
+## Web Admin Disaster Recovery — done
+
+One OPERATIONAL section — **بکاپ و بازیابی** under **سامانه و عملیات** — plus the
+backend that makes it real: an authorized administrator can read the backup
+history, inspect a run, take a backup, download an ENCRYPTED archive, upload one,
+have it verified and restore-tested against real PostgreSQL, and then, behind a
+CRITICAL permission and a typed phrase bound to that artifact's checksum, restore
+the whole installation. ADR-0028 records the design; `docs/backup.md` is the
+operator's account of it.
+
+### The rule the whole design is arranged around
+
+**No HTTP request ever restores into the database serving it.** A request can
+upload, verify and confirm; a separate process role — `main.recovery.ts`, the
+fourth — does the destructive work, claims it with a durable lease, and survives
+the browser, the API and itself being restarted, because every step is state on a
+`recovery_requests` row rather than a step in a wizard.
+
+### Cutover by rename
+
+The candidate is restored into a NEW database, validated, and only then does
+production change: `REVOKE CONNECT`, terminate other sessions, rename live to
+`nexa_pre_restore_<id>`, rename the candidate into its place, `GRANT CONNECT` in
+a `finally`. No configuration changes, the irreversible window is two metadata
+statements rather than the length of a restore, and the outgoing database SURVIVES
+under a recorded name — which makes a rollback two more renames instead of another
+restore. Nothing drops it, ever, and `docs/backup.md` says so where an operator
+looks for their disk.
+
+It is survivable only because of the pool error listener Architecture Hardening
+added: `pg` delivers connection death as an `'error'` EVENT, and an unlistened
+`'error'` on an `EventEmitter` throws. ADR-0028 § 3 records that cross-file
+dependency rather than leaving the next reader to rediscover it.
+
+### Quiesce, derived rather than flagged
+
+While a recovery holds the installation, durable writes are refused at the two
+chokepoints every write actually passes — the unit of work and the outbox relay —
+and the refusal is derived from the recovery row's own state, not from a second
+flag that could disagree with it. Reads keep working: an operator supervising a
+restore is reading. `PRE_RESTORE_BACKUP` is deliberately OUTSIDE the window,
+because that stage has to write the backup that makes everything after it
+recoverable.
+
+### What the tests found
+
+Three things the implementation claimed and did not do, each found by writing the
+test the owner's matrix asked for rather than by reasoning:
+
+1. **A confirmation never expired.** `confirmationExpiresAt` was written at
+   confirm time, projected to the Web Admin, and read by nothing — so a request
+   confirmed and abandoned could replace a production database an hour later. The
+   executor now checks it once, as it claims the work.
+2. **A manual backup succeeded during a restore.** The write gate refused the
+   pipeline's individual writes one at a time, the operational-event recorder fell
+   back to its degraded path, and the run still returned COMPLETED. The operator's
+   path now refuses on arrival with `recovery.quiesced`; the gate stays the
+   authority underneath it.
+3. **Two failure codes and two stages had no producer.** `recovery.manifest_invalid`
+   now names a real check — the payload must BE a `pg_dump` custom archive, which
+   is the owner's "pg_dump-format validation" step and was missing — and
+   `recovery.candidate_validation_failed` now names an inspection that could not
+   run, which previously surfaced as the unclassified code in the one stage where
+   an operator most needs to know production was never touched.
+
+### Deliberately absent
+
+**A foreign installation's archive cannot be restored**, and the Web Admin says
+«پشتیبانی نمی‌شود» with the reason rather than omitting the control. The workaround
+is to add that installation's KEK to `SECRETS_KEYS` out of band. There is no form
+that accepts a pasted key and there will not be one; `docs/open-questions.md`
+records why, and what a real key-import feature would have to carry.
+
+**Nothing restarts the worker or the monitor after a cutover.** Their pools
+recover, and a `botctl` restart is still the tidier operational choice.
+
+**Nothing cleans up a displaced database, a candidate a refusal left, or a
+successful upload's workspace.** Debris is reported on the row and in the
+operational log; a recovery that removed its own evidence would be one nobody
+could audit.
+
 ## Phases 4–8
 
 Not started. Scope in `docs/architecture.md`.

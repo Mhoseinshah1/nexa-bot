@@ -4,7 +4,14 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import { chromium } from 'playwright';
-import { ARCHIVED_PANELS_PAGE, INFO, PANELS, ROUTES } from './fixtures.mjs';
+import {
+  ARCHIVED_PANELS_PAGE,
+  INFO,
+  PANELS,
+  RECOVERY_TESTED,
+  RECOVERY_UPLOADED,
+  ROUTES,
+} from './fixtures.mjs';
 
 /**
  * Visual verification for the production Web Admin.
@@ -86,6 +93,7 @@ const PAGES = [
   ['system', '/system'],
   ['system-monitor', '/system?section=monitor'],
   ['system-admins', '/system?section=admins'],
+  ['recovery', '/recovery'],
   ['users-planned', '/users'],
   ['services-planned', '/services'],
   ['orders-planned', '/orders'],
@@ -97,6 +105,34 @@ const PAGES = [
   ['discounts-planned', '/discounts'],
   ['not-found', '/nowhere'],
 ];
+
+/**
+ * Anything on the page that looks like key material or a connection string.
+ *
+ * Run on EVERY capture rather than on the recovery route alone. A secret reaches
+ * a page through a response shape, not through a route, so the route that leaks
+ * one is by definition the route nobody thought to check — and the page that
+ * motivated this check is the one whose whole subject is encrypted archives,
+ * database names and a cutover.
+ *
+ * Matched against the rendered TEXT, so a name that merely contains a database's
+ * name — `nexa_pre_restore_...`, which an operator needs after a cutover — is not
+ * a hit, while a URL carrying a password is.
+ */
+const SECRET_SHAPES = [
+  ['a postgres URL', /postgres(?:ql)?:\/\/[^\s]*/],
+  ['a credential in a URL', /:\/\/[^\s/]+:[^\s/@]+@/],
+  ['a PGPASSWORD', /PGPASSWORD/],
+  ['a KEK environment name', /SECRETS_KEKS?\b/],
+  ['a wrapped-key envelope', /\bv2\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{8,}/],
+  ['a PEM block', /-----BEGIN [A-Z ]+-----/],
+  ['a Telegram bot token', /\b\d{8,12}:[A-Za-z0-9_-]{30,}/],
+];
+
+async function secretsIn(page) {
+  const text = await page.evaluate(() => document.body.textContent ?? '');
+  return SECRET_SHAPES.filter(([, pattern]) => pattern.test(text)).map(([name]) => name);
+}
 
 const browser = await chromium.launch();
 const findings = [];
@@ -195,6 +231,8 @@ for (const view of VIEWS) {
       dir: document.documentElement.getAttribute('dir'),
     }));
 
+    const leaked = await secretsIn(page);
+
     await page.screenshot({
       path: join(OUT, `${view.key}--${name}.png`),
       fullPage: true,
@@ -212,6 +250,7 @@ for (const view of VIEWS) {
       pageScrolledBy,
       stillLoading: unsettled.skeleton,
       showingError: unsettled.errorState,
+      secretsRendered: leaked,
       errors: [...errors],
     });
   }
@@ -338,6 +377,168 @@ for (const view of VIEWS) {
     pageScrolledBy,
     stillLoading: state.skeleton,
     showingError: state.text.includes('خطا در ارتباط با سرور'),
+    secretsRendered: await secretsIn(page),
+    errors: [...errors],
+  });
+
+  await context.close();
+}
+
+/*
+ * The dangerous confirmation, REACHED rather than photographed from a route.
+ *
+ * `/recovery` at rest shows history and requests; the confirmation only exists
+ * after an archive has been uploaded and has PASSED a restore test, and the
+ * button behind it is disabled until the exact phrase is typed. None of that is
+ * addressable by a URL, and it is the screen on this branch where being wrong is
+ * most expensive — so it is driven: choose a file, upload, verify, then type a
+ * near-miss phrase and the real one, capturing both.
+ */
+{
+  const view = VIEWS[0];
+  const context = await browser.newContext({
+    viewport: { width: view.width, height: view.height },
+    deviceScaleFactor: 2,
+    locale: 'fa-IR',
+    colorScheme: view.theme,
+  });
+  await context.addInitScript((theme) => {
+    try {
+      window.localStorage.setItem('nexa.theme', theme);
+    } catch {
+      /* a browser that refuses storage still gets the system theme */
+    }
+  }, view.theme);
+
+  const UPLOADED = RECOVERY_UPLOADED;
+  const TESTED = RECOVERY_TESTED;
+
+  await context.route('**/*', async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    if (path.startsWith('/health/info')) return route.fulfill({ json: INFO });
+    if (path.startsWith(PREFIX)) {
+      const rest = path.slice(PREFIX.length);
+      const method = route.request().method();
+      // The three POSTs of the flow, most specific first. Answering any of them
+      // with the LIST — which a path-prefix match does — fails the client's
+      // schema parse and photographs a toast instead of the state.
+      if (method === 'POST' && rest.endsWith('/verify')) {
+        return route.fulfill({ json: { recovery: TESTED } });
+      }
+      if (method === 'POST' && rest.endsWith('/confirm')) {
+        return route.fulfill({
+          json: { recovery: { ...TESTED, state: 'RESTORE_REQUESTED', stage: 'EMERGENCY_BACKUP' } },
+        });
+      }
+      if (method === 'POST' && rest === '/recoveries/upload') {
+        return route.fulfill({ json: { recovery: UPLOADED } });
+      }
+      const key = Object.keys(ROUTES)
+        .filter((candidate) => rest === candidate || rest.startsWith(`${candidate}/`))
+        .sort((a, b) => b.length - a.length)[0];
+      if (key) return route.fulfill({ json: ROUTES[key] });
+      return route.fulfill({
+        status: 404,
+        json: {
+          error: { kind: 'not_found', code: 'fixture.missing', message: rest, correlationId: 'x' },
+        },
+      });
+    }
+    return route.continue();
+  });
+
+  const page = await context.newPage();
+  const errors = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(`console: ${message.text()}`);
+  });
+  page.on('pageerror', (error) => errors.push(`page: ${error.message}`));
+
+  await page.goto(`http://localhost:${PORT}/recovery`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(2500);
+
+  // A file the page will accept: the size check is client-side courtesy, and the
+  // bytes are never read by the browser — the server is what opens the archive.
+  await page.setInputFiles('input[type=file]', {
+    name: 'nexa-backup-2026-09-09.nxb',
+    mimeType: 'application/octet-stream',
+    buffer: Buffer.from('PGDMP-not-a-real-archive'),
+  });
+  await page.getByRole('button', { name: 'بارگذاری' }).click();
+  await page.waitForTimeout(1200);
+  await page.screenshot({ path: join(OUT, `${view.key}--recovery-uploaded.png`), fullPage: true });
+
+  await page.getByRole('button', { name: 'راستی‌آزمایی و آزمون بازگردانی' }).click();
+  await page.waitForTimeout(1500);
+  await page.screenshot({
+    path: join(OUT, `${view.key}--recovery-restore-tested.png`),
+    fullPage: true,
+  });
+
+  const confirmButton = page.getByRole('button', { name: 'تأیید و شروع بازیابی' });
+  const disabledAtRest = await confirmButton.isDisabled();
+
+  // A NEAR MISS, captured: the operator must be able to see why it is refused.
+  await page.fill('input[dir=ltr]', 'restore nexa');
+  await page.waitForTimeout(400);
+  const disabledOnNearMiss = await confirmButton.isDisabled();
+  await page.screenshot({
+    path: join(OUT, `${view.key}--recovery-confirm-wrong-phrase.png`),
+    fullPage: true,
+  });
+
+  await page.fill('input[dir=ltr]', 'RESTORE NEXA');
+  await page.waitForTimeout(400);
+  const enabledOnExact = await confirmButton.isEnabled();
+  await page.screenshot({
+    path: join(OUT, `${view.key}--recovery-confirm-armed.png`),
+    fullPage: true,
+  });
+
+  await confirmButton.click();
+  await page.waitForTimeout(1500);
+  await page.screenshot({
+    path: join(OUT, `${view.key}--recovery-restore-requested.png`),
+    fullPage: true,
+  });
+
+  await page.evaluate(() => window.scrollTo(0, 5000));
+  const pageScrolledBy = await page.evaluate(() => window.scrollY);
+  await page.evaluate(() => window.scrollTo(0, 0));
+
+  const state = await page.evaluate(() => ({
+    text: document.body.textContent ?? '',
+    skeleton: document.querySelector('.skel') !== null,
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+    theme: document.documentElement.getAttribute('data-theme'),
+    dir: document.documentElement.getAttribute('dir'),
+  }));
+  const leaked = await secretsIn(page);
+
+  // The three properties this pass exists to prove, MEASURED. A screenshot of a
+  // disabled button is not evidence that it was disabled for the right reason.
+  if (!disabledAtRest) errors.push('the confirm button was enabled before any phrase was typed');
+  if (!disabledOnNearMiss) errors.push('the confirm button accepted a lower-case phrase');
+  if (!enabledOnExact) errors.push('the confirm button stayed disabled for the exact phrase');
+  if (!state.text.includes('بازیابی تأیید شد و در صف اجراست.')) {
+    errors.push('the confirmed recovery was not reported back');
+  }
+
+  findings.push({
+    view: view.key,
+    kind: 'interactive',
+    page: 'recovery-confirm-armed',
+    path: '/recovery (uploaded, verified, confirmed)',
+    theme: state.theme,
+    dir: state.dir,
+    horizontalOverflow: state.scrollWidth > state.clientWidth,
+    overflowBy: state.scrollWidth - state.clientWidth,
+    pageScrolledBy,
+    stillLoading: state.skeleton,
+    showingError: state.text.includes('خطا در ارتباط با سرور'),
+    secretsRendered: leaked,
     errors: [...errors],
   });
 
@@ -353,7 +554,8 @@ const bad = findings.filter(
     f.errors.length > 0 ||
     f.pageScrolledBy > 0 ||
     f.stillLoading ||
-    f.showingError,
+    f.showingError ||
+    (f.secretsRendered ?? []).length > 0,
 );
 const wrongTheme = findings.filter((f) => !f.view.includes(f.theme ?? 'none'));
 const wrongDir = findings.filter((f) => f.dir !== 'rtl');
@@ -374,6 +576,12 @@ const summary = {
   documentScrolledInsteadOfShell: findings.filter((f) => f.pageScrolledBy > 0).length,
   stillLoadingAfterSettle: findings.filter((f) => f.stillLoading).length,
   showingErrorState: findings.filter((f) => f.showingError).length,
+  // Zero is the only acceptable value, and it is REPORTED rather than assumed:
+  // a summary that omitted it would make a clean run and an unchecked one look
+  // identical.
+  capturesRenderingSomethingSecretShaped: findings.filter(
+    (f) => (f.secretsRendered ?? []).length > 0,
+  ).length,
   consoleOrPageErrors: findings.reduce((sum, f) => sum + f.errors.length, 0),
   themeMismatches: wrongTheme.length,
   nonRtl: wrongDir.length,

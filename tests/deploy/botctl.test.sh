@@ -160,7 +160,7 @@ assert_ok 'the readiness parser could not be extracted' test -s "$parser"
 library_ready_services="$(env -u NEXA_ROOT -u NEXA_STATE_DIR -u NEXA_LOCK_FILE \
   bash -c '. "$1" >/dev/null 2>&1; printf "%s" "$NEXA_READY_SERVICES"' _ "$NEXA_LIB")"
 assert_equals 'readiness requires a service these fixtures do not model' \
-  'api worker monitor caddy' "$library_ready_services"
+  'api worker monitor recovery caddy' "$library_ready_services"
 
 # The three application roles. The edge has its own block at the end, where the
 # required list is the whole of the library's.
@@ -318,6 +318,43 @@ parser_case '3C: a topology without a monitor still requires its worker' \
   exited "${RUN_HEALTHY}\n${WORKER_EXITED}"
 PARSER_REQUIRED='api worker monitor'
 
+# --- DR: the recovery executor is the only process that can restore ----------
+#
+# It performs no requests and answers nothing, so "the container is running" is
+# all an operator can see — and its absence has a symptom that looks exactly
+# like its presence: a recovery an administrator CONFIRMED, with a CRITICAL
+# permission and a typed phrase, sitting in RESTORE_REQUESTED for ever. A
+# restore about to start and a restore that will never start are the same screen.
+#
+# Each row isolates the executor: everything else is healthy.
+RECOVERY_HEALTHY='{"Service":"recovery","State":"running","Health":"healthy"}'
+RECOVERY_STARTING='{"Service":"recovery","State":"running","Health":"starting"}'
+RECOVERY_UNHEALTHY='{"Service":"recovery","State":"running","Health":"unhealthy"}'
+RECOVERY_EXITED='{"Service":"recovery","State":"exited","Health":"unhealthy"}'
+RECOVERY_RESTARTING='{"Service":"recovery","State":"restarting"}'
+
+PARSER_REQUIRED='api worker monitor recovery'
+parser_case 'DR: api + worker + monitor healthy but the executor STOPPED is not ready' \
+  exited "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}\n${RECOVERY_EXITED}"
+parser_case 'DR: an executor in a crash loop is not ready' \
+  restarting "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}\n${RECOVERY_RESTARTING}"
+parser_case 'DR: an unhealthy executor is not ready — its heartbeat is a real signal' \
+  unhealthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}\n${RECOVERY_UNHEALTHY}"
+parser_case 'DR: an executor still starting is not ready yet' \
+  starting "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}\n${RECOVERY_STARTING}"
+parser_case 'DR: an executor that never appears at all is not ready' \
+  '' "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
+parser_case 'DR: the four roles healthy is ready' \
+  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}\n${RECOVERY_HEALTHY}"
+parser_case 'DR: an executor one-off reporting starting beside a healthy executor is healthy' \
+  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}\n${RECOVERY_STARTING}\n${RECOVERY_HEALTHY}"
+# The rollback direction, for the same reason the monitor has one: a release
+# that predates the executor defines no such service, and demanding one would
+# time out every rollback to it AFTER the assets had already moved.
+PARSER_REQUIRED='api worker monitor'
+parser_case 'DR: a topology without an executor is ready without one' \
+  healthy "${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
+
 # --- D1: the edge is the service an operator meets first ---------------------
 #
 # Caddy is the only container that publishes a port. A release whose api,
@@ -332,9 +369,13 @@ CADDY_STARTING='{"Service":"caddy","State":"running","Health":"starting"}'
 CADDY_UNHEALTHY='{"Service":"caddy","State":"running","Health":"unhealthy"}'
 CADDY_EXITED='{"Service":"caddy","State":"exited","Health":"unhealthy"}'
 CADDY_RESTARTING='{"Service":"caddy","State":"restarting"}'
-APP_HEALTHY="${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}"
+# All four application roles, so the edge rows below isolate the EDGE. Without
+# the executor here, every row expecting `healthy` would be asserting about a
+# topology that is missing a required service — and `D1: the whole topology
+# healthy is ready` would have been testing the opposite of its name.
+APP_HEALTHY="${RUN_HEALTHY}\n${WORKER_HEALTHY}\n${MONITOR_HEALTHY}\n${RECOVERY_HEALTHY}"
 
-PARSER_REQUIRED='api worker monitor caddy'
+PARSER_REQUIRED='api worker monitor recovery caddy'
 parser_case 'D1: the whole application healthy behind a STOPPED edge is not ready' \
   exited "${APP_HEALTHY}\n${CADDY_EXITED}"
 parser_case 'D1: the whole application healthy behind a crash-looping edge is not ready' \
@@ -350,7 +391,7 @@ parser_case 'D1: the whole topology healthy is ready' \
 # The rollback direction again, and the reason the list is an intersection: the
 # CI topology and any release whose compose does not define an edge must still
 # be able to become ready.
-PARSER_REQUIRED='api worker monitor'
+PARSER_REQUIRED='api worker monitor recovery'
 parser_case 'D1: a topology that defines no edge is ready without one' \
   healthy "${APP_HEALTHY}"
 

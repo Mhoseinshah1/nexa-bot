@@ -255,6 +255,64 @@ export const ARCHIVED_PANELS_PAGE = {
   nextCursor: null,
 };
 
+/**
+ * A backup run, shaped by `backupRunSummarySchema`.
+ *
+ * `dumpBytes` and `archiveBytes` are STRINGS because the wire carries a `bigint`
+ * as one. A fixture that sends numbers parses fine in JavaScript and would hide
+ * a real client defect: the page formats them through a helper that takes the
+ * string form, and a number reaching it is how `NaN` gets rendered as a size.
+ */
+const backupRun = (id, over = {}) => ({
+  id,
+  trigger: 'SCHEDULED',
+  state: 'SUCCEEDED',
+  stage: 'CLEANUP',
+  startedAt: iso(180),
+  finishedAt: iso(177),
+  dumpBytes: '184320512',
+  archiveBytes: '61440128',
+  checksum: 'a3f1c9d2b4e5076889aabbccddeeff00112233445566778899aabbccddeeff00',
+  verifiedAt: iso(178),
+  deliveryState: 'SUCCEEDED',
+  deliveryAttemptedAt: iso(177),
+  deliveryDetail: null,
+  failureCode: null,
+  cleanupOk: true,
+  cleanupDetail: null,
+  archiveAvailable: true,
+  ...over,
+});
+
+/** A recovery request, shaped by `recoveryRequestSummarySchema`. */
+const recovery = (id, over = {}) => ({
+  id,
+  source: 'UPLOAD',
+  state: 'UPLOADED',
+  stage: 'PARSE_CONTAINER',
+  createdAt: iso(20),
+  updatedAt: iso(20),
+  requestedBy: 'owner',
+  backupId: null,
+  artifactChecksum: null,
+  failureCode: null,
+  correlationId: '01a05e35-c9ad-7e93-bef3-1ed9b5529500',
+  upload: {
+    sizeBytes: 61440128,
+    archiveSha256: 'b'.repeat(64),
+    clientFilename: 'nexa-backup-2026-09-09.nxb',
+  },
+  verification: null,
+  restoreTest: null,
+  confirmedAt: null,
+  confirmationExpiresAt: null,
+  preRestoreBackupId: null,
+  cutoverAt: null,
+  displacedDatabase: null,
+  finishedAt: null,
+  ...over,
+});
+
 export const ROUTES = {
   '/auth/session': {
     admin: {
@@ -284,6 +342,13 @@ export const ROUTES = {
       'payments.view',
       'resellers.view',
       'reports.view',
+      // The four disaster-recovery keys. Without them the recovery route
+      // photographs its own refusals, which is a real screen but not the one
+      // these captures exist to check.
+      'backup.view',
+      'backup.run',
+      'backup.download',
+      'recovery.restore',
     ],
     expiresAt: iso(-60 * 8),
   },
@@ -462,6 +527,167 @@ export const ROUTES = {
         lastLoginAt: null,
       },
     ],
+  },
+  // --- Backup and disaster recovery ---------------------------------------
+  //
+  // Shaped by `backupStatusResponseSchema`, `backupHistoryResponseSchema`,
+  // `recoveryCapabilitiesResponseSchema` and `recoveryListResponseSchema`. A
+  // fixture that drifts from the frozen schema makes the client's `parse` throw
+  // and the capture photographs a loading skeleton — which is the exact drift
+  // the `stillLoading` measurement was added to catch.
+  '/backups/status': {
+    scheduleEnabled: true,
+    intervalMs: 86400000,
+    lastSucceededAt: iso(180),
+    running: null,
+    // Non-zero on purpose: the third delivery outcome is the one an operator
+    // has to read a sentence about, so the banner is in the frame.
+    unknownDeliveries: 1,
+    quiesced: false,
+  },
+  '/backups': {
+    runs: [
+      backupRun('01a05e35-c9ad-7e93-bef3-1ed9b5529301', { startedAt: iso(180) }),
+      backupRun('01a05e35-c9ad-7e93-bef3-1ed9b5529302', {
+        startedAt: iso(1620),
+        deliveryState: 'OUTCOME_UNKNOWN',
+        deliveryDetail: null,
+      }),
+      backupRun('01a05e35-c9ad-7e93-bef3-1ed9b5529303', {
+        startedAt: iso(3060),
+        trigger: 'MANUAL',
+        // The archive pruned from local disk: the row an operator reads as
+        // «فایل محلی دیگر موجود نیست» rather than as a broken link.
+        archiveAvailable: false,
+      }),
+      backupRun('01a05e35-c9ad-7e93-bef3-1ed9b5529304', {
+        startedAt: iso(4500),
+        state: 'FAILED',
+        stage: 'DELIVER',
+        verifiedAt: null,
+        finishedAt: iso(4498),
+        deliveryState: 'FAILED_DEFINITIVE',
+        failureCode: 'backup.delivery_failed',
+        archiveAvailable: false,
+      }),
+      backupRun('01a05e35-c9ad-7e93-bef3-1ed9b5529305', {
+        startedAt: iso(5900),
+        trigger: 'PRE_RESTORE',
+        cleanupOk: false,
+        cleanupDetail: '/var/lib/nexa/backups/01a05e35/dump.sql',
+      }),
+    ],
+    nextCursor: null,
+  },
+  '/recoveries/capabilities': {
+    uploadEnabled: true,
+    maxUploadBytes: 2147483648,
+    // The limitation this release HAS, reported rather than hidden.
+    foreignInstallationSupported: false,
+    confirmationPhrase: 'RESTORE NEXA',
+    confirmationTtlMs: 600000,
+  },
+  /*
+   * Four recovery requests, one per shape an operator has to be able to read at
+   * a glance: a finished restore, a restore IN PROGRESS, a safe failure, and an
+   * archive that was only ever verified.
+   *
+   * These are rows in the requests table rather than four separate screens,
+   * because that is what the page is: the progress of a destructive operation is
+   * durable state on a row, not a wizard step, which is the whole reason the
+   * recovery survives a closed browser.
+   */
+  '/recoveries': {
+    recoveries: [
+      recovery('01a05e35-c9ad-7e93-bef3-1ed9b5529401', {
+        state: 'RESTORING',
+        stage: 'RESTORE_CANDIDATE',
+        createdAt: iso(6),
+        updatedAt: iso(1),
+        backupId: '01a05e35-c9ad-7e93-bef3-1ed9b5529301',
+        artifactChecksum: 'd'.repeat(64),
+        confirmedAt: iso(5),
+        confirmationExpiresAt: iso(-5),
+        preRestoreBackupId: '01a05e35-c9ad-7e93-bef3-1ed9b5529305',
+      }),
+      recovery('01a05e35-c9ad-7e93-bef3-1ed9b5529402', {
+        state: 'SUCCEEDED',
+        stage: 'DONE',
+        createdAt: iso(60 * 26),
+        updatedAt: iso(60 * 25),
+        backupId: '01a05e35-c9ad-7e93-bef3-1ed9b5529302',
+        artifactChecksum: 'e'.repeat(64),
+        confirmedAt: iso(60 * 26),
+        preRestoreBackupId: '01a05e35-c9ad-7e93-bef3-1ed9b5529305',
+        cutoverAt: iso(60 * 25),
+        displacedDatabase: 'nexa_pre_restore_01a05e35c9ad7e93',
+        finishedAt: iso(60 * 25),
+      }),
+      recovery('01a05e35-c9ad-7e93-bef3-1ed9b5529403', {
+        state: 'FAILED',
+        stage: 'CLEANUP',
+        createdAt: iso(60 * 50),
+        updatedAt: iso(60 * 50),
+        // A SAFE failure: refused before anything destructive, and the code says
+        // which check refused it.
+        failureCode: 'recovery.migration_incompatible',
+        finishedAt: iso(60 * 50),
+      }),
+      recovery('01a05e35-c9ad-7e93-bef3-1ed9b5529404', {
+        state: 'RESTORE_TEST_PASSED',
+        stage: 'AWAIT_CONFIRMATION',
+        createdAt: iso(20),
+        updatedAt: iso(18),
+        backupId: '01a05e35-c9ad-7e93-bef3-1ed9b5529301',
+        artifactChecksum: 'f'.repeat(64),
+      }),
+    ],
+    nextCursor: null,
+  },
+};
+
+/**
+ * The two states the recovery flow's interactive pass drives through.
+ *
+ * Exported rather than inlined in the capture because they are response bodies
+ * shaped by the frozen schemas, which is what this file is for — and because the
+ * second one has to be the FIRST one advanced, not an independently written
+ * object that could disagree with it about the request's own identity.
+ */
+export const RECOVERY_UPLOADED = recovery('01a05e35-c9ad-7e93-bef3-1ed9b5529601', {
+  createdAt: iso(0),
+  updatedAt: iso(0),
+});
+
+export const RECOVERY_TESTED = {
+  ...RECOVERY_UPLOADED,
+  state: 'RESTORE_TEST_PASSED',
+  stage: 'AWAIT_CONFIRMATION',
+  backupId: '01a05e35-c9ad-7e93-bef3-1ed9b5529301',
+  artifactChecksum: 'a3f1c9d2b4e5076889aabbccddeeff00112233445566778899aabbccddeeff00',
+  verification: {
+    formatVersion: 1,
+    backupId: '01a05e35-c9ad-7e93-bef3-1ed9b5529301',
+    // Never the key ID itself: that names a KEK the operator holds, and a
+    // browser is not a place where knowing it buys anything.
+    keyId: 'held',
+    decrypted: true,
+    checksumMatches: true,
+    databaseName: 'nexa',
+    postgresVersion: '16.13',
+    pgDumpVersion: 'pg_dump (PostgreSQL) 16.13',
+    takenAt: iso(180),
+    dumpBytes: 184320512,
+    checksum: 'a3f1c9d2b4e5076889aabbccddeeff00112233445566778899aabbccddeeff00',
+    exclusions: [],
+  },
+  restoreTest: {
+    restored: true,
+    tableCount: 31,
+    migrationVerdict: 'CURRENT',
+    appliedMigrations: 30,
+    expectedMigrations: 30,
+    cutoverPermitted: true,
   },
 };
 
