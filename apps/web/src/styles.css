@@ -1309,6 +1309,23 @@ textarea.input {
 .banner b {
   font-weight: 600;
 }
+/*
+ * A banner's TITLE is a line of its own.
+ *
+ * `Banner` renders `<strong>{title}</strong>{children}` into one flex child, and
+ * nothing separated them — so all sixteen banners that carry both read as one
+ * run-on sentence with a bold prefix: «بازگرداندن کل نصباین آرشیو کار…». Found in
+ * a capture of the restore confirmation, which is the most dangerous control in
+ * the product and the worst possible place for a sentence an operator has to
+ * re-read to parse.
+ *
+ * A shared rule rather than a per-page fix, because the defect is shared: nine of
+ * the sixteen are on pages this branch did not touch.
+ */
+.banner strong {
+  display: block;
+  margin-bottom: 2px;
+}
 .banner.warn {
   background: var(--warn-soft);
   border-color: color-mix(in srgb, var(--warn) 40%, transparent);
