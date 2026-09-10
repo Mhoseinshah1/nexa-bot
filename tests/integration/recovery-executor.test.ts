@@ -416,6 +416,64 @@ describe('the recovery executor', () => {
     expect(await databaseExists(liveName)).toBe(true);
   });
 
+  it('refuses to cut over to a candidate this release cannot account for', async () => {
+    /*
+     * The LAST refusal before the renames, and the only one that cannot be
+     * reached by feeding the pipeline a bad archive.
+     *
+     * A diverged archive is refused earlier, by the restore test, so it never
+     * becomes a confirmed request — which is why this check looked untestable and
+     * why the falsification harness reported SURVIVED for removing it. It is
+     * still load-bearing, and reachable in production by two routes the tests
+     * above cannot produce: a candidate that passed the restore test as
+     * BEHIND-but-migratable and did not become current after `migrateCandidate`,
+     * and an executor running a different release's migration journal than the
+     * api that tested the archive — which is one moment of every rolling update.
+     *
+     * So the STATE is injected rather than the archive: the executor's own deps,
+     * with `compatibility` reporting a verdict this release cannot cut over to.
+     * Reaching into the private field is deliberate and is the narrowest
+     * intervention available — everything else is the production object, so what
+     * runs is the real `runStages` on a real candidate it really restored.
+     */
+    const { recoveryId } = await confirmedRecovery();
+
+    type Deps = {
+      recovery: { compatibility: (applied: readonly unknown[]) => unknown };
+    };
+    const deps = (container.recoveryExecutor as unknown as { deps: Deps }).deps;
+    const real = deps.recovery.compatibility.bind(deps.recovery);
+    deps.recovery.compatibility = () => ({
+      verdict: 'DIVERGED',
+      permitted: false,
+      // NOT migratable: a migration pass would not help, which is the shape that
+      // has to reach the final refusal rather than the migrate-and-recheck path.
+      migratable: false,
+      applied: 30,
+      expected: 30,
+    });
+    try {
+      await container.recoveryExecutor.tick();
+    } finally {
+      deps.recovery.compatibility = real;
+    }
+
+    const row = await container.recoveryRequests.byIdUnscoped(recoveryId);
+    expect(row?.state).toBe('FAILED');
+    expect(row?.failureCode).toBe('recovery.migration_incompatible');
+    // The candidate was BUILT — this refusal happens after a real restore — and
+    // production is still production. That is the property: a refusal this late
+    // costs a candidate database and nothing else.
+    expect(row?.candidateDatabase).not.toBeNull();
+    expect(row?.cutoverAt).toBeNull();
+    expect(row?.displacedDatabase).toBeNull();
+    expect(await databaseExists(liveName)).toBe(true);
+    // And the live database still holds the rows it held, rather than the
+    // candidate's: no rename happened in either direction.
+    const rows = await queryLive<{ count: string }>(liveName, 'SELECT count(*) FROM tenants');
+    expect(Number(rows[0]?.count ?? 0)).toBeGreaterThan(0);
+  });
+
   it('refuses a request that reached RESTORE_REQUESTED with no confirmation at all', async () => {
     /*
      * The row the executor must not take on trust.
