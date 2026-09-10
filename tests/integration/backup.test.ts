@@ -12,6 +12,7 @@ import { checksumFile } from '../../apps/api/src/modules/platform/backup/infrast
 import { PostgresDatabaseTools } from '../../apps/api/src/modules/platform/backup/infrastructure/pg-tools';
 import { FilesystemBackupWorkspaces } from '../../apps/api/src/modules/platform/backup/infrastructure/workspace';
 import { BackupService } from '../../apps/api/src/modules/platform/backup/application/backup.service';
+import { cmdRun } from '../../apps/api/src/backup.cli';
 import type { DeliveryAttempt } from '../../apps/api/src/modules/platform/backup/application/ports';
 
 /**
@@ -755,6 +756,63 @@ describe('backup against a real database', () => {
           WHERE entity_id = ${manual.run.id} OR entity_id = ${scheduled.run.id}`,
     );
     expect((audits.rows as unknown as readonly { total: number }[])[0]?.total).toBe(0);
+  }, 180_000);
+
+  it('records the condition when the run comes from the CLI, not only from the worker', async () => {
+    /*
+     * Review finding 2, CONFIRMED. `resolveInstallationTenant` is called by
+     * `main.worker.ts` and `main.monitor.ts` and by nothing else, so the backup
+     * CLI's container had `installationTenantId === null` for its whole life:
+     * `BackupService.report` took its "no tenant provisioned" branch and recorded
+     * NOTHING.
+     *
+     * The consequence was specific and bad. Nightly scheduled backups fail and
+     * `backup.run_failed` is open and alerted — the worker resolves its tenant, so
+     * that half worked. The operator then runs `backup run`, it SUCCEEDS, and
+     * `backup.run_ok` is never recorded, so `recoversDedupeKey` never fires and the
+     * alert stays open. Their only way out was to wait for a scheduled run to
+     * succeed. The log line they got instead said "no installation tenant is
+     * provisioned", which is false on a provisioned installation.
+     *
+     * Driven through the exported `cmdRun` rather than the helper it calls, so the
+     * CALL SITE is what this pins: removing the call fails this case.
+     *
+     * `context.container` is built exactly as the CLI builds one — `createContainer`
+     * with no tenant resolution — which is also why no existing test could see
+     * this. The other cases in this file construct their own `BackupService` with a
+     * hardcoded scope.
+     */
+    expect(context.container.installationTenantId).toBeNull();
+
+    // An open failure, recorded the way the worker's failure path records it.
+    await context.container.opsLog.record(
+      { tenantId: SEED_IDS.tenantA as never, botInstanceId: null },
+      {
+        code: 'backup.run_failed',
+        severity: 'ERROR',
+        message: 'a nightly run failed',
+        dedupeKey: 'backup.run',
+      },
+    );
+
+    const code = await cmdRun(context.container);
+    expect(code).toBe(0);
+    // The tenant is now known, which is what lets the recorder address anything.
+    expect(context.container.installationTenantId).toBe(SEED_IDS.tenantA);
+
+    // And the success was recorded against it, so the open failure is resolved.
+    // By CODE, not by dedupe key: the success report carries `recoversDedupeKey`
+    // and no `dedupeKey` of its own, so the recovery row's key is null. A first
+    // version of this query filtered on the key and found only the failure.
+    const events = await context.container.database.db.execute(
+      sql`SELECT code, resolved_at FROM operational_events
+          WHERE code IN ('backup.run_failed', 'backup.run_ok') ORDER BY code`,
+    );
+    const rows = events.rows as unknown as readonly { code: string; resolved_at: Date | null }[];
+    const failed = rows.find((row) => row.code === 'backup.run_failed');
+    const ok = rows.find((row) => row.code === 'backup.run_ok');
+    expect(ok).toBeDefined();
+    expect(failed?.resolved_at).not.toBeNull();
   }, 180_000);
 
   it('parses a real manifest against the frozen schema', async () => {
