@@ -525,6 +525,60 @@ implement none of them. Owner revision 24's per-gateway minimum top-up is
 BLOCKED, not deferred: no gateway registry exists for an override to be keyed
 by, and ADR-0024 records that rather than inventing one.
 
+## Telegram Backup V1 — done
+
+The disaster-recovery pipeline. ADR-0025 records the design; `docs/backup.md` is
+the operational half.
+
+Six stages, in an order that IS the guarantee — `DUMP → CHECKSUM → ENCRYPT →
+VERIFY_RESTORE → DELIVER → CLEANUP`, with `DELIVER` reachable only from a
+verification that passed. Every run this system calls successful has been
+decrypted through the operator's own restore path and restored into a real,
+empty PostgreSQL database that then had tables in it.
+
+The dump is the whole database with nothing excluded, and the manifest carries
+an `exclusions` array so that any future exclusion has to justify itself inside
+the artifact. The checksum is SHA-256 over the plaintext dump, which is what
+makes it verifiable years later by anyone holding the key and the manifest.
+
+A new streaming archive format, because `SecretCipher` was inspected and cannot
+carry a dump: its port takes a string, its `'utf8'` decode corrupts binary
+(a 64-byte gzip buffer round-trips to 96), its `base64url` envelope throws above
+~384 MiB, and it holds three copies of the payload in memory. Everything that
+makes it trustworthy is reused — the keyring, the wrapped per-archive data key,
+AES-256-GCM, the associated-data discipline. No new cryptography.
+
+One backup at a time, enforced by a partial unique index rather than by any
+process, because two worker replicas is normal on every rolling update. The
+claim is a lease; a stale one is taken over by FAILING the abandoned run, never
+by adopting it.
+
+Delivery carries three outcomes on its own enum. `OUTCOME_UNKNOWN` is the one
+the codebase did not previously have and the reason a durable run row exists:
+Telegram can reject a request whose upload it accepted, so nothing resends on an
+outcome nobody observed.
+
+### What the falsification run changed
+
+Four rules had no test, and two comments claimed guarantees the code did not
+have. `docs/backup-falsification.md` carries all of it. The archive's docblock
+said the header is bound by the payload's associated data; removing that binding
+left every test green, because the key-unwrap AAD binds it too — two redundant
+mechanisms, and the claim was corrected to match. A comment said a second
+decrypt path prevented a tautological verification; it does not, and now says
+what it actually buys. Four further rules are recorded as NOT falsifiable, with
+the reason, rather than as claims.
+
+### Deliberately absent
+
+ADR-0011 asked for seven compensating controls; five are satisfied and two are
+not, stated rather than implied. There is **no off-server copy** — the archive
+sits on the same host as the database it protects. And there is **no retention
+anywhere**: nothing prunes `BACKUP_WORK_DIR` and nothing deletes an old document
+from the Telegram channel. Those two are the next backup work.
+
+No automatic reconciliation of an `OUTCOME_UNKNOWN` delivery, on purpose.
+
 ## Phases 4–8
 
 Not started. Scope in `docs/architecture.md`.

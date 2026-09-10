@@ -24,7 +24,20 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import ts from 'typescript';
 import { basename, join } from 'node:path';
 
-const RECORD = 'docs/phase3d-falsification.md';
+/**
+ * The falsification records this check reads.
+ *
+ * A LIST, because a phase gets its own record and the alternative was to keep
+ * appending to Phase 3D's — which would make one file's title a lie and,
+ * worse, would let a new phase's rows inherit an old phase's certification by
+ * sitting under it. Every record here is checked by the same rules; nothing is
+ * checked by being named here and skipped for not being.
+ *
+ * `EXPECTED` below is the TOTAL across all of them, for the reason it is exact
+ * rather than a floor: the number is a claim about these files and should be
+ * re-stated deliberately when they grow.
+ */
+const RECORDS = ['docs/phase3d-falsification.md', 'docs/backup-falsification.md'];
 /**
  * The fewest citations this record may contain.
  *
@@ -43,10 +56,14 @@ const RECORD = 'docs/phase3d-falsification.md';
  * exited 0 under the floor, one of them the table certifying that very commit.
  *
  * So it is EXACT. Adding rows fails the run and the failure says what to set it
- * to, which is the point: the number is a claim about this file and should be
+ * to, which is the point: the number is a claim about these files and should be
  * re-stated deliberately, not drifted into.
+ *
+ * It is the TOTAL over `RECORDS`, not a per-file figure. A per-file count would
+ * have to be a map, and a map is a place for a record to be added with no entry
+ * and checked against nothing — which is this script's own failure mode.
  */
-const EXPECTED = 407;
+const EXPECTED = 436;
 /**
  * A table whose last column is one of these is making citations.
  *
@@ -703,7 +720,6 @@ function citationsIn(cell) {
   return found;
 }
 
-const lines = readFileSync(RECORD, 'utf8').split('\n');
 /**
  * The check itself, behind a guard so the module can be imported.
  *
@@ -720,7 +736,13 @@ function main() {
    * the tests they name have stopped running. Collected before anything else so
    * the run says that rather than reporting a resolved count nobody can trust.
    */
-  const { duplicated, staleCounts } = recordIssues(readFileSync(RECORD, 'utf8'), EXPECTED);
+  const duplicated = [];
+  const staleCounts = [];
+  for (const record of RECORDS) {
+    const issues = recordIssues(readFileSync(record, 'utf8'), EXPECTED);
+    duplicated.push(...issues.duplicated.map((label) => `${record}: ${label}`));
+    staleCounts.push(...issues.staleCounts.map((row) => `${record}:${row}`));
+  }
 
   const only = files.flatMap(([path, text]) =>
     onlyMarkers(text, path).map((line) => `${path}:${line}`),
@@ -759,181 +781,188 @@ function main() {
   /** Rows whose cell count disagrees with their table's header. */
   const malformed = [];
   let checked = 0;
-  let inCitationTable = false;
-  let previous = null;
-
-  /** The previous table row, so a separator can identify the header above it. */
-  let header = null;
-  /** Which column of the current table holds its citations. */
-  let column = -1;
-  /** How many cells the current table's header declares. */
-  let width = 0;
-  /** Inside a fenced code block, where a pipe is illustration rather than data. */
-  let fenced = false;
   /** Tables with no header/separator pair, in which nothing at all was checked. */
   const unstructured = [];
 
-  /*
-   * A sentinel blank line, so END OF FILE is not a second copy of the rule.
-   *
-   * The end-of-table detector fired only on a non-`|` line, so a table at the
-   * end of the file was never closed — and the end of this file is exactly where
-   * every round appends its own table. The fix for that was a COPY of the check
-   * after the loop, and the copy could not fire: `split('\n')` on a file with a
-   * trailing newline already yields a final `''`, which is a non-`|` line, so
-   * the in-loop check had always been handling EOF for any file git and prettier
-   * would accept. Its certifying row in the record passed with the rule reverted
-   * — the definition of a test that is not a test.
-   *
-   * One rule, reached the same way in both cases, is the version that can be
-   * falsified — and that rule IS falsified (row WY): drop the in-loop
-   * `unstructured.push(header)` with a header-only table appended and the check
-   * goes green.
-   *
-   * The sentinel itself is not separately falsifiable, and saying so is the
-   * point. Removing it changes nothing today, for exactly the reason round 28's
-   * end-of-file copy could not fire: prettier and git guarantee a trailing
-   * newline, so `lines` already ends in `''`. It is a guard against a file that
-   * lacks one — not a rule — and it is here so the loop is total rather than
-   * true-by-coincidence. A round that mistakes it for a tested rule would be
-   * repeating the mistake it replaced.
-   */
-  for (const line of [...lines, '']) {
+  // Per RECORD, and every piece of table state is re-declared inside the loop.
+  // Carrying `fenced`, `header` or `width` across a file boundary would let one
+  // record's unterminated fence blank the start of the next one — the same
+  // "silently checked nothing" failure this script's header comment is about.
+  for (const record of RECORDS) {
+    const lines = readFileSync(record, 'utf8').split('\n');
+    let inCitationTable = false;
+    let previous = null;
+    /** The previous table row, so a separator can identify the header above it. */
+    let header = null;
+    /** Which column of the current table holds its citations. */
+    let column = -1;
+    /** How many cells the current table's header declares. */
+    let width = 0;
+    /** Inside a fenced code block, where a pipe is illustration rather than data. */
+    let fenced = false;
+
     /*
-     * A fenced block is prose, not a table.
+     * A sentinel blank line, so END OF FILE is not a second copy of the rule.
      *
-     * The record documents table SHAPES, and the moment one is written out
-     * properly inside a fence the check failed the run for a table making no
-     * claim at all. Two such lines already exist and escape only by not having a
-     * separator row under them, which is luck rather than a rule.
+     * The end-of-table detector fired only on a non-`|` line, so a table at the
+     * end of the file was never closed — and the end of this file is exactly where
+     * every round appends its own table. The fix for that was a COPY of the check
+     * after the loop, and the copy could not fire: `split('\n')` on a file with a
+     * trailing newline already yields a final `''`, which is a non-`|` line, so
+     * the in-loop check had always been handling EOF for any file git and prettier
+     * would accept. Its certifying row in the record passed with the rule reverted
+     * — the definition of a test that is not a test.
+     *
+     * One rule, reached the same way in both cases, is the version that can be
+     * falsified — and that rule IS falsified (row WY): drop the in-loop
+     * `unstructured.push(header)` with a header-only table appended and the check
+     * goes green.
+     *
+     * The sentinel itself is not separately falsifiable, and saying so is the
+     * point. Removing it changes nothing today, for exactly the reason round 28's
+     * end-of-file copy could not fire: prettier and git guarantee a trailing
+     * newline, so `lines` already ends in `''`. It is a guard against a file that
+     * lacks one — not a rule — and it is here so the loop is total rather than
+     * true-by-coincidence. A round that mistakes it for a tested rule would be
+     * repeating the mistake it replaced.
      */
-    if (/^\s*```/.test(line)) {
-      fenced = !fenced;
-      inCitationTable = false;
-      header = null;
-      width = 0;
-      continue;
-    }
-    if (fenced) continue;
-    if (!line.startsWith('|')) {
+    for (const line of [...lines, '']) {
       /*
-       * A blank line ENDS a table, and a table that ended without ever reaching a
-       * separator was never checked for anything.
+       * A fenced block is prose, not a table.
        *
-       * That was silent and it dropped rows wholesale: one blank line inserted
-       * mid-table took the count from 157 to 139 and still exited 0 — eighteen
-       * citations unverified, no warning. Third consecutive round in which this
-       * script skipped part of the record without saying so, which is precisely
-       * what its own opening comment forbids.
+       * The record documents table SHAPES, and the moment one is written out
+       * properly inside a fence the check failed the run for a table making no
+       * claim at all. Two such lines already exist and escape only by not having a
+       * separator row under them, which is luck rather than a rule.
        */
-      if (header !== null && width === 0) unstructured.push(header);
-      inCitationTable = false;
-      header = null;
-      // A table's width dies with the table. Without this the HEADER row of the
-      // next one is measured against the previous one's column count, which is
-      // a mismatch for every table that changes shape.
-      width = 0;
-      continue;
-    }
-    // A table declares its columns in the row ABOVE the separator, and nowhere
-    // else. Deciding at the separator rather than on any row whose last cell
-    // happens to read like a header is what keeps `a real test in dashboard.tsx`
-    // — an ordinary sentence in an ordinary data row — from being mistaken for a
-    // misspelled declaration.
-    if (isSeparator(line)) {
-      const declared = header === null ? [] : cells(header).map((cell) => cell.toLowerCase());
-      /*
-       * By NAME, at whatever position — not "the last column".
-       *
-       * The record's oldest and largest evidence table is headed
-       * `| # | Rule | Mutation | Named test | Result |`. `Named test` was always
-       * a recognised name; it simply is not last, so reading only the last cell
-       * saw `result`, decided the table made no claims, and skipped all twelve of
-       * its rows in silence — the same escape as the misspelled header, one
-       * position over. Widening the header list would not have closed it.
-       */
-      column = declared.findIndex((cell) => CITATION_HEADERS.includes(cell));
-      inCitationTable = column >= 0;
-      previous = null;
-      /*
-       * Every table declares itself, or the run fails.
-       *
-       * By NAME at any position, exactly as the citation column is found — the
-       * opt-out list was matched against the LAST cell alone, which is the same
-       * positional escape that hid the record's largest table and would have hid
-       * the next one written a column wider.
-       */
-      if (header === null) {
-        // A separator with no header row above it. `declared` is empty, so every
-        // rule below silently does nothing — the declaration check, the width
-        // check and the citations all switch off for the rest of the table.
-        unstructured.push(line);
+      if (/^\s*```/.test(line)) {
+        fenced = !fenced;
+        inCitationTable = false;
+        header = null;
+        width = 0;
         continue;
       }
-      if (!inCitationTable && !declared.some((cell) => NON_CITING_HEADERS.includes(cell))) {
-        unrecognised.push(header);
+      if (fenced) continue;
+      if (!line.startsWith('|')) {
+        /*
+         * A blank line ENDS a table, and a table that ended without ever reaching a
+         * separator was never checked for anything.
+         *
+         * That was silent and it dropped rows wholesale: one blank line inserted
+         * mid-table took the count from 157 to 139 and still exited 0 — eighteen
+         * citations unverified, no warning. Third consecutive round in which this
+         * script skipped part of the record without saying so, which is precisely
+         * what its own opening comment forbids.
+         */
+        if (header !== null && width === 0) unstructured.push(header);
+        inCitationTable = false;
+        header = null;
+        // A table's width dies with the table. Without this the HEADER row of the
+        // next one is measured against the previous one's column count, which is
+        // a mismatch for every table that changes shape.
+        width = 0;
+        continue;
       }
-      width = declared.length;
-      header = null;
-      continue;
-    }
-    const columns = cells(line);
-    /*
-     * A row that does not match its header's width is malformed, in ANY table.
-     *
-     * The escaped-pipe bug produced exactly this shape and nothing looked at it;
-     * so did one hand-written row in the one table nothing was reading. A cell
-     * count is the cheapest possible check for both, and it does not care whether
-     * the table cites anything.
-     */
-    if (width > 0 && columns.length !== width) {
-      malformed.push(line);
-    }
-    if (!inCitationTable) {
-      header = line;
-      continue;
-    }
-
-    const cell = columns[column] ?? '';
-    if (/^\(same/i.test(cell.trim())) {
-      if (previous === null) unparsed.push(line);
-      continue;
-    }
-    const cites = citationsIn(cell);
-    if (cites === null) {
-      // NOT skipped. A row in a citation table that names no test is the defect.
-      unparsed.push(line);
-      continue;
-    }
-    previous = cites[cites.length - 1];
-
-    for (const cited of cites) {
-      checked += 1;
-      // `it.each` titles carry a printf placeholder; the literal head of the name
-      // is what distinguishes one test from another anyway.
-      const needle = cited.name.includes('%')
-        ? cited.name.slice(0, cited.name.indexOf('%'))
-        : cited.name;
-      // Checked in the file the citation NAMES, when it names one. A name that
-      // resolves in some other file is not evidence for the row that cites it.
-      const named =
-        cited.file === null
-          ? null
-          : [...titlesByPath].filter(([path]) => path.endsWith(cited.file));
-      const candidates = named === null ? everyTitle : named.flatMap(([, names]) => names);
-      if (named !== null && named.length === 0) {
-        missing.push(`${cited.name}  (no such file: ${cited.file})`);
+      // A table declares its columns in the row ABOVE the separator, and nowhere
+      // else. Deciding at the separator rather than on any row whose last cell
+      // happens to read like a header is what keeps `a real test in dashboard.tsx`
+      // — an ordinary sentence in an ordinary data row — from being mistaken for a
+      // misspelled declaration.
+      if (isSeparator(line)) {
+        const declared = header === null ? [] : cells(header).map((cell) => cell.toLowerCase());
+        /*
+         * By NAME, at whatever position — not "the last column".
+         *
+         * The record's oldest and largest evidence table is headed
+         * `| # | Rule | Mutation | Named test | Result |`. `Named test` was always
+         * a recognised name; it simply is not last, so reading only the last cell
+         * saw `result`, decided the table made no claims, and skipped all twelve of
+         * its rows in silence — the same escape as the misspelled header, one
+         * position over. Widening the header list would not have closed it.
+         */
+        column = declared.findIndex((cell) => CITATION_HEADERS.includes(cell));
+        inCitationTable = column >= 0;
+        previous = null;
+        /*
+         * Every table declares itself, or the run fails.
+         *
+         * By NAME at any position, exactly as the citation column is found — the
+         * opt-out list was matched against the LAST cell alone, which is the same
+         * positional escape that hid the record's largest table and would have hid
+         * the next one written a column wider.
+         */
+        if (header === null) {
+          // A separator with no header row above it. `declared` is empty, so every
+          // rule below silently does nothing — the declaration check, the width
+          // check and the citations all switch off for the rest of the table.
+          unstructured.push(line);
+          continue;
+        }
+        if (!inCitationTable && !declared.some((cell) => NON_CITING_HEADERS.includes(cell))) {
+          unrecognised.push(header);
+        }
+        width = declared.length;
+        header = null;
+        continue;
       }
-      // Matched against the TEST TITLES, not the file text.
-      //
-      // `includes` over the whole source made a `describe` name, a comment or a
-      // sentence of prose satisfy "resolves to a committed test" — and one row
-      // was doing exactly that. The guarantee this line prints has to be the one
-      // it checks.
-      // `includes` WITHIN a title, not within the file: an `it.each` title is
-      // `'%s is reachable at ...'`, so the citation names a suffix of it.
-      else if (!candidates.some((title) => title.includes(needle)))
-        missing.push(`${cited.name}  (${cited.file ?? 'any file'})`);
+      const columns = cells(line);
+      /*
+       * A row that does not match its header's width is malformed, in ANY table.
+       *
+       * The escaped-pipe bug produced exactly this shape and nothing looked at it;
+       * so did one hand-written row in the one table nothing was reading. A cell
+       * count is the cheapest possible check for both, and it does not care whether
+       * the table cites anything.
+       */
+      if (width > 0 && columns.length !== width) {
+        malformed.push(line);
+      }
+      if (!inCitationTable) {
+        header = line;
+        continue;
+      }
+
+      const cell = columns[column] ?? '';
+      if (/^\(same/i.test(cell.trim())) {
+        if (previous === null) unparsed.push(line);
+        continue;
+      }
+      const cites = citationsIn(cell);
+      if (cites === null) {
+        // NOT skipped. A row in a citation table that names no test is the defect.
+        unparsed.push(line);
+        continue;
+      }
+      previous = cites[cites.length - 1];
+
+      for (const cited of cites) {
+        checked += 1;
+        // `it.each` titles carry a printf placeholder; the literal head of the name
+        // is what distinguishes one test from another anyway.
+        const needle = cited.name.includes('%')
+          ? cited.name.slice(0, cited.name.indexOf('%'))
+          : cited.name;
+        // Checked in the file the citation NAMES, when it names one. A name that
+        // resolves in some other file is not evidence for the row that cites it.
+        const named =
+          cited.file === null
+            ? null
+            : [...titlesByPath].filter(([path]) => path.endsWith(cited.file));
+        const candidates = named === null ? everyTitle : named.flatMap(([, names]) => names);
+        if (named !== null && named.length === 0) {
+          missing.push(`${cited.name}  (no such file: ${cited.file})`);
+        }
+        // Matched against the TEST TITLES, not the file text.
+        //
+        // `includes` over the whole source made a `describe` name, a comment or a
+        // sentence of prose satisfy "resolves to a committed test" — and one row
+        // was doing exactly that. The guarantee this line prints has to be the one
+        // it checks.
+        // `includes` WITHIN a title, not within the file: an `it.each` title is
+        // `'%s is reachable at ...'`, so the citation names a suffix of it.
+        else if (!candidates.some((title) => title.includes(needle)))
+          missing.push(`${cited.name}  (${cited.file ?? 'any file'})`);
+      }
     }
   }
 

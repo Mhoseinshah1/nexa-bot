@@ -19,6 +19,10 @@ import { sql, type SQL } from 'drizzle-orm';
 import {
   ACTOR_TYPES,
   ADMIN_STATUSES,
+  BACKUP_DELIVERY_STATES,
+  BACKUP_RUN_STATES,
+  BACKUP_STAGES,
+  BACKUP_TRIGGERS,
   AUDIT_RESULTS,
   BOT_INSTANCE_STATUSES,
   CALENDARS,
@@ -1524,6 +1528,122 @@ export const panelMonitorTenants = pgTable(
   ],
 );
 
+/**
+ * One row per backup run, and the row IS the installation's backup lock.
+ *
+ * INSTALLATION-scoped, so there is deliberately no `tenant_id`. A dump is of
+ * the whole database; giving it a tenant column would invite a per-tenant
+ * backup that this pipeline does not produce and cannot restore.
+ *
+ * The exclusivity is `backup_runs_single_active_idx`, a partial unique index on
+ * a constant over `state = 'RUNNING'`. One RUNNING row can exist in the whole
+ * table, enforced by PostgreSQL rather than by any process — which is the only
+ * form of "one at a time" that survives two worker replicas, which is the
+ * normal case on every rolling update. An in-memory flag would have bounded
+ * exactly one process, and a `pg_advisory_xact_lock` would have to be held for
+ * the length of a dump inside a transaction that `idle_in_transaction_session_
+ * timeout` is configured to kill.
+ *
+ * A lock nothing can release is a lock that outlives its owner's crash, so the
+ * claim is a LEASE: `lease_owner` names the process, `lease_heartbeat_at` is
+ * refreshed while it works, and a run whose heartbeat has gone stale may be
+ * taken over — by transitioning it to FAILED, never by silently adopting it,
+ * because its temporary files belong to a process that may still be writing.
+ *
+ * Nothing here holds key material. `checksum` is a digest of the plaintext
+ * dump, which is not a secret and is what makes the artifact verifiable later.
+ * `delivery_detail` and `failure_message` carry redacted operator-facing text;
+ * the bot token they could otherwise leak lives in the URL path of the Telegram
+ * call and never reaches this table.
+ */
+export const backupRuns = pgTable(
+  'backup_runs',
+  {
+    /** UUIDv7. This is the backup id in the manifest and in the caption. */
+    id: uuid('id').primaryKey(),
+    trigger: text('trigger').notNull(),
+    state: text('state').notNull(),
+    /** The stage in flight, or — once terminal — the stage the run ended in. */
+    stage: text('stage').notNull(),
+    startedAt: timestamptz('started_at').notNull(),
+    finishedAt: timestamptz('finished_at'),
+
+    /**
+     * Who holds the lease and when they last proved it.
+     *
+     * `lease_owner` is a process identity, not a credential: role plus PID plus
+     * a random suffix, so two replicas of the same role are distinguishable.
+     */
+    leaseOwner: text('lease_owner').notNull(),
+    leaseHeartbeatAt: timestamptz('lease_heartbeat_at').notNull(),
+
+    /** Bytes of the plaintext dump, and of the encrypted archive. */
+    dumpBytes: bigint('dump_bytes', { mode: 'bigint' }),
+    archiveBytes: bigint('archive_bytes', { mode: 'bigint' }),
+    /** SHA-256 of the plaintext dump, lowercase hex. Not a secret. */
+    checksum: text('checksum'),
+    /**
+     * When a real pg_restore into a real empty scratch database succeeded.
+     *
+     * Null on any run that did not get that far, which is what makes
+     * "verified" a fact rather than an inference from `state`.
+     */
+    verifiedAt: timestamptz('verified_at'),
+
+    /**
+     * What we know about the Telegram delivery. See BACKUP_DELIVERY_STATES.
+     *
+     * `OUTCOME_UNKNOWN` is durable and nothing resends on it automatically.
+     */
+    deliveryState: text('delivery_state').notNull(),
+    deliveryAttemptedAt: timestamptz('delivery_attempted_at'),
+    /** Redacted operator-facing detail. Never a token, never a chat payload. */
+    deliveryDetail: text('delivery_detail'),
+
+    /** Set on FAILED. The stage is in `stage`; this says what went wrong. */
+    failureCode: text('failure_code'),
+    failureMessage: text('failure_message'),
+
+    /**
+     * Whether cleanup completed, and what was left behind if not.
+     *
+     * A column rather than a log line because a cleanup failure means plaintext
+     * dump bytes are still on disk, or a scratch database still exists. Both
+     * are things an operator must be told about explicitly; neither is visible
+     * from a run that otherwise reports success.
+     */
+    cleanupOk: boolean('cleanup_ok').notNull(),
+    cleanupDetail: text('cleanup_detail'),
+  },
+  (table) => [
+    check('backup_runs_trigger_check', enumCheck('trigger', BACKUP_TRIGGERS)),
+    check('backup_runs_state_check', enumCheck('state', BACKUP_RUN_STATES)),
+    check('backup_runs_stage_check', enumCheck('stage', BACKUP_STAGES)),
+    check('backup_runs_delivery_state_check', enumCheck('delivery_state', BACKUP_DELIVERY_STATES)),
+    /**
+     * A terminal run has an end; a RUNNING one does not.
+     *
+     * Both directions, because only one of them is the interesting failure: a
+     * RUNNING row with `finished_at` set is a run something forgot to close,
+     * and it would hold the installation's lock until its lease expired.
+     */
+    check('backup_runs_finished_at_check', sql`(state = 'RUNNING') = (finished_at IS NULL)`),
+    /**
+     * The installation-wide backup lock, enforced by the database.
+     *
+     * A partial unique index over a constant: at most one row may have
+     * `state = 'RUNNING'`, whatever process inserted it. A second starter's
+     * INSERT raises a unique violation, which the repository turns into a
+     * truthful BUSY rather than a second dump.
+     */
+    uniqueIndex('backup_runs_single_active_idx')
+      .on(sql`(true)`)
+      .where(sql`state = 'RUNNING'`),
+    /** The operator's list, and the scheduler's "when did we last succeed". */
+    index('backup_runs_started_at_idx').on(table.startedAt),
+  ],
+);
+
 export const schema = {
   tenants,
   botInstances,
@@ -1554,6 +1674,7 @@ export const schema = {
   panelProbeBudgets,
   panelMonitorSchedule,
   panelMonitorTenants,
+  backupRuns,
 };
 
 /** Tables the database itself refuses to UPDATE or DELETE. */

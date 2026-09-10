@@ -32,6 +32,7 @@ export * from './templates.js';
 export * from './settings.js';
 export * from './features.js';
 export * from './notifications.js';
+export * from './backup.js';
 export * from './secrets.js';
 export * from './ports.js';
 export * from './http.js';

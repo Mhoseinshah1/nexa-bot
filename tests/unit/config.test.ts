@@ -262,6 +262,39 @@ describe('configuration', () => {
   it('rejects a key-encryption key that is not 32 bytes', () => {
     expect(() => loadConfig({ ...valid, SECRETS_KEK: 'dG9vLXNob3J0' })).toThrowError(/SECRETS_KEK/);
   });
+
+  it('refuses half-configured backup delivery', () => {
+    // Neither is a real choice: the archive is verified and kept on the server.
+    // BOTH is delivery. ONE is an installation whose operator believes their
+    // backups are leaving the host, and finds out otherwise during a disaster.
+    expect(() => loadConfig({ ...valid, BACKUP_TELEGRAM_CHAT_ID: '-100123' })).toThrowError(
+      /BACKUP_TELEGRAM_BOT_TOKEN/,
+    );
+    expect(() => loadConfig({ ...valid, BACKUP_TELEGRAM_BOT_TOKEN: '123:AAtoken' })).toThrowError(
+      /BACKUP_TELEGRAM_CHAT_ID/,
+    );
+  });
+
+  it('accepts backup delivery configured fully, or not at all', () => {
+    expect(loadConfig({ ...valid }).BACKUP_TELEGRAM_CHAT_ID).toBe('');
+    const both = loadConfig({
+      ...valid,
+      BACKUP_TELEGRAM_CHAT_ID: '-100123',
+      BACKUP_TELEGRAM_BOT_TOKEN: '123:AAtoken',
+    });
+    expect(both.BACKUP_TELEGRAM_CHAT_ID).toBe('-100123');
+  });
+
+  it('defaults the scheduled backup OFF and its work directory off /tmp', () => {
+    const config = loadConfig({ ...valid });
+    // Off, because an installation that has not chosen a destination or a work
+    // directory should not start writing gigabytes to a path nobody picked.
+    expect(config.BACKUP_SCHEDULE_ENABLED).toBe(false);
+    // And never /tmp: a plaintext dump is the database with the encryption
+    // taken off, and /tmp is world-traversable, cleaned by a timer nobody here
+    // controls, and often a tmpfs a real database will not fit in.
+    expect(config.BACKUP_WORK_DIR.startsWith('/tmp')).toBe(false);
+  });
 });
 
 describe('deployment topology and trusted proxies', () => {

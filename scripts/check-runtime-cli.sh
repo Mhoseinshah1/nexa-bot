@@ -25,6 +25,9 @@ ENTRYPOINTS=(
   "apps/api/dist/infrastructure/persistence/seed.js"
   "apps/api/dist/bootstrap-owner.cli.js"
   "apps/api/dist/provision-installation.cli.js"
+  # The one that runs during a disaster. If its graph does not load from a
+  # production runtime, the operator finds out at the worst possible moment.
+  "apps/api/dist/backup.cli.js"
 )
 
 # 1. The compiled entrypoints exist.
@@ -44,6 +47,7 @@ node --input-type=module -e "
   const seed = await import('./apps/api/dist/infrastructure/persistence/seed.js');
   await import('./apps/api/dist/bootstrap-owner.cli.js');
   const provision = await import('./apps/api/dist/provision-installation.cli.js');
+  const backup = await import('./apps/api/dist/backup.cli.js');
 
   const problems = [];
   if (typeof migrate.runMigrations !== 'function') problems.push('migrate.runMigrations');
@@ -51,6 +55,10 @@ node --input-type=module -e "
   if (typeof seed.seed !== 'function') problems.push('seed.seed');
   if (typeof provision.provisionInstallation !== 'function')
     problems.push('provision.provisionInstallation');
+  // \`verify\` is the command that must work with no database and no container,
+  // so it is the one whose presence is asserted rather than assumed.
+  if (typeof backup.cmdVerify !== 'function') problems.push('backup.cmdVerify');
+  if (typeof backup.parseArgs !== 'function') problems.push('backup.parseArgs');
 
   // The migrations have to be reachable FROM DIST. The folder is resolved
   // relative to the module, so a compiled layout that nests one level deeper

@@ -5,7 +5,14 @@ is marked ACCEPTED.** Raised explicitly with the owner; the owner chose to keep
 Telegram delivery.
 
 Nothing in Phase 0 implements backups. This ADR exists so the decision and its
-accepted risk are on the record before Phase 8 designs the pipeline.
+accepted risk are on the record before the pipeline is designed.
+
+**IMPLEMENTED.** Telegram Backup V1 builds the pipeline; ADR-0025 records what
+it is and carries a control-by-control table against the seven below. Five are
+satisfied. Two are NOT in V1 and are stated as such rather than implied: there
+is no off-server destination (2), and nothing deletes an old backup from the
+channel or from the disk (4). `docs/backup.md` says so where an operator will
+read it.
 
 ## The conflict
 
@@ -61,7 +68,8 @@ Because the channel cannot be made safe, the payload has to be:
 
 ## Revisit when
 
-Before Phase 8 implements the backup pipeline, and immediately if the deployment
-model changes to a shared multi-tenant one — at which point a single chat
+Controls 2 and 4 are the outstanding work and should be the next backup change
+made. Revisit immediately if the deployment model changes to a shared
+multi-tenant one — at which point a single chat
 channel would carry more than one customer's data and the calculus changes
 entirely.

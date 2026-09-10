@@ -151,6 +151,67 @@ export const PLATFORM_ERROR_CODES = {
    */
   SECRET_KEY_ID_MISMATCH: 'platform.secret_key_id_mismatch',
   TELEGRAM_BAD_SECRET_TOKEN: 'telegram.bad_secret_token',
+
+  /**
+   * A backup archive failed authenticated decryption. ONE code, as above.
+   *
+   * Same argument as `SECRET_AUTH_FAILED`, and it needs restating because an
+   * archive is a file somebody can hold: a wrong key, a modified byte, a
+   * truncated download and an edited header are indistinguishable at the AEAD
+   * boundary and must stay that way. A code that named which of the four had
+   * failed would let whoever holds the archive tell how close their guess was.
+   */
+  BACKUP_ARCHIVE_AUTH_FAILED: 'backup.archive_auth_failed',
+  /**
+   * The archive is not readable AS AN ARCHIVE: wrong magic, an implausible
+   * length, a future format version, a header that is not JSON.
+   *
+   * Deliberately NOT an authentication failure. Nothing has been decrypted at
+   * this point and nothing has been trusted; a restore tool needs to be able to
+   * say "this is not a Nexa backup" without implying it tried a key against it.
+   */
+  BACKUP_ARCHIVE_MALFORMED: 'backup.archive_malformed',
+  /**
+   * The archive decrypted, and the bytes that came out are not the bytes that
+   * went in.
+   *
+   * Distinct from an authentication failure because it means something on OUR
+   * side of the AEAD is wrong — the tag verified, so the ciphertext is intact.
+   * It is also the check that stays meaningful years later, when the only thing
+   * anyone has is a file and a manifest.
+   */
+  BACKUP_CHECKSUM_MISMATCH: 'backup.checksum_mismatch',
+  /**
+   * A real `pg_restore` into a real empty database did not produce a database.
+   *
+   * The stage that makes this a backup rather than a file. A run that reaches
+   * it and fails deletes its archive rather than delivering it: an archive
+   * nobody can restore is worse than none, because its existence stops somebody
+   * looking for a real one.
+   */
+  BACKUP_VERIFICATION_FAILED: 'backup.verification_failed',
+  /** `pg_dump`, `pg_restore` or `psql` could not be run, or did not succeed. */
+  BACKUP_TOOL_FAILED: 'backup.tool_failed',
+  /**
+   * A restore was aimed at the database this installation is running on.
+   *
+   * The one refusal here that exists to prevent a catastrophe rather than to
+   * report one. A restore overwrites; there is no default target, and the live
+   * one is refused even when named explicitly.
+   */
+  BACKUP_UNSAFE_RESTORE_TARGET: 'backup.unsafe_restore_target',
+  /** A run finished and its own row could not be read back. */
+  BACKUP_RUN_MISSING: 'backup.run_missing',
+  /**
+   * A backup could not take the installation's lock.
+   *
+   * NOT the ordinary busy answer — that is a return value, because one backup
+   * at a time is the invariant working rather than a failure. This is the
+   * narrow race where the holder released the lock between our INSERT losing
+   * and our reading who won, so there is no holder to name and inventing one
+   * would be worse than saying so.
+   */
+  BACKUP_ALREADY_RUNNING: 'backup.already_running',
 } as const;
 
 /**
