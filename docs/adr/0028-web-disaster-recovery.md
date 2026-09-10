@@ -144,10 +144,32 @@ different database.
 
 The typed phrase (`RESTORE NEXA`) is a constant, so storing it would prove
 nothing. What is durable is the BINDING: the request, the SHA-256 of the
-plaintext dump, the acting administrator, their session, and an expiry. The
-checksum recorded at confirmation is re-compared at execution, which is what
-makes a confirmation for backup A unable to restore backup B. A replay finds the
-state already advanced, because the transition is a conditional UPDATE.
+plaintext dump, the acting administrator, their session, and an expiry.
+
+Two of those are ENFORCED at execution and three are RECORDED, and the
+difference is stated here because a reader could otherwise take all five for
+guarantees:
+
+- **The checksum is re-compared** as the executor claims the work. This is what
+  makes a confirmation for backup A unable to restore backup B, and it is
+  re-checked in the executor rather than trusted from the row, because between
+  the two there is a process boundary.
+- **The expiry is checked once**, in the same place. It bounds confirm → START,
+  not the length of the restore: a slow pre-restore backup must not invalidate
+  the confirmation that began it, but a request confirmed and then left — an
+  executor that was not running, a host that was down — must not replace a
+  production database an hour later. This was written and unread in the first
+  implementation, which made the field decoration; the falsification record's
+  X-01 and X-03 rows are the evidence that it is not any more.
+- **The administrator, their session, and the confirmation time are recorded**,
+  and are not gates. They are the audit answer to "who decided this, from where,
+  and when", which is a question asked after the fact. Revoking a session does
+  not un-make a decision that was validly taken, and a rule that refused an
+  in-flight recovery because somebody logged out would be a rule that abandons a
+  restore half way for no safety benefit.
+
+A replay finds the state already advanced, because the transition is a
+conditional UPDATE.
 
 ### 9. The emergency pre-restore backup is mandatory and is a trigger value
 
