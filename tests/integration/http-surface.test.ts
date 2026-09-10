@@ -9,6 +9,7 @@ import {
   systemReadinessResponseSchema,
   TELEGRAM_SECRET_TOKEN_HEADER,
 } from '@nexa/contracts';
+import { eq } from 'drizzle-orm';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { auditLogs, outboxMessages } from '../../apps/api/src/infrastructure/persistence/schema';
 import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
@@ -351,6 +352,21 @@ describe('HTTP surface', () => {
   });
 });
 
+/**
+ * Readiness when a dependency is down, and which dependencies count.
+ *
+ * This block used to take Redis away and assert 503, which was true until item F
+ * of the hardening audit found that Redis stores nothing in this system: a cache
+ * nothing reads was failing the API's container healthcheck and could roll a
+ * release back. So the Redis scenario still runs and now asserts the OPPOSITE
+ * verdict, and the not-ready case is produced by a dependency that genuinely
+ * matters — an outbox too far behind.
+ *
+ * Keeping both in one block is deliberate: the pair is the property. "Optional
+ * dependency down, still ready" and "required dependency down, not ready" are only
+ * meaningful beside each other, because either alone is satisfied by a readiness
+ * check that always returns the same thing.
+ */
 describe('readiness when a dependency is down', () => {
   let api: ApiApp;
   let cookie: string;
@@ -403,28 +419,111 @@ describe('readiness when a dependency is down', () => {
     return systemReadinessResponseSchema.parse(response.json());
   };
 
+  /**
+   * Pushes the outbox past its lag bound, and puts it back.
+   *
+   * A REQUIRED dependency, unlike Redis, and a real one: an unpublished message
+   * older than `OUTBOX_RELAY_MAX_LAG_MS` means the relay has stopped relaying,
+   * which is a process that cannot be trusted to carry an effect anywhere. The row
+   * is written with raw SQL and a backdated `occurred_at` because the point is the
+   * lag the probe measures, not the writing of it.
+   */
+  const withLaggingOutbox = async (fn: () => Promise<void>): Promise<void> => {
+    const db = api.container.database.db;
+    const id = api.container.ids.uuid();
+    const longAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    // Through the schema object rather than raw SQL, so a NOT NULL column added
+    // later is a type error here instead of a 23502 at run time — which is how the
+    // first version of this helper failed.
+    await db.insert(outboxMessages).values({
+      id,
+      tenantId: null,
+      aggregateType: 'System',
+      aggregateId: 'system',
+      sequence: 1,
+      eventType: 'SystemPinged',
+      eventVersion: 1,
+      payload: {},
+      actor: { id: 'test', type: 'SYSTEM_JOB' },
+      correlationId: 'corr-readiness',
+      occurredAt: longAgo,
+      createdAt: longAgo,
+    });
+    try {
+      await fn();
+    } finally {
+      await db.delete(outboxMessages).where(eq(outboxMessages.id, id));
+    }
+  };
+
   it('stays live while reporting not ready', async () => {
     // This distinction is the entire point of having two endpoints: reporting a
     // dead dependency as "not live" makes an orchestrator restart a healthy
     // process and lose in-flight work.
     const instance = api.app.getHttpAdapter().getInstance();
 
-    const live = await instance.inject({ method: 'GET', url: '/health/live' });
-    expect(live.statusCode).toBe(200);
+    await withLaggingOutbox(async () => {
+      const live = await instance.inject({ method: 'GET', url: '/health/live' });
+      expect(live.statusCode).toBe(200);
 
+      const ready = await instance.inject({ method: 'GET', url: '/health/ready' });
+      expect(ready.statusCode).toBe(503);
+      // The 503 is the whole answer for an anonymous caller. Which dependency
+      // failed is exactly what a stranger does not get, least of all now.
+      expect(Object.keys(ready.json() as object)).toEqual(['status']);
+      expect(healthReadyResponseSchema.parse(ready.json()).status).toBe('degraded');
+    });
+
+    // And it comes back. Without this the case is satisfied by a process that is
+    // never ready, which is the other way to pass it.
+    const recovered = await instance.inject({ method: 'GET', url: '/health/ready' });
+    expect(recovered.statusCode).toBe(200);
+  });
+
+  it('stays READY when only the optional cache is down, and still reports it', async () => {
+    /*
+     * Item F, both halves. Redis is unreachable for this whole block.
+     *
+     * "Still ready" is what stops a self-inflicted outage: the load balancer is no
+     * longer told this process cannot serve traffic it can serve, and a release is
+     * no longer rolled back because a cache nothing reads went away. Every piece of
+     * admission, rate-limit and idempotency state is in PostgreSQL on purpose.
+     *
+     * "Still reports it" is what stops that becoming a lie. Making Redis invisible
+     * would have been the other available mistake.
+     */
+    const instance = api.app.getHttpAdapter().getInstance();
     const ready = await instance.inject({ method: 'GET', url: '/health/ready' });
-    expect(ready.statusCode).toBe(503);
-    // The 503 is the whole answer for an anonymous caller. Which dependency
-    // failed is exactly what a stranger does not get, least of all now.
-    expect(Object.keys(ready.json() as object)).toEqual(['status']);
-    expect(healthReadyResponseSchema.parse(ready.json()).status).toBe('degraded');
+    expect(ready.statusCode).toBe(200);
+    expect(healthReadyResponseSchema.parse(ready.json()).status).toBe('ok');
   });
 
   it('names the failing dependency to an authenticated administrator', async () => {
     const body = await readinessDetail();
-    expect(body.status).toBe('degraded');
-    expect(body.dependencies.find((d) => d.name === 'redis')?.status).toBe('down');
-    expect(body.dependencies.find((d) => d.name === 'postgres')?.status).toBe('up');
+    // Not degraded — Redis is down and not required — and the administrator is
+    // told both facts: which dependency is down, and whether that is why (or, here,
+    // why not) the process is out of rotation.
+    expect(body.status).toBe('ok');
+    const redis = body.dependencies.find((d) => d.name === 'redis');
+    expect(redis?.status).toBe('down');
+    expect(redis?.required).toBe(false);
+    const postgres = body.dependencies.find((d) => d.name === 'postgres');
+    expect(postgres?.status).toBe('up');
+    expect(postgres?.required).toBe(true);
+  });
+
+  it('reports the required dependency as the reason it is not ready', async () => {
+    await withLaggingOutbox(async () => {
+      const body = await readinessDetail();
+      expect(body.status).toBe('degraded');
+      const outbox = body.dependencies.find((d) => d.name === 'outbox');
+      expect(outbox?.status).toBe('down');
+      expect(outbox?.required).toBe(true);
+      // And the optional one being down at the same time does not become the
+      // explanation: an operator reading this must be able to tell which
+      // dependency is keeping the process out of rotation.
+      expect(body.dependencies.find((d) => d.name === 'redis')?.required).toBe(false);
+    });
   });
 
   it('describes the failure from a closed vocabulary, not from the driver', async () => {
