@@ -320,16 +320,50 @@ describe('the recovery executor', () => {
       }),
     ).rejects.toThrow(/being restored/i);
 
-    // And the RELAY, which opens its transaction on the database handle directly
-    // and is therefore the one write path the unit of work cannot cover. It
-    // claims nothing rather than publishing against a database about to be
-    // replaced.
+    /*
+     * And the RELAY, which opens its transaction on the database handle directly
+     * and is therefore the one write path the unit of work cannot cover. It
+     * claims nothing rather than publishing against a database about to be
+     * replaced.
+     *
+     * A MESSAGE IS PLANTED FIRST, and that is the whole assertion. Without one
+     * the relay returns `{claimed: 0}` because there is nothing to claim, so the
+     * expectation below was satisfied by an empty outbox and passed with the
+     * gate check removed — the falsification harness reported SURVIVED, which is
+     * how this was found. The positive control after the quiesce clears is the
+     * other half: it proves the zero above came from the gate rather than from
+     * the relay being unable to claim anything at all.
+     */
+    await container.database.db.execute(
+      `INSERT INTO outbox_messages
+         (id, aggregate_type, aggregate_id, sequence, event_type, payload, actor, correlation_id, occurred_at)
+       VALUES ('01900000-0000-7000-8000-00000000ee71', 'System', 'system', 1, 'SystemPinged', '{}', '{}', 'quiesce-probe', now())` as never,
+    );
     const batch = await container.relay.processBatch();
     expect(batch).toEqual({ claimed: 0, published: 0, failed: 0 });
+
+    // The message is still there, unclaimed: a gate that swallowed it would be
+    // worse than one that let it through.
+    const unclaimed = await container.database.db.execute(
+      `SELECT count(*)::int AS n FROM outbox_messages
+        WHERE correlation_id = 'quiesce-probe' AND published_at IS NULL` as never,
+    );
+    expect((unclaimed.rows as unknown as readonly { n: number }[])[0]?.n).toBe(1);
 
     // A READ is unaffected: an operator supervising a recovery is reading.
     const still = await container.recoveryRequests.byIdUnscoped(recoveryId);
     expect(still?.state).toBe('RESTORING');
+
+    // THE POSITIVE CONTROL. With the quiesce lifted, the same relay claims the
+    // same message — so the zero above was the gate refusing, and not the relay
+    // being incapable.
+    await container.database.db.execute(
+      `UPDATE recovery_requests SET state = 'FAILED', finished_at = now(),
+              failure_code = 'recovery.internal'
+        WHERE id = '${recoveryId}'` as never,
+    );
+    const after = await container.relay.processBatch();
+    expect(after.claimed).toBeGreaterThan(0);
   });
 
   it('lets the recovery lane write while everything else is refused', async () => {
