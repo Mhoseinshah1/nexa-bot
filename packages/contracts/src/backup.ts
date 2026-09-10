@@ -106,8 +106,21 @@ export type BackupDeliveryState = (typeof BACKUP_DELIVERY_STATES)[number];
  * verification; this field says who asked, not what happens. A second execution
  * path for "the operator pressed the button" is how a scheduled backup and a
  * manual one come to differ in exactly the property nobody tests.
+ *
+ * `PRE_RESTORE` is the mandatory backup a recovery takes of the installation it
+ * is about to replace, and it is a third VALUE rather than a third code path
+ * precisely because of the rule above. It goes through `BackupService.run`
+ * unchanged: the same lock, the same six stages, the same mandatory
+ * verification. What differs is only what the recovery executor then DEMANDS of
+ * the result — `SUCCEEDED` with a non-null `verifiedAt`, or the recovery aborts
+ * before anything destructive happens.
+ *
+ * Calling it `MANUAL` would have avoided a migration and put a false statement
+ * in the one table an operator reads after a disaster: the row that says what
+ * the installation looked like just before it was replaced is the row they need
+ * to be able to find, and `trigger` is how they find it.
  */
-export const BACKUP_TRIGGERS = ['MANUAL', 'SCHEDULED'] as const;
+export const BACKUP_TRIGGERS = ['MANUAL', 'SCHEDULED', 'PRE_RESTORE'] as const;
 export type BackupTrigger = (typeof BACKUP_TRIGGERS)[number];
 
 /**

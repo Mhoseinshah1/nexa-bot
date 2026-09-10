@@ -140,6 +140,14 @@ describe('state machine validation', () => {
   });
 
   it('validates every declared machine', () => {
+    // The loop below was vacuous for three phases: `STATE_MACHINES` was `[]`,
+    // so this case passed by iterating over nothing and would have kept passing
+    // if a machine had been declared and never registered. The registry is
+    // asserted non-empty and asserted to contain the machine by NAME, so
+    // emptying the list or forgetting to register a machine fails here rather
+    // than silently removing the check.
+    expect(STATE_MACHINES.length).toBeGreaterThan(0);
+    expect(STATE_MACHINES.map((machine) => machine.name)).toContain('recovery');
     for (const machine of STATE_MACHINES) {
       expect(validateStateMachine(machine)).toEqual([]);
     }

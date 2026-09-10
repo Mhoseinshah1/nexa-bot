@@ -32,6 +32,22 @@ import {
   PROVIDER_TYPES,
 } from './provider.js';
 import { isStorableInstant } from './time.js';
+import {
+  BACKUP_DELIVERY_STATES,
+  BACKUP_RUN_STATES,
+  BACKUP_STAGES,
+  BACKUP_TRIGGERS,
+} from './backup.js';
+import {
+  RECOVERY_CONFIRMATION_PHRASE,
+  RECOVERY_FAILURE_CODES,
+  RECOVERY_SOURCES,
+  RECOVERY_STAGES,
+  RECOVERY_STATES,
+  recoveryRestoreTestSchema,
+  recoveryVerificationSchema,
+  uploadedArtifactSchema,
+} from './recovery.js';
 
 /**
  * The HTTP seam.
@@ -1178,3 +1194,206 @@ export const providerListResponseSchema = z.object({
   providers: z.array(providerDescriptorSchema),
 });
 export type ProviderListResponse = z.infer<typeof providerListResponseSchema>;
+
+// --- Backup and disaster recovery -------------------------------------------
+
+/**
+ * One backup run, as the Web Admin renders it.
+ *
+ * Every field here is a FACT the pipeline recorded, and the shape refuses to
+ * collapse two of them. `state` says whether the run completed; `verifiedAt`
+ * says whether a real `pg_restore` into a real empty database succeeded; and
+ * `deliveryState` says what is known about Telegram — which, for
+ * `OUTCOME_UNKNOWN`, is nothing. A single `status: 'ok'` would be three
+ * different lies depending on which one was false.
+ *
+ * What is NOT here is as deliberate: no workspace path, no archive path, no
+ * `keyId`, no connection string. `checksum` is a digest and is included because
+ * it is what makes an archive verifiable by hand years later.
+ * `archiveAvailable` is a boolean rather than a path — the surface needs to know
+ * whether a download button will work, and does not need to know where the file
+ * is.
+ */
+export const backupRunSummarySchema = z.object({
+  id: z.string(),
+  trigger: z.enum(BACKUP_TRIGGERS),
+  state: z.enum(BACKUP_RUN_STATES),
+  stage: z.enum(BACKUP_STAGES),
+  startedAt: z.iso.datetime(),
+  finishedAt: z.iso.datetime().nullable(),
+  /** Bytes, as strings: these are `bigint` columns and JSON has no bigint. */
+  dumpBytes: z.string().nullable(),
+  archiveBytes: z.string().nullable(),
+  checksum: z.string().nullable(),
+  verifiedAt: z.iso.datetime().nullable(),
+  deliveryState: z.enum(BACKUP_DELIVERY_STATES),
+  deliveryAttemptedAt: z.iso.datetime().nullable(),
+  deliveryDetail: z.string().nullable(),
+  /**
+   * The failure CODE, and never the failure MESSAGE.
+   *
+   * `backup_runs.failure_message` holds an arbitrary `error.message` — the same
+   * uncontrolled string Architecture Hardening finding 18 kept out of the
+   * operator channel. It is kept out of this response for the same reason: a
+   * code plus the stage is what makes an alert actionable, and the message is in
+   * the log with a correlation id where an operator with shell access can read
+   * it and a browser cannot.
+   */
+  failureCode: z.string().nullable(),
+  cleanupOk: z.boolean(),
+  cleanupDetail: z.string().nullable(),
+  /** Whether the encrypted archive is still on this host and downloadable. */
+  archiveAvailable: z.boolean(),
+});
+export type BackupRunSummary = z.infer<typeof backupRunSummarySchema>;
+
+export const backupHistoryResponseSchema = z.object({
+  runs: z.array(backupRunSummarySchema),
+  /** Opaque keyset cursor for the next page, or null at the end. */
+  nextCursor: z.string().nullable(),
+});
+export type BackupHistoryResponse = z.infer<typeof backupHistoryResponseSchema>;
+
+export const backupRunDetailResponseSchema = z.object({ run: backupRunSummarySchema });
+export type BackupRunDetailResponse = z.infer<typeof backupRunDetailResponseSchema>;
+
+/**
+ * What the backup section reports about the installation as a whole.
+ *
+ * `lastSucceededAt` is the same value the scheduler derives its next due time
+ * from, so an operator and the scheduler cannot disagree about when the last
+ * good backup was. `scheduleEnabled` is reported because a green history with
+ * the schedule switched off is the shape that reads as healthy and is not.
+ */
+export const backupStatusResponseSchema = z.object({
+  scheduleEnabled: z.boolean(),
+  intervalMs: z.number().int().positive(),
+  lastSucceededAt: z.iso.datetime().nullable(),
+  /** The run currently holding the installation's backup lock, if any. */
+  running: backupRunSummarySchema.nullable(),
+  /** How many runs carry an unresolved `OUTCOME_UNKNOWN` delivery. */
+  unknownDeliveries: z.number().int().nonnegative(),
+  /** Whether a destructive recovery currently refuses new durable writes. */
+  quiesced: z.boolean(),
+});
+export type BackupStatusResponse = z.infer<typeof backupStatusResponseSchema>;
+
+export const runBackupRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type RunBackupRequest = z.infer<typeof runBackupRequestSchema>;
+
+/**
+ * What a "run backup now" press produced.
+ *
+ * `BUSY` is a first-class outcome and not an error, because one backup at a time
+ * is the installation's invariant and a second presser being told "already
+ * running, since 09:14" is that invariant working. Modelling it as a 409 would
+ * make the surface render a failure for a correct answer.
+ */
+export const runBackupResponseSchema = z.object({
+  outcome: z.enum(['COMPLETED', 'BUSY']),
+  run: backupRunSummarySchema,
+});
+export type RunBackupResponse = z.infer<typeof runBackupResponseSchema>;
+
+/**
+ * One recovery request, as the Web Admin renders it.
+ *
+ * The failure is a CODE from the frozen `RECOVERY_FAILURE_CODES` vocabulary and
+ * never a message, for the reason that enum's own docblock gives.
+ * `displacedDatabase` is the name the outgoing database was renamed to, present
+ * only after a cutover — it is not a secret (it is on the operator's own
+ * server, and they need it to roll back by hand) and it is the one piece of
+ * state that tells an operator whether production is the old database or the
+ * new one.
+ */
+export const recoveryRequestSummarySchema = z.object({
+  id: z.string(),
+  source: z.enum(RECOVERY_SOURCES),
+  state: z.enum(RECOVERY_STATES),
+  stage: z.enum(RECOVERY_STAGES),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+  /** Who started it. A label captured at the time, so a rename cannot rewrite it. */
+  requestedBy: z.string().nullable(),
+  /** The backup this recovery is of, when the artifact identified itself. */
+  backupId: z.string().nullable(),
+  artifactChecksum: z.string().nullable(),
+  failureCode: z.enum(RECOVERY_FAILURE_CODES).nullable(),
+  correlationId: z.string().nullable(),
+  upload: uploadedArtifactSchema.nullable(),
+  verification: recoveryVerificationSchema.nullable(),
+  restoreTest: recoveryRestoreTestSchema.nullable(),
+  /** Set once a confirmation was accepted; the phrase itself is never stored. */
+  confirmedAt: z.iso.datetime().nullable(),
+  confirmationExpiresAt: z.iso.datetime().nullable(),
+  /** The pre-restore backup this recovery took, once it has one. */
+  preRestoreBackupId: z.string().nullable(),
+  cutoverAt: z.iso.datetime().nullable(),
+  displacedDatabase: z.string().nullable(),
+  finishedAt: z.iso.datetime().nullable(),
+});
+export type RecoveryRequestSummary = z.infer<typeof recoveryRequestSummarySchema>;
+
+export const recoveryListResponseSchema = z.object({
+  recoveries: z.array(recoveryRequestSummarySchema),
+  nextCursor: z.string().nullable(),
+});
+export type RecoveryListResponse = z.infer<typeof recoveryListResponseSchema>;
+
+export const recoveryDetailResponseSchema = z.object({
+  recovery: recoveryRequestSummarySchema,
+});
+export type RecoveryDetailResponse = z.infer<typeof recoveryDetailResponseSchema>;
+
+/**
+ * Whether this release can restore an archive at all, and from where.
+ *
+ * A capability document rather than a set of assumptions baked into the
+ * surface. `foreignInstallationSupported` is `false` and is REPORTED rather
+ * than omitted, so the Web Admin can say «پشتیبانی نمی‌شود» in the place an
+ * operator would look for it instead of leaving the absence to be interpreted
+ * as an oversight. `docs/disaster-recovery-audit.md` § D-10.
+ */
+export const recoveryCapabilitiesResponseSchema = z.object({
+  uploadEnabled: z.boolean(),
+  maxUploadBytes: z.number().int().positive(),
+  foreignInstallationSupported: z.literal(false),
+  /** The phrase the server will compare against. The surface shows it; it never decides it. */
+  confirmationPhrase: z.literal(RECOVERY_CONFIRMATION_PHRASE),
+  confirmationTtlMs: z.number().int().positive(),
+});
+export type RecoveryCapabilitiesResponse = z.infer<typeof recoveryCapabilitiesResponseSchema>;
+
+export const startRecoveryFromRunRequestSchema = z.object({
+  backupId: z.string(),
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type StartRecoveryFromRunRequest = z.infer<typeof startRecoveryFromRunRequestSchema>;
+
+export const BACKUP_ROUTES = {
+  status: '/backups/status',
+  history: '/backups',
+  detail: (id: string) => `/backups/${encodeURIComponent(id)}`,
+  run: '/backups/run',
+  download: (id: string) => `/backups/${encodeURIComponent(id)}/archive`,
+} as const;
+
+export const RECOVERY_ROUTES = {
+  capabilities: '/recoveries/capabilities',
+  list: '/recoveries',
+  /**
+   * The upload. A raw `application/octet-stream` body, streamed to disk.
+   *
+   * Not multipart: this endpoint takes exactly one file and no fields, so a
+   * multipart parser would be a dependency and an attack surface bought to
+   * decode a wrapper around the only thing being sent. The ceiling is enforced
+   * on the STREAM by the server's own counter rather than by a declared
+   * `content-length`, because a chunked request declares none.
+   */
+  upload: '/recoveries/upload',
+  fromRun: '/recoveries/from-run',
+  detail: (id: string) => `/recoveries/${encodeURIComponent(id)}`,
+  confirm: (id: string) => `/recoveries/${encodeURIComponent(id)}/confirm`,
+} as const;

@@ -117,6 +117,30 @@ export const PERMISSIONS = [
   p('audit.view', 'View the audit log', 'LOW'),
   p('opslog.view', 'View operational events', 'LOW'),
 
+  // Backup and disaster recovery
+  //
+  // Four keys, at four risk levels, because the blast radii are not comparable
+  // and a single `backup.*` permission would make the most dangerous operation
+  // in the product reachable by anybody allowed to look at a list.
+  //
+  // `backup.download` is CRITICAL and not MEDIUM. The artifact is the whole
+  // database — every tenant, every admin hash, every encrypted panel
+  // credential — and it is encrypted under a KEK the installation holds, which
+  // protects it at rest and not at all from somebody this permission hands it
+  // to. Reading the backup LIST is an operational need; walking out with the
+  // database is not the same act.
+  //
+  // `recovery.restore` is CRITICAL and covers the whole destructive chain: it is
+  // what a typed confirmation is additionally required on top of, never
+  // instead of. It does NOT cover upload-and-verify, which is deliberately
+  // reachable with `backup.view` — proving an archive is sound changes nothing
+  // about the installation, and an operator who cannot check their backups
+  // without holding the power to overwrite production will not check them.
+  p('backup.view', 'View backup history and recovery operations', 'LOW'),
+  p('backup.run', 'Take a backup now', 'HIGH'),
+  p('backup.download', 'Download an encrypted backup archive', 'CRITICAL'),
+  p('recovery.restore', 'Restore this installation from a backup', 'CRITICAL'),
+
   // Platform
   p('tenant.cross_read', 'Read data across tenants', 'CRITICAL'),
   p('maintenance.run', 'Run maintenance operations', 'CRITICAL'),
@@ -182,6 +206,10 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'templates.edit',
       'reports.view',
       'opslog.view',
+      // Whether this installation's backups are working is an operational
+      // question, and an operator who cannot see the answer is an operator who
+      // finds out during a disaster. Viewing is LOW; nothing else here is.
+      'backup.view',
     ],
   },
   {
@@ -239,6 +267,11 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'services.edit',
       'settings.view',
       'opslog.view',
+      'backup.view',
+      // Taking a backup is the one safe thing to do before touching anything,
+      // and a technical role that cannot do it will touch things anyway.
+      // Download and restore stay with the owner.
+      'backup.run',
     ],
   },
   {
