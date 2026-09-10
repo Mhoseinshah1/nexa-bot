@@ -182,6 +182,44 @@ export interface PgToolsOptions {
   readonly migratorEntrypoint: string;
 }
 
+/**
+ * How hard the cutover tries to win the race against a reconnecting pool.
+ *
+ * Four attempts, half a second apart: a reconnect storm after
+ * `pg_terminate_backend` settles in well under that, and two seconds is short
+ * enough that a genuinely occupied database still fails the recovery promptly
+ * rather than hanging the destructive lane.
+ */
+const CUTOVER_RENAME_ATTEMPTS = 4;
+const CUTOVER_RENAME_RETRY_MS = 500;
+
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms).unref?.();
+  });
+
+/**
+ * A cutover that failed, and WHICH SIDE of the two renames it fell on.
+ *
+ * The distinction is the difference between "production is untouched under its
+ * own name" and "production is under `nexa_pre_restore_<id>` and nothing answers
+ * to the live name" — and an operator needs to be told which, in the row and in
+ * the operational event, by the only code that knows.
+ */
+export class CutoverError extends Error {
+  constructor(
+    readonly outgoingRenamed: boolean,
+    cause: unknown,
+  ) {
+    super(
+      outgoingRenamed
+        ? 'The cutover renamed the outgoing database and could not rename the candidate into place.'
+        : 'The cutover failed before anything was renamed.',
+      { cause },
+    );
+  }
+}
+
 export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
   private readonly connection: Connection;
 
@@ -701,10 +739,76 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
       }
     };
 
+    /*
+     * REVOKE from PUBLIC and from the CONNECTING ROLE.
+     *
+     * From PUBLIC alone is close to inert on a default installation: the
+     * application connects as the database's OWNER (the image's `POSTGRES_USER`),
+     * and an owner's own privileges are not what `FROM PUBLIC` removes — a
+     * superuser bypasses the check outright. The first version of this revoked
+     * from PUBLIC only while its comment claimed no process could re-establish a
+     * session, which is the shape of claim this project keeps having to correct.
+     *
+     * Naming the role narrows the window for an ordinary owner. It does NOT close
+     * it for a superuser, and nothing here can — which is why the rename below
+     * RETRIES rather than relying on the revoke.
+     */
     await exec(
       `REVOKE CONNECT ON DATABASE ${quoteIdent(live)} FROM PUBLIC`,
       'stop new connections to the live database',
     );
+    await exec(
+      `REVOKE CONNECT ON DATABASE ${quoteIdent(live)} FROM ${quoteIdent(this.connection.user)}`,
+      'stop new connections from the application role',
+    ).catch(() => undefined);
+
+    /*
+     * The rename, with a bounded retry on "is being accessed by other users".
+     *
+     * Between the terminate and the rename there is a real gap — one subprocess
+     * spawn — and it is exactly when every pool whose connections were just
+     * killed reconnects. A superuser reconnecting in that gap makes
+     * `ALTER DATABASE ... RENAME TO` fail with 55006 and the whole recovery
+     * refuse, for a race rather than for a fault. So each attempt re-terminates
+     * and tries again, a few times, over a couple of seconds.
+     *
+     * The retry is bounded and it is SAFE to repeat: a rename that succeeded does
+     * not run twice, because a failure is what brings us back here.
+     */
+    const renameWithRetry = async (from: string, to: string, what: string): Promise<void> => {
+      let last: unknown = null;
+      for (let attempt = 0; attempt < CUTOVER_RENAME_ATTEMPTS; attempt += 1) {
+        if (attempt > 0) {
+          await delay(CUTOVER_RENAME_RETRY_MS);
+          await exec(
+            `DO $$ BEGIN PERFORM pg_terminate_backend(pid) FROM pg_stat_activity ` +
+              `WHERE datname = ${quoteLiteral(from)} AND pid <> pg_backend_pid(); END $$`,
+            'disconnect the database being renamed',
+          ).catch(() => undefined);
+        }
+        try {
+          await exec(`ALTER DATABASE ${quoteIdent(from)} RENAME TO ${quoteIdent(to)}`, what);
+          return;
+        } catch (error) {
+          last = error;
+          const detail = error instanceof NexaError ? JSON.stringify(error.details) : String(error);
+          // Only a live-session collision is worth retrying. Anything else — a
+          // name that does not exist, a permission failure — will not improve.
+          if (!detail.includes('is being accessed by other users')) throw error;
+        }
+      }
+      throw last instanceof Error
+        ? last
+        : new NexaError({
+            kind: 'INTERNAL',
+            code: PLATFORM_ERROR_CODES.BACKUP_TOOL_FAILED,
+            message: `The cutover could not ${what}.`,
+          });
+    };
+
+    // Which name the data is under, for the `finally` and for the caller. It
+    // starts as the live name and moves exactly once.
+    let outgoingRenamed = false;
     try {
       // Terminating nothing is not an error: an installation with no other
       // session open is the easiest case this can run in, and `PERFORM` over an
@@ -714,21 +818,35 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
           `WHERE datname = ${quoteLiteral(live)} AND pid <> pg_backend_pid(); END $$`,
         'disconnect the live database',
       );
-      await exec(
-        `ALTER DATABASE ${quoteIdent(live)} RENAME TO ${quoteIdent(input.displacedName)}`,
-        'rename the outgoing database',
-      );
-      await exec(
-        `ALTER DATABASE ${quoteIdent(input.candidateName)} RENAME TO ${quoteIdent(live)}`,
-        'rename the restored database into place',
-      );
+      await renameWithRetry(live, input.displacedName, 'rename the outgoing database');
+      outgoingRenamed = true;
+      await renameWithRetry(input.candidateName, live, 'rename the restored database into place');
+    } catch (error) {
+      // WHICH SIDE. A failure before the first rename leaves production under its
+      // own name; a failure after it leaves production under `displacedName` and
+      // NOTHING bearing the live name. Those need different actions from an
+      // operator, and only this function knows which happened.
+      throw new CutoverError(outgoingRenamed, error);
     } finally {
-      // ALWAYS, including after a failure between the renames. An installation
-      // that cannot connect to its own database is a worse outcome than a failed
-      // recovery, and this is the statement that prevents it.
+      /*
+       * Connectivity restored to whichever database now HOLDS THE DATA.
+       *
+       * The first version granted on the live name unconditionally, in a comment
+       * that claimed it always prevents an installation that cannot connect to
+       * its own database — and in the one window it named, after the outgoing
+       * rename succeeded and the incoming one failed, no database bears the live
+       * name and the GRANT fails with 3D000 while the surviving production data
+       * stays REVOKED under its new name. That is the exact outage the statement
+       * exists to prevent, produced by the statement itself.
+       */
+      const holder = outgoingRenamed ? input.displacedName : live;
       await exec(
-        `GRANT CONNECT ON DATABASE ${quoteIdent(live)} TO PUBLIC`,
+        `GRANT CONNECT ON DATABASE ${quoteIdent(holder)} TO PUBLIC`,
         'restore connection grants',
+      ).catch(() => undefined);
+      await exec(
+        `GRANT CONNECT ON DATABASE ${quoteIdent(holder)} TO ${quoteIdent(this.connection.user)}`,
+        'restore the application role grant',
       ).catch(() => undefined);
     }
   }

@@ -1,4 +1,5 @@
 import {
+  isSystemContext,
   RECOVERY_CANDIDATE_PREFIX,
   RECOVERY_DISPLACED_PREFIX,
   RECOVERY_LEASE_HEARTBEAT_MS,
@@ -9,6 +10,7 @@ import {
   type ScopeContext,
 } from '@nexa/contracts';
 import type { BackupService } from '../../backup/application/backup.service.js';
+import { isCutoverFailure } from './ports.js';
 import type {
   CutoverJournal,
   DatabaseInspection,
@@ -136,6 +138,24 @@ export class RecoveryExecutor {
    * that the loop is alive.
    */
   isFresh(nowMs: number): boolean {
+    /*
+     * A RUN IN PROGRESS is the loop working, not the loop stalled.
+     *
+     * `lastTickAt` is stamped before `execute`, and `ticking` suppresses every
+     * later tick — so during a real restore, which takes minutes to hours,
+     * nothing advanced it and this went false 45 seconds in. The consequences
+     * were both bad and reachable on every recovery: the container's healthcheck
+     * failed for the length of the restore, and because `recovery` is a required
+     * readiness service, `botctl status` reported the whole installation not
+     * ready exactly while an operator was watching a restore — inviting the
+     * orchestrator restart that ADR-0028 § 6 exists to prevent.
+     *
+     * The freshness that matters while a run is in flight is the LEASE
+     * heartbeat, which the run refreshes itself and which stops the moment the
+     * process does. So a run in flight reports fresh, and a loop between runs is
+     * held to the tick interval as before.
+     */
+    if (this.ticking) return true;
     if (this.lastTickAt === null) return false;
     return nowMs - this.lastTickAt <= this.deps.tickIntervalMs * 3;
   }
@@ -144,6 +164,7 @@ export class RecoveryExecutor {
     if (this.ticking) return;
     this.ticking = true;
     try {
+      await this.reconcileCutovers();
       await this.reclaimAbandoned();
 
       // Our OWN in-flight request first. A process that restarted mid-recovery
@@ -222,11 +243,229 @@ export class RecoveryExecutor {
     }
   }
 
+  /**
+   * A cutover this installation performed and did not finish recording.
+   *
+   * THE OTHER HALF OF ADR-0028 § 4, and for one whole branch it did not exist:
+   * the journal was written on both sides of the renames and read by nothing,
+   * while four comments — the ADR, the port, this file and the entrypoint — said
+   * a restarted executor reads it. That made the crash-recovery property a
+   * claim rather than a mechanism, which is the same defect as the expiry that
+   * was written and never read.
+   *
+   * The window it covers: the process dies after the renames and before the
+   * re-assert. The row that describes the recovery is inside the database the
+   * cutover renamed away; the database that is live now carries the BACKUP's
+   * rows, which cannot include this recovery. So `reclaimStale` finds nothing,
+   * `claimOwn` finds nothing, and without this the recovery — and the name of
+   * the displaced database holding the operator's previous data — is invisible
+   * for ever.
+   *
+   * What it does NOT do is resume the recovery. The readiness verdict that would
+   * have completed it was never taken, and inventing one here would be a
+   * different claim; the recovery is recorded as FAILED with the cutover facts
+   * on the row, and the operational event names the displaced database. An
+   * operator who finds the restore is in fact serving can read that row and act.
+   */
+  private async reconcileCutovers(): Promise<void> {
+    let ids: readonly string[];
+    try {
+      ids = await this.deps.journal.pending();
+    } catch (error) {
+      this.deps.logger.error(
+        { err: rootMessage(error) },
+        'the cutover journal could not be listed',
+      );
+      return;
+    }
+
+    for (const id of ids) {
+      const entry = await this.deps.journal.read(id).catch(() => null);
+      if (entry === null) {
+        // Unreadable or half-written. Left alone deliberately: a file this
+        // process cannot parse is not a fact to act on, and removing it would
+        // destroy the only trace of whatever wrote it.
+        continue;
+      }
+
+      const current = await this.deps.requests.byIdUnscoped(id).catch(() => null);
+      if (current !== null) {
+        /*
+         * The row is here, so this executor — or another one — already recorded
+         * the outcome. A journal for a request that reached a terminal state has
+         * done its job and is cleared; one for a request still in flight is left,
+         * because the run that owns it may still be between the renames.
+         */
+        if (current.state === 'SUCCEEDED' || current.state === 'FAILED') {
+          await this.deps.journal.clear(id).catch(() => undefined);
+        }
+        continue;
+      }
+
+      if (entry.phase === 'ABOUT_TO_RENAME') {
+        /*
+         * Written before the renames, and no row here. Either nothing was
+         * renamed and the row is in this same database under a state the
+         * ordinary paths handle — in which case `byIdUnscoped` would have found
+         * it — or the cutover began and the outcome is genuinely unknown.
+         *
+         * Unknown is reported, not guessed at. Renaming anything on the strength
+         * of a file that says only "about to" is how a recovery tool destroys a
+         * database it was asked to protect.
+         */
+        this.deps.logger.error(
+          { recoveryId: id, displacedDatabase: entry.displacedDatabase },
+          'a cutover journal says a rename was about to happen and no row records what did',
+        );
+        await this.report({
+          code: 'recovery.run_failed',
+          severity: 'CRITICAL',
+          message:
+            `Recovery ${id} began a cutover and this installation holds no record of the outcome. ` +
+            `Check whether ${entry.displacedDatabase} and ${entry.candidateDatabase} exist.`,
+          context: {
+            recoveryId: id,
+            phase: entry.phase,
+            displacedDatabase: entry.displacedDatabase,
+            candidateDatabase: entry.candidateDatabase,
+          },
+          dedupeKey: `recovery.${id}`,
+        });
+        continue;
+      }
+
+      /*
+       * `RENAMED` or `RENAMED_OUT`: the outgoing database HAS moved. The row is
+       * written into whatever database is live now, so the fact survives, and it
+       * carries the displaced name — which is the operator's rollback and the
+       * one thing that must never be lost.
+       */
+      /*
+       * The row needs a tenant, and `tenant_id` is a NOT NULL foreign key.
+       *
+       * On an installation that has been provisioned this is always available —
+       * and if it is not, the reconstruction is skipped rather than guessed at,
+       * with the fact logged. A row invented under the wrong tenant would be
+       * worse than no row: it would be a recovery attributed to somebody.
+       */
+      const scope = this.deps.scope();
+      const tenantId = scope !== null && !isSystemContext(scope) ? scope.tenantId : null;
+      if (tenantId === null) {
+        this.deps.logger.error(
+          {
+            recoveryId: id,
+            phase: entry.phase,
+            displacedDatabase: entry.displacedDatabase,
+            candidateDatabase: entry.candidateDatabase,
+          },
+          'a cutover journal describes a completed rename and no tenant is provisioned to record it against',
+        );
+        continue;
+      }
+
+      const now = this.deps.clock.now();
+      await this.deps.requests.reassert({
+        id,
+        tenantId,
+        source: 'UPLOAD',
+        state: 'FAILED',
+        stage: 'CLEANUP',
+        createdAt: now,
+        updatedAt: now,
+        finishedAt: now,
+        requestedByAdminId: null,
+        requestedByLabel: null,
+        correlationId: null,
+        leaseOwner: null,
+        leaseHeartbeatAt: null,
+        workspacePath: null,
+        uploadBytes: null,
+        uploadSha256: null,
+        clientFilename: null,
+        backupId: null,
+        artifactChecksum: null,
+        archiveKeyId: null,
+        verifiedAt: null,
+        verification: null,
+        restoreTest: null,
+        confirmedAt: null,
+        confirmedByAdminId: null,
+        confirmedSessionId: null,
+        confirmedChecksum: null,
+        confirmationExpiresAt: null,
+        preRestoreBackupId: null,
+        candidateDatabase: entry.candidateDatabase,
+        displacedDatabase: entry.displacedDatabase,
+        // Both renames done means production IS the candidate; one rename done
+        // means nothing bears the live name and an operator has to act. Only the
+        // first is a cutover, and `cutover_at` is what the retention rule reads
+        // to keep this row for ever.
+        cutoverAt: entry.phase === 'RENAMED' ? now : null,
+        failureCode: 'recovery.internal',
+      });
+
+      this.deps.logger.error(
+        {
+          recoveryId: id,
+          phase: entry.phase,
+          displacedDatabase: entry.displacedDatabase,
+          candidateDatabase: entry.candidateDatabase,
+        },
+        'a cutover completed and its executor did not record it; reconstructed from the journal',
+      );
+      await this.report({
+        code: 'recovery.run_failed',
+        severity: 'CRITICAL',
+        message:
+          entry.phase === 'RENAMED'
+            ? `Recovery ${id} completed its cutover and the executor stopped before recording it. ` +
+              `The previous database is ${entry.displacedDatabase}.`
+            : `Recovery ${id} renamed the outgoing database and did not complete. ` +
+              `The previous database is ${entry.displacedDatabase} and nothing holds the live name.`,
+        context: {
+          recoveryId: id,
+          phase: entry.phase,
+          displacedDatabase: entry.displacedDatabase,
+          candidateDatabase: entry.candidateDatabase,
+        },
+        dedupeKey: `recovery.${id}`,
+      });
+      await this.deps.journal.clear(id).catch(() => undefined);
+    }
+  }
+
   /** Runs one confirmed recovery, or fails it with a safe code. */
   async execute(request: RecoveryRequestRow): Promise<void> {
     const heartbeat = this.startHeartbeat(request.id);
+    /*
+     * WHAT THIS RUN HAS ACTUALLY DONE, as it does it.
+     *
+     * The failure path below used to describe the recovery from `request` — the
+     * row as it was CLAIMED — which carries `cutoverAt: null`,
+     * `displacedDatabase: null` and `candidateDatabase: null` for the whole run.
+     * The one path that writes a row after the renames therefore recorded, in the
+     * restored database and in a CRITICAL operational event, that no cutover had
+     * happened: production was the candidate, the operator's old data was sitting
+     * under a `nexa_pre_restore_` name named nowhere, and the row said everything
+     * was untouched. `purgeFinishedBefore` keeps rows by `cutover_at`, so that row
+     * was also eligible for deletion.
+     *
+     * These fields are set at the moment the corresponding act succeeds, so a
+     * failure anywhere after it reports the truth.
+     */
+    const done: {
+      preRestoreBackupId: string | null;
+      candidateDatabase: string | null;
+      displacedDatabase: string | null;
+      cutoverAt: Date | null;
+    } = {
+      preRestoreBackupId: null,
+      candidateDatabase: null,
+      displacedDatabase: null,
+      cutoverAt: null,
+    };
     try {
-      await this.runStages(request);
+      await this.runStages(request, done);
       await this.report({
         code: 'recovery.run_ok',
         severity: 'INFO',
@@ -249,7 +488,25 @@ export class RecoveryExecutor {
         },
         'recovery failed',
       );
-      const current = await this.deps.requests.byIdUnscoped(request.id);
+      /*
+       * The read can THROW rather than return null, and that is not the same
+       * thing.
+       *
+       * After a cutover the connection string resolves to the restored database,
+       * and the pooled connections this executor held were terminated by the
+       * cutover itself — so the first query afterwards can fail on a connection
+       * that is gone. Worse, if the SECOND rename failed, no database bears the
+       * live name at all and every query here fails with 3D000. Letting that
+       * escape means the catch block that exists to record the failure throws its
+       * own, and the only trace of a half-completed cutover is one log line.
+       */
+      const current = await this.deps.requests.byIdUnscoped(request.id).catch((readError) => {
+        this.deps.logger.error(
+          { recoveryId: request.id, err: rootMessage(readError) },
+          'a failed recovery could not be read back from the database that is live now',
+        );
+        return null;
+      });
       if (current === null) {
         /*
          * The row is not in the database that is live now.
@@ -263,14 +520,35 @@ export class RecoveryExecutor {
          * The journal on disk is the other half of this, and it is what a restarted
          * executor reads — this covers the case where the process survives.
          */
-        await this.deps.requests.reassert({
-          ...request,
-          state: 'FAILED',
-          stage: 'CLEANUP',
-          updatedAt: this.deps.clock.now(),
-          finishedAt: this.deps.clock.now(),
-          failureCode: code,
-        });
+        await this.deps.requests
+          .reassert({
+            ...request,
+            state: 'FAILED',
+            stage: 'CLEANUP',
+            updatedAt: this.deps.clock.now(),
+            finishedAt: this.deps.clock.now(),
+            failureCode: code,
+            // THE FACTS, not the claim-time row. See `done` above.
+            preRestoreBackupId: done.preRestoreBackupId ?? request.preRestoreBackupId,
+            candidateDatabase: done.candidateDatabase,
+            displacedDatabase: done.displacedDatabase,
+            cutoverAt: done.cutoverAt,
+          })
+          .catch((writeError) => {
+            // The database that is live now may be unreachable — that is the
+            // whole reason this branch exists — and the journal on disk is what
+            // survives it. Reported rather than swallowed.
+            this.deps.logger.error(
+              {
+                recoveryId: request.id,
+                code,
+                displacedDatabase: done.displacedDatabase,
+                candidateDatabase: done.candidateDatabase,
+                err: rootMessage(writeError),
+              },
+              'a failed recovery could not be recorded in any database; the cutover journal is the record',
+            );
+          });
       }
       await this.deps.requests.transition({
         id: request.id,
@@ -298,12 +576,19 @@ export class RecoveryExecutor {
         context: {
           recoveryId: request.id,
           code,
-          // The one fact an operator needs most after a failed recovery: whether
-          // production is the old database or the new one, and where the other
-          // one is.
-          cutoverDone: current?.cutoverAt !== null && current?.cutoverAt !== undefined,
-          displacedDatabase: current?.displacedDatabase ?? null,
-          candidateDatabase: current?.candidateDatabase ?? null,
+          /*
+           * The one fact an operator needs most after a failed recovery: whether
+           * production is the old database or the new one, and where the other
+           * one is.
+           *
+           * From `done` FIRST. Reading it off `current` was wrong in exactly the
+           * case that matters — a failure after the renames leaves `current`
+           * null, and `undefined !== undefined` is false, so the event said "no
+           * cutover" precisely when there had been one.
+           */
+          cutoverDone: done.cutoverAt !== null || current?.cutoverAt != null,
+          displacedDatabase: done.displacedDatabase ?? current?.displacedDatabase ?? null,
+          candidateDatabase: done.candidateDatabase ?? current?.candidateDatabase ?? null,
         },
         dedupeKey: `recovery.${request.id}`,
       });
@@ -312,7 +597,15 @@ export class RecoveryExecutor {
     }
   }
 
-  private async runStages(request: RecoveryRequestRow): Promise<void> {
+  private async runStages(
+    request: RecoveryRequestRow,
+    done: {
+      preRestoreBackupId: string | null;
+      candidateDatabase: string | null;
+      displacedDatabase: string | null;
+      cutoverAt: Date | null;
+    },
+  ): Promise<void> {
     const id = request.id;
 
     // ---- RE-CHECK THE BINDING -------------------------------------------
@@ -433,6 +726,8 @@ export class RecoveryExecutor {
     // costs a candidate database and nothing else.
     await this.advance(id, ['QUIESCING'], 'RESTORING', 'CREATE_CANDIDATE');
     const candidate = `${RECOVERY_CANDIDATE_PREFIX}${shortId(id)}`;
+    done.preRestoreBackupId = emergency.run.id;
+
     await this.deps.requests.progress({
       id,
       stage: 'CREATE_CANDIDATE',
@@ -450,6 +745,9 @@ export class RecoveryExecutor {
         `The candidate database could not be created: ${String(error)}`,
       );
     }
+    // The candidate EXISTS now. Recorded on the in-memory facts as well as on the
+    // row, because the row's write is lease-guarded and can silently no-op.
+    done.candidateDatabase = candidate;
 
     const workspace = this.deps.workspaces.open(request.workspacePath);
     await this.deps.requests.progress({
@@ -464,7 +762,7 @@ export class RecoveryExecutor {
       // because a plaintext dump is the database with the encryption taken off
       // and leaving one on disk for the days a confirmation might take is the
       // thing the encryption was for.
-      await this.deps.recovery.decryptForExecutor(id, workspace);
+      await this.deps.recovery.decryptForExecutor(id, workspace, request.confirmedChecksum);
       await this.deps.engine.restoreIntoEmpty(candidate, workspace.dumpPath);
     } catch (error) {
       throw new RecoveryAbort(
@@ -575,8 +873,39 @@ export class RecoveryExecutor {
     try {
       await this.deps.engine.cutover({ candidateName: candidate, displacedName: displaced });
     } catch (error) {
-      throw new RecoveryAbort('recovery.cutover_failed', `The cutover failed: ${String(error)}`);
+      /*
+       * A cutover that failed may still have renamed the OUTGOING database.
+       *
+       * `cutover` reports which side it fell on, because the two are completely
+       * different situations for an operator: production untouched under its own
+       * name, or production sitting under `nexa_pre_restore_<id>` with nothing
+       * bearing the live name at all. Recording the displaced name here is what
+       * lets the failure path below say which — and it is set BEFORE the throw,
+       * so the catch in `execute` sees it.
+       */
+      if (isCutoverFailure(error) && error.outgoingRenamed) {
+        done.displacedDatabase = displaced;
+        await this.deps.journal.write({
+          recoveryId: id,
+          phase: 'RENAMED_OUT',
+          liveDatabase: live,
+          candidateDatabase: candidate,
+          displacedDatabase: displaced,
+          at: this.deps.clock.now(),
+        });
+      }
+      throw new RecoveryAbort(
+        'recovery.cutover_failed',
+        isCutoverFailure(error) && error.outgoingRenamed
+          ? `The cutover renamed the outgoing database and could not rename the candidate into place. Production data is under ${displaced}.`
+          : 'The cutover failed before anything was renamed.',
+        error,
+      );
     }
+    // BOTH renames are done: production IS the candidate from here.
+    done.candidateDatabase = candidate;
+    done.displacedDatabase = displaced;
+    done.cutoverAt = this.deps.clock.now();
     await this.deps.journal.write({
       recoveryId: id,
       phase: 'RENAMED',
@@ -613,7 +942,7 @@ export class RecoveryExecutor {
       preRestoreBackupId: emergency.run.id,
       candidateDatabase: candidate,
       displacedDatabase: displaced,
-      cutoverAt: this.deps.clock.now(),
+      cutoverAt: done.cutoverAt,
       finishedAt: null,
       failureCode: null,
     };

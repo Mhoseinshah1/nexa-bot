@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { recoveryIdSchema } from '@nexa/contracts';
 import type { CutoverJournal } from '../application/ports.js';
@@ -41,7 +41,7 @@ export class FileCutoverJournal implements CutoverJournal {
 
   async write(entry: {
     recoveryId: string;
-    phase: 'ABOUT_TO_RENAME' | 'RENAMED';
+    phase: 'ABOUT_TO_RENAME' | 'RENAMED_OUT' | 'RENAMED';
     liveDatabase: string;
     candidateDatabase: string;
     displacedDatabase: string;
@@ -54,9 +54,39 @@ export class FileCutoverJournal implements CutoverJournal {
     });
   }
 
-  async read(
-    recoveryId: string,
-  ): Promise<{ phase: 'ABOUT_TO_RENAME' | 'RENAMED'; displacedDatabase: string } | null> {
+  /**
+   * Every recovery id this journal holds a file for.
+   *
+   * The reason `read` alone was not enough, and the reason it went uncalled for
+   * a whole branch: `read` takes a recovery id, and a process that restarted
+   * mid-cutover HAS NO ID. The row that would name it is inside the database the
+   * cutover renamed away, and the restored database carries the backup's rows.
+   * Discovery has to come from the one thing a rename cannot move, which is this
+   * directory.
+   */
+  async pending(): Promise<readonly string[]> {
+    try {
+      const names = await readdir(this.root);
+      return names
+        .filter((name) => name.startsWith('cutover-') && name.endsWith('.json'))
+        .map((name) => name.slice('cutover-'.length, -'.json'.length));
+    } catch {
+      // No directory is no journals, which is the ordinary case on an
+      // installation that has never run a recovery.
+      return [];
+    }
+  }
+
+  /** Removes a journal once its facts are recorded where an operator reads them. */
+  async clear(recoveryId: string): Promise<void> {
+    await rm(this.path(recoveryId), { force: true });
+  }
+
+  async read(recoveryId: string): Promise<{
+    phase: 'ABOUT_TO_RENAME' | 'RENAMED_OUT' | 'RENAMED';
+    displacedDatabase: string;
+    candidateDatabase: string;
+  } | null> {
     let raw: string;
     try {
       raw = await readFile(this.path(recoveryId), 'utf8');
@@ -66,14 +96,25 @@ export class FileCutoverJournal implements CutoverJournal {
       return null;
     }
     try {
-      const parsed = JSON.parse(raw) as { phase?: unknown; displacedDatabase?: unknown };
+      const parsed = JSON.parse(raw) as {
+        phase?: unknown;
+        displacedDatabase?: unknown;
+        candidateDatabase?: unknown;
+      };
       if (
-        (parsed.phase !== 'ABOUT_TO_RENAME' && parsed.phase !== 'RENAMED') ||
-        typeof parsed.displacedDatabase !== 'string'
+        (parsed.phase !== 'ABOUT_TO_RENAME' &&
+          parsed.phase !== 'RENAMED_OUT' &&
+          parsed.phase !== 'RENAMED') ||
+        typeof parsed.displacedDatabase !== 'string' ||
+        typeof parsed.candidateDatabase !== 'string'
       ) {
         return null;
       }
-      return { phase: parsed.phase, displacedDatabase: parsed.displacedDatabase };
+      return {
+        phase: parsed.phase,
+        displacedDatabase: parsed.displacedDatabase,
+        candidateDatabase: parsed.candidateDatabase,
+      };
     } catch {
       // A journal we cannot parse is treated as absent, which is the SAFE
       // reading: the executor then re-checks the databases themselves rather

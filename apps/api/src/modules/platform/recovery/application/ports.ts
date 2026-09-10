@@ -46,6 +46,27 @@ export interface DatabaseInspection {
  * output, a timeout with a SIGKILL backstop, and `assertOutsideTransaction`.
  * Nothing here opens its own subprocess.
  */
+/**
+ * A failed cutover, and WHICH SIDE of the two renames it fell on.
+ *
+ * Declared here rather than imported from the adapter, because the application
+ * layer must not reach into infrastructure — and because the question is part of
+ * the PORT's contract: any implementation of `cutover` has to be able to say
+ * whether production is still under its own name. The two situations need
+ * different actions from an operator, and only the implementation knows.
+ */
+export interface CutoverFailure {
+  /** True once the outgoing database has been renamed away. */
+  readonly outgoingRenamed: boolean;
+}
+
+export function isCutoverFailure(error: unknown): error is Error & CutoverFailure {
+  return (
+    error instanceof Error &&
+    typeof (error as Partial<CutoverFailure>).outgoingRenamed === 'boolean'
+  );
+}
+
 export interface RestoreEngine {
   /** The live database's name, for the refusals below. */
   readonly liveDatabase: string;
@@ -138,16 +159,43 @@ export interface RecoveryWorkspaceFactory {
 export interface CutoverJournal {
   write(entry: {
     readonly recoveryId: string;
-    readonly phase: 'ABOUT_TO_RENAME' | 'RENAMED';
+    /**
+     * `RENAMED_OUT` is the state between the two renames: the outgoing database
+     * has moved aside and nothing bears the live name yet. It is written only on
+     * the failure path, because that is the only way to STAY there — and it is
+     * the one state where an operator has to act on the file rather than on a
+     * row, since no database is addressable to hold one.
+     */
+    readonly phase: 'ABOUT_TO_RENAME' | 'RENAMED_OUT' | 'RENAMED';
     readonly liveDatabase: string;
     readonly candidateDatabase: string;
     readonly displacedDatabase: string;
     readonly at: Date;
   }): Promise<void>;
+  /**
+   * Every recovery id this journal holds a file for.
+   *
+   * `read` alone was not enough, and that is why it went uncalled: it takes a
+   * recovery id, and a process that restarted mid-cutover HAS NO ID. The row
+   * that would name it is inside the database the cutover renamed away, and the
+   * restored database carries the backup's rows. Discovery has to come from the
+   * one thing on the host a database rename cannot move.
+   */
+  pending(): Promise<readonly string[]>;
+  /** Removes a journal once its facts are recorded where an operator reads them. */
+  clear(recoveryId: string): Promise<void>;
   /** Reads a recovery's journal, for an executor that restarted mid-cutover. */
   read(recoveryId: string): Promise<{
-    readonly phase: 'ABOUT_TO_RENAME' | 'RENAMED';
+    /**
+     * `RENAMED_OUT` is the state between the two renames: the outgoing database
+     * has moved aside and nothing bears the live name yet. It is written only on
+     * the failure path, because that is the only way to STAY there — and it is
+     * the one state where an operator has to act on the file rather than on a
+     * row, since no database is addressable to hold one.
+     */
+    readonly phase: 'ABOUT_TO_RENAME' | 'RENAMED_OUT' | 'RENAMED';
     readonly displacedDatabase: string;
+    readonly candidateDatabase: string;
   } | null>;
 }
 

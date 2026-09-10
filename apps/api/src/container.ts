@@ -1,5 +1,4 @@
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
 import { MAX_REQUESTS_PER_PROBE } from '@nexa/contracts';
 import type {
   AuditWriter,
@@ -37,7 +36,9 @@ import { providerAdapter } from './modules/platform/providers/infrastructure/ada
 import { SystemClock } from './infrastructure/clock.js';
 import { Uuidv7IdGenerator } from './infrastructure/ids.js';
 import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
+import { hostname } from 'node:os';
 import { resolveKeyring } from './infrastructure/crypto/resolve-keyring.js';
+import { blocksReadiness } from './modules/platform/system/application/readiness.service.js';
 import { createLogger } from './infrastructure/logging/logger.js';
 import { createDatabase, type DatabaseHandle } from './infrastructure/persistence/database.js';
 import { createRedis, type RedisHandle } from './infrastructure/redis/redis.js';
@@ -863,8 +864,25 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * one and believe it was taking over from somebody else — and the recovery
    * executor's restart path (`claimOwn`) depends on recognising exactly this
    * string.
+   *
+   * STABLE ACROSS RESTARTS, which is the whole point and which the first version
+   * of this value defeated: it carried the pid and a fresh random suffix, so a
+   * restarted process could never recognise its own lease and `claimOwn` matched
+   * nothing, ever. The comment above said the restart path depended on this
+   * string while the value made the dependency unsatisfiable. The cost was not
+   * theoretical — a recovery executor that died mid-restore left the row in a
+   * quiescing state with a lease nobody could reclaim for fifteen minutes, and a
+   * quiescing state refuses every durable write in the installation. Fifteen
+   * minutes of refused writes, on every crash, is exactly what `claimOwn` was
+   * written to prevent.
+   *
+   * The role plus the HOST is the identity that survives a process restart and
+   * still separates the four roles from each other. In the deployment each role
+   * is its own container and a container's hostname is its id, so two containers
+   * of one role never collide; a container REPLACED by an update gets a new
+   * hostname and correctly falls through to the stale-lease path instead.
    */
-  const leaseOwner = `${role}:${String(process.pid)}:${randomUUID().slice(0, 8)}`;
+  const leaseOwner = `${role}:${hostname()}`;
 
   /** The backup graph. */
   const backupRuns = new DrizzleBackupRunRepository(database.db);
@@ -1063,12 +1081,34 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // The unmodified pipeline. `PRE_RESTORE` is a trigger VALUE, not a second
     // code path: same lock, same six stages, same mandatory verification.
     backup,
-    // The SAME readiness computation the load balancer gets. Two readiness
-    // computations would eventually disagree, and the disagreement would be an
-    // outage nobody could explain.
+    /*
+     * The SAME readiness computation the load balancer gets — MINUS the outbox
+     * lag, which is the one probe that cannot mean what it usually means here.
+     *
+     * `outboxLagMs` is the age of the oldest unpublished message, and a restored
+     * database is by construction older than `OUTBOX_RELAY_MAX_LAG_MS` (five
+     * minutes by default). Any message that was unpublished when the dump was
+     * taken — one written moments before it, one in backoff — comes back with
+     * that age, so the lag right after a cutover is the AGE OF THE BACKUP. Worse,
+     * it cannot recover while the check is being made: `RESTARTING` still
+     * quiesces, so the relay is idle and the lag can only grow.
+     *
+     * Left in, this reports `recovery.readiness_failed` on a successful restore
+     * of any backup older than five minutes — which is every backup — after the
+     * renames, with a CRITICAL event, on an installation that is in fact serving.
+     * A false failure at that exact point is the most dangerous wrong answer this
+     * design can give: an operator reading it will try to undo a restore that
+     * worked.
+     *
+     * The other three probes are what "can this installation serve?" means here:
+     * the database answers, Redis answers, and the restored schema matches this
+     * release's migration journal. Lag is a freshness metric, and freshness is
+     * exactly what a restore is not claiming.
+     */
     readiness: async () => {
-      const { degraded } = await readiness.run();
-      return { degraded };
+      const { dependencies } = await readiness.run();
+      const blocking = dependencies.filter((dependency) => dependency.name !== 'outbox');
+      return { degraded: blocking.some(blocksReadiness) };
     },
     clock,
     opsLog,
@@ -1084,6 +1124,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const backupScheduler = new BackupScheduler({
     service: backup,
     runs: backupRuns,
+    // The same predicate the write gate and the operator's button read, from the
+    // same row. Three readers, one source: a second way to ask would eventually
+    // give a third answer.
+    quiesced: async () => {
+      const lock = await recoveryRequests.installationLock();
+      return lock !== null && lock.quiescing;
+    },
     clock,
     intervalMs: config.BACKUP_INTERVAL_MS,
     tickIntervalMs: config.BACKUP_TICK_MS,

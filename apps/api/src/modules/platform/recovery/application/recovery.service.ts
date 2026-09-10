@@ -555,7 +555,27 @@ export class RecoveryService {
    * On this service rather than in the executor so there is one archiver
    * dependency and one decrypt call site; the executor holds no keyring.
    */
-  async decryptForExecutor(recoveryId: string, workspace: RecoveryWorkspace): Promise<void> {
+  async decryptForExecutor(
+    recoveryId: string,
+    workspace: RecoveryWorkspace,
+    /**
+     * The checksum the OPERATOR confirmed, from the row the executor claimed.
+     *
+     * Required, and it is the whole point of the parameter. Without it this
+     * function could only ask whether the file on disk agrees with ITS OWN
+     * manifest — which any internally consistent Nexa archive does, including a
+     * different backup of this installation swapped into the workspace between
+     * the confirmation and the restore. Every check upstream would still pass:
+     * the row's two checksum columns are written from one value in one statement,
+     * so comparing them to each other cannot detect a swapped FILE.
+     *
+     * ADR-0028 § 8 and CLAUDE.md both say the checksum is what makes a
+     * confirmation for backup A unable to restore backup B. This comparison —
+     * the bytes about to be restored against the value the operator confirmed —
+     * is the only place that is true.
+     */
+    confirmedChecksum: string,
+  ): Promise<void> {
     const opened = await this.deps.archiver.open({
       archivePath: workspace.archivePath,
       dumpPath: workspace.dumpPath,
@@ -571,6 +591,18 @@ export class RecoveryService {
       throw this.refuse(
         'recovery.checksum_mismatch',
         'The archive no longer matches its manifest.',
+      );
+    }
+    if (!constantTimeEqual(opened.dumpChecksum, confirmedChecksum)) {
+      // THE BINDING, against the bytes rather than against another column. A
+      // whole archive substituted for another one lands here and nowhere else.
+      this.deps.logger.error(
+        { recoveryId },
+        'a recovery archive is not the artifact the operator confirmed',
+      );
+      throw this.refuse(
+        'recovery.confirmation_invalid',
+        'The archive on disk is not the artifact this recovery was confirmed for.',
       );
     }
   }

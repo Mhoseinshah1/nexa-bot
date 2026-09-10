@@ -48,7 +48,12 @@ export class FilesystemRecoveryWorkspaces implements RecoveryWorkspaceFactory {
   open(directory: string): RecoveryWorkspace {
     const root = resolve(this.root);
     const target = resolve(directory);
-    if (target !== root && !target.startsWith(root + sep)) {
+    // The root ITSELF is not a workspace, and permitting it was a `rm -rf` of
+    // every other pending upload waiting to be reached through a column: `open`
+    // takes a path read back out of `workspace_path`, and `discard` removes the
+    // directory it is given. Nothing legitimate resolves here — every real
+    // workspace carries a random suffix — so equality is refused with the rest.
+    if (!target.startsWith(root + sep)) {
       throw new NexaError({
         kind: 'INTERNAL',
         code: PLATFORM_ERROR_CODES.BACKUP_TOOL_FAILED,

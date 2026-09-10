@@ -708,11 +708,17 @@ describe('the backup pipeline', () => {
 });
 
 describe('the backup scheduler', () => {
-  function scheduled(): { scheduler: BackupScheduler; h: Harness } {
+  function scheduled(options: { quiesced?: boolean } = {}): {
+    scheduler: BackupScheduler;
+    h: Harness;
+  } {
     const h = harness();
     const scheduler = new BackupScheduler({
       service: h.service,
       runs: h.runs,
+      // Whether a recovery holds the installation. The default is the ordinary
+      // case; the case below sets it.
+      quiesced: async () => options.quiesced === true,
       clock: h.clock,
       intervalMs: 24 * 3_600_000,
       tickIntervalMs: 60_000,
@@ -725,6 +731,32 @@ describe('the backup scheduler', () => {
     const { scheduler, h } = scheduled();
     await scheduler.tick();
     expect(h.runs.rows.size).toBe(1);
+  });
+
+  it('does not start a backup while a recovery holds the installation', async () => {
+    /*
+     * The unattended caller, and the one that needed the check most.
+     *
+     * `backup_runs` is written on the database handle rather than through the
+     * unit of work, so no backup write passes either quiesce chokepoint — the
+     * write gate cannot stop this one. The operator's own button is checked at
+     * its surface for exactly that reason, and the scheduler was left out on the
+     * strength of a comment that said it is the pre-restore backup's own path.
+     * It is not: the executor calls `BackupService.run('PRE_RESTORE')` directly.
+     *
+     * Left unchecked, a tick landing in the window between the recovery's
+     * pre-restore backup releasing the lock and the executor quiescing starts a
+     * full `pg_dump` against a database that is about to be renamed away.
+     */
+    const { scheduler, h } = scheduled({ quiesced: true });
+    await scheduler.tick();
+    expect(h.runs.rows.size).toBe(0);
+
+    // The POSITIVE CONTROL, on the same fixture: a scheduler that never backed
+    // up would pass the assertion above whatever the reason.
+    const ordinary = scheduled();
+    await ordinary.scheduler.tick();
+    expect(ordinary.h.runs.rows.size).toBe(1);
   });
 
   it('measures the interval from the last SUCCESS, not from process start', async () => {

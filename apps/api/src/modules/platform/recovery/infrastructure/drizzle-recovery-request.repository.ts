@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, ne, sql } from 'drizzle-orm';
 import {
   NexaError,
   PLATFORM_ERROR_CODES,
@@ -510,10 +510,52 @@ export class DrizzleRecoveryRequestRepository implements RecoveryRequestReposito
      * primary tenant is in every backup of it, because it is what the backup is
      * a backup OF.
      */
-    await this.db
-      .insert(recoveryRequests)
-      .values(values)
-      .onConflictDoUpdate({ target: recoveryRequests.id, set: values });
+    await this.db.transaction(async (tx) => {
+      /*
+       * FIRST, close any OTHER destructive row this database came with.
+       *
+       * The rows in the restored database are the backup's rows, and a backup
+       * taken while some recovery was in flight carries that recovery in a
+       * destructive state — `PRE_RESTORE_BACKUP` for certain, because the
+       * mandatory pre-restore backup is taken while the row is in exactly that
+       * state and the dump excludes nothing. Restoring a `PRE_RESTORE` archive,
+       * which is precisely what a rollback restores, therefore lands a row in
+       * `recovery_requests_single_destructive_idx`'s predicate — and the upsert
+       * below, which writes `RESTARTING`, then raises 23505 on that partial index
+       * rather than on the primary key. `onConflictDoUpdate` targets `id` and
+       * does not cover it, so a SUCCESSFUL cutover ended as
+       * `recovery.internal`, with the row written by the failure path claiming
+       * no cutover had happened.
+       *
+       * Those rows are snapshot artefacts by definition: they describe a
+       * recovery that was in flight when the backup was taken, which cannot be in
+       * flight now — this executor holds the only destructive lease. They are
+       * FAILED rather than deleted, because a row an operator can read and date is
+       * worth more than a clean table.
+       */
+      await tx
+        .update(recoveryRequests)
+        .set({
+          state: 'FAILED',
+          stage: 'CLEANUP',
+          failureCode: 'recovery.lease_expired',
+          finishedAt: row.updatedAt,
+          updatedAt: row.updatedAt,
+          leaseOwner: null,
+          leaseHeartbeatAt: null,
+        })
+        .where(
+          and(
+            ne(recoveryRequests.id, row.id),
+            inArray(recoveryRequests.state, [...RECOVERY_ACTIVE_DESTRUCTIVE_STATES]),
+          ),
+        );
+
+      await tx
+        .insert(recoveryRequests)
+        .values(values)
+        .onConflictDoUpdate({ target: recoveryRequests.id, set: values });
+    });
   }
 
   /**
