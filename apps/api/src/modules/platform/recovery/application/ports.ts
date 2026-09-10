@@ -62,6 +62,16 @@ export interface RestoreEngine {
    * restoring under pressure, like a restore that nearly worked.
    */
   restoreIntoEmpty(name: string, dumpPath: string): Promise<void>;
+  /**
+   * Is this file a `pg_dump` CUSTOM-format archive?
+   *
+   * The five-byte magic, read from the head of the file. Asked before a restore
+   * is attempted so that "this is not a pg_dump archive" and "pg_restore refused
+   * this pg_dump archive" are two different answers on the row — the manifest
+   * declares `dumpFormat: 'custom'`, and this is the only check that the payload
+   * it travelled with agrees.
+   */
+  isCustomFormatDump(dumpPath: string): Promise<boolean>;
   /** Table count and migration history. Opens no transaction on the candidate. */
   inspectDatabase(name: string): Promise<DatabaseInspection>;
   /**

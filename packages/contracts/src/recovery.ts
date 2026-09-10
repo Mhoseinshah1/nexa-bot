@@ -372,10 +372,15 @@ export const RECOVERY_CONFIRMATION_PHRASE = 'RESTORE NEXA';
  * How long a confirmation stays usable.
  *
  * Short, because its whole purpose is to mean "the person who typed this is
- * still the person at the keyboard". Long enough that a slow pre-restore backup
- * does not invalidate the confirmation that started it — the expiry is checked
- * once, when the confirmation is accepted, and the executor re-checks the
- * BINDING rather than the clock.
+ * still the person at the keyboard".
+ *
+ * It bounds confirm -> START, and not the length of the restore: the executor
+ * checks it ONCE, as it claims the request, and never again, so a slow
+ * pre-restore backup cannot invalidate the confirmation that began it. What it
+ * does refuse is a request that was confirmed and then left — an executor that
+ * was not running, a host that was down — which must not replace a production
+ * database an hour later because a row still said RESTORE_REQUESTED. The binding
+ * to the artifact is re-checked in the same place, and is a separate question.
  */
 export const RECOVERY_CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 

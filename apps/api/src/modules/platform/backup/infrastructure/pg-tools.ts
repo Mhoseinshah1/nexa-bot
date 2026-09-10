@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { open, type FileHandle } from 'node:fs/promises';
 import { NexaError, PLATFORM_ERROR_CODES } from '@nexa/contracts';
 import type {
   DatabaseTools,
@@ -377,6 +378,34 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
       return { dropped: false };
     }
     return { dropped: true };
+  }
+
+  /**
+   * The `pg_dump` custom-format magic, read from the head of the file.
+   *
+   * `PGDMP` is the five-byte signature every custom-format archive starts with,
+   * and it is what `pg_restore` itself looks for. Reading five bytes is the whole
+   * check: this answers "is this the kind of file the manifest says it is", not
+   * "will it restore" — that question only a real restore answers, and the
+   * restore-test is what asks it.
+   *
+   * An unreadable or shorter-than-five-bytes file answers `false` rather than
+   * throwing: the caller's next move is the same either way, and a throw here
+   * would surface as the unclassified code instead of the specific one.
+   */
+  async isCustomFormatDump(dumpPath: string): Promise<boolean> {
+    const MAGIC = Buffer.from('PGDMP', 'ascii');
+    let handle: FileHandle | null = null;
+    try {
+      handle = await open(dumpPath, 'r');
+      const head = Buffer.alloc(MAGIC.length);
+      const { bytesRead } = await handle.read(head, 0, MAGIC.length, 0);
+      return bytesRead === MAGIC.length && head.equals(MAGIC);
+    } catch {
+      return false;
+    } finally {
+      await handle?.close().catch(() => undefined);
+    }
   }
 
   /**

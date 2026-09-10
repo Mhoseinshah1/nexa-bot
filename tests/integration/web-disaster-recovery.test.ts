@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -45,6 +45,15 @@ describe('web disaster recovery', () => {
   let technicalCookie: string;
   let workRoot: string;
   let recoveryRoot: string;
+  /**
+   * The installation's keyring, resolved from the SAME config the API was built
+   * from, so an archive this file seals is one this installation can open.
+   *
+   * Resolved here rather than read off the container, which does not expose it —
+   * and should not: nothing in the application needs the raw keys, and a test
+   * needing them is not a reason to widen that surface.
+   */
+  let keyring: { activeKeyId: string; keys: Map<string, Buffer> };
 
   const inject = (options: Record<string, unknown>) =>
     api.app
@@ -103,6 +112,9 @@ describe('web disaster recovery', () => {
       // buffer bigger than this rather than a real archive.
       RECOVERY_UPLOAD_MAX_BYTES: '1048576',
     });
+    const { resolveKeyring } =
+      await import('../../apps/api/src/infrastructure/crypto/resolve-keyring');
+    keyring = resolveKeyring(config) as never;
     await migrateOnce(config.DATABASE_URL);
     await dropPreExistingScratches(config.DATABASE_URL);
     api = await createApiApp(config);
@@ -483,6 +495,125 @@ describe('web disaster recovery', () => {
       }
     });
 
+    /**
+     * The three archives below are SEALED BY THIS TEST, under this
+     * installation's own keyring, because each one is a shape the pipeline
+     * cannot produce: a payload that is not a `pg_dump` archive, a manifest
+     * whose checksum is not the payload's, and an archive wrapped under a key
+     * this installation does not hold. Mutating a real archive cannot reach any
+     * of them — every mutation fails the AEAD tag first, which is the one answer
+     * the authentication layer is supposed to give.
+     */
+    async function seal(input: {
+      readonly payload: Buffer;
+      readonly manifest?: Partial<Record<string, unknown>>;
+      readonly keyring?: { activeKeyId: string; keys: Map<string, Buffer> };
+    }): Promise<Buffer> {
+      const { sealArchive } =
+        await import('../../apps/api/src/modules/platform/backup/infrastructure/archive');
+      const { createHash } = await import('node:crypto');
+      const directory = await mkdtemp(join(tmpdir(), 'nexa-dr-seal-'));
+      try {
+        const dumpPath = join(directory, 'dump.bin');
+        const archivePath = join(directory, 'archive.nxb');
+        await writeFile(dumpPath, input.payload);
+        const manifest = {
+          manifestVersion: 1 as const,
+          backupId: '01a05e35-c9ad-7e93-bef3-1ed9b55292ff',
+          installationId: 'test-installation',
+          createdAt: '2026-09-09T02:00:00.000Z',
+          databaseName: 'nexa',
+          postgresVersion: '16.13',
+          pgDumpVersion: 'pg_dump (PostgreSQL) 16.13',
+          dumpFormat: 'custom' as const,
+          dumpBytes: input.payload.length,
+          checksumAlgorithm: 'sha256' as const,
+          checksum: createHash('sha256').update(input.payload).digest('hex'),
+          exclusions: [],
+          ...input.manifest,
+        };
+        await sealArchive({
+          dumpPath,
+          archivePath,
+          manifest: manifest as never,
+          keyring: (input.keyring ?? keyring) as never,
+        });
+        return await readFile(archivePath);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
+
+    const verify = async (id: string) =>
+      recoveryDetailResponseSchema.parse(
+        (await post(`${RECOVERY_ROUTES.detail(id)}/verify`, ownerCookie)).json(),
+      );
+
+    it('refuses a payload that is not a pg_dump archive, naming the manifest', async () => {
+      // Authenticates, and its checksum matches its manifest: everything before
+      // the format check passes. The manifest says `dumpFormat: custom` and the
+      // payload is plain SQL, which is what `pg_dump -Fp` writes and this
+      // pipeline never does.
+      const archive = await seal({
+        payload: Buffer.from('-- PostgreSQL database dump\nCREATE TABLE t (id int);\n'),
+      });
+      const created = recoveryDetailResponseSchema.parse((await upload(archive)).json());
+      const verified = await verify(created.recovery.id);
+
+      expect(verified.recovery.state).toBe('FAILED');
+      // NOT `restore_test_failed`: the file is the wrong kind, and the code says
+      // so before a scratch database is created for it.
+      expect(verified.recovery.failureCode).toBe('recovery.manifest_invalid');
+      // And it got as far as reporting what it decrypted, so an operator can see
+      // the archive was theirs and the payload was not a dump.
+      expect(verified.recovery.verification?.decrypted).toBe(true);
+      expect(verified.recovery.verification?.checksumMatches).toBe(true);
+    });
+
+    it('refuses a manifest whose checksum is not the payload it carries', async () => {
+      // A REAL dump, and a manifest that records a different SHA-256. Both are
+      // inside the authenticated region, so this authenticates perfectly: the
+      // only thing wrong is that the archive lies about its own contents.
+      const { archive: real } = await takeBackup();
+      void real;
+      const archive = await seal({
+        payload: Buffer.concat([Buffer.from('PGDMP', 'ascii'), randomBytes(64)]),
+        manifest: { checksum: 'b'.repeat(64) },
+      });
+      const created = recoveryDetailResponseSchema.parse((await upload(archive)).json());
+      const verified = await verify(created.recovery.id);
+
+      expect(verified.recovery.state).toBe('FAILED');
+      expect(verified.recovery.failureCode).toBe('recovery.checksum_mismatch');
+      // Reported on the row, so the operator sees WHICH check failed rather than
+      // a generic refusal — and the computed checksum is the payload's, not the
+      // manifest's claim.
+      expect(verified.recovery.verification?.checksumMatches).toBe(false);
+      expect(verified.recovery.verification?.checksum).not.toBe('b'.repeat(64));
+    });
+
+    it('refuses an archive wrapped under a key this installation does not hold', async () => {
+      // The foreign-installation case, reached the only way it can be: a real
+      // archive sealed under a REAL but different KEK. There is deliberately no
+      // form that accepts a key, so this is a refusal by design — and it has its
+      // own code, distinct from a corrupt file, because the two need different
+      // actions from an operator.
+      const archive = await seal({
+        payload: Buffer.concat([Buffer.from('PGDMP', 'ascii'), randomBytes(64)]),
+        keyring: {
+          activeKeyId: 'someone-elses-key',
+          keys: new Map([['someone-elses-key', randomBytes(32)]]),
+        },
+      });
+      const created = recoveryDetailResponseSchema.parse((await upload(archive)).json());
+      const verified = await verify(created.recovery.id);
+
+      expect(verified.recovery.state).toBe('FAILED');
+      expect(verified.recovery.failureCode).toBe('recovery.archive_foreign_key');
+      // Nothing about the key is echoed. Not the id it named, not the ids held.
+      expect(JSON.stringify(verified.recovery)).not.toContain('someone-elses-key');
+    });
+
     it('refuses an empty upload', async () => {
       const response = await upload(Buffer.alloc(0));
       expect(response.statusCode).toBe(400);
@@ -605,6 +736,56 @@ describe('web disaster recovery', () => {
   });
 
   // --- Scope ---------------------------------------------------------------
+
+  describe('a recovery holding the installation', () => {
+    /**
+     * The HTTP side of the quiesce window.
+     *
+     * The executor suite proves the write gate refuses the unit of work and the
+     * relay; this proves what an OPERATOR gets, which is a different question: a
+     * truthful refusal with a code, and a status that says so, rather than a
+     * request that appears to work and writes nothing.
+     */
+    async function holdInstallation(): Promise<void> {
+      const { archive } = await takeBackup();
+      const created = recoveryDetailResponseSchema.parse((await upload(archive)).json());
+      await api.container.database.db.execute(
+        `UPDATE recovery_requests SET state = 'RESTORING', stage = 'RESTORE_CANDIDATE'
+          WHERE id = '${created.recovery.id}'` as never,
+      );
+    }
+
+    it('refuses a new backup while a recovery is restoring, and says so in the status', async () => {
+      await holdInstallation();
+
+      const status = backupStatusResponseSchema.parse(
+        (await get(BACKUP_ROUTES.status, ownerCookie)).json(),
+      );
+      // The page is told, rather than finding out by pressing the button.
+      expect(status.quiesced).toBe(true);
+
+      const refused = await post(BACKUP_ROUTES.run, ownerCookie, {
+        idempotencyKey: idempotencyKey(),
+      });
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json()).toMatchObject({
+        error: { code: PLATFORM_ERROR_CODES.RECOVERY_QUIESCED },
+      });
+    });
+
+    it('still answers READS, because supervising a recovery is reading', async () => {
+      await holdInstallation();
+      // An operator watching a restore needs the history and the request list to
+      // keep working. A quiesce that refused reads would blind the person
+      // supervising the one operation that needs supervising.
+      expect((await get(BACKUP_ROUTES.history, ownerCookie)).statusCode).toBe(200);
+      expect((await get(RECOVERY_ROUTES.list, ownerCookie)).statusCode).toBe(200);
+      const listed = recoveryListResponseSchema.parse(
+        (await get(RECOVERY_ROUTES.list, ownerCookie)).json(),
+      );
+      expect(listed.recoveries.some((row) => row.state === 'RESTORING')).toBe(true);
+    });
+  });
 
   describe('scope', () => {
     it('answers not-found for a recovery belonging to another scope', async () => {

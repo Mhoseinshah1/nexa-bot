@@ -142,6 +142,36 @@ export class BackupAdminService {
       entityId: null,
     });
 
+    /*
+     * REFUSED BEFORE IT STARTS, if a recovery holds the installation.
+     *
+     * The write gate is the authority and stays the authority — it is consulted
+     * inside every transaction, which is what makes a quiesce that commits
+     * mid-backup effective. But it is not sufficient HERE, and the difference is
+     * not theoretical: a six-stage pipeline whose individual writes are refused
+     * one at a time does not stop. It dumps, encrypts, verifies by restoring, and
+     * returns COMPLETED, while the operational event that was supposed to record
+     * it falls back to its degraded path because the gate refused the
+     * notification beside it. The operator is told a backup was taken during a
+     * restore, and a row says so.
+     *
+     * So the arrival is checked too, the same way every other surface checks
+     * scope activity on arrival AND inside the transaction. The check here is
+     * racy by construction — a recovery can begin quiescing a millisecond later —
+     * and that is precisely why the gate exists underneath it.
+     *
+     * The scheduler is NOT given this check: it is the pre-restore backup's own
+     * path too, and that one runs in the recovery lane before the window opens.
+     */
+    const lock = await this.deps.recoveries.installationLock();
+    if (lock !== null && lock.quiescing) {
+      throw errors.conflict(
+        PLATFORM_ERROR_CODES.RECOVERY_QUIESCED,
+        'This installation is being restored and is not taking backups. The recovery takes its own.',
+        { recoveryId: lock.recoveryId },
+      );
+    }
+
     const outcome = await this.deps.backup.run('MANUAL');
     const row = outcome.kind === 'BUSY' ? outcome.holder : outcome.run;
 

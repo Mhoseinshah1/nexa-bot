@@ -292,8 +292,42 @@ export class RecoveryService {
         checksum: opened.dumpChecksum,
         exclusions: opened.manifest.exclusions,
       };
+      await this.deps.requests.progressUnowned({
+        id,
+        stage: 'CHECKSUM',
+        now: this.deps.clock.now(),
+      });
       if (!matches) {
         return this.failStep(scope, id, workspace, 'recovery.checksum_mismatch', 'VERIFYING', {
+          verification,
+        });
+      }
+
+      /*
+       * MANIFEST: does the manifest DESCRIBE the payload it travelled with?
+       *
+       * A separate question from "did the bytes authenticate" and from "is the
+       * checksum the one the manifest recorded", and the stage vocabulary names
+       * it because it is the step where an archive that is internally consistent
+       * can still be the wrong KIND of file. `dumpFormat` is pinned to `custom`
+       * by the manifest schema, so the claim being checked here is the payload's:
+       * a pg_dump custom archive begins with the five bytes `PGDMP`, and anything
+       * else is not a thing `pg_restore` can read.
+       *
+       * Checked HERE rather than left to `pg_restore` because the code an
+       * operator reads should say which of the two disagreed. Without it, a
+       * plain-SQL dump — which `pg_dump -Fp` produces and which this pipeline
+       * never writes — reaches the scratch restore and comes back as the generic
+       * `restore_test_failed`, pointing at the restore rather than at the file.
+       */
+      await this.deps.requests.progressUnowned({
+        id,
+        stage: 'MANIFEST',
+        now: this.deps.clock.now(),
+      });
+      const described = await this.deps.engine.isCustomFormatDump(workspace.dumpPath);
+      if (!described) {
+        return this.failStep(scope, id, workspace, 'recovery.manifest_invalid', 'VERIFYING', {
           verification,
         });
       }
@@ -345,6 +379,14 @@ export class RecoveryService {
     try {
       await this.deps.engine.createDatabase(scratch);
       await this.deps.engine.restoreIntoEmpty(scratch, workspace.dumpPath);
+      // A stage of its own: `pg_restore` exiting zero and the restored database
+      // being a Nexa database are two claims, and an operator reading a stalled
+      // row needs to know which one was being made.
+      await this.deps.requests.progressUnowned({
+        id,
+        stage: 'SCRATCH_INSPECT',
+        now: this.deps.clock.now(),
+      });
       const inspection = await this.deps.engine.inspectDatabase(scratch);
       if (inspection.tableCount === 0) {
         // An empty dump restores perfectly and holds nothing. This is the single

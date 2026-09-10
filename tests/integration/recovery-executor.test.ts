@@ -360,6 +360,73 @@ describe('the recovery executor', () => {
     expect(wrote).toBe('writes are still permitted');
   });
 
+  it('refuses an expired confirmation, and nothing destructive happens', async () => {
+    const { recoveryId } = await confirmedRecovery();
+    // Confirmed, and then left. An executor that was not running, a host that was
+    // down, a queue nobody drained — the row still says RESTORE_REQUESTED and the
+    // operator who typed the phrase went home an hour ago.
+    await container.database.db.execute(
+      `UPDATE recovery_requests SET confirmation_expires_at = now() - interval '1 minute'
+        WHERE id = '${recoveryId}'` as never,
+    );
+
+    await container.recoveryExecutor.tick();
+
+    const row = await container.recoveryRequests.byIdUnscoped(recoveryId);
+    expect(row?.state).toBe('FAILED');
+    expect(row?.failureCode).toBe('recovery.confirmation_invalid');
+    // Before the pre-restore backup, let alone the renames.
+    expect(row?.preRestoreBackupId).toBeNull();
+    expect(row?.candidateDatabase).toBeNull();
+    expect(row?.cutoverAt).toBeNull();
+    expect(await databaseExists(liveName)).toBe(true);
+  });
+
+  it('accepts a confirmation that is still inside its window', async () => {
+    /*
+     * The positive control for the case above, and it is not ceremony: a clock
+     * check written the wrong way round — `>=` for `<=`, or a null treated as
+     * valid — refuses EVERY recovery, and the expiry case above would pass just
+     * as well. That failure mode is this project's own history: a readiness
+     * parser was rewritten three times and two of the rewrites inverted the rule
+     * they were written to protect.
+     */
+    const { recoveryId } = await confirmedRecovery();
+    const before = await container.recoveryRequests.byIdUnscoped(recoveryId);
+    expect(before?.confirmationExpiresAt).not.toBeNull();
+    expect(before?.confirmationExpiresAt?.getTime()).toBeGreaterThan(Date.now());
+
+    await container.recoveryExecutor.tick();
+
+    const row = await container.recoveryRequests.byIdUnscoped(recoveryId);
+    expect(row?.failureCode).toBeNull();
+    expect(row?.state).toBe('SUCCEEDED');
+    expect(row?.cutoverAt).not.toBeNull();
+  });
+
+  it('fails on a candidate name already taken, and leaves production serving', async () => {
+    const { recoveryId } = await confirmedRecovery();
+    // The candidate's name is derived from the recovery id, so it can be taken in
+    // advance — which is what a previous attempt's debris IS. `CREATE DATABASE`
+    // then fails, and the question is whether the failure is named and harmless.
+    const candidate = `nexa_candidate_${recoveryId.replace(/-/g, '').slice(0, 20)}`;
+    await maintenance(`CREATE DATABASE "${candidate}"`);
+    created.push(candidate);
+
+    await container.recoveryExecutor.tick();
+
+    const row = await container.recoveryRequests.byIdUnscoped(recoveryId);
+    expect(row?.state).toBe('FAILED');
+    expect(row?.failureCode).toBe('recovery.candidate_create_failed');
+    // The emergency backup DID run — it precedes the candidate — and the cutover
+    // did not. Production is untouched and still answers.
+    expect(row?.preRestoreBackupId).not.toBeNull();
+    expect(row?.cutoverAt).toBeNull();
+    expect(await databaseExists(liveName)).toBe(true);
+    const rows = await queryLive<{ count: string }>(liveName, 'SELECT count(*) FROM tenants');
+    expect(Number(rows[0]?.count ?? 0)).toBeGreaterThan(0);
+  });
+
   it('lets only one executor claim a confirmed recovery', async () => {
     const { recoveryId } = await confirmedRecovery();
     const now = new Date();

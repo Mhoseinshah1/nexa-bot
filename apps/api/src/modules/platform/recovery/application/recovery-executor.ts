@@ -11,6 +11,7 @@ import {
 import type { BackupService } from '../../backup/application/backup.service.js';
 import type {
   CutoverJournal,
+  DatabaseInspection,
   RecoveryRequestRepository,
   RecoveryRequestRow,
   RecoveryWorkspaceFactory,
@@ -82,9 +83,27 @@ class RecoveryAbort extends Error {
   constructor(
     readonly code: RecoveryFailureCode,
     message: string,
+    /**
+     * The underlying failure, when this abort is wrapping one.
+     *
+     * Carried so the LOG keeps the real reason — a connection refused, a
+     * `pg_restore` stderr — while the row and the operational event keep only
+     * the code. Without it, converting an unexpected error into a specific code
+     * would trade a precise row for an unexplainable log.
+     */
+    cause?: unknown,
   ) {
-    super(message);
+    super(message, { cause });
   }
+}
+
+/** The deepest `message` in a cause chain, for the log line. */
+function rootMessage(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const cause = (error as { cause?: unknown }).cause;
+  return cause === undefined || cause === null
+    ? error.message
+    : `${error.message}: ${rootMessage(cause)}`;
 }
 
 export class RecoveryExecutor {
@@ -226,7 +245,7 @@ export class RecoveryExecutor {
         {
           recoveryId: request.id,
           code,
-          err: error instanceof Error ? error.message : String(error),
+          err: rootMessage(error),
         },
         'recovery failed',
       );
@@ -318,6 +337,31 @@ export class RecoveryExecutor {
       throw new RecoveryAbort(
         'recovery.confirmation_invalid',
         'This request has no passing restore test.',
+      );
+    }
+    /*
+     * And the CLOCK, once, here.
+     *
+     * `RECOVERY_CONFIRMATION_TTL_MS` bounds the window between an operator typing
+     * the phrase and this process beginning the restore — not the length of the
+     * restore, which is why it is checked as the executor claims the work and
+     * never again. A confirmation means "the person who typed this is still the
+     * person at the keyboard", and that claim has a shelf life: a request
+     * confirmed and then left — an executor that was not running, a host that was
+     * down, a queue nobody drained — must not replace a production database an
+     * hour later because a row still said RESTORE_REQUESTED.
+     *
+     * Before this, the expiry was written at `confirm` time, projected to the Web
+     * Admin, and read by nothing. A confirmation was valid for ever, and the
+     * field said otherwise.
+     */
+    if (
+      request.confirmationExpiresAt === null ||
+      request.confirmationExpiresAt.getTime() <= this.deps.clock.now().getTime()
+    ) {
+      throw new RecoveryAbort(
+        'recovery.confirmation_invalid',
+        'The confirmation on this request has expired. A new confirmation is a new decision.',
       );
     }
     if (request.workspacePath === null) {
@@ -442,7 +486,7 @@ export class RecoveryExecutor {
     // A separate state from RESTORING because `pg_restore` exiting zero is not
     // the claim that a database is usable.
     await this.advance(id, ['RESTORING'], 'VALIDATING', 'VALIDATE_CANDIDATE');
-    let inspection = await this.deps.engine.inspectDatabase(candidate);
+    let inspection = await this.inspectForValidation(candidate);
     if (inspection.tableCount === 0) {
       throw new RecoveryAbort(
         'recovery.restored_database_empty',
@@ -467,8 +511,16 @@ export class RecoveryExecutor {
         leaseOwner: this.deps.leaseOwner,
         now: this.deps.clock.now(),
       });
-      await this.deps.engine.migrateCandidate(candidate);
-      inspection = await this.deps.engine.inspectDatabase(candidate);
+      try {
+        await this.deps.engine.migrateCandidate(candidate);
+      } catch (error) {
+        throw new RecoveryAbort(
+          'recovery.candidate_validation_failed',
+          "This release's migrations would not apply to the candidate.",
+          error,
+        );
+      }
+      inspection = await this.inspectForValidation(candidate);
       if (inspection.migrations === null) {
         throw new RecoveryAbort(
           'recovery.migration_state_unreadable',
@@ -606,6 +658,33 @@ export class RecoveryExecutor {
    * late transition from the abandoned process would carry it onwards past the
    * point somebody else has already failed it.
    */
+  /**
+   * Inspects the candidate, and names the stage if the inspection itself fails.
+   *
+   * Three validation outcomes already have their own codes — empty, unreadable
+   * migration state, incompatible schema — and every one of them is a thing the
+   * inspection SUCCESSFULLY established. An inspection that cannot run at all
+   * (the candidate unreachable, the connection refused, a timeout) is a fourth
+   * thing, and before this it surfaced as `recovery.internal`: the one code that
+   * tells an operator nothing about where they stand.
+   *
+   * Where they stand matters here more than anywhere else in the pipeline. This
+   * is the last stage before the renames, so a failure in it means the candidate
+   * was built and PRODUCTION WAS NEVER TOUCHED — which is exactly what
+   * `candidate_validation_failed` says and `internal` does not.
+   */
+  private async inspectForValidation(candidate: string): Promise<DatabaseInspection> {
+    try {
+      return await this.deps.engine.inspectDatabase(candidate);
+    } catch (error) {
+      throw new RecoveryAbort(
+        'recovery.candidate_validation_failed',
+        'The candidate could not be inspected.',
+        error,
+      );
+    }
+  }
+
   private async advance(
     id: string,
     from: readonly (
