@@ -1371,12 +1371,24 @@ describe('the Web Admin V2 surface', () => {
     });
 
     it('reports the configured cooldown when it is above the HTTP floor', async () => {
-      // The other direction, so this is not "always report the floor": a
-      // constant would pass the case above and fail here.
+      /*
+       * The other direction, so this is not "always report the floor": a constant
+       * would pass the case above and fail here.
+       *
+       * The cadence moves with the cooldown, and it has to: the config schema now
+       * refuses a healthy interval shorter than the cooldown the installation
+       * obeys, because that combination is a monitor that finds every panel due and
+       * then refuses every probe. A ten-minute cooldown against the default
+       * three-minute interval was exactly that, and this fixture was the first
+       * thing the new check caught. The freshness window moves too, because check 1
+       * bounds the interval by it.
+       */
       const config = testConfig({
         WEB_ADMIN_ORIGINS: ORIGIN,
         PANEL_PROBE_COOLDOWN_MS: '600000',
         PANEL_HTTP_TIMEOUT_MS: '10000',
+        PANEL_MONITOR_HEALTHY_INTERVAL_MS: '600000',
+        PANEL_HEALTH_FRESH_FOR_MS: '1800000',
       });
       const other = await createApiApp(config);
       try {
