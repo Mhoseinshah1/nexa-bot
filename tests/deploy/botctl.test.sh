@@ -3374,4 +3374,149 @@ assert_not_contains 'status warned about a mismatch that does not exist' \
   "$BOTCTL_OUTPUT" 'DIFFERENT configuration generation'
 teardown_root
 
+# =============================================================================
+# Configuration upgrade audit — capability visibility and obsolete keys
+# =============================================================================
+#
+# `botctl status` reported version, containers, edge, secrets and readiness, and
+# nothing about the capabilities whose default is OFF. An installation that never
+# added BACKUP_SCHEDULE_ENABLED takes no automatic backups, which is the correct
+# default and was an invisible state.
+
+append_env() { printf '%s\n' "$@" >>"${NEXA_CONFIG_DIR}/nexa.env"; }
+
+setup_root
+setup_fake_docker
+seed_release 'vA' "$DIGEST_A"
+fake_set secrets_json '{"format":"canonical","acceptV1":false,"explicit":false,"v1Rows":0,"rows":4,"mismatched":0}'
+
+test_case 'status: an installation that never configured backups is told so'
+seed_nexa_env canonical
+run_botctl status
+assert_contains 'the capabilities section is missing' "$BOTCTL_OUTPUT" 'capabilities:'
+assert_contains 'the scheduled backup default was not reported as off' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   off'
+assert_contains 'an unconfigured destination was not reported' \
+  "$BOTCTL_OUTPUT" 'backup delivery    not configured'
+assert_contains 'the operator was not told no automatic backup is taken' \
+  "$BOTCTL_OUTPUT" 'No AUTOMATIC backup is taken'
+assert_contains 'the local-retention behaviour was not explained' \
+  "$BOTCTL_OUTPUT" 'NOT_ATTEMPTED'
+assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'BACKUP_SCHEDULE_ENABLED=true'
+# The defaults that are ON must read as on, or the section is just a list of offs.
+assert_contains 'recovery upload was not reported as on by default' \
+  "$BOTCTL_OUTPUT" 'recovery upload    on'
+assert_contains 'the panel monitor was not reported as on by default' \
+  "$BOTCTL_OUTPUT" 'panel monitor      on'
+
+test_case 'status: a configured schedule and destination stop the advice, and print no token'
+seed_nexa_env canonical
+append_env 'BACKUP_SCHEDULE_ENABLED=true' \
+  'BACKUP_TELEGRAM_CHAT_ID=-1001234567890' \
+  'BACKUP_TELEGRAM_BOT_TOKEN=123456:AAsecrettokenvalue'
+run_botctl status
+assert_contains 'an enabled schedule was not reported' "$BOTCTL_OUTPUT" 'scheduled backup   on'
+assert_contains 'a configured destination was not reported' \
+  "$BOTCTL_OUTPUT" 'backup delivery    configured'
+assert_not_contains 'the advice was printed to an installation that does not need it' \
+  "$BOTCTL_OUTPUT" 'No AUTOMATIC backup is taken'
+assert_not_contains 'status printed the delivery bot token' \
+  "$BOTCTL_OUTPUT" 'AAsecrettokenvalue'
+assert_not_contains 'status printed the delivery chat id' "$BOTCTL_OUTPUT" '-1001234567890'
+
+test_case 'status: a half-configured destination is named as half, not as configured'
+seed_nexa_env canonical
+append_env 'BACKUP_TELEGRAM_CHAT_ID=-1001234567890'
+run_botctl status
+assert_contains 'a half-configured destination was not reported' \
+  "$BOTCTL_OUTPUT" 'backup delivery    HALF configured'
+assert_not_contains 'status printed the chat id' "$BOTCTL_OUTPUT" '-1001234567890'
+
+test_case 'status: every spelling the application accepts is read the same way'
+# `booleanish` takes true/false/1/0/yes/no. A reader that took only `true` would
+# report a monitor an operator enabled with `yes` as disabled.
+for spelling in true 1 yes; do
+  seed_nexa_env canonical
+  append_env "BACKUP_SCHEDULE_ENABLED=${spelling}"
+  run_botctl status
+  assert_contains "the spelling ${spelling} was not read as on" \
+    "$BOTCTL_OUTPUT" 'scheduled backup   on'
+done
+for spelling in false 0 no; do
+  seed_nexa_env canonical
+  append_env "RECOVERY_UPLOAD_ENABLED=${spelling}"
+  run_botctl status
+  assert_contains "the spelling ${spelling} was not read as off" \
+    "$BOTCTL_OUTPUT" 'recovery upload    off'
+done
+
+test_case 'status: a value the application would refuse is reported as invalid, not guessed'
+seed_nexa_env canonical
+append_env 'PANEL_MONITOR_ENABLED=maybe'
+run_botctl status
+assert_contains 'an unparseable value was guessed at' "$BOTCTL_OUTPUT" 'panel monitor      invalid'
+
+test_case 'status: a stale build identity is reported, with what it costs'
+seed_nexa_env canonical
+append_env 'BUILD_VERSION=v0.1.0-staging.1' 'BUILD_COMMIT=pending' 'BUILD_TIME=pending'
+run_botctl status
+assert_contains 'the stale build keys were not named' "$BOTCTL_OUTPUT" 'BUILD_VERSION'
+assert_contains 'the consequence was not stated' "$BOTCTL_OUTPUT" '/health/info reports'
+assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'botctl update'
+
+test_case 'status: an installation without them says nothing about them'
+seed_nexa_env canonical
+run_botctl status
+assert_not_contains 'a warning was printed with nothing to warn about' \
+  "$BOTCTL_OUTPUT" '/health/info reports'
+teardown_root
+
+# --- update removes them -----------------------------------------------------
+
+setup_root
+setup_fake_docker
+seed_release 'vA' "$DIGEST_A"
+fake_set secrets_json '{"format":"canonical","acceptV1":false,"explicit":false,"v1Rows":0,"rows":4,"mismatched":0}'
+
+test_case 'update: removes the build identity the first template wrote, and nothing else'
+seed_nexa_env canonical
+append_env 'BUILD_VERSION=v0.1.0-staging.1' 'BUILD_COMMIT=pending' 'BUILD_TIME=pending'
+before_db="$(nexa_env_key DATABASE_URL)"
+before_keys="$(nexa_env_key SECRETS_KEYS)"
+run_botctl update vA
+assert_contains 'the removal was not reported' "$BOTCTL_OUTPUT" 'removed from nexa.env'
+assert_equals 'BUILD_VERSION survived' '' "$(nexa_env_key BUILD_VERSION)"
+assert_equals 'BUILD_COMMIT survived' '' "$(nexa_env_key BUILD_COMMIT)"
+assert_equals 'BUILD_TIME survived' '' "$(nexa_env_key BUILD_TIME)"
+# Everything else is the operator's, including the key that decrypts every
+# stored credential. A rewrite that lost it would be an installation that cannot
+# boot, discovered at the restart.
+assert_equals 'DATABASE_URL was changed' "$before_db" "$(nexa_env_key DATABASE_URL)"
+assert_equals 'the keyring was changed' "$before_keys" "$(nexa_env_key SECRETS_KEYS)"
+assert_equals 'an operator value was changed' 'https://admin.example.test' \
+  "$(nexa_env_key WEB_ADMIN_ORIGINS)"
+assert_file_mode 'the rewritten file lost its mode' "${NEXA_CONFIG_DIR}/nexa.env" 600
+assert_not_contains 'the removal printed a value' "$BOTCTL_OUTPUT" 'staging.1'
+
+test_case 'update: says nothing and changes nothing when there is nothing to remove'
+seed_nexa_env canonical
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl update vA
+assert_not_contains 'a removal was reported with nothing to remove' \
+  "$BOTCTL_OUTPUT" 'removed from nexa.env'
+assert_equals 'the file was rewritten for no reason' "$before" \
+  "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+
+test_case 'update: repairs the file even when the target version is already current'
+# The command an operator runs to repair an installation is
+# `botctl update <the version it already has>`, and that path returns early.
+# Reconciling after the early return would have made the repair unreachable on
+# the one host that needed it.
+seed_nexa_env canonical
+append_env 'BUILD_COMMIT=pending'
+run_botctl update vA
+assert_contains 'the no-op update did not report the removal' "$BOTCTL_OUTPUT" 'removed from nexa.env'
+assert_equals 'BUILD_COMMIT survived a no-op update' '' "$(nexa_env_key BUILD_COMMIT)"
+teardown_root
+
 report

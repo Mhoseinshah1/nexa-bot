@@ -174,6 +174,74 @@ cmd_version() {
 # status
 # ---------------------------------------------------------------------------
 
+# What this installation is and is not doing, for the capabilities whose absence
+# is silent.
+#
+# Several settings default OFF or UNCONFIGURED, and that is correct: an upgrade
+# must not start taking and delivering backups, or start dialling an operator's
+# panels, because a new release learned how to. The cost of that correctness is
+# that an installation which never added the line is in the disabled state and
+# NOTHING said so — `botctl status` reported version, containers, edge, secrets
+# and readiness, and an operator had no command that would tell them their
+# backups were not running.
+#
+# Read from /etc/nexa/nexa.env by key, applying the same defaults the application
+# applies, so this says what the running processes do rather than what the file
+# happens to mention. The BACKUP destination is reported by PRESENCE only: one of
+# its two keys is a bot token and does not belong in an output an operator pastes
+# into a ticket.
+status_capabilities() {
+  local file="${NEXA_CONFIG_DIR}/nexa.env"
+  printf '\ncapabilities:\n'
+  [ -r "$file" ] || {
+    printf '  configuration  unreadable (%s)\n' "$file"
+    return 0
+  }
+
+  local scheduled chat token destination
+  scheduled="$(nexa_env_boolean "$file" BACKUP_SCHEDULE_ENABLED off)"
+  chat="$(nexa_env_value "$file" BACKUP_TELEGRAM_CHAT_ID 2>/dev/null || true)"
+  token="$(nexa_env_value "$file" BACKUP_TELEGRAM_BOT_TOKEN 2>/dev/null || true)"
+  if [ -n "${chat//[[:space:]]/}" ] && [ -n "${token//[[:space:]]/}" ]; then
+    destination='configured'
+  elif [ -z "${chat//[[:space:]]/}" ] && [ -z "${token//[[:space:]]/}" ]; then
+    destination='not configured'
+  else
+    # The application refuses to boot on this, so it can only be a file nobody
+    # has restarted on yet. Worth saying before the restart finds out.
+    destination='HALF configured'
+  fi
+
+  printf '  scheduled backup   %s\n' "$scheduled"
+  printf '  backup delivery    %s\n' "$destination"
+  printf '  recovery upload    %s\n' "$(nexa_env_boolean "$file" RECOVERY_UPLOAD_ENABLED on)"
+  printf '  panel monitor      %s\n' "$(nexa_env_boolean "$file" PANEL_MONITOR_ENABLED on)"
+  printf '  notifications      %s\n' "$(nexa_env_boolean "$file" NOTIFICATION_DISPATCH_ENABLED on)"
+  printf '  outbox relay       %s\n' "$(nexa_env_boolean "$file" OUTBOX_RELAY_ENABLED on)"
+  printf '  telegram webhook   %s\n' "$(nexa_env_boolean "$file" TELEGRAM_WEBHOOK_ENABLED off)"
+
+  if [ "$scheduled" = off ]; then
+    printf '\n  No AUTOMATIC backup is taken. `botctl backup` still works, and a backup an\n'
+    printf '  operator remembers to run is not a backup policy. To schedule them, set\n'
+    printf '  BACKUP_SCHEDULE_ENABLED=true in %s and run `botctl restart`.\n' "$file"
+    if [ "$destination" = 'not configured' ]; then
+      printf '  With no delivery destination a run still dumps, verifies and RETAINS locally;\n'
+      printf '  its delivery outcome is recorded as NOT_ATTEMPTED.\n'
+    fi
+  fi
+
+  # Lines the application no longer reads, and that actively mask the image.
+  local obsolete
+  obsolete="$(nexa_obsolete_app_env_keys "$file")"
+  if [ -n "$obsolete" ]; then
+    printf '\n  This file still sets %s,\n' "$(printf '%s' "$obsolete" | tr '\n' ' ')"
+    printf '  which REPLACES the build identity stamped into the release image — so\n'
+    printf '  /health/info reports what the installer wrote rather than what is running.\n'
+    printf '  The next `botctl update` removes them.\n'
+  fi
+}
+
+
 # The v1-ciphertext position, in `botctl status`, so an operator does not have
 # to know that `botctl secrets status` exists to learn they are still carrying
 # the envelope this project is retiring.
@@ -325,6 +393,7 @@ cmd_status() {
   fi
 
   status_secrets
+  status_capabilities
 
   printf '\nreadiness: '
   if nexa_wait_ready 5; then
@@ -457,6 +526,16 @@ cmd_update() {
   local current
   current="$(nexa_current_version || true)"
   [ -n "$current" ] || nexa_die "no current release is recorded; refusing to update."
+
+  # Configuration the application no longer reads, removed before anything else.
+  #
+  # HERE rather than after the commit, and before the early returns below, because
+  # `botctl update <the version already installed>` is the command an operator
+  # runs to repair an installation — and on a host carrying a stale BUILD_* line
+  # that repair is the whole point. Non-fatal: a stale build label is not worth
+  # failing an update over, and `nexa_reconcile_app_env` leaves the file untouched
+  # if it cannot rewrite it cleanly.
+  nexa_reconcile_app_env "${NEXA_CONFIG_DIR}/nexa.env" || true
 
   if [ "$target" = "$current" ]; then
     # Not unconditionally "nothing to do": if deploy.env disagrees with the

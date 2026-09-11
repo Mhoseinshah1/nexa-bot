@@ -210,6 +210,36 @@ botctl restart             restart the stack
 None of these print a secret. `botctl status` deliberately shows container
 state rather than configuration, so its output can be pasted into a ticket.
 
+`botctl status` reports a `capabilities:` section, because several settings
+default OFF and that is correct — an upgrade must not start taking and delivering
+backups, or start dialling an operator's panels, because a new release learned
+how to. The cost of that correctness is that an installation which never added
+the line is in the disabled state, and until this section existed no command
+would say so. It reads `/etc/nexa/nexa.env` by key, applying the same defaults
+the application applies, and reports the backup delivery destination by PRESENCE
+only: one of its two keys is a bot token.
+
+So `scheduled backup   off` is not a fault report. It means no automatic backup
+is taken, `botctl backup` still works, and a backup somebody remembers to run is
+not a backup policy. `backup delivery    not configured` means a run still dumps,
+verifies against a real scratch restore and retains locally, with its delivery
+outcome recorded as `NOT_ATTEMPTED`.
+
+`docs/config-upgrade-audit.md` classifies every configuration variable an
+installation runs on: whether it must be set deliberately, whether a missing line
+is a safe schema default, whether its absence is a real disabled state, and which
+old spellings still map to the current model. It exists because `botctl update`
+does not rewrite `nexa.env` — deliberately, so it cannot overwrite an operator's
+choice — which makes "a missing line is safe" a claim about every variable added
+after the first install.
+
+`botctl update` does remove the three keys that audit classifies as obsolete:
+`BUILD_VERSION`, `BUILD_COMMIT` and `BUILD_TIME`. The first production template
+wrote them into `nexa.env`, `env_file` beats an image's own ENV, and nothing ever
+took them out again — so `/health/info` reported what the installer substituted
+rather than what was built. The removal is one atomic rewrite and is non-fatal: a
+stale build label is not worth failing an update over.
+
 `botctl status` also reports the installation's position on v1 ciphertext,
 because an operator should not have to know that `botctl secrets status` exists
 to learn they are still carrying the envelope this project is retiring. Two

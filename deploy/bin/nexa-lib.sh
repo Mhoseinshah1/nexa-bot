@@ -971,6 +971,87 @@ nexa_env_rewrite() {
   mv -f "$tmp" "$file" || nexa_die "cannot install ${file}."
 }
 
+# Keys the application no longer takes from `/etc/nexa/nexa.env`.
+#
+# A FROZEN list, and short on purpose: a key belongs here only when leaving it in
+# place is actively wrong, not merely unnecessary. Restating a default is
+# harmless; these three are not.
+#
+# `env_file` beats an image's own ENV, so a BUILD_* line in nexa.env REPLACES the
+# identity stamped into the release at build time. The first production template
+# wrote all three, and the installer substituted `pending` for the commit and the
+# build time — it had built nothing and could not know them. The template stopped
+# writing them the next day, and nothing ever removed them from a file that
+# already had them, because `botctl update` does not rewrite nexa.env. So an
+# installation created then reports the installer's placeholder from
+# /health/info for the rest of its life, and an operator has no way to tie a
+# running container back to its source.
+#
+# Removing them is safe in the strongest sense available: the schema defaults all
+# three, so the file still boots, and the defaults (`0.0.0-dev`, `unknown`) are
+# true statements where `pending` was a claim that something was about to be
+# filled in. They are not operator choices — no operator was ever asked.
+NEXA_OBSOLETE_APP_ENV_KEYS="BUILD_VERSION BUILD_COMMIT BUILD_TIME"
+
+# Which of them a file actually carries, one per line. Names only, never values.
+nexa_obsolete_app_env_keys() {
+  local file="$1" key
+  [ -r "$file" ] || return 0
+  for key in $NEXA_OBSOLETE_APP_ENV_KEYS; do
+    grep -qE "^${key}=" -- "$file" && printf '%s\n' "$key"
+  done
+  return 0
+}
+
+# Remove them, in ONE atomic rewrite, or leave the file exactly as it is.
+#
+# NON-FATAL by contract: the caller is `botctl update`, and a stale build label is
+# not worth failing an update over. `nexa_env_rewrite` dies on any problem and
+# leaves the original in place, so running it in a subshell turns that into a
+# return code the caller can warn about and carry on.
+#
+# Returns 0 when there was nothing to do or the removal succeeded, 1 when the
+# removal was attempted and did not happen.
+nexa_reconcile_app_env() {
+  local file="${1:-${NEXA_CONFIG_DIR}/nexa.env}" present csv
+  present="$(nexa_obsolete_app_env_keys "$file")"
+  [ -n "$present" ] || return 0
+
+  csv="$(printf '%s' "$present" | tr '\n' ',' | sed 's/,$//')"
+  nexa_step "removing configuration the application no longer reads"
+  if ( nexa_env_rewrite "$file" "$csv" ) >/dev/null 2>&1; then
+    # The NAMES, because they are not secrets and an operator should see what
+    # changed in a file they are responsible for.
+    nexa_ok "removed from $(basename "$file"): $(printf '%s' "$present" | tr '\n' ' ')"
+    nexa_log "The image supplies the build identity; these lines were masking it."
+    return 0
+  fi
+  nexa_warn "could not remove $(printf '%s' "$present" | tr '\n' ' ') from ${file}; it is UNCHANGED."
+  nexa_warn "The release's own build identity stays masked until they are gone. Nothing else is affected."
+  return 1
+}
+
+# Is a booleanish setting on?
+#
+# The spellings are the application's, not a second opinion: `booleanish` in
+# config.schema.ts accepts true/false/1/0/yes/no, and a reader here that took only
+# `true` would report a monitor an operator had enabled with `yes` as disabled.
+# `tests/unit/config-upgrade.test.ts` binds the two lists together.
+#
+# Usage: nexa_env_boolean FILE KEY DEFAULT   (DEFAULT is `on` or `off`)
+nexa_env_boolean() {
+  local file="$1" key="$2" fallback="$3" raw
+  raw="$(nexa_env_value "$file" "$key" 2>/dev/null || true)"
+  raw="${raw//[[:space:]]/}"
+  case "$raw" in
+    true | 1 | yes) printf 'on' ;;
+    false | 0 | no) printf 'off' ;;
+    '') printf '%s' "$fallback" ;;
+    # A value the application would REFUSE to boot on. Saying so beats guessing.
+    *) printf 'invalid' ;;
+  esac
+}
+
 nexa_write_atomic() {
   local path="$1" content="$2" tmp
   tmp="$(mktemp "${path}.XXXXXX")" || nexa_die "cannot write ${path}."
