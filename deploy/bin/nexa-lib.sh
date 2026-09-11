@@ -1291,12 +1291,19 @@ nexa_compose_env_unterminated() {
 # Compose's own first line of explanation on stderr; and exit 1 when the document
 # defines no such service, which is the same answer for the caller: nothing will start
 # as asked. Compose's stderr is kept apart from its stdout because it WARNS there on
-# success too, and a warning glued onto the JSON would read as a refusal.
+# success too — one line per unset substitution, meaning a value was silently blanked —
+# and a warning glued onto the JSON would read as a refusal. Those warnings are NOT
+# surfaced on success; nothing here claims to report them.
 nexa_compose_resolved_env() {
   local service="${1:-api}" json err
   err="$(mktemp)" || return 1
   if ! json="$(nexa_compose config --format json 2>"$err")"; then
-    sed -n '1p' "$err" >&2
+    # The REFUSAL, not the first line. Compose logs warnings to stderr BEFORE the
+    # error — `The "X" variable is not set. Defaulting to a blank string.` for every
+    # unset substitution in the file — and the error itself is a plain line after
+    # them. Measured on v5.1.1. The first line that is not a logged warning is the
+    # reason; if every line is a warning, the last line is the best there is.
+    { grep -v 'level=warning' "$err" | sed -n '1p'; sed -n '$p' "$err"; } | sed -n '1p' >&2
     rm -f "$err"
     return 1
   fi
@@ -1368,6 +1375,39 @@ nexa_listing_value() {
   local rendered
   rendered="$(printf '%s\n' "$1" | sed -n "s/^${2}=//p" | sed -n '1p')"
   printf '%b' "$rendered"
+}
+
+# The LENGTH of a value, as `configSchema` measures it.
+#
+# Not `${#value}`, for two reasons found by review. Command substitution drops a
+# trailing newline, so a quoted value that ends its line — 16 characters to the
+# schema, which accepts it — arrived as 15 and read `invalid`. And `${#}` counts
+# characters under a UTF-8 locale and BYTES under C/POSIX, while JavaScript's
+# `.length` counts UTF-16 code units; `botctl` sets no locale, so the answer would
+# depend on how it was invoked. This decodes the rendering itself and counts what
+# the schema counts, so a value is accepted here exactly when it is accepted there.
+nexa_listing_length() {
+  printf '%s\n' "$1" | sed -n "s/^${2}=//p" | sed -n '1p' | python3 -c '
+import sys
+
+rendered = sys.stdin.read()
+if rendered.endswith(chr(10)):
+    rendered = rendered[:-1]
+back = chr(92)
+out = []
+i = 0
+while i < len(rendered):
+    ch = rendered[i]
+    if ch == back and i + 1 < len(rendered):
+        nxt = rendered[i + 1]
+        out.append(chr(10) if nxt == "n" else nxt)
+        i += 2
+    else:
+        out.append(ch)
+        i += 1
+value = "".join(out)
+print(len(value.encode("utf-16-le")) // 2)
+'
 }
 
 # Is a boolean setting on, in the vocabulary the application accepts FOR THAT KEY?

@@ -3664,6 +3664,50 @@ assert_not_contains 'values were printed for a service that does not exist' \
 fake_set compose_service_missing 0
 seed_nexa_env canonical
 
+test_case 'status: a refusal is the error line Compose printed, not the warning it logged first'
+# Compose logs warnings to stderr BEFORE the error — one per unset substitution in
+# the file, `The "X" variable is not set. Defaulting to a blank string.` — and the
+# refusal is a plain line after them. Measured on v5.1.1. Taking the first line, and
+# cutting it at its first quote, printed `Compose said: time=` for exactly the
+# interpolation shape that ended the reimplementation.
+seed_nexa_env canonical
+fake_set compose_config_fails 1
+fake_set compose_config_stderr "$(printf 'time="2026-09-11T17:34:07Z" level=warning msg="The \\"UNSETVAR\\" variable is not set. Defaulting to a blank string."\nfailed to read /etc/nexa/nexa.env: line 3: unterminated quoted value '"'"'7777777:AAAfakeBotTokenValue')"
+run_botctl status
+assert_contains 'the warning was reported as the reason' "$BOTCTL_OUTPUT" 'line 3: unterminated quoted value'
+assert_not_contains 'the warning line was printed as the reason' "$BOTCTL_OUTPUT" 'Compose said:
+    time='
+assert_not_contains 'the echoed token was printed' "$BOTCTL_OUTPUT" 'AAAfakeBotTokenValue'
+fake_set compose_config_fails 0
+fake_set compose_config_stderr ''
+seed_nexa_env canonical
+
+test_case 'status: the secret is measured as the schema measures it, trailing newline and all'
+# `configSchema` refuses a webhook secret under 16 `.length` — UTF-16 code units — and
+# a quoted value that ends its line keeps that newline. Command substitution drops a
+# trailing newline, so `${#value}` measured a 16-character secret ending in a newline
+# as 15 and reported `invalid` for a configuration the application accepts; and `${#}`
+# is characters or BYTES depending on the locale botctl happens to run under. The
+# length is computed from the rendering, in code units, so it agrees with the schema.
+seed_nexa_env canonical
+fake_set compose_env ''
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","TELEGRAM_WEBHOOK_ENABLED":"true","TELEGRAM_WEBHOOK_SECRET":"abcdefghijklmno\n"}'
+run_botctl status
+assert_contains 'a 16-character secret ending in a newline was measured as 15' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   on'
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","TELEGRAM_WEBHOOK_ENABLED":"true","TELEGRAM_WEBHOOK_SECRET":"abcdefghijklmn\n"}'
+run_botctl status
+assert_contains 'a 15-character secret ending in a newline was accepted' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   invalid'
+# Eight astral characters are 16 code units to the schema, 8 characters to a UTF-8
+# `${#}` and 32 bytes to a C-locale one; only the schema's count is the rule.
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","TELEGRAM_WEBHOOK_ENABLED":"true","TELEGRAM_WEBHOOK_SECRET":"😀😀😀😀😀😀😀😀"}'
+run_botctl status
+assert_contains 'eight astral characters were not measured as sixteen code units' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   on'
+fake_set compose_env_json ''
+seed_nexa_env canonical
+
 test_case 'status: every capability names the process that reads it'
 # PANEL_MONITOR_ENABLED belongs to the monitor, TELEGRAM_WEBHOOK_ENABLED and
 # RECOVERY_UPLOAD_ENABLED to the API, and the rest to the worker. An

@@ -272,9 +272,9 @@ status_capabilities() {
     # start fails. The secret itself is never printed; only whether it satisfies the
     # length the schema demands.
     if [ "$key" = TELEGRAM_WEBHOOK_ENABLED ] && [ "$configured" = on ]; then
-      local secret
-      secret="$(nexa_listing_value "$resolved" TELEGRAM_WEBHOOK_SECRET)"
-      if [ "${#secret}" -lt 16 ]; then
+      local secret_length
+      secret_length="$(nexa_listing_length "$resolved" TELEGRAM_WEBHOOK_SECRET)"
+      if [ "${secret_length:-0}" -lt 16 ]; then
         configured='invalid'
         webhook='short-secret'
       fi

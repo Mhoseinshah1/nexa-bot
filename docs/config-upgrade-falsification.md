@@ -638,3 +638,30 @@ first, so a green answer below it means something.
 | H-63 | A value is measured by its characters, not by the listing's one-line rendering | `nexa-lib.sh`: `nexa_listing_value` returns the rendering          | `botctl.test.sh` › status: a value is measured by its characters, not by its one-line rendering        | KILLED |
 | H-64 | A refusal repeats Compose's reason, cut before any value Compose echoed        | `nexa-lib.sh`: `nexa_compose_refusal_reason` prints the line whole | `botctl.test.sh` › status: a refusal reports the reason Compose gave, with the value it echoed cut off | KILLED |
 | H-65 | The rewriter's loadability oracle is live, not an undefined command negated    | `nexa-lib.sh`: `nexa_compose_env_unterminated` returns 1 always    | `botctl.test.sh` › harness: the loadability oracle sees an unterminated file                           | KILLED |
+
+**Two more from the review of `3508b74` itself**, before Codex saw it. Compose logs
+warnings to stderr BEFORE its error — `The "X" variable is not set. Defaulting to a
+blank string.`, one per unset substitution — and the refusal is a plain line after
+them; taking the first line and cutting it at its first quote printed `Compose said:
+time=` for exactly the interpolation shape that ended the reimplementation. The
+resolver reports the first line that is not a logged warning (H-66). And the length
+check inherited a regression from its own fix: command substitution drops a trailing
+newline, so a quoted value ending its line — 16 characters to the schema, accepted —
+measured 15 and read `invalid`; at `898224b` the same value measured 17 and read `on`,
+right by accident. `${#}` is also characters under a UTF-8 locale and bytes under
+C/POSIX, and `botctl` sets neither, while the schema counts UTF-16 code units.
+`nexa_listing_length` counts what the schema counts (H-67).
+
+Two findings from the same review are recorded as accepted rather than fixed. The cut
+at the first quote character also shortens a template error — `X=${` produces `Invalid
+template: "${"` and reads `Invalid template:` after the cut — because a template can
+carry a value as easily as an unterminated quote can, and the class of the error still
+names itself. And Compose's warnings on a SUCCESSFUL resolution — one per unset
+substitution, each meaning a value was silently blanked — are not surfaced by `status`;
+its stderr is kept apart from the JSON so that a warning is not mistaken for a
+refusal, and nothing more is claimed for it.
+
+| #    | Rule                                                                            | Mutation                                                | Named test                                                                                              | Result |
+| ---- | ------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------ |
+| H-66 | The reported refusal is Compose's error line, not a warning it logged before it | `nexa-lib.sh`: report the first stderr line again       | `botctl.test.sh` › status: a refusal is the error line Compose printed, not the warning it logged first | KILLED |
+| H-67 | The secret is measured in UTF-16 code units, trailing newline included          | `botctl`: measure `${#}` of the substituted value again | `botctl.test.sh` › status: the secret is measured as the schema measures it, trailing newline and all   | KILLED |
