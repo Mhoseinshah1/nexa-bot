@@ -632,12 +632,11 @@ across the very rounds whose corruption they were written to catch. They call th
 function directly now, and H-65 asks the oracle about a file that IS unterminated
 first, so a green answer below it means something.
 
-| #    | Rule                                                                           | Mutation                                                           | Named test                                                                                             | Result                             |
-| ---- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ---------------------------------- |
-| H-62 | A `$` Compose re-escapes in `config` output is a single `$` before validation  | `nexa-lib.sh`: drop the `$$` → `$` replacement                     | `botctl.test.sh` › status: a dollar Compose re-escapes is measured as the application receives it      | KILLED                             |
-| H-63 | A value is measured by its characters, not by the listing's one-line rendering | `nexa-lib.sh`: `nexa_listing_value` returns the rendering          | `botctl.test.sh` › status: a destination that resolves to only a newline is not configured             | KILLED, then SURVIVED, then KILLED |
-| H-64 | A refusal repeats Compose's reason, cut before any value Compose echoed        | `nexa-lib.sh`: `nexa_compose_refusal_reason` prints the line whole | `botctl.test.sh` › status: a refusal reports the reason Compose gave, with the value it echoed cut off | KILLED                             |
-| H-65 | The rewriter's loadability oracle is live, not an undefined command negated    | `nexa-lib.sh`: `nexa_compose_env_unterminated` returns 1 always    | `botctl.test.sh` › harness: the loadability oracle sees an unterminated file                           | KILLED                             |
+| #    | Rule                                                                          | Mutation                                                           | Named test                                                                                             | Result |
+| ---- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ------ |
+| H-62 | A `$` Compose re-escapes in `config` output is a single `$` before validation | `nexa-lib.sh`: drop the `$$` → `$` replacement                     | `botctl.test.sh` › status: a dollar Compose re-escapes is measured as the application receives it      | KILLED |
+| H-64 | A refusal repeats Compose's reason, cut before any value Compose echoed       | `nexa-lib.sh`: `nexa_compose_refusal_reason` prints the line whole | `botctl.test.sh` › status: a refusal reports the reason Compose gave, with the value it echoed cut off | KILLED |
+| H-65 | The rewriter's loadability oracle is live, not an undefined command negated   | `nexa-lib.sh`: `nexa_compose_env_unterminated` returns 1 always    | `botctl.test.sh` › harness: the loadability oracle sees an unterminated file                           | KILLED |
 
 **Two more from the review of `3508b74` itself**, before Codex saw it. Compose logs
 warnings to stderr BEFORE its error — `The "X" variable is not set. Defaulting to a
@@ -652,16 +651,18 @@ right by accident. `${#}` is also characters under a UTF-8 locale and bytes unde
 C/POSIX, and `botctl` sets neither, while the schema counts UTF-16 code units.
 `nexa_listing_length` counts what the schema counts (H-67).
 
-**H-63 SURVIVED its own follow-up.** The row above was killed on `3508b74` by the
-webhook-secret test, and `0a9ebd2` moved that measurement to `nexa_listing_length` —
-so on `0a9ebd2` the mutation (`nexa_listing_value` returns the rendering) is green at
-212 of 212, found by the review of that head. The rule was still real: every boolean,
-the backup destination and the keyring fields read through `nexa_listing_value`. The
-row is retargeted to the one consumer that can observe the decode — a chat id that
-resolves to only a newline is two non-blank characters in the rendering and nothing to
-the application, which `.trim()`s it — and re-run against the current tree. Recorded
-as killed, then survived, then killed, because a KILLED row whose mutation is green
-is the thing this file exists to prevent.
+**H-63 is retired in round thirteen, after surviving twice.** The row was killed on
+`3508b74` by the webhook-secret test; `0a9ebd2` moved that measurement to
+`nexa_listing_length` and the mutation went green at 212 of 212; round eleven
+retargeted it to the backup destination, and round twelve's presence fix moved THAT to
+`nexa_listing_present` — green again at 218 of 218, found by the review of `f0a1b62`.
+Twice is the answer: `nexa_listing_value` existed to hand a caller a decoded value, and
+no caller needs one. The function is gone. Its rule survives, split across the three
+readers that each do their own single pass and so cannot lose a trailing newline to a
+command substitution — measured by `nexa_listing_length` (H-67), compared by
+`nexa_listing_rendered` (H-73), trimmed by `nexa_listing_present` (H-71, H-75). A row
+whose mutation keeps going green is a row about nothing, and this file says so rather
+than retargeting it a third time.
 
 **H-67's kill count depends on the locale.** The deploy suite runs under POSIX here
 and in CI (nothing sets `LANG` or `LC_ALL`), where `${#}` counts bytes: the `${#}`
@@ -737,12 +738,15 @@ is nothing to the application and was "configured" to `status`. Python's own
 `str.isspace()` is a third set (measured: it lacks U+FEFF and includes U+001C..U+001F
 and U+0085), so `nexa_listing_present` spells the ECMAScript set out (H-71).
 
-**P2, NOT_REPRODUCIBLE on v5.1.1 — a null entry rendered as an empty assignment.**
-Measured: a bare `KEY` line whose host variable is unset is OMITTED from `config`
-output on Compose v5.1.1, not emitted as null. The Compose contract does allow a null
-for an unset variable, and a null rendered as `KEY=` would turn the schema default
-into an invalid explicit empty value, so the resolver skips null entries; the fake
-states one as JSON (H-72). Recorded as a contract, not a measurement.
+**P2, CONFIRMED on v5.1.1 — a null entry rendered as an empty assignment.** Recorded
+first as not reproducible, and corrected by the review of the fix: a bare `KEY` line in
+`env_file` with the host variable unset is OMITTED from `config` output, but a bare
+`- KEY` in the compose file's OWN `environment:` list with the variable unset is emitted
+as `null` — and `nexa_compose_resolved_env` reads exactly that block. So the shape is
+reachable on the measured version, not only by contract. A null rendered as `KEY=` would
+turn the schema default into an invalid explicit empty value, which is the
+absent-versus-empty lie of U-12 again; the resolver skips null entries, and the fake
+states one as JSON (H-72).
 
 | #    | Rule                                                                                | Mutation                                                 | Named test                                                                                                   | Result |
 | ---- | ----------------------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------ |
@@ -750,3 +754,83 @@ states one as JSON (H-72). Recorded as a contract, not a measurement.
 | H-70 | A provenance that cannot be computed is reported as unknown, never as "no override" | `nexa-lib.sh`: the four early returns back to `return 0` | `botctl.test.sh` › status: a provenance it cannot compute makes no claim about the running API               | KILLED |
 | H-71 | Destination presence is decided by the schema's trim set, not the shell's           | `botctl`: presence by `[[:space:]]` again                | `botctl.test.sh` › status: a chat id that is only a no-break space is not configured                         | KILLED |
 | H-72 | A null entry in Compose's document is an absent variable                            | `nexa-lib.sh`: render a null as an empty string again    | `botctl.test.sh` › status: a null entry Compose resolved is an absent variable, not an empty one             | KILLED |
+
+### Round twelve, Codex, on `f0a1b62`
+
+Two findings, both CONFIRMED, both about a claim being checked against the wrong
+thing.
+
+**P2 — a boolean with a trailing newline read `on`.** Compose lets a quoted value
+span lines, so `BACKUP_SCHEDULE_ENABLED='true<newline>'` reaches the container as
+`true` with the newline and `booleanish` refuses it. The previous round gave the
+LENGTH check a rendering-aware reader but left the VOCABULARY check on
+`nexa_listing_value`, whose decode passes through a command substitution — which
+drops a trailing newline. So the validator saw `true` and reported a working
+schedule for a configuration the next start refuses. Reproduced through the real
+function. `nexa_listing_boolean` compares the listing's RENDERING now, where that
+value is the five characters `true\n`: no accepted spelling contains a backslash
+or a newline, so comparing renderings is exact and needs no decode (H-73).
+
+**P2 — the legacy-template gate covered three of seven shapes.** `git log --
+deploy/nexa.env.template` has seven distinct blobs, and the assertion was
+`toBeGreaterThanOrEqual(3)`. The omitted four are not interchangeable: `126747d` is
+the only template that writes `PANEL_HTTP_DENIED_SUBNETS` (the variable the SSRF
+policy reads), `48568f7` the first with a canonical keyring AND an explicit
+`SECRETS_ACCEPT_V1=true`, `267dcbd` the first that stopped writing the build keys.
+A schema change breaking a host installed from any of them left the gate green. All
+seven are committed as fixtures and parsed through the current schema by a named
+case each, and the count assertion is now the exact set of seven names rather than a
+lower bound (H-74).
+
+| #    | Rule                                                                        | Mutation                                                           | Named test                                                                                  | Result |
+| ---- | --------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- | ------ |
+| H-73 | A boolean is validated as the listing RENDERS it, trailing newline included | `nexa-lib.sh`: `nexa_listing_boolean` back to `nexa_listing_value` | `botctl.test.sh` › status: a boolean with a trailing newline is invalid, not on             | KILLED |
+| H-74 | Every distinct released template shape is a fixture, not at least three     | `config-upgrade.test.ts`: the exact set back to a lower bound      | `config-upgrade.test.ts` › has a fixture for every distinct template a release ever shipped | KILLED |
+
+### Round thirteen — self-review of `f0a1b62`, and the end of `nexa_listing_value`
+
+Zero blockers, seven non-blockers, two of which this repository treats as defects in
+their own right.
+
+**A KILLED row was green under its own mutation, for the second time.** H-63 said a
+value is measured by its characters rather than by the listing's rendering, and named
+whichever test happened to read a value through `nexa_listing_value`. Round twelve moved
+the last such reader — the backup destination — to `nexa_listing_present`, so the
+mutation went green at 218 of 218 again. Retargeting it a third time would say nothing.
+`nexa_listing_value` existed to hand a caller a DECODED value and no caller needs one:
+`nexa_listing_rendered` compares, `nexa_listing_length` measures, `nexa_listing_present`
+trims, each in one pass that cannot lose a trailing newline to a command substitution.
+The function is deleted and H-63 is retired with it; the rule survives as H-67, H-73,
+H-71 and H-75.
+
+**The ECMAScript whitespace set had no test that distinguished it from the
+interpreter's.** `nexa_listing_present` spells the set out because Python trims
+U+FEFF and U+001C..U+001F while JavaScript trims the first and not the second — and
+`value.strip()` passed the whole suite, because the only fixture was U+00A0, which both
+trim. Measured on the real function: a byte-order-mark chat id is absent (the schema
+trims it, so the destination is HALF configured) and a file-separator chat id is present
+(the schema does not). H-75 pins both, and it is the narrower mutation H-71 could not
+see.
+
+Three smaller corrections, all of them claims rather than behaviour: two comments still
+described the withdrawn "state 2 for a missing container" (the provenance is unknown
+there now); a case said it covered an API that is not running at all while its loop ran
+only the three lookup failures (the arm is there now); and the unterminated-record case
+asserted the file and the reason but never that the update still SUCCEEDS, which is the
+one property the new `nexa_die` risked — `BOTCTL_STATUS` is asserted 0.
+
+One reclassification: U-45 was recorded NOT_REPRODUCIBLE because an `env_file` bare key
+is omitted from `config` output on v5.1.1. A bare `- KEY` in the compose file's own
+`environment:` list, with the variable unset, IS emitted as null — and that block is
+exactly what the resolver reads. The fix was right; the record said "contract" where
+"measurement" was available, and now says so.
+
+Also read, and left alone: `nexa_listing_present` cannot distinguish a blank value from
+a failed interpreter, which is unreachable because the resolver must already have run
+python3 to produce the listing at all.
+
+| #    | Rule                                                                          | Mutation                                                      | Named test                                                                                                   | Result |
+| ---- | ----------------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------ |
+| H-75 | Presence trims the SCHEMA's whitespace set, not the interpreter's             | `nexa-lib.sh`: `nexa_listing_present` back to `value.strip()` | `botctl.test.sh` › status: a chat id that is only a no-break space is not configured                         | KILLED |
+| H-76 | A refused removal leaves the update itself successful                         | `nexa-lib.sh`: let the rewriter's die escape the subshell     | `botctl.test.sh` › update: an obsolete record whose quote never closes is refused, and the file is UNCHANGED | KILLED |
+| H-77 | An API that is not running makes the provenance unknown, like a failed lookup | `nexa-lib.sh`: the missing-container guard back to `return 0` | `botctl.test.sh` › status: a provenance it cannot compute makes no claim about the running API               | KILLED |

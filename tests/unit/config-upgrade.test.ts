@@ -32,6 +32,8 @@ const SUBSTITUTIONS: Record<string, string> = {
   __SECRETS_ACTIVE_KEY_ID__: 'install-1',
   __DOMAIN__: 'admin.example.com',
   __EDGE_SUBNET__: '172.29.0.0/24',
+  // Only `126747d` substitutes this one, into PANEL_HTTP_DENIED_SUBNETS.
+  __DATA_SUBNET__: '172.29.1.0/24',
   // The first production template substituted these three. They are the reason
   // this file exists; see the BUILD_* case below.
   __BUILD_VERSION__: 'v0.1.0-staging.1',
@@ -78,11 +80,26 @@ const problems = (env: Record<string, string>): string[] => {
 };
 
 describe('an upgraded installation on the current image', () => {
-  it('has fixtures to test at all', () => {
-    // Without this the whole file is a loop over an empty array reporting
-    // success — which is how a suite comes to certify nothing.
-    expect(legacy.length).toBeGreaterThanOrEqual(3);
-    expect(legacy.map((l) => l.name)).toContain('150d8c4.env');
+  it('has a fixture for every distinct template a release ever shipped', () => {
+    // Not a lower bound. `deploy/nexa.env.template` has had SEVEN distinct blobs
+    // (`git log -- deploy/nexa.env.template`, one fixture per blob, named for the
+    // first commit carrying it), and they are not interchangeable: `126747d` is the
+    // only one that writes PANEL_HTTP_DENIED_SUBNETS, `48568f7` the first with the
+    // canonical keyring AND an explicit SECRETS_ACCEPT_V1, `267dcbd` the first
+    // without the build keys. A lower bound of three passed while four shapes went
+    // unparsed, so a schema change breaking a host installed from any of them left
+    // this gate green. The CURRENT template is covered by
+    // `tests/unit/deployment-config.test.ts`; when it changes again, the superseded
+    // shape is added here.
+    expect(legacy.map((l) => l.name)).toEqual([
+      '126747d.env',
+      '150d8c4.env',
+      '1968444.env',
+      '267dcbd.env',
+      '2916442.env',
+      '48568f7.env',
+      '7c55d98.env',
+    ]);
   });
 
   /**
@@ -116,6 +133,35 @@ describe('an upgraded installation on the current image', () => {
     // The release before disaster recovery, which is what a host updated to
     // v0.1.0-staging.13 would have had written for it had it been installed then.
     expect(problems(fixture('1968444.env'))).toEqual([]);
+  });
+
+  it('boots from the 267dcbd.env template through the current schema', () => {
+    // The first template that stopped writing the build keys, and the last with the
+    // legacy keyring pair: the shape a host installed the day after the first
+    // release carries, where v1 acceptance is DERIVED rather than written.
+    expect(problems(fixture('267dcbd.env'))).toEqual([]);
+  });
+
+  it('boots from the 7c55d98.env template through the current schema', () => {
+    // Legacy keyring still, one revision later. Same key set as 267dcbd and a
+    // different blob, parsed rather than assumed equivalent — the assumption that
+    // two shapes with the same keys behave alike is what a parse is for.
+    expect(problems(fixture('7c55d98.env'))).toEqual([]);
+  });
+
+  it('boots from the 48568f7.env template through the current schema', () => {
+    // The first canonical-keyring template, and the only shape that writes
+    // SECRETS_ACCEPT_V1=true: acceptance EXPLICIT beside a canonical keyring, which
+    // is the combination `status_secrets` reports as `(SECRETS_ACCEPT_V1)` rather
+    // than as a derived default.
+    expect(problems(fixture('48568f7.env'))).toEqual([]);
+  });
+
+  it('boots from the 126747d.env template through the current schema', () => {
+    // The only template that writes PANEL_HTTP_DENIED_SUBNETS, substituted with the
+    // installation's data subnet — the variable the SSRF policy reads, so a schema
+    // change to it breaks exactly the hosts installed from this shape.
+    expect(problems(fixture('126747d.env'))).toEqual([]);
   });
 
   it('resolves the SAME configuration for every process role', () => {
@@ -782,8 +828,12 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
     const fn = /nexa_listing_boolean\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '';
     expect(fn, 'nexa_listing_boolean is gone').not.toBe('');
     expect(fn, 'nexa_listing_boolean does not read a resolved listing').toContain(
-      'nexa_listing_value "$listing"',
+      'nexa_listing_rendered "$listing"',
     );
+    // The RENDERING, not the decoded value: a decode through a command substitution
+    // drops a trailing newline, so `true` + newline read as `true` and was reported as
+    // a working setting for a value the schema refuses.
+    expect(fn, 'the vocabulary check decodes before comparing').not.toMatch(/nexa_listing_value/);
     expect(fn, 'nexa_listing_boolean reads a file again').not.toMatch(/\$file/);
     expect(fn, 'nexa_listing_boolean normalises the value').not.toMatch(
       /raw="\$\{raw\/\/\[\[:space:\]\]\/\}"/,

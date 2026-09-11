@@ -1085,6 +1085,12 @@ nexa_reconcile_app_env() {
   # file was left alone, and "ends inside a quoted value" names a file Compose will
   # refuse whole at the next start. Only stderr, and only its last line: the
   # rewriter prints no value anywhere, so the reason carries none.
+  #
+  # The call is inside a command substitution, which forks — so the `nexa_die` in the
+  # rewriter cannot exit `botctl`, and a removal refused on an unterminated file leaves
+  # the update itself successful. That is the property: a stale build label is not worth
+  # failing an update over. The inner `( … )` is redundant beside the substitution and
+  # kept deliberately, so the protection does not rest on the substitution alone.
   local reason=''
   if reason="$( (nexa_env_rewrite "$file" "$csv") 2>&1 >/dev/null)"; then
     # The NAMES, because they are not secrets and an operator should see what
@@ -1300,8 +1306,10 @@ nexa_compose_env_unterminated() {
 #
 # Output is one `KEY=value` per line with any newline inside a value rendered as the
 # two characters \n and a backslash doubled, because a multiline value cannot travel
-# through a line-based caller intact. `nexa_listing_value` undoes exactly that
-# rendering, so what a caller holds is the value and not a picture of it.
+# through a line-based caller intact. No caller decodes that rendering back into a
+# value: `nexa_listing_rendered` compares it, `nexa_listing_length` measures through
+# it and `nexa_listing_present` trims through it, each in one pass that cannot lose a
+# trailing newline the way a command substitution does.
 #
 # Exit 1 when Compose REFUSES the configuration — an unterminated quoted value, a
 # missing env file, an unsatisfiable substitution, a malformed compose file — with
@@ -1356,7 +1364,8 @@ for key in sorted(env):
     # A null entry is a variable Compose left UNSET — a bare `KEY` line whose host
     # variable is absent — so the application never receives it. Rendering it as
     # `KEY=` would turn the schema default into an invalid explicit empty value.
-    # (Compose v5.1.1 omits the key instead; this is the contract, not a measurement.)
+    # Measured on v5.1.1: an `env_file` bare key is omitted, but a bare `- KEY` in the
+    # `environment:` list of the compose file itself — which this reads — IS a null.
     if raw is None:
         continue
     text = str(raw)
@@ -1395,16 +1404,17 @@ $2="*) return 0 ;;
   return 1
 }
 
-# The VALUE, not its rendering. The listing carries `\\` for a backslash and `\n` for a
-# newline, and nothing else is escaped — so `printf %b`, which turns exactly those two
-# back, recovers the string the application receives. A caller that measured the
-# rendering counted two characters per backslash and two per newline, and reported a
-# 16-character webhook secret where the schema saw fewer. (Command substitution drops a
-# trailing newline from the result, as it does everywhere in this script.)
-nexa_listing_value() {
-  local rendered
-  rendered="$(printf '%s\n' "$1" | sed -n "s/^${2}=//p" | sed -n '1p')"
-  printf '%b' "$rendered"
+# The value AS THE LISTING RENDERS IT: a newline inside it is the two characters
+# `\n`, a backslash is doubled, and nothing else is escaped.
+#
+# This is what a VOCABULARY check must read. Decoding first and capturing the result
+# in a command substitution loses a trailing newline — `true` + newline arrived as
+# `true` and read `on`, for a value `booleanish` refuses, which is the original
+# cry-wolf-in-reverse this reader exists to avoid. No accepted spelling contains a
+# backslash or a newline, so a rendering that differs from the spelling IS a value
+# the schema refuses: comparing renderings is exact here, and needs no decode.
+nexa_listing_rendered() {
+  printf '%s\n' "$1" | sed -n "s/^${2}=//p" | sed -n '1p'
 }
 
 # The LENGTH of a value, as `configSchema` measures it.
@@ -1510,7 +1520,10 @@ nexa_listing_boolean() {
     printf '%s' "$fallback"
     return 0
   }
-  raw="$(nexa_listing_value "$listing" "$key")"
+  # The RENDERING, not the decoded value: see `nexa_listing_rendered`. A decode
+  # through a command substitution drops a trailing newline, so `true` + newline read
+  # as `true` and was reported `on` for a value the schema refuses.
+  raw="$(nexa_listing_rendered "$listing" "$key")"
   [ -n "$raw" ] || {
     printf 'invalid'
     return 0

@@ -436,13 +436,16 @@ status_secrets() {
     return 0
   fi
 
-  local keys kek explicit format accept accept_source
-  keys="$(nexa_listing_value "$resolved" SECRETS_KEYS)"
-  kek="$(nexa_listing_value "$resolved" SECRETS_KEK)"
-  explicit="$(nexa_listing_value "$resolved" SECRETS_ACCEPT_V1)"
-  if [ -n "${keys//[[:space:]]/}" ]; then
+  local explicit format accept accept_source
+  # PRESENCE for the two key-material variables, through the same trim the schema
+  # applies — and without reading either value into this script. The spelling that
+  # came before held the KEK in a shell variable purely to test whether it was blank,
+  # which puts the key that decrypts every stored credential into an environment a
+  # `set -x` or a crash trace would print. The question was only ever "is it there".
+  explicit="$(nexa_listing_rendered "$resolved" SECRETS_ACCEPT_V1)"
+  if nexa_listing_present "$resolved" SECRETS_KEYS; then
     format=canonical
-  elif [ -n "${kek//[[:space:]]/}" ]; then
+  elif nexa_listing_present "$resolved" SECRETS_KEK; then
     format=legacy
   else
     format=unknown

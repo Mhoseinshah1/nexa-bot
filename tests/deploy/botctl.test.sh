@@ -3459,6 +3459,43 @@ fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","BACKUP_TELEGRAM_
 run_botctl status
 assert_contains 'a chat id containing a no-break space was read as absent' \
   "$BOTCTL_OUTPUT" 'backup delivery    configured'
+# The set is the SCHEMA's, not whichever set the interpreter happens to have.
+# Measured: Python trims U+FEFF and U+001C..U+001F; JavaScript trims the first and
+# NOT the second. So a byte-order mark alone is absent to the application, and a file
+# separator alone is a VALUE — `value.strip()` gets the second one backwards, and
+# nothing in this suite could see that until these two cases.
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","BACKUP_TELEGRAM_CHAT_ID":"\ufeff","BACKUP_TELEGRAM_BOT_TOKEN":"123456:AAAfakeToken"}'
+run_botctl status
+assert_contains 'a byte-order-mark chat id was read as present, which the schema trims away' \
+  "$BOTCTL_OUTPUT" 'backup delivery    HALF configured'
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","BACKUP_TELEGRAM_CHAT_ID":"\u001c","BACKUP_TELEGRAM_BOT_TOKEN":"123456:AAAfakeToken"}'
+run_botctl status
+assert_contains 'a file-separator chat id was trimmed away, which the schema does not do' \
+  "$BOTCTL_OUTPUT" 'backup delivery    configured'
+fake_set compose_env_json ''
+seed_nexa_env canonical
+
+test_case 'status: a boolean with a trailing newline is invalid, not on'
+# Compose lets a quoted value span lines, so `BACKUP_SCHEDULE_ENABLED='true\n'` reaches
+# the container as `true` WITH the newline and `booleanish` refuses it. The validator
+# read the DECODED value through a command substitution, which drops a trailing
+# newline, so it saw `true` and reported `on` for a configuration the next start
+# refuses. It reads the listing's rendering now, where that value is `true\n` and
+# matches no accepted spelling.
+seed_nexa_env canonical
+fake_set compose_env ''
+fake_set compose_env_json "$(printf '{"DATABASE_URL":"d","REDIS_URL":"r","BACKUP_SCHEDULE_ENABLED":"true\\n","PANEL_MONITOR_ENABLED":"false\\n"}')"
+run_botctl status
+assert_contains 'a booleanish value with a trailing newline was reported as on' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   invalid'
+assert_contains 'a strict-enum value with a trailing newline was reported as off' \
+  "$BOTCTL_OUTPUT" 'panel monitor      invalid'
+# And the same values without the newline are read normally, so this is about the
+# boundary rather than about refusing every value.
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","BACKUP_SCHEDULE_ENABLED":"true","PANEL_MONITOR_ENABLED":"false"}'
+run_botctl status
+assert_contains 'a clean booleanish value stopped being read' "$BOTCTL_OUTPUT" 'scheduled backup   on'
+assert_contains 'a clean strict value stopped being read' "$BOTCTL_OUTPUT" 'panel monitor      off'
 fake_set compose_env_json ''
 seed_nexa_env canonical
 
@@ -3479,7 +3516,7 @@ seed_nexa_env canonical
 
 test_case 'status: a destination that resolves to only a newline is not configured'
 # The listing renders a newline as the two characters `\n` so that one entry is one
-# line, and `nexa_listing_value` turns it back before anyone looks. A reader of the
+# line, and `nexa_listing_present` trims through that rendering. A reader of the
 # RENDERING would see two non-blank characters where the application — which
 # `.trim()`s the chat id — sees nothing, and report a destination as configured that
 # the next start refuses as half-configured. This is the case that keeps the decode
@@ -3864,8 +3901,10 @@ assert_not_contains 'a pending override was reported as already masking /health/
   "$BOTCTL_OUTPUT" '/health/info reports what the installer wrote rather than'
 assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'botctl update'
 
-# 3. A stopped API cannot be masking anything, so state 2 is what a missing container
-#    gets — never a claim about an endpoint that is not answering.
+# 3. A stopped API is not masking anything and is not carrying a stale override
+#    either, so a missing container gets neither state: the provenance is UNKNOWN
+#    and the case below it says so — never a claim about an endpoint that is not
+#    answering.
 seed_nexa_env canonical
 append_env 'BUILD_VERSION=v0.1.0-staging.1'
 fake_set api_state absent
@@ -3997,7 +4036,9 @@ fake_set api_env ''
 
 test_case 'status: a provenance it cannot compute produces no warning, at any of three lookups'
 # The remedy this warning feeds is a restart, and a restart would not change an
-# answer that could not be computed. Silence beats a warning nobody can act on.
+# answer that could not be computed, so a file AT ITS DEFAULTS gets silence.
+# A file that carries the keys gets the unknown-state paragraph instead — the case
+# after this one — because there the operator has something to act on.
 #
 # THREE lookups, each tested, because a guard that covered only the first was the
 # defect in the previous revision: an `image inspect` that failed made every stamped
@@ -4024,17 +4065,18 @@ test_case 'status: a provenance it cannot compute makes no claim about the runni
 # "nothing is overridden" — so a file that sets the keys was reported as pending, with
 # the sentence that the running API does not carry them and /health/info is correct
 # for now. That is the fact that could not be established. Unknown is reported as
-# unknown, for each of the three lookups and for an API that is not running at all.
+# unknown, for each of the three lookups AND for an API that is not running at all:
+# the fourth arm below, which is the missing-container branch.
 seed_nexa_env canonical
 append_env 'BUILD_COMMIT=pending'
-for failure in image_absent container_env_fails image_env_fails; do
-  fake_set "$failure" 1
+for failure in image_absent container_env_fails image_env_fails api_state_absent; do
+  if [ "$failure" = api_state_absent ]; then fake_set api_state absent; else fake_set "$failure" 1; fi
   run_botctl status
   assert_contains "a failed ${failure} lookup claimed the running API does not carry the key" \
     "$BOTCTL_OUTPUT" 'could not be determined'
   assert_not_contains "a failed ${failure} lookup reported the file key as pending" \
     "$BOTCTL_OUTPUT" 'correct for NOW'
-  fake_set "$failure" 0
+  if [ "$failure" = api_state_absent ]; then fake_set api_state running; else fake_set "$failure" 0; fi
 done
 # With every lookup working, the same file IS classified — pending, because the fake
 # container carries the image's own value — so this is about failure, not silence.
@@ -4152,6 +4194,10 @@ assert_contains 'the reason for leaving the file alone was not given' \
 assert_contains 'the keyring after the unterminated record was lost' \
   "$(cat "${NEXA_CONFIG_DIR}/nexa.env")" 'SECRETS_KEYS='
 assert_contains 'the last line was lost' "$(cat "${NEXA_CONFIG_DIR}/nexa.env")" 'TAIL_KEY=still-here'
+# And the update as a whole still SUCCEEDS: a stale build label is not worth failing
+# an update over, which is why the removal is non-fatal. A die that escaped the
+# subshell would turn a cosmetic repair into a refused update.
+assert_equals 'a refused removal failed the whole update' 0 "$BOTCTL_STATUS"
 seed_nexa_env canonical
 
 test_case 'update: an ESCAPED delimiter does not end a value early'
