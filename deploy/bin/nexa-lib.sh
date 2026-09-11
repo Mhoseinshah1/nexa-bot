@@ -1100,9 +1100,10 @@ nexa_reconcile_app_env() {
 # the operator's value by the rewriter.
 #
 # Defined ONCE and prepended to each of the three awk programs below, because this is
-# the rule that must not drift between the one that reads a value, the one that
-# decides whether the file is loadable at all, and the one that removes lines. Three
-# copies of it would be three chances for two of them to disagree.
+# the rule that must not drift between the one that finds an assignment, the one that
+# removes lines, and the one the deploy suite uses to assert the rewriter never leaves
+# a file Compose refuses. Three copies of it would be three chances for two of them to
+# disagree.
 #
 # Backslashes are counted only back to the START OF THE LINE, which is correct: a
 # backslash at the end of the previous line precedes a newline, not this delimiter.
@@ -1120,11 +1121,15 @@ function unescaped_index(s, q,   i, n, b, j) {
 }
 '
 
-# One value out of a file Docker Compose reads, resolved the way COMPOSE resolves it.
+# One assignment out of a file Docker Compose reads, as the file's TEXT spells it after
+# Compose's quoting and comment rules — and deliberately NOT what the container receives.
 #
-# `nexa_env_value` answers what a LINE says. This answers what the CONTAINER
-# receives, and the two differ — so any report about configuration has to use this
-# one, because the application never sees the file, it sees what Compose made of it.
+# This is the scanner, and it survives for questions about lines only: which top-level
+# assignments a file makes (`nexa_obsolete_app_env_keys`), and what `migrate-config`
+# must read before it REWRITES the file, because writing a resolved value there would
+# freeze an interpolation meant to be evaluated at every start. Anything that reports
+# what the application RECEIVES asks Compose instead — `nexa_compose_resolved_env` —
+# because Compose interpolates these values and this scanner does not.
 #
 # It SCANS rather than greps, and that is the point. A value may span lines, so a line
 # that looks like an assignment may be text inside another variable's value:
@@ -1133,15 +1138,13 @@ function unescaped_index(s, q,   i, n, b, j) {
 #   BACKUP_SCHEDULE_ENABLED=true
 #   last'
 #
-# defines ONE variable. A grep for `^BACKUP_SCHEDULE_ENABLED=` finds the middle line
-# and reports a schedule that Compose never sets — while the application runs on the
-# `false` default. No amount of care about the selected line fixes that; the quoted
-# regions have to be tracked across the whole file, which is what the scanner does.
+# defines ONE variable, and a grep for `^BACKUP_SCHEDULE_ENABLED=` would find the
+# middle line and delete it out of the operator's value. The quoted regions have to be
+# tracked across the whole file, which is what the scanner does.
 #
 # The rules are not inferred from the documentation; they were established by running
 # 25 shapes through `docker compose config --format json` (Compose v5.1.1) and reading
-# the resolved environment back. Several contradict what the documentation alone
-# suggests, and three contradict what this reader did in an earlier revision:
+# the resolved environment back:
 #
 #   KEY=false # off       ->  false        a SPACE before `#` starts a comment
 #   KEY=false#off         ->  false#off    no space: not a comment
@@ -1157,18 +1160,13 @@ function unescaped_index(s, q,   i, n, b, j) {
 #   KEY=a then KEY=b      ->  b            the last assignment wins
 #   KEY=true<CR>          ->  true         a CRLF file is read, not mangled
 #
-# A newline INSIDE a value is rendered as the two characters `\n`. Command
-# substitution cannot carry a trailing newline, so a value that is genuinely
-# `true` + newline would otherwise arrive as `true` and be reported as a working
-# setting — when Compose hands the application a string its schema refuses. Rendered,
-# it fails every per-key validator, which is the honest answer.
+# A newline INSIDE a value is rendered as the two characters `\n`, because command
+# substitution cannot carry a trailing newline.
 #
 # NOT mirrored, deliberately: interpolation (`${OTHER}`) and the escape expansion
-# Compose applies inside double quotes, because reproducing those means reproducing
-# Compose's variable precedence as well. No key this is used for can legitimately
-# contain either — they are booleans, a numeric chat id and a bot token — and a value
-# that does is passed through unchanged, where the per-key validator refuses it rather
-# than guessing.
+# Compose applies inside double quotes. A value that contains either is passed through
+# as text, and the one caller that would WRITE such a value — `migrate-config` —
+# refuses it rather than freeze it.
 #
 # Exit 0 with the value, or 1 when the file does not assign that key at all.
 nexa_compose_env_value() {
@@ -1230,12 +1228,14 @@ nexa_compose_env_value() {
   ' <"$file"
 }
 
-# Would Compose REFUSE this file outright?
+# Does this file end inside a quoted value — the shape Compose refuses whole?
 #
-# One condition, and it is not per key: a file that ends inside a quoted value is
-# rejected whole — `unterminated quoted value` — so every setting in it is moot,
-# including the ones that look fine. A reader that answered only per key would report
-# a tidy list of values no container will ever receive.
+# No production caller: `botctl status` asks Compose itself now, and Compose says why.
+# This is the deploy suite's ORACLE for the rewriter — after `nexa_env_rewrite` drops a
+# line, the suite asserts the result is not a file Compose would refuse — and it lives
+# here rather than in the harness because it must share `NEXA_ENV_AWK_LIB` with the
+# rewriter: the delimiter rule that decides where a value ends is the one rule the
+# oracle and the code under test must not be allowed to disagree about.
 nexa_compose_env_unterminated() {
   local file="$1"
   [ -r "$file" ] || return 1
@@ -1274,16 +1274,33 @@ nexa_compose_env_unterminated() {
 # and resolves exactly what the containers will receive — including the compose file's
 # own `environment:` entries, which a reader of nexa.env never saw at all.
 #
-# Output is one `KEY=value` per line with any newline inside a value rendered as the
-# two characters \n, because a multiline value cannot travel through a line-based
-# caller intact. A backslash is doubled first, so the rendering is unambiguous.
+# One thing about that output is NOT what the container receives, and it was found by
+# review after this function claimed otherwise: `config` emits a RE-LOADABLE document,
+# so every literal `$` in a resolved value comes out doubled — measured on v5.1.1,
+# `S='abc$'` is `abc$$` in the JSON, one character longer than what the application
+# gets. Undone here, once, so that a caller measuring or comparing a value is measuring
+# the value. Nothing else is re-escaped: newlines and backslashes arrive intact.
 #
-# Exit 1 when Compose REFUSES the configuration — an unterminated quoted value, a bad
-# interpolation, a malformed compose file. That refusal is the most important thing
-# this reports: nothing will start, whatever the individual values look like.
+# Output is one `KEY=value` per line with any newline inside a value rendered as the
+# two characters \n and a backslash doubled, because a multiline value cannot travel
+# through a line-based caller intact. `nexa_listing_value` undoes exactly that
+# rendering, so what a caller holds is the value and not a picture of it.
+#
+# Exit 1 when Compose REFUSES the configuration — an unterminated quoted value, a
+# missing env file, an unsatisfiable substitution, a malformed compose file — with
+# Compose's own first line of explanation on stderr; and exit 1 when the document
+# defines no such service, which is the same answer for the caller: nothing will start
+# as asked. Compose's stderr is kept apart from its stdout because it WARNS there on
+# success too, and a warning glued onto the JSON would read as a refusal.
 nexa_compose_resolved_env() {
-  local service="${1:-api}" json
-  json="$(nexa_compose config --format json 2>/dev/null)" || return 1
+  local service="${1:-api}" json err
+  err="$(mktemp)" || return 1
+  if ! json="$(nexa_compose config --format json 2>"$err")"; then
+    sed -n '1p' "$err" >&2
+    rm -f "$err"
+    return 1
+  fi
+  rm -f "$err"
   [ -n "$json" ] || return 1
   printf '%s' "$json" | NEXA_SERVICE="$service" python3 -c '
 import json, os, sys
@@ -1291,20 +1308,37 @@ import json, os, sys
 try:
     doc = json.load(sys.stdin)
 except Exception:
+    sys.stderr.write("docker compose config did not produce a document this script can read\n")
     sys.exit(1)
 name = os.environ.get("NEXA_SERVICE", "api")
 services = doc.get("services") or {}
-service = services.get(name) or {}
-env = service.get("environment") or {}
+if name not in services:
+    sys.stderr.write("the compose file defines no service named " + name + "\n")
+    sys.exit(1)
+env = (services.get(name) or {}).get("environment") or {}
 if not isinstance(env, dict):
+    sys.stderr.write("the compose file gives " + name + " an environment this script cannot read\n")
     sys.exit(1)
 back = chr(92)
 for key in sorted(env):
     raw = env[key]
     text = "" if raw is None else str(raw)
+    # `config` re-escapes the document it prints; the container gets one `$`.
+    text = text.replace("$$", "$")
     text = text.replace(back, back + back).replace(chr(10), back + "n")
     sys.stdout.write(str(key) + "=" + text + chr(10))
 '
+}
+
+# Compose's refusal, fit to print: its first line, cut at the first quote character and
+# bounded in length. Compose echoes the offending VALUE when a quoted value is never
+# closed (`unterminated quoted value '7777:AAA…`), and the values in nexa.env include a
+# bot token and the encryption key. Everything else Compose says — a missing env file,
+# a required variable without a value, a malformed compose file — reads whole.
+nexa_compose_refusal_reason() {
+  local text
+  text="$(printf '%s\n' "$1" | sed -n '1p' | sed "s/[\"'].*\$//" | cut -c1-200)"
+  printf '%s' "${text:-(compose gave no reason)}"
 }
 
 # One value out of a resolved listing, and whether the key is there at all.
@@ -1324,8 +1358,16 @@ $2="*) return 0 ;;
   return 1
 }
 
+# The VALUE, not its rendering. The listing carries `\\` for a backslash and `\n` for a
+# newline, and nothing else is escaped — so `printf %b`, which turns exactly those two
+# back, recovers the string the application receives. A caller that measured the
+# rendering counted two characters per backslash and two per newline, and reported a
+# 16-character webhook secret where the schema saw fewer. (Command substitution drops a
+# trailing newline from the result, as it does everywhere in this script.)
 nexa_listing_value() {
-  printf '%s\n' "$1" | sed -n "s/^${2}=//p" | sed -n '1p'
+  local rendered
+  rendered="$(printf '%s\n' "$1" | sed -n "s/^${2}=//p" | sed -n '1p')"
+  printf '%b' "$rendered"
 }
 
 # Is a boolean setting on, in the vocabulary the application accepts FOR THAT KEY?

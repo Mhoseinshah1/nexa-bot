@@ -715,16 +715,34 @@ case "${1:-}" in
             #
             # `compose_config_fails` expresses the other important answer: a
             # configuration Compose REFUSES, where no value is in force at all.
-            [ "$(read_state compose_config_fails 0)" != 1 ] || exit 1
-            COMPOSE_ENV="$(read_state compose_env '')" python3 -c '
+            #
+            # A refusal says WHY on stderr, as Compose does — and Compose's reason can
+            # echo the offending value, which is what `compose_config_stderr` lets a
+            # test express. `compose_env_json` states the resolved environment as a raw
+            # JSON object for a value the line-based `compose_env` cannot spell, such as
+            # one containing a newline; `compose_service_missing` produces a document
+            # that defines no `api` at all.
+            if [ "$(read_state compose_config_fails 0)" = 1 ]; then
+              read_state compose_config_stderr 'failed to read nexa.env: line 3: unterminated quoted value' >&2
+              printf '\n' >&2
+              exit 1
+            fi
+            if [ "$(read_state compose_service_missing 0)" = 1 ]; then
+              printf '{"services":{}}\n'
+              exit 0
+            fi
+            COMPOSE_ENV="$(read_state compose_env '')" COMPOSE_ENV_JSON="$(read_state compose_env_json '')" python3 -c '
 import json, os, sys
 
 env = {}
-for line in (os.environ.get("COMPOSE_ENV") or "").split(chr(10)):
-    if not line or "=" not in line:
-        continue
-    key, _, value = line.partition("=")
-    env[key] = value
+if os.environ.get("COMPOSE_ENV_JSON"):
+    env = json.loads(os.environ["COMPOSE_ENV_JSON"])
+else:
+    for line in (os.environ.get("COMPOSE_ENV") or "").split(chr(10)):
+        if not line or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        env[key] = value
 print(json.dumps({"services": {"api": {"environment": env}}}))
 '
             ;;

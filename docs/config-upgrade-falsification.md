@@ -386,7 +386,6 @@ values no container will ever receive.
 | ---- | ---------------------------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------ |
 | H-45 | The REWRITER never deletes a line from inside another variable's value | `nexa-lib.sh`: drop the rewriter's quoted-region tracking  | `botctl.test.sh` › update: the removal never reaches inside another variable value                 | KILLED |
 | H-46 | A removed key's continuation lines go with it                          | `nexa-lib.sh`: drop the rewriter's quoted-region tracking  | `botctl.test.sh` › update: removing a multiline obsolete value takes its continuation lines        | KILLED |
-| H-47 | A file Compose refuses WHOLE is reported as refused whole              | `botctl`: remove the unterminated-file notice              | `botctl.test.sh` › status: a configuration Compose REFUSES is reported as refused, not summarised  | KILLED |
 | H-48 | The file and the running API are three states, not two                 | `botctl`: collapse the first branch back to the file alone | `botctl.test.sh` › status: the file and the running API are two facts, reported as three states    | KILLED |
 | H-49 | Detection and removal use the scanner, never a pattern                 | `nexa-lib.sh`: the detector greps again                    | `config-upgrade.test.ts` › finds and removes assignments with the same scanner, not with a pattern | KILLED |
 | H-50 | Presence is settled by the pass that reads the value                   | `nexa-lib.sh`: a separate presence grep, as before         | `config-upgrade.test.ts` › treats an EMPTY assignment as invalid, which is what the schema does    | KILLED |
@@ -460,6 +459,12 @@ instead of passing quietly.
 **H-54 is the fixture assertion**, and it is in the table because it is a rule like any
 other: the case asserts its own input before acting on it, and the mutation that
 reintroduces the format-string fixture kills it.
+
+**H-47 is retired in round ten**, not corrected: its mutation — "remove the
+unterminated-file notice" — names a notice round nine removed, so the mutation can no
+longer be performed, and the rule it protected is H-56's now (Compose reports the
+refusal; `status` repeats it). A row whose mutation cannot be applied is a row that
+cannot be falsified.
 
 ### Round nine, on `0977fce` — and the end of the reimplementation
 
@@ -576,3 +581,60 @@ read the file — and writing a resolved value there would freeze an interpolati
 to be evaluated at every start. Neither reading is safe when the value IS a
 substitution, so it refuses. The cost of choosing wrong is an installation that cannot
 decrypt anything.
+
+### Round ten — self-review of `898224b`, before Codex
+
+The adversarial pass on the head that ended the reimplementation found one blocker in
+the thing that replaced it, and it is the same class of defect as everything before:
+believing a description of a tool instead of measuring the tool.
+
+**`docker compose config` re-escapes `$`.** Measured on v5.1.1:
+
+```
+S='abcdefghijklmn$'   in nexa.env        15 characters to the application
+                       in config JSON     "abcdefghijklmn$$"     16
+M='$'                                     "$$"
+D='$$'  (single-quoted: no escape)        "$$$$"
+N='line1<newline>line2'                   "line1\nline2"  — the newline itself, intact
+B='a\\b'                                  "a\\b"        — backslashes intact
+```
+
+`config` prints a RE-LOADABLE document, so every literal dollar is doubled and nothing
+else is. The listing `nexa_compose_resolved_env` produced was therefore "what the
+container receives" for every value except one containing `$` — and the new webhook
+check measured that listing, so a 15-character secret ending in `$` was reported `on`
+for an API the schema refuses to start. That is the exact lie H-57 claims to kill, and
+H-57's test could not see it because its fixture had no dollar. The doubling is undone
+once, in the resolver; H-62 pins it with a 15-character `$`-terminated secret that
+must read `invalid` and a 16-character one that must read `on`.
+
+The second finding is the same mistake in this repository's own rendering. The
+listing carries `\\` and `\n` so that one entry is one line, and the length check
+measured the rendering: eight backslashes counted sixteen. `nexa_listing_value`
+decodes exactly those two escapes now (`printf %b`, which is total on this alphabet
+because every real backslash is doubled), and H-63 measures a secret of backslashes
+and one spanning a line. The fake `compose config` gained `compose_env_json` for the
+values its line-based fixture cannot spell.
+
+Third: the refusal discarded Compose's reason and guessed at "common causes", so a
+missing env file was reported as a possibly unclosed quote. Compose says why, and
+`status` repeats it — cut at the first quote character, because an unterminated-quote
+refusal echoes the offending VALUE, and in this file that value can be the bot token.
+Measured: `unterminated quoted value '7777:AAAsecretvalue`. H-64 asserts the reason
+is printed, the echoed token is not, and a document defining no `api` is a refusal
+rather than a column of defaults.
+
+Fourth, and the one that says something about the method: three deploy cases asserted
+"the rewritten file does not end inside a quoted value" through
+`nexa_compose_env_unterminated` — called inside a `bash -c` that had never sourced the
+library. `! undefined-command` exits 0. All three passed against any rewriter at all,
+across the very rounds whose corruption they were written to catch. They call the
+function directly now, and H-65 asks the oracle about a file that IS unterminated
+first, so a green answer below it means something.
+
+| #    | Rule                                                                           | Mutation                                                           | Named test                                                                                             | Result |
+| ---- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ------ |
+| H-62 | A `$` Compose re-escapes in `config` output is a single `$` before validation  | `nexa-lib.sh`: drop the `$$` → `$` replacement                     | `botctl.test.sh` › status: a dollar Compose re-escapes is measured as the application receives it      | KILLED |
+| H-63 | A value is measured by its characters, not by the listing's one-line rendering | `nexa-lib.sh`: `nexa_listing_value` returns the rendering          | `botctl.test.sh` › status: a value is measured by its characters, not by its one-line rendering        | KILLED |
+| H-64 | A refusal repeats Compose's reason, cut before any value Compose echoed        | `nexa-lib.sh`: `nexa_compose_refusal_reason` prints the line whole | `botctl.test.sh` › status: a refusal reports the reason Compose gave, with the value it echoed cut off | KILLED |
+| H-65 | The rewriter's loadability oracle is live, not an undefined command negated    | `nexa-lib.sh`: `nexa_compose_env_unterminated` returns 1 always    | `botctl.test.sh` › harness: the loadability oracle sees an unterminated file                           | KILLED |

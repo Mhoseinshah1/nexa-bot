@@ -227,7 +227,8 @@ Compose's variable precedence. So `status` asks Compose what a container started
 would receive, and applies only the part that is the application's own: the per-key
 vocabulary the schema accepts. It also surfaces the one answer that matters more than
 any value, because Compose reports it directly: a configuration Compose REFUSES, where
-nothing starts and no individual setting is in force. The backup delivery destination is
+nothing starts and no individual setting is in force — repeating Compose's own reason,
+cut before any value Compose echoed back. The backup delivery destination is
 reported by PRESENCE only, because one of its two keys is a bot token.
 
 Each line names the process that READS the value, which is the operator's next

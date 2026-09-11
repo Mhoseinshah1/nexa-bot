@@ -3591,6 +3591,79 @@ assert_contains 'a webhook with a long enough secret was not reported as on' \
 assert_not_contains 'status printed the webhook secret' "$BOTCTL_OUTPUT" '0123456789abcdef'
 seed_nexa_env canonical
 
+test_case 'status: a dollar Compose re-escapes is measured as the application receives it'
+# `docker compose config` prints a RE-LOADABLE document, so every literal `$` in a
+# resolved value comes out doubled — measured on v5.1.1: `S='abcdefghijklmn$'` is
+# `abcdefghijklmn$$` in the JSON. Fifteen characters to the application, sixteen to a
+# reader of that document, and the schema refuses fifteen. Reported `on` for a webhook
+# the API will refuse to start with, which is exactly the lie the length check exists
+# to prevent. The doubling is undone before anything is measured.
+seed_nexa_env canonical
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r\nTELEGRAM_WEBHOOK_ENABLED=true\nTELEGRAM_WEBHOOK_SECRET=abcdefghijklmn$$')"
+run_botctl status
+assert_contains 'a 15-character secret ending in a dollar was measured as 16' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   invalid'
+# And sixteen real characters, one of them a dollar, is on — so this is about the
+# doubling, not about refusing a dollar.
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r\nTELEGRAM_WEBHOOK_ENABLED=true\nTELEGRAM_WEBHOOK_SECRET=abcdefghijklmno$$')"
+run_botctl status
+assert_contains 'a 16-character secret containing a dollar was refused' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   on'
+seed_nexa_env canonical
+
+test_case 'status: a value is measured by its characters, not by its one-line rendering'
+# The listing renders a backslash as two characters and a newline as `\n`, so that one
+# entry stays one line. A caller that measured the RENDERING counted eight backslashes
+# as sixteen characters and reported a webhook secret the schema refuses as `on`.
+# `nexa_listing_value` undoes the rendering; these values cannot be spelled in the
+# line-based `compose_env`, so the resolved environment is stated as JSON.
+seed_nexa_env canonical
+fake_set compose_env ''
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","TELEGRAM_WEBHOOK_ENABLED":"true","TELEGRAM_WEBHOOK_SECRET":"\\\\\\\\\\\\\\\\"}'
+run_botctl status
+assert_contains 'eight backslashes were measured as sixteen characters' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   invalid'
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","TELEGRAM_WEBHOOK_ENABLED":"true","TELEGRAM_WEBHOOK_SECRET":"abcdefgh\nijklmn"}'
+run_botctl status
+assert_contains 'a 15-character value with a newline was measured as 16' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   invalid'
+# Sixteen characters INCLUDING the newline is what the schema counts, so it is on.
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","TELEGRAM_WEBHOOK_ENABLED":"true","TELEGRAM_WEBHOOK_SECRET":"abcdefgh\nijklmno"}'
+run_botctl status
+assert_contains 'a 16-character value with a newline was refused' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   on'
+fake_set compose_env_json ''
+seed_nexa_env canonical
+
+test_case 'status: a refusal reports the reason Compose gave, with the value it echoed cut off'
+# Guessing at "common causes" told an operator whose env file was missing to look for an
+# unclosed quote. Compose says why, so `status` repeats Compose — but not whole: an
+# unterminated-quote refusal echoes the offending VALUE, and the offending value in this
+# file can be the bot token. Everything from the first quote character on is dropped.
+seed_nexa_env canonical
+fake_set compose_config_fails 1
+fake_set compose_config_stderr "failed to read /etc/nexa/nexa.env: line 9: unterminated quoted value '7777777:AAAfakeBotTokenValue"
+run_botctl status
+assert_contains 'the refusal was not reported' "$BOTCTL_OUTPUT" 'REFUSED by compose'
+assert_contains "Compose's reason was not repeated" "$BOTCTL_OUTPUT" 'line 9: unterminated quoted value'
+assert_not_contains 'the echoed token was printed' "$BOTCTL_OUTPUT" 'AAAfakeBotTokenValue'
+assert_not_contains 'a guessed cause was printed beside the real one' "$BOTCTL_OUTPUT" 'Common causes'
+# A reason without a quote reads whole.
+fake_set compose_config_stderr 'env file /etc/nexa/nexa.env not found: stat /etc/nexa/nexa.env: no such file or directory'
+run_botctl status
+assert_contains 'a quote-free reason was cut short' "$BOTCTL_OUTPUT" 'no such file or directory'
+fake_set compose_config_fails 0
+fake_set compose_config_stderr ''
+# And a document that defines no `api` is a refusal too, not a column of defaults.
+fake_set compose_service_missing 1
+run_botctl status
+assert_contains 'a missing service was summarised as defaults' "$BOTCTL_OUTPUT" 'REFUSED by compose'
+assert_contains 'the missing service was not named' "$BOTCTL_OUTPUT" 'no service named api'
+assert_not_contains 'values were printed for a service that does not exist' \
+  "$BOTCTL_OUTPUT" 'scheduled backup'
+fake_set compose_service_missing 0
+seed_nexa_env canonical
+
 test_case 'status: every capability names the process that reads it'
 # PANEL_MONITOR_ENABLED belongs to the monitor, TELEGRAM_WEBHOOK_ENABLED and
 # RECOVERY_UPLOAD_ENABLED to the API, and the rest to the worker. An
@@ -3888,6 +3961,19 @@ assert_equals "the interior line was deleted out of NOTE's value" '1' \
 assert_equals "NOTE's closing line was lost" '1' \
   "$(grep -c "^line three'" "${NEXA_CONFIG_DIR}/nexa.env")"
 
+test_case 'harness: the loadability oracle sees an unterminated file'
+# Three cases below assert that the rewriter never leaves a file Compose would refuse,
+# through `nexa_compose_env_unterminated`. They used to call it in a `bash -c` that had
+# not sourced the library — `! undefined-command` exits 0 — so all three passed
+# vacuously against any rewriter at all. The oracle is asked here about a file that IS
+# unterminated and one that is not, so that a green run below means what it says.
+oracle_file="$(mktemp)"
+printf "OK=1\nNOTE='never closed\n" >"$oracle_file"
+assert_ok 'an unterminated file was not detected' nexa_compose_env_unterminated "$oracle_file"
+printf "OK=1\nNOTE='closed'\nTAIL=ok\n" >"$oracle_file"
+assert_fails 'a complete file was reported as unterminated' nexa_compose_env_unterminated "$oracle_file"
+rm -f "$oracle_file"
+
 test_case 'update: dropping a single-line key does not swallow the NEXT value'
 # The suppression flag means "skip the continuation lines of the value being dropped".
 # Leaving it set after dropping a SINGLE-line assignment made the next multiline value
@@ -3899,8 +3985,8 @@ run_botctl update vA
 assert_equals 'the single-line key was not removed' '' "$(nexa_env_key BUILD_COMMIT)"
 assert_equals "the next value's closing line was swallowed" '1' \
   "$(grep -c "^second'" "${NEXA_CONFIG_DIR}/nexa.env")"
-assert_ok 'the rewritten file ends inside a quoted value' \
-  bash -c "! nexa_compose_env_unterminated '${NEXA_CONFIG_DIR}/nexa.env'"
+assert_fails 'the rewritten file ends inside a quoted value' \
+  nexa_compose_env_unterminated "${NEXA_CONFIG_DIR}/nexa.env"
 assert_equals 'a key after the multiline value was lost' 'ok' "$(nexa_env_key TAIL)"
 
 test_case 'update: an ESCAPED delimiter does not end a value early'
@@ -3925,8 +4011,8 @@ assert_equals "the interior line was deleted out of NOTE's value" '1' \
   "$(grep -c '^BUILD_COMMIT=interior' "${NEXA_CONFIG_DIR}/nexa.env")"
 assert_equals "NOTE's closing line was lost" '1' \
   "$(grep -c "^done'" "${NEXA_CONFIG_DIR}/nexa.env")"
-assert_ok 'the rewritten file ends inside a quoted value' \
-  bash -c "! nexa_compose_env_unterminated '${NEXA_CONFIG_DIR}/nexa.env'"
+assert_fails 'the rewritten file ends inside a quoted value' \
+  nexa_compose_env_unterminated "${NEXA_CONFIG_DIR}/nexa.env"
 # And `status` does not report the interior line as a setting either.
 run_botctl status
 assert_not_contains 'an interior line after an escaped quote was reported as a setting' \
@@ -3945,8 +4031,8 @@ assert_equals 'the first line of the multiline value survived' '' \
 assert_equals 'the continuation line was left behind as a fragment' '' \
   "$(grep -c "^second'" "${NEXA_CONFIG_DIR}/nexa.env" | tr -d '0')"
 # And the file is still one Compose will read.
-assert_ok 'the rewritten file ends inside a quoted value' \
-  bash -c "! nexa_compose_env_unterminated '${NEXA_CONFIG_DIR}/nexa.env'"
+assert_fails 'the rewritten file ends inside a quoted value' \
+  nexa_compose_env_unterminated "${NEXA_CONFIG_DIR}/nexa.env"
 assert_equals 'an unrelated key was lost' 'https://admin.example.test' \
   "$(nexa_env_key WEB_ADMIN_ORIGINS)"
 

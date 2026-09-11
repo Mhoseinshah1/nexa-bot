@@ -211,15 +211,26 @@ status_capabilities() {
   # Compose variable precedence. Asking Compose is right about every shape by
   # construction, and it also sees the compose file's own `environment:` entries, which a
   # reader of nexa.env never did.
-  if ! resolved="$(nexa_compose_resolved_env api)"; then
+  local reason errfile
+  errfile="$(mktemp)"
+  if ! resolved="$(nexa_compose_resolved_env api 2>"$errfile")"; then
+    # Compose's own first line, because guessing at "common causes" told an operator
+    # with a missing env file to look for an unclosed quote. REDACTED past the first
+    # quote character: Compose echoes the offending VALUE in an unterminated-quote
+    # refusal (`unterminated quoted value '7777:AAA…`), and this section reports the
+    # backup destination by presence precisely so that a bot token never appears in
+    # an output an operator pastes into a ticket.
+    reason="$(nexa_compose_refusal_reason "$(cat "$errfile")")"
+    rm -f "$errfile"
     printf '\ncapabilities:\n'
     printf '  configuration  REFUSED by compose\n'
-    printf '\n  `docker compose config` cannot resolve this installation configuration, so\n'
-    printf '  no container will start and no individual value is in force. Common causes are\n'
-    printf '  a quoted value in %s that is never closed and a\n' "$file"
-    printf '  substitution that cannot be satisfied. Run `botctl logs` after fixing it.\n'
+    printf '\n  `docker compose config` cannot resolve this installation'"'"'s configuration,\n'
+    printf '  so no container will start and no individual value is in force. Compose said:\n'
+    printf '    %s\n' "$reason"
+    printf '  Fix that, then run `botctl restart`.\n'
     return 0
   fi
+  rm -f "$errfile"
   printf '\ncapabilities, as compose resolves %s:\n' "$file"
 
   # Key, label, default, the vocabulary the SCHEMA gives that key, and the process
@@ -395,7 +406,7 @@ status_secrets() {
   # derived default — so an interpolated or comment-bearing line read literally gives
   # the OPPOSITE answer whenever that default disagrees with what the operator wrote.
   local resolved
-  if ! resolved="$(nexa_compose_resolved_env api)"; then
+  if ! resolved="$(nexa_compose_resolved_env api 2>/dev/null)"; then
     printf '  configuration  REFUSED by compose; see the capabilities section below\n'
     return 0
   fi
@@ -1310,27 +1321,24 @@ cmd_secrets_migrate_config() {
   fi
 
   local SECRETS_ACTIVE_KEY_ID legacy_key
-  # The COMPOSE reader, and these two are why the rule is "every read of nexa.env".
-  # Both values are carried INTO the file this command rewrites, so reading them the
-  # way the file literally spells them rather than the way the application receives
-  # them writes a keyring nothing can use: `SECRETS_KEK_ID=install-1 # original`
-  # would become an active key id with a comment in it, and a commented SECRETS_KEK
-  # would become a SECRETS_KEYS entry the base64 refinement refuses at boot. A
-  # conversion that leaves an installation unable to decrypt is the worst outcome
-  # available to this command, and the inline comment is a thing an operator
-  # documenting their own key would write.
+  # The FILE, through the scanner — deliberately not what Compose resolves. This
+  # command REWRITES nexa.env, so a resolved value written back would freeze an
+  # interpolation meant to be evaluated at every start. The scanner still applies
+  # Compose's quoting and comment rules, which is what keeps `SECRETS_KEK_ID=install-1
+  # # original` from becoming an active key id with a comment in it, and a commented
+  # SECRETS_KEK from becoming a SECRETS_KEYS entry the base64 refinement refuses.
   SECRETS_ACTIVE_KEY_ID="$(nexa_compose_env_value "$file" SECRETS_KEK_ID 2>/dev/null || true)"
   legacy_key="$(nexa_compose_env_value "$file" SECRETS_KEK 2>/dev/null || true)"
 
-  # The FILE here, deliberately, and not what Compose resolves — this command REWRITES
-  # the file, and writing a resolved value would freeze an interpolation that is meant
-  # to be evaluated at every start. But then neither reading is safe if the value IS an
-  # interpolation: the literal `${VAULT_KEK}` is not a key, and `$(…)` of it is a key
-  # this file was never meant to contain. Refuse instead of choosing, because the cost
-  # of choosing wrong here is an installation that cannot decrypt anything.
+  # But neither reading is safe if the value carries a `$`. To Compose that is a
+  # substitution (`${VAULT_KEK}`) or an escaped dollar (`$$`): the literal text is not
+  # a key, and the resolved text is a key this file was never meant to contain. A valid
+  # key id and a valid base64 key contain no `$` at all, so nothing legitimate is
+  # refused here. Refuse instead of choosing, because the cost of choosing wrong is an
+  # installation that cannot decrypt anything.
   case "${SECRETS_ACTIVE_KEY_ID}${legacy_key}" in
     *'$'*)
-      nexa_die "${file} defines SECRETS_KEK or SECRETS_KEK_ID through a substitution, so this conversion cannot know what to write without freezing it. Resolve those two lines to literal values first; nothing was changed."
+      nexa_die "${file} gives SECRETS_KEK or SECRETS_KEK_ID a value containing \`\$\`, which Compose treats as a substitution, so this conversion cannot know what to write without freezing it. Set those two lines to literal values first; nothing was changed."
       ;;
   esac
 
