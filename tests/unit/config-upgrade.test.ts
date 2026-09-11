@@ -640,3 +640,137 @@ describe("botctl reads the application's booleans per key, not one vocabulary fo
     ]);
   });
 });
+
+describe('the obsolete build keys are detected by provenance, not by presence', () => {
+  const lib = readFileSync(join(__dirname, '../../deploy/bin/nexa-lib.sh'), 'utf8');
+  const dockerfile = readFileSync(join(__dirname, '../../Dockerfile'), 'utf8');
+
+  it('stamps every obsolete key into the RUNTIME image, which is the premise', () => {
+    // The fact the whole check rests on, and the one a presence check got wrong.
+    //
+    // These three keys are where the release's identity is SUPPOSED to come from:
+    // the runtime stage puts them in the image's own ENV, so every correctly built
+    // container carries all three. A `botctl status` that warned whenever they were
+    // present therefore warned on every healthy installation, and the restart it
+    // advised recreated the same image environment — so the warning could never
+    // clear.
+    //
+    // Pinned here because the shell can only be tested against a fake docker, and a
+    // fake is free to model an image that stamps nothing. If a future change moved
+    // the identity out of the image, the provenance comparison would be comparing
+    // two empty strings and this test is what says so.
+    const frozen = /NEXA_OBSOLETE_APP_ENV_KEYS="([^"]*)"/.exec(lib)?.[1] ?? '';
+    const keys = frozen.split(/\s+/).filter(Boolean);
+    expect(keys.length).toBe(3);
+    // The RUNTIME stage, not the builder: an ENV in an earlier stage reaches no
+    // container. Everything from the last `FROM` onwards.
+    const stages = dockerfile.split(/^FROM .*$/m);
+    const runtime = stages[stages.length - 1] ?? '';
+    expect(runtime, 'the runtime stage was not found').toContain('CMD ["node", "dist/main.js"]');
+    for (const key of keys) {
+      expect(
+        new RegExp(`(^|\\n)\\s*(ENV\\s+)?${key}=\\$\\{${key}\\}`).test(runtime),
+        `the runtime image does not stamp ${key}, so nothing can be compared against it`,
+      ).toBe(true);
+    }
+    // And the production compose file sets none of them, so `nexa.env` is the only
+    // thing that can override the image. If compose gained a BUILD_* line the
+    // provenance check would report every container as overridden — truthfully, but
+    // for a reason no operator could act on with a restart.
+    const compose = readFileSync(join(__dirname, '../../deploy/compose.yml'), 'utf8');
+    for (const key of keys) {
+      expect(compose, `deploy/compose.yml sets ${key}, which would mask the image`).not.toContain(
+        key,
+      );
+    }
+  });
+
+  it('compares the container against its image rather than asking whether a value exists', () => {
+    // The rule in the shell, asserted as a rule: both halves are read and the
+    // decision is the comparison. A reader that kept only one half is the presence
+    // check this replaced.
+    const fn = /nexa_container_overridden_obsolete_keys\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '';
+    expect(fn, 'nexa_container_overridden_obsolete_keys is gone').not.toBe('');
+    expect(fn, 'the container half is not read').toContain('nexa_running_env_value');
+    expect(fn, 'the image half is not read').toContain('nexa_image_env_value');
+    expect(fn, 'the decision is not a comparison of the two').toMatch(
+      /\[ "\$running" = "\$stamped" \]/,
+    );
+    // And an image it cannot inspect reports nothing: the remedy is a restart, and
+    // a restart would not change an answer that could not be computed.
+    expect(fn, 'an uninspectable image does not fail closed').toMatch(
+      /\[ -n "\$image" \] \|\| return 0/,
+    );
+  });
+
+  it('refuses a boolean with whitespace, which is what the schema does', () => {
+    // `loadConfig` hands `process.env` to the schema untouched and `booleanish` is a
+    // bare enum with no `.trim()`, so a value with whitespace anywhere in it is a
+    // value the application REFUSES. The shell reader is a second implementation of
+    // that vocabulary, and a version that removed internal whitespace read `t rue`
+    // as `true` — reporting a working schedule for a file the next start rejects.
+    const base = {
+      DATABASE_URL: 'postgres://u:p@h:5432/d',
+      REDIS_URL: 'redis://h:6379',
+      SECRETS_KEYS: `k1:${Buffer.alloc(32, 9).toString('base64')}`,
+      SECRETS_ACTIVE_KEY_ID: 'k1',
+      DEPLOYMENT_TOPOLOGY: 'direct',
+    };
+    for (const spelling of [' true', 'true ', 't rue', 'tr ue', '  ']) {
+      expect(
+        configSchema.safeParse({ ...base, BACKUP_SCHEDULE_ENABLED: spelling }).success,
+        `booleanish accepted [${spelling}]`,
+      ).toBe(false);
+      expect(
+        configSchema.safeParse({ ...base, PANEL_MONITOR_ENABLED: spelling }).success,
+        `the strict enum accepted [${spelling}]`,
+      ).toBe(false);
+    }
+    // The exact spellings still parse, so the schema is strict about whitespace
+    // rather than about everything.
+    expect(configSchema.safeParse({ ...base, BACKUP_SCHEDULE_ENABLED: 'true' }).success).toBe(true);
+    expect(configSchema.safeParse({ ...base, PANEL_MONITOR_ENABLED: 'false' }).success).toBe(true);
+    // And the shell normalises nothing, which is the only reading that agrees.
+    const fn = /nexa_env_boolean\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '';
+    expect(fn, 'nexa_env_boolean is gone').not.toBe('');
+    expect(fn, 'nexa_env_boolean normalises whitespace out of the value').not.toMatch(
+      /raw="\$\{raw\/\/\[\[:space:\]\]\/\}"/,
+    );
+  });
+
+  it('names every process that delivers a backup, not the worker alone', () => {
+    // The delivery line's owner label, bound to the call sites rather than to a
+    // belief about them. One `BackupService` is built in `createContainer` and every
+    // role gets it, so the destination is the worker's, the API's and the recovery
+    // executor's — and after a service-specific recreation those three can hold
+    // different ones.
+    const root = join(__dirname, '../../apps/api/src');
+    const container = readFileSync(join(root, 'container.ts'), 'utf8');
+    expect(container, 'the delivery credentials are not built in createContainer').toMatch(
+      /new TelegramBackupDelivery\(\{[\s\S]*?BACKUP_TELEGRAM_BOT_TOKEN/,
+    );
+    const admin = readFileSync(
+      join(root, 'modules/platform/recovery/application/backup-admin.service.ts'),
+      'utf8',
+    );
+    expect(admin, 'the Web Admin manual run does not use BackupService').toContain('BackupService');
+    const executor = readFileSync(
+      join(root, 'modules/platform/recovery/application/recovery-executor.ts'),
+      'utf8',
+    );
+    expect(executor, 'the recovery executor does not use BackupService').toContain('BackupService');
+    // So the label says so.
+    const botctl = readFileSync(join(__dirname, '../../deploy/bin/botctl'), 'utf8');
+    expect(botctl, 'the delivery line still names the worker alone').toMatch(
+      /backup delivery[^\n]*'worker, api, recovery'/,
+    );
+    // The schedule, by contrast, IS the worker's: it gates the scheduler there and
+    // nowhere else. A label that named everything would carry no information.
+    const worker = readFileSync(join(root, 'main.worker.ts'), 'utf8');
+    expect(worker).toContain('BACKUP_SCHEDULE_ENABLED');
+    expect(
+      readFileSync(join(root, 'main.monitor.ts'), 'utf8'),
+      'the monitor reads the backup schedule',
+    ).not.toContain('BACKUP_SCHEDULE_ENABLED');
+  });
+});

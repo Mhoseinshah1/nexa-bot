@@ -426,6 +426,18 @@ printf '%s [image=%s] [edge=%s]\n' "$*" "$NEXA_IMAGE" "${NEXA_EDGE_CONFIG:-}" >>
 
 read_state() { cat "${FAKE_DIR}/$1" 2>/dev/null || printf '%s' "$2"; }
 
+# The build identity the release image STAMPS, which is where it is supposed to
+# come from: `Dockerfile` lines 89-92 put all three in the runtime image's ENV, so
+# every correctly built container carries them. One definition, used both for the
+# image's own environment and as the base of a container created from it, because a
+# fake in which those two could disagree by accident would be a fake that could
+# manufacture the very mismatch the code under test reports.
+fake_image_env() {
+  printf 'BUILD_VERSION=%s\n' "$(read_state image_build_version 0.1.0-test)"
+  printf 'BUILD_COMMIT=%s\n' "$(read_state image_build_commit cafebabe)"
+  printf 'BUILD_TIME=%s\n' "$(read_state image_build_time 2026-01-01T00:00:00Z)"
+}
+
 case "${1:-}" in
   buildx)
     # buildx imagetools inspect <ref> --format ...
@@ -458,6 +470,12 @@ case "${1:-}" in
       esac
     done
     case "$*" in
+      # The release's identity as the IMAGE stamps it — the half of the provenance
+      # comparison that says what the container SHOULD be answering.
+      *Config.Env*)
+        printf 'NODE_ENV=production\n'
+        fake_image_env
+        ;;
       # The commit the image was built from, per digest when a test says so:
       # the recovery cross-checks it against the manifest.
       *org.opencontainers.image.revision*) printf '%s\n' "$(read_state "revision_${_ref}" cafebabe)" ;;
@@ -478,15 +496,39 @@ case "${1:-}" in
     # means it carries nothing the caller is looking for, which is the ordinary
     # case.
     case "$*" in
+      *'{{.Image}}'*)
+        # The image a container was created FROM, which is what makes the
+        # provenance comparison possible: `status` asks whether the API's build
+        # identity is its own image's or something that replaced it, and that needs
+        # both halves. `image_absent` expresses a container whose image cannot be
+        # inspected, which must report nothing rather than a warning whose remedy
+        # would not change the answer.
+        [ "$(read_state image_absent 0)" = 1 ] || printf 'sha256:fakeimageid\n'
+        ;;
       *Config.Env*)
         case "$*" in
           *fakeapicontainerid*)
-            # The API's environment. Asked about separately from the worker's
-            # because /health/info is the API's route, so the build identity the
-            # capabilities section reports has to come from this container and not
-            # from whichever one happened to be convenient.
-            printf 'NODE_ENV=production\n'
-            [ -z "$(read_state api_env '')" ] || printf '%s\n' "$(read_state api_env '')"
+            # The API's environment, as Docker actually resolves it: the IMAGE's
+            # own ENV, with anything the container was created with on top.
+            #
+            # Modelling the image's stamped BUILD_* is not decoration. The real
+            # Dockerfile stamps all three on every build (lines 89-92), so a fake
+            # API container carrying none of them is a container no release
+            # produces — and against that fake a check that merely asked whether
+            # the keys were PRESENT passed every test while warning every real
+            # installation. A fake that cannot express the ordinary case cannot
+            # falsify anything about it.
+            #
+            # One entry per key, like `docker inspect`, rather than the override
+            # first and the image after: a duplicate-key listing would let a reader
+            # that took the LAST match pass here and be wrong in production.
+            {
+              printf 'NODE_ENV=production\n'
+              fake_image_env
+              [ -z "$(read_state api_env '')" ] || printf '%s\n' "$(read_state api_env '')"
+            } | awk -F= '{ order[$1] = (($1 in value) ? order[$1] : ++n); value[$1] = $0 }
+              END { for (k in value) out[order[k]] = value[k]
+                    for (i = 1; i <= n; i++) print out[i] }'
             ;;
           *)
             printf 'NEXA_DOMAIN=example.test\n'

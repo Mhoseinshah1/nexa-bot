@@ -127,3 +127,73 @@ empty does not, for the enum and for `booleanish` alike.
 parsed as `172.29.0.0/24` and `172.29.0.0/` as a `/0`. A malformed literal changed
 consistently at every occurrence would have passed both the agreement and the overlap
 cases while Docker refused the subnet.
+
+### Round four, on `d47573a`
+
+Four findings, all four CONFIRMED, and the P2 on the remaining container inspection
+is the most useful finding of the four rounds: **it was wrong about every healthy
+installation, not about an edge case.**
+
+`Dockerfile` lines 89-92 stamp `BUILD_VERSION`, `BUILD_COMMIT` and `BUILD_TIME` into
+the runtime image's own ENV — that is where a release's identity is SUPPOSED to come
+from. So `.Config.Env` on a correctly built API container always carries all three,
+and a check keyed on their PRESENCE told every operator their build identity was
+masked and to restart; the restart recreated the same image environment and the
+warning could never clear. The empty-value finding beside it is the same error from
+the other side: `BUILD_COMMIT=` is not an absent key, and a check asking whether the
+value was non-empty reported nothing wrong about a container whose `/health/info`
+answers the empty string.
+
+Both are one error — **inferring a value's provenance from its presence** — which is
+the same error the three withdrawn versions of the runtime comparison made about
+absence, ownership and intent. The replacement asks provenance directly: the
+container's value is compared against its IMAGE's value, because `env_file` beats an
+image's own ENV, so a difference IS the override and an agreement is the image
+reporting itself. There is no inference step left to get wrong, and the empty
+assignment is covered by construction rather than by a special case.
+
+**The fake docker could not express the ordinary case, which is why the presence
+check passed its own tests.** It gave the API container no `BUILD_*` at all — a
+container no release produces. That is the same class of harness lie as `compose ps -q`
+answering the edge's id for every service (H-18's mutation, round one), and it is
+recorded as a rule below: H-23 mutates the fake to stamp nothing and the case that
+asserts the fake's own contents dies.
+
+| #    | Rule                                                                         | Mutation                                                                | Named test                                                                                                    | Result |
+| ---- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------ |
+| H-22 | A container's build identity is judged by comparison with its IMAGE's        | `nexa-lib.sh`: back to "the value is present", as the first version did | `botctl.test.sh` › status: an API answering its own image says nothing about them                             | KILLED |
+| H-23 | The fake API container carries the identity every real image stamps          | `harness.sh`: `fake_image_env` stamps nothing                           | `botctl.test.sh` › status: an API answering its own image says nothing about them                             | KILLED |
+| H-24 | An EMPTY override of the image's identity is still an override               | `nexa-lib.sh`: back to "the value is present"                           | `botctl.test.sh` › status: an EMPTY override of the image identity is still an override                       | KILLED |
+| H-25 | An image that cannot be inspected produces no warning                        | `nexa-lib.sh`: drop the `[ -n "$image" ]` guard                         | `botctl.test.sh` › status: an image it cannot inspect produces no warning                                     | KILLED |
+| H-26 | The runtime image stamps every obsolete key, which is the premise of H-22    | `Dockerfile`: stop stamping `BUILD_VERSION` in the runtime stage        | `config-upgrade.test.ts` › stamps every obsolete key into the RUNTIME image, which is the premise             | KILLED |
+| H-27 | The decision is a comparison of two reads, not one read                      | `nexa-lib.sh`: delete the image half and test the container's value     | `config-upgrade.test.ts` › compares the container against its image rather than asking whether a value exists | KILLED |
+| H-28 | A boolean with whitespace ANYWHERE is refused, because the schema refuses it | `nexa-lib.sh`: restore `raw="${raw//[[:space:]]/}"`                     | `botctl.test.sh` › status: whitespace is never normalised away                                                | KILLED |
+| H-29 | Whitespace strictness is the SCHEMA's, not the reader's opinion              | `nexa-lib.sh`: restore the whitespace substitution                      | `config-upgrade.test.ts` › refuses a boolean with whitespace, which is what the schema does                   | KILLED |
+| H-30 | The delivery destination names every process that delivers                   | `botctl`: the delivery line names `worker` alone                        | `botctl.test.sh` › status: the delivery destination names every process that delivers                         | KILLED |
+| H-31 | …bound to the call sites rather than to a belief about them                  | `botctl`: the delivery line names `worker` alone                        | `config-upgrade.test.ts` › names every process that delivers a backup, not the worker alone                   | KILLED |
+| H-32 | `nexa.env` is the ONLY thing that can override the image's identity          | `compose.yml`: add a `BUILD_COMMIT` line to the shared environment      | `config-upgrade.test.ts` › stamps every obsolete key into the RUNTIME image, which is the premise             | KILLED |
+
+**H-28 is the whitespace finding, and it is narrower than it looks.** `loadConfig`
+hands `process.env` to the schema untouched and `booleanish` is a bare enum with no
+`.trim()`, so `t rue`, ` true` and `true ` are all values the application REFUSES.
+The reader removed whitespace before matching, so `BACKUP_SCHEDULE_ENABLED="t rue"`
+read as `on` and suppressed the no-backup guidance for a file the next start rejects.
+The correct reading is to normalise NOTHING and let the accepted spellings be the
+whole validator — which is also why the fix is a deletion rather than a narrower trim.
+
+**H-32 closes the one way the provenance check could still cry wolf.** It reports a
+difference between a container and its image, so anything else that sets a `BUILD_*`
+key would make it report every container as overridden — truthfully, and for a reason
+no restart could fix. `deploy/compose.yml` sets none of them today, which is what
+makes `nexa.env` the only source; the assertion is what keeps it that way.
+
+**H-30 was a truthfulness finding about a label, and the label was wrong.** The
+backup destination is not the worker's: `createContainer` builds one `BackupService`
+with these credentials and every role gets it, so the worker schedules,
+`RecoveryController.runBackup` serves the Web Admin's manual run, and the recovery
+executor takes the `PRE_RESTORE` backup. After a service-specific recreation those
+three can hold different destinations, and naming only the worker would send a
+targeted restart to the wrong process. `BACKUP_SCHEDULE_ENABLED` beside it is
+genuinely the worker's — it gates the scheduler in `main.worker.ts` and nothing else —
+which is why H-31 pins both halves: a label that named everything would carry no
+information at all.

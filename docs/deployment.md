@@ -216,8 +216,21 @@ backups, or start dialling an operator's panels, because a new release learned
 how to. The cost of that correctness is that an installation which never added
 the line is in the disabled state, and until this section existed no command
 would say so. It reads `/etc/nexa/nexa.env` by key, applying the same defaults
-the application applies, and reports the backup delivery destination by PRESENCE
-only: one of its two keys is a bot token.
+and the same PER-KEY vocabulary the application applies — `PANEL_MONITOR_ENABLED`
+is a `true`/`false` enum while the others also take `1`/`0`/`yes`/`no`, and a value
+outside its own key's vocabulary reads as `invalid` rather than being guessed at.
+Nothing is normalised: the schema sees `process.env` untouched, so a value with
+whitespace in it is one the next start refuses. The backup delivery destination is
+reported by PRESENCE only, because one of its two keys is a bot token.
+
+Each line names the process that READS the value, which is the operator's next
+question. The section claims nothing about what those processes are currently
+running: a container keeps the configuration it was created with, so a value
+changed since the last `botctl restart` is not yet in force, and the section says
+so as a standing caveat rather than pretending to detect it. The delivery
+destination names three processes because three deliver — the worker schedules,
+the API serves the Web Admin's manual run, and the recovery executor takes the
+pre-restore backup.
 
 So `scheduled backup   off` is not a fault report. It means no automatic backup
 is taken, `botctl backup` still works, and a backup somebody remembers to run is
@@ -239,6 +252,13 @@ wrote them into `nexa.env`, `env_file` beats an image's own ENV, and nothing eve
 took them out again — so `/health/info` reported what the installer substituted
 rather than what was built. The removal is one atomic rewrite and is non-fatal: a
 stale build label is not worth failing an update over.
+
+Because that removal happens before the image is pulled, `botctl status` also asks
+the running API whether its build identity is its own IMAGE's. Not whether it HAS
+one — the release image stamps all three keys on every build, so that question
+answers yes on every healthy installation — but whether the values agree with the
+image they came from. A difference is a container created while the file still set
+them, and the remedy is `botctl restart`.
 
 `botctl status` also reports the installation's position on v1 ciphertext,
 because an operator should not have to know that `botctl secrets status` exists

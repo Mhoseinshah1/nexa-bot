@@ -242,7 +242,15 @@ status_capabilities() {
     [ "$key" != BACKUP_SCHEDULE_ENABLED ] || scheduled="$configured"
     printf '  %s %-8s %s\n' "$label" "$configured" "$owner"
   done
-  printf '  backup delivery    %-8s %s\n' "$destination" worker
+  # THREE processes, not the worker alone. `createContainer` builds one
+  # `BackupService` with these credentials and every role gets it: the worker
+  # schedules, `RecoveryController.runBackup` serves the Web Admin's «تهیه بکاپ
+  # جدید», and the recovery executor takes the PRE_RESTORE backup. After a
+  # service-specific recreation those three can hold different destinations, so
+  # naming only the worker would point a diagnosis away from the process that is
+  # actually delivering. BACKUP_SCHEDULE_ENABLED above is genuinely the worker's —
+  # it gates the scheduler in `main.worker.ts` and nothing else.
+  printf '  backup delivery    %-8s %s\n' "$destination" 'worker, api, recovery'
 
   # Always, not on a detected mismatch. A container keeps the environment it was
   # created with, so any of the values above may not be in force yet — and a
@@ -274,10 +282,15 @@ status_capabilities() {
   # The API, because /health/info is the API's route. This is the one place the
   # section does look at a container, and it is the one place where the remedy is
   # unambiguous whatever the answer: restart.
+  #
+  # What is asked of that container is whether its build identity is its IMAGE's,
+  # not whether it has one. The image stamps all three keys on every correct build,
+  # so a presence check warned every healthy installation and the restart it
+  # advised could never clear it.
   local obsolete running_obsolete api_id
   api_id="$(nexa_running_container api 2>/dev/null || true)"
   obsolete="$(nexa_obsolete_app_env_keys "$file")"
-  running_obsolete="$(nexa_running_obsolete_keys "$api_id")"
+  running_obsolete="$(nexa_container_overridden_obsolete_keys "$api_id")"
   if [ -n "$obsolete" ]; then
     printf '\n  This file still sets %s,\n' "$(printf '%s' "$obsolete" | tr '\n' ' ')"
     printf '  which REPLACES the build identity stamped into the release image — so\n'
@@ -286,7 +299,8 @@ status_capabilities() {
   elif [ -n "$running_obsolete" ]; then
     printf '\n  The file no longer sets %s, but the RUNNING\n' \
       "$(printf '%s' "$running_obsolete" | tr '\n' ' ')"
-    printf '  API container was created with them, so /health/info still reports what the\n'
+    printf '  API container answers something other than its own image for them, so it was\n'
+    printf '  created while the file still set them and /health/info still reports what the\n'
     printf '  installer wrote. Run `botctl restart`.\n'
   fi
 }

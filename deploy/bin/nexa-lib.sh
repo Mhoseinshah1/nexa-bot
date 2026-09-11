@@ -1062,7 +1062,16 @@ nexa_env_boolean() {
     return 0
   }
   raw="$(nexa_env_value "$file" "$key" 2>/dev/null || true)"
-  raw="${raw//[[:space:]]/}"
+  # NOT normalised in any way, and in particular not stripped of whitespace.
+  #
+  # `loadConfig` hands `process.env` to the schema untouched and `booleanish` is a
+  # bare enum with no `.trim()`, so `true `, ` true` and `t rue` are all values the
+  # application REFUSES. Removing internal whitespace collapsed `t rue` to `true`
+  # and reported `on` for a file the next start rejects — the same lie as accepting
+  # a spelling the schema does not, which is what this reader's per-key vocabulary
+  # exists to prevent. An exact match against the accepted spellings is the only
+  # reading that agrees with the schema, so the case statements below are the whole
+  # validator and anything else is `invalid`.
   [ -n "$raw" ] || {
     printf 'invalid'
     return 0
@@ -1100,17 +1109,25 @@ nexa_running_container() {
 
 # One environment variable as a RUNNING container actually has it.
 #
-# The file is intent; this is what the process was started with. They differ for
-# as long as it takes an operator to run `botctl restart`, and the difference is
-# the whole reason this exists: a `status` that read only the file would report a
-# capability an operator had just switched on as already working, which is the
-# same class of defect as the edge container serving a previous release's
-# configuration while every other output named the new one.
+# The file is intent; this is what the process was started with. They differ for as
+# long as it takes an operator to run `botctl restart`.
+#
+# That difference is NOT reported per setting. Three review rounds found a
+# capabilities section that compared each value against a running container wrong in
+# a new way at every field, so the section reports the file, says it is the file, and
+# carries one standing caveat instead. What survives of the idea is the single
+# question whose answer has one remedy either way: whether the API's build identity
+# is its own image's, which the function below asks by COMPARING two reads rather
+# than by interpreting one.
 #
 # Takes a container ID, not a service, so the caller has already decided that a
-# container exists. Empty output then means the container was created WITHOUT that
-# variable — which for this application means the process is using the schema
-# default, not that the value is empty.
+# container exists. Empty output is then AMBIGUOUS and deliberately left so: the
+# container may have been created without the variable, or with it set to the empty
+# string, and `docker inspect` renders those identically. Callers must not read a
+# meaning into it that the data does not carry — which is why the obsolete-key check
+# below compares this against the image's value rather than testing it for
+# emptiness. A caller that needs to know whether the variable is there at all has to
+# ask a question this function does not answer.
 nexa_running_env_value() {
   local id="$1" key="$2"
   [ -n "$id" ] || return 1
@@ -1118,18 +1135,58 @@ nexa_running_env_value() {
     sed -n "s/^${key}=//p" | sed -n '1p'
 }
 
-# Which obsolete keys a RUNNING container still carries in its environment.
+# One environment variable as an IMAGE stamps it.
 #
-# Not the same question as which ones the FILE has, and asking only the file was a
-# defect: the removal happens before the fallible steps of an update, so a run that
-# stops at the image pull leaves the file clean and the containers still carrying
-# the stale identity — at which point a `status` reading the file alone reports
-# nothing wrong while /health/info still answers `pending`.
-nexa_running_obsolete_keys() {
-  local id="$1" key
+# The other half of the provenance comparison below. Separate function because the
+# inspect target is different — an image reference, not a container id — and
+# because a reader of `nexa_container_overridden_obsolete_keys` should be able to
+# see that two independent facts are being compared rather than one being guessed
+# at twice.
+nexa_image_env_value() {
+  local ref="$1" key="$2"
+  [ -n "$ref" ] || return 1
+  docker image inspect "$ref" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null |
+    sed -n "s/^${key}=//p" | sed -n '1p'
+}
+
+# Which obsolete keys a RUNNING container carries BECAUSE SOMETHING OVERRODE ITS
+# IMAGE.
+#
+# Not the same question as which ones the FILE has: the removal happens before the
+# fallible steps of an update, so a run that stops at the image pull leaves the file
+# clean and the containers still carrying the stale identity — at which point a
+# report reading the file alone says nothing is wrong while /health/info still
+# answers `pending`.
+#
+# But PRESENCE is not the question either, and asking it was a defect that fired on
+# every healthy installation. `Dockerfile` lines 89-92 stamp BUILD_VERSION,
+# BUILD_COMMIT and BUILD_TIME into the runtime image itself — that is where the
+# release's identity is SUPPOSED to come from — so a correctly built container
+# always carries all three. A check keyed on presence told every operator their API
+# was masked and to restart it, after which the recreated container carried them
+# again and the warning never cleared.
+#
+# The question is PROVENANCE: does the container's value come from its image, or
+# from something that replaced it? `env_file` beats an image's own ENV, so a
+# DIFFERENCE between the container's value and its image's value IS the override,
+# and an agreement is the image reporting itself. That comparison needs no
+# inference about where a value came from, which is the property the presence check
+# did not have. An empty assignment is covered by construction rather than by a
+# special case: `BUILD_COMMIT=` in a container whose image stamps a real commit is
+# a difference like any other.
+#
+# A container whose image cannot be inspected reports nothing. The remedy this
+# function feeds is a restart, and a restart would not change an answer that could
+# not be computed.
+nexa_container_overridden_obsolete_keys() {
+  local id="$1" image key running stamped
   [ -n "$id" ] || return 0
+  image="$(docker inspect "$id" --format '{{.Image}}' 2>/dev/null || true)"
+  [ -n "$image" ] || return 0
   for key in $NEXA_OBSOLETE_APP_ENV_KEYS; do
-    [ -z "$(nexa_running_env_value "$id" "$key" 2>/dev/null || true)" ] || printf '%s\n' "$key"
+    running="$(nexa_running_env_value "$id" "$key" 2>/dev/null || true)"
+    stamped="$(nexa_image_env_value "$image" "$key" 2>/dev/null || true)"
+    [ "$running" = "$stamped" ] || printf '%s\n' "$key"
   done
   return 0
 }

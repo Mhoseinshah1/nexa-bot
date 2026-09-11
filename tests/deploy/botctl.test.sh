@@ -3524,6 +3524,47 @@ seed_nexa_env canonical
 run_botctl status
 assert_contains 'an absent key stopped getting its default' "$BOTCTL_OUTPUT" 'panel monitor      on'
 
+test_case 'status: whitespace is never normalised away'
+# `loadConfig` hands `process.env` to the schema untouched and `booleanish` is a
+# bare enum with no `.trim()`, so every one of these is a value the application
+# REFUSES. A reader that stripped internal whitespace read `t rue` as `true` and
+# reported a working schedule for a file the next start rejects; one that trimmed
+# the ends would do the same for `true `.
+for spelling in 't rue' ' true' 'true ' 'tr ue'; do
+  seed_nexa_env canonical
+  append_env "BACKUP_SCHEDULE_ENABLED=${spelling}"
+  run_botctl status
+  assert_contains "a whitespace-bearing value [${spelling}] was normalised instead of refused" \
+    "$BOTCTL_OUTPUT" 'scheduled backup   invalid'
+done
+# A whitespace-only value is `invalid` for the same reason, not the default.
+seed_nexa_env canonical
+append_env 'PANEL_MONITOR_ENABLED=  '
+run_botctl status
+assert_contains 'a whitespace-only value was read as the default' \
+  "$BOTCTL_OUTPUT" 'panel monitor      invalid'
+# And the exact spellings still work, so this is strictness about whitespace
+# rather than a reader that refuses everything.
+seed_nexa_env canonical
+append_env 'BACKUP_SCHEDULE_ENABLED=true'
+run_botctl status
+assert_contains 'an exact spelling stopped being accepted' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   on'
+
+test_case 'status: the delivery destination names every process that delivers'
+# Not the worker alone. `createContainer` builds one BackupService and every role
+# gets it: the worker schedules, RecoveryController.runBackup serves the Web
+# Admin's manual run, and the recovery executor takes the PRE_RESTORE backup.
+# Naming only the worker points a diagnosis away from the process that is actually
+# delivering after a service-specific recreation.
+seed_nexa_env canonical
+run_botctl status
+assert_contains 'the delivery line does not name all three consumers' \
+  "$BOTCTL_OUTPUT" 'backup delivery    not configured worker, api, recovery'
+# The schedule is genuinely the worker's, so this is not "name everything".
+assert_contains 'the schedule stopped being attributed to the worker alone' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   off      worker'
+
 test_case 'status: a stale build identity is reported, with what it costs'
 seed_nexa_env canonical
 append_env 'BUILD_VERSION=v0.1.0-staging.1' 'BUILD_COMMIT=pending' 'BUILD_TIME=pending'
@@ -3550,11 +3591,54 @@ assert_not_contains 'the file was blamed for something it does not set' \
   "$BOTCTL_OUTPUT" 'This file still sets'
 fake_set api_env ''
 
-test_case 'status: an installation without them says nothing about them'
+test_case 'status: an API answering its own image says nothing about them'
+# The ordinary case, and the one a presence check got wrong about every healthy
+# installation: `Dockerfile` lines 89-92 stamp all three keys into the runtime
+# image, so a correctly built container ALWAYS carries them. A check keyed on
+# presence told every operator their build identity was masked and to restart,
+# after which the recreated container carried them again and the warning never
+# cleared. What is asked is PROVENANCE — does the container answer its image, or
+# something that replaced it?
 seed_nexa_env canonical
+fake_set api_env ''
+# Asserted of the fake first, because this case is only meaningful if the API
+# container really does carry the image's stamped identity. A fake carrying none
+# of the keys would make the assertion below pass for the wrong reason, which is
+# exactly how the presence check survived its own tests.
+api_stamped="$(docker inspect fakeapicontainerid --format '{{range .Config.Env}}{{println .}}{{end}}')"
+assert_contains 'the fake API container carries no stamped build identity at all' \
+  "$api_stamped" 'BUILD_VERSION=0.1.0-test'
+assert_contains 'the fake API container carries no stamped commit' \
+  "$api_stamped" 'BUILD_COMMIT=cafebabe'
 run_botctl status
 assert_not_contains 'a warning was printed with nothing to warn about' \
   "$BOTCTL_OUTPUT" '/health/info reports'
+assert_not_contains 'a healthy installation was told to restart' \
+  "$BOTCTL_OUTPUT" 'still reports what the'
+
+test_case 'status: an EMPTY override of the image identity is still an override'
+# `BUILD_COMMIT=` is not an absent key. An update that removed the line and then
+# failed before recreating the API leaves a container whose commit is the empty
+# string while the image stamps a real one, and /health/info reports the empty
+# value — so a check that asked whether the value was NON-EMPTY reported nothing
+# wrong. The provenance comparison covers it by construction rather than by a
+# special case: empty differs from the stamped value like anything else.
+seed_nexa_env canonical
+fake_set api_env 'BUILD_COMMIT='
+run_botctl status
+assert_contains 'an empty override was treated as no override' "$BOTCTL_OUTPUT" 'BUILD_COMMIT'
+assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'botctl restart'
+fake_set api_env ''
+
+test_case 'status: an image it cannot inspect produces no warning'
+# The remedy this warning feeds is a restart, and a restart would not change an
+# answer that could not be computed. Silence beats a warning nobody can act on.
+seed_nexa_env canonical
+fake_set image_absent 1
+run_botctl status
+assert_not_contains 'an uninspectable image produced a warning anyway' \
+  "$BOTCTL_OUTPUT" 'still reports what the'
+fake_set image_absent 0
 teardown_root
 
 # --- update removes them -----------------------------------------------------
