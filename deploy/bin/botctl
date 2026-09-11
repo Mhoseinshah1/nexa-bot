@@ -233,24 +233,46 @@ status_capabilities() {
     destination='HALF configured'
   fi
 
+  # The worker's container, resolved ONCE. No container is "cannot say"; a
+  # container that exists is the authority on what the processes are running.
+  local worker_id
+  worker_id="$(nexa_running_container worker 2>/dev/null || true)"
+
   local entry key label fallback vocab configured applied applied_state pending=0
   for entry in "${settings[@]}"; do
     IFS='|' read -r key label fallback vocab <<<"$entry"
     configured="$(nexa_env_boolean "$file" "$key" "$fallback" "$vocab")"
     [ "$key" != BACKUP_SCHEDULE_ENABLED ] || scheduled="$configured"
 
-    # What the worker was STARTED with. Absent means the service is not running,
-    # which is "cannot say" and not "off".
-    applied="$(nexa_running_env_value worker "$key" 2>/dev/null || true)"
+    # What the worker was STARTED with.
+    #
+    # A container that does not set the key is NOT "cannot say": it was created
+    # from a file that did not mention it, so the process is running the schema
+    # DEFAULT — which is `fallback`, the same value this reader falls back to. An
+    # earlier version treated an absent key and an absent container alike, and so
+    # skipped the comparison in exactly the case the comparison exists for: a
+    # legacy file that never had the line, an operator who has just added it, and
+    # a worker still running the default. It reported the new value as working.
     applied_state=''
-    if [ -n "${applied//[[:space:]]/}" ]; then
-      case "$applied" in
-        true | 1 | yes) applied_state=on ;;
-        false | 0 | no) applied_state=off ;;
-      esac
+    if [ -n "$worker_id" ]; then
+      applied="$(nexa_running_env_value "$worker_id" "$key" 2>/dev/null || true)"
+      if [ -z "${applied//[[:space:]]/}" ]; then
+        applied_state="$fallback"
+      else
+        case "$applied" in
+          true | 1 | yes) applied_state=on ;;
+          false | 0 | no) applied_state=off ;;
+          # A running container holding a value the schema refuses cannot have
+          # booted on it, so this is not a state to reason about — say nothing
+          # rather than invent a comparison.
+          *) applied_state='' ;;
+        esac
+      fi
     fi
 
-    if [ -n "$applied_state" ] && [ "$applied_state" != "$configured" ]; then
+    # `invalid` is not a pending change, it is a file the next start will refuse.
+    if [ "$configured" != invalid ] && [ -n "$applied_state" ] &&
+      [ "$applied_state" != "$configured" ]; then
       printf '  %s %s  (running: %s — pending restart)\n' "$label" "$configured" "$applied_state"
       pending=1
     else
@@ -276,13 +298,26 @@ status_capabilities() {
   fi
 
   # Lines the application no longer reads, and that actively mask the image.
-  local obsolete
+  #
+  # Asked of the FILE and of the running container, because they can disagree and
+  # the disagreement is the state an operator most needs to see. The removal
+  # happens early in an update, before the image is pulled and the backup is
+  # taken, so a run that stops at one of those leaves the file clean and the
+  # containers still carrying the stale identity — and a report that read only the
+  # file would say nothing was wrong while /health/info still answered `pending`.
+  local obsolete running_obsolete
   obsolete="$(nexa_obsolete_app_env_keys "$file")"
+  running_obsolete="$(nexa_running_obsolete_keys "$worker_id")"
   if [ -n "$obsolete" ]; then
     printf '\n  This file still sets %s,\n' "$(printf '%s' "$obsolete" | tr '\n' ' ')"
     printf '  which REPLACES the build identity stamped into the release image — so\n'
     printf '  /health/info reports what the installer wrote rather than what is running.\n'
     printf '  The next `botctl update` removes them.\n'
+  elif [ -n "$running_obsolete" ]; then
+    printf '\n  The file no longer sets %s, but the RUNNING\n' \
+      "$(printf '%s' "$running_obsolete" | tr '\n' ' ')"
+    printf '  containers were created with them, so /health/info still reports what the\n'
+    printf '  installer wrote. Run `botctl restart`.\n'
   fi
 }
 

@@ -119,3 +119,40 @@ value across all of them.
 environment, found none of its keys, and reported "cannot say" — passing for the
 wrong reason. The fake now dispatches on the service, and the mutation restoring
 its old behaviour kills the pending-restart case.
+
+## The second Codex round
+
+Two findings on `e94102a`, both of them defects in the fix for the first round's P1.
+That is the pattern this repository has already paid for and written down: _"a fix
+is reviewed as hard as the bug"_, because on the deployment branch four review
+rounds each found their defect inside the fix written for the round before. This is
+rounds five and six of the same shape, on a much smaller scale.
+
+| #    | Rule                                                                              | Mutation                                                              | Named test                                                                                          | Result |
+| ---- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ------ |
+| H-19 | A key a running container does not set means the process is on the schema DEFAULT | `botctl`: treat an absent key as cannot-say, as the first version did | `botctl.test.sh` › status: a key the running container never had is compared against its DEFAULT    | KILLED |
+| H-20 | The obsolete-key report asks the running containers as well as the file           | `botctl`: stop asking the running containers                          | `botctl.test.sh` › status: a clean file whose containers still carry the stale identity is reported | KILLED |
+
+**H-19 — the fix missed the case it was written for.** `nexa_running_env_value`
+returned an empty string both when there was no container and when the container
+did not set the key, and the comparison was skipped on empty. But a container
+created from a `nexa.env` that never mentioned the key is running the schema
+DEFAULT — which is the legacy shape, and therefore exactly the installation the
+whole comparison exists for. A file that never had the line, an operator who has
+just added it, and a worker still on the default: reported as working. Container
+existence and key presence are now separate questions, and an absent key in an
+existing container maps to that key's default.
+
+**H-20 — the removal happens before the fallible steps.** It runs early in
+`cmd_update`, before the image is resolved and pulled and before the backup. A run
+that stops at any of those leaves the file clean and the containers still carrying
+the stale identity, and only the already-current path printed a restart
+instruction. Rather than moving the removal — which would lose the already-current
+repair that the previous round's finding asked for — `status` now asks both, and
+reports the running containers when the file is clean and they are not. The report
+is then true wherever the removal happened and whatever interrupted it.
+
+Two cases exist only to stop the new rules answering the same way always: a file at
+its defaults beside a container without the keys must report nothing pending, and an
+`invalid` value must not be dressed up as a pending change — it is a file the next
+start refuses, and sending an operator to restart would be the wrong instruction.

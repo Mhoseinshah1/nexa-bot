@@ -1071,6 +1071,21 @@ nexa_env_boolean() {
   esac
 }
 
+# The id of a service's running container, or nothing.
+#
+# Separate from reading a variable out of it, because "there is no container" and
+# "the container does not set that variable" are DIFFERENT facts with different
+# meanings, and a single function returning an empty string cannot tell a caller
+# which it got. A container created from a `nexa.env` that never mentioned a key
+# has no entry for it and is using the schema default; a container that does not
+# exist says nothing at all.
+nexa_running_container() {
+  local id
+  id="$(nexa_compose ps -q "$1" 2>/dev/null | sed -n '1p')" || return 1
+  [ -n "$id" ] || return 1
+  printf '%s' "$id"
+}
+
 # One environment variable as a RUNNING container actually has it.
 #
 # The file is intent; this is what the process was started with. They differ for
@@ -1080,14 +1095,31 @@ nexa_env_boolean() {
 # same class of defect as the edge container serving a previous release's
 # configuration while every other output named the new one.
 #
-# Empty when the service is not running, which the caller must treat as "cannot
-# say" rather than as "off" — `nexa_running_edge_config` takes the same care.
+# Takes a container ID, not a service, so the caller has already decided that a
+# container exists. Empty output then means the container was created WITHOUT that
+# variable — which for this application means the process is using the schema
+# default, not that the value is empty.
 nexa_running_env_value() {
-  local service="$1" key="$2" id
-  id="$(nexa_compose ps -q "$service" 2>/dev/null | sed -n '1p')" || return 1
+  local id="$1" key="$2"
   [ -n "$id" ] || return 1
   docker inspect "$id" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null |
     sed -n "s/^${key}=//p" | sed -n '1p'
+}
+
+# Which obsolete keys a RUNNING container still carries in its environment.
+#
+# Not the same question as which ones the FILE has, and asking only the file was a
+# defect: the removal happens before the fallible steps of an update, so a run that
+# stops at the image pull leaves the file clean and the containers still carrying
+# the stale identity — at which point a `status` reading the file alone reports
+# nothing wrong while /health/info still answers `pending`.
+nexa_running_obsolete_keys() {
+  local id="$1" key
+  [ -n "$id" ] || return 0
+  for key in $NEXA_OBSOLETE_APP_ENV_KEYS; do
+    [ -z "$(nexa_running_env_value "$id" "$key" 2>/dev/null || true)" ] || printf '%s\n' "$key"
+  done
+  return 0
 }
 
 nexa_write_atomic() {

@@ -3414,6 +3414,11 @@ seed_nexa_env canonical
 append_env 'BACKUP_SCHEDULE_ENABLED=true' \
   'BACKUP_TELEGRAM_CHAT_ID=-1001234567890' \
   'BACKUP_TELEGRAM_BOT_TOKEN=123456:AAsecrettokenvalue'
+# The worker was created with the same value, so this is a settled installation
+# rather than one waiting for a restart. Stated, because leaving it unset would
+# make the case ALSO exercise the pending-restart path and its name would no
+# longer describe what it asserts.
+fake_set worker_env 'BACKUP_SCHEDULE_ENABLED=true'
 run_botctl status
 assert_contains 'an enabled schedule was not reported' "$BOTCTL_OUTPUT" 'scheduled backup   on'
 assert_contains 'a configured destination was not reported' \
@@ -3423,6 +3428,7 @@ assert_not_contains 'the advice was printed to an installation that does not nee
 assert_not_contains 'status printed the delivery bot token' \
   "$BOTCTL_OUTPUT" 'AAsecrettokenvalue'
 assert_not_contains 'status printed the delivery chat id' "$BOTCTL_OUTPUT" '-1001234567890'
+fake_set worker_env ''
 
 test_case 'status: a half-configured destination is named as half, not as configured'
 seed_nexa_env canonical
@@ -3497,6 +3503,57 @@ run_botctl status
 assert_contains 'the configured value was not reported' "$BOTCTL_OUTPUT" 'scheduled backup   on'
 assert_not_contains 'a pending restart was announced with nothing pending' \
   "$BOTCTL_OUTPUT" 'pending restart'
+fake_set worker_env ''
+
+test_case 'status: a key the running container never had is compared against its DEFAULT'
+# The legacy shape, and the case the comparison exists for: a file that never
+# mentioned the key, an operator who has just added it, and a worker created
+# WITHOUT it — so the process is running the schema default. Treating an absent
+# key like an absent container skipped the comparison here and reported the new
+# value as working, which is the defect this case now holds shut.
+seed_nexa_env canonical
+append_env 'BACKUP_SCHEDULE_ENABLED=true'
+fake_set worker_env ''
+run_botctl status
+assert_contains 'the configured value was not reported' "$BOTCTL_OUTPUT" 'scheduled backup   on'
+assert_contains 'an absent key was not read as the default' "$BOTCTL_OUTPUT" 'running: off'
+assert_contains 'the pending state was not named' "$BOTCTL_OUTPUT" 'pending restart'
+
+test_case 'status: a file at its defaults and a container without the keys agree'
+# The other direction, and the ordinary case: neither names the key, so both are
+# the default and nothing is pending. Without this the rule above could be
+# satisfied by always announcing a restart.
+seed_nexa_env canonical
+fake_set worker_env ''
+run_botctl status
+assert_contains 'the default was not reported' "$BOTCTL_OUTPUT" 'scheduled backup   off'
+assert_not_contains 'a pending restart was announced with nothing pending' \
+  "$BOTCTL_OUTPUT" 'pending restart'
+
+test_case 'status: a value the next start would REFUSE is not reported as pending'
+# `invalid` is not a change waiting for a restart, it is a file the next start
+# rejects. Announcing a restart would send an operator to make it take effect.
+seed_nexa_env canonical
+append_env 'PANEL_MONITOR_ENABLED=maybe'
+fake_set worker_env ''
+run_botctl status
+assert_contains 'the invalid value was not reported' "$BOTCTL_OUTPUT" 'panel monitor      invalid'
+assert_not_contains 'an invalid value was dressed up as a pending change' \
+  "$BOTCTL_OUTPUT" 'panel monitor      invalid  (running'
+
+test_case 'status: a clean file whose containers still carry the stale identity is reported'
+# The removal runs early in an update, before the image is pulled and the backup
+# is taken. A run that stops at one of those leaves the file clean and the
+# containers still carrying the stale identity — and a report that read only the
+# file would say nothing was wrong while /health/info still answered `pending`.
+seed_nexa_env canonical
+fake_set worker_env 'BUILD_COMMIT=pending'
+run_botctl status
+assert_contains 'the running containers were not reported' "$BOTCTL_OUTPUT" 'RUNNING'
+assert_contains 'the stale key was not named' "$BOTCTL_OUTPUT" 'BUILD_COMMIT'
+assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'botctl restart'
+assert_not_contains 'the file was blamed for something it does not set' \
+  "$BOTCTL_OUTPUT" 'This file still sets'
 fake_set worker_env ''
 
 test_case 'status: a worker that is not running is cannot-say, never off'
