@@ -55,104 +55,75 @@ through the current schema and showing `BUILD_COMMIT` resolving to `pending`, an
 showing the schema's own `unknown` once the lines are gone. The second is
 `docker`'s documented precedence, not ours.
 
-## The Codex round
+## The Codex rounds
 
-Six findings on `64906e7`, and all six were real — checked against the code rather
-than taken from the description. Three of them are defects in the fixes above, and
-two are tests that could pass for the wrong reason, which this repository treats as
-the same class of defect as a broken rule.
+Three rounds, thirteen findings, and every one of them real — each checked against
+the code rather than accepted from its description. Two of the three rounds found
+their defect inside the fix written for the round before, which is the pattern this
+repository has already paid for and written down: _"a fix is reviewed as hard as the
+bug"_, after four rounds on the deployment branch each did the same.
 
-| #    | Rule                                                                | Mutation                                                               | Named test                                                                                                  | Result |
-| ---- | ------------------------------------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------ |
-| H-13 | `status` compares the file against what the worker was STARTED with | `botctl`: set `applied=""` instead of reading the running container    | `botctl.test.sh` › status: a file the running worker has not adopted is reported as pending, not as working | KILLED |
-| H-14 | Each key is read in the vocabulary its OWN validator allows         | `botctl`: give `PANEL_MONITOR_ENABLED` the `loose` vocabulary          | `config-upgrade.test.ts` › gives each key the vocabulary its own validator allows                           | KILLED |
-| H-15 | A removal on a path that recreates nothing says so                  | `botctl`: drop the restart advice from the already-current branch      | `botctl.test.sh` › update: repairs the file even when the target version is already current                 | KILLED |
-| H-16 | The overlap check compares address RANGES, not strings              | the test's own comparator always answers `false`                       | `config-upgrade.test.ts` › can tell an overlap from a difference, so the case above is not vacuous          | KILLED |
-| H-17 | EVERY spelling of a subnet default is collected, not the first      | the test's collector keeps only the first match                        | `config-upgrade.test.ts` › agrees on the edge subnet across every place it is spelled                       | KILLED |
-| H-18 | The fake answers the container id of the service that was ASKED for | `harness.sh`: answer the edge's id for every service, as it did before | `botctl.test.sh` › status: a file the running worker has not adopted is reported as pending, not as working | KILLED |
+### Round one, on `64906e7`
 
-### What each of the six was
+Six findings. Three were defects in the fixes above; two were tests that could pass
+for the wrong reason, which this repository treats as the same class of defect.
 
-**H-13 — the P1, and correct.** `status_capabilities` read `nexa.env` and the
-section's own comment claimed it said "what the running processes do". It did not:
-an operator who sets `BACKUP_SCHEDULE_ENABLED=true` and has not restarted was told
-the schedule was on while the worker still held `false`. The file is intent; the
-container keeps what it was created with. It now reports both and names the
-disagreement — which is the distinction `status_secrets` beside it already makes
-between configuration and rows, and the same failure the `edge configuration`
-lines were added for after a staging update left the previous release's Caddy
-serving while every other output named the new one.
+| #    | Rule                                                           | Mutation                                                          | Named test                                                                                         | Result |
+| ---- | -------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------ |
+| H-13 | Each key is read in the vocabulary its OWN validator allows    | `botctl`: give `PANEL_MONITOR_ENABLED` the `loose` vocabulary     | `config-upgrade.test.ts` › gives each key the vocabulary its own validator allows                  | KILLED |
+| H-14 | A removal on a path that recreates nothing says so             | `botctl`: drop the restart advice from the already-current branch | `botctl.test.sh` › update: repairs the file even when the target version is already current        | KILLED |
+| H-15 | The overlap check compares address RANGES, not strings         | the test's own comparator always answers `false`                  | `config-upgrade.test.ts` › can tell an overlap from a difference, so the case above is not vacuous | KILLED |
+| H-16 | EVERY spelling of a subnet default is collected, not the first | the test's collector keeps only the first match                   | `config-upgrade.test.ts` › agrees on the edge subnet across every place it is spelled              | KILLED |
 
-**H-14 — the vocabulary is not uniform, and assuming it was went the wrong way.**
-`booleanish` accepts `true/false/1/0/yes/no`, but `PANEL_MONITOR_ENABLED` is
-`z.enum(['true', 'false'])`. The generic reader reported `PANEL_MONITOR_ENABLED=yes`
-as `on` for a value the next start REFUSES — a working monitor claimed where a boot
-failure waits. The first drift test bound one global vocabulary and so proved only
-the half that was already true.
+The other two findings of that round were `.env.example`'s `SECRETS_ACCEPT_V1=false`
+contradicting its own offer of the legacy pair — a documentation fix with no rule to
+mutate — and the P1 below.
 
-**H-15 — the repair that announced itself before taking effect.** On the
-already-current path the keys are removed and no container is recreated, so the
-running processes keep the values just taken out of the file — while `status`,
-reading the cleaned file, stops warning. The operator is told a repair happened
-that has not. The note now says so, and only when something was actually removed:
-the flag is set by observing the keys gone rather than by reading
-`nexa_reconcile_app_env`'s status, which answers 0 both for "removed" and for
-"nothing to remove".
+### The P1, and what happened to it over two more rounds
 
-**H-16 — string inequality is not disjointness.** `172.29.0.0/16` and
-`172.29.1.0/24` are different strings and the second is inside the first. The check
-now parses both CIDRs and compares ranges, and the comparator has its own case —
-otherwise a predicate that always answered `false` would make the assertion pass
-for ever.
+**Round one's P1 was correct and its fix was wrong three times.** The capabilities
+section read `nexa.env` while its own comment claimed it reported "what the running
+processes do". So the first fix compared each value against the worker's created
+environment. Round two then found that an absent key in an existing container is the
+schema DEFAULT rather than unknown — so the comparison skipped exactly the legacy
+shape it existed for. Round three found three more: the Telegram destination was not
+compared at all, the advice paragraph could contradict the line above it, and the
+worker is not the process that owns `PANEL_MONITOR_ENABLED`, `TELEGRAM_WEBHOOK_ENABLED`
+or `RECOVERY_UPLOAD_ENABLED` — nor does it serve `/health/info`.
 
-**H-17 — the installer spells the edge default TWICE**, once deriving
-`TRUSTED_PROXY_IPS` and once writing `deploy.env`. The collector took `exec()`'s
-single match, so a change to the second alone would leave a fresh installation
-putting Caddy on one subnet and trusting the other, with the test still green — the
-exact lockout it exists to prevent, surviving its own guard. It now collects every
-occurrence, asserts how many there are in each file, and requires one distinct
-value across all of them.
+Each of those was a true statement about a design that was wrong in a new way at
+every field. The review asked for the alternative in its own first sentence —
+_"distinguish pending configuration from runtime state"_ — and that is what the
+section does now: it reports the FILE, the heading says so, each line names the
+process that reads the value, and a standing sentence says a container keeps the
+configuration it was created with. No per-setting runtime claim remains to be wrong.
 
-**H-18 — found while fixing H-13, and the reason it is listed.** The fake docker's
-`compose ps -q` answered the EDGE container's id whatever service was asked for.
-`status_capabilities` inspects the worker, so against that fake it read the edge's
-environment, found none of its keys, and reported "cannot say" — passing for the
-wrong reason. The fake now dispatches on the service, and the mutation restoring
-its old behaviour kills the pending-restart case.
+Two mutations that killed the withdrawn mechanism's tests are recorded here as
+history rather than as live rows, because the tests they killed no longer exist and a
+table row citing a deleted test is the precise dishonesty this file exists to
+prevent: reverting the per-setting comparison killed `status: a file the running
+worker has not adopted is reported as pending`, and restoring the absent-key
+conflation killed `status: a key the running container never had is compared against
+its DEFAULT`. Both were real at the time. Both are gone with the mechanism.
 
-## The second Codex round
+### Round three's rules, which are the ones in force
 
-Two findings on `e94102a`, both of them defects in the fix for the first round's P1.
-That is the pattern this repository has already paid for and written down: _"a fix
-is reviewed as hard as the bug"_, because on the deployment branch four review
-rounds each found their defect inside the fix written for the round before. This is
-rounds five and six of the same shape, on a much smaller scale.
+| #    | Rule                                                                       | Mutation                                                                   | Named test                                                                                      | Result |
+| ---- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------ |
+| H-17 | The section reports the FILE and says so, claiming no runtime state        | `botctl`: drop the heading's source and the standing caveat                | `botctl.test.sh` › status: the section names the FILE as its source and claims nothing more     | KILLED |
+| H-18 | Each setting is attributed to the entrypoint that actually reads it        | `botctl`: attribute `PANEL_MONITOR_ENABLED` to the worker                  | `config-upgrade.test.ts` › attributes each setting to the entrypoint that actually reads it     | KILLED |
+| H-19 | An EMPTY assignment is invalid, because zod defaults only an ABSENT value  | `nexa-lib.sh`: infer absence from an empty value, as the first version did | `botctl.test.sh` › status: an EMPTY assignment is invalid, not the default                      | KILLED |
+| H-20 | The stale build identity is read from the API, which serves `/health/info` | `botctl`: stop asking the running container                                | `botctl.test.sh` › status: a clean file whose API still carries the stale identity is reported  | KILLED |
+| H-21 | A malformed CIDR is refused rather than coerced                            | the test's parser back to `Number()` without a decimal check               | `config-upgrade.test.ts` › refuses a malformed CIDR instead of coercing its empty parts to zero | KILLED |
 
-| #    | Rule                                                                              | Mutation                                                              | Named test                                                                                          | Result |
-| ---- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ------ |
-| H-19 | A key a running container does not set means the process is on the schema DEFAULT | `botctl`: treat an absent key as cannot-say, as the first version did | `botctl.test.sh` › status: a key the running container never had is compared against its DEFAULT    | KILLED |
-| H-20 | The obsolete-key report asks the running containers as well as the file           | `botctl`: stop asking the running containers                          | `botctl.test.sh` › status: a clean file whose containers still carry the stale identity is reported | KILLED |
+**H-19 is the sharpest of the three rounds.** `PANEL_MONITOR_ENABLED=` — an empty
+assignment — is not an absent key. Zod applies `.default()` to an UNDEFINED value,
+and an environment variable is a string, so `''` reaches the enum and is refused. The
+reader mapped it to the default and reported a healthy `on` for a file the next start
+rejects. Verified against the schema in the test rather than argued: absent parses,
+empty does not, for the enum and for `booleanish` alike.
 
-**H-19 — the fix missed the case it was written for.** `nexa_running_env_value`
-returned an empty string both when there was no container and when the container
-did not set the key, and the comparison was skipped on empty. But a container
-created from a `nexa.env` that never mentioned the key is running the schema
-DEFAULT — which is the legacy shape, and therefore exactly the installation the
-whole comparison exists for. A file that never had the line, an operator who has
-just added it, and a worker still on the default: reported as working. Container
-existence and key presence are now separate questions, and an absent key in an
-existing container maps to that key's default.
-
-**H-20 — the removal happens before the fallible steps.** It runs early in
-`cmd_update`, before the image is resolved and pulled and before the backup. A run
-that stops at any of those leaves the file clean and the containers still carrying
-the stale identity, and only the already-current path printed a restart
-instruction. Rather than moving the removal — which would lose the already-current
-repair that the previous round's finding asked for — `status` now asks both, and
-reports the running containers when the file is clean and they are not. The report
-is then true wherever the removal happened and whatever interrupted it.
-
-Two cases exist only to stop the new rules answering the same way always: a file at
-its defaults beside a container without the keys must report nothing pending, and an
-`invalid` value must not be dressed up as a pending change — it is a file the next
-start refuses, and sending an operator to restart would be the wrong instruction.
+**H-21 is the same shape one level down.** `Number('')` is `0`, so `172.29.0./24`
+parsed as `172.29.0.0/24` and `172.29.0.0/` as a `/0`. A malformed literal changed
+consistently at every occurrence would have passed both the agreement and the overlap
+cases while Docker refused the subnet.

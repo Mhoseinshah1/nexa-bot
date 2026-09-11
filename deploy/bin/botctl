@@ -174,7 +174,7 @@ cmd_version() {
 # status
 # ---------------------------------------------------------------------------
 
-# What this installation is and is not doing, for the capabilities whose absence
+# What this installation is CONFIGURED to do, for the capabilities whose absence
 # is silent.
 #
 # Several settings default OFF or UNCONFIGURED, and that is correct: an upgrade
@@ -185,39 +185,41 @@ cmd_version() {
 # and readiness, and an operator had no command that would tell them their
 # backups were not running.
 #
-# CONFIGURED state, from /etc/nexa/nexa.env, applying the same defaults and the
-# same per-key vocabulary the application applies — and then compared against what
-# the running worker was actually STARTED with, because those two are different
-# facts and an earlier version of this section claimed to report the second while
-# reading the first. An operator who edits nexa.env and has not restarted would
-# have been told the capability was working.
+# THE FILE, and the heading says so. An earlier version claimed to report "what
+# the running processes do" and then tried to make that true by comparing each
+# value against the worker's created environment, which was wrong in a new way at
+# every field: the worker is not the process that owns PANEL_MONITOR_ENABLED, a
+# key a container does not set is the default rather than unknown, the Telegram
+# destination was not compared at all, and the advice paragraph could contradict
+# the line above it. Reporting the file and SAYING it is the file is the version
+# that cannot be wrong — which is what the review asked for, put the other way
+# round: distinguish configuration from runtime state rather than conflating them.
 #
-# That distinction is the one `status_secrets` beside this already makes between
-# configuration and rows, for the same reason: they have different remedies. And
-# it is the same class of defect as the edge container serving a previous
-# release's routes while every other output named the new release — the failure
-# this command gained its `edge configuration` lines for.
+# Each line names the process that reads the value, because "is the monitor on"
+# and "which container would have to restart" are the two questions an operator
+# asks next, and neither needs a claim about what that container is running.
 #
 # The BACKUP destination is reported by PRESENCE only: one of its two keys is a
 # bot token and does not belong in an output an operator pastes into a ticket.
 status_capabilities() {
   local file="${NEXA_CONFIG_DIR}/nexa.env"
-  printf '\ncapabilities:\n'
+  printf '\ncapabilities, as configured in %s:\n' "$file"
   [ -r "$file" ] || {
-    printf '  configuration  unreadable (%s)\n' "$file"
+    printf '  configuration  unreadable\n'
     return 0
   }
 
-  # Key, label, default, and the vocabulary the SCHEMA gives that key. The
-  # vocabulary is not uniform: PANEL_MONITOR_ENABLED is a true/false enum, so
-  # `yes` there is a value the application refuses rather than one it accepts.
+  # Key, label, default, the vocabulary the SCHEMA gives that key, and the process
+  # that reads it. The vocabulary is not uniform: PANEL_MONITOR_ENABLED is a
+  # true/false enum, so `yes` there is a value the application refuses rather than
+  # one it accepts.
   local -a settings=(
-    'BACKUP_SCHEDULE_ENABLED|scheduled backup  |off|loose'
-    'RECOVERY_UPLOAD_ENABLED|recovery upload   |on|loose'
-    'PANEL_MONITOR_ENABLED|panel monitor     |on|strict'
-    'NOTIFICATION_DISPATCH_ENABLED|notifications     |on|loose'
-    'OUTBOX_RELAY_ENABLED|outbox relay      |on|loose'
-    'TELEGRAM_WEBHOOK_ENABLED|telegram webhook  |off|loose'
+    'BACKUP_SCHEDULE_ENABLED|scheduled backup  |off|loose|worker'
+    'RECOVERY_UPLOAD_ENABLED|recovery upload   |on|loose|api'
+    'PANEL_MONITOR_ENABLED|panel monitor     |on|strict|monitor'
+    'NOTIFICATION_DISPATCH_ENABLED|notifications     |on|loose|worker'
+    'OUTBOX_RELAY_ENABLED|outbox relay      |on|loose|worker'
+    'TELEGRAM_WEBHOOK_ENABLED|telegram webhook  |off|loose|api'
   )
 
   local chat token destination scheduled=''
@@ -233,64 +235,27 @@ status_capabilities() {
     destination='HALF configured'
   fi
 
-  # The worker's container, resolved ONCE. No container is "cannot say"; a
-  # container that exists is the authority on what the processes are running.
-  local worker_id
-  worker_id="$(nexa_running_container worker 2>/dev/null || true)"
-
-  local entry key label fallback vocab configured applied applied_state pending=0
+  local entry key label fallback vocab owner configured
   for entry in "${settings[@]}"; do
-    IFS='|' read -r key label fallback vocab <<<"$entry"
+    IFS='|' read -r key label fallback vocab owner <<<"$entry"
     configured="$(nexa_env_boolean "$file" "$key" "$fallback" "$vocab")"
     [ "$key" != BACKUP_SCHEDULE_ENABLED ] || scheduled="$configured"
-
-    # What the worker was STARTED with.
-    #
-    # A container that does not set the key is NOT "cannot say": it was created
-    # from a file that did not mention it, so the process is running the schema
-    # DEFAULT — which is `fallback`, the same value this reader falls back to. An
-    # earlier version treated an absent key and an absent container alike, and so
-    # skipped the comparison in exactly the case the comparison exists for: a
-    # legacy file that never had the line, an operator who has just added it, and
-    # a worker still running the default. It reported the new value as working.
-    applied_state=''
-    if [ -n "$worker_id" ]; then
-      applied="$(nexa_running_env_value "$worker_id" "$key" 2>/dev/null || true)"
-      if [ -z "${applied//[[:space:]]/}" ]; then
-        applied_state="$fallback"
-      else
-        case "$applied" in
-          true | 1 | yes) applied_state=on ;;
-          false | 0 | no) applied_state=off ;;
-          # A running container holding a value the schema refuses cannot have
-          # booted on it, so this is not a state to reason about — say nothing
-          # rather than invent a comparison.
-          *) applied_state='' ;;
-        esac
-      fi
-    fi
-
-    # `invalid` is not a pending change, it is a file the next start will refuse.
-    if [ "$configured" != invalid ] && [ -n "$applied_state" ] &&
-      [ "$applied_state" != "$configured" ]; then
-      printf '  %s %s  (running: %s — pending restart)\n' "$label" "$configured" "$applied_state"
-      pending=1
-    else
-      printf '  %s %s\n' "$label" "$configured"
-    fi
+    printf '  %s %-8s %s\n' "$label" "$configured" "$owner"
   done
-  printf '  backup delivery    %s\n' "$destination"
+  printf '  backup delivery    %-8s %s\n' "$destination" worker
 
-  if [ "$pending" -eq 1 ]; then
-    printf '\n  A value above is configured one way and RUNNING the other. The file is what\n'
-    printf '  the next start reads; the running process keeps what it was created with.\n'
-    printf '  Run `botctl restart` to make them agree.\n'
-  fi
+  # Always, not on a detected mismatch. A container keeps the environment it was
+  # created with, so any of the values above may not be in force yet — and a
+  # DETECTION of that would have to be right about every field and every owning
+  # process to be worth printing. This sentence is right about all of them.
+  printf '\n  These are the values in the FILE. A container keeps the configuration it was\n'
+  printf '  created with, so a value changed since the last `botctl restart` is not in\n'
+  printf '  force yet.\n'
 
   if [ "$scheduled" = off ]; then
-    printf '\n  No AUTOMATIC backup is taken. `botctl backup` still works, and a backup an\n'
-    printf '  operator remembers to run is not a backup policy. To schedule them, set\n'
-    printf '  BACKUP_SCHEDULE_ENABLED=true in %s and run `botctl restart`.\n' "$file"
+    printf '\n  This configuration takes no AUTOMATIC backup. `botctl backup` still works, and\n'
+    printf '  a backup an operator remembers to run is not a backup policy. To schedule\n'
+    printf '  them, set BACKUP_SCHEDULE_ENABLED=true in %s and run `botctl restart`.\n' "$file"
     if [ "$destination" = 'not configured' ]; then
       printf '  With no delivery destination a run still dumps, verifies and RETAINS locally;\n'
       printf '  its delivery outcome is recorded as NOT_ATTEMPTED.\n'
@@ -299,15 +264,20 @@ status_capabilities() {
 
   # Lines the application no longer reads, and that actively mask the image.
   #
-  # Asked of the FILE and of the running container, because they can disagree and
-  # the disagreement is the state an operator most needs to see. The removal
-  # happens early in an update, before the image is pulled and the backup is
-  # taken, so a run that stops at one of those leaves the file clean and the
-  # containers still carrying the stale identity — and a report that read only the
-  # file would say nothing was wrong while /health/info still answered `pending`.
-  local obsolete running_obsolete
+  # Asked of the FILE and of the running API, because they can disagree and the
+  # disagreement is the state an operator most needs to see. The removal happens
+  # early in an update, before the image is pulled and the backup is taken, so a
+  # run that stops at one of those leaves the file clean and the containers still
+  # carrying the stale identity — and a report that read only the file would say
+  # nothing was wrong while /health/info still answered `pending`.
+  #
+  # The API, because /health/info is the API's route. This is the one place the
+  # section does look at a container, and it is the one place where the remedy is
+  # unambiguous whatever the answer: restart.
+  local obsolete running_obsolete api_id
+  api_id="$(nexa_running_container api 2>/dev/null || true)"
   obsolete="$(nexa_obsolete_app_env_keys "$file")"
-  running_obsolete="$(nexa_running_obsolete_keys "$worker_id")"
+  running_obsolete="$(nexa_running_obsolete_keys "$api_id")"
   if [ -n "$obsolete" ]; then
     printf '\n  This file still sets %s,\n' "$(printf '%s' "$obsolete" | tr '\n' ' ')"
     printf '  which REPLACES the build identity stamped into the release image — so\n'
@@ -316,7 +286,7 @@ status_capabilities() {
   elif [ -n "$running_obsolete" ]; then
     printf '\n  The file no longer sets %s, but the RUNNING\n' \
       "$(printf '%s' "$running_obsolete" | tr '\n' ' ')"
-    printf '  containers were created with them, so /health/info still reports what the\n'
+    printf '  API container was created with them, so /health/info still reports what the\n'
     printf '  installer wrote. Run `botctl restart`.\n'
   fi
 }

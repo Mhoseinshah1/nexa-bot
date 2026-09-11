@@ -473,16 +473,20 @@ case "${1:-}" in
     # fact from the file on the host — `nexa_running_edge_config` and
     # `nexa_running_env_value` both exist to read it.
     #
-    # Per container, because the two callers ask about different ones. `worker_env`
-    # is whatever a test says the worker was started with, one KEY=VALUE per line;
-    # unset means it was started with the same values the file now holds, which is
-    # the ordinary case and must NOT report a pending restart.
+    # Per container, because the callers ask about different ones. `api_env` is
+    # whatever a test says the API was started with, one KEY=VALUE per line; unset
+    # means it carries nothing the caller is looking for, which is the ordinary
+    # case.
     case "$*" in
       *Config.Env*)
         case "$*" in
-          *fakeworkercontainerid*)
+          *fakeapicontainerid*)
+            # The API's environment. Asked about separately from the worker's
+            # because /health/info is the API's route, so the build identity the
+            # capabilities section reports has to come from this container and not
+            # from whichever one happened to be convenient.
             printf 'NODE_ENV=production\n'
-            [ -z "$(read_state worker_env '')" ] || printf '%s\n' "$(read_state worker_env '')"
+            [ -z "$(read_state api_env '')" ] || printf '%s\n' "$(read_state api_env '')"
             ;;
           *)
             printf 'NEXA_DOMAIN=example.test\n'
@@ -637,10 +641,10 @@ case "${1:-}" in
             # edge's environment, found none of the keys it wanted, and reported
             # "cannot say" — passing its tests for the wrong reason.
             case "$*" in
-              *worker*)
-                case "$(read_state worker_state running)" in
+              *' api'* | *'api '*)
+                case "$(read_state api_state running)" in
                   absent | exited | dead) : ;;
-                  *) printf 'fakeworkercontainerid\n' ;;
+                  *) printf 'fakeapicontainerid\n' ;;
                 esac
                 ;;
               *)

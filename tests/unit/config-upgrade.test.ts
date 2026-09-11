@@ -371,17 +371,29 @@ describe('the subnet defaults are one decision, not several literals', () => {
     return distinct[0] ?? '';
   };
 
-  /** First address and prefix length of a CIDR, as a 32-bit number. */
+  /**
+   * First address and prefix length of a CIDR, as a 32-bit number.
+   *
+   * Every component is required to be non-empty decimal TEXT before `Number` sees
+   * it. JavaScript turns '' into 0, so the first version of this accepted
+   * `172.29.0./24` as `172.29.0.0/24` and `172.29.0.0/` as a `/0` — and a
+   * malformed literal changed consistently at every occurrence would then pass
+   * both the agreement and the overlap case while Docker refused the subnet and a
+   * fresh deployment failed.
+   */
   const parseCidr = (cidr: string): { base: number; bits: number } => {
-    const [address = '', prefix = ''] = cidr.split('/');
-    const octets = address.split('.').map((part) => Number(part));
-    expect(octets, `${cidr} is not four octets`).toHaveLength(4);
-    for (const octet of octets)
-      expect(Number.isInteger(octet) && octet >= 0 && octet <= 255).toBe(true);
+    const parts = cidr.split('/');
+    expect(parts, `${cidr} is not address/prefix`).toHaveLength(2);
+    const [address = '', prefix = ''] = parts;
+    const rawOctets = address.split('.');
+    expect(rawOctets, `${cidr} is not four octets`).toHaveLength(4);
+    for (const raw of [...rawOctets, prefix]) {
+      expect(/^\d+$/.test(raw), `${cidr} has a non-decimal or empty component`).toBe(true);
+    }
+    const octets = rawOctets.map((part) => Number(part));
+    for (const octet of octets) expect(octet >= 0 && octet <= 255, `${cidr}`).toBe(true);
     const bits = Number(prefix);
-    expect(Number.isInteger(bits) && bits >= 0 && bits <= 32, `${cidr} has no prefix length`).toBe(
-      true,
-    );
+    expect(bits >= 0 && bits <= 32, `${cidr} has an out-of-range prefix length`).toBe(true);
     const value = octets.reduce((acc, octet) => acc * 256 + octet, 0);
     // The network address, so a host bit somebody left set cannot shift the range.
     const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
@@ -416,6 +428,22 @@ describe('the subnet defaults are one decision, not several literals', () => {
     const edge = agreed('NEXA_EDGE_SUBNET', { compose: 1, installer: 2 });
     const data = agreed('NEXA_DATA_SUBNET', { compose: 2, installer: 1 });
     expect(overlaps(edge, data), `${edge} and ${data} intersect`).toBe(false);
+  });
+
+  it('refuses a malformed CIDR instead of coercing its empty parts to zero', () => {
+    // `172.29.0./24` and `172.29.0.0/` both became valid under `Number('')  === 0`,
+    // so a malformed literal changed consistently everywhere would have passed
+    // both cases above while Docker refused the subnet.
+    for (const malformed of [
+      '172.29.0./24',
+      '172.29.0.0/',
+      '172.29.0.0',
+      '172.29/24',
+      'x.y.z.w/8',
+    ]) {
+      expect(() => parseCidr(malformed), `${malformed} was accepted`).toThrow();
+    }
+    expect(() => parseCidr('172.29.0.0/24')).not.toThrow();
   });
 
   it('can tell an overlap from a difference, so the case above is not vacuous', () => {
@@ -454,10 +482,20 @@ describe("botctl reads the application's booleans per key, not one vocabulary fo
   const lib = readFileSync(join(__dirname, '../../deploy/bin/nexa-lib.sh'), 'utf8');
   const botctl = readFileSync(join(__dirname, '../../deploy/bin/botctl'), 'utf8');
 
-  /** The table `status_capabilities` iterates: KEY|label|default|vocabulary. */
+  /**
+   * The table `status_capabilities` iterates:
+   * KEY|label|default|vocabulary|owning process.
+   */
   const reported = [
-    ...botctl.matchAll(/^\s*'([A-Z][A-Z0-9_]*)\|([^|]*)\|(on|off)\|(loose|strict)'$/gm),
-  ].map((m) => ({ key: m[1] ?? '', fallback: m[3] ?? '', vocab: m[4] ?? '' }));
+    ...botctl.matchAll(
+      /^\s*'([A-Z][A-Z0-9_]*)\|([^|]*)\|(on|off)\|(loose|strict)\|(worker|monitor|api)'$/gm,
+    ),
+  ].map((m) => ({
+    key: m[1] ?? '',
+    fallback: m[3] ?? '',
+    vocab: m[4] ?? '',
+    owner: m[5] ?? '',
+  }));
 
   /** The schema's declaration for one key, to the start of the next. */
   const declaration = (key: string): string => {
@@ -537,6 +575,60 @@ describe("botctl reads the application's booleans per key, not one vocabulary fo
     expect(loose.truthy).toEqual(['1', 'true', 'yes']);
     expect(loose.falsy).toEqual(['0', 'false', 'no']);
     expect([...loose.truthy, ...loose.falsy].sort()).toEqual(accepted.sort());
+  });
+
+  it('attributes each setting to the entrypoint that actually reads it', () => {
+    // `status` names the owning process per line, and a wrong name is a wrong
+    // instruction: an operator asking "which container has to restart" acts on it.
+    // Bound to the source rather than to a comment — `PANEL_MONITOR_ENABLED` is
+    // read by main.monitor.ts, the webhook flag by app.module.ts which only the
+    // api serves, and the rest by main.worker.ts.
+    const readers: Record<string, string> = {
+      worker: readFileSync(join(__dirname, '../../apps/api/src/main.worker.ts'), 'utf8'),
+      monitor: readFileSync(join(__dirname, '../../apps/api/src/main.monitor.ts'), 'utf8'),
+    };
+    for (const { key, owner } of reported) {
+      if (owner === 'api') {
+        // The api is the only role that serves HTTP, so a flag gating a route or a
+        // module belongs to it — and must NOT be read by either loop entrypoint.
+        expect(readers.worker, `${key} is read by the worker, not only the api`).not.toContain(key);
+        expect(readers.monitor, `${key} is read by the monitor, not only the api`).not.toContain(
+          key,
+        );
+        continue;
+      }
+      expect(readers[owner], `${owner} does not read ${key}`).toContain(key);
+    }
+  });
+
+  it('treats an EMPTY assignment as invalid, which is what the schema does', () => {
+    // The reader's rule, checked against the thing it is a second implementation
+    // of. Zod applies `.default()` to an UNDEFINED value, and an environment
+    // variable is a string — so `KEY=` arrives as '' and is refused, by the enum
+    // and by `booleanish` alike. A reader that mapped it to the default reported a
+    // healthy value for a file the next start rejects.
+    const base = {
+      DATABASE_URL: 'postgres://u:p@h:5432/d',
+      REDIS_URL: 'redis://h:6379',
+      SECRETS_KEYS: `k1:${Buffer.alloc(32, 7).toString('base64')}`,
+      SECRETS_ACTIVE_KEY_ID: 'k1',
+      DEPLOYMENT_TOPOLOGY: 'direct',
+    };
+    // Absent: accepted, and defaulted.
+    expect(configSchema.safeParse(base).success).toBe(true);
+    // Empty: refused, for both vocabularies.
+    expect(
+      configSchema.safeParse({ ...base, PANEL_MONITOR_ENABLED: '' }).success,
+      'an empty enum assignment was accepted',
+    ).toBe(false);
+    expect(
+      configSchema.safeParse({ ...base, BACKUP_SCHEDULE_ENABLED: '' }).success,
+      'an empty booleanish assignment was accepted',
+    ).toBe(false);
+    // And the shell says so by testing PRESENCE before it reads the value.
+    expect(lib, 'nexa_env_boolean infers absence from an empty value').toMatch(
+      /grep -qE "\^\$\{key\}=" -- "\$file"/,
+    );
   });
 
   it('names the same obsolete keys the upgrade audit does', () => {

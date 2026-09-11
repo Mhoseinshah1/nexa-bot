@@ -1049,10 +1049,22 @@ nexa_reconcile_app_env() {
 #   VOCAB    `loose` for a booleanish key, `strict` for a true/false enum
 nexa_env_boolean() {
   local file="$1" key="$2" fallback="$3" vocab="${4:-loose}" raw
+  # ABSENT is the only thing that gets the default.
+  #
+  # Zod applies `.default()` to an UNDEFINED value, and an environment variable is
+  # a string: `PANEL_MONITOR_ENABLED=` reaches the schema as '' and is refused by
+  # both the enum and `booleanish`. A reader that mapped an empty assignment to
+  # the default would report a healthy `on` for a file the next start rejects —
+  # the same lie as accepting a spelling the schema does not, which is why
+  # presence is tested before the value is read rather than inferred from it.
+  grep -qE "^${key}=" -- "$file" 2>/dev/null || {
+    printf '%s' "$fallback"
+    return 0
+  }
   raw="$(nexa_env_value "$file" "$key" 2>/dev/null || true)"
   raw="${raw//[[:space:]]/}"
   [ -n "$raw" ] || {
-    printf '%s' "$fallback"
+    printf 'invalid'
     return 0
   }
   if [ "$vocab" = strict ]; then
