@@ -312,28 +312,37 @@ status_capabilities() {
   api_id="$(nexa_running_container api 2>/dev/null || true)"
   obsolete="$(nexa_obsolete_app_env_keys "$file")"
   running_obsolete="$(nexa_container_overridden_obsolete_keys "$api_id")"
-  # THREE states, because the file and the running container are two independent
-  # facts and conflating them gets one of the three wrong.
+  # THREE states, per KEY, because the two lists need not hold the same keys.
   #
-  # Saying "/health/info reports what the installer wrote" whenever the FILE has the
-  # lines was wrong whenever the container predates them: a line added or restored
-  # since the API was created is not in force yet, and a stopped API is not masking
-  # anything at all. The endpoint is only described as masked when the comparison
-  # against the image says so.
-  if [ -n "$obsolete" ] && [ -n "$running_obsolete" ]; then
-    printf '\n  This file sets %s, which REPLACES the\n' "$(printf '%s' "$obsolete" | tr '\n' ' ')"
+  # A file that newly sets BUILD_VERSION while the running API retains an old
+  # BUILD_COMMIT override is both states at once, and a conjunction over the lists
+  # reported it as one: it named BUILD_VERSION and claimed the container differs from
+  # its image "for them", while the key that actually differs went unmentioned. So the
+  # sets are intersected and differenced, and each sentence names only the keys it is
+  # true of.
+  local masked pending stale
+  masked="$(comm -12 <(printf '%s\n' "$obsolete" | sort -u) <(printf '%s\n' "$running_obsolete" | sort -u) | tr '\n' ' ')"
+  pending="$(comm -23 <(printf '%s\n' "$obsolete" | sort -u) <(printf '%s\n' "$running_obsolete" | sort -u) | tr '\n' ' ')"
+  stale="$(comm -13 <(printf '%s\n' "$obsolete" | sort -u) <(printf '%s\n' "$running_obsolete" | sort -u) | tr '\n' ' ')"
+  masked="${masked# }"
+  pending="${pending# }"
+  stale="${stale# }"
+
+  if [ -n "${masked// /}" ]; then
+    printf '\n  This file sets %s, which REPLACES the\n' "$masked"
     printf '  build identity stamped into the release image, and the RUNNING API container\n'
     printf '  answers something other than its own image for them — so /health/info reports\n'
     printf '  what the installer wrote rather than what is running. The next `botctl update`\n'
     printf '  removes the lines; the containers then need recreating to pick that up.\n'
-  elif [ -n "$obsolete" ]; then
-    printf '\n  This file sets %s, which REPLACES the\n' "$(printf '%s' "$obsolete" | tr '\n' ' ')"
+  fi
+  if [ -n "${pending// /}" ]; then
+    printf '\n  This file sets %s, which REPLACES the\n' "$pending"
     printf '  build identity stamped into the release image. The running API does not carry\n'
     printf '  them, so /health/info is correct for NOW and these lines take effect at the\n'
     printf '  next start. The next `botctl update` removes them first.\n'
-  elif [ -n "$running_obsolete" ]; then
-    printf '\n  The file no longer sets %s, but the RUNNING\n' \
-      "$(printf '%s' "$running_obsolete" | tr '\n' ' ')"
+  fi
+  if [ -n "${stale// /}" ]; then
+    printf '\n  The file no longer sets %s, but the RUNNING\n' "$stale"
     printf '  API container answers something other than its own image for them, so it was\n'
     printf '  created while the file still set them and /health/info still reports what the\n'
     printf '  installer wrote. Run `botctl restart`.\n'

@@ -401,3 +401,69 @@ values no container will ever receive.
 The cross-check now covers **23 keys** in one file, including a multiline value whose
 interior looks like an assignment, and the reader agrees with `docker compose config`
 on every one — including that the interior key is NOT set.
+
+### Round eight, on `5b58c7f`
+
+Three findings — two of them P1 — and both P1s are defects in the scanner written for
+round seven. That makes seven consecutive rounds in which the previous round's fix
+carried the next round's bug, and the honest summary of this branch is that on it a
+**fix has been about as likely to be wrong as the code it replaced.** What has caught
+it every time is somebody reviewing the fix as hard as the bug.
+
+**P1 one: the suppression flag was not reset, and the result was corruption.**
+`skip` means "suppress the continuation lines of the value being dropped". It was set
+when a key was dropped and cleared only when a quoted value CLOSED — so dropping a
+SINGLE-line assignment left it set, and the next multiline value lost its continuation
+lines including its closing quote. Reproduced directly before fixing:
+
+```
+DATABASE_URL=…            removing BUILD_COMMIT gave:   DATABASE_URL=…
+BUILD_COMMIT=pending                                    NOTE='first
+NOTE='first                                             OTHER=ok
+second'
+OTHER=ok                  ← `second'` gone; the file is now unterminated,
+                            which Compose refuses WHOLE, and update said ok
+```
+
+**P1 two: escaped delimiters.** Compose honours an escaped delimiter inside a quoted
+value, and the rule is the usual odd/even one. Measured on v5.1.1:
+
+```
+KEY='it\'s fine'   ->  it's fine      one backslash: escaped
+KEY='ends\\'       ->  ends\\         two: not escaped, the value ends here
+KEY="ends\\"       ->  ends\          same in double quotes
+KEY='a\\\'b'       ->  a\\'b          three: escaped again
+```
+
+The scanner took the first matching character, so `'it\'s fine` ended at the escaped
+quote and the lines after it were classified top-level — which the rewriter then
+deletes out of the operator's value. The rule now lives in ONE awk function prepended
+to all three programs (the reader, the loadability check, the rewriter), because this
+is precisely the rule that must not drift between the thing that reads a value and the
+thing that removes a line.
+
+**The P2 was about the report, and it was right.** `obsolete` and `running_obsolete`
+need not hold the same keys: a file newly setting `BUILD_VERSION` while the container
+retains a stale `BUILD_COMMIT` is both states at once, and a conjunction over the lists
+named the wrong key in the wrong sentence. The sets are intersected and differenced
+now, and each sentence names only the keys it is true of.
+
+**A test of mine was wrong in a way worth recording.** The first version of the
+escaped-delimiter fixture used `printf FORMAT` with `\'` in it; printf drops unknown
+escapes, so the file written was `NOTE='it's fine` — a quote that is NOT escaped, where
+deleting the interior line is the CORRECT answer. The case therefore failed against
+correct code. It is written with `printf '%s\n' ARG…` now and asserts that the fixture
+contains the backslash it is about, because a fixture that does not contain what the
+case claims is the same defect as a test that cannot fail — it just fails loudly
+instead of passing quietly.
+
+| #    | Rule                                                            | Mutation                                                  | Named test                                                                                  | Result |
+| ---- | --------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------ |
+| H-51 | Dropping a single-line key does not swallow the NEXT value      | `nexa-lib.sh`: stop resetting `skip` per top-level record | `botctl.test.sh` › update: dropping a single-line key does not swallow the NEXT value       | KILLED |
+| H-52 | A delimiter preceded by an ODD number of backslashes is escaped | `nexa-lib.sh`: `unescaped_index` returns the first match  | `botctl.test.sh` › update: an ESCAPED delimiter does not end a value early                  | KILLED |
+| H-53 | The build states are classified per KEY, not over the lists     | `botctl`: drop the pending branch                         | `botctl.test.sh` › status: a mixed pending/stale pair is reported per key, not as one state | KILLED |
+| H-54 | The fixture contains the escaping it is about                   | the fixture's backslash is eaten by `printf FORMAT`       | `botctl.test.sh` › update: an ESCAPED delimiter does not end a value early                  | KILLED |
+
+**H-54 is the fixture assertion**, and it is in the table because it is a rule like any
+other: the case asserts its own input before acting on it, and the mutation that
+reintroduces the format-string fixture kills it.

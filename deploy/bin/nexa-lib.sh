@@ -949,7 +949,7 @@ nexa_env_rewrite() {
     #
     # Only TOP-LEVEL assignments of the named keys are dropped, and when one of them
     # opens a multiline value its continuation lines go with it.
-    awk -v drop="$removals" -v sq="'" -v dq='"' '
+    awk -v drop="$removals" -v sq="'" -v dq='"' "$NEXA_ENV_AWK_LIB"'
       BEGIN {
         n = split(drop, a, ",")
         for (i = 1; i <= n; i++) if (a[i] != "") kill[a[i]] = 1
@@ -958,11 +958,17 @@ nexa_env_rewrite() {
       {
         line = $0
         if (inq) {
-          closed = (index(line, quote) > 0)
+          closed = (unescaped_index(line, quote) > 0)
           if (!skip) print line
           if (closed) { inq = 0; skip = 0 }
           next
         }
+        # Reset at EVERY top-level record. `skip` means "suppress the continuation
+        # lines of the value being dropped", and leaving it set after dropping a
+        # SINGLE-line assignment made the next multiline value lose its continuation
+        # lines — including its closing quote. That is an update that installs an
+        # unterminated nexa.env, which Compose refuses outright, and reports success.
+        skip = 0
         if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) == 0) { print line; next }
         name = substr(line, RSTART, RLENGTH)
         sub(/^[ \t]*(export[ \t]+)?/, "", name)
@@ -972,7 +978,7 @@ nexa_env_rewrite() {
         first = substr(rest, 1, 1)
         if (first == dq || first == sq) {
           quote = first
-          if (index(substr(rest, 2), quote) == 0) inq = 1
+          if (unescaped_index(substr(rest, 2), quote) == 0) inq = 1
         }
         if (name in kill) { skip = 1; next }
         print line
@@ -1076,6 +1082,44 @@ nexa_reconcile_app_env() {
   return 1
 }
 
+# Where a quoted value ENDS, as Compose decides it.
+#
+# Not the first matching delimiter. Compose honours an escaped delimiter inside a
+# quoted value, and the rule is the usual one — a delimiter is escaped when an ODD
+# number of backslashes immediately precedes it. Measured on v5.1.1, and the two
+# halves of the rule each need one of these:
+#
+#   KEY='it\'s fine'   ->  it's fine      one backslash: the quote is escaped
+#   KEY='ends\\'       ->  ends\\         two: the quote is NOT escaped, value ends
+#   KEY="ends\\"       ->  ends\          same in double quotes
+#   KEY='a\\\'b'       ->  a\\'b          three: escaped again
+#
+# A reader that took the first matching character would end `'it\'s fine'` at the
+# escaped quote — and then treat the REST of a multiline value as top-level lines, so
+# an interior `BUILD_COMMIT=` would be classified as an assignment and deleted out of
+# the operator's value by the rewriter.
+#
+# Defined ONCE and prepended to each of the three awk programs below, because this is
+# the rule that must not drift between the one that reads a value, the one that
+# decides whether the file is loadable at all, and the one that removes lines. Three
+# copies of it would be three chances for two of them to disagree.
+#
+# Backslashes are counted only back to the START OF THE LINE, which is correct: a
+# backslash at the end of the previous line precedes a newline, not this delimiter.
+NEXA_ENV_AWK_LIB='
+function unescaped_index(s, q,   i, n, b, j) {
+  n = length(s)
+  for (i = 1; i <= n; i++) {
+    if (substr(s, i, 1) != q) continue
+    b = 0
+    j = i - 1
+    while (j >= 1 && substr(s, j, 1) == "\\") { b++; j-- }
+    if (b % 2 == 0) return i
+  }
+  return 0
+}
+'
+
 # One value out of a file Docker Compose reads, resolved the way COMPOSE resolves it.
 #
 # `nexa_env_value` answers what a LINE says. This answers what the CONTAINER
@@ -1130,7 +1174,7 @@ nexa_reconcile_app_env() {
 nexa_compose_env_value() {
   local file="$1" key="$2"
   [ -r "$file" ] || return 1
-  awk -v want="$key" -v sq="'" -v dq='"' '
+  awk -v want="$key" -v sq="'" -v dq='"' "$NEXA_ENV_AWK_LIB"'
     function trim_end(s) { sub(/[ \t\r]+$/, "", s); return s }
     BEGIN { found = 0; inq = 0 }
     {
@@ -1138,7 +1182,7 @@ nexa_compose_env_value() {
       if (inq) {
         # Inside a quoted value. Everything up to the closing quote belongs to it,
         # assignments included: that is the whole reason this is a scanner.
-        idx = index(line, quote)
+        idx = unescaped_index(line, quote)
         if (idx > 0) {
           acc = acc substr(line, 1, idx - 1)
           inq = 0
@@ -1159,7 +1203,7 @@ nexa_compose_env_value() {
       if (first == dq || first == sq) {
         quote = first
         body = substr(rest, 2)
-        idx = index(body, quote)
+        idx = unescaped_index(body, quote)
         if (idx > 0) {
           if (mine) { found = 1; out = substr(body, 1, idx - 1) }
           next
@@ -1195,12 +1239,12 @@ nexa_compose_env_value() {
 nexa_compose_env_unterminated() {
   local file="$1"
   [ -r "$file" ] || return 1
-  awk -v sq="'" -v dq='"' '
+  awk -v sq="'" -v dq='"' "$NEXA_ENV_AWK_LIB"'
     BEGIN { inq = 0 }
     {
       line = $0
       if (inq) {
-        if (index(line, quote) > 0) { inq = 0 }
+        if (unescaped_index(line, quote) > 0) { inq = 0 }
         next
       }
       if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) == 0) next
@@ -1209,7 +1253,7 @@ nexa_compose_env_unterminated() {
       first = substr(rest, 1, 1)
       if (first != dq && first != sq) next
       quote = first
-      if (index(substr(rest, 2), quote) == 0) inq = 1
+      if (unescaped_index(substr(rest, 2), quote) == 0) inq = 1
     }
     END { exit (inq ? 0 : 1) }
   ' <"$file"

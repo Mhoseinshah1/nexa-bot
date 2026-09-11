@@ -3785,6 +3785,27 @@ assert_not_contains 'a warning was printed with nothing to warn about' \
 assert_not_contains 'a healthy installation was told to restart' \
   "$BOTCTL_OUTPUT" 'still reports what the'
 
+test_case 'status: a mixed pending/stale pair is reported per key, not as one state'
+# The two lists need not hold the same keys. A file that newly sets BUILD_VERSION while
+# the running API retains an old BUILD_COMMIT override is BOTH states at once, and a
+# conjunction over the lists reported it as one — naming BUILD_VERSION while claiming
+# the container differs from its image for it, and never mentioning the key that does.
+seed_nexa_env canonical
+append_env 'BUILD_VERSION=v0.1.0-staging.1'
+fake_set api_env 'BUILD_COMMIT=pending'
+run_botctl status
+# The file-only key is PENDING...
+assert_contains 'the file-only key was not reported as taking effect at the next start' \
+  "$BOTCTL_OUTPUT" 'next start'
+# ...and the container-only key is STALE, with its own remedy.
+assert_contains 'the container-only key was not reported at all' \
+  "$BOTCTL_OUTPUT" 'The file no longer sets BUILD_COMMIT'
+assert_contains 'the stale container was not given its remedy' "$BOTCTL_OUTPUT" 'botctl restart'
+# And neither sentence claims the other key.
+assert_not_contains 'the pending key was named as stale' \
+  "$BOTCTL_OUTPUT" 'The file no longer sets BUILD_VERSION'
+fake_set api_env ''
+
 test_case 'status: an EMPTY override of the image identity is still an override'
 # `BUILD_COMMIT=` is not an absent key. An update that removed the line and then
 # failed before recreating the API leaves a container whose commit is the empty
@@ -3885,6 +3906,50 @@ assert_equals "the interior line was deleted out of NOTE's value" '1' \
   "$(grep -c '^BUILD_COMMIT=interior' "${NEXA_CONFIG_DIR}/nexa.env")"
 assert_equals "NOTE's closing line was lost" '1' \
   "$(grep -c "^line three'" "${NEXA_CONFIG_DIR}/nexa.env")"
+
+test_case 'update: dropping a single-line key does not swallow the NEXT value'
+# The suppression flag means "skip the continuation lines of the value being dropped".
+# Leaving it set after dropping a SINGLE-line assignment made the next multiline value
+# lose its continuation lines — including its closing quote — so the update installed
+# an unterminated nexa.env, which Compose refuses outright, and reported success.
+seed_nexa_env canonical
+printf "BUILD_COMMIT=pending\nNOTE='first\nsecond'\nTAIL=ok\n" >>"${NEXA_CONFIG_DIR}/nexa.env"
+run_botctl update vA
+assert_equals 'the single-line key was not removed' '' "$(nexa_env_key BUILD_COMMIT)"
+assert_equals "the next value's closing line was swallowed" '1' \
+  "$(grep -c "^second'" "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_ok 'the rewritten file ends inside a quoted value' \
+  bash -c "! nexa_compose_env_unterminated '${NEXA_CONFIG_DIR}/nexa.env'"
+assert_equals 'a key after the multiline value was lost' 'ok' "$(nexa_env_key TAIL)"
+
+test_case 'update: an ESCAPED delimiter does not end a value early'
+# Compose honours an escaped delimiter: a quote is escaped when an ODD number of
+# backslashes precedes it, measured on v5.1.1. A reader that stopped at the first
+# matching character would end this value at `it\'` and then treat the interior
+# BUILD_COMMIT line as a top-level assignment — which the rewriter deletes, silently
+# changing the operator's value.
+seed_nexa_env canonical
+# `printf '%s\n' ARG...` rather than a format string with escapes in it: the first
+# version of this fixture wrote `NOTE='it's fine`, losing the backslash, because
+# printf treats `\'` as an unknown escape and drops it. The case then described a file
+# whose quote is NOT escaped — where deleting the interior line is the right answer —
+# so it failed against correct code. A fixture that does not contain what the case
+# says it contains is the same defect as a test that cannot fail.
+printf '%s\n' "NOTE='it\\'s fine" 'BUILD_COMMIT=interior' "done'" 'TAIL=ok' \
+  >>"${NEXA_CONFIG_DIR}/nexa.env"
+assert_equals 'the fixture lost the escaping backslash it is about' '1' \
+  "$(grep -c "^NOTE='it\\\\'s fine$" "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl update vA
+assert_equals "the interior line was deleted out of NOTE's value" '1' \
+  "$(grep -c '^BUILD_COMMIT=interior' "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_equals "NOTE's closing line was lost" '1' \
+  "$(grep -c "^done'" "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_ok 'the rewritten file ends inside a quoted value' \
+  bash -c "! nexa_compose_env_unterminated '${NEXA_CONFIG_DIR}/nexa.env'"
+# And `status` does not report the interior line as a setting either.
+run_botctl status
+assert_not_contains 'an interior line after an escaped quote was reported as a setting' \
+  "$BOTCTL_OUTPUT" 'This file sets BUILD_COMMIT'
 
 test_case 'update: removing a multiline obsolete value takes its continuation lines'
 # The other half. If an obsolete key opens a multiline value and only its first line
