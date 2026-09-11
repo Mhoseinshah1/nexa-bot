@@ -473,6 +473,7 @@ case "${1:-}" in
       # The release's identity as the IMAGE stamps it — the half of the provenance
       # comparison that says what the container SHOULD be answering.
       *Config.Env*)
+        [ "$(read_state image_env_fails 0)" != 1 ] || exit 1
         printf 'NODE_ENV=production\n'
         fake_image_env
         ;;
@@ -500,14 +501,19 @@ case "${1:-}" in
         # The image a container was created FROM, which is what makes the
         # provenance comparison possible: `status` asks whether the API's build
         # identity is its own image's or something that replaced it, and that needs
-        # both halves. `image_absent` expresses a container whose image cannot be
-        # inspected, which must report nothing rather than a warning whose remedy
-        # would not change the answer.
+        # both halves.
+        #
+        # THREE lookups can fail and each must silence the report, so each has its
+        # own state: `image_absent` is this one, `container_env_fails` is the
+        # container's environment and `image_env_fails` is the image's. A guard that
+        # covered only this one let a failure of either other report every stamped
+        # value as an override.
         [ "$(read_state image_absent 0)" = 1 ] || printf 'sha256:fakeimageid\n'
         ;;
       *Config.Env*)
         case "$*" in
           *fakeapicontainerid*)
+            [ "$(read_state container_env_fails 0)" != 1 ] || exit 1
             # The API's environment, as Docker actually resolves it: the IMAGE's
             # own ENV, with anything the container was created with on top.
             #

@@ -223,8 +223,14 @@ status_capabilities() {
   )
 
   local chat token destination scheduled=''
-  chat="$(nexa_env_value "$file" BACKUP_TELEGRAM_CHAT_ID 2>/dev/null || true)"
-  token="$(nexa_env_value "$file" BACKUP_TELEGRAM_BOT_TOKEN 2>/dev/null || true)"
+  # Through the COMPOSE reader, like the booleans above, for consistency rather than
+  # for a changed answer: this is a PRESENCE test, and neither trimming nor comment
+  # stripping can turn a non-blank value blank or the reverse, so the raw line would
+  # report the same thing in every shape. One reader answering "what the container
+  # receives" throughout the section is the point — two readers on one file is an
+  # invitation to reach for the wrong one.
+  chat="$(nexa_compose_env_value "$file" BACKUP_TELEGRAM_CHAT_ID 2>/dev/null || true)"
+  token="$(nexa_compose_env_value "$file" BACKUP_TELEGRAM_BOT_TOKEN 2>/dev/null || true)"
   if [ -n "${chat//[[:space:]]/}" ] && [ -n "${token//[[:space:]]/}" ]; then
     destination='configured'
   elif [ -z "${chat//[[:space:]]/}" ] && [ -z "${token//[[:space:]]/}" ]; then
@@ -332,9 +338,14 @@ status_secrets() {
   }
 
   local keys kek explicit format accept accept_source
-  keys="$(nexa_env_value "$file" SECRETS_KEYS 2>/dev/null || true)"
-  kek="$(nexa_env_value "$file" SECRETS_KEK 2>/dev/null || true)"
-  explicit="$(nexa_env_value "$file" SECRETS_ACCEPT_V1 2>/dev/null || true)"
+  keys="$(nexa_compose_env_value "$file" SECRETS_KEYS 2>/dev/null || true)"
+  kek="$(nexa_compose_env_value "$file" SECRETS_KEK 2>/dev/null || true)"
+  # The COMPOSE reader, because this one is switched on EXACTLY `true` or `false`
+  # below and anything else falls through to the derived default. `SECRETS_ACCEPT_V1=false # keep for now`
+  # reaches the application as `false` — an explicit setting — while the raw line
+  # missed the case and reported the default, which is the opposite answer whenever
+  # the derived default disagrees with what the operator wrote.
+  explicit="$(nexa_compose_env_value "$file" SECRETS_ACCEPT_V1 2>/dev/null || true)"
   if [ -n "${keys//[[:space:]]/}" ]; then
     format=canonical
   elif [ -n "${kek//[[:space:]]/}" ]; then
@@ -1227,22 +1238,31 @@ cmd_secrets_migrate_config() {
   # Already canonical? Say so and stop. Rerunning must be free — an operator who
   # cannot tell whether they ran it should be able to just run it again.
   local existing_keys
-  existing_keys="$(nexa_env_value "$file" SECRETS_KEYS 2>/dev/null || true)"
+  existing_keys="$(nexa_compose_env_value "$file" SECRETS_KEYS 2>/dev/null || true)"
   if [ -n "${existing_keys//[[:space:]]/}" ]; then
     nexa_ok "the secret configuration is already canonical; nothing to do."
     # Deliberately reported, because a host can be canonical AND still carry the
     # legacy pair — the parser prefers SECRETS_KEYS, so those two lines are dead
     # weight that reads like configuration.
     local stale_kek
-    stale_kek="$(nexa_env_value "$file" SECRETS_KEK 2>/dev/null || true)"
+    stale_kek="$(nexa_compose_env_value "$file" SECRETS_KEK 2>/dev/null || true)"
     [ -z "${stale_kek//[[:space:]]/}" ] ||
       nexa_warn "SECRETS_KEK is still present and is IGNORED (SECRETS_KEYS wins). Remove those two lines by hand once you are satisfied."
     return 0
   fi
 
   local SECRETS_ACTIVE_KEY_ID legacy_key
-  SECRETS_ACTIVE_KEY_ID="$(nexa_env_value "$file" SECRETS_KEK_ID 2>/dev/null || true)"
-  legacy_key="$(nexa_env_value "$file" SECRETS_KEK 2>/dev/null || true)"
+  # The COMPOSE reader, and these two are why the rule is "every read of nexa.env".
+  # Both values are carried INTO the file this command rewrites, so reading them the
+  # way the file literally spells them rather than the way the application receives
+  # them writes a keyring nothing can use: `SECRETS_KEK_ID=install-1 # original`
+  # would become an active key id with a comment in it, and a commented SECRETS_KEK
+  # would become a SECRETS_KEYS entry the base64 refinement refuses at boot. A
+  # conversion that leaves an installation unable to decrypt is the worst outcome
+  # available to this command, and the inline comment is a thing an operator
+  # documenting their own key would write.
+  SECRETS_ACTIVE_KEY_ID="$(nexa_compose_env_value "$file" SECRETS_KEK_ID 2>/dev/null || true)"
+  legacy_key="$(nexa_compose_env_value "$file" SECRETS_KEK 2>/dev/null || true)"
 
   # Refusals name the KEY, never the value.
   [ -n "${SECRETS_ACTIVE_KEY_ID//[[:space:]]/}" ] ||
@@ -1268,7 +1288,7 @@ cmd_secrets_migrate_config() {
   # lengths, never the values: an operator watching this run must learn that the
   # key survived without learning the key.
   local written
-  written="$(nexa_env_value "$file" SECRETS_KEYS 2>/dev/null || true)"
+  written="$(nexa_compose_env_value "$file" SECRETS_KEYS 2>/dev/null || true)"
   [ "${#written}" -eq "${#SECRETS_KEYS}" ] ||
     nexa_die "the converted ${file} does not read back as written. Inspect it before restarting."
 
@@ -1303,7 +1323,7 @@ cmd_secrets_disable_v1() {
   fi
 
   local previous SECRETS_ACCEPT_V1
-  previous="$(nexa_env_value "$file" SECRETS_ACCEPT_V1 2>/dev/null || true)"
+  previous="$(nexa_compose_env_value "$file" SECRETS_ACCEPT_V1 2>/dev/null || true)"
   if [ "$previous" = "false" ]; then
     nexa_ok "SECRETS_ACCEPT_V1 is already false; nothing to do."
     return 0

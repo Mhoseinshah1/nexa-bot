@@ -159,27 +159,29 @@ answering the edge's id for every service (H-18's mutation, round one), and it i
 recorded as a rule below: H-23 mutates the fake to stamp nothing and the case that
 asserts the fake's own contents dies.
 
-| #    | Rule                                                                         | Mutation                                                                | Named test                                                                                                    | Result |
-| ---- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------ |
-| H-22 | A container's build identity is judged by comparison with its IMAGE's        | `nexa-lib.sh`: back to "the value is present", as the first version did | `botctl.test.sh` › status: an API answering its own image says nothing about them                             | KILLED |
-| H-23 | The fake API container carries the identity every real image stamps          | `harness.sh`: `fake_image_env` stamps nothing                           | `botctl.test.sh` › status: an API answering its own image says nothing about them                             | KILLED |
-| H-24 | An EMPTY override of the image's identity is still an override               | `nexa-lib.sh`: back to "the value is present"                           | `botctl.test.sh` › status: an EMPTY override of the image identity is still an override                       | KILLED |
-| H-25 | An image that cannot be inspected produces no warning                        | `nexa-lib.sh`: drop the `[ -n "$image" ]` guard                         | `botctl.test.sh` › status: an image it cannot inspect produces no warning                                     | KILLED |
-| H-26 | The runtime image stamps every obsolete key, which is the premise of H-22    | `Dockerfile`: stop stamping `BUILD_VERSION` in the runtime stage        | `config-upgrade.test.ts` › stamps every obsolete key into the RUNTIME image, which is the premise             | KILLED |
-| H-27 | The decision is a comparison of two reads, not one read                      | `nexa-lib.sh`: delete the image half and test the container's value     | `config-upgrade.test.ts` › compares the container against its image rather than asking whether a value exists | KILLED |
-| H-28 | A boolean with whitespace ANYWHERE is refused, because the schema refuses it | `nexa-lib.sh`: restore `raw="${raw//[[:space:]]/}"`                     | `botctl.test.sh` › status: whitespace is never normalised away                                                | KILLED |
-| H-29 | Whitespace strictness is the SCHEMA's, not the reader's opinion              | `nexa-lib.sh`: restore the whitespace substitution                      | `config-upgrade.test.ts` › refuses a boolean with whitespace, which is what the schema does                   | KILLED |
-| H-30 | The delivery destination names every process that delivers                   | `botctl`: the delivery line names `worker` alone                        | `botctl.test.sh` › status: the delivery destination names every process that delivers                         | KILLED |
-| H-31 | …bound to the call sites rather than to a belief about them                  | `botctl`: the delivery line names `worker` alone                        | `config-upgrade.test.ts` › names every process that delivers a backup, not the worker alone                   | KILLED |
-| H-32 | `nexa.env` is the ONLY thing that can override the image's identity          | `compose.yml`: add a `BUILD_COMMIT` line to the shared environment      | `config-upgrade.test.ts` › stamps every obsolete key into the RUNTIME image, which is the premise             | KILLED |
+| #    | Rule                                                                      | Mutation                                                                | Named test                                                                                                    | Result |
+| ---- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------ |
+| H-22 | A container's build identity is judged by comparison with its IMAGE's     | `nexa-lib.sh`: back to "the value is present", as the first version did | `botctl.test.sh` › status: an API answering its own image says nothing about them                             | KILLED |
+| H-23 | The fake API container carries the identity every real image stamps       | `harness.sh`: `fake_image_env` stamps nothing                           | `botctl.test.sh` › status: an API answering its own image says nothing about them                             | KILLED |
+| H-24 | An EMPTY override of the image's identity is still an override            | `nexa-lib.sh`: back to "the value is present"                           | `botctl.test.sh` › status: an EMPTY override of the image identity is still an override                       | KILLED |
+| H-25 | An image that cannot be inspected produces no warning                     | `nexa-lib.sh`: drop the `[ -n "$image" ]` guard                         | `botctl.test.sh` › status: a provenance it cannot compute produces no warning, at any of three lookups        | KILLED |
+| H-26 | The runtime image stamps every obsolete key, which is the premise of H-22 | `Dockerfile`: stop stamping `BUILD_VERSION` in the runtime stage        | `config-upgrade.test.ts` › stamps every obsolete key into the RUNTIME image, which is the premise             | KILLED |
+| H-27 | The decision is a comparison of two reads, not one read                   | `nexa-lib.sh`: delete the image half and test the container's value     | `config-upgrade.test.ts` › compares the container against its image rather than asking whether a value exists | KILLED |
+| H-30 | The delivery destination names every process that delivers                | `botctl`: the delivery line names `worker` alone                        | `botctl.test.sh` › status: the delivery destination names every process that delivers                         | KILLED |
+| H-31 | …bound to the call sites rather than to a belief about them               | `botctl`: the delivery line names `worker` alone                        | `config-upgrade.test.ts` › names every process that delivers a backup, not the worker alone                   | KILLED |
+| H-32 | `nexa.env` is the ONLY thing that can override the image's identity       | `compose.yml`: add a `BUILD_COMMIT` line to the shared environment      | `config-upgrade.test.ts` › stamps every obsolete key into the RUNTIME image, which is the premise             | KILLED |
 
-**H-28 is the whitespace finding, and it is narrower than it looks.** `loadConfig`
-hands `process.env` to the schema untouched and `booleanish` is a bare enum with no
-`.trim()`, so `t rue`, ` true` and `true ` are all values the application REFUSES.
-The reader removed whitespace before matching, so `BACKUP_SCHEDULE_ENABLED="t rue"`
-read as `on` and suppressed the no-backup guidance for a file the next start rejects.
-The correct reading is to normalise NOTHING and let the accepted spellings be the
-whole validator — which is also why the fix is a deletion rather than a narrower trim.
+**The whitespace finding of this round was right, and the fix for it was wrong —
+which round five established by measurement.** The reader had been removing whitespace
+before matching, so `BACKUP_SCHEDULE_ENABLED="t rue"` read as `on` for a file the next
+start rejects; that much was correct. The fix normalised NOTHING, on the reasoning that
+`loadConfig` hands `process.env` to the schema untouched and `booleanish` has no
+`.trim()`. True of the schema, and beside the point: the application does not read this
+file, Compose does, and Compose TRIMS an unquoted value at both ends. So the new reader
+refused `true`, which the application accepts. Two rows stood here claiming that rule;
+they have been removed rather than corrected in place, because the rule they named is
+not the rule, and the live statements are `H-33`…`H-36` below. This is the same
+treatment the withdrawn runtime mechanism got, for the same reason.
 
 **H-32 closes the one way the provenance check could still cry wolf.** It reports a
 difference between a container and its image, so anything else that sets a `BUILD_*`
@@ -197,3 +199,75 @@ targeted restart to the wrong process. `BACKUP_SCHEDULE_ENABLED` beside it is
 genuinely the worker's — it gates the scheduler in `main.worker.ts` and nothing else —
 which is why H-31 pins both halves: a label that named everything would carry no
 information at all.
+
+### Round five, on `b6f3467`
+
+Two findings, both CONFIRMED, and between them they settle a question this file had
+been answering from reasoning rather than from evidence.
+
+**The first is a defect in round four's own fix**, which is now the fourth time that
+has happened on this branch. `nexa_image_env_value` returned an empty string both
+when a key was not stamped and when `docker image inspect` FAILED, and the caller's
+`|| true` swallowed the difference — so a failed image inspect made every stamped
+value read as empty, every key look overridden, and every operator be told to
+restart. The guard added in round four only covered the first of the three lookups,
+and the test only simulated that one. All three are checked now, each with its own
+case, and M5/M6 below are the mutations that restore each hole.
+
+**The second established that the reader had been wrong about whitespace in BOTH
+directions, one round apart.** The application does not read `nexa.env`; Compose
+does, and hands the result to the container. So the rule is a two-stage pipeline and
+neither stage alone is it. Rather than reason about Compose's documented behaviour —
+which is how the previous two versions went wrong — 18 shapes were run through
+`docker compose config --format json` on **Compose v5.1.1** and the resolved
+environment read back:
+
+```
+line in nexa.env            what the container receives   so status says
+KEY=false # disabled        false                         off
+KEY=false# notcomment       false# notcomment             invalid
+KEY=true<TAB># tabbefore    true<TAB># tabbefore          invalid
+KEY=__true__                true                          on       (leading/trailing spaces)
+KEY=_# onlycomment          # onlycomment                 invalid
+KEY=t rue                   t rue                         invalid
+KEY="false # inquotes"      false # inquotes              invalid
+KEY="true" # after          true                          on
+KEY=_"true"_                true                          on
+```
+
+Three of those contradict what the documentation alone suggests: a TAB before `#` is
+not a comment separator, an unquoted value IS trimmed at both ends, and a value that
+is only a comment survives as a value because the trimming happens first. The
+trimming one is the one that matters: round four made the reader refuse
+`BACKUP_SCHEDULE_ENABLED= true `, which Compose trims and the application accepts —
+crying wolf about a working file — immediately after a version that accepted `t rue`,
+which Compose preserves and the application refuses. `nexa_compose_env_value` was
+then cross-checked against the real parser on all 18 shapes and agrees on every one.
+
+**And the rule generalised past the finding.** If a reader of `nexa.env` has to agree
+with what the container receives, then every reader of it does — including the two in
+`botctl secrets migrate-config` that carry `SECRETS_KEK_ID` and `SECRETS_KEK` INTO
+the file it rewrites. `SECRETS_KEK_ID=install-1 # original` would have become an
+active key id with a comment in it, and a commented `SECRETS_KEK` a `SECRETS_KEYS`
+entry the base64 refinement refuses at boot: a conversion that leaves an installation
+unable to decrypt anything. That was not reported by either review; it follows from
+the finding, and an inline comment beside one's own key is a thing an operator writes.
+`/etc/os-release` keeps the raw reader, because it is not a Compose file.
+
+| #    | Rule                                                                | Mutation                                               | Named test                                                                                             | Result |
+| ---- | ------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ------ |
+| H-33 | A capability value is resolved the way COMPOSE resolves it          | `nexa-lib.sh`: `nexa_env_boolean` back to the raw line | `botctl.test.sh` › status: a value is read the way COMPOSE resolves it, then validated                 | KILLED |
+| H-34 | A SPACE introduces an inline comment; any other whitespace does not | `nexa-lib.sh`: accept `[[:space:]]#` as the separator  | `botctl.test.sh` › status: a value is read the way COMPOSE resolves it, then validated                 | KILLED |
+| H-35 | An unquoted value is trimmed at both ends, as Compose trims it      | `nexa-lib.sh`: drop both trims                         | `botctl.test.sh` › status: a value is read the way COMPOSE resolves it, then validated                 | KILLED |
+| H-36 | Quotes beat the comment rule                                        | `nexa-lib.sh`: apply the comment cut inside quotes too | `botctl.test.sh` › status: a value is read the way COMPOSE resolves it, then validated                 | KILLED |
+| H-37 | A failed IMAGE-environment lookup stops the report                  | `nexa-lib.sh`: swallow its status, as round four did   | `botctl.test.sh` › status: a provenance it cannot compute produces no warning, at any of three lookups | KILLED |
+| H-38 | A failed CONTAINER-environment lookup stops the report              | `nexa-lib.sh`: swallow its status                      | `botctl.test.sh` › status: a provenance it cannot compute produces no warning, at any of three lookups | KILLED |
+| H-39 | The reader's first stage is the Compose resolver, not the raw line  | `nexa-lib.sh`: `nexa_env_boolean` back to the raw line | `config-upgrade.test.ts` › validates what COMPOSE produces, not what the file literally says           | KILLED |
+| H-40 | EVERY read of `nexa.env` goes through it, `migrate-config` included | `botctl`: the key-id read back to the raw line         | `config-upgrade.test.ts` › reads nexa.env through the Compose resolver everywhere, not only in status  | KILLED |
+
+**On H-37 and H-38 passing for the right reason.** A test asserting that nothing is
+warned about is satisfied by a check that never warns, so the case also drives the
+working path and asserts the override IS reported — the three failure states are
+cleared first. The same reason the fake now carries three separate failure states
+instead of one: a single `image_absent` could not express the two holes the finding
+named.

@@ -219,8 +219,11 @@ would say so. It reads `/etc/nexa/nexa.env` by key, applying the same defaults
 and the same PER-KEY vocabulary the application applies — `PANEL_MONITOR_ENABLED`
 is a `true`/`false` enum while the others also take `1`/`0`/`yes`/`no`, and a value
 outside its own key's vocabulary reads as `invalid` rather than being guessed at.
-Nothing is normalised: the schema sees `process.env` untouched, so a value with
-whitespace in it is one the next start refuses. The backup delivery destination is
+Values are resolved the way COMPOSE resolves them and then validated the way the
+SCHEMA validates them, because that is the path a value actually travels: an inline
+comment after a space is dropped and an unquoted value is trimmed at both ends, as
+Compose does both; whitespace INSIDE a value survives, as Compose leaves it, and the
+schema then refuses it. The backup delivery destination is
 reported by PRESENCE only, because one of its two keys is a bot token.
 
 Each line names the process that READS the value, which is the operator's next

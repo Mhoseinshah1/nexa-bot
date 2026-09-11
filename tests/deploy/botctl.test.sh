@@ -3524,32 +3524,81 @@ seed_nexa_env canonical
 run_botctl status
 assert_contains 'an absent key stopped getting its default' "$BOTCTL_OUTPUT" 'panel monitor      on'
 
-test_case 'status: whitespace is never normalised away'
-# `loadConfig` hands `process.env` to the schema untouched and `booleanish` is a
-# bare enum with no `.trim()`, so every one of these is a value the application
-# REFUSES. A reader that stripped internal whitespace read `t rue` as `true` and
-# reported a working schedule for a file the next start rejects; one that trimmed
-# the ends would do the same for `true `.
-for spelling in 't rue' ' true' 'true ' 'tr ue'; do
-  seed_nexa_env canonical
-  append_env "BACKUP_SCHEDULE_ENABLED=${spelling}"
-  run_botctl status
-  assert_contains "a whitespace-bearing value [${spelling}] was normalised instead of refused" \
-    "$BOTCTL_OUTPUT" 'scheduled backup   invalid'
-done
-# A whitespace-only value is `invalid` for the same reason, not the default.
+test_case 'status: a value is read the way COMPOSE resolves it, then validated'
+# The application never reads nexa.env; it reads what Compose made of it. So the
+# reader is two stages, and neither alone is the rule.
+#
+# The expectations below are EVIDENCE, not reasoning: each line was run through
+# `docker compose config --format json` on Compose v5.1.1 and the resolved value read
+# back. Three of them contradict what the documentation alone suggests, and two
+# contradict what this reader did a revision ago — it refused ` true ` (which Compose
+# trims, so the application accepts it) after previously accepting `t rue` (which
+# Compose preserves, so the application refuses it).
+#
+#   line                        compose gives     so status says
+#   BACKUP_SCHEDULE_ENABLED=true # on   true      on
+#   ...=true#on                         true#on   invalid
+#   ...=true\t# on                      true\t#.. invalid   (a TAB is not a comment)
+#   ...=  true                          true      on        (unquoted: trimmed)
+#   ...="true" # on                     true      on
+#   ...="true # on"                     true # on invalid   (quotes beat the comment)
+#   ...=t rue                           t rue     invalid   (internal ws preserved)
+seed_nexa_env canonical
+append_env 'BACKUP_SCHEDULE_ENABLED=true # the DR schedule'
+run_botctl status
+assert_contains 'a space-introduced inline comment was not dropped, as Compose drops it' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   on'
+
+seed_nexa_env canonical
+append_env 'BACKUP_SCHEDULE_ENABLED=  true  '
+run_botctl status
+assert_contains 'surrounding whitespace was refused, though Compose trims it' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   on'
+
+seed_nexa_env canonical
+append_env 'BACKUP_SCHEDULE_ENABLED="true" # quoted then commented'
+run_botctl status
+assert_contains 'a quoted value followed by a comment was not resolved' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   on'
+
+# And the shapes Compose does NOT resolve away stay invalid, or the reader is just
+# permissive rather than accurate.
+seed_nexa_env canonical
+append_env 'BACKUP_SCHEDULE_ENABLED=true#notacomment'
+run_botctl status
+assert_contains 'a `#` with no space before it was treated as a comment' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   invalid'
+
+seed_nexa_env canonical
+printf 'BACKUP_SCHEDULE_ENABLED=true\t# tab before hash\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+run_botctl status
+assert_contains 'a TAB before `#` was treated as a comment separator' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   invalid'
+
+seed_nexa_env canonical
+append_env 'BACKUP_SCHEDULE_ENABLED="true # inside quotes"'
+run_botctl status
+assert_contains 'a comment inside quotes was stripped' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   invalid'
+
+seed_nexa_env canonical
+append_env 'BACKUP_SCHEDULE_ENABLED=t rue'
+run_botctl status
+assert_contains 'internal whitespace was normalised away' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   invalid'
+
+# An empty assignment is still invalid rather than the default, and an absent key is
+# still the default — the two stages compose, they do not replace each other.
+seed_nexa_env canonical
+append_env 'PANEL_MONITOR_ENABLED='
+run_botctl status
+assert_contains 'an empty assignment was read as the default' \
+  "$BOTCTL_OUTPUT" 'panel monitor      invalid'
 seed_nexa_env canonical
 append_env 'PANEL_MONITOR_ENABLED=  '
 run_botctl status
-assert_contains 'a whitespace-only value was read as the default' \
+assert_contains 'a whitespace-only value was not read as empty, which is what Compose makes of it' \
   "$BOTCTL_OUTPUT" 'panel monitor      invalid'
-# And the exact spellings still work, so this is strictness about whitespace
-# rather than a reader that refuses everything.
-seed_nexa_env canonical
-append_env 'BACKUP_SCHEDULE_ENABLED=true'
-run_botctl status
-assert_contains 'an exact spelling stopped being accepted' \
-  "$BOTCTL_OUTPUT" 'scheduled backup   on'
 
 test_case 'status: the delivery destination names every process that delivers'
 # Not the worker alone. `createContainer` builds one BackupService and every role
@@ -3630,15 +3679,29 @@ assert_contains 'an empty override was treated as no override' "$BOTCTL_OUTPUT" 
 assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'botctl restart'
 fake_set api_env ''
 
-test_case 'status: an image it cannot inspect produces no warning'
+test_case 'status: a provenance it cannot compute produces no warning, at any of three lookups'
 # The remedy this warning feeds is a restart, and a restart would not change an
 # answer that could not be computed. Silence beats a warning nobody can act on.
+#
+# THREE lookups, each tested, because a guard that covered only the first was the
+# defect in the previous revision: an `image inspect` that failed made every stamped
+# value read as empty, so all three keys looked overridden and every operator was
+# told to restart.
 seed_nexa_env canonical
-fake_set image_absent 1
+for failure in image_absent container_env_fails image_env_fails; do
+  fake_set "$failure" 1
+  run_botctl status
+  assert_not_contains "a failed ${failure} lookup produced a warning anyway" \
+    "$BOTCTL_OUTPUT" 'still reports what the'
+  fake_set "$failure" 0
+done
+# And with all three working, the override IS still reported — or the loop above
+# would pass against a check that never reports anything.
+fake_set api_env 'BUILD_COMMIT=pending'
 run_botctl status
-assert_not_contains 'an uninspectable image produced a warning anyway' \
-  "$BOTCTL_OUTPUT" 'still reports what the'
-fake_set image_absent 0
+assert_contains 'the check reports nothing even when it can compute an override' \
+  "$BOTCTL_OUTPUT" 'BUILD_COMMIT'
+fake_set api_env ''
 teardown_root
 
 # --- update removes them -----------------------------------------------------

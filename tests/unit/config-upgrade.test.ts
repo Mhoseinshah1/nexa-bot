@@ -691,24 +691,42 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
     // check this replaced.
     const fn = /nexa_container_overridden_obsolete_keys\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '';
     expect(fn, 'nexa_container_overridden_obsolete_keys is gone').not.toBe('');
-    expect(fn, 'the container half is not read').toContain('nexa_running_env_value');
-    expect(fn, 'the image half is not read').toContain('nexa_image_env_value');
+    expect(fn, 'the container half is not read').toContain('nexa_inspect_env container');
+    expect(fn, 'the image half is not read').toContain('nexa_inspect_env image');
     expect(fn, 'the decision is not a comparison of the two').toMatch(
       /\[ "\$running" = "\$stamped" \]/,
     );
-    // And an image it cannot inspect reports nothing: the remedy is a restart, and
-    // a restart would not change an answer that could not be computed.
-    expect(fn, 'an uninspectable image does not fail closed').toMatch(
+    // THREE lookups can fail, and each must stop the report: a provenance that could
+    // not be computed is not an override, and the restart it would advise would not
+    // change the answer. A guard covering only the image id was the defect in the
+    // previous revision — a failed `image inspect` made every stamped value read as
+    // empty, so all three keys looked overridden on every host.
+    expect(fn, 'a missing image id does not stop the report').toMatch(
       /\[ -n "\$image" \] \|\| return 0/,
+    );
+    expect(fn, 'a failed container inspect does not stop the report').toMatch(
+      /running_env="\$\(nexa_inspect_env container "\$id"\)" \|\| return 0/,
+    );
+    expect(fn, 'a failed image inspect does not stop the report').toMatch(
+      /stamped_env="\$\(nexa_inspect_env image "\$image"\)" \|\| return 0/,
+    );
+    // And the per-key reads come out of those listings rather than re-inspecting,
+    // which is what makes one checked status cover every key.
+    expect(fn, 'the keys are not read out of the already-checked listings').toContain(
+      'nexa_env_listing_value',
     );
   });
 
-  it('refuses a boolean with whitespace, which is what the schema does', () => {
-    // `loadConfig` hands `process.env` to the schema untouched and `booleanish` is a
-    // bare enum with no `.trim()`, so a value with whitespace anywhere in it is a
-    // value the application REFUSES. The shell reader is a second implementation of
-    // that vocabulary, and a version that removed internal whitespace read `t rue`
-    // as `true` — reporting a working schedule for a file the next start rejects.
+  it('validates what COMPOSE produces, not what the file literally says', () => {
+    // Two stages, because that is what a deployed installation is: the application
+    // never reads `nexa.env`, it reads what Compose made of it. The shell reader is
+    // the first stage and `configSchema` is the second, and a rule that skipped
+    // either was wrong in a different direction in each of the last two rounds.
+    //
+    // What this case pins is stage two plus the wiring. Stage one — Compose's own
+    // resolution — is pinned in `tests/deploy/botctl.test.sh`, against expectations
+    // taken from `docker compose config` on Compose v5.1.1 rather than from reading
+    // the documentation.
     const base = {
       DATABASE_URL: 'postgres://u:p@h:5432/d',
       REDIS_URL: 'redis://h:6379',
@@ -716,7 +734,11 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
       SECRETS_ACTIVE_KEY_ID: 'k1',
       DEPLOYMENT_TOPOLOGY: 'direct',
     };
-    for (const spelling of [' true', 'true ', 't rue', 'tr ue', '  ']) {
+    // INTERNAL whitespace survives Compose, reaches `booleanish` — a bare enum with
+    // no `.trim()` — and is refused. So the reader must refuse it too, and a version
+    // that normalised it reported a working schedule for a file the next start
+    // rejects.
+    for (const spelling of ['t rue', 'tr ue', 'fa lse']) {
       expect(
         configSchema.safeParse({ ...base, BACKUP_SCHEDULE_ENABLED: spelling }).success,
         `booleanish accepted [${spelling}]`,
@@ -726,15 +748,50 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
         `the strict enum accepted [${spelling}]`,
       ).toBe(false);
     }
-    // The exact spellings still parse, so the schema is strict about whitespace
-    // rather than about everything.
+    // An empty assignment is refused and an absent key is defaulted, which is why
+    // presence is tested separately from the value.
+    expect(configSchema.safeParse({ ...base, PANEL_MONITOR_ENABLED: '' }).success).toBe(false);
+    expect(configSchema.safeParse(base).success).toBe(true);
+    // The exact spellings parse, so the schema is strict about whitespace rather than
+    // about everything.
     expect(configSchema.safeParse({ ...base, BACKUP_SCHEDULE_ENABLED: 'true' }).success).toBe(true);
     expect(configSchema.safeParse({ ...base, PANEL_MONITOR_ENABLED: 'false' }).success).toBe(true);
-    // And the shell normalises nothing, which is the only reading that agrees.
+    // And the wiring: the reader's first stage is the Compose resolver, not the raw
+    // line. `nexa_env_value` there would refuse ` true `, which Compose trims and the
+    // application accepts — crying wolf about a working file.
     const fn = /nexa_env_boolean\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '';
     expect(fn, 'nexa_env_boolean is gone').not.toBe('');
+    expect(fn, 'nexa_env_boolean does not resolve the value the way Compose does').toContain(
+      'nexa_compose_env_value',
+    );
+    expect(fn, 'nexa_env_boolean still reads the raw line').not.toMatch(/raw="\$\(nexa_env_value /);
     expect(fn, 'nexa_env_boolean normalises whitespace out of the value').not.toMatch(
       /raw="\$\{raw\/\/\[\[:space:\]\]\/\}"/,
+    );
+  });
+
+  it('reads nexa.env through the Compose resolver everywhere, not only in status', () => {
+    // `nexa.env` is the file operators edit and the file the application consumes, so
+    // every read of it has to agree with what the container receives. The two reads
+    // that make this more than tidiness are in `botctl secrets migrate-config`, which
+    // carries SECRETS_KEK_ID and SECRETS_KEK INTO the file it rewrites: reading them
+    // as the file spells them would write an active key id with a comment in it and a
+    // SECRETS_KEYS entry the base64 refinement refuses at boot — a conversion that
+    // leaves an installation unable to decrypt anything.
+    const botctl = readFileSync(join(__dirname, '../../deploy/bin/botctl'), 'utf8');
+    const raw = [...botctl.matchAll(/nexa_env_value "\$file"[^\n]*/g)].map((m) => m[0]);
+    expect(raw, `these nexa.env reads bypass the Compose resolver: ${raw.join(' | ')}`).toEqual([]);
+    // And the reads that matter are there, so this is not satisfied by a file that
+    // stopped reading nexa.env altogether.
+    expect(botctl).toContain('nexa_compose_env_value "$file" SECRETS_KEK_ID');
+    expect(botctl).toContain('nexa_compose_env_value "$file" SECRETS_KEK ');
+    expect(botctl).toMatch(
+      /nexa_compose_env_value "\$file" BACKUP_SCHEDULE_ENABLED|nexa_env_boolean/,
+    );
+    // `/etc/os-release` is deliberately NOT a Compose file and keeps the raw reader.
+    const install = readFileSync(join(__dirname, '../../deploy/install.sh'), 'utf8');
+    expect(install, 'os-release stopped using the raw reader').toContain(
+      'nexa_env_value /etc/os-release',
     );
   });
 

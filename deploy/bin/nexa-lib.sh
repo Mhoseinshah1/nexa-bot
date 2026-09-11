@@ -1031,6 +1031,70 @@ nexa_reconcile_app_env() {
   return 1
 }
 
+# One value out of a file Docker Compose reads, resolved the way COMPOSE resolves it.
+#
+# `nexa_env_value` answers what the FILE says. This answers what the CONTAINER
+# receives, and the two differ — so any report about a capability has to use this
+# one, because the application never sees the file, it sees what Compose made of it.
+#
+# The rules below are not inferred from the documentation; they were established by
+# running 18 shapes through `docker compose config --format json` (Compose v5.1.1)
+# and reading the resolved environment back. Three of them contradict what the
+# documentation alone suggests, and two contradict what this reader previously did:
+#
+#   KEY=false # off      ->  false            a SPACE before `#` starts a comment
+#   KEY=false#off        ->  false#off        no space: not a comment
+#   KEY=true\t# off       ->  true\t# off      a TAB before `#` is NOT a comment
+#   KEY=  true           ->  true             unquoted values ARE trimmed, both ends
+#   KEY= # off           ->  # off            trimmed first, so this `#` leads
+#   KEY=t rue            ->  t rue            INTERNAL whitespace is preserved
+#   KEY="false # x"      ->  false # x        quotes win over the comment rule
+#   KEY="false" # x      ->  false            after the closing quote, dropped
+#   KEY= "true"          ->  true             leading space before a quote is fine
+#
+# The trimming one matters: a reader that refused `BACKUP_SCHEDULE_ENABLED= true `
+# would report `invalid` for a file the application accepts, because Compose hands it
+# `true`. The internal-whitespace one matters for the opposite reason: `t rue` reaches
+# the schema intact and is refused, so a reader that normalised it would report a
+# working schedule for a file the next start rejects. Both mistakes have been made in
+# this function, in consecutive rounds, which is why the rule is now evidence.
+#
+# NOT mirrored, deliberately: interpolation (`${OTHER}`) and the escape expansion
+# Compose applies inside double quotes, because reproducing those means reproducing
+# Compose's variable precedence as well. No key this is used for can legitimately
+# contain either — they are booleans, a numeric chat id and a bot token — and a value
+# that does contain one is passed through unchanged, where the per-key validator
+# refuses it rather than guessing. `export KEY=` is likewise not recognised, for the
+# same reason the installer never writes it.
+nexa_compose_env_value() {
+  local file="$1" key="$2" line value
+  [ -r "$file" ] || return 1
+  # The LAST assignment wins, matching how Compose reads the file.
+  line="$(grep -E "^${key}=" -- "$file" | tail -n 1 || true)"
+  [ -n "$line" ] || return 1
+  value="${line#*=}"
+  # Leading whitespace is never part of the value, quoted or not.
+  value="${value#"${value%%[![:space:]]*}"}"
+  case "$value" in
+    \"*)
+      value="${value#\"}"
+      value="${value%%\"*}"
+      ;;
+    \'*)
+      value="${value#\'}"
+      value="${value%%\'*}"
+      ;;
+    *)
+      value="${value%"${value##*[![:space:]]}"}"
+      case "$value" in
+        *' #'*) value="${value%%" #"*}" ;;
+      esac
+      value="${value%"${value##*[![:space:]]}"}"
+      ;;
+  esac
+  printf '%s' "$value"
+}
+
 # Is a boolean setting on, in the vocabulary the application accepts FOR THAT KEY?
 #
 # Not one vocabulary for all of them, because the schema does not have one.
@@ -1061,17 +1125,19 @@ nexa_env_boolean() {
     printf '%s' "$fallback"
     return 0
   }
-  raw="$(nexa_env_value "$file" "$key" 2>/dev/null || true)"
-  # NOT normalised in any way, and in particular not stripped of whitespace.
+  # Resolved the way COMPOSE resolves it, then validated the way the SCHEMA
+  # validates it. Two stages, because that is what a deployed installation is: the
+  # application never reads this file, it reads what Compose made of it.
   #
-  # `loadConfig` hands `process.env` to the schema untouched and `booleanish` is a
-  # bare enum with no `.trim()`, so `true `, ` true` and `t rue` are all values the
-  # application REFUSES. Removing internal whitespace collapsed `t rue` to `true`
-  # and reported `on` for a file the next start rejects — the same lie as accepting
-  # a spelling the schema does not, which is what this reader's per-key vocabulary
-  # exists to prevent. An exact match against the accepted spellings is the only
-  # reading that agrees with the schema, so the case statements below are the whole
-  # validator and anything else is `invalid`.
+  # Neither stage alone is the rule. Compose trims an unquoted value at both ends
+  # and drops a space-introduced inline comment, so ` true ` and `true # on` are
+  # values the application ACCEPTS and a reader that refused them would cry wolf.
+  # Compose preserves internal whitespace, so `t rue` reaches `booleanish` — a bare
+  # enum with no `.trim()` — intact and is refused, and a reader that normalised it
+  # would report a working schedule for a file the next start rejects. This function
+  # has made both mistakes, one per round; `nexa_compose_env_value` is where the
+  # first stage now lives, and the case statements below are the whole of the second.
+  raw="$(nexa_compose_env_value "$file" "$key" 2>/dev/null || true)"
   [ -n "$raw" ] || {
     printf 'invalid'
     return 0
@@ -1094,12 +1160,11 @@ nexa_env_boolean() {
 
 # The id of a service's running container, or nothing.
 #
-# Separate from reading a variable out of it, because "there is no container" and
-# "the container does not set that variable" are DIFFERENT facts with different
-# meanings, and a single function returning an empty string cannot tell a caller
-# which it got. A container created from a `nexa.env` that never mentioned a key
-# has no entry for it and is using the schema default; a container that does not
-# exist says nothing at all.
+# Separate from reading its environment, because "there is no container" and "the
+# inspect failed" and "the key is not set" are three different facts, and a single
+# function returning an empty string cannot tell a caller which it got. Each of them
+# makes the provenance comparison below report something different, so each is asked
+# for separately and each failure stops it.
 nexa_running_container() {
   local id
   id="$(nexa_compose ps -q "$1" 2>/dev/null | sed -n '1p')" || return 1
@@ -1107,46 +1172,29 @@ nexa_running_container() {
   printf '%s' "$id"
 }
 
-# One environment variable as a RUNNING container actually has it.
+# A whole environment, as an IMAGE stamps it or as a CONTAINER holds it.
 #
-# The file is intent; this is what the process was started with. They differ for as
-# long as it takes an operator to run `botctl restart`.
+# The WHOLE environment and not one variable, and the exit status preserved, because
+# the difference between "the key is not set" and "the inspect failed" cannot be read
+# out of an empty string — and the comparison below is wrong in opposite directions
+# depending on which it got. A per-key reader that swallowed the failure reported
+# every stamped value as an override and sent the operator to restart; that was a
+# defect in this file's previous revision, not a hypothetical.
 #
-# That difference is NOT reported per setting. Three review rounds found a
-# capabilities section that compared each value against a running container wrong in
-# a new way at every field, so the section reports the file, says it is the file, and
-# carries one standing caveat instead. What survives of the idea is the single
-# question whose answer has one remedy either way: whether the API's build identity
-# is its own image's, which the function below asks by COMPARING two reads rather
-# than by interpreting one.
-#
-# Takes a container ID, not a service, so the caller has already decided that a
-# container exists. Empty output is then AMBIGUOUS and deliberately left so: the
-# container may have been created without the variable, or with it set to the empty
-# string, and `docker inspect` renders those identically. Callers must not read a
-# meaning into it that the data does not carry — which is why the obsolete-key check
-# below compares this against the image's value rather than testing it for
-# emptiness. A caller that needs to know whether the variable is there at all has to
-# ask a question this function does not answer.
-nexa_running_env_value() {
-  local id="$1" key="$2"
-  [ -n "$id" ] || return 1
-  docker inspect "$id" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null |
-    sed -n "s/^${key}=//p" | sed -n '1p'
+# `$1` is `image` or `container`; `$2` is the reference or id.
+nexa_inspect_env() {
+  local kind="$1" ref="$2"
+  [ -n "$ref" ] || return 1
+  case "$kind" in
+    image) docker image inspect "$ref" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null ;;
+    container) docker inspect "$ref" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null ;;
+    *) return 1 ;;
+  esac
 }
 
-# One environment variable as an IMAGE stamps it.
-#
-# The other half of the provenance comparison below. Separate function because the
-# inspect target is different — an image reference, not a container id — and
-# because a reader of `nexa_container_overridden_obsolete_keys` should be able to
-# see that two independent facts are being compared rather than one being guessed
-# at twice.
-nexa_image_env_value() {
-  local ref="$1" key="$2"
-  [ -n "$ref" ] || return 1
-  docker image inspect "$ref" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null |
-    sed -n "s/^${key}=//p" | sed -n '1p'
+# One variable out of an environment already read.
+nexa_env_listing_value() {
+  printf '%s\n' "$1" | sed -n "s/^${2}=//p" | sed -n '1p'
 }
 
 # Which obsolete keys a RUNNING container carries BECAUSE SOMETHING OVERRODE ITS
@@ -1175,17 +1223,22 @@ nexa_image_env_value() {
 # special case: `BUILD_COMMIT=` in a container whose image stamps a real commit is
 # a difference like any other.
 #
-# A container whose image cannot be inspected reports nothing. The remedy this
-# function feeds is a restart, and a restart would not change an answer that could
-# not be computed.
+# Nothing is reported unless BOTH halves were actually read. Three separate lookups
+# can fail — the container's image id, the container's environment, the image's
+# environment — and a failure of any of them makes every key look overridden, which
+# is advice to restart that would not change the answer. Each one therefore bails,
+# and each one has its own case in `tests/deploy/botctl.test.sh`: a guard that only
+# covered the first lookup was the defect in the previous revision of this function.
 nexa_container_overridden_obsolete_keys() {
-  local id="$1" image key running stamped
+  local id="$1" image key running_env stamped_env running stamped
   [ -n "$id" ] || return 0
   image="$(docker inspect "$id" --format '{{.Image}}' 2>/dev/null || true)"
   [ -n "$image" ] || return 0
+  running_env="$(nexa_inspect_env container "$id")" || return 0
+  stamped_env="$(nexa_inspect_env image "$image")" || return 0
   for key in $NEXA_OBSOLETE_APP_ENV_KEYS; do
-    running="$(nexa_running_env_value "$id" "$key" 2>/dev/null || true)"
-    stamped="$(nexa_image_env_value "$image" "$key" 2>/dev/null || true)"
+    running="$(nexa_env_listing_value "$running_env" "$key")"
+    stamped="$(nexa_env_listing_value "$stamped_env" "$key")"
     [ "$running" = "$stamped" ] || printf '%s\n' "$key"
   done
   return 0
