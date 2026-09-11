@@ -3587,6 +3587,37 @@ run_botctl status
 assert_contains 'internal whitespace was normalised away' \
   "$BOTCTL_OUTPUT" 'scheduled backup   invalid'
 
+# A quoted value that does not CLOSE on its line is not a scalar this reader can
+# resolve, and both ways that happens are `invalid` rather than `on`. Measured on
+# Compose v5.1.1:
+#
+#   PANEL_MONITOR_ENABLED='true\n'   reaches the container as `true` WITH the
+#                                    newline, which the strict enum refuses
+#   PANEL_MONITOR_ENABLED='true      makes Compose refuse the whole FILE
+#                                    ("unterminated quoted value") — nothing starts
+#
+# Stripping the unmatched opening quote reported a working monitor in the first case
+# and a healthy file in the second.
+seed_nexa_env canonical
+printf "PANEL_MONITOR_ENABLED='true\n'\n" >>"${NEXA_CONFIG_DIR}/nexa.env"
+run_botctl status
+assert_contains 'a value whose quote closes on the NEXT line was read as a scalar' \
+  "$BOTCTL_OUTPUT" 'panel monitor      invalid'
+
+seed_nexa_env canonical
+printf "PANEL_MONITOR_ENABLED='true\n" >>"${NEXA_CONFIG_DIR}/nexa.env"
+run_botctl status
+assert_contains 'an unterminated quote was read as a scalar' \
+  "$BOTCTL_OUTPUT" 'panel monitor      invalid'
+
+# And a quote that DOES close on its line is still resolved, so this is about the
+# closing quote rather than about refusing every quoted value.
+seed_nexa_env canonical
+append_env "PANEL_MONITOR_ENABLED='true'"
+run_botctl status
+assert_contains 'a properly quoted value stopped being resolved' \
+  "$BOTCTL_OUTPUT" 'panel monitor      on'
+
 # An empty assignment is still invalid rather than the default, and an absent key is
 # still the default — the two stages compose, they do not replace each other.
 seed_nexa_env canonical

@@ -271,3 +271,40 @@ working path and asserts the override IS reported — the three failure states a
 cleared first. The same reason the fake now carries three separate failure states
 instead of one: a single `image_absent` could not express the two holes the finding
 named.
+
+### Round six, on `fd3f441`
+
+One finding, CONFIRMED, and it is a defect in the reader round five built — the
+fifth consecutive round in which the previous round's fix carried the next round's
+bug. Worth stating plainly rather than filed away: on this branch a fix has been
+**as likely to be wrong as the code it replaced**, and the only thing that has
+caught that every time is somebody reviewing the fix as hard as the bug.
+
+Compose lets a quoted value span lines. The reader is line-based, so
+`PANEL_MONITOR_ENABLED='true` followed by `'` on the next line gave it `'true`, and
+stripping the unmatched opening quote manufactured the scalar `true` — a monitor
+reported `on`. Measured on Compose v5.1.1, the two ways that happens are:
+
+```
+KEY='true\n'          the container receives `true` WITH the newline, which the
+                      strict enum and booleanish both refuse
+KEY='unterminated     Compose refuses the WHOLE FILE — "unterminated quoted
+                      value" — so no container starts at all
+```
+
+Neither is `on`. A quote is now only stripped when its partner is on the same line;
+otherwise the value is returned as it stands, leading quote included, and the
+per-key validator refuses it. `invalid` is the honest answer to both — in the second
+case it understates the problem, and understating beats reporting health.
+
+The 18-shape cross-check against `docker compose config` was re-run after the change
+and still agrees on every shape, which is the point of having it: a narrowing fix
+that broke an ordinary quoted value would have shown up there rather than in review.
+
+| #    | Rule                                                          | Mutation                                        | Named test                                                                             | Result |
+| ---- | ------------------------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------- | ------ |
+| H-41 | A quote is stripped only when its partner is on the SAME line | `nexa-lib.sh`: strip an unmatched opening quote | `botctl.test.sh` › status: a value is read the way COMPOSE resolves it, then validated | KILLED |
+
+**And the case that keeps it honest** is the third assertion beside it: a value whose
+quote DOES close on its line is still resolved to `on`. Without it, a reader that
+refused every quoted value would pass.

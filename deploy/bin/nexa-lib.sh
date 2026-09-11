@@ -1077,12 +1077,34 @@ nexa_compose_env_value() {
   value="${value#"${value%%[![:space:]]*}"}"
   case "$value" in
     \"*)
-      value="${value#\"}"
-      value="${value%%\"*}"
+      # A closing quote must be ON THIS LINE, or the value is not a single-line
+      # scalar and this reader cannot resolve it. Compose lets a quoted value span
+      # lines, and two measured cases follow:
+      #
+      #   KEY='true\n'          reaches the container as `true` WITH the newline,
+      #                         which both the strict enum and `booleanish` refuse
+      #   KEY='unterminated     makes Compose refuse the whole FILE — "unterminated
+      #                         quoted value" — so nothing starts at all
+      #
+      # Stripping an unmatched opening quote would turn the first into a reported
+      # `on` for a monitor the next start refuses to configure, and the second into a
+      # healthy-looking report of a file no container will read. So the value is
+      # returned AS IT STANDS, leading quote included, and every per-key validator
+      # refuses it. `invalid` is the honest answer to both.
+      case "${value#\"}" in
+        *\"*)
+          value="${value#\"}"
+          value="${value%%\"*}"
+          ;;
+      esac
       ;;
     \'*)
-      value="${value#\'}"
-      value="${value%%\'*}"
+      case "${value#\'}" in
+        *\'*)
+          value="${value#\'}"
+          value="${value%%\'*}"
+          ;;
+      esac
       ;;
     *)
       value="${value%"${value##*[![:space:]]}"}"
