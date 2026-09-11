@@ -1092,6 +1092,17 @@ teardown_root
 # version and status
 # =============================================================================
 setup_root
+
+test_case 'harness: a second root seeds the resolved environment too'
+# `setup_root` seeds nexa.env, and the environment Compose resolves from it, BEFORE
+# `setup_fake_docker` runs. The fake's state directory used to be setup_fake_docker's,
+# so every root after the first wrote that environment into the previous root's
+# deleted directory — a `No such file` warning on stderr and a `status` that resolved
+# nothing, in 57 tests, under a green suite. Asserted on a root that is not the first,
+# before the fake docker is installed, which is exactly where it went wrong.
+assert_equals 'the fake directory is not under THIS root' "${NEXA_ROOT}/fake" "$FAKE_DIR"
+assert_ok 'the resolved environment was not seeded into this root' test -s "${FAKE_DIR}/compose_env"
+
 setup_fake_docker
 seed_release 'v1.0.0' "$DIGEST_A"
 
@@ -2971,9 +2982,25 @@ assert_contains 'the compatibility-only case was not distinguished' "$out" 'no r
 assert_contains 'the conversion step was not named' "$out" 'botctl secrets migrate-config'
 assert_not_contains 'rewrap was suggested with nothing to rewrap' "$out" 'botctl secrets rewrap'
 
+test_case 'secrets migrate-config: a substitution is refused, not frozen'
+# This command REWRITES nexa.env, so it reads the FILE: writing what Compose resolved
+# would freeze an interpolation meant to be evaluated at every start. But then neither
+# reading is safe when the value IS a substitution — the literal `${VAULT_KEK}` is not a
+# key, and the resolved one is a key the file was never meant to contain — so it refuses
+# rather than choosing. Choosing wrong here leaves an installation that cannot decrypt.
+seed_nexa_env empty
+append_resolved_env 'SECRETS_KEK=${VAULT_KEK}' 'SECRETS_KEK_ID=install-1'
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl secrets migrate-config || true
+assert_contains 'the refusal did not name the cause' "$BOTCTL_OUTPUT" 'substitution'
+assert_equals 'the file was changed by a refused conversion' "$before" \
+  "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_not_contains 'the refusal printed key material' "$BOTCTL_OUTPUT" 'VAULT_KEK}'
+seed_nexa_env canonical
+
 test_case 'status: an explicit SECRETS_ACCEPT_V1=true on a canonical keyring is reported as explicit'
 seed_nexa_env canonical
-printf 'SECRETS_ACCEPT_V1=true\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+append_resolved_env 'SECRETS_ACCEPT_V1=true'
 fake_set secrets_json '{"format":"canonical","acceptV1":true,"explicit":true,"v1Rows":0,"rows":4,"mismatched":0}'
 out="$(status_secrets_probe)"
 assert_contains 'the explicit setting was reported as a default' "$out" 'accept v1      yes  (SECRETS_ACCEPT_V1)'
@@ -2983,7 +3010,7 @@ assert_contains 'disable-v1 was not named' "$out" 'botctl secrets disable-v1'
 
 test_case 'status: v1 rows with v1 NOT accepted is the loud case'
 seed_nexa_env canonical
-printf 'SECRETS_ACCEPT_V1=false\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+append_resolved_env 'SECRETS_ACCEPT_V1=false'
 fake_set secrets_json '{"format":"canonical","acceptV1":false,"explicit":true,"v1Rows":2,"rows":4,"mismatched":0}'
 out="$(status_secrets_probe)"
 assert_contains 'unreadable rows were not called out' "$out" 'cannot be read'
@@ -3383,7 +3410,13 @@ teardown_root
 # added BACKUP_SCHEDULE_ENABLED takes no automatic backups, which is the correct
 # default and was an invisible state.
 
-append_env() { printf '%s\n' "$@" >>"${NEXA_CONFIG_DIR}/nexa.env"; }
+# A line in the file AND in what Compose resolves from it, which is the ordinary case:
+# an assignment Compose passes through literally. `botctl status` asks
+# `docker compose config` now, so a helper that only wrote the file would leave every
+# capability at its default. A case that wants the two to DIVERGE sets the fake
+# `compose_env` itself — the only way to express a divergence now that nothing in
+# `deploy/` parses env_file semantics for reporting.
+append_env() { append_resolved_env "$@"; }
 
 setup_root
 setup_fake_docker
@@ -3393,7 +3426,7 @@ fake_set secrets_json '{"format":"canonical","acceptV1":false,"explicit":false,"
 test_case 'status: an installation that never configured backups is told so'
 seed_nexa_env canonical
 run_botctl status
-assert_contains 'the capabilities section is missing' "$BOTCTL_OUTPUT" 'capabilities, as configured in'
+assert_contains 'the capabilities section is missing' "$BOTCTL_OUTPUT" 'capabilities, as compose resolves'
 assert_contains 'the scheduled backup default was not reported as off' \
   "$BOTCTL_OUTPUT" 'scheduled backup   off'
 assert_contains 'an unconfigured destination was not reported' \
@@ -3471,21 +3504,92 @@ append_env 'BACKUP_SCHEDULE_ENABLED=yes'
 run_botctl status
 assert_contains 'a booleanish key stopped accepting yes' "$BOTCTL_OUTPUT" 'scheduled backup   on'
 
-test_case 'status: the section names the FILE as its source and claims nothing more'
-# The claim that got this wrong three rounds running was "what the running
-# processes do". A container keeps the configuration it was created with, so a
-# report that named a runtime state had to be right about every field and every
-# owning process. This one names the file and says so.
+test_case 'status: the section names COMPOSE as its resolver and claims nothing more'
+# Three review rounds produced a per-setting runtime claim that was wrong in a new way
+# at every field, and five more produced a reimplementation of Compose env_file
+# semantics that was wrong in a new way at every shape. What is left says where the
+# values came from and what they are not: Compose resolved them, and a RUNNING container
+# keeps whatever it was created with.
 seed_nexa_env canonical
-append_env 'BACKUP_SCHEDULE_ENABLED=true'
 run_botctl status
-assert_contains 'the heading does not name the file' "$BOTCTL_OUTPUT" 'as configured in'
-assert_contains 'the configured value was not reported' "$BOTCTL_OUTPUT" 'scheduled backup   on'
-assert_contains 'the standing caveat is missing' "$BOTCTL_OUTPUT" 'values in the FILE'
-assert_contains 'the caveat does not say what a container keeps' \
+assert_contains 'the heading does not name compose as the resolver' \
+  "$BOTCTL_OUTPUT" 'as compose resolves'
+assert_contains 'the standing caveat is missing' "$BOTCTL_OUTPUT" 'STARTED NOW'
+assert_contains 'the caveat does not say what a running container keeps' \
   "$BOTCTL_OUTPUT" 'created with'
-# And it does not pretend to know the running state of any of them.
+# And it still does not pretend to know the running state of any of them.
 assert_not_contains 'the section claims a running value' "$BOTCTL_OUTPUT" 'running:'
+test_case 'status: the capabilities section reports what COMPOSE resolved'
+# `botctl status` asks `docker compose config` rather than reading nexa.env, because
+# Compose INTERPOLATES env_file values — `${UNSET:-true}` reaches the container as
+# `true` and `${HOME}` comes from the ambient environment — so no shell reader can be
+# right about them without reproducing Compose variable precedence. Five rounds of
+# trying is the evidence. What this asserts is the remaining rule: the section reports
+# the resolved value, whatever the file happens to spell.
+seed_nexa_env canonical
+# The file says one thing; Compose resolves another. Only the resolved value may appear.
+append_env 'BACKUP_SCHEDULE_ENABLED=false'
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r\nSECRETS_KEYS=k1:v\nSECRETS_ACTIVE_KEY_ID=k1\nBACKUP_SCHEDULE_ENABLED=true')"
+run_botctl status
+assert_contains 'status reported the file value rather than what compose resolved' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   on'
+
+# A resolved value outside the key's own vocabulary is still `invalid`: resolution is
+# Compose's job, validation is this one, and PANEL_MONITOR_ENABLED is a true/false enum
+# while the others also take 1/0/yes/no.
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r\nPANEL_MONITOR_ENABLED=yes\nNOTIFICATION_DISPATCH_ENABLED=yes')"
+run_botctl status
+assert_contains 'a value the strict enum refuses was not reported as invalid' \
+  "$BOTCTL_OUTPUT" 'panel monitor      invalid'
+assert_contains 'a value booleanish accepts was reported as invalid' \
+  "$BOTCTL_OUTPUT" 'notifications      on'
+
+# Assigned to nothing is invalid; absent is the default. The two are different states.
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r\nPANEL_MONITOR_ENABLED=')"
+run_botctl status
+assert_contains 'an empty resolved value was read as the default' \
+  "$BOTCTL_OUTPUT" 'panel monitor      invalid'
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r')"
+run_botctl status
+assert_contains 'an absent key stopped getting its default' "$BOTCTL_OUTPUT" 'panel monitor      on'
+seed_nexa_env canonical
+
+test_case 'status: a configuration Compose REFUSES is reported as refused, not summarised'
+# An unterminated quoted value, an unsatisfiable substitution, a malformed compose file:
+# Compose rejects the configuration WHOLE, so no container starts and no individual
+# value is in force. A tidy column of values no container will ever receive is the most
+# misleading thing this section could print — and it is also the one condition this
+# script no longer has to detect for itself, because the authority reports it.
+seed_nexa_env canonical
+fake_set compose_config_fails 1
+run_botctl status
+assert_contains 'a refused configuration was not reported as refused' \
+  "$BOTCTL_OUTPUT" 'REFUSED by compose'
+assert_contains 'the consequence was not stated' "$BOTCTL_OUTPUT" 'no container will start'
+assert_not_contains 'values were summarised from a configuration compose refuses' \
+  "$BOTCTL_OUTPUT" 'scheduled backup'
+fake_set compose_config_fails 0
+
+test_case 'status: an enabled webhook with a short secret is invalid, not on'
+# `configSchema.superRefine` refuses the WHOLE configuration when the webhook is on and
+# the secret is shorter than 16 characters, so the API will not start. Reporting
+# `telegram webhook on` there is the same lie as accepting a spelling the schema does
+# not: it says working where the next start fails. The secret is never printed.
+seed_nexa_env canonical
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r\nTELEGRAM_WEBHOOK_ENABLED=true\nTELEGRAM_WEBHOOK_SECRET=tooshort')"
+run_botctl status
+assert_contains 'an enabled webhook with a short secret was reported as on' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   invalid'
+assert_contains 'the reason was not named' "$BOTCTL_OUTPUT" '16 characters'
+assert_not_contains 'status printed the webhook secret' "$BOTCTL_OUTPUT" 'tooshort'
+# With a secret of the required length it is on, so this is about the dependency rather
+# than about refusing the webhook.
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r\nTELEGRAM_WEBHOOK_ENABLED=true\nTELEGRAM_WEBHOOK_SECRET=0123456789abcdef')"
+run_botctl status
+assert_contains 'a webhook with a long enough secret was not reported as on' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   on'
+assert_not_contains 'status printed the webhook secret' "$BOTCTL_OUTPUT" '0123456789abcdef'
+seed_nexa_env canonical
 
 test_case 'status: every capability names the process that reads it'
 # PANEL_MONITOR_ENABLED belongs to the monitor, TELEGRAM_WEBHOOK_ENABLED and
@@ -3524,134 +3628,6 @@ seed_nexa_env canonical
 run_botctl status
 assert_contains 'an absent key stopped getting its default' "$BOTCTL_OUTPUT" 'panel monitor      on'
 
-test_case 'status: a value is read the way COMPOSE resolves it, then validated'
-# The application never reads nexa.env; it reads what Compose made of it. So the
-# reader is two stages, and neither alone is the rule.
-#
-# The expectations below are EVIDENCE, not reasoning: each line was run through
-# `docker compose config --format json` on Compose v5.1.1 and the resolved value read
-# back. Three of them contradict what the documentation alone suggests, and two
-# contradict what this reader did a revision ago — it refused ` true ` (which Compose
-# trims, so the application accepts it) after previously accepting `t rue` (which
-# Compose preserves, so the application refuses it).
-#
-#   line                        compose gives     so status says
-#   BACKUP_SCHEDULE_ENABLED=true # on   true      on
-#   ...=true#on                         true#on   invalid
-#   ...=true\t# on                      true\t#.. invalid   (a TAB is not a comment)
-#   ...=  true                          true      on        (unquoted: trimmed)
-#   ...="true" # on                     true      on
-#   ...="true # on"                     true # on invalid   (quotes beat the comment)
-#   ...=t rue                           t rue     invalid   (internal ws preserved)
-seed_nexa_env canonical
-append_env 'BACKUP_SCHEDULE_ENABLED=true # the DR schedule'
-run_botctl status
-assert_contains 'a space-introduced inline comment was not dropped, as Compose drops it' \
-  "$BOTCTL_OUTPUT" 'scheduled backup   on'
-
-seed_nexa_env canonical
-append_env 'BACKUP_SCHEDULE_ENABLED=  true  '
-run_botctl status
-assert_contains 'surrounding whitespace was refused, though Compose trims it' \
-  "$BOTCTL_OUTPUT" 'scheduled backup   on'
-
-seed_nexa_env canonical
-append_env 'BACKUP_SCHEDULE_ENABLED="true" # quoted then commented'
-run_botctl status
-assert_contains 'a quoted value followed by a comment was not resolved' \
-  "$BOTCTL_OUTPUT" 'scheduled backup   on'
-
-# And the shapes Compose does NOT resolve away stay invalid, or the reader is just
-# permissive rather than accurate.
-seed_nexa_env canonical
-append_env 'BACKUP_SCHEDULE_ENABLED=true#notacomment'
-run_botctl status
-assert_contains 'a `#` with no space before it was treated as a comment' \
-  "$BOTCTL_OUTPUT" 'scheduled backup   invalid'
-
-seed_nexa_env canonical
-printf 'BACKUP_SCHEDULE_ENABLED=true\t# tab before hash\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
-run_botctl status
-assert_contains 'a TAB before `#` was treated as a comment separator' \
-  "$BOTCTL_OUTPUT" 'scheduled backup   invalid'
-
-seed_nexa_env canonical
-append_env 'BACKUP_SCHEDULE_ENABLED="true # inside quotes"'
-run_botctl status
-assert_contains 'a comment inside quotes was stripped' \
-  "$BOTCTL_OUTPUT" 'scheduled backup   invalid'
-
-seed_nexa_env canonical
-append_env 'BACKUP_SCHEDULE_ENABLED=t rue'
-run_botctl status
-assert_contains 'internal whitespace was normalised away' \
-  "$BOTCTL_OUTPUT" 'scheduled backup   invalid'
-
-# A quoted value that does not CLOSE on its line is not a scalar this reader can
-# resolve, and both ways that happens are `invalid` rather than `on`. Measured on
-# Compose v5.1.1:
-#
-#   PANEL_MONITOR_ENABLED='true\n'   reaches the container as `true` WITH the
-#                                    newline, which the strict enum refuses
-#   PANEL_MONITOR_ENABLED='true      makes Compose refuse the whole FILE
-#                                    ("unterminated quoted value") — nothing starts
-#
-# Stripping the unmatched opening quote reported a working monitor in the first case
-# and a healthy file in the second.
-seed_nexa_env canonical
-printf "PANEL_MONITOR_ENABLED='true\n'\n" >>"${NEXA_CONFIG_DIR}/nexa.env"
-run_botctl status
-assert_contains 'a value whose quote closes on the NEXT line was read as a scalar' \
-  "$BOTCTL_OUTPUT" 'panel monitor      invalid'
-
-seed_nexa_env canonical
-printf "PANEL_MONITOR_ENABLED='true\n" >>"${NEXA_CONFIG_DIR}/nexa.env"
-run_botctl status
-assert_contains 'an unterminated quote was read as a scalar' \
-  "$BOTCTL_OUTPUT" 'panel monitor      invalid'
-
-# And a quote that DOES close on its line is still resolved, so this is about the
-# closing quote rather than about refusing every quoted value.
-seed_nexa_env canonical
-append_env "PANEL_MONITOR_ENABLED='true'"
-run_botctl status
-assert_contains 'a properly quoted value stopped being resolved' \
-  "$BOTCTL_OUTPUT" 'panel monitor      on'
-
-# An assignment is not only `^KEY=`. Compose accepts leading whitespace before the
-# key and an `export ` prefix, both measured on v5.1.1 — so a matcher anchored on
-# `^KEY=` read them as ABSENT and reported the schema DEFAULT, which for a key whose
-# default is ON is the next start turning it off while `status` says it is running.
-seed_nexa_env canonical
-append_env 'export PANEL_MONITOR_ENABLED=false'
-run_botctl status
-assert_contains 'an `export` prefix was read as an absent key' \
-  "$BOTCTL_OUTPUT" 'panel monitor      off'
-seed_nexa_env canonical
-append_env '   PANEL_MONITOR_ENABLED=false'
-run_botctl status
-assert_contains 'an indented key was read as absent' \
-  "$BOTCTL_OUTPUT" 'panel monitor      off'
-# The last assignment wins, as it does for Compose.
-seed_nexa_env canonical
-append_env 'PANEL_MONITOR_ENABLED=true' 'PANEL_MONITOR_ENABLED=false'
-run_botctl status
-assert_contains 'the first assignment won instead of the last' \
-  "$BOTCTL_OUTPUT" 'panel monitor      off'
-
-# An empty assignment is still invalid rather than the default, and an absent key is
-# still the default — the two stages compose, they do not replace each other.
-seed_nexa_env canonical
-append_env 'PANEL_MONITOR_ENABLED='
-run_botctl status
-assert_contains 'an empty assignment was read as the default' \
-  "$BOTCTL_OUTPUT" 'panel monitor      invalid'
-seed_nexa_env canonical
-append_env 'PANEL_MONITOR_ENABLED=  '
-run_botctl status
-assert_contains 'a whitespace-only value was not read as empty, which is what Compose makes of it' \
-  "$BOTCTL_OUTPUT" 'panel monitor      invalid'
-
 test_case 'status: the delivery destination names every process that delivers'
 # Not the worker alone. `createContainer` builds one BackupService and every role
 # gets it: the worker schedules, RecoveryController.runBackup serves the Web
@@ -3665,42 +3641,6 @@ assert_contains 'the delivery line does not name all three consumers' \
 # The schedule is genuinely the worker's, so this is not "name everything".
 assert_contains 'the schedule stopped being attributed to the worker alone' \
   "$BOTCTL_OUTPUT" 'scheduled backup   off      worker'
-
-test_case 'status: a file Compose refuses WHOLE is said to be refused whole'
-# A file ending inside a quoted value is rejected outright — `unterminated quoted
-# value` — so none of the values reach a container, including the ones that look fine.
-# A tidy column of values no container will ever receive is the most misleading thing
-# this section could print.
-seed_nexa_env canonical
-printf "SOME_NOTE='never closed\n" >>"${NEXA_CONFIG_DIR}/nexa.env"
-run_botctl status
-assert_contains 'an unterminated quoted value was not reported' \
-  "$BOTCTL_OUTPUT" 'ENDS INSIDE a quoted value'
-assert_contains 'the consequence for every value was not stated' \
-  "$BOTCTL_OUTPUT" 'NONE of the values'
-# And a complete file says nothing of the sort.
-seed_nexa_env canonical
-run_botctl status
-assert_not_contains 'a complete file was reported as unterminated' \
-  "$BOTCTL_OUTPUT" 'ENDS INSIDE a quoted value'
-
-test_case 'status: a line inside another variable is not an assignment'
-# Compose reads a quoted value across lines, so this defines ONE variable and does
-# NOT set BACKUP_SCHEDULE_ENABLED. A grep for the key finds the interior line and
-# reports a schedule Compose never sets, while the application runs on its `false`
-# default.
-seed_nexa_env canonical
-printf "IGNORED_NOTE='first\nBACKUP_SCHEDULE_ENABLED=true\nlast'\n" >>"${NEXA_CONFIG_DIR}/nexa.env"
-run_botctl status
-assert_contains 'an interior line was read as an assignment' \
-  "$BOTCTL_OUTPUT" 'scheduled backup   off'
-# The real assignment after such a value is still found, so this is about quoted
-# regions rather than about giving up after one.
-seed_nexa_env canonical
-printf "IGNORED_NOTE='first\nlast'\nBACKUP_SCHEDULE_ENABLED=true\n" >>"${NEXA_CONFIG_DIR}/nexa.env"
-run_botctl status
-assert_contains 'an assignment after a multiline value was missed' \
-  "$BOTCTL_OUTPUT" 'scheduled backup   on'
 
 test_case 'status: the file and the running API are two facts, reported as three states'
 # Conflating them got one of the three wrong. Saying "/health/info reports what the
@@ -3804,6 +3744,47 @@ assert_contains 'the stale container was not given its remedy' "$BOTCTL_OUTPUT" 
 # And neither sentence claims the other key.
 assert_not_contains 'the pending key was named as stale' \
   "$BOTCTL_OUTPUT" 'The file no longer sets BUILD_VERSION'
+fake_set api_env ''
+
+test_case 'status: a stale multiline override is not mistaken for a match'
+# `docker inspect --format '{{println .}}'` put a value containing a newline on two
+# lines, so a line-based comparison saw only its first part — and a container carrying
+# `BUILD_COMMIT=cafebabe` + newline + `pending` over an image stamped `cafebabe` compared
+# EQUAL, leaving a stale override unreported while /health/info exposed the whole thing.
+# Both sides are rendered with Go `%q` now: one entry is one line.
+seed_nexa_env canonical
+fake_set api_env "$(printf 'BUILD_COMMIT=cafebabe\npending')"
+run_botctl status
+assert_contains 'a multiline override whose first line matches the image was not reported' \
+  "$BOTCTL_OUTPUT" 'BUILD_COMMIT'
+assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'botctl restart'
+# And a container that genuinely matches its image still reports nothing, so this is
+# about the rendering rather than about warning always.
+fake_set api_env ''
+run_botctl status
+assert_not_contains 'a matching container was reported as overridden' \
+  "$BOTCTL_OUTPUT" 'still reports what the'
+
+test_case 'harness: the fake docker renders the --format template it was asked for'
+# The fake participated in the proof above and lied: it rendered `%q`-shaped lines
+# whatever template it was passed, so reverting `nexa_inspect_env` to `println`
+# requested one shape and received the other, and the test above stayed green
+# (falsification H-58, first run). A fake that answers one way regardless of the
+# question cannot falsify the question. The same fixture is therefore asked for both
+# shapes, on a value where they must differ, and a template the fake does not model
+# must be refused rather than rendered as something else.
+fake_set api_env "$(printf 'BUILD_COMMIT=cafebabe\npending')"
+quoted="$("${FAKE_DIR}/bin/docker" inspect fakeapicontainerid \
+  --format '{{range .Config.Env}}{{printf "%q" .}}{{"\n"}}{{end}}')"
+plain="$("${FAKE_DIR}/bin/docker" inspect fakeapicontainerid \
+  --format '{{range .Config.Env}}{{println .}}{{end}}')"
+assert_contains 'the %q shape did not render the entry as ONE quoted line' \
+  "$quoted" '"BUILD_COMMIT=cafebabe\npending"'
+assert_not_contains 'the println shape quoted its entries' "$plain" '"BUILD_COMMIT='
+assert_contains 'the println shape did not put the continuation on its own line' \
+  "$plain" "$(printf 'BUILD_COMMIT=cafebabe\npending\n')"
+assert_fails 'a template the fake does not model was rendered anyway' \
+  "${FAKE_DIR}/bin/docker" inspect fakeapicontainerid --format '{{range .Config.Env}}{{.}}{{end}}'
 fake_set api_env ''
 
 test_case 'status: an EMPTY override of the image identity is still an override'

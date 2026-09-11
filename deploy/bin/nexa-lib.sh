@@ -1259,52 +1259,104 @@ nexa_compose_env_unterminated() {
   ' <"$file"
 }
 
+# The resolved environment of a service, as COMPOSE resolves it.
+#
+# NOT a reimplementation, and that is the point. Five review rounds were spent
+# approaching Compose env_file semantics from the outside — inline comments, trimming,
+# quoting, escaped delimiters, values spanning lines — and each round found a new way
+# the outside view differed. Round nine found the one that settles it: Compose
+# INTERPOLATES env_file values. `${UNSET:-true}` reaches the container as `true` and
+# `${HOME}` resolves from the ambient environment, so reproducing it faithfully means
+# reproducing Compose variable precedence. A shell reader cannot, and one that tries
+# reports `invalid` for a file the application accepts.
+#
+# So this asks the authority. `docker compose config` is client-side, needs no daemon,
+# and resolves exactly what the containers will receive — including the compose file's
+# own `environment:` entries, which a reader of nexa.env never saw at all.
+#
+# Output is one `KEY=value` per line with any newline inside a value rendered as the
+# two characters \n, because a multiline value cannot travel through a line-based
+# caller intact. A backslash is doubled first, so the rendering is unambiguous.
+#
+# Exit 1 when Compose REFUSES the configuration — an unterminated quoted value, a bad
+# interpolation, a malformed compose file. That refusal is the most important thing
+# this reports: nothing will start, whatever the individual values look like.
+nexa_compose_resolved_env() {
+  local service="${1:-api}" json
+  json="$(nexa_compose config --format json 2>/dev/null)" || return 1
+  [ -n "$json" ] || return 1
+  printf '%s' "$json" | NEXA_SERVICE="$service" python3 -c '
+import json, os, sys
+
+try:
+    doc = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+name = os.environ.get("NEXA_SERVICE", "api")
+services = doc.get("services") or {}
+service = services.get(name) or {}
+env = service.get("environment") or {}
+if not isinstance(env, dict):
+    sys.exit(1)
+back = chr(92)
+for key in sorted(env):
+    raw = env[key]
+    text = "" if raw is None else str(raw)
+    text = text.replace(back, back + back).replace(chr(10), back + "n")
+    sys.stdout.write(str(key) + "=" + text + chr(10))
+'
+}
+
+# One value out of a resolved listing, and whether the key is there at all.
+#
+# Separate from reading it, because "absent" and "assigned to nothing" are different
+# states with different meanings: zod defaults an UNDEFINED value, and an environment
+# variable is a string, so `KEY=` reaches the schema as '' and is refused.
+nexa_listing_has() {
+  # A bash pattern rather than a pipeline into `grep -q`: under `pipefail` a consumer
+  # that exits early makes the writer die of SIGPIPE and the pipeline return 141 when it
+  # SUCCEEDED. `scripts/check-shell.sh` refuses that shape, and it is right to.
+  case "$1" in
+    "$2="*) return 0 ;;
+    *"
+$2="*) return 0 ;;
+  esac
+  return 1
+}
+
+nexa_listing_value() {
+  printf '%s\n' "$1" | sed -n "s/^${2}=//p" | sed -n '1p'
+}
+
 # Is a boolean setting on, in the vocabulary the application accepts FOR THAT KEY?
 #
-# Not one vocabulary for all of them, because the schema does not have one.
-# `booleanish` takes true/false/1/0/yes/no, and a reader that took only `true`
-# would report a monitor an operator had enabled with `yes` as disabled. But
-# `PANEL_MONITOR_ENABLED` is `z.enum(['true', 'false'])` and nothing wider, so a
-# reader that accepted `yes` there would report `on` for a value the application
-# REFUSES to boot on — which is the same lie from the other direction, and the
-# worse one: it reports a working monitor where the next restart will fail.
+# Takes a RESOLVED listing from `nexa_compose_resolved_env`, not a file. Resolution is
+# Compose's job and validation is this one, and keeping them apart is what finally made
+# this function correct: five rounds of failure here were all attempts to resolve and
+# validate in the same place, getting comments, trimming, escapes, multiline values and
+# finally interpolation wrong in turn.
 #
-# So the vocabulary is per key, and `tests/unit/config-upgrade.test.ts` binds each
-# key this reads to the validator the schema gives it.
+# The vocabulary is per key, because the schema does not have one. `booleanish` takes
+# true/false/1/0/yes/no, so a reader accepting only `true` would report a monitor an
+# operator enabled with `yes` as disabled. But `PANEL_MONITOR_ENABLED` is
+# `z.enum(['true', 'false'])` and nothing wider, so accepting `yes` there would report
+# `on` for a value the application REFUSES to boot on — the same lie from the other
+# side, and the worse one.
 #
-# Usage: nexa_env_boolean FILE KEY DEFAULT VOCAB
+# ABSENT gets the default; ASSIGNED TO NOTHING does not. Zod applies `.default()` to an
+# UNDEFINED value and an environment variable is a string, so `KEY=` reaches the schema
+# as '' and is refused by both vocabularies.
+#
+# Usage: nexa_listing_boolean LISTING KEY DEFAULT VOCAB
 #   DEFAULT  `on` or `off`
 #   VOCAB    `loose` for a booleanish key, `strict` for a true/false enum
-nexa_env_boolean() {
-  local file="$1" key="$2" fallback="$3" vocab="${4:-loose}" raw
-  # ABSENT is the only thing that gets the default, and absence is the SCANNER's
-  # answer rather than a separate grep's.
-  #
-  # Zod applies `.default()` to an UNDEFINED value, and an environment variable is
-  # a string: `PANEL_MONITOR_ENABLED=` reaches the schema as '' and is refused by
-  # both the enum and `booleanish`. So presence has to be settled before the value
-  # is read — but by the same pass that reads it. A grep for the key would count a
-  # line inside ANOTHER variable's multiline value as an assignment, and report a
-  # key Compose never sets as set. One pass, one answer: a non-zero exit means the
-  # file does not assign this key.
-  # Resolved the way COMPOSE resolves it, then validated the way the SCHEMA
-  # validates it. Two stages, because that is what a deployed installation is: the
-  # application never reads this file, it reads what Compose made of it.
-  #
-  # Neither stage alone is the rule. Compose trims an unquoted value at both ends
-  # and drops a space-introduced inline comment, so ` true ` and `true # on` are
-  # values the application ACCEPTS and a reader that refused them would cry wolf.
-  # Compose preserves internal whitespace, so `t rue` reaches `booleanish` — a bare
-  # enum with no `.trim()` — intact and is refused, and a reader that normalised it
-  # would report a working schedule for a file the next start rejects. This function
-  # has made both mistakes, one per round; `nexa_compose_env_value` is where the
-  # first stage now lives, and the case statements below are the whole of the second.
-  raw="$(nexa_compose_env_value "$file" "$key" 2>/dev/null)" || {
+nexa_listing_boolean() {
+  local listing="$1" key="$2" fallback="$3" vocab="${4:-loose}" raw
+  nexa_listing_has "$listing" "$key" || {
     printf '%s' "$fallback"
     return 0
   }
-  # Assigned, but to nothing. `KEY=` and `KEY=   ` both reach the schema as '' and are
-  # refused; neither is the default.
+  raw="$(nexa_listing_value "$listing" "$key")"
   [ -n "$raw" ] || {
     printf 'invalid'
     return 0
@@ -1352,16 +1404,26 @@ nexa_running_container() {
 nexa_inspect_env() {
   local kind="$1" ref="$2"
   [ -n "$ref" ] || return 1
+  # `printf "%q"` per entry, not `println`. An environment value may contain a newline
+  # — Compose lets a quoted value span lines — and `println` put the continuation on
+  # its own line, so a line-based reader returned only the first part. Two different
+  # values whose first lines matched then compared EQUAL, and a stale override went
+  # unreported. `%q` renders each entry as one quoted, escaped line, so one entry is
+  # one line and two entries are equal only when they are.
   case "$kind" in
-    image) docker image inspect "$ref" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null ;;
-    container) docker inspect "$ref" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null ;;
+    image) docker image inspect "$ref" --format '{{range .Config.Env}}{{printf "%q" .}}{{"\n"}}{{end}}' 2>/dev/null ;;
+    container) docker inspect "$ref" --format '{{range .Config.Env}}{{printf "%q" .}}{{"\n"}}{{end}}' 2>/dev/null ;;
     *) return 1 ;;
   esac
 }
 
-# One variable out of an environment already read.
-nexa_env_listing_value() {
-  printf '%s\n' "$1" | sed -n "s/^${2}=//p" | sed -n '1p'
+# One ENTRY out of an environment already read, quoted exactly as `%q` rendered it.
+#
+# The whole entry rather than the value, because the caller compares two of them and a
+# quoted entry is already a faithful one-line representation — unquoting it would add a
+# step that can be wrong for no gain.
+nexa_quoted_env_entry() {
+  printf '%s\n' "$1" | sed -n "s/^\"${2}=/${2}=/p" | sed -n '1p'
 }
 
 # Which obsolete keys a RUNNING container carries BECAUSE SOMETHING OVERRODE ITS
@@ -1404,8 +1466,8 @@ nexa_container_overridden_obsolete_keys() {
   running_env="$(nexa_inspect_env container "$id")" || return 0
   stamped_env="$(nexa_inspect_env image "$image")" || return 0
   for key in $NEXA_OBSOLETE_APP_ENV_KEYS; do
-    running="$(nexa_env_listing_value "$running_env" "$key")"
-    stamped="$(nexa_env_listing_value "$stamped_env" "$key")"
+    running="$(nexa_quoted_env_entry "$running_env" "$key")"
+    stamped="$(nexa_quoted_env_entry "$stamped_env" "$key")"
     [ "$running" = "$stamped" ] || printf '%s\n' "$key"
   done
   return 0

@@ -215,19 +215,19 @@ default OFF and that is correct — an upgrade must not start taking and deliver
 backups, or start dialling an operator's panels, because a new release learned
 how to. The cost of that correctness is that an installation which never added
 the line is in the disabled state, and until this section existed no command
-would say so. It reads `/etc/nexa/nexa.env` by key, applying the same defaults
-and the same PER-KEY vocabulary the application applies — `PANEL_MONITOR_ENABLED`
+would say so. It applies the same defaults and the same PER-KEY vocabulary the
+application applies — `PANEL_MONITOR_ENABLED`
 is a `true`/`false` enum while the others also take `1`/`0`/`yes`/`no`, and a value
 outside its own key's vocabulary reads as `invalid` rather than being guessed at.
-Values are resolved the way COMPOSE resolves them and then validated the way the
-SCHEMA validates them, because that is the path a value actually travels: an inline
-comment after a space is dropped and an unquoted value is trimmed at both ends, as
-Compose does both; whitespace INSIDE a value survives, as Compose leaves it, and the
-schema then refuses it. The file is SCANNED rather than grepped, because a quoted
-value may span lines — so a line that looks like an assignment can be text inside
-another variable's value, and counting it as a setting would report configuration
-Compose never applies. A file that ends inside a quoted value is refused by Compose
-whole, and `status` says so before it lists anything. The backup delivery destination is
+Values come from `docker compose config`, not from reading the file. Compose resolves
+`env_file` semantics — quoting, inline comments, trimming, values spanning lines, and
+**interpolation**, so `${UNSET:-true}` arrives as `true` and `${HOME}` comes from the
+ambient environment — and reproducing that in a shell script means reproducing
+Compose's variable precedence. So `status` asks Compose what a container started now
+would receive, and applies only the part that is the application's own: the per-key
+vocabulary the schema accepts. It also surfaces the one answer that matters more than
+any value, because Compose reports it directly: a configuration Compose REFUSES, where
+nothing starts and no individual setting is in force. The backup delivery destination is
 reported by PRESENCE only, because one of its two keys is a bot token.
 
 Each line names the process that READS the value, which is the operator's next

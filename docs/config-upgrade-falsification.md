@@ -110,7 +110,7 @@ its DEFAULT`. Both were real at the time. Both are gone with the mechanism.
 
 | #    | Rule                                                                       | Mutation                                                                   | Named test                                                                                      | Result |
 | ---- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------ |
-| H-17 | The section reports the FILE and says so, claiming no runtime state        | `botctl`: drop the heading's source and the standing caveat                | `botctl.test.sh` › status: the section names the FILE as its source and claims nothing more     | KILLED |
+| H-17 | The section names its RESOLVER and says so, claiming no runtime state      | `botctl`: drop the heading's source and the standing caveat                | `botctl.test.sh` › status: the section names COMPOSE as its resolver and claims nothing more    | KILLED |
 | H-18 | Each setting is attributed to the entrypoint that actually reads it        | `botctl`: attribute `PANEL_MONITOR_ENABLED` to the worker                  | `config-upgrade.test.ts` › attributes each setting to the entrypoint that actually reads it     | KILLED |
 | H-19 | An EMPTY assignment is invalid, because zod defaults only an ABSENT value  | `nexa-lib.sh`: infer absence from an empty value, as the first version did | `botctl.test.sh` › status: an EMPTY assignment is invalid, not the default                      | KILLED |
 | H-20 | The stale build identity is read from the API, which serves `/health/info` | `botctl`: stop asking the running container                                | `botctl.test.sh` › status: a clean file whose API still carries the stale identity is reported  | KILLED |
@@ -256,14 +256,10 @@ the finding, and an inline comment beside one's own key is a thing an operator w
 
 | #    | Rule                                                                | Mutation                                               | Named test                                                                                             | Result |
 | ---- | ------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ------ |
-| H-33 | A capability value is resolved the way COMPOSE resolves it          | `nexa-lib.sh`: `nexa_env_boolean` back to the raw line | `botctl.test.sh` › status: a value is read the way COMPOSE resolves it, then validated                 | KILLED |
-| H-34 | A SPACE introduces an inline comment; any other whitespace does not | `nexa-lib.sh`: accept `[[:space:]]#` as the separator  | `botctl.test.sh` › status: a value is read the way COMPOSE resolves it, then validated                 | KILLED |
-| H-35 | An unquoted value is trimmed at both ends, as Compose trims it      | `nexa-lib.sh`: drop both trims                         | `botctl.test.sh` › status: a value is read the way COMPOSE resolves it, then validated                 | KILLED |
-| H-36 | Quotes beat the comment rule                                        | `nexa-lib.sh`: apply the comment cut inside quotes too | `botctl.test.sh` › status: a value is read the way COMPOSE resolves it, then validated                 | KILLED |
 | H-37 | A failed IMAGE-environment lookup stops the report                  | `nexa-lib.sh`: swallow its status, as round four did   | `botctl.test.sh` › status: a provenance it cannot compute produces no warning, at any of three lookups | KILLED |
 | H-38 | A failed CONTAINER-environment lookup stops the report              | `nexa-lib.sh`: swallow its status                      | `botctl.test.sh` › status: a provenance it cannot compute produces no warning, at any of three lookups | KILLED |
 | H-39 | The reader's first stage is the Compose resolver, not the raw line  | `nexa-lib.sh`: `nexa_env_boolean` back to the raw line | `config-upgrade.test.ts` › validates what COMPOSE produces, not what the file literally says           | KILLED |
-| H-40 | EVERY read of `nexa.env` goes through it, `migrate-config` included | `botctl`: the key-id read back to the raw line         | `config-upgrade.test.ts` › reads nexa.env through the Compose resolver everywhere, not only in status  | KILLED |
+| H-40 | EVERY read of `nexa.env` goes through it, `migrate-config` included | `botctl`: the key-id read back to the raw line         | `config-upgrade.test.ts` › reads what the application receives, and refuses to freeze a substitution   | KILLED |
 
 **On H-37 and H-38 passing for the right reason.** A test asserting that nothing is
 warned about is satisfied by a check that never warns, so the case also drives the
@@ -301,11 +297,9 @@ The 18-shape cross-check against `docker compose config` was re-run after the ch
 and still agrees on every shape, which is the point of having it: a narrowing fix
 that broke an ordinary quoted value would have shown up there rather than in review.
 
-| #    | Rule                                                                    | Mutation                                                             | Named test                                                                             | Result |
-| ---- | ----------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------ |
-| H-41 | A quote is stripped only when its partner is on the SAME line           | `nexa-lib.sh`: strip an unmatched opening quote                      | `botctl.test.sh` › status: a value is read the way COMPOSE resolves it, then validated | KILLED |
-| H-42 | An assignment is not only `^KEY=`: `export` and indentation count       | `nexa-lib.sh`: narrow `nexa_env_key_pattern` back to `^KEY=`         | `botctl.test.sh` › status: a value is read the way COMPOSE resolves it, then validated | KILLED |
-| H-43 | The detector and the rewriter agree about what an assignment looks like | `nexa-lib.sh`: leave the rewriter on `^KEY=` while the reader widens | `botctl.test.sh` › update: removes an obsolete line however it is spelled              | KILLED |
+| #    | Rule                                                                    | Mutation                                                             | Named test                                                                | Result |
+| ---- | ----------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------ |
+| H-43 | The detector and the rewriter agree about what an assignment looks like | `nexa-lib.sh`: leave the rewriter on `^KEY=` while the reader widens | `botctl.test.sh` › update: removes an obsolete line however it is spelled | KILLED |
 
 **And the case that keeps it honest** is the third assertion beside it: a value whose
 quote DOES close on its line is still resolved to `on`. Without it, a reader that
@@ -390,10 +384,9 @@ values no container will ever receive.
 
 | #    | Rule                                                                   | Mutation                                                   | Named test                                                                                         | Result |
 | ---- | ---------------------------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------ |
-| H-44 | A line inside another variable's value is not an assignment            | `nexa-lib.sh`: the scanner stops tracking quoted regions   | `botctl.test.sh` › status: a line inside another variable is not an assignment                     | KILLED |
 | H-45 | The REWRITER never deletes a line from inside another variable's value | `nexa-lib.sh`: drop the rewriter's quoted-region tracking  | `botctl.test.sh` › update: the removal never reaches inside another variable value                 | KILLED |
 | H-46 | A removed key's continuation lines go with it                          | `nexa-lib.sh`: drop the rewriter's quoted-region tracking  | `botctl.test.sh` › update: removing a multiline obsolete value takes its continuation lines        | KILLED |
-| H-47 | A file Compose refuses WHOLE is reported as refused whole              | `botctl`: remove the unterminated-file notice              | `botctl.test.sh` › status: a file Compose refuses WHOLE is said to be refused whole                | KILLED |
+| H-47 | A file Compose refuses WHOLE is reported as refused whole              | `botctl`: remove the unterminated-file notice              | `botctl.test.sh` › status: a configuration Compose REFUSES is reported as refused, not summarised  | KILLED |
 | H-48 | The file and the running API are three states, not two                 | `botctl`: collapse the first branch back to the file alone | `botctl.test.sh` › status: the file and the running API are two facts, reported as three states    | KILLED |
 | H-49 | Detection and removal use the scanner, never a pattern                 | `nexa-lib.sh`: the detector greps again                    | `config-upgrade.test.ts` › finds and removes assignments with the same scanner, not with a pattern | KILLED |
 | H-50 | Presence is settled by the pass that reads the value                   | `nexa-lib.sh`: a separate presence grep, as before         | `config-upgrade.test.ts` › treats an EMPTY assignment as invalid, which is what the schema does    | KILLED |
@@ -467,3 +460,119 @@ instead of passing quietly.
 **H-54 is the fixture assertion**, and it is in the table because it is a rule like any
 other: the case asserts its own input before acting on it, and the mutation that
 reintroduces the format-string fixture kills it.
+
+### Round nine, on `0977fce` — and the end of the reimplementation
+
+Three findings. One of them ends an argument that had run for five rounds, so this
+section retires rules rather than only adding them.
+
+**Compose INTERPOLATES env_file values.** Measured on v5.1.1:
+
+```
+KEY=${UNSET_VAR:-true}   the container receives  true
+KEY=${UNSET_VAR:-}       the container receives  (empty)
+KEY=${HOME}              the container receives  /root      ← the AMBIENT environment
+```
+
+So a reader in this repository cannot be right about these values without reproducing
+Compose variable precedence — the shell environment, `--env-file`, and the rest. One
+that tries reports `invalid` for a file the application accepts, which is the same
+false alarm the whitespace rule produced two rounds earlier, and `${UNSET:-}` makes an
+unset backup destination look present.
+
+Rounds five to nine were all one mistake: **resolving and validating in the same
+place.** Comments, trimming, escapes, values spanning lines, interior assignments,
+escaped delimiters, and now interpolation — seven distinct ways the outside view of
+`env_file` differed from Compose's own. The answer is not an eighth correction. It is
+that resolution belongs to Compose and validation belongs here:
+
+```
+docker compose config --format json   →  the resolved environment, by construction
+nexa_listing_boolean                  →  the per-key vocabulary the SCHEMA applies
+```
+
+`docker compose config` is client-side, needs no daemon, and reports exactly what a
+container started now would receive — including the compose file's own `environment:`
+entries, which a reader of `nexa.env` never saw at all. It also reports the one
+condition that matters more than any value: a configuration Compose REFUSES, where
+nothing starts and no individual setting is in force.
+
+**Seven rows are retired here, not corrected.** `H-33`, `H-34`, `H-35`, `H-36`,
+`H-41`, `H-42` and `H-44` each named a rule about how this repository resolved
+`env_file` semantics for reporting. That code is gone, so the rules are not wrong — they
+are about nothing. Keeping them would leave a table that cites tests no longer in the
+suite, which is what this file exists to prevent. The same treatment the withdrawn
+runtime comparison got in round three, for the same reason.
+
+The scanner SURVIVES, and only there: `nexa_obsolete_app_env_keys` and
+`nexa_env_rewrite` operate on the file as TEXT — one finds assignments to remove, the
+other removes them — and that is a question about lines, which interpolation does not
+touch. `H-45`, `H-46`, `H-51` and `H-52` are its live rules.
+
+**The fake docker no longer parses anything**, which removes a standing hazard. It
+serves a resolved environment a test states outright, so a shape case can no longer
+pass because the fake's parser agreed with this repository's — they were the same
+parser. What the suite now checks is that `status` reports what Compose told it; that
+Compose's answer is right is Compose's business.
+
+| #    | Rule                                                                        | Mutation                                                               | Named test                                                                                        | Result                |
+| ---- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------- |
+| H-55 | Capability values come from `docker compose config`, not from the file      | `botctl`: read the file with the old scanner instead                   | `botctl.test.sh` › status: the capabilities section reports what COMPOSE resolved                 | KILLED                |
+| H-56 | A configuration Compose REFUSES is reported, never summarised               | `botctl`: carry on and print values when `compose config` fails        | `botctl.test.sh` › status: a configuration Compose REFUSES is reported as refused, not summarised | KILLED                |
+| H-57 | An enabled webhook with a secret under 16 characters is `invalid`           | `botctl`: drop the dependency check                                    | `botctl.test.sh` › status: an enabled webhook with a short secret is invalid, not on              | KILLED                |
+| H-58 | A multiline environment entry cannot be truncated into a false match        | `nexa-lib.sh`: render the inspect output with `println` again          | `botctl.test.sh` › status: a stale multiline override is not mistaken for a match                 | SURVIVED, then KILLED |
+| H-59 | `migrate-config` refuses to freeze a substitution into the file it rewrites | `botctl`: drop the refusal and write the literal                       | `botctl.test.sh` › secrets migrate-config: a substitution is refused, not frozen                  | KILLED                |
+| H-60 | The fake `docker inspect` renders the `--format` template it was asked for  | `harness.sh`: render `%q` whatever the template says                   | `botctl.test.sh` › harness: the fake docker renders the --format template it was asked for        | KILLED                |
+| H-61 | Every test root seeds the environment Compose resolves, not only the first  | `harness.sh`: create the fake's directory in `setup_fake_docker` again | `botctl.test.sh` › harness: a second root seeds the resolved environment too                      | KILLED                |
+
+**H-58 is the second finding of this round.** `docker inspect --format '{{println .}}'`
+put a value containing a newline on two lines, so a line-based comparison saw only its
+first part — and `BUILD_COMMIT='cafebabe\npending'` over an image stamped `cafebabe`
+compared EQUAL, leaving a stale override unreported. Both sides are rendered with Go
+`%q` now: one entry is one line, and two entries are equal only when they are.
+
+**H-58 SURVIVED its first mutation, and the table said KILLED.** Reverting both
+`nexa_inspect_env` templates to `println` left all 204 checks green, including the test
+named for the difference. The reason was the fake, not the rule: the fake `docker
+inspect` ignored the `--format` argument and rendered `%q`-shaped lines whatever it was
+asked, so under the mutation the production code requested `println` and received
+`%q` anyway. That is the fourth harness lie on this branch, after `compose ps -q`, the
+container carrying no stamped `BUILD_*`, and the single failure state for the image's
+environment — each a fake that answered one way regardless of the question, and each
+let a production rule be removed under a green suite. A test that cannot observe the
+mutation is not evidence, so the row above was wrong when it was first written, and
+this paragraph replaces the claim rather than editing it away.
+
+The correction is to the harness: `fake_render_config_env` inspects the template it
+was actually passed and renders `{{println .}}` as Go's println would — each entry's
+raw text, a multiline value spanning lines — and `{{printf "%q" .}}` as one quoted,
+escaped line per entry; any other template is refused loudly rather than rendered as
+something the caller did not ask for. The fixture data is the same for both shapes;
+only the rendering follows the request. Two mutations were then re-run:
+
+```
+M24   println on both nexa_inspect_env lines, quoted reader unchanged
+      → 7 of 204 fail: the named test and six provenance tests, because the reader
+        finds no quoted entry in println output and every lookup goes silent.
+M24b  println on both lines AND the reader made to match (an unquoted ^KEY= match),
+      which is the whole previous design, not half of it
+      → exactly 1 of 204 fails: status: a stale multiline override is not mistaken
+        for a match — the multiline rule alone, for the intended reason.
+```
+
+Restore was confirmed with `cmp` after each, and the suite is green on the restored
+file. H-60 pins the harness rule itself, because it participated in this proof.
+
+While fixing the fake, a second harness defect surfaced: `setup_root` seeded the
+default `nexa.env` BEFORE `setup_fake_docker` created the fake's state directory, so
+every root after the first wrote its resolved environment into the previous root's
+deleted directory — a `No such file` warning on stderr, 57 times, under a green suite,
+and a `status` in those tests that resolved nothing. The directory is created by
+`setup_root` now, and H-61 asserts it on a second root.
+
+**H-59 is not from either review.** It follows from the resolution split: `status` must
+read what the application RECEIVES, but `migrate-config` REWRITES the file, so it must
+read the file — and writing a resolved value there would freeze an interpolation meant
+to be evaluated at every start. Neither reading is safe when the value IS a
+substitution, so it refuses. The cost of choosing wrong is an installation that cannot
+decrypt anything.

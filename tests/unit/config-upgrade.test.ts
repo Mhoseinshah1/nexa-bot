@@ -548,8 +548,8 @@ describe("botctl reads the application's booleans per key, not one vocabulary fo
     const accepted = [...(block ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1] ?? '');
     expect(accepted.sort()).toEqual(['0', '1', 'false', 'no', 'true', 'yes']);
 
-    const reader = /nexa_env_boolean\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '';
-    expect(reader, 'nexa_env_boolean is not where this test looks for it').toContain('vocab');
+    const reader = /nexa_listing_boolean\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '';
+    expect(reader, 'nexa_listing_boolean is not where this test looks for it').toContain('vocab');
     const arms = (from: string) => {
       const truthy = /\n\s*(.*?)\) printf 'on'/.exec(from)?.[1] ?? '';
       const falsy = /\n\s*(.*?)\) printf 'off'/.exec(from)?.[1] ?? '';
@@ -625,16 +625,13 @@ describe("botctl reads the application's booleans per key, not one vocabulary fo
       configSchema.safeParse({ ...base, BACKUP_SCHEDULE_ENABLED: '' }).success,
       'an empty booleanish assignment was accepted',
     ).toBe(false);
-    // And the shell settles PRESENCE with the same pass that reads the value, rather
-    // than with a separate grep. A grep would count a line inside ANOTHER variable's
-    // multiline value as an assignment — so a key Compose never sets would be reported
-    // as set, and one that IS set would be read from the wrong line.
-    const fnAbs = /nexa_env_boolean\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '';
-    expect(fnAbs, 'presence is decided by a grep rather than by the scanner').not.toMatch(
-      /grep -qE/,
-    );
-    expect(fnAbs, 'absence is not taken from the scanner exit status').toMatch(
-      /raw="\$\(nexa_compose_env_value "\$file" "\$key" 2>\/dev\/null\)" \|\| \{/,
+    // And the shell settles PRESENCE on the RESOLVED listing, with `nexa_listing_has`
+    // rather than a grep of its own: absent gets the default and assigned-to-nothing
+    // does not, and both answers come from what Compose resolved, not from the file.
+    const fnAbs = /nexa_listing_boolean\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '';
+    expect(fnAbs, 'presence is decided by a grep of its own').not.toMatch(/grep/);
+    expect(fnAbs, 'absence is not asked of the resolved listing').toMatch(
+      /nexa_listing_has "\$listing" "\$key" \|\| \{/,
     );
     // The scanner recognises an assignment the way Compose does: an optional indent
     // and an optional `export ` prefix, both measured.
@@ -725,7 +722,7 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
     // And the per-key reads come out of those listings rather than re-inspecting,
     // which is what makes one checked status cover every key.
     expect(fn, 'the keys are not read out of the already-checked listings').toContain(
-      'nexa_env_listing_value',
+      'nexa_quoted_env_entry',
     );
   });
 
@@ -768,17 +765,29 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
     // about everything.
     expect(configSchema.safeParse({ ...base, BACKUP_SCHEDULE_ENABLED: 'true' }).success).toBe(true);
     expect(configSchema.safeParse({ ...base, PANEL_MONITOR_ENABLED: 'false' }).success).toBe(true);
-    // And the wiring: the reader's first stage is the Compose resolver, not the raw
-    // line. `nexa_env_value` there would refuse ` true `, which Compose trims and the
-    // application accepts — crying wolf about a working file.
-    const fn = /nexa_env_boolean\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '';
-    expect(fn, 'nexa_env_boolean is gone').not.toBe('');
-    expect(fn, 'nexa_env_boolean does not resolve the value the way Compose does').toContain(
-      'nexa_compose_env_value',
+    // And the wiring: the first stage is COMPOSE, asked through `docker compose config`,
+    // not any reader in this repository. Five rounds were spent reimplementing env_file
+    // semantics and the last found the case that ends it — Compose interpolates these
+    // values, `${HOME}` included — so the validator takes a RESOLVED listing and this
+    // asserts it cannot go back to reading a file.
+    const fn = /nexa_listing_boolean\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '';
+    expect(fn, 'nexa_listing_boolean is gone').not.toBe('');
+    expect(fn, 'nexa_listing_boolean does not read a resolved listing').toContain(
+      'nexa_listing_value "$listing"',
     );
-    expect(fn, 'nexa_env_boolean still reads the raw line').not.toMatch(/raw="\$\(nexa_env_value /);
-    expect(fn, 'nexa_env_boolean normalises whitespace out of the value').not.toMatch(
+    expect(fn, 'nexa_listing_boolean reads a file again').not.toMatch(/\$file/);
+    expect(fn, 'nexa_listing_boolean normalises the value').not.toMatch(
       /raw="\$\{raw\/\/\[\[:space:\]\]\/\}"/,
+    );
+    // And the capability section gets its values from compose, not from the file.
+    const botctlSrc = readFileSync(join(__dirname, '../../deploy/bin/botctl'), 'utf8');
+    const section = /status_capabilities\(\) \{[\s\S]*?\n\}/.exec(botctlSrc)?.[0] ?? '';
+    expect(section, 'status_capabilities is gone').not.toBe('');
+    expect(section, 'the section does not ask compose to resolve the configuration').toContain(
+      'nexa_compose_resolved_env api',
+    );
+    expect(section, 'the section reads the file itself again').not.toMatch(
+      /nexa_compose_env_value|nexa_env_value/,
     );
   });
 
@@ -811,23 +820,32 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
     );
   });
 
-  it('reads nexa.env through the Compose resolver everywhere, not only in status', () => {
-    // `nexa.env` is the file operators edit and the file the application consumes, so
-    // every read of it has to agree with what the container receives. The two reads
-    // that make this more than tidiness are in `botctl secrets migrate-config`, which
-    // carries SECRETS_KEK_ID and SECRETS_KEK INTO the file it rewrites: reading them
-    // as the file spells them would write an active key id with a comment in it and a
-    // SECRETS_KEYS entry the base64 refinement refuses at boot — a conversion that
-    // leaves an installation unable to decrypt anything.
+  it('reads what the application receives, and refuses to freeze a substitution', () => {
+    // Two different questions, answered by two different readers on purpose.
+    //
+    // `status` asks what the application RECEIVES, which only Compose can say — it
+    // interpolates these values — so the capability and secret sections go through
+    // `docker compose config`.
+    //
+    // `botctl secrets migrate-config` REWRITES the file, so it must read the file:
+    // writing a resolved value would freeze an interpolation meant to be evaluated at
+    // every start. But then neither reading is safe when the value IS a substitution —
+    // the literal `${VAULT_KEK}` is not a key and the resolved one is a key the file was
+    // never meant to hold — so it refuses rather than choosing. The cost of choosing
+    // wrong there is an installation that cannot decrypt anything.
     const botctl = readFileSync(join(__dirname, '../../deploy/bin/botctl'), 'utf8');
-    const raw = [...botctl.matchAll(/nexa_env_value "\$file"[^\n]*/g)].map((m) => m[0]);
-    expect(raw, `these nexa.env reads bypass the Compose resolver: ${raw.join(' | ')}`).toEqual([]);
-    // And the reads that matter are there, so this is not satisfied by a file that
-    // stopped reading nexa.env altogether.
-    expect(botctl).toContain('nexa_compose_env_value "$file" SECRETS_KEK_ID');
-    expect(botctl).toContain('nexa_compose_env_value "$file" SECRETS_KEK ');
-    expect(botctl).toMatch(
-      /nexa_compose_env_value "\$file" BACKUP_SCHEDULE_ENABLED|nexa_env_boolean/,
+    const secrets = /status_secrets\(\) \{[\s\S]*?\n\}/.exec(botctl)?.[0] ?? '';
+    expect(secrets, 'status_secrets is gone').not.toBe('');
+    expect(secrets, 'the secrets section does not ask compose').toContain(
+      'nexa_compose_resolved_env api',
+    );
+    const migrate = /cmd_secrets_migrate_config\(\) \{[\s\S]*?\n\}/.exec(botctl)?.[0] ?? '';
+    expect(migrate, 'migrate-config is gone').not.toBe('');
+    expect(migrate, 'migrate-config stopped reading the file it rewrites').toContain(
+      'nexa_compose_env_value "$file" SECRETS_KEK_ID',
+    );
+    expect(migrate, 'migrate-config would freeze a substitution into the file').toMatch(
+      /\*'\$'\*\)/,
     );
     // `/etc/os-release` is deliberately NOT a Compose file and keeps the raw reader.
     const install = readFileSync(join(__dirname, '../../deploy/install.sh'), 'utf8');

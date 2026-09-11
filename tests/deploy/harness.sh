@@ -120,9 +120,18 @@ setup_root() {
 
   export NEXA_BIN_DIR="${NEXA_ROOT}/usr/local/bin"
 
+  # The fake tools' state lives under THIS root, and it is created here rather
+  # than in setup_fake_docker because seeding the configuration below writes
+  # into it. Left to setup_fake_docker, every root after the first seeded its
+  # `compose_env` into the previous root's deleted directory — a warning on
+  # stderr and a `status` that resolved nothing, in 57 tests, under a suite
+  # that was green.
+  FAKE_DIR="${NEXA_ROOT}/fake"
+  export FAKE_DIR
+
   mkdir -p "$NEXA_DEPLOY_DIR" "$NEXA_LIB_DIR" "$NEXA_STATE_DIR/releases" \
     "$NEXA_STATE_DIR/assets" "$NEXA_BACKUP_DIR" "$NEXA_BIN_DIR" \
-    "$(dirname "$NEXA_LOCK_FILE")"
+    "$(dirname "$NEXA_LOCK_FILE")" "$FAKE_DIR/bin"
   chmod 0700 "$NEXA_BACKUP_DIR"
   install -d -m 0700 "$NEXA_CONFIG_DIR"
 
@@ -208,6 +217,50 @@ seed_nexa_env() {
     printf 'NOTIFICATION_TRANSPORT=telegram\n'
   } >"$file"
   chmod 0600 "$file"
+
+  # The same shape as the environment COMPOSE would resolve from it.
+  #
+  # `botctl status` asks `docker compose config` now rather than reading the file, so a
+  # fake that only wrote the file would leave every capability at its default. This is a
+  # fixed mapping written by hand, NOT a parser: resolving env_file semantics is
+  # Compose's job, and a fake that parsed the file would be asserting this repository's own
+  # reader against itself.
+  {
+    printf 'DATABASE_URL=postgres://nexa:pw@postgres:5432/nexa\n'
+    printf 'REDIS_URL=redis://:pw@redis:6379\n'
+    case "$shape" in
+      legacy | legacy-truncated)
+        printf 'SECRETS_KEK=%s\n' "$TEST_KEK"
+        printf 'SECRETS_KEK_ID=%s\n' "$TEST_KEY_ID"
+        ;;
+      canonical)
+        printf 'SECRETS_KEYS=%s:%s\n' "$TEST_KEY_ID" "$TEST_KEK"
+        printf 'SECRETS_ACTIVE_KEY_ID=%s\n' "$TEST_KEY_ID"
+        ;;
+      canonical-with-stale-legacy)
+        printf 'SECRETS_KEYS=%s:%s\n' "$TEST_KEY_ID" "$TEST_KEK"
+        printf 'SECRETS_ACTIVE_KEY_ID=%s\n' "$TEST_KEY_ID"
+        printf 'SECRETS_KEK=%s\n' "$TEST_KEK"
+        printf 'SECRETS_KEK_ID=%s\n' "$TEST_KEY_ID"
+        ;;
+      id-without-key) printf 'SECRETS_KEK_ID=%s\n' "$TEST_KEY_ID" ;;
+      empty) ;;
+    esac
+    printf 'WEB_ADMIN_ORIGINS=https://admin.example.test\n'
+    printf 'DEPLOYMENT_TOPOLOGY=edge\n'
+    printf 'NOTIFICATION_TRANSPORT=telegram\n'
+  } >"${FAKE_DIR}/compose_env"
+}
+
+# A line in the file AND in what Compose resolves from it.
+#
+# The ordinary case: an assignment Compose passes through literally. A test that wants
+# the two to DIVERGE — a comment, an interpolation, a value Compose refuses — sets
+# `compose_env` or `compose_config_fails` itself, which is the only way a divergence can
+# be expressed now that this script does not parse anything.
+append_resolved_env() {
+  printf '%s\n' "$@" >>"${NEXA_CONFIG_DIR}/nexa.env"
+  printf '%s\n' "$@" >>"${FAKE_DIR}/compose_env"
 }
 
 # Read one key out of the fake root's nexa.env without going through the
@@ -358,8 +411,7 @@ clear_activation_fault() {
 # Behaviour is scripted through files in $FAKE_DIR, so a test can make a pull
 # fail, a health check hang, or a migration exit non-zero.
 setup_fake_docker() {
-  FAKE_DIR="${NEXA_ROOT}/fake"
-  export FAKE_DIR
+  # FAKE_DIR is setup_root's; see there.
   mkdir -p "$FAKE_DIR/bin"
   export DOCKER_LOG="${FAKE_DIR}/docker.log"
   : >"$DOCKER_LOG"
@@ -438,6 +490,83 @@ fake_image_env() {
   printf 'BUILD_TIME=%s\n' "$(read_state image_build_time 2026-01-01T00:00:00Z)"
 }
 
+# Render environment entries the way `docker inspect --format` renders them for
+# the template the caller ACTUALLY passed. Stdin is one KEY=VALUE per line; a
+# line with no `=` continues the entry above it, because Docker stores ONE entry
+# per variable and a value may contain a newline. Docker keeps one entry per key,
+# so a later assignment replaces an earlier one where it stood.
+#
+# The template is inspected, not assumed. This fake once rendered `%q`-shaped
+# lines whatever was asked, and against it `nexa_inspect_env` could be reverted
+# to `println` under a green suite: the test named for the difference between
+# the two could not observe it, so it proved nothing (M24 in
+# docs/config-upgrade-falsification.md). Two shapes are modelled because two are
+# used — `{{println .}}` puts each entry's raw text on a line, so a multiline
+# value spans lines exactly as Go's println would; `{{printf "%q" .}}` renders
+# each entry as one Go-quoted line with the newline escaped. Any other template
+# is refused loudly rather than rendered as something the caller did not ask for.
+fake_render_config_env() {
+  local shape
+  case "$1" in
+    *'{{printf "%q" .}}'*) shape=quoted ;;
+    *'{{println .}}'*) shape=println ;;
+    *)
+      printf 'fake docker: unmodelled --format template: %s\n' "$1" >&2
+      return 1
+      ;;
+  esac
+  FAKE_ENV_SHAPE="$shape" python3 -c '
+import os, sys
+
+entries = []
+for line in sys.stdin.read().split(chr(10)):
+    if line == "" and entries:
+        continue
+    if "=" in line and not line.startswith(" "):
+        key, _, value = line.partition("=")
+        entries.append([key, value])
+    elif entries:
+        entries[-1][1] += chr(10) + line
+merged = {}
+order = []
+for key, value in entries:
+    if key not in merged:
+        order.append(key)
+    merged[key] = value
+
+def go_quote(text):
+    # What Go strconv.Quote does to the characters an environment value can
+    # plausibly carry: the delimiters and the whitespace escapes are exact, and
+    # anything else non-printable is rendered as Go would render it in hex.
+    out = []
+    for ch in text:
+        code = ord(ch)
+        if ch == chr(92):
+            out.append(chr(92) + chr(92))
+        elif ch == chr(34):
+            out.append(chr(92) + chr(34))
+        elif ch == chr(10):
+            out.append(chr(92) + "n")
+        elif ch == chr(9):
+            out.append(chr(92) + "t")
+        elif ch == chr(13):
+            out.append(chr(92) + "r")
+        elif code < 32 or code == 127:
+            out.append(chr(92) + "x" + format(code, "02x"))
+        else:
+            out.append(ch)
+    return chr(34) + "".join(out) + chr(34)
+
+shape = os.environ["FAKE_ENV_SHAPE"]
+for key in order:
+    entry = key + "=" + merged[key]
+    if shape == "quoted":
+        sys.stdout.write(go_quote(entry) + chr(10))
+    else:
+        sys.stdout.write(entry + chr(10))
+'
+}
+
 case "${1:-}" in
   buildx)
     # buildx imagetools inspect <ref> --format ...
@@ -474,8 +603,7 @@ case "${1:-}" in
       # comparison that says what the container SHOULD be answering.
       *Config.Env*)
         [ "$(read_state image_env_fails 0)" != 1 ] || exit 1
-        printf 'NODE_ENV=production\n'
-        fake_image_env
+        { printf 'NODE_ENV=production\n'; fake_image_env; } | fake_render_config_env "$*" || exit 1
         ;;
       # The commit the image was built from, per digest when a test says so:
       # the recovery cross-checks it against the manifest.
@@ -528,17 +656,21 @@ case "${1:-}" in
             # One entry per key, like `docker inspect`, rather than the override
             # first and the image after: a duplicate-key listing would let a reader
             # that took the LAST match pass here and be wrong in production.
+            #
+            # Rendered for the template the caller passed — see
+            # fake_render_config_env for why the template is inspected rather
+            # than assumed.
             {
               printf 'NODE_ENV=production\n'
               fake_image_env
               [ -z "$(read_state api_env '')" ] || printf '%s\n' "$(read_state api_env '')"
-            } | awk -F= '{ order[$1] = (($1 in value) ? order[$1] : ++n); value[$1] = $0 }
-              END { for (k in value) out[order[k]] = value[k]
-                    for (i = 1; i <= n; i++) print out[i] }'
+            } | fake_render_config_env "$*" || exit 1
             ;;
           *)
-            printf 'NEXA_DOMAIN=example.test\n'
-            printf 'NEXA_EDGE_CONFIG=%s\n' "$(read_state edge_running unset)"
+            {
+              printf 'NEXA_DOMAIN=example.test\n'
+              printf 'NEXA_EDGE_CONFIG=%s\n' "$(read_state edge_running unset)"
+            } | fake_render_config_env "$*" || exit 1
             ;;
         esac
         ;;
@@ -567,6 +699,34 @@ case "${1:-}" in
         case "$*" in
           *--services*)
             printf '%s\n' $(read_state compose_services "api worker monitor postgres redis caddy")
+            ;;
+          *--format*json*)
+            # `compose config --format json`, which `botctl status` asks for the
+            # RESOLVED application environment.
+            #
+            # The resolved values come from `compose_env` — a test says what Compose
+            # produces — and NOT from parsing nexa.env. That is deliberate. Resolving
+            # env_file semantics is Compose's job now, so a fake that parsed the file
+            # would be asserting MY parser against itself: every shape test would pass
+            # because the fake stripped the comment, not because Compose does. The
+            # agreement with the real parser is established by running real Compose,
+            # recorded in docs/config-upgrade-falsification.md; what these tests check
+            # is that `status` reports what Compose told it.
+            #
+            # `compose_config_fails` expresses the other important answer: a
+            # configuration Compose REFUSES, where no value is in force at all.
+            [ "$(read_state compose_config_fails 0)" != 1 ] || exit 1
+            COMPOSE_ENV="$(read_state compose_env '')" python3 -c '
+import json, os, sys
+
+env = {}
+for line in (os.environ.get("COMPOSE_ENV") or "").split(chr(10)):
+    if not line or "=" not in line:
+        continue
+    key, _, value = line.partition("=")
+    env[key] = value
+print(json.dumps({"services": {"api": {"environment": env}}}))
+'
             ;;
           *) : ;;
         esac

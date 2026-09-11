@@ -203,11 +203,24 @@ cmd_version() {
 # bot token and does not belong in an output an operator pastes into a ticket.
 status_capabilities() {
   local file="${NEXA_CONFIG_DIR}/nexa.env"
-  printf '\ncapabilities, as configured in %s:\n' "$file"
-  [ -r "$file" ] || {
-    printf '  configuration  unreadable\n'
+  local resolved
+  # COMPOSE resolves it, not this script. Five review rounds were spent reimplementing
+  # env_file semantics and the last one found the case that ends the argument: Compose
+  # INTERPOLATES these values, so `${UNSET:-true}` is `true` to the container and
+  # `${HOME}` comes from the ambient environment. Reproducing that means reproducing
+  # Compose variable precedence. Asking Compose is right about every shape by
+  # construction, and it also sees the compose file's own `environment:` entries, which a
+  # reader of nexa.env never did.
+  if ! resolved="$(nexa_compose_resolved_env api)"; then
+    printf '\ncapabilities:\n'
+    printf '  configuration  REFUSED by compose\n'
+    printf '\n  `docker compose config` cannot resolve this installation configuration, so\n'
+    printf '  no container will start and no individual value is in force. Common causes are\n'
+    printf '  a quoted value in %s that is never closed and a\n' "$file"
+    printf '  substitution that cannot be satisfied. Run `botctl logs` after fixing it.\n'
     return 0
-  }
+  fi
+  printf '\ncapabilities, as compose resolves %s:\n' "$file"
 
   # Key, label, default, the vocabulary the SCHEMA gives that key, and the process
   # that reads it. The vocabulary is not uniform: PANEL_MONITOR_ENABLED is a
@@ -222,37 +235,39 @@ status_capabilities() {
     'TELEGRAM_WEBHOOK_ENABLED|telegram webhook  |off|loose|api'
   )
 
-  local chat token destination scheduled=''
-  # Through the COMPOSE reader, like the booleans above, for consistency rather than
-  # for a changed answer: this is a PRESENCE test, and neither trimming nor comment
-  # stripping can turn a non-blank value blank or the reverse, so the raw line would
-  # report the same thing in every shape. One reader answering "what the container
-  # receives" throughout the section is the point — two readers on one file is an
-  # invitation to reach for the wrong one.
-  chat="$(nexa_compose_env_value "$file" BACKUP_TELEGRAM_CHAT_ID 2>/dev/null || true)"
-  token="$(nexa_compose_env_value "$file" BACKUP_TELEGRAM_BOT_TOKEN 2>/dev/null || true)"
+  local chat token destination scheduled='' webhook=''
+  chat="$(nexa_listing_value "$resolved" BACKUP_TELEGRAM_CHAT_ID)"
+  token="$(nexa_listing_value "$resolved" BACKUP_TELEGRAM_BOT_TOKEN)"
+  # The schema `.trim()`s both, so whitespace is not a value here.
   if [ -n "${chat//[[:space:]]/}" ] && [ -n "${token//[[:space:]]/}" ]; then
     destination='configured'
   elif [ -z "${chat//[[:space:]]/}" ] && [ -z "${token//[[:space:]]/}" ]; then
     destination='not configured'
   else
-    # The application refuses to boot on this, so it can only be a file nobody
-    # has restarted on yet. Worth saying before the restart finds out.
+    # The application refuses to boot on this, so it can only be a configuration
+    # nobody has restarted on yet. Worth saying before the restart finds out.
     destination='HALF configured'
   fi
-
-  # One condition that is not per setting: a file ending inside a quoted value is
-  # refused by Compose OUTRIGHT — `unterminated quoted value` — so nothing in it is in
-  # force, including the lines that look fine. Said before the list, because a tidy
-  # column of values no container will ever receive is the most misleading output this
-  # section could produce.
-  local unterminated=0
-  ! nexa_compose_env_unterminated "$file" || unterminated=1
 
   local entry key label fallback vocab owner configured
   for entry in "${settings[@]}"; do
     IFS='|' read -r key label fallback vocab owner <<<"$entry"
-    configured="$(nexa_env_boolean "$file" "$key" "$fallback" "$vocab")"
+    configured="$(nexa_listing_boolean "$resolved" "$key" "$fallback" "$vocab")"
+    # The webhook needs a secret of at least 16 characters, and `configSchema`
+    # refuses the WHOLE configuration without one — so an operator who enabled the
+    # webhook and has not yet set the secret has an API that will not start. A line
+    # reading `telegram webhook on` for that configuration is the same lie as
+    # accepting a spelling the schema does not: it reports working where the next
+    # start fails. The secret itself is never printed; only whether it satisfies the
+    # length the schema demands.
+    if [ "$key" = TELEGRAM_WEBHOOK_ENABLED ] && [ "$configured" = on ]; then
+      local secret
+      secret="$(nexa_listing_value "$resolved" TELEGRAM_WEBHOOK_SECRET)"
+      if [ "${#secret}" -lt 16 ]; then
+        configured='invalid'
+        webhook='short-secret'
+      fi
+    fi
     [ "$key" != BACKUP_SCHEDULE_ENABLED ] || scheduled="$configured"
     printf '  %s %-8s %s\n' "$label" "$configured" "$owner"
   done
@@ -266,20 +281,19 @@ status_capabilities() {
   # it gates the scheduler in `main.worker.ts` and nothing else.
   printf '  backup delivery    %-8s %s\n' "$destination" 'worker, api, recovery'
 
-  if [ "$unterminated" -eq 1 ]; then
-    printf '\n  This file ENDS INSIDE a quoted value. Compose refuses such a file whole —\n'
-    printf '  `unterminated quoted value` — so NONE of the values above will reach a\n'
-    printf '  container, and the next `botctl restart` or `botctl update` will not start.\n'
-    printf '  Close the quote before anything else.\n'
+  if [ "$webhook" = short-secret ]; then
+    printf '\n  TELEGRAM_WEBHOOK_ENABLED is on but TELEGRAM_WEBHOOK_SECRET is shorter than the\n'
+    printf '  16 characters the schema requires, so the API will REFUSE to start. Every\n'
+    printf '  update is authenticated by that header; set it and run `botctl restart`.\n'
   fi
 
   # Always, not on a detected mismatch. A container keeps the environment it was
   # created with, so any of the values above may not be in force yet — and a
   # DETECTION of that would have to be right about every field and every owning
   # process to be worth printing. This sentence is right about all of them.
-  printf '\n  These are the values in the FILE. A container keeps the configuration it was\n'
-  printf '  created with, so a value changed since the last `botctl restart` is not in\n'
-  printf '  force yet.\n'
+  printf '\n  These are the values compose would hand a container STARTED NOW. A running\n'
+  printf '  container keeps the configuration it was created with, so anything changed\n'
+  printf '  since the last `botctl restart` is not in force yet.\n'
 
   if [ "$scheduled" = off ]; then
     printf '\n  This configuration takes no AUTOMATIC backup. `botctl backup` still works, and\n'
@@ -375,15 +389,21 @@ status_secrets() {
     return 0
   }
 
+  # Resolved by COMPOSE, like the capabilities section and for the same reason: the
+  # application reads what Compose made of this file, and `SECRETS_ACCEPT_V1` below is
+  # switched on EXACTLY `true` or `false` with anything else falling through to the
+  # derived default — so an interpolated or comment-bearing line read literally gives
+  # the OPPOSITE answer whenever that default disagrees with what the operator wrote.
+  local resolved
+  if ! resolved="$(nexa_compose_resolved_env api)"; then
+    printf '  configuration  REFUSED by compose; see the capabilities section below\n'
+    return 0
+  fi
+
   local keys kek explicit format accept accept_source
-  keys="$(nexa_compose_env_value "$file" SECRETS_KEYS 2>/dev/null || true)"
-  kek="$(nexa_compose_env_value "$file" SECRETS_KEK 2>/dev/null || true)"
-  # The COMPOSE reader, because this one is switched on EXACTLY `true` or `false`
-  # below and anything else falls through to the derived default. `SECRETS_ACCEPT_V1=false # keep for now`
-  # reaches the application as `false` — an explicit setting — while the raw line
-  # missed the case and reported the default, which is the opposite answer whenever
-  # the derived default disagrees with what the operator wrote.
-  explicit="$(nexa_compose_env_value "$file" SECRETS_ACCEPT_V1 2>/dev/null || true)"
+  keys="$(nexa_listing_value "$resolved" SECRETS_KEYS)"
+  kek="$(nexa_listing_value "$resolved" SECRETS_KEK)"
+  explicit="$(nexa_listing_value "$resolved" SECRETS_ACCEPT_V1)"
   if [ -n "${keys//[[:space:]]/}" ]; then
     format=canonical
   elif [ -n "${kek//[[:space:]]/}" ]; then
@@ -1301,6 +1321,18 @@ cmd_secrets_migrate_config() {
   # documenting their own key would write.
   SECRETS_ACTIVE_KEY_ID="$(nexa_compose_env_value "$file" SECRETS_KEK_ID 2>/dev/null || true)"
   legacy_key="$(nexa_compose_env_value "$file" SECRETS_KEK 2>/dev/null || true)"
+
+  # The FILE here, deliberately, and not what Compose resolves — this command REWRITES
+  # the file, and writing a resolved value would freeze an interpolation that is meant
+  # to be evaluated at every start. But then neither reading is safe if the value IS an
+  # interpolation: the literal `${VAULT_KEK}` is not a key, and `$(…)` of it is a key
+  # this file was never meant to contain. Refuse instead of choosing, because the cost
+  # of choosing wrong here is an installation that cannot decrypt anything.
+  case "${SECRETS_ACTIVE_KEY_ID}${legacy_key}" in
+    *'$'*)
+      nexa_die "${file} defines SECRETS_KEK or SECRETS_KEK_ID through a substitution, so this conversion cannot know what to write without freezing it. Resolve those two lines to literal values first; nothing was changed."
+      ;;
+  esac
 
   # Refusals name the KEY, never the value.
   [ -n "${SECRETS_ACTIVE_KEY_ID//[[:space:]]/}" ] ||
