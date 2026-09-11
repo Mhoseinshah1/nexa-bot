@@ -241,6 +241,14 @@ status_capabilities() {
     destination='HALF configured'
   fi
 
+  # One condition that is not per setting: a file ending inside a quoted value is
+  # refused by Compose OUTRIGHT — `unterminated quoted value` — so nothing in it is in
+  # force, including the lines that look fine. Said before the list, because a tidy
+  # column of values no container will ever receive is the most misleading output this
+  # section could produce.
+  local unterminated=0
+  ! nexa_compose_env_unterminated "$file" || unterminated=1
+
   local entry key label fallback vocab owner configured
   for entry in "${settings[@]}"; do
     IFS='|' read -r key label fallback vocab owner <<<"$entry"
@@ -257,6 +265,13 @@ status_capabilities() {
   # actually delivering. BACKUP_SCHEDULE_ENABLED above is genuinely the worker's —
   # it gates the scheduler in `main.worker.ts` and nothing else.
   printf '  backup delivery    %-8s %s\n' "$destination" 'worker, api, recovery'
+
+  if [ "$unterminated" -eq 1 ]; then
+    printf '\n  This file ENDS INSIDE a quoted value. Compose refuses such a file whole —\n'
+    printf '  `unterminated quoted value` — so NONE of the values above will reach a\n'
+    printf '  container, and the next `botctl restart` or `botctl update` will not start.\n'
+    printf '  Close the quote before anything else.\n'
+  fi
 
   # Always, not on a detected mismatch. A container keeps the environment it was
   # created with, so any of the values above may not be in force yet — and a
@@ -297,11 +312,25 @@ status_capabilities() {
   api_id="$(nexa_running_container api 2>/dev/null || true)"
   obsolete="$(nexa_obsolete_app_env_keys "$file")"
   running_obsolete="$(nexa_container_overridden_obsolete_keys "$api_id")"
-  if [ -n "$obsolete" ]; then
-    printf '\n  This file still sets %s,\n' "$(printf '%s' "$obsolete" | tr '\n' ' ')"
-    printf '  which REPLACES the build identity stamped into the release image — so\n'
-    printf '  /health/info reports what the installer wrote rather than what is running.\n'
-    printf '  The next `botctl update` removes them.\n'
+  # THREE states, because the file and the running container are two independent
+  # facts and conflating them gets one of the three wrong.
+  #
+  # Saying "/health/info reports what the installer wrote" whenever the FILE has the
+  # lines was wrong whenever the container predates them: a line added or restored
+  # since the API was created is not in force yet, and a stopped API is not masking
+  # anything at all. The endpoint is only described as masked when the comparison
+  # against the image says so.
+  if [ -n "$obsolete" ] && [ -n "$running_obsolete" ]; then
+    printf '\n  This file sets %s, which REPLACES the\n' "$(printf '%s' "$obsolete" | tr '\n' ' ')"
+    printf '  build identity stamped into the release image, and the RUNNING API container\n'
+    printf '  answers something other than its own image for them — so /health/info reports\n'
+    printf '  what the installer wrote rather than what is running. The next `botctl update`\n'
+    printf '  removes the lines; the containers then need recreating to pick that up.\n'
+  elif [ -n "$obsolete" ]; then
+    printf '\n  This file sets %s, which REPLACES the\n' "$(printf '%s' "$obsolete" | tr '\n' ' ')"
+    printf '  build identity stamped into the release image. The running API does not carry\n'
+    printf '  them, so /health/info is correct for NOW and these lines take effect at the\n'
+    printf '  next start. The next `botctl update` removes them first.\n'
   elif [ -n "$running_obsolete" ]; then
     printf '\n  The file no longer sets %s, but the RUNNING\n' \
       "$(printf '%s' "$running_obsolete" | tr '\n' ' ')"

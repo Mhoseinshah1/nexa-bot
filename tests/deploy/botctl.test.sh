@@ -3618,6 +3618,27 @@ run_botctl status
 assert_contains 'a properly quoted value stopped being resolved' \
   "$BOTCTL_OUTPUT" 'panel monitor      on'
 
+# An assignment is not only `^KEY=`. Compose accepts leading whitespace before the
+# key and an `export ` prefix, both measured on v5.1.1 — so a matcher anchored on
+# `^KEY=` read them as ABSENT and reported the schema DEFAULT, which for a key whose
+# default is ON is the next start turning it off while `status` says it is running.
+seed_nexa_env canonical
+append_env 'export PANEL_MONITOR_ENABLED=false'
+run_botctl status
+assert_contains 'an `export` prefix was read as an absent key' \
+  "$BOTCTL_OUTPUT" 'panel monitor      off'
+seed_nexa_env canonical
+append_env '   PANEL_MONITOR_ENABLED=false'
+run_botctl status
+assert_contains 'an indented key was read as absent' \
+  "$BOTCTL_OUTPUT" 'panel monitor      off'
+# The last assignment wins, as it does for Compose.
+seed_nexa_env canonical
+append_env 'PANEL_MONITOR_ENABLED=true' 'PANEL_MONITOR_ENABLED=false'
+run_botctl status
+assert_contains 'the first assignment won instead of the last' \
+  "$BOTCTL_OUTPUT" 'panel monitor      off'
+
 # An empty assignment is still invalid rather than the default, and an absent key is
 # still the default — the two stages compose, they do not replace each other.
 seed_nexa_env canonical
@@ -3645,13 +3666,81 @@ assert_contains 'the delivery line does not name all three consumers' \
 assert_contains 'the schedule stopped being attributed to the worker alone' \
   "$BOTCTL_OUTPUT" 'scheduled backup   off      worker'
 
-test_case 'status: a stale build identity is reported, with what it costs'
+test_case 'status: a file Compose refuses WHOLE is said to be refused whole'
+# A file ending inside a quoted value is rejected outright — `unterminated quoted
+# value` — so none of the values reach a container, including the ones that look fine.
+# A tidy column of values no container will ever receive is the most misleading thing
+# this section could print.
+seed_nexa_env canonical
+printf "SOME_NOTE='never closed\n" >>"${NEXA_CONFIG_DIR}/nexa.env"
+run_botctl status
+assert_contains 'an unterminated quoted value was not reported' \
+  "$BOTCTL_OUTPUT" 'ENDS INSIDE a quoted value'
+assert_contains 'the consequence for every value was not stated' \
+  "$BOTCTL_OUTPUT" 'NONE of the values'
+# And a complete file says nothing of the sort.
+seed_nexa_env canonical
+run_botctl status
+assert_not_contains 'a complete file was reported as unterminated' \
+  "$BOTCTL_OUTPUT" 'ENDS INSIDE a quoted value'
+
+test_case 'status: a line inside another variable is not an assignment'
+# Compose reads a quoted value across lines, so this defines ONE variable and does
+# NOT set BACKUP_SCHEDULE_ENABLED. A grep for the key finds the interior line and
+# reports a schedule Compose never sets, while the application runs on its `false`
+# default.
+seed_nexa_env canonical
+printf "IGNORED_NOTE='first\nBACKUP_SCHEDULE_ENABLED=true\nlast'\n" >>"${NEXA_CONFIG_DIR}/nexa.env"
+run_botctl status
+assert_contains 'an interior line was read as an assignment' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   off'
+# The real assignment after such a value is still found, so this is about quoted
+# regions rather than about giving up after one.
+seed_nexa_env canonical
+printf "IGNORED_NOTE='first\nlast'\nBACKUP_SCHEDULE_ENABLED=true\n" >>"${NEXA_CONFIG_DIR}/nexa.env"
+run_botctl status
+assert_contains 'an assignment after a multiline value was missed' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   on'
+
+test_case 'status: the file and the running API are two facts, reported as three states'
+# Conflating them got one of the three wrong. Saying "/health/info reports what the
+# installer wrote" whenever the FILE carries the lines is false when the container
+# predates them — a line added or restored since the API was created is not in force
+# yet — and false again when the API is not running at all.
+
+# 1. The file sets them AND the running API confirms the override: masked NOW.
 seed_nexa_env canonical
 append_env 'BUILD_VERSION=v0.1.0-staging.1' 'BUILD_COMMIT=pending' 'BUILD_TIME=pending'
+fake_set api_env 'BUILD_COMMIT=pending'
 run_botctl status
 assert_contains 'the stale build keys were not named' "$BOTCTL_OUTPUT" 'BUILD_VERSION'
-assert_contains 'the consequence was not stated' "$BOTCTL_OUTPUT" '/health/info reports'
+assert_contains 'the masking was not stated when both facts agree' \
+  "$BOTCTL_OUTPUT" '/health/info reports'
 assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'botctl update'
+
+# 2. The file sets them but the running API answers its own image: PENDING, not masked.
+seed_nexa_env canonical
+append_env 'BUILD_VERSION=v0.1.0-staging.1'
+fake_set api_env ''
+run_botctl status
+assert_contains 'a pending override was not named' "$BOTCTL_OUTPUT" 'BUILD_VERSION'
+assert_contains 'a pending override was not described as taking effect at the next start' \
+  "$BOTCTL_OUTPUT" 'next start'
+assert_not_contains 'a pending override was reported as already masking /health/info' \
+  "$BOTCTL_OUTPUT" '/health/info reports what the installer wrote rather than'
+assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'botctl update'
+
+# 3. A stopped API cannot be masking anything, so state 2 is what a missing container
+#    gets — never a claim about an endpoint that is not answering.
+seed_nexa_env canonical
+append_env 'BUILD_VERSION=v0.1.0-staging.1'
+fake_set api_state absent
+run_botctl status
+assert_not_contains 'a stopped API was reported as masking /health/info' \
+  "$BOTCTL_OUTPUT" '/health/info reports what the installer wrote rather than'
+assert_contains 'a stopped API suppressed the file warning entirely' \
+  "$BOTCTL_OUTPUT" 'BUILD_VERSION'
+fake_set api_state running
 
 test_case 'status: a clean file whose API still carries the stale identity is reported'
 # The removal runs early in an update, before the image is pulled and the backup is
@@ -3761,6 +3850,59 @@ assert_equals 'an operator value was changed' 'https://admin.example.test' \
   "$(nexa_env_key WEB_ADMIN_ORIGINS)"
 assert_file_mode 'the rewritten file lost its mode' "${NEXA_CONFIG_DIR}/nexa.env" 600
 assert_not_contains 'the removal printed a value' "$BOTCTL_OUTPUT" 'staging.1'
+
+test_case 'update: removes an obsolete line however it is spelled'
+# The detector and the rewriter have to agree about what an assignment looks like.
+# If the detector accepts `export BUILD_VERSION=` and the rewriter does not, `update`
+# reports the line removed, leaves it in place, and reports it again next time.
+seed_nexa_env canonical
+append_env 'export BUILD_VERSION=v0.1.0-staging.1' '  BUILD_COMMIT=pending'
+run_botctl update vA
+assert_contains 'the removal was not reported' "$BOTCTL_OUTPUT" 'removed from nexa.env'
+assert_equals 'an exported BUILD_VERSION survived the removal' '' "$(nexa_env_key BUILD_VERSION)"
+assert_equals 'an indented BUILD_COMMIT survived the removal' '' "$(grep -cE '^[[:space:]]*BUILD_COMMIT=' "${NEXA_CONFIG_DIR}/nexa.env" | tr -d '0')"
+run_botctl status
+assert_not_contains 'status still reports a line the rewrite claimed to remove' \
+  "$BOTCTL_OUTPUT" 'This file still sets'
+
+test_case 'update: the removal never reaches inside another variable value'
+# The rewriter has to track quoted regions for the same reason the reader does. A line
+# that reads `BUILD_COMMIT=...` inside NOTE's multiline value is not an assignment, and
+# dropping it by pattern deletes a line out of the middle of an operator's value —
+# silent corruption of /etc/nexa/nexa.env, by an update that reported success.
+seed_nexa_env canonical
+printf "NOTE='line one\nBUILD_COMMIT=interior\nline three'\nBUILD_COMMIT=pending\n" \
+  >>"${NEXA_CONFIG_DIR}/nexa.env"
+run_botctl update vA
+assert_contains 'the removal was not reported' "$BOTCTL_OUTPUT" 'removed from nexa.env'
+# The TOP-LEVEL assignment is gone...
+assert_equals 'the top-level BUILD_COMMIT survived' '' \
+  "$(grep -c '^BUILD_COMMIT=pending' "${NEXA_CONFIG_DIR}/nexa.env" | tr -d '0')"
+# ...and every line of NOTE's value is still there, interior assignment included.
+assert_equals "NOTE's first line was lost" '1' \
+  "$(grep -c "^NOTE='line one" "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_equals "the interior line was deleted out of NOTE's value" '1' \
+  "$(grep -c '^BUILD_COMMIT=interior' "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_equals "NOTE's closing line was lost" '1' \
+  "$(grep -c "^line three'" "${NEXA_CONFIG_DIR}/nexa.env")"
+
+test_case 'update: removing a multiline obsolete value takes its continuation lines'
+# The other half. If an obsolete key opens a multiline value and only its first line
+# goes, what is left is a dangling fragment and a quote that now closes somewhere
+# else — a file Compose refuses whole, produced by a repair.
+seed_nexa_env canonical
+printf "BUILD_TIME='first\nsecond'\nWEB_ADMIN_ORIGINS=https://admin.example.test\n" \
+  >>"${NEXA_CONFIG_DIR}/nexa.env"
+run_botctl update vA
+assert_equals 'the first line of the multiline value survived' '' \
+  "$(grep -c "^BUILD_TIME='first" "${NEXA_CONFIG_DIR}/nexa.env" | tr -d '0')"
+assert_equals 'the continuation line was left behind as a fragment' '' \
+  "$(grep -c "^second'" "${NEXA_CONFIG_DIR}/nexa.env" | tr -d '0')"
+# And the file is still one Compose will read.
+assert_ok 'the rewritten file ends inside a quoted value' \
+  bash -c "! nexa_compose_env_unterminated '${NEXA_CONFIG_DIR}/nexa.env'"
+assert_equals 'an unrelated key was lost' 'https://admin.example.test' \
+  "$(nexa_env_key WEB_ADMIN_ORIGINS)"
 
 test_case 'update: says nothing and changes nothing when there is nothing to remove'
 seed_nexa_env canonical

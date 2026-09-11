@@ -301,10 +301,103 @@ The 18-shape cross-check against `docker compose config` was re-run after the ch
 and still agrees on every shape, which is the point of having it: a narrowing fix
 that broke an ordinary quoted value would have shown up there rather than in review.
 
-| #    | Rule                                                          | Mutation                                        | Named test                                                                             | Result |
-| ---- | ------------------------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------- | ------ |
-| H-41 | A quote is stripped only when its partner is on the SAME line | `nexa-lib.sh`: strip an unmatched opening quote | `botctl.test.sh` › status: a value is read the way COMPOSE resolves it, then validated | KILLED |
+| #    | Rule                                                                    | Mutation                                                             | Named test                                                                             | Result |
+| ---- | ----------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------ |
+| H-41 | A quote is stripped only when its partner is on the SAME line           | `nexa-lib.sh`: strip an unmatched opening quote                      | `botctl.test.sh` › status: a value is read the way COMPOSE resolves it, then validated | KILLED |
+| H-42 | An assignment is not only `^KEY=`: `export` and indentation count       | `nexa-lib.sh`: narrow `nexa_env_key_pattern` back to `^KEY=`         | `botctl.test.sh` › status: a value is read the way COMPOSE resolves it, then validated | KILLED |
+| H-43 | The detector and the rewriter agree about what an assignment looks like | `nexa-lib.sh`: leave the rewriter on `^KEY=` while the reader widens | `botctl.test.sh` › update: removes an obsolete line however it is spelled              | KILLED |
 
 **And the case that keeps it honest** is the third assertion beside it: a value whose
 quote DOES close on its line is still resolved to `on`. Without it, a reader that
 refused every quoted value would pass.
+
+**H-42 and H-43 were not reported by either review.** After five rounds of a fix
+carrying the next round's bug, the shapes were re-run against `docker compose config`
+looking for more — the same probe that produced the table above, asked a second time
+and harder. Two divergences came out of it, both in the direction of reporting a
+DEFAULT for a key the operator had set:
+
+```
+export PANEL_MONITOR_ENABLED=false    reaches the container as `false`
+  PANEL_MONITOR_ENABLED=false         reaches the container as `false`  (indented key)
+```
+
+Compose accepts leading whitespace before a key and an `export ` prefix; a matcher
+anchored on `^KEY=` read both as absent and reported the schema default — which for a
+key whose default is ON means `status` says the monitor is running while the next
+start turns it off.
+
+**H-43 is why that fix had to be one definition rather than one regex per function.**
+`nexa_obsolete_app_env_keys` finds lines and `nexa_env_rewrite` removes them, and if
+they disagree about the shape of an assignment then `botctl update` reports a line
+removed, leaves it in the file, and reports it again on the next run — an operator
+told a repair happened twice. `nexa_env_key_pattern` is that definition, used by the
+reader, the boolean's presence test, the detector and the rewriter, and the mutation
+that desynchronises just two of them is killed.
+
+The cross-check now covers **22** shapes and the reader agrees with Compose on every
+one.
+
+### Round seven, on `e482337`
+
+Two findings, both CONFIRMED, and the first says something the previous two rounds
+had been patching around: **a line-based reader cannot be correct about this file
+format.** Compose reads a quoted value across lines, so a line that looks like an
+assignment may be text inside another variable's value. Measured on v5.1.1:
+
+```
+IGNORED_NOTE='first
+BACKUP_SCHEDULE_ENABLED=true
+last'
+```
+
+defines ONE variable. `BACKUP_SCHEDULE_ENABLED` is not set at all, and the
+application runs on its `false` default — while a grep for the key found the middle
+line and reported `on`. No amount of care about the SELECTED line fixes that, which
+is why rounds five and six kept finding the same shape from different angles.
+
+The reader is a scanner now: it walks the file tracking quoted regions and answers
+only about top-level assignments. Presence comes from the same pass rather than a
+separate grep, for the same reason — a grep would call that interior line an
+assignment and then report a key Compose never sets as set.
+
+**And the finding generalised into a corruption risk neither review reported.** If
+the DETECTOR must scan, so must the REWRITER: `nexa_env_rewrite` dropped lines by
+pattern, so a `BUILD_COMMIT=` line inside an operator's multiline value would have
+been deleted out of the middle of it — and a removed obsolete key that OPENED a
+multiline value would have left its continuation lines behind as a dangling fragment
+with a quote that now closes somewhere else. Both are silent corruption of
+`/etc/nexa/nexa.env`, performed by an update that reported success.
+
+**The first mutation of that rule SURVIVED**, and that is the most useful thing in
+this round. Removing the rewriter's quoted-region tracking left all 197 checks green:
+the rule had no test, exactly as this repository's own note predicts — _"a rule with
+no test is a rule that will be silently reverted"_. Two cases were written, the
+mutation re-run, and both died. It is recorded here as M13-survived-then-killed
+rather than as a clean row, because a falsification pass whose first result is
+"nothing failed" is information, and hiding it would make this table a record of
+tests that happened to exist.
+
+The second finding is about the build-identity warning claiming `/health/info` IS
+masked whenever the FILE carries the lines. False when the container predates them —
+a line added since the API was created is not in force — and false again when the API
+is not running. Three states now, and the middle one says the lines take effect at
+the next start rather than describing an endpoint nobody is serving.
+
+One condition was added that is not per setting: a file ending inside a quoted value
+is refused by Compose OUTRIGHT, so `status` says so before printing a column of
+values no container will ever receive.
+
+| #    | Rule                                                                   | Mutation                                                   | Named test                                                                                         | Result |
+| ---- | ---------------------------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------ |
+| H-44 | A line inside another variable's value is not an assignment            | `nexa-lib.sh`: the scanner stops tracking quoted regions   | `botctl.test.sh` › status: a line inside another variable is not an assignment                     | KILLED |
+| H-45 | The REWRITER never deletes a line from inside another variable's value | `nexa-lib.sh`: drop the rewriter's quoted-region tracking  | `botctl.test.sh` › update: the removal never reaches inside another variable value                 | KILLED |
+| H-46 | A removed key's continuation lines go with it                          | `nexa-lib.sh`: drop the rewriter's quoted-region tracking  | `botctl.test.sh` › update: removing a multiline obsolete value takes its continuation lines        | KILLED |
+| H-47 | A file Compose refuses WHOLE is reported as refused whole              | `botctl`: remove the unterminated-file notice              | `botctl.test.sh` › status: a file Compose refuses WHOLE is said to be refused whole                | KILLED |
+| H-48 | The file and the running API are three states, not two                 | `botctl`: collapse the first branch back to the file alone | `botctl.test.sh` › status: the file and the running API are two facts, reported as three states    | KILLED |
+| H-49 | Detection and removal use the scanner, never a pattern                 | `nexa-lib.sh`: the detector greps again                    | `config-upgrade.test.ts` › finds and removes assignments with the same scanner, not with a pattern | KILLED |
+| H-50 | Presence is settled by the pass that reads the value                   | `nexa-lib.sh`: a separate presence grep, as before         | `config-upgrade.test.ts` › treats an EMPTY assignment as invalid, which is what the schema does    | KILLED |
+
+The cross-check now covers **23 keys** in one file, including a multiline value whose
+interior looks like an assignment, and the reader agrees with `docker compose config`
+on every one — including that the interior key is NOT set.

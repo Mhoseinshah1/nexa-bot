@@ -223,7 +223,11 @@ Values are resolved the way COMPOSE resolves them and then validated the way the
 SCHEMA validates them, because that is the path a value actually travels: an inline
 comment after a space is dropped and an unquoted value is trimmed at both ends, as
 Compose does both; whitespace INSIDE a value survives, as Compose leaves it, and the
-schema then refuses it. The backup delivery destination is
+schema then refuses it. The file is SCANNED rather than grepped, because a quoted
+value may span lines — so a line that looks like an assignment can be text inside
+another variable's value, and counting it as a setting would report configuration
+Compose never applies. A file that ends inside a quoted value is refused by Compose
+whole, and `status` says so before it lists anything. The backup delivery destination is
 reported by PRESENCE only, because one of its two keys is a bot token.
 
 Each line names the process that READS the value, which is the operator's next

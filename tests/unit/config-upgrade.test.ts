@@ -625,9 +625,21 @@ describe("botctl reads the application's booleans per key, not one vocabulary fo
       configSchema.safeParse({ ...base, BACKUP_SCHEDULE_ENABLED: '' }).success,
       'an empty booleanish assignment was accepted',
     ).toBe(false);
-    // And the shell says so by testing PRESENCE before it reads the value.
-    expect(lib, 'nexa_env_boolean infers absence from an empty value').toMatch(
-      /grep -qE "\^\$\{key\}=" -- "\$file"/,
+    // And the shell settles PRESENCE with the same pass that reads the value, rather
+    // than with a separate grep. A grep would count a line inside ANOTHER variable's
+    // multiline value as an assignment — so a key Compose never sets would be reported
+    // as set, and one that IS set would be read from the wrong line.
+    const fnAbs = /nexa_env_boolean\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '';
+    expect(fnAbs, 'presence is decided by a grep rather than by the scanner').not.toMatch(
+      /grep -qE/,
+    );
+    expect(fnAbs, 'absence is not taken from the scanner exit status').toMatch(
+      /raw="\$\(nexa_compose_env_value "\$file" "\$key" 2>\/dev\/null\)" \|\| \{/,
+    );
+    // The scanner recognises an assignment the way Compose does: an optional indent
+    // and an optional `export ` prefix, both measured.
+    expect(lib, 'the scanner does not accept an indented or exported assignment').toMatch(
+      /match\(line, \/\^\[ \\t\]\*\(export\[ \\t\]\+\)\?\[A-Za-z_\]\[A-Za-z0-9_\]\*=\//,
     );
   });
 
@@ -767,6 +779,35 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
     expect(fn, 'nexa_env_boolean still reads the raw line').not.toMatch(/raw="\$\(nexa_env_value /);
     expect(fn, 'nexa_env_boolean normalises whitespace out of the value').not.toMatch(
       /raw="\$\{raw\/\/\[\[:space:\]\]\/\}"/,
+    );
+  });
+
+  it('finds and removes assignments with the same scanner, not with a pattern', () => {
+    // `nexa_obsolete_app_env_keys` finds lines and `nexa_env_rewrite` removes them, and
+    // neither may use a pattern: a `BUILD_COMMIT=` line inside another variable's
+    // multiline value is not an assignment, and removing it by pattern deletes a line
+    // out of the middle of an operator's value. That is silent corruption of
+    // /etc/nexa/nexa.env, performed by an update that reported success.
+    // Comment lines stripped first: these functions EXPLAIN why they do not grep, and
+    // an assertion that tripped over the explanation would be satisfied by deleting
+    // the comment.
+    const code = (body: string) =>
+      body
+        .split('\n')
+        .filter((l) => !/^\s*#/.test(l))
+        .join('\n');
+    const detector = code(/nexa_obsolete_app_env_keys\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '');
+    expect(detector, 'the detector is gone').not.toBe('');
+    expect(detector, 'the detector greps instead of scanning').not.toMatch(/grep/);
+    expect(detector, 'the detector does not use the scanner').toContain('nexa_compose_env_value');
+    const rewriter = code(/nexa_env_rewrite\(\) \{[\s\S]*?\n\}\n/.exec(lib)?.[0] ?? '');
+    expect(rewriter, 'the rewriter is gone').not.toBe('');
+    expect(rewriter, 'the rewriter drops lines by pattern').not.toMatch(/grep/);
+    expect(rewriter, 'the rewriter does not track quoted regions').toMatch(/if \(inq\) \{/);
+    // And a dropped key's continuation lines go with it, or the file is left with a
+    // dangling fragment and a quote that closes somewhere else.
+    expect(rewriter, 'a dropped multiline value keeps its continuation lines').toMatch(
+      /if \(!skip\) print line/,
     );
   });
 

@@ -110,6 +110,22 @@ nexa_require_version() {
     nexa_die "\"$1\" is not a usable version: letters, digits, dot, dash and underscore only, up to 64 characters."
 }
 
+# The shape of an assignment line, as COMPOSE recognises one.
+#
+# Not `^KEY=`. Compose accepts leading whitespace before the key and an `export `
+# prefix, and both were MEASURED — `  E=indented` and `export B=true` each reach the
+# container with the value they look like they have. A matcher anchored on `^KEY=`
+# read both as ABSENT, so the reader reported the schema DEFAULT: `export
+# PANEL_MONITOR_ENABLED=false` came out as `panel monitor on`, which is the next
+# start turning the monitor off while `status` says it is running.
+#
+# ONE definition, used by everything that finds, reads or removes an assignment,
+# because a detector and a rewriter that disagree about what an assignment looks like
+# produce an update that reports a line removed while it is still in the file — and
+# then reports it again on the next run.
+nexa_env_key_pattern() { printf '^[[:space:]]*(export[[:space:]]+)?%s=' "$1"; }
+
+
 # --- Reading configuration ---------------------------------------------------
 
 # Read ONE value out of a KEY=VALUE file, without sourcing it.
@@ -124,7 +140,7 @@ nexa_env_value() {
   local file="$1" key="$2" line
   [ -r "$file" ] || return 1
   # The LAST assignment wins, matching how a shell would read the file.
-  line="$(grep -E "^${key}=" -- "$file" | tail -n 1 || true)"
+  line="$(grep -E "$(nexa_env_key_pattern "$key")" -- "$file" | tail -n 1 || true)"
   [ -n "$line" ] || return 1
   local value="${line#*=}"
   # Strip one layer of surrounding quotes if present.
@@ -916,32 +932,58 @@ nexa_env_rewrite() {
 
   # Every key this rewrite touches, so the old assignments are dropped exactly
   # once and the new ones are appended in a known order.
-  local names=() name key drop_pattern
+  local names=() name
   for name in "$@"; do names+=("$name"); done
 
   local removals="${remove}"
   for name in "${names[@]}"; do removals="${removals},${name}"; done
 
-  drop_pattern=""
-  local IFS_SAVE="$IFS"
-  IFS=','
-  for key in $removals; do
-    [ -n "$key" ] || continue
-    drop_pattern="${drop_pattern}${drop_pattern:+|}^${key}="
-  done
-  IFS="$IFS_SAVE"
-
   local status=0
-  if [ -n "$drop_pattern" ]; then
-    # 0 (lines kept) and 1 (everything matched) are both fine; anything else
-    # means the file we would write is not the file we meant to write.
-    grep -Ev "$drop_pattern" -- "$file" >"$tmp" || status=$?
+  if [ -n "${removals//,/}" ]; then
+    # A SCANNER, not `grep -v`, and for the same reason the reader is one: a value may
+    # span lines, so a line that looks like `BUILD_VERSION=...` may be text inside
+    # another variable's value. Dropping it by pattern would delete a line out of the
+    # middle of somebody's value and leave a file whose remaining quote closes
+    # somewhere else entirely — silent corruption of /etc/nexa/nexa.env, done by an
+    # update that reported success.
+    #
+    # Only TOP-LEVEL assignments of the named keys are dropped, and when one of them
+    # opens a multiline value its continuation lines go with it.
+    awk -v drop="$removals" -v sq="'" -v dq='"' '
+      BEGIN {
+        n = split(drop, a, ",")
+        for (i = 1; i <= n; i++) if (a[i] != "") kill[a[i]] = 1
+        inq = 0; skip = 0
+      }
+      {
+        line = $0
+        if (inq) {
+          closed = (index(line, quote) > 0)
+          if (!skip) print line
+          if (closed) { inq = 0; skip = 0 }
+          next
+        }
+        if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) == 0) { print line; next }
+        name = substr(line, RSTART, RLENGTH)
+        sub(/^[ \t]*(export[ \t]+)?/, "", name)
+        sub(/=$/, "", name)
+        rest = substr(line, RSTART + RLENGTH)
+        sub(/^[ \t]+/, "", rest)
+        first = substr(rest, 1, 1)
+        if (first == dq || first == sq) {
+          quote = first
+          if (index(substr(rest, 2), quote) == 0) inq = 1
+        }
+        if (name in kill) { skip = 1; next }
+        print line
+      }
+    ' <"$file" >"$tmp" || status=$?
   else
     cat -- "$file" >"$tmp" || status=$?
   fi
-  if [ "$status" -gt 1 ]; then
+  if [ "$status" -ne 0 ]; then
     rm -f "$tmp"
-    nexa_die "could not read ${file} (grep exited ${status}); it is UNCHANGED. Check free space on /var."
+    nexa_die "could not read ${file} (the filter exited ${status}); it is UNCHANGED. Check free space on /var."
   fi
 
   for name in "${names[@]}"; do
@@ -997,8 +1039,11 @@ NEXA_OBSOLETE_APP_ENV_KEYS="BUILD_VERSION BUILD_COMMIT BUILD_TIME"
 nexa_obsolete_app_env_keys() {
   local file="$1" key
   [ -r "$file" ] || return 0
+  # Through the SCANNER, not a grep: a `BUILD_VERSION=` line sitting inside another
+  # variable's multiline value is not an assignment, and reporting it as one would send
+  # the rewriter to delete a line out of the middle of somebody's value.
   for key in $NEXA_OBSOLETE_APP_ENV_KEYS; do
-    grep -qE "^${key}=" -- "$file" && printf '%s\n' "$key"
+    nexa_compose_env_value "$file" "$key" >/dev/null 2>&1 && printf '%s\n' "$key"
   done
   return 0
 }
@@ -1033,88 +1078,141 @@ nexa_reconcile_app_env() {
 
 # One value out of a file Docker Compose reads, resolved the way COMPOSE resolves it.
 #
-# `nexa_env_value` answers what the FILE says. This answers what the CONTAINER
-# receives, and the two differ — so any report about a capability has to use this
+# `nexa_env_value` answers what a LINE says. This answers what the CONTAINER
+# receives, and the two differ — so any report about configuration has to use this
 # one, because the application never sees the file, it sees what Compose made of it.
 #
-# The rules below are not inferred from the documentation; they were established by
-# running 18 shapes through `docker compose config --format json` (Compose v5.1.1)
-# and reading the resolved environment back. Three of them contradict what the
-# documentation alone suggests, and two contradict what this reader previously did:
+# It SCANS rather than greps, and that is the point. A value may span lines, so a line
+# that looks like an assignment may be text inside another variable's value:
 #
-#   KEY=false # off      ->  false            a SPACE before `#` starts a comment
-#   KEY=false#off        ->  false#off        no space: not a comment
-#   KEY=true\t# off       ->  true\t# off      a TAB before `#` is NOT a comment
-#   KEY=  true           ->  true             unquoted values ARE trimmed, both ends
-#   KEY= # off           ->  # off            trimmed first, so this `#` leads
-#   KEY=t rue            ->  t rue            INTERNAL whitespace is preserved
-#   KEY="false # x"      ->  false # x        quotes win over the comment rule
-#   KEY="false" # x      ->  false            after the closing quote, dropped
-#   KEY= "true"          ->  true             leading space before a quote is fine
+#   IGNORED_NOTE='first
+#   BACKUP_SCHEDULE_ENABLED=true
+#   last'
 #
-# The trimming one matters: a reader that refused `BACKUP_SCHEDULE_ENABLED= true `
-# would report `invalid` for a file the application accepts, because Compose hands it
-# `true`. The internal-whitespace one matters for the opposite reason: `t rue` reaches
-# the schema intact and is refused, so a reader that normalised it would report a
-# working schedule for a file the next start rejects. Both mistakes have been made in
-# this function, in consecutive rounds, which is why the rule is now evidence.
+# defines ONE variable. A grep for `^BACKUP_SCHEDULE_ENABLED=` finds the middle line
+# and reports a schedule that Compose never sets — while the application runs on the
+# `false` default. No amount of care about the selected line fixes that; the quoted
+# regions have to be tracked across the whole file, which is what the scanner does.
+#
+# The rules are not inferred from the documentation; they were established by running
+# 25 shapes through `docker compose config --format json` (Compose v5.1.1) and reading
+# the resolved environment back. Several contradict what the documentation alone
+# suggests, and three contradict what this reader did in an earlier revision:
+#
+#   KEY=false # off       ->  false        a SPACE before `#` starts a comment
+#   KEY=false#off         ->  false#off    no space: not a comment
+#   KEY=true<TAB># off    ->  unchanged    a TAB before `#` is NOT a comment
+#   KEY=__true__          ->  true         unquoted values ARE trimmed, both ends
+#   KEY=_# off            ->  # off        trimmed first, so this `#` leads
+#   KEY=t rue             ->  t rue        INTERNAL whitespace is preserved
+#   KEY="false # x"       ->  false # x    quotes win over the comment rule
+#   KEY="false" # x       ->  false        after the closing quote, dropped
+#   KEY=_"true"_          ->  true         leading space before a quote is fine
+#   export KEY=true       ->  true         an `export` prefix is an assignment
+#   __KEY=true            ->  true         so is an indented key
+#   KEY=a then KEY=b      ->  b            the last assignment wins
+#   KEY=true<CR>          ->  true         a CRLF file is read, not mangled
+#
+# A newline INSIDE a value is rendered as the two characters `\n`. Command
+# substitution cannot carry a trailing newline, so a value that is genuinely
+# `true` + newline would otherwise arrive as `true` and be reported as a working
+# setting — when Compose hands the application a string its schema refuses. Rendered,
+# it fails every per-key validator, which is the honest answer.
 #
 # NOT mirrored, deliberately: interpolation (`${OTHER}`) and the escape expansion
 # Compose applies inside double quotes, because reproducing those means reproducing
 # Compose's variable precedence as well. No key this is used for can legitimately
 # contain either — they are booleans, a numeric chat id and a bot token — and a value
-# that does contain one is passed through unchanged, where the per-key validator
-# refuses it rather than guessing. `export KEY=` is likewise not recognised, for the
-# same reason the installer never writes it.
+# that does is passed through unchanged, where the per-key validator refuses it rather
+# than guessing.
+#
+# Exit 0 with the value, or 1 when the file does not assign that key at all.
 nexa_compose_env_value() {
-  local file="$1" key="$2" line value
+  local file="$1" key="$2"
   [ -r "$file" ] || return 1
-  # The LAST assignment wins, matching how Compose reads the file.
-  line="$(grep -E "^${key}=" -- "$file" | tail -n 1 || true)"
-  [ -n "$line" ] || return 1
-  value="${line#*=}"
-  # Leading whitespace is never part of the value, quoted or not.
-  value="${value#"${value%%[![:space:]]*}"}"
-  case "$value" in
-    \"*)
-      # A closing quote must be ON THIS LINE, or the value is not a single-line
-      # scalar and this reader cannot resolve it. Compose lets a quoted value span
-      # lines, and two measured cases follow:
-      #
-      #   KEY='true\n'          reaches the container as `true` WITH the newline,
-      #                         which both the strict enum and `booleanish` refuse
-      #   KEY='unterminated     makes Compose refuse the whole FILE — "unterminated
-      #                         quoted value" — so nothing starts at all
-      #
-      # Stripping an unmatched opening quote would turn the first into a reported
-      # `on` for a monitor the next start refuses to configure, and the second into a
-      # healthy-looking report of a file no container will read. So the value is
-      # returned AS IT STANDS, leading quote included, and every per-key validator
-      # refuses it. `invalid` is the honest answer to both.
-      case "${value#\"}" in
-        *\"*)
-          value="${value#\"}"
-          value="${value%%\"*}"
-          ;;
-      esac
-      ;;
-    \'*)
-      case "${value#\'}" in
-        *\'*)
-          value="${value#\'}"
-          value="${value%%\'*}"
-          ;;
-      esac
-      ;;
-    *)
-      value="${value%"${value##*[![:space:]]}"}"
-      case "$value" in
-        *' #'*) value="${value%%" #"*}" ;;
-      esac
-      value="${value%"${value##*[![:space:]]}"}"
-      ;;
-  esac
-  printf '%s' "$value"
+  awk -v want="$key" -v sq="'" -v dq='"' '
+    function trim_end(s) { sub(/[ \t\r]+$/, "", s); return s }
+    BEGIN { found = 0; inq = 0 }
+    {
+      line = $0
+      if (inq) {
+        # Inside a quoted value. Everything up to the closing quote belongs to it,
+        # assignments included: that is the whole reason this is a scanner.
+        idx = index(line, quote)
+        if (idx > 0) {
+          acc = acc substr(line, 1, idx - 1)
+          inq = 0
+          if (mine) { found = 1; out = acc }
+          next
+        }
+        acc = acc line "\\n"
+        next
+      }
+      if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) == 0) next
+      name = substr(line, RSTART, RLENGTH)
+      sub(/^[ \t]*(export[ \t]+)?/, "", name)
+      sub(/=$/, "", name)
+      mine = (name == want)
+      rest = substr(line, RSTART + RLENGTH)
+      sub(/^[ \t]+/, "", rest)
+      first = substr(rest, 1, 1)
+      if (first == dq || first == sq) {
+        quote = first
+        body = substr(rest, 2)
+        idx = index(body, quote)
+        if (idx > 0) {
+          if (mine) { found = 1; out = substr(body, 1, idx - 1) }
+          next
+        }
+        inq = 1
+        acc = body "\\n"
+        next
+      }
+      v = trim_end(rest)
+      i = index(v, " #")
+      if (i > 0) v = trim_end(substr(v, 1, i - 1))
+      if (mine) { found = 1; out = v }
+    }
+    END {
+      # A file that ENDS inside a quote is one Compose refuses outright
+      # ("unterminated quoted value"), so nothing it assigns is in force. What is
+      # reported for the key is the text accumulated so far, which carries a rendered
+      # newline and is therefore refused by every validator — `invalid` rather than a
+      # value, which is the nearest true thing a per-key reader can say.
+      if (inq && mine) { found = 1; out = acc }
+      if (!found) exit 1
+      printf "%s", out
+    }
+  ' <"$file"
+}
+
+# Would Compose REFUSE this file outright?
+#
+# One condition, and it is not per key: a file that ends inside a quoted value is
+# rejected whole — `unterminated quoted value` — so every setting in it is moot,
+# including the ones that look fine. A reader that answered only per key would report
+# a tidy list of values no container will ever receive.
+nexa_compose_env_unterminated() {
+  local file="$1"
+  [ -r "$file" ] || return 1
+  awk -v sq="'" -v dq='"' '
+    BEGIN { inq = 0 }
+    {
+      line = $0
+      if (inq) {
+        if (index(line, quote) > 0) { inq = 0 }
+        next
+      }
+      if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) == 0) next
+      rest = substr(line, RSTART + RLENGTH)
+      sub(/^[ \t]+/, "", rest)
+      first = substr(rest, 1, 1)
+      if (first != dq && first != sq) next
+      quote = first
+      if (index(substr(rest, 2), quote) == 0) inq = 1
+    }
+    END { exit (inq ? 0 : 1) }
+  ' <"$file"
 }
 
 # Is a boolean setting on, in the vocabulary the application accepts FOR THAT KEY?
@@ -1135,18 +1233,16 @@ nexa_compose_env_value() {
 #   VOCAB    `loose` for a booleanish key, `strict` for a true/false enum
 nexa_env_boolean() {
   local file="$1" key="$2" fallback="$3" vocab="${4:-loose}" raw
-  # ABSENT is the only thing that gets the default.
+  # ABSENT is the only thing that gets the default, and absence is the SCANNER's
+  # answer rather than a separate grep's.
   #
   # Zod applies `.default()` to an UNDEFINED value, and an environment variable is
   # a string: `PANEL_MONITOR_ENABLED=` reaches the schema as '' and is refused by
-  # both the enum and `booleanish`. A reader that mapped an empty assignment to
-  # the default would report a healthy `on` for a file the next start rejects —
-  # the same lie as accepting a spelling the schema does not, which is why
-  # presence is tested before the value is read rather than inferred from it.
-  grep -qE "^${key}=" -- "$file" 2>/dev/null || {
-    printf '%s' "$fallback"
-    return 0
-  }
+  # both the enum and `booleanish`. So presence has to be settled before the value
+  # is read — but by the same pass that reads it. A grep for the key would count a
+  # line inside ANOTHER variable's multiline value as an assignment, and report a
+  # key Compose never sets as set. One pass, one answer: a non-zero exit means the
+  # file does not assign this key.
   # Resolved the way COMPOSE resolves it, then validated the way the SCHEMA
   # validates it. Two stages, because that is what a deployed installation is: the
   # application never reads this file, it reads what Compose made of it.
@@ -1159,7 +1255,12 @@ nexa_env_boolean() {
   # would report a working schedule for a file the next start rejects. This function
   # has made both mistakes, one per round; `nexa_compose_env_value` is where the
   # first stage now lives, and the case statements below are the whole of the second.
-  raw="$(nexa_compose_env_value "$file" "$key" 2>/dev/null || true)"
+  raw="$(nexa_compose_env_value "$file" "$key" 2>/dev/null)" || {
+    printf '%s' "$fallback"
+    return 0
+  }
+  # Assigned, but to nothing. `KEY=` and `KEY=   ` both reach the schema as '' and are
+  # refused; neither is the default.
   [ -n "$raw" ] || {
     printf 'invalid'
     return 0
