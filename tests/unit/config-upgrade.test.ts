@@ -336,108 +336,210 @@ describe('.env.example names every variable the application reads', () => {
   });
 });
 
-describe('the subnet defaults are one decision, not three literals', () => {
+describe('the subnet defaults are one decision, not several literals', () => {
   /**
    * An installation whose `deploy.env` predates a subnet key takes compose's
    * default; its `nexa.env` carries the `TRUSTED_PROXY_IPS` the installer derived
-   * at install time. Those are three separate literals in three files, and if any
-   * two ever disagreed the API would stop trusting the proxy in front of it —
-   * after which every request appears to come from Caddy and one failed-login
-   * burst locks out every administrator. The template's own comment warns about
-   * an operator causing that by hand; nothing stopped the repository causing it.
+   * at install time. Those are literals in two files — and the installer spells
+   * the edge default TWICE, once deriving `TRUSTED_PROXY_IPS` and once writing
+   * `deploy.env`. If any of them disagreed, the API would stop trusting the proxy
+   * in front of it: every request would appear to come from Caddy, and one
+   * failed-login burst would lock out every administrator.
+   *
+   * EVERY occurrence, not the first. The first version of this took only
+   * `exec()`'s single match, so a change to the installer's second spelling alone
+   * would have left a fresh installation putting Caddy on one subnet and trusting
+   * the other with this test still green — the exact scenario it exists to
+   * prevent, surviving its own guard.
    */
   const compose = readFileSync(join(__dirname, '../../deploy/compose.yml'), 'utf8');
   const installer = readFileSync(join(__dirname, '../../deploy/install.sh'), 'utf8');
 
-  const composeDefault = (key: string): string | undefined =>
-    new RegExp(`\\$\\{${key}:-([^}]+)\\}`).exec(compose)?.[1];
-  const installerDefault = (key: string): string | undefined =>
-    new RegExp(`\\$\\{${key}:-([^}]+)\\}`).exec(installer)?.[1];
+  /** Every `${KEY:-default}` default for KEY, in the order they appear. */
+  const defaultsFor = (text: string, key: string): string[] =>
+    [...text.matchAll(new RegExp(`\\$\\{${key}:-([^}]+)\\}`, 'g'))].map((m) => m[1] ?? '');
 
-  it('agrees on the edge subnet between compose and the installer', () => {
-    const fromCompose = composeDefault('NEXA_EDGE_SUBNET');
-    const fromInstaller = installerDefault('NEXA_EDGE_SUBNET');
-    expect(fromCompose, 'compose declares no default edge subnet').toBeTruthy();
-    expect(fromInstaller, 'the installer declares no default edge subnet').toBeTruthy();
-    expect(fromCompose).toBe(fromInstaller);
+  const agreed = (key: string, expectedOccurrences: { compose: number; installer: number }) => {
+    const fromCompose = defaultsFor(compose, key);
+    const fromInstaller = defaultsFor(installer, key);
+    expect(fromCompose.length, `compose spells ${key}'s default`).toBe(expectedOccurrences.compose);
+    expect(fromInstaller.length, `install.sh spells ${key}'s default`).toBe(
+      expectedOccurrences.installer,
+    );
+    const distinct = [...new Set([...fromCompose, ...fromInstaller])];
+    expect(distinct, `${key} has more than one default across the deployment`).toHaveLength(1);
+    return distinct[0] ?? '';
+  };
+
+  /** First address and prefix length of a CIDR, as a 32-bit number. */
+  const parseCidr = (cidr: string): { base: number; bits: number } => {
+    const [address = '', prefix = ''] = cidr.split('/');
+    const octets = address.split('.').map((part) => Number(part));
+    expect(octets, `${cidr} is not four octets`).toHaveLength(4);
+    for (const octet of octets)
+      expect(Number.isInteger(octet) && octet >= 0 && octet <= 255).toBe(true);
+    const bits = Number(prefix);
+    expect(Number.isInteger(bits) && bits >= 0 && bits <= 32, `${cidr} has no prefix length`).toBe(
+      true,
+    );
+    const value = octets.reduce((acc, octet) => acc * 256 + octet, 0);
+    // The network address, so a host bit somebody left set cannot shift the range.
+    const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+    return { base: (value & mask) >>> 0, bits };
+  };
+
+  const overlaps = (a: string, b: string): boolean => {
+    const left = parseCidr(a);
+    const right = parseCidr(b);
+    // Two CIDRs intersect exactly when one contains the other's network address,
+    // which is decided by the SHORTER prefix.
+    const bits = Math.min(left.bits, right.bits);
+    const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+    return (left.base & mask) >>> 0 === (right.base & mask) >>> 0;
+  };
+
+  it('agrees on the edge subnet across every place it is spelled', () => {
+    // compose: the network. install.sh: TRUSTED_PROXY_IPS, and deploy.env.
+    expect(agreed('NEXA_EDGE_SUBNET', { compose: 1, installer: 2 })).toBeTruthy();
   });
 
-  it('agrees on the data subnet, in every place compose spells it', () => {
-    const fromCompose = composeDefault('NEXA_DATA_SUBNET');
-    const fromInstaller = installerDefault('NEXA_DATA_SUBNET');
-    expect(fromCompose).toBeTruthy();
-    expect(fromInstaller).toBe(fromCompose);
-    // compose uses the expression twice — the network's subnet and the value it
-    // hands the application — and both must be the same expression.
-    const occurrences = compose.split(`\${NEXA_DATA_SUBNET:-${fromCompose}}`).length - 1;
-    expect(occurrences, 'the data-subnet expression is not used exactly twice').toBe(2);
+  it('agrees on the data subnet across every place it is spelled', () => {
+    // compose: the network, and the value handed to the application.
+    expect(agreed('NEXA_DATA_SUBNET', { compose: 2, installer: 1 })).toBeTruthy();
   });
 
-  it('keeps the two networks from overlapping at their defaults', () => {
-    // Equal defaults would put the database on the network Caddy sits on, which
-    // is the separation the whole topology rests on.
-    expect(composeDefault('NEXA_EDGE_SUBNET')).not.toBe(composeDefault('NEXA_DATA_SUBNET'));
+  it('keeps the two networks from OVERLAPPING at their defaults, not merely differing', () => {
+    // String inequality does not establish disjointness: `172.29.0.0/16` and
+    // `172.29.1.0/24` are different strings and the second is inside the first.
+    // Either Docker refuses the deployment or the edge/data separation the whole
+    // topology rests on is gone.
+    const edge = agreed('NEXA_EDGE_SUBNET', { compose: 1, installer: 2 });
+    const data = agreed('NEXA_DATA_SUBNET', { compose: 2, installer: 1 });
+    expect(overlaps(edge, data), `${edge} and ${data} intersect`).toBe(false);
+  });
+
+  it('can tell an overlap from a difference, so the case above is not vacuous', () => {
+    // The comparator itself, because a predicate that always answered `false`
+    // would make the assertion above pass for ever.
+    expect(overlaps('172.29.0.0/24', '172.29.1.0/24')).toBe(false);
+    expect(overlaps('172.29.0.0/16', '172.29.1.0/24')).toBe(true);
+    expect(overlaps('172.29.1.0/24', '172.29.0.0/16')).toBe(true);
+    expect(overlaps('10.0.0.0/8', '10.255.255.0/24')).toBe(true);
+    expect(overlaps('10.0.0.0/8', '11.0.0.0/8')).toBe(false);
+    expect(overlaps('0.0.0.0/0', '192.168.1.0/24')).toBe(true);
   });
 });
 
-describe("botctl reads the application's booleans, not a second opinion", () => {
+describe("botctl reads the application's booleans per key, not one vocabulary for all", () => {
   /**
    * `botctl status` reports which capabilities are on by reading nexa.env itself,
-   * because the application cannot be asked while it is down — and that makes the
-   * shell a SECOND implementation of `booleanish`. A reader that accepted only
-   * `true` would report a monitor an operator had enabled with `yes` as disabled,
-   * and an operator acting on that would be acting on a lie about their own
-   * installation.
+   * because the application cannot be asked while it is down — which makes the
+   * shell a second implementation of the schema's boolean parsing. It is not ONE
+   * parse: `booleanish` accepts true/false/1/0/yes/no, while
+   * `PANEL_MONITOR_ENABLED` is `z.enum(['true', 'false'])` and nothing wider.
    *
-   * So the two spelling sets are bound together here. The shell suite proves the
-   * reader behaves; this proves it is reading the same vocabulary.
+   * Both directions are a lie an operator would act on. A reader that took only
+   * `true` would report a monitor enabled with `yes` as disabled; a reader that
+   * took `yes` for the enum key would report `on` for a value the next start
+   * REFUSES. The first version of this test bound one global vocabulary and so
+   * proved only the first half.
+   *
+   * So every key the section reports is bound here to the validator the schema
+   * gives it, and to the default the schema gives it.
    */
   const schemaSource = readFileSync(
     join(__dirname, '../../apps/api/src/infrastructure/config/config.schema.ts'),
     'utf8',
   );
   const lib = readFileSync(join(__dirname, '../../deploy/bin/nexa-lib.sh'), 'utf8');
+  const botctl = readFileSync(join(__dirname, '../../deploy/bin/botctl'), 'utf8');
 
-  /**
-   * The declaration block, then the quoted strings inside it.
-   *
-   * Matching the block and then its literals, rather than one regex over the
-   * whole `z.union([z.boolean(), z.enum([...])])` shape: the first version of
-   * this test tried the latter, the regex did not compile, and the file reported
-   * `no tests` — which is a suite that certifies nothing while exiting zero.
-   */
-  const booleanishBlock = /const booleanish = [\s\S]*?\.transform\(/.exec(schemaSource)?.[0];
+  /** The table `status_capabilities` iterates: KEY|label|default|vocabulary. */
+  const reported = [
+    ...botctl.matchAll(/^\s*'([A-Z][A-Z0-9_]*)\|([^|]*)\|(on|off)\|(loose|strict)'$/gm),
+  ].map((m) => ({ key: m[1] ?? '', fallback: m[3] ?? '', vocab: m[4] ?? '' }));
 
-  it("finds the schema's accepted spellings at all", () => {
-    expect(booleanishBlock, 'booleanish no longer looks the way this test reads it').toBeTruthy();
+  /** The schema's declaration for one key, to the start of the next. */
+  const declaration = (key: string): string => {
+    const lines = schemaSource.split('\n');
+    const at = lines.findIndex((line) => new RegExp(`^ {4}${key}:`).test(line));
+    expect(at, `${key} is not declared in the schema`).toBeGreaterThan(-1);
+    const next = lines.findIndex((line, index) => index > at && /^ {4}[A-Z][A-Z0-9_]*:/.test(line));
+    return lines.slice(at, next < 0 ? undefined : next).join('\n');
+  };
+
+  it('reports the six settings the section is built from', () => {
+    expect(reported.map((r) => r.key).sort()).toEqual([
+      'BACKUP_SCHEDULE_ENABLED',
+      'NOTIFICATION_DISPATCH_ENABLED',
+      'OUTBOX_RELAY_ENABLED',
+      'PANEL_MONITOR_ENABLED',
+      'RECOVERY_UPLOAD_ENABLED',
+      'TELEGRAM_WEBHOOK_ENABLED',
+    ]);
   });
 
-  it('accepts exactly the same spellings in the shell', () => {
-    const accepted = [...(booleanishBlock ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1] ?? '');
+  it('gives each key the vocabulary its own validator allows', () => {
+    for (const { key, vocab } of reported) {
+      const declared = declaration(key);
+      const isBooleanish = /:\s*booleanish/.test(declared);
+      const isStrictEnum = /z\s*\n?\s*\.enum\(\['true', 'false'\]\)/.test(declared);
+      expect(
+        isBooleanish || isStrictEnum,
+        `${key} is neither booleanish nor a true/false enum, so this test cannot classify it`,
+      ).toBe(true);
+      expect(vocab, `${key} is read with the wrong vocabulary`).toBe(
+        isBooleanish ? 'loose' : 'strict',
+      );
+    }
+  });
+
+  it('gives each key the default its own declaration gives it', () => {
+    for (const { key, fallback } of reported) {
+      const declared = declaration(key);
+      const asWritten = /\.default\((true|false|'true'|'false')\)/.exec(declared)?.[1];
+      expect(asWritten, `${key} has no boolean default this test can read`).toBeTruthy();
+      const on = asWritten === 'true' || asWritten === "'true'";
+      expect(fallback, `status falls back to the wrong default for ${key}`).toBe(on ? 'on' : 'off');
+    }
+  });
+
+  it("accepts exactly the schema spellings in each of the shell reader's two arms", () => {
+    const block = /const booleanish = [\s\S]*?\.transform\(/.exec(schemaSource)?.[0];
+    expect(block, 'booleanish no longer looks the way this test reads it').toBeTruthy();
+    const accepted = [...(block ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1] ?? '');
     expect(accepted.sort()).toEqual(['0', '1', 'false', 'no', 'true', 'yes']);
 
-    // The shell's two case arms, read out of the function that implements them.
     const reader = /nexa_env_boolean\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '';
-    expect(reader, 'nexa_env_boolean is not where this test looks for it').toContain(
-      'case "$raw" in',
+    expect(reader, 'nexa_env_boolean is not where this test looks for it').toContain('vocab');
+    const arms = (from: string) => {
+      const truthy = /\n\s*(.*?)\) printf 'on'/.exec(from)?.[1] ?? '';
+      const falsy = /\n\s*(.*?)\) printf 'off'/.exec(from)?.[1] ?? '';
+      const split = (arm: string) =>
+        arm
+          .split('|')
+          .map((part) => part.trim())
+          .filter(Boolean)
+          .sort();
+      return { truthy: split(truthy), falsy: split(falsy) };
+    };
+    // The strict branch comes first in the function; split on it so each arm pair
+    // is read from the branch it belongs to.
+    const strictAt = reader.indexOf('if [ "$vocab" = strict ]');
+    expect(strictAt).toBeGreaterThan(-1);
+    const strict = arms(reader.slice(strictAt));
+    const loose = arms(
+      reader.slice(reader.indexOf('case "$raw" in', reader.indexOf('return 0', strictAt))),
     );
-    const truthy = /\n\s*(.*?)\) printf 'on'/.exec(reader)?.[1] ?? '';
-    const falsy = /\n\s*(.*?)\) printf 'off'/.exec(reader)?.[1] ?? '';
-    const spellings = (arm: string) =>
-      arm
-        .split('|')
-        .map((part) => part.trim())
-        .filter(Boolean)
-        .sort();
-    expect(spellings(truthy)).toEqual(['1', 'true', 'yes']);
-    expect(spellings(falsy)).toEqual(['0', 'false', 'no']);
-    // And together they are the schema's set exactly — neither wider nor narrower.
-    expect([...spellings(truthy), ...spellings(falsy)].sort()).toEqual(accepted.sort());
+
+    expect(strict.truthy).toEqual(['true']);
+    expect(strict.falsy).toEqual(['false']);
+    expect(loose.truthy).toEqual(['1', 'true', 'yes']);
+    expect(loose.falsy).toEqual(['0', 'false', 'no']);
+    expect([...loose.truthy, ...loose.falsy].sort()).toEqual(accepted.sort());
   });
 
   it('names the same obsolete keys the upgrade audit does', () => {
-    // The frozen list lives in one place. A key added to it without a reason is
-    // a key removed from an operator's configuration without a reason.
     const frozen = /NEXA_OBSOLETE_APP_ENV_KEYS="([^"]*)"/.exec(lib)?.[1] ?? '';
     expect(frozen.split(/\s+/).filter(Boolean).sort()).toEqual([
       'BUILD_COMMIT',

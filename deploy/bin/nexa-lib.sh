@@ -1031,25 +1031,63 @@ nexa_reconcile_app_env() {
   return 1
 }
 
-# Is a booleanish setting on?
+# Is a boolean setting on, in the vocabulary the application accepts FOR THAT KEY?
 #
-# The spellings are the application's, not a second opinion: `booleanish` in
-# config.schema.ts accepts true/false/1/0/yes/no, and a reader here that took only
-# `true` would report a monitor an operator had enabled with `yes` as disabled.
-# `tests/unit/config-upgrade.test.ts` binds the two lists together.
+# Not one vocabulary for all of them, because the schema does not have one.
+# `booleanish` takes true/false/1/0/yes/no, and a reader that took only `true`
+# would report a monitor an operator had enabled with `yes` as disabled. But
+# `PANEL_MONITOR_ENABLED` is `z.enum(['true', 'false'])` and nothing wider, so a
+# reader that accepted `yes` there would report `on` for a value the application
+# REFUSES to boot on — which is the same lie from the other direction, and the
+# worse one: it reports a working monitor where the next restart will fail.
 #
-# Usage: nexa_env_boolean FILE KEY DEFAULT   (DEFAULT is `on` or `off`)
+# So the vocabulary is per key, and `tests/unit/config-upgrade.test.ts` binds each
+# key this reads to the validator the schema gives it.
+#
+# Usage: nexa_env_boolean FILE KEY DEFAULT VOCAB
+#   DEFAULT  `on` or `off`
+#   VOCAB    `loose` for a booleanish key, `strict` for a true/false enum
 nexa_env_boolean() {
-  local file="$1" key="$2" fallback="$3" raw
+  local file="$1" key="$2" fallback="$3" vocab="${4:-loose}" raw
   raw="$(nexa_env_value "$file" "$key" 2>/dev/null || true)"
   raw="${raw//[[:space:]]/}"
+  [ -n "$raw" ] || {
+    printf '%s' "$fallback"
+    return 0
+  }
+  if [ "$vocab" = strict ]; then
+    case "$raw" in
+      true) printf 'on' ;;
+      false) printf 'off' ;;
+      # A value the application would REFUSE to boot on. Saying so beats guessing.
+      *) printf 'invalid' ;;
+    esac
+    return 0
+  fi
   case "$raw" in
     true | 1 | yes) printf 'on' ;;
     false | 0 | no) printf 'off' ;;
-    '') printf '%s' "$fallback" ;;
-    # A value the application would REFUSE to boot on. Saying so beats guessing.
     *) printf 'invalid' ;;
   esac
+}
+
+# One environment variable as a RUNNING container actually has it.
+#
+# The file is intent; this is what the process was started with. They differ for
+# as long as it takes an operator to run `botctl restart`, and the difference is
+# the whole reason this exists: a `status` that read only the file would report a
+# capability an operator had just switched on as already working, which is the
+# same class of defect as the edge container serving a previous release's
+# configuration while every other output named the new one.
+#
+# Empty when the service is not running, which the caller must treat as "cannot
+# say" rather than as "off" — `nexa_running_edge_config` takes the same care.
+nexa_running_env_value() {
+  local service="$1" key="$2" id
+  id="$(nexa_compose ps -q "$service" 2>/dev/null | sed -n '1p')" || return 1
+  [ -n "$id" ] || return 1
+  docker inspect "$id" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null |
+    sed -n "s/^${key}=//p" | sed -n '1p'
 }
 
 nexa_write_atomic() {

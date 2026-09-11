@@ -3456,6 +3456,58 @@ append_env 'PANEL_MONITOR_ENABLED=maybe'
 run_botctl status
 assert_contains 'an unparseable value was guessed at' "$BOTCTL_OUTPUT" 'panel monitor      invalid'
 
+test_case 'status: a key with a narrower validator does not accept the wider spellings'
+# `PANEL_MONITOR_ENABLED` is `z.enum(['true', 'false'])`, not `booleanish`. Reading
+# `yes` there as `on` would report a working monitor where the next start REFUSES
+# to boot — the same lie as reading an enabled monitor as off, and the worse one.
+seed_nexa_env canonical
+append_env 'PANEL_MONITOR_ENABLED=yes'
+run_botctl status
+assert_contains 'the narrower vocabulary was not applied' "$BOTCTL_OUTPUT" 'panel monitor      invalid'
+# And the same spelling on a booleanish key IS accepted, so this is a per-key
+# rule rather than a reader that simply refuses `yes`.
+seed_nexa_env canonical
+append_env 'BACKUP_SCHEDULE_ENABLED=yes'
+run_botctl status
+assert_contains 'a booleanish key stopped accepting yes' "$BOTCTL_OUTPUT" 'scheduled backup   on'
+
+test_case 'status: a file the running worker has not adopted is reported as pending, not as working'
+# The file is intent; the container keeps what it was created with. An operator
+# who has just enabled the schedule and not restarted must not be told it is
+# running — which is what reading the file alone would have said.
+seed_nexa_env canonical
+append_env 'BACKUP_SCHEDULE_ENABLED=true'
+fake_set worker_env 'BACKUP_SCHEDULE_ENABLED=false'
+run_botctl status
+assert_contains 'the configured value was not reported' "$BOTCTL_OUTPUT" 'scheduled backup   on'
+assert_contains 'the running value was not reported' "$BOTCTL_OUTPUT" 'running: off'
+assert_contains 'the pending state was not named' "$BOTCTL_OUTPUT" 'pending restart'
+assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'botctl restart'
+# The advice about having no automatic backup must NOT appear: the file says on.
+assert_not_contains 'the no-backup advice contradicted the configured value' \
+  "$BOTCTL_OUTPUT" 'No AUTOMATIC backup is taken'
+fake_set worker_env ''
+
+test_case 'status: a worker that agrees with the file says nothing about pending'
+# The other direction, so the warning above is not simply always printed.
+seed_nexa_env canonical
+append_env 'BACKUP_SCHEDULE_ENABLED=true'
+fake_set worker_env 'BACKUP_SCHEDULE_ENABLED=true'
+run_botctl status
+assert_contains 'the configured value was not reported' "$BOTCTL_OUTPUT" 'scheduled backup   on'
+assert_not_contains 'a pending restart was announced with nothing pending' \
+  "$BOTCTL_OUTPUT" 'pending restart'
+fake_set worker_env ''
+
+test_case 'status: a worker that is not running is cannot-say, never off'
+seed_nexa_env canonical
+append_env 'BACKUP_SCHEDULE_ENABLED=true'
+fake_set worker_state absent
+run_botctl status
+assert_contains 'the configured value was not reported' "$BOTCTL_OUTPUT" 'scheduled backup   on'
+assert_not_contains 'a stopped worker was read as a disagreement' "$BOTCTL_OUTPUT" 'pending restart'
+fake_set worker_state running
+
 test_case 'status: a stale build identity is reported, with what it costs'
 seed_nexa_env canonical
 append_env 'BUILD_VERSION=v0.1.0-staging.1' 'BUILD_COMMIT=pending' 'BUILD_TIME=pending'
@@ -3517,6 +3569,21 @@ append_env 'BUILD_COMMIT=pending'
 run_botctl update vA
 assert_contains 'the no-op update did not report the removal' "$BOTCTL_OUTPUT" 'removed from nexa.env'
 assert_equals 'BUILD_COMMIT survived a no-op update' '' "$(nexa_env_key BUILD_COMMIT)"
+# And it must say the removal has not taken effect yet. This path recreates no
+# container, so the running processes still carry the values just removed — and
+# `status` reading the cleaned file would stop warning about an effect still in
+# force. Without this line the operator is told a repair happened that has not.
+assert_contains 'the operator was not told the repair needs a restart' \
+  "$BOTCTL_OUTPUT" "still in the running containers' environment"
+assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'botctl restart'
+
+test_case 'update: an already-current release with nothing to remove says nothing about restarting'
+# The pending-restart note must follow a removal, not every no-op update.
+seed_nexa_env canonical
+run_botctl update vA
+assert_contains 'the no-op was not reported' "$BOTCTL_OUTPUT" 'Nothing to do'
+assert_not_contains 'a restart was advised with nothing removed' \
+  "$BOTCTL_OUTPUT" "still in the running containers' environment"
 teardown_root
 
 report

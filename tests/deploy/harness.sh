@@ -469,13 +469,26 @@ case "${1:-}" in
     exit 0
     ;;
   inspect)
-    # What `nexa_running_edge_config` asks: the environment of the edge
-    # container. Only the one variable it reads is modelled, because that is the
-    # only thing any caller looks at.
+    # The environment a running container was CREATED with, which is a different
+    # fact from the file on the host — `nexa_running_edge_config` and
+    # `nexa_running_env_value` both exist to read it.
+    #
+    # Per container, because the two callers ask about different ones. `worker_env`
+    # is whatever a test says the worker was started with, one KEY=VALUE per line;
+    # unset means it was started with the same values the file now holds, which is
+    # the ordinary case and must NOT report a pending restart.
     case "$*" in
       *Config.Env*)
-        printf 'NEXA_DOMAIN=example.test\n'
-        printf 'NEXA_EDGE_CONFIG=%s\n' "$(read_state edge_running unset)"
+        case "$*" in
+          *fakeworkercontainerid*)
+            printf 'NODE_ENV=production\n'
+            [ -z "$(read_state worker_env '')" ] || printf '%s\n' "$(read_state worker_env '')"
+            ;;
+          *)
+            printf 'NEXA_DOMAIN=example.test\n'
+            printf 'NEXA_EDGE_CONFIG=%s\n' "$(read_state edge_running unset)"
+            ;;
+        esac
         ;;
       *) printf '\n' ;;
     esac
@@ -613,12 +626,29 @@ case "${1:-}" in
             esac
             ;;
           *-q*)
-            # `compose ps -q caddy` — the container id the verification then
-            # inspects. Empty when the edge is not running, which is how
-            # `nexa_verify_edge_config` reports "there is nothing serving it".
-            case "$(read_state caddy_state running)" in
-              absent | exited | dead) : ;;
-              *) printf 'fakecaddycontainerid\n' ;;
+            # `compose ps -q SERVICE` — the container id the caller then inspects.
+            # Empty when that service is not running, which is how
+            # `nexa_verify_edge_config` reports "there is nothing serving it" and
+            # how `nexa_running_env_value` reports "cannot say".
+            #
+            # Dispatched on the SERVICE, because it used to answer the edge's id
+            # whatever was asked. `status_capabilities` inspects the WORKER, and
+            # against a fake that handed it the edge's id it would have read the
+            # edge's environment, found none of the keys it wanted, and reported
+            # "cannot say" — passing its tests for the wrong reason.
+            case "$*" in
+              *worker*)
+                case "$(read_state worker_state running)" in
+                  absent | exited | dead) : ;;
+                  *) printf 'fakeworkercontainerid\n' ;;
+                esac
+                ;;
+              *)
+                case "$(read_state caddy_state running)" in
+                  absent | exited | dead) : ;;
+                  *) printf 'fakecaddycontainerid\n' ;;
+                esac
+                ;;
             esac
             ;;
           *)

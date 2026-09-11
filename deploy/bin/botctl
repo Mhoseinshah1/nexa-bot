@@ -185,11 +185,21 @@ cmd_version() {
 # and readiness, and an operator had no command that would tell them their
 # backups were not running.
 #
-# Read from /etc/nexa/nexa.env by key, applying the same defaults the application
-# applies, so this says what the running processes do rather than what the file
-# happens to mention. The BACKUP destination is reported by PRESENCE only: one of
-# its two keys is a bot token and does not belong in an output an operator pastes
-# into a ticket.
+# CONFIGURED state, from /etc/nexa/nexa.env, applying the same defaults and the
+# same per-key vocabulary the application applies — and then compared against what
+# the running worker was actually STARTED with, because those two are different
+# facts and an earlier version of this section claimed to report the second while
+# reading the first. An operator who edits nexa.env and has not restarted would
+# have been told the capability was working.
+#
+# That distinction is the one `status_secrets` beside this already makes between
+# configuration and rows, for the same reason: they have different remedies. And
+# it is the same class of defect as the edge container serving a previous
+# release's routes while every other output named the new release — the failure
+# this command gained its `edge configuration` lines for.
+#
+# The BACKUP destination is reported by PRESENCE only: one of its two keys is a
+# bot token and does not belong in an output an operator pastes into a ticket.
 status_capabilities() {
   local file="${NEXA_CONFIG_DIR}/nexa.env"
   printf '\ncapabilities:\n'
@@ -198,8 +208,19 @@ status_capabilities() {
     return 0
   }
 
-  local scheduled chat token destination
-  scheduled="$(nexa_env_boolean "$file" BACKUP_SCHEDULE_ENABLED off)"
+  # Key, label, default, and the vocabulary the SCHEMA gives that key. The
+  # vocabulary is not uniform: PANEL_MONITOR_ENABLED is a true/false enum, so
+  # `yes` there is a value the application refuses rather than one it accepts.
+  local -a settings=(
+    'BACKUP_SCHEDULE_ENABLED|scheduled backup  |off|loose'
+    'RECOVERY_UPLOAD_ENABLED|recovery upload   |on|loose'
+    'PANEL_MONITOR_ENABLED|panel monitor     |on|strict'
+    'NOTIFICATION_DISPATCH_ENABLED|notifications     |on|loose'
+    'OUTBOX_RELAY_ENABLED|outbox relay      |on|loose'
+    'TELEGRAM_WEBHOOK_ENABLED|telegram webhook  |off|loose'
+  )
+
+  local chat token destination scheduled=''
   chat="$(nexa_env_value "$file" BACKUP_TELEGRAM_CHAT_ID 2>/dev/null || true)"
   token="$(nexa_env_value "$file" BACKUP_TELEGRAM_BOT_TOKEN 2>/dev/null || true)"
   if [ -n "${chat//[[:space:]]/}" ] && [ -n "${token//[[:space:]]/}" ]; then
@@ -212,13 +233,37 @@ status_capabilities() {
     destination='HALF configured'
   fi
 
-  printf '  scheduled backup   %s\n' "$scheduled"
+  local entry key label fallback vocab configured applied applied_state pending=0
+  for entry in "${settings[@]}"; do
+    IFS='|' read -r key label fallback vocab <<<"$entry"
+    configured="$(nexa_env_boolean "$file" "$key" "$fallback" "$vocab")"
+    [ "$key" != BACKUP_SCHEDULE_ENABLED ] || scheduled="$configured"
+
+    # What the worker was STARTED with. Absent means the service is not running,
+    # which is "cannot say" and not "off".
+    applied="$(nexa_running_env_value worker "$key" 2>/dev/null || true)"
+    applied_state=''
+    if [ -n "${applied//[[:space:]]/}" ]; then
+      case "$applied" in
+        true | 1 | yes) applied_state=on ;;
+        false | 0 | no) applied_state=off ;;
+      esac
+    fi
+
+    if [ -n "$applied_state" ] && [ "$applied_state" != "$configured" ]; then
+      printf '  %s %s  (running: %s — pending restart)\n' "$label" "$configured" "$applied_state"
+      pending=1
+    else
+      printf '  %s %s\n' "$label" "$configured"
+    fi
+  done
   printf '  backup delivery    %s\n' "$destination"
-  printf '  recovery upload    %s\n' "$(nexa_env_boolean "$file" RECOVERY_UPLOAD_ENABLED on)"
-  printf '  panel monitor      %s\n' "$(nexa_env_boolean "$file" PANEL_MONITOR_ENABLED on)"
-  printf '  notifications      %s\n' "$(nexa_env_boolean "$file" NOTIFICATION_DISPATCH_ENABLED on)"
-  printf '  outbox relay       %s\n' "$(nexa_env_boolean "$file" OUTBOX_RELAY_ENABLED on)"
-  printf '  telegram webhook   %s\n' "$(nexa_env_boolean "$file" TELEGRAM_WEBHOOK_ENABLED off)"
+
+  if [ "$pending" -eq 1 ]; then
+    printf '\n  A value above is configured one way and RUNNING the other. The file is what\n'
+    printf '  the next start reads; the running process keeps what it was created with.\n'
+    printf '  Run `botctl restart` to make them agree.\n'
+  fi
 
   if [ "$scheduled" = off ]; then
     printf '\n  No AUTOMATIC backup is taken. `botctl backup` still works, and a backup an\n'
@@ -535,7 +580,16 @@ cmd_update() {
   # that repair is the whole point. Non-fatal: a stale build label is not worth
   # failing an update over, and `nexa_reconcile_app_env` leaves the file untouched
   # if it cannot rewrite it cleanly.
-  nexa_reconcile_app_env "${NEXA_CONFIG_DIR}/nexa.env" || true
+  # Whether anything was actually removed, observed rather than inferred from the
+  # return code: `nexa_reconcile_app_env` answers 0 both when it removed keys and
+  # when there was nothing to remove, so reading its status would have announced a
+  # pending restart on every update of a clean installation.
+  local app_env="${NEXA_CONFIG_DIR}/nexa.env" reconciled=0 had_obsolete=0
+  [ -z "$(nexa_obsolete_app_env_keys "$app_env")" ] || had_obsolete=1
+  nexa_reconcile_app_env "$app_env" || true
+  if [ "$had_obsolete" -eq 1 ] && [ -z "$(nexa_obsolete_app_env_keys "$app_env")" ]; then
+    reconciled=1
+  fi
 
   if [ "$target" = "$current" ]; then
     # Not unconditionally "nothing to do": if deploy.env disagrees with the
@@ -561,6 +615,14 @@ cmd_update() {
     fi
     if [ "$divergence" -eq 0 ]; then
       nexa_ok "already running ${target}. Nothing to do."
+      # Unless something WAS done. The removal above edited nexa.env and this
+      # path recreates no container, so the running processes still carry the
+      # values that were just taken out of the file — and `botctl status` would
+      # stop warning about keys whose effect is still in force. Saying so is the
+      # difference between a repair an operator completes and one they believe
+      # already happened.
+      [ "$reconciled" -eq 0 ] ||
+        nexa_log "The lines removed above are still in the running containers' environment. Run 'botctl restart' so ${target} reports its own build identity."
       return 0
     fi
     # divergence == 2: no manifest. Fall through to the full update path, which
