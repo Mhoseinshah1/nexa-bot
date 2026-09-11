@@ -705,19 +705,28 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
     expect(fn, 'the decision is not a comparison of the two').toMatch(
       /\[ "\$running" = "\$stamped" \]/,
     );
-    // THREE lookups can fail, and each must stop the report: a provenance that could
-    // not be computed is not an override, and the restart it would advise would not
-    // change the answer. A guard covering only the image id was the defect in the
-    // previous revision — a failed `image inspect` made every stamped value read as
-    // empty, so all three keys looked overridden on every host.
-    expect(fn, 'a missing image id does not stop the report').toMatch(
-      /\[ -n "\$image" \] \|\| return 0/,
+    // THREE lookups can fail, and each must make the answer UNKNOWN — exit 1, not an
+    // empty success. A guard covering only the image id was one defect (a failed
+    // `image inspect` made every stamped value read as empty, so all three keys looked
+    // overridden on every host); an empty success was the next — the per-key
+    // classifier read it as "nothing is overridden" and told the operator the running
+    // API does not carry the file's keys, which is exactly what could not be known.
+    expect(fn, 'a missing container id is reported as computed').toMatch(
+      /\[ -n "\$id" \] \|\| return 1/,
     );
-    expect(fn, 'a failed container inspect does not stop the report').toMatch(
-      /running_env="\$\(nexa_inspect_env container "\$id"\)" \|\| return 0/,
+    expect(fn, 'a missing image id is reported as computed').toMatch(
+      /\[ -n "\$image" \] \|\| return 1/,
     );
-    expect(fn, 'a failed image inspect does not stop the report').toMatch(
-      /stamped_env="\$\(nexa_inspect_env image "\$image"\)" \|\| return 0/,
+    expect(fn, 'a failed container inspect is reported as computed').toMatch(
+      /running_env="\$\(nexa_inspect_env container "\$id"\)" \|\| return 1/,
+    );
+    expect(fn, 'a failed image inspect is reported as computed').toMatch(
+      /stamped_env="\$\(nexa_inspect_env image "\$image"\)" \|\| return 1/,
+    );
+    // And the one caller treats that exit as unknown rather than as an empty list.
+    const botctlProvenance = readFileSync(join(__dirname, '../../deploy/bin/botctl'), 'utf8');
+    expect(botctlProvenance, 'botctl takes a failed provenance as an empty answer').toMatch(
+      /running_obsolete="\$\(nexa_container_overridden_obsolete_keys "\$api_id"\)" \|\| running_known=0/,
     );
     // And the per-key reads come out of those listings rather than re-inspecting,
     // which is what makes one checked status cover every key.

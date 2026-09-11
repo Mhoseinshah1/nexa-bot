@@ -983,9 +983,20 @@ nexa_env_rewrite() {
         if (name in kill) { skip = 1; next }
         print line
       }
+      # A file that ENDS inside a quoted value is refused, whatever opened it. When
+      # the unterminated record is one being dropped, `skip` stays set to EOF and
+      # every later line — the keyring, the backup destination — would be deleted
+      # by an update that reported success. When it is any other record, the file
+      # is one Compose refuses whole, and a rewrite of it cannot be reasoned about.
+      # Either way the original stays: exit 3 is the caller'"'"'s signal to say so.
+      END { if (inq) exit 3 }
     ' <"$file" >"$tmp" || status=$?
   else
     cat -- "$file" >"$tmp" || status=$?
+  fi
+  if [ "$status" -eq 3 ]; then
+    rm -f "$tmp"
+    nexa_die "${file} ends inside a quoted value, so no line after that quote can be told from the value it is in; it is UNCHANGED. Close the quote first."
   fi
   if [ "$status" -ne 0 ]; then
     rm -f "$tmp"
@@ -1070,7 +1081,12 @@ nexa_reconcile_app_env() {
 
   csv="$(printf '%s' "$present" | tr '\n' ',' | sed 's/,$//')"
   nexa_step "removing configuration the application no longer reads"
-  if ( nexa_env_rewrite "$file" "$csv" ) >/dev/null 2>&1; then
+  # The rewriter's own reason is kept — it is the operator's only way to learn WHY a
+  # file was left alone, and "ends inside a quoted value" names a file Compose will
+  # refuse whole at the next start. Only stderr, and only its last line: the
+  # rewriter prints no value anywhere, so the reason carries none.
+  local reason=''
+  if reason="$( (nexa_env_rewrite "$file" "$csv") 2>&1 >/dev/null)"; then
     # The NAMES, because they are not secrets and an operator should see what
     # changed in a file they are responsible for.
     nexa_ok "removed from $(basename "$file"): $(printf '%s' "$present" | tr '\n' ' ')"
@@ -1078,6 +1094,7 @@ nexa_reconcile_app_env() {
     return 0
   fi
   nexa_warn "could not remove $(printf '%s' "$present" | tr '\n' ' ') from ${file}; it is UNCHANGED."
+  [ -z "$reason" ] || nexa_warn "$(printf '%s\n' "$reason" | sed -n '$p')"
   nexa_warn "The release's own build identity stays masked until they are gone. Nothing else is affected."
   return 1
 }
@@ -1336,7 +1353,13 @@ if not isinstance(env, dict):
 back = chr(92)
 for key in sorted(env):
     raw = env[key]
-    text = "" if raw is None else str(raw)
+    # A null entry is a variable Compose left UNSET — a bare `KEY` line whose host
+    # variable is absent — so the application never receives it. Rendering it as
+    # `KEY=` would turn the schema default into an invalid explicit empty value.
+    # (Compose v5.1.1 omits the key instead; this is the contract, not a measurement.)
+    if raw is None:
+        continue
+    text = str(raw)
     # `config` re-escapes the document it prints; the container gets one `$`.
     text = text.replace("$$", "$")
     text = text.replace(back, back + back).replace(chr(10), back + "n")
@@ -1414,6 +1437,48 @@ while i < len(rendered):
         i += 1
 value = "".join(out)
 print(len(value.encode("utf-16-le")) // 2)
+'
+}
+
+# Is a value PRESENT after the trim the schema applies?
+#
+# `configSchema` trims the backup destination with JavaScript'"'"'s `.trim()`, whose
+# whitespace is the ECMAScript set — the ASCII blanks, the no-break space, the
+# Unicode space separators, the line separators and the byte-order mark — while the
+# shell'"'"'s `[[:space:]]` is the ASCII set, whatever the locale. A chat id that is only
+# a no-break space is nothing to the application and "present" to the shell, and the
+# next start refuses a destination the report called configured. Python'"'"'s own
+# `str.isspace()` is a third set (it lacks U+FEFF and has the ASCII separators
+# U+001C..U+001F and U+0085), so the ECMAScript set is spelled out.
+#
+# Exit 0 when something remains after the trim, 1 when nothing does or the key is
+# absent.
+nexa_listing_present() {
+  printf '%s\n' "$1" | sed -n "s/^${2}=//p" | sed -n '1p' | python3 -c '
+import sys
+
+rendered = sys.stdin.read()
+if rendered.endswith(chr(10)):
+    rendered = rendered[:-1]
+back = chr(92)
+out = []
+i = 0
+while i < len(rendered):
+    ch = rendered[i]
+    if ch == back and i + 1 < len(rendered):
+        nxt = rendered[i + 1]
+        out.append(chr(10) if nxt == "n" else nxt)
+        i += 2
+    else:
+        out.append(ch)
+        i += 1
+value = "".join(out)
+ecma = set(chr(c) for c in (
+    0x9, 0xA, 0xB, 0xC, 0xD, 0x20, 0xA0, 0x1680,
+    0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A,
+    0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF,
+))
+sys.exit(0 if any(ch not in ecma for ch in value) else 1)
 '
 }
 
@@ -1549,11 +1614,15 @@ nexa_quoted_env_entry() {
 # covered the first lookup was the defect in the previous revision of this function.
 nexa_container_overridden_obsolete_keys() {
   local id="$1" image key running_env stamped_env running stamped
-  [ -n "$id" ] || return 0
+  # Exit 1 when the answer cannot be computed — no running container, or any of the
+  # three lookups failing — which is a different fact from "computed, and nothing is
+  # overridden". A caller that took an empty answer as the second turned every lookup
+  # failure into the claim that the running API carries none of the file's keys.
+  [ -n "$id" ] || return 1
   image="$(docker inspect "$id" --format '{{.Image}}' 2>/dev/null || true)"
-  [ -n "$image" ] || return 0
-  running_env="$(nexa_inspect_env container "$id")" || return 0
-  stamped_env="$(nexa_inspect_env image "$image")" || return 0
+  [ -n "$image" ] || return 1
+  running_env="$(nexa_inspect_env container "$id")" || return 1
+  stamped_env="$(nexa_inspect_env image "$image")" || return 1
   for key in $NEXA_OBSOLETE_APP_ENV_KEYS; do
     running="$(nexa_quoted_env_entry "$running_env" "$key")"
     stamped="$(nexa_quoted_env_entry "$stamped_env" "$key")"

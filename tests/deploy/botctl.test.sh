@@ -3442,6 +3442,41 @@ assert_contains 'recovery upload was not reported as on by default' \
 assert_contains 'the panel monitor was not reported as on by default' \
   "$BOTCTL_OUTPUT" 'panel monitor      on'
 
+test_case 'status: a chat id that is only a no-break space is not configured'
+# The schema trims the destination with JavaScript's `.trim()`, whose whitespace set
+# includes the no-break space; the shell's `[[:space:]]` does not. A chat id of one
+# U+00A0 is nothing to the application — a half-configured destination the next start
+# refuses — and "present" to a shell test, which reported it configured.
+seed_nexa_env canonical
+fake_set compose_env ''
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","BACKUP_TELEGRAM_CHAT_ID":" ","BACKUP_TELEGRAM_BOT_TOKEN":"123456:AAAfakeToken"}'
+run_botctl status
+assert_contains 'a no-break-space chat id was read as present' \
+  "$BOTCTL_OUTPUT" 'backup delivery    HALF configured'
+# And a chat id with real characters around such a space is present, so this is about
+# the trim and not about refusing the character.
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","BACKUP_TELEGRAM_CHAT_ID":"-100 1","BACKUP_TELEGRAM_BOT_TOKEN":"123456:AAAfakeToken"}'
+run_botctl status
+assert_contains 'a chat id containing a no-break space was read as absent' \
+  "$BOTCTL_OUTPUT" 'backup delivery    configured'
+fake_set compose_env_json ''
+seed_nexa_env canonical
+
+test_case 'status: a null entry Compose resolved is an absent variable, not an empty one'
+# A bare `KEY` line in nexa.env takes the variable from the host, and when the host
+# has none the application never receives it and applies its default. Compose v5.1.1
+# omits such a key from `config` output; the Compose contract also allows a null. A
+# null rendered as `KEY=` would turn that default into an invalid explicit empty value.
+seed_nexa_env canonical
+fake_set compose_env ''
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","PANEL_MONITOR_ENABLED":null}'
+run_botctl status
+assert_contains 'a null entry was reported as an invalid empty value' \
+  "$BOTCTL_OUTPUT" 'panel monitor      on'
+assert_not_contains 'a null entry read as invalid' "$BOTCTL_OUTPUT" 'panel monitor      invalid'
+fake_set compose_env_json ''
+seed_nexa_env canonical
+
 test_case 'status: a destination that resolves to only a newline is not configured'
 # The listing renders a newline as the two characters `\n` so that one entry is one
 # line, and `nexa_listing_value` turns it back before anyone looks. A reader of the
@@ -3983,6 +4018,30 @@ run_botctl status
 assert_contains 'the check reports nothing even when it can compute an override' \
   "$BOTCTL_OUTPUT" 'BUILD_COMMIT'
 fake_set api_env ''
+
+test_case 'status: a provenance it cannot compute makes no claim about the running API'
+# A failed lookup used to return an EMPTY answer, which the per-key classifier read as
+# "nothing is overridden" — so a file that sets the keys was reported as pending, with
+# the sentence that the running API does not carry them and /health/info is correct
+# for now. That is the fact that could not be established. Unknown is reported as
+# unknown, for each of the three lookups and for an API that is not running at all.
+seed_nexa_env canonical
+append_env 'BUILD_COMMIT=pending'
+for failure in image_absent container_env_fails image_env_fails; do
+  fake_set "$failure" 1
+  run_botctl status
+  assert_contains "a failed ${failure} lookup claimed the running API does not carry the key" \
+    "$BOTCTL_OUTPUT" 'could not be determined'
+  assert_not_contains "a failed ${failure} lookup reported the file key as pending" \
+    "$BOTCTL_OUTPUT" 'correct for NOW'
+  fake_set "$failure" 0
+done
+# With every lookup working, the same file IS classified — pending, because the fake
+# container carries the image's own value — so this is about failure, not silence.
+run_botctl status
+assert_contains 'a computable provenance was reported as unknown' "$BOTCTL_OUTPUT" 'correct for NOW'
+assert_not_contains 'a computable provenance was reported as unknown' \
+  "$BOTCTL_OUTPUT" 'could not be determined'
 teardown_root
 
 # --- update removes them -----------------------------------------------------
@@ -4074,6 +4133,26 @@ assert_equals "the next value's closing line was swallowed" '1' \
 assert_fails 'the rewritten file ends inside a quoted value' \
   nexa_compose_env_unterminated "${NEXA_CONFIG_DIR}/nexa.env"
 assert_equals 'a key after the multiline value was lost' 'ok' "$(nexa_env_key TAIL)"
+
+test_case 'update: an obsolete record whose quote never closes is refused, and the file is UNCHANGED'
+# `BUILD_COMMIT='pending` with no closing quote is a record the rewriter is asked to
+# drop. It set `skip` on entering the value and, with no closing quote, stayed in it to
+# EOF — so every later line, the keyring included, was deleted by an update that
+# reported success. Compose refuses such a file whole anyway, but a rewrite that
+# cannot tell a later line from the value it is in has no safe output, so the original
+# stays and the operator is told to close the quote.
+seed_nexa_env canonical
+printf '%s\n' "BUILD_COMMIT='pending" 'TAIL_KEY=still-here' >>"${NEXA_CONFIG_DIR}/nexa.env"
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl update vA
+assert_equals 'the file was rewritten from an unterminated record' "$before" \
+  "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_contains 'the reason for leaving the file alone was not given' \
+  "$BOTCTL_OUTPUT" 'ends inside a quoted value'
+assert_contains 'the keyring after the unterminated record was lost' \
+  "$(cat "${NEXA_CONFIG_DIR}/nexa.env")" 'SECRETS_KEYS='
+assert_contains 'the last line was lost' "$(cat "${NEXA_CONFIG_DIR}/nexa.env")" 'TAIL_KEY=still-here'
+seed_nexa_env canonical
 
 test_case 'update: an ESCAPED delimiter does not end a value early'
 # Compose honours an escaped delimiter: a quote is escaped when an ODD number of

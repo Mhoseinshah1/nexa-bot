@@ -702,3 +702,51 @@ container can be created or recreated from the refused configuration, the next
 `botctl restart` or `botctl update` will fail, and the running containers are not
 described. The named test for H-56 asserts the new wording and the caveat, and
 asserts the old claim is gone.
+
+### Round eleven, Codex, on `116cca0`
+
+Four findings. One is the most serious defect this branch has carried, and it was in
+the rewriter three rounds of review had already corrected twice.
+
+**P1, CONFIRMED_BLOCKER — an obsolete record whose quote never closes swallowed the
+rest of the file.** `BUILD_COMMIT='pending` with no closing quote is a record the
+rewriter is asked to drop. It set `skip` on entering the value and, with no closing
+quote to clear it, stayed inside the value to EOF: every later line — the keyring, the
+backup destination — was deleted, awk exited 0, and because `DATABASE_URL` precedes
+the record the post-write validation passed. An update that reported success had
+installed a file missing its encryption key. Reproduced through the real rewriter.
+The awk program now exits 3 from `END` when the file ends inside a quoted value,
+whatever opened it, and the rewriter leaves the original untouched and says to close
+the quote (H-69). Compose refuses such a file whole in any case; the point is that
+nothing may delete data from it.
+
+**P2, CONFIRMED_NON_BLOCKER — a provenance that could not be computed was read as
+"nothing is overridden".** `nexa_container_overridden_obsolete_keys` returned an
+empty SUCCESS when there was no running API or any of three lookups failed, and the
+per-key classifier then reported every file key as pending, with the sentence that
+the running API does not carry it and `/health/info` is correct for now — the very
+fact it could not establish. The function exits 1 on an answer it cannot compute,
+and `status` says the running state could not be determined and claims nothing
+about `/health/info` (H-70).
+
+**P2, CONFIRMED_NON_BLOCKER — presence by the shell's whitespace, not the schema's.**
+`configSchema` trims the backup destination with JavaScript's `.trim()`, whose set
+includes the no-break space, the Unicode space separators, the line separators and
+the byte-order mark; `[[:space:]]` is the ASCII set. A chat id that is only U+00A0
+is nothing to the application and was "configured" to `status`. Python's own
+`str.isspace()` is a third set (measured: it lacks U+FEFF and includes U+001C..U+001F
+and U+0085), so `nexa_listing_present` spells the ECMAScript set out (H-71).
+
+**P2, NOT_REPRODUCIBLE on v5.1.1 — a null entry rendered as an empty assignment.**
+Measured: a bare `KEY` line whose host variable is unset is OMITTED from `config`
+output on Compose v5.1.1, not emitted as null. The Compose contract does allow a null
+for an unset variable, and a null rendered as `KEY=` would turn the schema default
+into an invalid explicit empty value, so the resolver skips null entries; the fake
+states one as JSON (H-72). Recorded as a contract, not a measurement.
+
+| #    | Rule                                                                                | Mutation                                                 | Named test                                                                                                   | Result |
+| ---- | ----------------------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------ |
+| H-69 | The rewriter refuses a file that ends inside a quoted value and leaves it unchanged | `nexa-lib.sh`: drop the `END { if (inq) exit 3 }` check  | `botctl.test.sh` › update: an obsolete record whose quote never closes is refused, and the file is UNCHANGED | KILLED |
+| H-70 | A provenance that cannot be computed is reported as unknown, never as "no override" | `nexa-lib.sh`: the four early returns back to `return 0` | `botctl.test.sh` › status: a provenance it cannot compute makes no claim about the running API               | KILLED |
+| H-71 | Destination presence is decided by the schema's trim set, not the shell's           | `botctl`: presence by `[[:space:]]` again                | `botctl.test.sh` › status: a chat id that is only a no-break space is not configured                         | KILLED |
+| H-72 | A null entry in Compose's document is an absent variable                            | `nexa-lib.sh`: render a null as an empty string again    | `botctl.test.sh` › status: a null entry Compose resolved is an absent variable, not an empty one             | KILLED |

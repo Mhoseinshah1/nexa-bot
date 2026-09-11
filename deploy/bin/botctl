@@ -251,13 +251,15 @@ status_capabilities() {
     'TELEGRAM_WEBHOOK_ENABLED|telegram webhook  |off|loose|api'
   )
 
-  local chat token destination scheduled='' webhook=''
-  chat="$(nexa_listing_value "$resolved" BACKUP_TELEGRAM_CHAT_ID)"
-  token="$(nexa_listing_value "$resolved" BACKUP_TELEGRAM_BOT_TOKEN)"
-  # The schema `.trim()`s both, so whitespace is not a value here.
-  if [ -n "${chat//[[:space:]]/}" ] && [ -n "${token//[[:space:]]/}" ]; then
+  local chat_present=0 token_present=0 destination scheduled='' webhook=''
+  # The schema `.trim()`s both with JavaScript's whitespace set, which is wider than
+  # the shell's: a chat id that is only a no-break space is nothing to the application.
+  # Presence is decided by that set, never by reading the value into this script.
+  ! nexa_listing_present "$resolved" BACKUP_TELEGRAM_CHAT_ID || chat_present=1
+  ! nexa_listing_present "$resolved" BACKUP_TELEGRAM_BOT_TOKEN || token_present=1
+  if [ "$chat_present" -eq 1 ] && [ "$token_present" -eq 1 ]; then
     destination='configured'
-  elif [ -z "${chat//[[:space:]]/}" ] && [ -z "${token//[[:space:]]/}" ]; then
+  elif [ "$chat_present" -eq 0 ] && [ "$token_present" -eq 0 ]; then
     destination='not configured'
   else
     # The application refuses to boot on this, so it can only be a configuration
@@ -342,10 +344,24 @@ status_capabilities() {
   # not whether it has one. The image stamps all three keys on every correct build,
   # so a presence check warned every healthy installation and the restart it
   # advised could never clear it.
-  local obsolete running_obsolete api_id
+  local obsolete running_obsolete api_id running_known=1
   api_id="$(nexa_running_container api 2>/dev/null || true)"
   obsolete="$(nexa_obsolete_app_env_keys "$file")"
-  running_obsolete="$(nexa_container_overridden_obsolete_keys "$api_id")"
+  # A provenance that cannot be computed — no running API, or a failed lookup — is
+  # UNKNOWN, not "nothing is overridden". Taking the empty answer as the latter
+  # classified every file key as pending and claimed the running API does not carry
+  # it, which is exactly the fact that could not be established.
+  running_obsolete="$(nexa_container_overridden_obsolete_keys "$api_id")" || running_known=0
+  if [ "$running_known" -eq 0 ]; then
+    if [ -n "$obsolete" ]; then
+      printf '\n  This file sets %s, which REPLACES the\n' "$(printf '%s' "$obsolete" | tr '\n' ' ')"
+      printf '  build identity stamped into the release image. Whether the RUNNING API carries\n'
+      printf '  them could not be determined (no running API container, or `docker inspect`\n'
+      printf '  failed), so nothing is claimed about /health/info. The next `botctl update`\n'
+      printf '  removes the lines first.\n'
+    fi
+    return 0
+  fi
   # THREE states, per KEY, because the two lists need not hold the same keys.
   #
   # A file that newly sets BUILD_VERSION while the running API retains an old
