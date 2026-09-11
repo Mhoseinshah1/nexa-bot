@@ -207,8 +207,9 @@ botctl logs [service]      follow logs
 botctl restart             restart the stack
 ```
 
-None of these print a secret. `botctl status` deliberately shows container
-state rather than configuration, so its output can be pasted into a ticket.
+None of these print a secret. `botctl status` reports container state and the
+resolved configuration by key and by presence, never a secret's value, so its
+output can be pasted into a ticket.
 
 `botctl status` reports a `capabilities:` section, because several settings
 default OFF and that is correct — an upgrade must not start taking and delivering
@@ -226,9 +227,10 @@ ambient environment — and reproducing that in a shell script means reproducing
 Compose's variable precedence. So `status` asks Compose what a container started now
 would receive, and applies only the part that is the application's own: the per-key
 vocabulary the schema accepts. It also surfaces the one answer that matters more than
-any value, because Compose reports it directly: a configuration Compose REFUSES, where
-nothing starts and no individual setting is in force — repeating Compose's own reason,
-cut before any value Compose echoed back. The backup delivery destination is
+any value, because Compose reports it directly: a configuration Compose REFUSES, from
+which no container can be created or recreated — repeating Compose's own reason, cut
+before any value Compose echoed back, and saying nothing about a container already
+running, which keeps the environment it was created with. The backup delivery destination is
 reported by PRESENCE only, because one of its two keys is a bot token.
 
 Each line names the process that READS the value, which is the operator's next

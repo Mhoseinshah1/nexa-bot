@@ -632,12 +632,12 @@ across the very rounds whose corruption they were written to catch. They call th
 function directly now, and H-65 asks the oracle about a file that IS unterminated
 first, so a green answer below it means something.
 
-| #    | Rule                                                                           | Mutation                                                           | Named test                                                                                             | Result |
-| ---- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ------ |
-| H-62 | A `$` Compose re-escapes in `config` output is a single `$` before validation  | `nexa-lib.sh`: drop the `$$` → `$` replacement                     | `botctl.test.sh` › status: a dollar Compose re-escapes is measured as the application receives it      | KILLED |
-| H-63 | A value is measured by its characters, not by the listing's one-line rendering | `nexa-lib.sh`: `nexa_listing_value` returns the rendering          | `botctl.test.sh` › status: a value is measured by its characters, not by its one-line rendering        | KILLED |
-| H-64 | A refusal repeats Compose's reason, cut before any value Compose echoed        | `nexa-lib.sh`: `nexa_compose_refusal_reason` prints the line whole | `botctl.test.sh` › status: a refusal reports the reason Compose gave, with the value it echoed cut off | KILLED |
-| H-65 | The rewriter's loadability oracle is live, not an undefined command negated    | `nexa-lib.sh`: `nexa_compose_env_unterminated` returns 1 always    | `botctl.test.sh` › harness: the loadability oracle sees an unterminated file                           | KILLED |
+| #    | Rule                                                                           | Mutation                                                           | Named test                                                                                             | Result                             |
+| ---- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ---------------------------------- |
+| H-62 | A `$` Compose re-escapes in `config` output is a single `$` before validation  | `nexa-lib.sh`: drop the `$$` → `$` replacement                     | `botctl.test.sh` › status: a dollar Compose re-escapes is measured as the application receives it      | KILLED                             |
+| H-63 | A value is measured by its characters, not by the listing's one-line rendering | `nexa-lib.sh`: `nexa_listing_value` returns the rendering          | `botctl.test.sh` › status: a destination that resolves to only a newline is not configured             | KILLED, then SURVIVED, then KILLED |
+| H-64 | A refusal repeats Compose's reason, cut before any value Compose echoed        | `nexa-lib.sh`: `nexa_compose_refusal_reason` prints the line whole | `botctl.test.sh` › status: a refusal reports the reason Compose gave, with the value it echoed cut off | KILLED                             |
+| H-65 | The rewriter's loadability oracle is live, not an undefined command negated    | `nexa-lib.sh`: `nexa_compose_env_unterminated` returns 1 always    | `botctl.test.sh` › harness: the loadability oracle sees an unterminated file                           | KILLED                             |
 
 **Two more from the review of `3508b74` itself**, before Codex saw it. Compose logs
 warnings to stderr BEFORE its error — `The "X" variable is not set. Defaulting to a
@@ -652,6 +652,31 @@ right by accident. `${#}` is also characters under a UTF-8 locale and bytes unde
 C/POSIX, and `botctl` sets neither, while the schema counts UTF-16 code units.
 `nexa_listing_length` counts what the schema counts (H-67).
 
+**H-63 SURVIVED its own follow-up.** The row above was killed on `3508b74` by the
+webhook-secret test, and `0a9ebd2` moved that measurement to `nexa_listing_length` —
+so on `0a9ebd2` the mutation (`nexa_listing_value` returns the rendering) is green at
+212 of 212, found by the review of that head. The rule was still real: every boolean,
+the backup destination and the keyring fields read through `nexa_listing_value`. The
+row is retargeted to the one consumer that can observe the decode — a chat id that
+resolves to only a newline is two non-blank characters in the rendering and nothing to
+the application, which `.trim()`s it — and re-run against the current tree. Recorded
+as killed, then survived, then killed, because a KILLED row whose mutation is green
+is the thing this file exists to prevent.
+
+**H-67's kill count depends on the locale.** The deploy suite runs under POSIX here
+and in CI (nothing sets `LANG` or `LC_ALL`), where `${#}` counts bytes: the `${#}`
+mutation fails only the trailing-newline assertion (1 of 212), because eight astral
+characters are 32 bytes. Under a UTF-8 locale the astral assertion fails too (2 of
+212). The astral assertion is not dead — a mutation counting code points instead of
+code units dies only there — but the count recorded is the POSIX one.
+
+The fallback branch of the refusal line — used when the filter leaves nothing, which
+an error line that itself contains `level=warning` produces (`TOKEN="level=warning`,
+measured) — had no test, and its first spelling depended on being called from an
+`if`: under errexit and pipefail a `grep` that matched nothing aborted the group
+before the fallback ran. It is written as two plain assignments now and H-68 names
+the branch.
+
 Two findings from the same review are recorded as accepted rather than fixed. The cut
 at the first quote character also shortens a template error — `X=${` produces `Invalid
 template: "${"` and reads `Invalid template:` after the cut — because a template can
@@ -661,7 +686,19 @@ substitution, each meaning a value was silently blanked — are not surfaced by 
 its stderr is kept apart from the JSON so that a warning is not mistaken for a
 refusal, and nothing more is claimed for it.
 
-| #    | Rule                                                                            | Mutation                                                | Named test                                                                                              | Result |
-| ---- | ------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------ |
-| H-66 | The reported refusal is Compose's error line, not a warning it logged before it | `nexa-lib.sh`: report the first stderr line again       | `botctl.test.sh` › status: a refusal is the error line Compose printed, not the warning it logged first | KILLED |
-| H-67 | The secret is measured in UTF-16 code units, trailing newline included          | `botctl`: measure `${#}` of the substituted value again | `botctl.test.sh` › status: the secret is measured as the schema measures it, trailing newline and all   | KILLED |
+| #    | Rule                                                                                        | Mutation                                                | Named test                                                                                              | Result |
+| ---- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------ |
+| H-66 | The reported refusal is Compose's error line, not a warning it logged before it             | `nexa-lib.sh`: report the first stderr line again       | `botctl.test.sh` › status: a refusal is the error line Compose printed, not the warning it logged first | KILLED |
+| H-67 | The secret is measured in UTF-16 code units, trailing newline included                      | `botctl`: measure `${#}` of the substituted value again | `botctl.test.sh` › status: the secret is measured as the schema measures it, trailing newline and all   | KILLED |
+| H-68 | A refusal whose error line the warning filter removes is still reported, from the last line | `nexa-lib.sh`: drop the last-line fallback              | `botctl.test.sh` › status: a refusal whose error line itself says level=warning is still reported       | KILLED |
+
+### Round ten, Codex, on `0a9ebd2`
+
+One finding, P2, CONFIRMED_NON_BLOCKER: the refusal text said "no container will start
+and no individual value is in force", which contradicts the readiness rows the same
+command prints below it — a container already running keeps the environment it was
+created with and may be perfectly healthy. The claim is about creation now: no
+container can be created or recreated from the refused configuration, the next
+`botctl restart` or `botctl update` will fail, and the running containers are not
+described. The named test for H-56 asserts the new wording and the caveat, and
+asserts the old claim is gone.

@@ -214,7 +214,7 @@ status_capabilities() {
   local reason errfile
   errfile="$(mktemp)"
   if ! resolved="$(nexa_compose_resolved_env api 2>"$errfile")"; then
-    # Compose's own first line, because guessing at "common causes" told an operator
+    # Compose's own error line, because guessing at "common causes" told an operator
     # with a missing env file to look for an unclosed quote. REDACTED past the first
     # quote character: Compose echoes the offending VALUE in an unterminated-quote
     # refusal (`unterminated quoted value '7777:AAA…`), and this section reports the
@@ -224,8 +224,13 @@ status_capabilities() {
     rm -f "$errfile"
     printf '\ncapabilities:\n'
     printf '  configuration  REFUSED by compose\n'
-    printf '\n  `docker compose config` cannot resolve this installation'"'"'s configuration,\n'
-    printf '  so no container will start and no individual value is in force. Compose said:\n'
+    # About what can be CREATED, not about what is running: a container already up
+    # keeps the environment it was created with and may pass the readiness check
+    # printed below this section, so "no value is in force" would contradict it.
+    printf '\n  `docker compose config` cannot resolve this installation'"'"'s configuration, so\n'
+    printf '  no container can be CREATED or RECREATED from it: the next `botctl restart` or\n'
+    printf '  `botctl update` will fail. A container already running keeps the environment\n'
+    printf '  it was created with, and this section does not describe it. Compose said:\n'
     printf '    %s\n' "$reason"
     printf '  Fix that, then run `botctl restart`.\n'
     return 0
@@ -273,8 +278,12 @@ status_capabilities() {
     # length the schema demands.
     if [ "$key" = TELEGRAM_WEBHOOK_ENABLED ] && [ "$configured" = on ]; then
       local secret_length
-      secret_length="$(nexa_listing_length "$resolved" TELEGRAM_WEBHOOK_SECRET)"
-      if [ "${secret_length:-0}" -lt 16 ]; then
+      # A measurement that fails is a secret that cannot be shown to satisfy the
+      # schema, so it reads as too short. The `||` is what makes that reachable: an
+      # assignment whose substitution fails aborts this function under errexit, and a
+      # default applied afterwards would never run.
+      secret_length="$(nexa_listing_length "$resolved" TELEGRAM_WEBHOOK_SECRET)" || secret_length=0
+      if [ "$secret_length" -lt 16 ]; then
         configured='invalid'
         webhook='short-secret'
       fi

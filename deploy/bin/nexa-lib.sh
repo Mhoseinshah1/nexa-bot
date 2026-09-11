@@ -1288,7 +1288,7 @@ nexa_compose_env_unterminated() {
 #
 # Exit 1 when Compose REFUSES the configuration — an unterminated quoted value, a
 # missing env file, an unsatisfiable substitution, a malformed compose file — with
-# Compose's own first line of explanation on stderr; and exit 1 when the document
+# Compose's own error line on stderr; and exit 1 when the document
 # defines no such service, which is the same answer for the caller: nothing will start
 # as asked. Compose's stderr is kept apart from its stdout because it WARNS there on
 # success too — one line per unset substitution, meaning a value was silently blanked —
@@ -1302,8 +1302,15 @@ nexa_compose_resolved_env() {
     # error — `The "X" variable is not set. Defaulting to a blank string.` for every
     # unset substitution in the file — and the error itself is a plain line after
     # them. Measured on v5.1.1. The first line that is not a logged warning is the
-    # reason; if every line is a warning, the last line is the best there is.
-    { grep -v 'level=warning' "$err" | sed -n '1p'; sed -n '$p' "$err"; } | sed -n '1p' >&2
+    # reason; if none survives the filter — every line is a warning, or the error line
+    # itself happens to contain `level=warning`, as an unterminated value spelled that
+    # way does — the last line is the best there is. Written so that it does not
+    # depend on being called from an `if`: under errexit and pipefail a `grep` that
+    # matched nothing would otherwise abort the group before the fallback ran.
+    local reason
+    reason="$(grep -v 'level=warning' "$err" | sed -n '1p')" || reason=''
+    [ -n "$reason" ] || reason="$(sed -n '$p' "$err")"
+    printf '%s\n' "$reason" >&2
     rm -f "$err"
     return 1
   fi

@@ -3442,6 +3442,23 @@ assert_contains 'recovery upload was not reported as on by default' \
 assert_contains 'the panel monitor was not reported as on by default' \
   "$BOTCTL_OUTPUT" 'panel monitor      on'
 
+test_case 'status: a destination that resolves to only a newline is not configured'
+# The listing renders a newline as the two characters `\n` so that one entry is one
+# line, and `nexa_listing_value` turns it back before anyone looks. A reader of the
+# RENDERING would see two non-blank characters where the application — which
+# `.trim()`s the chat id — sees nothing, and report a destination as configured that
+# the next start refuses as half-configured. This is the case that keeps the decode
+# honest: the secret length is measured elsewhere, so nothing else could observe it.
+seed_nexa_env canonical
+fake_set compose_env ''
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","BACKUP_TELEGRAM_CHAT_ID":"\n","BACKUP_TELEGRAM_BOT_TOKEN":"123456:AAAfakeToken"}'
+run_botctl status
+assert_contains 'a chat id that is only a newline was read as present' \
+  "$BOTCTL_OUTPUT" 'backup delivery    HALF configured'
+assert_not_contains 'status printed the token' "$BOTCTL_OUTPUT" 'AAAfakeToken'
+fake_set compose_env_json ''
+seed_nexa_env canonical
+
 test_case 'status: a configured schedule and destination stop the advice, and print no token'
 seed_nexa_env canonical
 append_env 'BACKUP_SCHEDULE_ENABLED=true' \
@@ -3565,7 +3582,14 @@ fake_set compose_config_fails 1
 run_botctl status
 assert_contains 'a refused configuration was not reported as refused' \
   "$BOTCTL_OUTPUT" 'REFUSED by compose'
-assert_contains 'the consequence was not stated' "$BOTCTL_OUTPUT" 'no container will start'
+assert_contains 'the consequence was not stated' \
+  "$BOTCTL_OUTPUT" 'no container can be CREATED or RECREATED'
+# And not more than the consequence: a container already running keeps its creation-time
+# environment and may pass readiness below, so the claim is about creation, not force.
+assert_contains 'the running-container caveat is missing' \
+  "$BOTCTL_OUTPUT" 'keeps the environment'
+assert_not_contains 'the refusal claimed no value is in force anywhere' \
+  "$BOTCTL_OUTPUT" 'no individual value is in force'
 assert_not_contains 'values were summarised from a configuration compose refuses' \
   "$BOTCTL_OUTPUT" 'scheduled backup'
 fake_set compose_config_fails 0
@@ -3615,7 +3639,7 @@ test_case 'status: a value is measured by its characters, not by its one-line re
 # The listing renders a backslash as two characters and a newline as `\n`, so that one
 # entry stays one line. A caller that measured the RENDERING counted eight backslashes
 # as sixteen characters and reported a webhook secret the schema refuses as `on`.
-# `nexa_listing_value` undoes the rendering; these values cannot be spelled in the
+# `nexa_listing_length` reads through the rendering; these values cannot be spelled in the
 # line-based `compose_env`, so the resolved environment is stated as JSON.
 seed_nexa_env canonical
 fake_set compose_env ''
@@ -3678,6 +3702,24 @@ assert_contains 'the warning was reported as the reason' "$BOTCTL_OUTPUT" 'line 
 assert_not_contains 'the warning line was printed as the reason' "$BOTCTL_OUTPUT" 'Compose said:
     time='
 assert_not_contains 'the echoed token was printed' "$BOTCTL_OUTPUT" 'AAAfakeBotTokenValue'
+fake_set compose_config_fails 0
+fake_set compose_config_stderr ''
+seed_nexa_env canonical
+
+test_case 'status: a refusal whose error line itself says level=warning is still reported'
+# The warning filter drops every stderr line containing `level=warning`. An
+# unterminated value spelled `TOKEN="level=warning` makes Compose's ERROR line
+# contain it too — measured on v5.1.1 — so the filter leaves nothing, and the reason
+# has to come from the fallback: the last line. Without it `status` reports that
+# Compose gave no reason, for a refusal Compose explained.
+seed_nexa_env canonical
+fake_set compose_config_fails 1
+fake_set compose_config_stderr "$(printf 'time="2026-09-11T17:34:07Z" level=warning msg="The \\"UNSETVAR\\" variable is not set. Defaulting to a blank string."\nfailed to read /etc/nexa/nexa.env: line 4: unterminated quoted value "level=warning')"
+run_botctl status
+assert_contains 'the error line was filtered away with the warnings' \
+  "$BOTCTL_OUTPUT" 'line 4: unterminated quoted value'
+assert_not_contains 'a refusal Compose explained was reported as unexplained' \
+  "$BOTCTL_OUTPUT" 'compose gave no reason'
 fake_set compose_config_fails 0
 fake_set compose_config_stderr ''
 seed_nexa_env canonical
