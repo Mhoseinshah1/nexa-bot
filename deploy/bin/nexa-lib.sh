@@ -991,6 +991,14 @@ nexa_env_rewrite_untraced() {
   local removals="${remove}"
   for name in "${names[@]}"; do removals="${removals},${name}"; done
 
+  # Whether the file ends without a newline, which decides what its last line MEANS —
+  # see `nexa_env_tail_unterminated`. A rewrite normalises that ending (awk prints a
+  # newline after every record, and an appended assignment must start its own line), and
+  # for a bare-shaped last line that normalisation CHANGES the configuration: `""` =
+  # `BUILD_COMMIT` becomes a genuine bare record taking BUILD_COMMIT from the environment.
+  local tail_open=0
+  if nexa_env_tail_unterminated "$file"; then tail_open=1; fi
+
   local status=0
   if [ -n "${removals//,/}" ]; then
     # A SCANNER, not `grep -v`, and for the same reason the reader is one: a value may
@@ -1002,7 +1010,7 @@ nexa_env_rewrite_untraced() {
     #
     # Only TOP-LEVEL assignments of the named keys are dropped, and when one of them
     # opens a multiline value its continuation lines go with it.
-    awk -v drop="$removals" -v sq="'" -v dq='"' "$NEXA_ENV_AWK_LIB"'
+    awk -v drop="$removals" -v tail_open="$tail_open" -v sq="'" -v dq='"' "$NEXA_ENV_AWK_LIB"'
       BEGIN {
         n = split(drop, a, ",")
         for (i = 1; i <= n; i++) if (a[i] != "") kill[a[i]] = 1
@@ -1026,10 +1034,16 @@ nexa_env_rewrite_untraced() {
         # the variable from the environment — and leaving it behind is how an obsolete
         # key survived an update that said it had removed it. It opens no quoted value,
         # having no value, so no continuation handling applies and `skip` stays 0.
-        if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*(#.*)?$/) > 0) {
+        #
+        # No trailing comment in the shape, measured on v5.1.1: `BUILD_COMMIT # why` is
+        # refused outright as `unexpected character "#" in variable name`, so it is not a
+        # record to drop. `last_bare` remembers the line for the END check below, because
+        # whether this IS a record depends on a newline awk cannot see.
+        if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t\r]*$/) > 0) {
+          last_bare = NR
           bare = line
           sub(/^[ \t]*(export[ \t]+)?/, "", bare)
-          sub(/[ \t]*(#.*)?$/, "", bare)
+          sub(/[ \t\r]*$/, "", bare)
           if (bare in kill) next
           print line
           next
@@ -1054,7 +1068,17 @@ nexa_env_rewrite_untraced() {
       # by an update that reported success. When it is any other record, the file
       # is one Compose refuses whole, and a rewrite of it cannot be reasoned about.
       # Either way the original stays: exit 3 is the caller'"'"'s signal to say so.
-      END { if (inq) exit 3 }
+      #
+      # Exit 4 is the other file this rewrite must not touch: one ending in a bare-shaped
+      # line with NO newline. Compose reads that as a variable with an empty name, not as a
+      # record (measured; see `nexa_env_tail_unterminated`), and every rewrite normalises
+      # the ending — so carrying the line through would CREATE the bare record, and
+      # dropping it would remove a variable the file does set. Neither is this function'"'"'s
+      # to decide, so the original stays and the caller says so.
+      END {
+        if (inq) exit 3
+        if (tail_open == 1 && last_bare == NR) exit 4
+      }
     ' <"$file" >"$tmp" || status=$?
   else
     cat -- "$file" >"$tmp" || status=$?
@@ -1062,6 +1086,10 @@ nexa_env_rewrite_untraced() {
   if [ "$status" -eq 3 ]; then
     rm -f "$tmp"
     nexa_die "${file} ends inside a quoted value, so no line after that quote can be told from the value it is in; it is UNCHANGED. Close the quote first."
+  fi
+  if [ "$status" -eq 4 ]; then
+    rm -f "$tmp"
+    nexa_die "${file} ends in a name with no value and no final newline, which Compose reads as a variable with an empty NAME rather than as a record; any rewrite would change what the file means. It is UNCHANGED. End the file with a newline first."
   fi
   if [ "$status" -ne 0 ]; then
     rm -f "$tmp"
@@ -1125,10 +1153,21 @@ nexa_obsolete_app_env_keys() {
   # variable's multiline value is not an assignment, and reporting it as one would send
   # the rewriter to delete a line out of the middle of somebody's value.
   for key in $NEXA_OBSOLETE_APP_ENV_KEYS; do
-    # TWO shapes, because Compose accepts two. An assignment has a value in the file; a
+    # TWO shapes, measured rather than counted: an assignment has a value in the file; a
     # bare record takes its value from the environment running Compose and so has none,
     # which is why asking only for a value reported it absent and left `botctl update`
     # claiming it had removed a key it never saw.
+    #
+    # NOT a claim that Compose accepts only two. Measured on v5.1.1, it also accepts
+    # `NAME:value` in an `env_file` — `BUILD_COMMIT:deadbeef` reaches the container as
+    # `BUILD_COMMIT=deadbeef` — and NEITHER scanner here sees that, nor does the value
+    # reader. So a colon-form obsolete record survives an update that reports success,
+    # and `status` then reads it as a STALE override and sends the operator to
+    # `botctl restart`, which re-applies the mask. UNK-DEPLOY-002 in
+    # `docs/open-questions.md` carries it, because extending three scanners to a second
+    # separator is a change to the awk that nearly deleted a keyring and belongs in its
+    # own commit with its own adversarial round. What is fixed here is the CLAIM: this
+    # covers the assignment and bare shapes, and names the one it does not.
     if nexa_compose_env_value "$file" "$key" >/dev/null 2>&1 ||
       nexa_env_has_bare_record "$file" "$key"; then
       printf '%s\n' "$key"
@@ -1216,6 +1255,30 @@ function unescaped_index(s, q,   i, n, b, j) {
 }
 '
 
+# Does this file END without a newline? Measured on Compose v5.1.1, because it decides
+# what the last line MEANS, and only for a bare record:
+#
+#   file ends `BUILD_COMMIT=abc`  (no newline)   ->  BUILD_COMMIT: abc
+#   file ends `BUILD_COMMIT`      (no newline)   ->  "": BUILD_COMMIT
+#   file ends `BUILD_COMMIT\n`                   ->  BUILD_COMMIT: <host value>
+#
+# So an unterminated ASSIGNMENT is honoured exactly as a terminated one, while an
+# unterminated bare name is NOT a bare record at all: Compose reads it as a variable with
+# an EMPTY name whose value is that text, and the key is never set. A trailing `\r`
+# instead of a newline behaves the same way. `awk` cannot see the difference — it hands a
+# final partial line to the program like any other record — so the scanners were reporting
+# a bare record for a key Compose does not set, and the rewriter would have deleted the
+# line on that report.
+#
+# The byte is compared as an OCTAL CODE and never as text, because the last byte of
+# nexa.env is the last character of somebody else's value.
+nexa_env_tail_unterminated() {
+  local file="$1" last
+  [ -s "$file" ] || return 1
+  last="$(tail -c1 -- "$file" | od -An -to1 | tr -d " \n")"
+  [ "$last" != '012' ]
+}
+
 # Is there a top-level BARE record for this key — `BUILD_COMMIT` with no `=` at all?
 #
 # Compose supports that form in an `env_file`, and it does NOT mean "assigned to
@@ -1231,10 +1294,11 @@ function unescaped_index(s, q,   i, n, b, j) {
 # another variable's multiline value is text, not a record, and reporting it would send
 # the rewriter to delete a line out of the middle of somebody else's value.
 nexa_env_has_bare_record() {
-  local file="$1" key="$2"
+  local file="$1" key="$2" tail_open=0
   [ -r "$file" ] || return 1
-  awk -v want="$key" -v sq="'" -v dq='"' "$NEXA_ENV_AWK_LIB"'
-    BEGIN { found = 0; inq = 0 }
+  if nexa_env_tail_unterminated "$file"; then tail_open=1; fi
+  awk -v want="$key" -v tail_open="$tail_open" -v sq="'" -v dq='"' "$NEXA_ENV_AWK_LIB"'
+    BEGIN { found = 0; first_match = 0; inq = 0 }
     {
       line = $0
       if (inq) {
@@ -1242,13 +1306,19 @@ nexa_env_has_bare_record() {
         next
       }
       # The bare shape first: a name alone, optionally exported, with nothing after it
-      # but blanks or a comment. It cannot open a quoted value, having no value at all,
-      # so none of the continuation bookkeeping below applies to it.
-      if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*(#.*)?$/) > 0) {
+      # but blanks or a carriage return. It cannot open a quoted value, having no value at
+      # all, so none of the continuation bookkeeping below applies to it.
+      #
+      # NOT a trailing comment. Measured on v5.1.1, `BUILD_COMMIT # why` is REFUSED —
+      # `unexpected character "#" in variable name "BUILD_COMMIT # why"` — so that line is
+      # not a bare record, it is a file Compose will not read at all, and `status` reports
+      # it through the refusal path. The earlier `(#.*)?` here claimed a shape Compose
+      # accepts and does not, which made this answer yes about a file that has no records.
+      if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t\r]*$/) > 0) {
         name = line
         sub(/^[ \t]*(export[ \t]+)?/, "", name)
-        sub(/[ \t]*(#.*)?$/, "", name)
-        if (name == want) found = 1
+        sub(/[ \t\r]*$/, "", name)
+        if (name == want) { found = 1; if (first_match == 0) first_match = NR }
         next
       }
       # Otherwise track quoted regions exactly as the reader does, so an interior line
@@ -1262,7 +1332,11 @@ nexa_env_has_bare_record() {
         if (unescaped_index(substr(rest, 2), quote) == 0) inq = 1
       }
     }
-    END { exit(found ? 0 : 1) }
+    # A bare name on a final line with no newline is not a record — Compose reads it as a
+    # variable with an empty NAME (`"": BUILD_COMMIT`) and never sets the key. If that is
+    # the FIRST line matching, it is the only one, because there is one final line; an
+    # earlier terminated record keeps the answer yes, which is what Compose does too.
+    END { if (found && tail_open == 1 && first_match == NR) found = 0; exit(found ? 0 : 1) }
   ' "$file"
 }
 
@@ -1517,9 +1591,11 @@ for key in sorted(env):
 #    operator needs and is not a value.
 #
 # Everything else Compose says — a missing env file, a malformed compose file — reads
-# whole, still bounded to 200 characters.
+# whole, still bounded to 200 characters. Both cuts SAY they happened, which neither
+# used to: a cut that leaves a grammatical sentence behind is read as the whole
+# message, and case 1 above is exactly that shape.
 nexa_compose_refusal_reason() {
-  local text withheld=''
+  local text cut bounded withheld=''
   text="$(printf '%s\n' "$1" | sed -n '1p')"
   # It CAN tell the two apart, which an earlier version of this said it could not.
   # Measured on v5.1.1, the two required-variable channels carry different prefixes:
@@ -1542,12 +1618,28 @@ nexa_compose_refusal_reason() {
       withheld=' (the rest of the message is withheld: it is text from the configuration and may contain a value)'
       ;;
   esac
-  text="$(printf '%s\n' "$text" | sed "s/[\"'].*\$//" | cut -c1-200)"
-  # The note is appended AFTER the quote cut and outside the 200-character bound, because
-  # it is this function's own words and not Compose's. The first version put it inside the
-  # string and the quote cut ate it at the apostrophe in `Compose's` — the redaction
+  cut="$(printf '%s\n' "$text" | sed "s/[\"'].*\$//")"
+  bounded="$(printf '%s\n' "$cut" | cut -c1-200)"
+  # The quote cut and the 200-character bound each announce THEMSELVES, rather than only
+  # the one channel whose marker is recognised above. They were silent, and the silent one
+  # is the channel that actually carries a value: measured on v5.1.1, a quoted value that
+  # is never closed is echoed into the message —
+  #   failed to read /etc/nexa/nexa.env: line 2: unterminated quoted value "<value>
+  # — and the cut at the quote removed it leaving a message that reads as complete. An
+  # operator comparing that output against the file sees a refusal about a line whose
+  # value is simply absent from the diagnostic, with nothing saying anything was removed.
+  # Neither note claims WHICH it was: this function cannot tell a keyring from a path.
+  if [ -z "$withheld" ] && [ "$cut" != "$text" ]; then
+    withheld=' (cut at a quote: what followed it may be a value out of the configuration)'
+  fi
+  if [ "$bounded" != "$cut" ]; then
+    withheld="${withheld} (cut at 200 characters)"
+  fi
+  # The notes are appended AFTER the quote cut and outside the 200-character bound, because
+  # they are this function's own words and not Compose's. The first version put one inside
+  # the string and the quote cut ate it at the apostrophe in `Compose's` — the redaction
   # removing the notice that a redaction had happened. Nothing here may contain a quote.
-  printf '%s' "${text:-(compose gave no reason)}${withheld}"
+  printf '%s' "${bounded:-(compose gave no reason)}${withheld}"
 }
 
 # One value out of a resolved listing, and whether the key is there at all.

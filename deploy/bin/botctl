@@ -320,10 +320,16 @@ status_capabilities_untraced() {
     printf '  %s %-8s %s\n' "$label" "$configured" "$owner"
   done
   # The monitor's row reports its FLAG and nothing more, and says so, because
-  # `configSchema.superRefine` guards four cross-field invariants behind
+  # `configSchema.superRefine` guards FIVE cross-field invariants behind
   # `if (PANEL_MONITOR_ENABLED)` and a `panel monitor on` that ignored them is the same
   # lie the webhook check above exists to prevent: a capability reported working for a
   # configuration the next start refuses.
+  #
+  # Counted from the schema, not from memory: the first version of this said four, and
+  # missed the one that refuses `PANEL_MONITOR_BUDGET_RESERVE_PERCENT=0` outright — which
+  # is the only one of the five that catches that value, because the reserve FLOOR the
+  # fourth rule compares against is itself 0 there. A list of rules is a claim that can
+  # go stale; when the schema grows a sixth this row must grow with it, or say "at least".
   #
   # The keys are NAMED and the arithmetic is NOT reimplemented. Two of these invariants
   # are computed by helpers in the schema (a tick-derived ceiling, and a cooldown floor
@@ -339,13 +345,17 @@ status_capabilities_untraced() {
   # is a new surface with its own fake and its own review, so it is named here and not
   # smuggled in: it is the fix, when the capabilities section is next opened.
   if [ "$monitor" = on ]; then
-    printf '\n  `panel monitor on` is the FLAG. The schema also checks four cross-field rules\n'
+    printf '\n  `panel monitor on` is the FLAG. The schema also checks five cross-field rules\n'
     printf '  only when the monitor is on — PANEL_MONITOR_TENANTS_PER_TICK against\n'
     printf '  PANEL_MONITOR_BATCH_SIZE, PANEL_MONITOR_HEALTHY_INTERVAL_MS against\n'
-    printf '  PANEL_MONITOR_TICK_MS and against the probe cooldown, and\n'
-    printf '  PANEL_MONITOR_BUDGET_RESERVE_PERCENT against PANEL_PROBE_TENANT_LIMIT — and it\n'
+    printf '  PANEL_MONITOR_TICK_MS and against the probe cooldown,\n'
+    printf '  PANEL_MONITOR_BUDGET_RESERVE_PERCENT against PANEL_PROBE_TENANT_LIMIT, and\n'
+    printf '  PANEL_MONITOR_BUDGET_RESERVE_PERCENT=0 refused outright — and it\n'
     printf '  refuses the whole configuration if any disagree. This row does not check them;\n'
-    printf '  the monitor does, at start, and `botctl logs monitor` names the one that failed.\n'
+    printf '  the monitor does, at START — so `botctl logs monitor` names the rule that failed\n'
+    printf '  only AFTER a recreate has been attempted and refused. A monitor already running\n'
+    printf '  keeps the settings it accepted, and its log has nothing to show about an edit\n'
+    printf '  made since. `botctl restart` is what asks it.\n'
   fi
   # THREE processes, not the worker alone. `createContainer` builds one
   # `BackupService` with these credentials and every role gets it: the worker
@@ -389,12 +399,24 @@ status_capabilities_untraced() {
   # So the claim is back, with the fourth command in it. `docs/open-questions.md`
   # carries UNK-DEPLOY-001 as RESOLVED with that evidence, and with the one thing still
   # unobserved: none of this has been watched against a real daemon.
+  #
+  # And it is bounded, which the first restored version was not. "A successful one of
+  # those has already loaded these values" is FALSE in three states this file documents
+  # itself: `update <the release already installed>` returns 0 without recreating, twice
+  # over (deploy.env agreeing, and deploy.env divergent — where it prints "The running
+  # containers were not changed"), and `disable-v1` returns 0 before its `up` when the
+  # setting is already false. Each of those says so in its own output, which is why this
+  # section points at that output rather than guessing: naming the commands that CAN
+  # recreate is true, and claiming one of them DID is not this section's to know.
   printf '\n  These are the values compose would hand a container STARTED NOW. A running\n'
   printf '  container keeps the configuration it was created with, so anything changed\n'
   printf '  since that container was CREATED is not in force in it yet. Only RECREATING\n'
-  printf '  the container loads it. `botctl restart`, `botctl update`, `botctl rollback` and\n'
-  printf '  `botctl secrets disable-v1` each bring the stack up, so a successful one of those\n'
-  printf '  has already loaded these values; no other command here does.\n'
+  printf '  the container loads it, and four commands can: `botctl restart`, `botctl update`,\n'
+  printf '  `botctl rollback` and `botctl secrets disable-v1`. TWO of those\n'
+  printf '  can also return success having recreated nothing — `update` on the release\n'
+  printf '  already installed, and `disable-v1` when the setting is already false — and each\n'
+  printf '  says so when it does.\n'
+  printf '  Read that, not this section, for whether your last one recreated.\n'
   printf '  The ROWS above read the configuration and not the containers. The build-identity\n'
   printf '  paragraphs below do inspect the running API, and say so where they do.\n'
 
@@ -455,9 +477,14 @@ status_capabilities_untraced() {
   masked="$(comm -12 <(printf '%s\n' "$obsolete" | sort -u) <(printf '%s\n' "$running_obsolete" | sort -u) | tr '\n' ' ')"
   pending="$(comm -23 <(printf '%s\n' "$obsolete" | sort -u) <(printf '%s\n' "$running_obsolete" | sort -u) | tr '\n' ' ')"
   stale="$(comm -13 <(printf '%s\n' "$obsolete" | sort -u) <(printf '%s\n' "$running_obsolete" | sort -u) | tr '\n' ' ')"
+  # `comm` ends its output with a newline and `tr` turns that into a TRAILING space, so
+  # every one of these sentences read `sets BUILD_COMMIT , which REPLACES`. Both ends.
   masked="${masked# }"
+  masked="${masked% }"
   pending="${pending# }"
+  pending="${pending% }"
   stale="${stale# }"
+  stale="${stale% }"
 
   if [ -n "${masked// /}" ]; then
     printf '\n  This file sets %s, which REPLACES the\n' "$masked"
@@ -476,8 +503,10 @@ status_capabilities_untraced() {
     printf '  build identity stamped into the release image. The running API answers its own\n'
     printf '  image for them, so /health/info is correct for NOW — either the container was\n'
     printf '  created before these lines, or it carries a value equal to the image stamp.\n'
-    printf '  A DIFFERENT value here takes effect at the next start; the next `botctl update`\n'
-    printf '  removes the lines first.\n'
+    printf '  A DIFFERENT value here takes effect at the next start — unless the line is a\n'
+    printf '  BARE record, which assigns nothing and instead takes whatever the environment\n'
+    printf '  running compose holds for that name, or nothing at all. The next\n'
+    printf '  `botctl update` removes the lines either way.\n'
   fi
   if [ -n "${stale// /}" ]; then
     printf '\n  The file no longer sets %s, but the RUNNING\n' "$stale"
@@ -601,8 +630,9 @@ status_secrets_untraced() {
     # it — two assertions were written against phrases this paragraph never contained.
     printf '  SECRETS_ACCEPT_V1 is set to something other than `true` or `false`, which the\n'
     printf '  schema refuses, so the API will not START from this configuration: the next\n'
-    printf '  `botctl restart` or `botctl update` will fail, and `botctl logs api` names the\n'
-    printf '  refusal AFTER that attempt, not before it. An API already running\n'
+    printf '  `botctl restart`, or any `botctl update` that recreates, will fail.\n'
+    printf '  `botctl logs api` names the refusal AFTER that attempt, not before it.\n'
+    printf '  An API already running\n'
     printf '  keeps the acceptance it was created with, and its log has nothing to show.\n'
     printf '\n'
     printf '  No row is shown below, and that is not a stack that is down: every row BELOW\n'
@@ -1496,6 +1526,30 @@ cmd_secrets_migrate_config() {
 cmd_secrets_migrate_config_untraced() {
   local file="${NEXA_CONFIG_DIR}/nexa.env"
   [ -r "$file" ] || nexa_die "cannot read ${file}."
+
+  # A BARE record for any key this command reads, and it refuses outright — before the
+  # canonical check, because one of the four keys is the one that check reads.
+  #
+  # Measured on Compose v5.1.1: with `SECRETS_KEK=old` followed by a bare `SECRETS_KEK`
+  # and that variable exported, the container receives the AMBIENT value and not `old`.
+  # Compose takes the LAST record, and a bare record's value is not in this file at all.
+  # `nexa_compose_env_value` reads the file — deliberately, see below — so it answers
+  # `old`, and the conversion would write the stale key as SECRETS_KEYS while reporting
+  # that "the key material is unchanged". The restart it then advises leaves every
+  # existing ciphertext undecryptable, which is the one outcome this command exists to
+  # avoid. (Duplicate ASSIGNMENTS are fine: the scanner takes the last one, measured to
+  # agree with Compose. It is only the shape whose value is elsewhere that diverges.)
+  #
+  # Same class as the `$` refusal further down, and the same answer: refuse rather than
+  # choose, because the cost of choosing wrong is an installation that cannot decrypt
+  # anything. SECRETS_KEYS and SECRETS_ACTIVE_KEY_ID are in the list because a bare
+  # record for either makes the already-canonical check below read EMPTY, so this command
+  # would convert over a keyring the application is already running from.
+  local bare_key
+  for bare_key in SECRETS_KEYS SECRETS_ACTIVE_KEY_ID SECRETS_KEK SECRETS_KEK_ID; do
+    ! nexa_env_has_bare_record "$file" "$bare_key" ||
+      nexa_die "${file} carries ${bare_key} as a BARE record — the name with no \`=\` — so Compose takes its value from the environment running compose, and this file does not say what the application receives. Give it a literal assignment, or remove the line, before converting; nothing was changed."
+  done
 
   # Already canonical? Say so and stop. Rerunning must be free — an operator who
   # cannot tell whether they ran it should be able to just run it again.

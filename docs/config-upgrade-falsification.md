@@ -1193,3 +1193,125 @@ One process note, because it cost a run: the confirming pass of this batch was p
 my own concurrent mutation of `nexa-lib.sh` while it was executing, which is the
 shared-checkout failure `CLAUDE.md` warns about — self-inflicted this time. Its result is
 discarded; `pnpm test:deploy` in the gate chain below is the clean run.
+
+## Round eighteen — the bare-record shapes, the silent cuts, and a check wired backwards
+
+The round's worst finding is not a production defect. `docs/vps-acceptance.md` step 12c —
+the ONE step that exists to close `UNK-DEPLOY-001` against a real daemon — edited
+`BACKUP_SCHEDULE_ENABLED` with a `sed` anchored on `^BACKUP_SCHEDULE_ENABLED=`, and neither
+`deploy/nexa.env.template` nor `install.sh` ever writes that key. On any host the installer
+built, the `sed` matched nothing, the file was unchanged, the restart changed nothing, and
+the closing `grep` printed nothing — which is the outcome the step itself documents as _"the
+deduction is wrong … Reopen `UNK-DEPLOY-001`"_. A check pinned to settle a question was
+wired to reopen it, on every host, from an edit that never happened.
+
+`UNK-DEPLOY-001` was also still one inference wide. The symbol table shows `upCommand`
+calls `WithServicesEnvironmentResolved` and `runHash` does not; it says nothing about what
+the resolver does to the field the hash reads. Three measurements close that:
+
+```
+ff1913: mov  $0x1,%eax                 up passes discardEnvFiles = true
+ff1918: call …WithServicesEnvironmentResolved
+
+docker compose config  (env_file: [one.env] holding A=2)
+  services: api: environment: {A: "2"}     content merged
+                              no env_file:  the list is discarded
+
+env_file: [one.env]  A=1     api 7273e293…
+env_file: [two.env]  A=1     api a6823960…   CHANGED — path only
+env_file: [two.env]  A=2     api a6823960…   unchanged — content only
+```
+
+`EnvFiles` is in the hash, so `config --hash` moves on the PATH and not the content — the
+content is in a file the hash never opens. `up` discards that list and puts the content in
+`Environment`, which the inline measurement already proved is hashed. The probe mistaken
+for the answer measured the one project model in which `nexa.env`'s content is invisible.
+
+Two more `env_file` shapes were measured and, unlike `NAME:value`, were cheap enough to
+fix in place:
+
+```
+BUILD_COMMIT # why                  REFUSED: unexpected character "#" in variable name
+BUILD_COMMIT      (no newline)      "": BUILD_COMMIT — an EMPTY name; the key is unset
+BUILD_COMMIT=abc  (no newline)      BUILD_COMMIT: abc — honoured as any assignment is
+BUILD_COMMIT\r\n                    BUILD_COMMIT: <host value> — the CR is stripped
+```
+
+So the bare-record shape had been allowing a trailing comment on a behaviour Compose does
+not have, and could not see a missing final newline at all — `awk` hands a final partial
+line to the program like any other record. Both made the detector answer yes about lines
+Compose does not read as records, and the rewriter would have acted on that answer; worse,
+a rewrite normalises the ending, so carrying such a line through would CREATE the record
+the scanner wrongly reported. The rewriter now refuses that file and names why.
+
+And the standing capability caveat was wrong for a fifth time — this round too wide, where
+every earlier version was too narrow. Verified against the fake docker:
+
+```
+botctl update vA   (vA already current, deploy.env agrees)   rc=0, no `up` issued
+botctl update vA   (deploy.env pointing elsewhere)           rc=0, no `up` issued
+botctl secrets disable-v1   (already false)                  rc=0, no `up` issued
+```
+
+| #     | Rule                                                              | Mutation                                                                      | Named test                                                                                                 | Result |
+| ----- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------ |
+| H-96  | The quote cut in a compose refusal announces itself               | `nexa-lib.sh`: drop the `"$cut" != "$text"` note arm                          | `botctl.test.sh` › status: a cut refusal says a cut happened, on the channel that carries a value          | KILLED |
+| H-97  | The 200-character bound announces itself                          | `nexa-lib.sh`: drop the `"$bounded" != "$cut"` note arm                       | `botctl.test.sh` › status: a cut refusal says a cut happened, on the channel that carries a value          | KILLED |
+| H-98  | A bare name on an unterminated final line is not a record         | `nexa-lib.sh`: `END { exit(found ? 0 : 1) }`, dropping the tail guard         | `botctl.test.sh` › update: a bare name on an unterminated last line is not a record, and a rewrite refuses | KILLED |
+| H-99  | A rewrite refuses a file ending in an unterminated bare name      | `nexa-lib.sh`: drop `if (tail_open == 1 && last_bare == NR) exit 4`           | `botctl.test.sh` › update: a bare name on an unterminated last line is not a record, and a rewrite refuses | KILLED |
+| H-100 | The bare shape admits no trailing comment                         | `nexa-lib.sh`: restore `(#.*)?$` in the detector's shape and its `sub`        | `botctl.test.sh` › update: a name with a trailing comment is not a bare record, and is left alone          | KILLED |
+| H-101 | A joined key list carries no trailing space into its sentence     | `botctl`: drop the three `${x% }` trims                                       | `botctl.test.sh` › status: a mixed pending/stale pair is reported per key, not as one state                | KILLED |
+| H-102 | The caveat names the commands that CAN recreate, not one that did | `botctl`: back to "A successful one of those has already loaded these values" | `botctl.test.sh` › status: the section names COMPOSE as its resolver and claims nothing more               | KILLED |
+| H-103 | The monitor caveat counts the schema's cross-field rules          | `botctl`: `five cross-field rules` → `four`                                   | `botctl.test.sh` › status: `panel monitor on` is reported as the flag, not as a verdict                    | KILLED |
+
+Counts, each mutation applied in its OWN `git worktree` so none could see another and the
+primary checkout was never touched (`git status` after the batch showed only this round's
+intended edits): H-96 fails 1 of 229, H-97 1, H-98 2, H-99 4, H-100 2, H-101 2, H-102 3,
+H-103 2. Every one died in the test named for it and in no other.
+
+**Two changes in this round are test strengthenings and get no mutation row, said plainly
+rather than dressed as one.** The monitor assertion matched `panel monitor`, which is the
+row's LABEL and present whether the flag reads `on` or `off` — it now matches
+`panel monitor      on`, and the old needle is a strict prefix of the new one, so the
+strengthening is by inspection rather than by experiment. The two trace assertions searched
+for a key id where the leak they guard is the database password inside `DATABASE_URL`; the
+needle is now `nexa:pw`. The production rule underneath both — tracing suppressed around
+anything that expands a resolved value — is already pinned by H-80, H-82, H-83 and H-95.
+
+### Round eighteen, second pass — the independent review on the same head
+
+An independent reviewer read the same head and raised four findings. Two were the ones
+above, found separately and already fixed here (the unbounded reload claim, and step 12c's
+absent flag) — which is the useful part of running two reviews: the agreement is evidence,
+not duplication. Two were new, and both confirmed:
+
+**A bare record defeats `secrets migrate-config`'s central claim.** It says the key
+material is unchanged, and it reads the file deliberately — writing what Compose resolved
+would freeze an interpolation meant to be evaluated at every start. But a bare record's
+value is not in the file, and Compose takes the LAST record:
+
+```
+SECRETS_KEK=old                  container receives `ambientvalue`
+SECRETS_KEK        (exported)    — the bare record wins
+SECRETS_KEK=first / =second      container receives `second`; the scanner also answers
+                                 `second`, so duplicate ASSIGNMENTS need nothing
+```
+
+So the conversion would write the stale key under the canonical name, report the key
+material unchanged, and advise a restart that leaves every existing ciphertext
+undecryptable. A bare `SECRETS_KEYS` is worse still: the already-canonical check reads
+empty, so the command converts over a keyring the application is running from.
+
+**And the monitor caveat repeated a defect fixed two rounds earlier one paragraph over.**
+U-70 scoped the API-refusal paragraph to AFTER a failed recreate, because an API already
+running has nothing in its log about a configuration it was not created with. The monitor
+paragraph, written after that fix, sent the operator to `botctl logs monitor` unqualified.
+
+| #     | Rule                                                        | Mutation                                                    | Named test                                                                                            | Result |
+| ----- | ----------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------ |
+| H-104 | `migrate-config` refuses a BARE record for any key it reads | `botctl`: empty the key list so the refusal loop never runs | `botctl.test.sh` › secrets migrate-config: a BARE record for a key it reads is refused, not converted | KILLED |
+| H-105 | The monitor-log advice is scoped to a failed recreate       | `botctl`: back to "names the one that failed"               | `botctl.test.sh` › status: `panel monitor on` is reported as the flag, not as a verdict               | KILLED |
+
+Counts, each in its own worktree: H-104 fails 5 of 230, H-105 3 of 230. H-104's mutation
+keeps the `nexa_die` call reachable in the source so the removal cannot be mistaken for a
+syntax error, and `bash -n` was run on the mutated file before the suite.

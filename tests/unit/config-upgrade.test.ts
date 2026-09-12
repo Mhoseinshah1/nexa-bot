@@ -924,6 +924,53 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
     );
   });
 
+  it('decides a bare record by what Compose accepts, and never prints the byte it reads', () => {
+    // Two corrections measured on Compose v5.1.1, both of which made the bare-record
+    // scanners answer yes about lines Compose does not read as records:
+    //
+    //   BUILD_COMMIT # why            REFUSED: unexpected character "#" in variable name
+    //   BUILD_COMMIT  (no newline)    "": BUILD_COMMIT — an EMPTY name; the key is unset
+    //   BUILD_COMMIT=abc (no newline) BUILD_COMMIT: abc — an assignment is honoured
+    //
+    // So the shape admits no trailing comment, and the final line needs its newline to be
+    // a record at all. `awk` cannot see a missing final newline, which is why the shell
+    // has to measure it and pass it in.
+    const code = (body: string) =>
+      body
+        .split('\n')
+        .filter((l) => !/^\s*#/.test(l))
+        .join('\n');
+    const detector = code(/nexa_env_has_bare_record\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '');
+    expect(detector, 'the bare-record detector is gone').not.toBe('');
+    expect(detector, 'the bare shape still admits a trailing comment Compose refuses').not.toMatch(
+      /\(#\.\*\)\?\$/,
+    );
+    expect(detector, 'the detector does not take the file ending into account').toContain(
+      'nexa_env_tail_unterminated',
+    );
+    expect(detector, 'an unterminated final bare line is still counted as a record').toMatch(
+      /tail_open == 1 && first_match == NR/,
+    );
+    const rewriter = code(/nexa_env_rewrite_untraced\(\) \{[\s\S]*?\n\}\n/.exec(lib)?.[0] ?? '');
+    expect(rewriter, 'the rewriter is gone').not.toBe('');
+    expect(rewriter, "the rewriter's bare shape admits a comment Compose refuses").not.toMatch(
+      /\(#\.\*\)\?\$/,
+    );
+    expect(
+      rewriter,
+      'the rewriter normalises an unterminated bare ending instead of refusing',
+    ).toMatch(/last_bare == NR\) exit 4/);
+    // And the predicate itself reads the last BYTE of nexa.env, which is the last
+    // character of somebody's value. It is compared as an octal code and never as text:
+    // a `printf` of it, or an unquoted expansion, is one `set -x` away from the keyring.
+    const tail = /nexa_env_tail_unterminated\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '';
+    expect(tail, 'the tail predicate is gone').not.toBe('');
+    expect(tail, 'the last byte is read as text rather than as an octal code').toContain(
+      'od -An -to1',
+    );
+    expect(tail, 'the last byte is printed').not.toMatch(/printf[^\n]*\$last/);
+  });
+
   it('reads what the application receives, and refuses to freeze a substitution', () => {
     // Two different questions, answered by two different readers on purpose.
     //

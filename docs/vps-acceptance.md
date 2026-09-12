@@ -278,27 +278,54 @@ Everything `botctl status` tells an operator to do ends "set it in
 against a real daemon. `UNK-DEPLOY-001` in `docs/open-questions.md` establishes from the
 Compose binary that `up -d` resolves `env_file` into the service environment before
 hashing, and that the hash is what decides recreation — a deduction, not an observation.
-This is the observation, and it is three commands.
+This is the observation, in three numbered steps.
 
 One key, not a dump: `.Config.Env` holds `DATABASE_URL`, `SECRETS_KEYS` and the backup
 bot token, and this whole checklist is about a box you are pasting output from.
 
+The key is `LOG_LEVEL`, and the choice matters. It is written by
+`deploy/nexa.env.template`, so the installer puts it in every `nexa.env` — which means
+the `sed` below has something to match. A key the template does NOT write (an optional
+one like `BACKUP_SCHEDULE_ENABLED`, say) would make the `sed` a silent no-op, and a
+no-op's empty output is indistinguishable from the propagation failure this step exists
+to detect: the step would read as refuting the deduction whenever it was run, on a host
+where nothing was wrong. That is why step 1 exists — it proves the key is there before
+anything is deduced from the absence of a value.
+
 ```bash
-sudo sed -i 's/^BACKUP_SCHEDULE_ENABLED=.*/BACKUP_SCHEDULE_ENABLED=true/' /etc/nexa/nexa.env
+# 1. The key this step edits must already be in the file. If this prints
+#    nothing, STOP: nothing below proves anything either way.
+grep -n '^LOG_LEVEL=' /etc/nexa/nexa.env
+
+# 2. Change it, and confirm the change landed in the FILE before restarting.
+sudo sed -i 's/^LOG_LEVEL=.*/LOG_LEVEL=debug/' /etc/nexa/nexa.env
+grep -n '^LOG_LEVEL=' /etc/nexa/nexa.env
+
+# 3. Restart, and read the value back out of the container.
 sudo botctl restart
 sudo docker inspect nexa-api-1 \
-  --format '{{range .Config.Env}}{{println .}}{{end}}' | grep '^BACKUP_SCHEDULE_ENABLED='
+  --format '{{range .Config.Env}}{{println .}}{{end}}' | grep '^LOG_LEVEL='
 ```
 
-The third command must print `BACKUP_SCHEDULE_ENABLED=true`. Put it back afterwards if
-this installation is not meant to take scheduled backups.
+Step 1 must print `LOG_LEVEL=info`, step 2 `LOG_LEVEL=debug`, and step 3 `LOG_LEVEL=debug`.
+Then put it back, because `debug` logs every request this installation serves:
 
-**If it prints nothing, or the old value:** the deduction is wrong, every `run botctl
-restart` remedy in `botctl status` is advice that cannot work, and `botctl secrets
-disable-v1` reports «v1 ciphertext is no longer accepted» for a container that still
-accepts it. The fix is the one the edge already uses: fingerprint `nexa.env` and
-interpolate that fingerprint into the service definitions, so a content change becomes a
-definition change. Reopen `UNK-DEPLOY-001` with what you saw.
+```bash
+sudo sed -i 's/^LOG_LEVEL=.*/LOG_LEVEL=info/' /etc/nexa/nexa.env
+sudo botctl restart
+```
+
+**If step 1 printed nothing:** this installation's `nexa.env` does not set `LOG_LEVEL` at
+all, which the installer would not produce. Find a key the file does set and use that
+one; do not record a result from an edit that changed nothing.
+
+**If steps 1 and 2 printed what they should and step 3 prints `LOG_LEVEL=info` or
+nothing:** the deduction is wrong, every `run botctl restart` remedy in `botctl status`
+is advice that cannot work, and `botctl secrets disable-v1` reports «v1 ciphertext is no
+longer accepted» for a container that still accepts it. The fix is the one the edge
+already uses: fingerprint `nexa.env` and interpolate that fingerprint into the service
+definitions, so a content change becomes a definition change. Reopen `UNK-DEPLOY-001`
+with what you saw.
 
 ## 13. Delegation, if you delegate
 
