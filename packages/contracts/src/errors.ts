@@ -442,78 +442,22 @@ export const COMMERCE_ERROR_CODES = {
   COMMERCE_REQUEST_INVALID: 'commerce.request_invalid',
 
   CUSTOMER_NOT_FOUND: 'commerce.customer_not_found',
-  /**
-   * The customer is blocked. Distinct from a permission denial: nothing the customer
-   * can do changes it, and the operator who can is not on this surface.
-   */
-  CUSTOMER_BLOCKED: 'commerce.customer_blocked',
-
-  PRODUCT_NOT_FOUND: 'commerce.product_not_found',
-  /** Listed, but not sellable — inactive, or its panel is gone. */
-  PRODUCT_UNAVAILABLE: 'commerce.product_unavailable',
-  /**
-   * The product has no price configured. NOT "the price is zero": a tenant that has
-   * not priced a plan has not finished configuring it, and selling it for nothing is
-   * the expensive reading.
-   */
-  PRODUCT_NOT_PRICED: 'commerce.product_not_priced',
-
-  ORDER_NOT_FOUND: 'commerce.order_not_found',
-  /** The order is not in a state this command is legal from. */
-  ORDER_STATE_INVALID: 'commerce.order_state_invalid',
-  ORDER_EXPIRED: 'commerce.order_expired',
-
-  PAYMENT_NOT_FOUND: 'commerce.payment_not_found',
-  PAYMENT_STATE_INVALID: 'commerce.payment_state_invalid',
-  /** A gateway was asked for and this installation has none configured. */
-  PAYMENT_METHOD_UNCONFIGURED: 'commerce.payment_method_unconfigured',
-  /** Evidence was required and what was supplied does not establish the payment. */
-  PAYMENT_EVIDENCE_INVALID: 'commerce.payment_evidence_invalid',
-
-  /**
-   * The debit would take the balance past what this customer may owe.
-   *
-   * The message names no balance. A refusal that quoted the figure would put a
-   * customer's balance into an error body that a surface may log.
-   */
-  WALLET_INSUFFICIENT_FUNDS: 'commerce.wallet_insufficient_funds',
-  /** An amount that is zero, negative, or past the sanity ceiling. */
-  WALLET_AMOUNT_INVALID: 'commerce.wallet_amount_invalid',
-
-  SERVICE_NOT_FOUND: 'commerce.service_not_found',
-  SERVICE_STATE_INVALID: 'commerce.service_state_invalid',
-  /**
-   * The panel this service lives on cannot perform the operation asked of it.
-   *
-   * Named rather than silently skipped, because `provider.ts` records the rule: the
-   * thing publishing a capability list is how the product tells an operator what it
-   * can do, and a button that quietly does nothing is worse than one that is absent.
-   */
-  SERVICE_CAPABILITY_UNSUPPORTED: 'commerce.service_capability_unsupported',
-  /**
-   * The service is in an unreconciled state, so this installation does not know what
-   * exists on the provider. The remedy is reconciliation, never a retry.
-   */
-  SERVICE_UNRECONCILED: 'commerce.service_unreconciled',
-
-  OPERATION_NOT_FOUND: 'commerce.operation_not_found',
-  /** The operation has exhausted its attempts. An operator decides what happens next. */
-  OPERATION_ATTEMPTS_EXHAUSTED: 'commerce.operation_attempts_exhausted',
-
-  DISCOUNT_NOT_FOUND: 'commerce.discount_not_found',
-  /** Inactive, outside its window, or over a redemption limit. */
-  DISCOUNT_NOT_REDEEMABLE: 'commerce.discount_not_redeemable',
-  /** This customer has already used it as many times as they may. */
-  DISCOUNT_ALREADY_REDEEMED: 'commerce.discount_already_redeemed',
-
-  REFERRAL_NOT_ATTRIBUTABLE: 'commerce.referral_not_attributable',
-
-  /** No trial product is configured, so this installation offers no trial. */
-  TRIAL_UNCONFIGURED: 'commerce.trial_unconfigured',
-  TRIAL_ALREADY_TAKEN: 'commerce.trial_already_taken',
-
-  RESELLER_NOT_FOUND: 'commerce.reseller_not_found',
-  RESELLER_CREDIT_EXCEEDED: 'commerce.reseller_credit_exceeded',
 } as const;
+
+/*
+ * The rest of the family arrives WITH its producer, one subphase at a time.
+ *
+ * This file carried twenty-seven more codes for one commit — the whole of 4B through 4F —
+ * and `scripts/check-boundaries.sh` rejected them, correctly and for a reason it records
+ * in its own words: reserving a code keeps a dead name in a FROZEN spec, which is what
+ * `CLAUDE.md` means by "no placeholder abstractions". Its `RESERVED_CODES` list is empty
+ * deliberately.
+ *
+ * So `PRODUCT_NOT_PRICED` lands in the commit that refuses an unpriced product,
+ * `WALLET_INSUFFICIENT_FUNDS` in the one that refuses a debit, `SERVICE_UNRECONCILED` in
+ * the one that refuses to retry after an unknown outcome, and so on. Each is a one-line
+ * contract commit beside the path that throws it, which is also the only way a reader can
+ * tell a live code from an aspiration.
+ */
 
 export type CommerceErrorCode = (typeof COMMERCE_ERROR_CODES)[keyof typeof COMMERCE_ERROR_CODES];

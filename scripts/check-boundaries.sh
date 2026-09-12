@@ -580,9 +580,18 @@ fi
 # line satisfies — so a file that imported the guard and never called it passed.
 # Measured: deleting the call from `telegram-transport.ts` left this check green.
 TRANSACTION_GUARD="assertOutsideTransaction("
+#
+# `telegram-transport.ts` was here and is not any more, and the reason is a
+# strengthening rather than a removal: Phase 4 needed a second caller of Telegram
+# `sendMessage` — customer-facing replies — and copying the transport's `post` would have
+# produced the duplicate CLAUDE.md warns about ("never copy it; the copy that would
+# silently keep the old behaviour is the unattended one"). So the `fetch` moved into
+# `infrastructure/telegram/send-message.ts`, which calls the guard, and the transport now
+# holds no sink at all. One file to assert instead of two, and a third caller inherits the
+# assertion instead of needing its own.
 SINK_FILES="
 apps/api/src/infrastructure/net/safe-http.ts
-apps/api/src/modules/control/notifications/infrastructure/telegram-transport.ts
+apps/api/src/infrastructure/telegram/send-message.ts
 apps/api/src/modules/platform/backup/infrastructure/telegram-backup-delivery.ts
 apps/api/src/modules/platform/backup/infrastructure/pg-tools.ts
 "

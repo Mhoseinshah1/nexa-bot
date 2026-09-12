@@ -18,7 +18,7 @@ import {
   type UnitOfWork,
   type UserId,
 } from '@nexa/contracts';
-import type { EventPublisher } from '@nexa/contracts';
+import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
 import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
@@ -62,7 +62,14 @@ export interface CustomerServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly idempotency: IdempotencyStore;
-  readonly events: EventPublisher;
+  /**
+   * The transactional outbox, by its own interface rather than `EventPublisher`.
+   *
+   * `EventPublisher` declares `publish`; `OutboxWriter.write` is what every existing
+   * module calls and what takes the transaction handle. Depending on the shape the
+   * codebase actually has beats renaming a method to match a port nothing implements.
+   */
+  readonly outbox: OutboxWriter;
   readonly clock: Clock;
   readonly ids: IdGenerator;
 }
@@ -206,7 +213,11 @@ export class CustomerService {
             },
             tx,
           );
-          await this.deps.events.publish({
+          // The TransactionScope, not the tenant scope: the writer takes the open
+          // transaction so the event row commits with the customer row. A domain event
+          // written outside the business transaction is an event that can exist for a
+          // change that rolled back.
+          await this.deps.outbox.write(tx, actor, {
             eventType: 'CustomerRegistered',
             aggregateType: 'Customer',
             aggregateId: customer.id,
@@ -415,7 +426,7 @@ export class CustomerService {
         );
 
         if (changed) {
-          await this.deps.events.publish({
+          await this.deps.outbox.write(tx, actor, {
             eventType: input.to === 'BLOCKED' ? 'CustomerBlocked' : 'CustomerUnblocked',
             aggregateType: 'Customer',
             aggregateId: after.id,

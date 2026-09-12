@@ -156,14 +156,63 @@ export class TelegramWebhookController {
       botInstanceId: botInstance.id,
     };
 
+    const idempotencyKey = telegramUpdateKey(botInstance.id, updateId);
+
     if (isPingCommand(update)) {
       await this.container.recordPing.execute(scope, actor, {
         // Telegram redelivers an update after a timeout; keying on the bot AND
         // the update id makes that redelivery a replay, while keeping two bots'
         // identically numbered updates distinct.
-        idempotencyKey: telegramUpdateKey(botInstance.id, updateId),
+        idempotencyKey,
         source: 'telegram',
       });
+      return { ok: true };
+    }
+
+    /*
+     * The customer-facing turn.
+     *
+     * Runs for every update that carries a Telegram user, which is the point: a
+     * customer's existence and their `last_seen_at` are facts about any contact, not
+     * only about `/start`. `BotRuntime` commits that state change and THEN replies,
+     * outside the transaction — `telegramSend` refuses to run inside one at all.
+     *
+     * An update with no `from` is not a customer contact. Telegram sends such updates
+     * (a channel post, an edited message in some shapes), and inventing a customer for
+     * one would key a row on an identity nobody has.
+     *
+     * Wrapped, and the wrapping is deliberate. A throw here becomes a non-2xx, a
+     * non-2xx makes Telegram redeliver the same update, and a redelivered update whose
+     * only problem was a transient failure is an unbounded loop. The runtime already
+     * returns send failures rather than throwing; this catches the rest — and records
+     * it, because a swallowed error with no trace is the legacy system's `catch {}`.
+     */
+    const telegramUserId = telegramUserIdOf(update);
+    if (telegramUserId !== null) {
+      try {
+        await this.container.botRuntime.handle(scope, actor, {
+          idempotencyKey,
+          botInstanceId: botInstance.id,
+          update,
+          telegramUserId,
+          from: (update as { message?: { from?: unknown } }).message?.from,
+        });
+      } catch (error) {
+        await this.container.opsLog.record(scope, {
+          code: 'telegram.turn_failed',
+          severity: 'ERROR',
+          message: 'A Telegram update could not be handled.',
+          dedupeKey: `telegram.turn_failed:${botInstance.id}`,
+          // The update id and the bot, and nothing out of the update itself. A
+          // customer's message text in an operational event is the hazard
+          // `docs/open-questions.md` records for this phase.
+          context: {
+            botInstanceId: botInstance.id,
+            updateId,
+            error: error instanceof Error ? error.name : 'unknown',
+          },
+        });
+      }
     }
 
     // Always 200: a non-2xx makes Telegram retry the same update indefinitely,
@@ -209,4 +258,22 @@ function isPingCommand(update: TelegramUpdate): boolean {
   const message = (update as { message?: { text?: unknown } }).message;
   const text = message?.text;
   return typeof text === 'string' && text.trim().startsWith('/ping');
+}
+
+/**
+ * The Telegram numeric id of the person who sent this update, as text.
+ *
+ * Null when the update carries no `from` — a channel post, for instance. Identity, so it
+ * is read strictly: a `from.id` that is not a number is not an id, and coercing one would
+ * key a customer row on whatever was sent.
+ */
+export function telegramUserIdOf(update: unknown): string | null {
+  const from = (update as { message?: { from?: { id?: unknown; is_bot?: unknown } } } | null)
+    ?.message?.from;
+  if (from === undefined || from === null) return null;
+  // A bot is not a customer. Telegram marks its own and other bots' messages, and a
+  // customer row for one would be a row no human can ever sign in to.
+  if (from.is_bot === true) return null;
+  if (typeof from.id !== 'number' || !Number.isSafeInteger(from.id) || from.id <= 0) return null;
+  return String(from.id);
 }
