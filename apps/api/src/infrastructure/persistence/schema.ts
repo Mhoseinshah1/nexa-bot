@@ -2195,6 +2195,24 @@ export const orders = pgTable(
     check('orders_refunded_at_check', sql`(state = 'REFUNDED') = (refunded_at IS NOT NULL)`),
     check('orders_cancelled_at_check', sql`(state = 'CANCELLED') = (cancelled_at IS NOT NULL)`),
     unique('orders_tenant_id_key').on(table.tenantId, table.id),
+    /**
+     * Redundant against the primary key, and the target of a CUSTOMER-bearing
+     * composite reference.
+     *
+     * `payments`, `services` and `discount_redemptions` each carry their own
+     * `customer_id` beside an `order_id`, and a two-column `(tenant_id, order_id)`
+     * foreign key lets a child row name order A while claiming customer B. Every one of
+     * those is a real bypass: a payment that settles another customer's order, a service
+     * that appears in the wrong customer's list, and — the one that motivated this — a
+     * discount redemption whose `(discount_id, customer_id)` pair is a fiction, which
+     * makes a per-customer redemption limit advisory rather than enforced.
+     *
+     * So the children reference `(tenant_id, id, customer_id)` and the agreement becomes
+     * impossible to express rather than merely unlikely. Found by the automated security
+     * review of the schema commit, which is exactly the class of thing a reviewer sees
+     * and an author does not: each FK looked correct on its own.
+     */
+    unique('orders_tenant_id_customer_key').on(table.tenantId, table.id, table.customerId),
   ],
 );
 
@@ -2250,10 +2268,19 @@ export const payments = pgTable(
       foreignColumns: [customers.tenantId, customers.id],
       name: 'payments_customer_fk',
     }),
+    /*
+     * The customer travels WITH the order.
+     *
+     * `order_id` is nullable — a wallet top-up settles no order — and a MATCH SIMPLE
+     * composite foreign key is not enforced when any of its columns is NULL, which is
+     * exactly the behaviour wanted here: a top-up has no order to agree with, and every
+     * payment that names one must name its owner too. Without the third column a wallet
+     * debit could settle another customer's order.
+     */
     foreignKey({
-      columns: [table.tenantId, table.orderId],
-      foreignColumns: [orders.tenantId, orders.id],
-      name: 'payments_order_fk',
+      columns: [table.tenantId, table.orderId, table.customerId],
+      foreignColumns: [orders.tenantId, orders.id, orders.customerId],
+      name: 'payments_order_customer_fk',
     }),
     uniqueIndex('payments_tenant_reference_key').on(table.tenantId, table.reference),
     index('payments_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
@@ -2437,10 +2464,11 @@ export const services = pgTable(
       foreignColumns: [customers.tenantId, customers.id],
       name: 'services_customer_fk',
     }),
+    /** The customer travels with the order, or a service lands in the wrong list. */
     foreignKey({
-      columns: [table.tenantId, table.orderId],
-      foreignColumns: [orders.tenantId, orders.id],
-      name: 'services_order_fk',
+      columns: [table.tenantId, table.orderId, table.customerId],
+      foreignColumns: [orders.tenantId, orders.id, orders.customerId],
+      name: 'services_order_customer_fk',
     }),
     foreignKey({
       columns: [table.tenantId, table.panelId],
@@ -2679,10 +2707,18 @@ export const discountRedemptions = pgTable(
       foreignColumns: [customers.tenantId, customers.id],
       name: 'discount_redemptions_customer_fk',
     }),
+    /**
+     * The customer travels with the order.
+     *
+     * This is the one the review found. The per-customer redemption limit is counted over
+     * `(discount_id, customer_id)`, so a row whose customer does not own its order makes
+     * the limit advisory — a customer could redeem a once-per-person code repeatedly by
+     * attributing each redemption elsewhere.
+     */
     foreignKey({
-      columns: [table.tenantId, table.orderId],
-      foreignColumns: [orders.tenantId, orders.id],
-      name: 'discount_redemptions_order_fk',
+      columns: [table.tenantId, table.orderId, table.customerId],
+      foreignColumns: [orders.tenantId, orders.id, orders.customerId],
+      name: 'discount_redemptions_order_customer_fk',
     }),
     /** One redemption per order, as a constraint rather than a check-then-write. */
     uniqueIndex('discount_redemptions_order_key').on(table.tenantId, table.orderId),
