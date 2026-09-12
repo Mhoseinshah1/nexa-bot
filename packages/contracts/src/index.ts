@@ -38,6 +38,20 @@ export * from './state-machine.js';
 export * from './provider.js';
 export * from './panels.js';
 export * from './pricing.js';
+/**
+ * Phase 4 vocabularies.
+ *
+ * Declared after `pricing.js` because several of them take a `PriceQuote`, and in the
+ * order a reader meets them: who buys (`customer`), what is sold (`catalog`), the
+ * commercial record (`commerce`), how it is settled (`payment`), what it becomes
+ * (`provisioning`), and what changes the price (`promotions`).
+ */
+export * from './customer.js';
+export * from './catalog.js';
+export * from './commerce.js';
+export * from './payment.js';
+export * from './provisioning.js';
+export * from './promotions.js';
 export * from './templates.js';
 export * from './settings.js';
 export * from './features.js';

@@ -38,4 +38,57 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{severity} — <code>{code}</code>\n{message}\nتعداد رخداد: {occurrences}\nنخستین بار: {firstSeenAt}',
   'ops.notification.test':
     'این یک پیام آزمایشی است. مقصد اعلان‌های عملیاتی به درستی پیکربندی شده است.\nدرخواست‌کننده: {requestedBy}\nزمان: {at}',
+
+  // Customer-facing commerce — Phase 4.
+  //
+  // No greeting names the customer. `templates.ts` records why: a name placeholder is
+  // a placeholder whose value comes from a third party, and the product has nothing
+  // to gain from rendering it.
+  //
+  // Wording is deliberately plain and short. These are read on a phone, in a chat,
+  // by someone who wants to buy something — not an operations channel.
+  'bot.start.welcome': 'خوش آمدید. برای دیدن سرویس‌های قابل خرید از منو استفاده کنید.',
+  'bot.start.welcome_back':
+    'خوش آمدید. از منو می‌توانید سرویس‌های خود را ببینید یا خرید جدیدی انجام دهید.',
+  'bot.blocked': 'دسترسی این حساب به ربات بسته شده است.',
+
+  'bot.catalog.empty': 'در حال حاضر سرویسی برای فروش تنظیم نشده است.',
+  'bot.catalog.heading': 'سرویس‌های قابل خرید:',
+
+  'bot.order.summary':
+    'سفارش شما\nسرویس: {productTitle}\nمدت: {durationDays}\nحجم: {trafficBytes}\nمبلغ قابل پرداخت: {total}',
+  'bot.order.awaiting_payment':
+    'سفارش ثبت شد و در انتظار پرداخت است.\nمبلغ: {total}\nاعتبار تا: {expiresAt}',
+  'bot.order.settled': 'پرداخت تأیید شد. سرویس شما در حال آماده‌سازی است.',
+  'bot.order.cancelled': 'سفارش لغو شد.',
+
+  'bot.wallet.balance': 'موجودی کیف پول شما: {balance}',
+  'bot.wallet.insufficient': 'موجودی کیف پول کافی نیست. کمبود: {shortfall}',
+
+  'bot.payment.manual_instructions':
+    'برای پرداخت مبلغ {total} طبق راهنمای فروشنده اقدام کنید و سپس رسید را ارسال نمایید.\nکد پیگیری این پرداخت: {reference}',
+  'bot.payment.unconfigured': 'این روش پرداخت در حال حاضر فعال نیست.',
+  'bot.payment.received_for_review': 'رسید شما دریافت شد و برای بررسی در نوبت قرار گرفت.',
+
+  'bot.service.list_empty': 'هنوز سرویسی ندارید.',
+  'bot.service.detail':
+    'سرویس: {productTitle}\nوضعیت: {state}\nمصرف: {usedTrafficBytes} از {totalTrafficBytes}\nانقضا: {expiresAt}\nآخرین به‌روزرسانی مصرف: {syncedAt}',
+  'bot.service.subscription': 'لینک اشتراک شما:\n<code>{subscriptionUrl}</code>',
+  'bot.service.provisioning': 'سرویس شما در حال ساخته شدن است. نتیجه به شما اطلاع داده می‌شود.',
+  // Deliberately does NOT invite a retry: `templates.ts` records that a retry after an
+  // unknown outcome is how a duplicate account is created.
+  'bot.service.provision_delayed':
+    'ساخت سرویس کامل نشد و موضوع به پشتیبانی اطلاع داده شد. لطفاً منتظر پیگیری بمانید.',
+  'bot.service.capability_unsupported': 'این قابلیت برای سرویس شما در دسترس نیست.',
+
+  'bot.discount.applied': 'کد تخفیف {code} اعمال شد. مبلغ تخفیف: {amount}',
+  // One message for every rejection reason, so the bot is not an oracle for guessing
+  // codes. `templates.ts` records the reasoning.
+  'bot.discount.rejected': 'این کد تخفیف قابل استفاده نیست.',
+
+  'bot.referral.invite': 'کد معرف شما: {referralCode}',
+  'bot.referral.unconfigured': 'برنامه معرفی دوستان در حال حاضر فعال نیست.',
+
+  'bot.trial.unavailable': 'سرویس آزمایشی در حال حاضر در دسترس نیست.',
+  'bot.trial.issued': 'سرویس آزمایشی شما در حال ساخته شدن است.',
 };

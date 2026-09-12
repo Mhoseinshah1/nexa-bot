@@ -252,6 +252,362 @@ export const TEMPLATES = [
       },
     ],
   },
+
+  // Customer-facing commerce — Phase 4.
+  //
+  // Every one of these is PLAIN_TEXT unless it interpolates something a reader must
+  // be able to copy, because `TELEGRAM_HTML` means values are HTML-escaped and a
+  // plain greeting has nothing to escape. The one exception is the subscription
+  // link, which is rendered in <code> so a customer can tap to copy it.
+  //
+  // No template here interpolates a customer's own name. The legacy system baked an
+  // admin's name into `{first_name}` for roughly 13,700 customers by saving a
+  // RENDERED echo, and while the research corrects the detail of that incident the
+  // hazard is real: a name placeholder is a placeholder whose value comes from a
+  // third party and is rendered into a message sent to someone else. Greetings here
+  // are name-free by design, and that is cheaper than an escaping rule.
+  {
+    key: 'bot.start.welcome',
+    description: 'Greeting for a customer the installation has not seen before.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.start.welcome_back',
+    description: 'Greeting for a returning customer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.blocked',
+    description:
+      'Shown to a customer an operator has blocked. Says that the account cannot be ' +
+      'served and nothing about why, because the reason is an operator note and not ' +
+      'a statement the product makes to the person it is about.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.empty',
+    description:
+      'Shown when a tenant has no listed, priced, fulfillable product. The honest ' +
+      'answer to an unconfigured catalogue, rather than an empty list that reads as ' +
+      'a failure.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.catalog.heading',
+    description: 'Introduces the product list.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.summary',
+    description:
+      'The server-calculated order summary a customer confirms. Every figure in it ' +
+      'comes from the price quote, never from callback data.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'productTitle',
+        type: 'STRING',
+        description: 'The product title as snapshotted onto the order.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'The server-calculated total.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'durationDays',
+        type: 'DURATION_DAYS',
+        description: 'Days of validity, or 0 for unlimited.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'trafficBytes',
+        type: 'BYTES',
+        description: 'Traffic allowance in bytes, or 0 for unlimited. The renderer owns the unit.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.awaiting_payment',
+    description: 'Confirms that an order is recorded and waiting for payment.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'The amount owed.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'When the unpaid order will expire.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.settled',
+    description: 'Confirms that payment was accepted and provisioning will follow.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.cancelled',
+    description: 'Confirms that an order was withdrawn.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.balance',
+    description: "The customer's own balance, derived from the ledger.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'balance',
+        type: 'MONEY',
+        description: 'The derived balance.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.wallet.insufficient',
+    description:
+      'Shown when a wallet settlement is refused for want of funds. Carries the ' +
+      'shortfall rather than the balance, because the shortfall is what the customer ' +
+      'has to act on.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'shortfall',
+        type: 'MONEY',
+        description: 'How much more is needed.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.manual_instructions',
+    description:
+      'How to pay out of band, and how to submit the evidence. The instructions ' +
+      'themselves are tenant copy — this installation ships no bank details and ' +
+      'invents none.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'The amount to transfer.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The reference the customer must quote.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.unconfigured',
+    description:
+      'Shown when a customer chooses a payment method this installation has not ' +
+      'configured. Names the situation rather than failing silently.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.received_for_review',
+    description: 'Confirms that submitted evidence is queued for an operator to review.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.list_empty',
+    description: 'Shown when the customer has no services.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.detail',
+    description:
+      'One service, as its owner sees it. Usage and expiry come from the last ' +
+      'successful sync and the message says so, because a figure with no asOf is a ' +
+      'figure a customer will read as live.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'productTitle',
+        type: 'STRING',
+        description: 'The plan this service was bought as.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'state',
+        type: 'STRING',
+        description: 'The service state, already localised by the surface.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'usedTrafficBytes',
+        type: 'BYTES',
+        description: 'Traffic used, in bytes, as of the last sync.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'totalTrafficBytes',
+        type: 'BYTES',
+        description: 'Traffic allowance in bytes, or 0 for unlimited.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'When the service expires.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'syncedAt',
+        type: 'DATETIME',
+        description: 'When usage was last read from the provider.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.subscription',
+    description:
+      "The customer's subscription link. TELEGRAM_HTML so the link is rendered in " +
+      '<code> and can be tapped to copy; this is the one customer-facing key where ' +
+      'the format is load-bearing rather than incidental.',
+    format: 'TELEGRAM_HTML',
+    placeholders: [
+      {
+        token: 'subscriptionUrl',
+        type: 'STRING',
+        description: 'The subscription URL issued by the provider.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.provisioning',
+    description:
+      'Shown while a service is being created on a provider. Promises a follow-up ' +
+      'rather than a duration, because the duration depends on somebody else.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.provision_delayed',
+    description:
+      'Shown when provisioning could not be completed and an operator has been told. ' +
+      'Deliberately does NOT invite the customer to try again: a retry after an ' +
+      'unknown outcome is how a duplicate account is created.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.capability_unsupported',
+    description:
+      'Shown when the customer asks for something the panel behind their service ' +
+      'cannot do. Names the limitation instead of failing quietly.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.discount.applied',
+    description: 'Confirms a discount code and the amount it took off.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'code',
+        type: 'STRING',
+        description: 'The code, normalised to upper case.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'How much was taken off.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.discount.rejected',
+    description:
+      'Shown when a code cannot be applied. One message for every reason: telling a ' +
+      'customer whether a code exists but is exhausted is an oracle for guessing ' +
+      'codes.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.referral.invite',
+    description: "The customer's own referral code, for sharing.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'referralCode',
+        type: 'STRING',
+        description: "The customer's derived referral code.",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.referral.unconfigured',
+    description:
+      'Shown when a tenant has not configured a referral reward. The feature is ' +
+      'disabled rather than paying zero.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.trial.unavailable',
+    description:
+      'Shown when a trial cannot be issued — unconfigured, already taken, or the ' +
+      'configured product is unavailable. One message, for the reason the discount ' +
+      'rejection gives.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.trial.issued',
+    description: 'Confirms that a trial service is being created.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
 ] as const satisfies readonly TemplateDefinition[];
 
 export type TemplateKey = (typeof TEMPLATES)[number]['key'];

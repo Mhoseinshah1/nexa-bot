@@ -84,6 +84,31 @@ export const EVENT_TYPES = [
   'TemplateOverrideChanged',
   'TemplateOverrideReverted',
   'FeatureFlagChanged',
+
+  // Commerce and provisioning — Phase 4. Deliberately NOT one event per Telegram
+  // packet: a customer's arrival is a row, and an event for every update would make
+  // the outbox a copy of the conversation. What is here is what another module must
+  // be able to react to, and nothing else.
+  //
+  // `CustomerBlocked` and `CustomerUnblocked` are events because a block has
+  // consequences elsewhere — an in-flight order, a scheduled renewal — and a module
+  // that has to poll a status column to find out is a module that finds out late.
+  'CustomerRegistered',
+  'CustomerBlocked',
+  'CustomerUnblocked',
+  'OrderConfirmed',
+  'OrderSettled',
+  'OrderCancelled',
+  'OrderRefunded',
+  'PaymentConfirmed',
+  'PaymentOutcomeUnknown',
+  'WalletEntryRecorded',
+  'ServiceProvisioned',
+  'ServiceStateChanged',
+  'ProvisioningOutcomeUnknown',
+  'DiscountRedeemed',
+  'ReferralRewarded',
+  'TrialIssued',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -102,6 +127,18 @@ export const AGGREGATE_TYPES = [
   'Admin',
   'Template',
   'FeatureFlag',
+  // Phase 4. `Wallet` is the customer's ledger as an aggregate, so an entry's event
+  // names the wallet rather than the entry: a consumer cares which customer's money
+  // moved, and the entry id is in the payload.
+  'Customer',
+  'Order',
+  'Payment',
+  'Wallet',
+  'Service',
+  'ProvisioningOperation',
+  'Discount',
+  'Referral',
+  'Trial',
 ] as const;
 export type AggregateType = (typeof AGGREGATE_TYPES)[number];
 
@@ -149,6 +186,114 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     revision: z.number().int().positive(),
   }),
   FeatureFlagChanged: z.object({ key: z.string(), from: z.boolean(), to: z.boolean() }),
+
+  /*
+   * Phase 4.
+   *
+   * Two rules hold across all of them, and both are about what is NOT here.
+   *
+   * No customer-supplied text. Not a username, not a first name, not a message.
+   * An outbox row is relayed and may be projected into an operations channel, and
+   * `docs/open-questions.md` records that customer-supplied text reaching an
+   * operational projection is the Phase 4A hazard. The ids are enough to join.
+   *
+   * Amounts are carried as STRINGS of minor units with their currency beside them,
+   * never as numbers. A JSON number loses a bigint above 2^53, and the place that
+   * would first show is a consumer projecting a large Toman total — which is an
+   * ordinary amount in this currency, not an edge case.
+   */
+  CustomerRegistered: z.object({
+    /** Telegram's numeric id, as text. Identity, not a display value. */
+    telegramUserId: z.string(),
+    /** Which bot the customer first arrived through. */
+    botInstanceId: z.string(),
+  }),
+  CustomerBlocked: z.object({ reason: z.string().max(500).nullable() }),
+  CustomerUnblocked: z.object({ reason: z.string().max(500).nullable() }),
+  OrderConfirmed: z.object({
+    customerId: z.string(),
+    productId: z.string(),
+    totalMinor: z.string(),
+    currency: z.string(),
+  }),
+  OrderSettled: z.object({
+    customerId: z.string(),
+    paymentId: z.string(),
+    totalMinor: z.string(),
+    currency: z.string(),
+  }),
+  OrderCancelled: z.object({ customerId: z.string(), byOperator: z.boolean() }),
+  OrderRefunded: z.object({
+    customerId: z.string(),
+    amountMinor: z.string(),
+    currency: z.string(),
+  }),
+  PaymentConfirmed: z.object({
+    customerId: z.string(),
+    orderId: z.string().nullable(),
+    method: z.string(),
+    evidenceKind: z.string(),
+    amountMinor: z.string(),
+    currency: z.string(),
+  }),
+  /*
+   * The one event whose whole purpose is that nothing automatic happens next. It
+   * exists so an operator is told, and so a reconciliation surface has something to
+   * list; `CLAUDE.md` records the same shape for backup delivery, where folding
+   * "unknown" into "retryable" was the defect.
+   */
+  PaymentOutcomeUnknown: z.object({
+    customerId: z.string(),
+    orderId: z.string().nullable(),
+    method: z.string(),
+    amountMinor: z.string(),
+    currency: z.string(),
+  }),
+  WalletEntryRecorded: z.object({
+    customerId: z.string(),
+    entryId: z.string(),
+    direction: z.string(),
+    reason: z.string(),
+    amountMinor: z.string(),
+    currency: z.string(),
+  }),
+  ServiceProvisioned: z.object({
+    customerId: z.string(),
+    orderId: z.string(),
+    panelId: z.string(),
+    operationId: z.string(),
+  }),
+  ServiceStateChanged: z.object({
+    customerId: z.string(),
+    from: z.string(),
+    to: z.string(),
+  }),
+  ProvisioningOutcomeUnknown: z.object({
+    serviceId: z.string(),
+    panelId: z.string(),
+    operationType: z.string(),
+    /** The failure kind from the existing provider taxonomy, never a new one. */
+    failureKind: z.string(),
+  }),
+  DiscountRedeemed: z.object({
+    customerId: z.string(),
+    orderId: z.string(),
+    code: z.string(),
+    amountMinor: z.string(),
+    currency: z.string(),
+  }),
+  ReferralRewarded: z.object({
+    referrerId: z.string(),
+    refereeId: z.string(),
+    trigger: z.string(),
+    amountMinor: z.string(),
+    currency: z.string(),
+  }),
+  TrialIssued: z.object({
+    customerId: z.string(),
+    productId: z.string(),
+    serviceId: z.string(),
+  }),
 } as const satisfies Record<EventType, z.ZodType>;
 
 export type EventPayload<T extends EventType> = z.infer<(typeof EVENT_PAYLOAD_SCHEMAS)[T]>;
