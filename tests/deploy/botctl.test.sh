@@ -2509,7 +2509,7 @@ test_case "a traced disable-v1 prints no database password"
 fake_set shutdown_ready 1
 seed_nexa_env canonical
 trace="$(bash -x "$BOTCTL" secrets disable-v1 2>&1 || true)"
-assert_not_contains 'a traced shutdown printed the database password' "$trace" 'nexa:'
+assert_not_contains 'a traced shutdown printed the database password' "$trace" 'nexa:pw@postgres'
 assert_not_contains 'a traced shutdown printed the key material' "$trace" "$TEST_KEK"
 # And the run was real: traced, and it reached the write.
 assert_contains 'nothing was traced at all' "$trace" '+ '
@@ -3018,6 +3018,33 @@ assert_equals 'the file was changed by a refused conversion' "$before" \
 assert_not_contains 'the refusal printed key material' "$BOTCTL_OUTPUT" 'VAULT_KEK}'
 seed_nexa_env canonical
 
+test_case 'nexa_untraced turns tracing off and puts it back exactly as it found it'
+# The OFF half is covered by three command-level cases. The RESTORE half was not:
+# deleting the restore line left all checks green, because every command that uses this
+# helper has nothing traced after it returns. A rule with no test is a rule that will be
+# silently reverted, so this calls the helper directly, in both directions.
+#
+# Tracing ON before the call must be ON after it: a command that went dark for the rest
+# of its run after one untraced step is the diagnostic failure this helper is bounded to
+# avoid, and `deploy/install.sh` is not the only script that may come to wrap a step.
+untraced_probe="$( ( set -x; nexa_untraced true; echo AFTER ) 2>&1 )"
+assert_contains 'tracing was not restored after the untraced call' \
+  "$untraced_probe" '+ echo AFTER'
+assert_not_contains 'the body was traced' "$untraced_probe" '+ true'
+# And tracing OFF before the call must stay OFF: turning it on for a caller that never
+# asked would print the rest of that command, which for `secrets migrate-config` is the
+# read-back of the keyring.
+untraced_probe="$( ( nexa_untraced true; echo AFTER ) 2>&1 )"
+assert_not_contains 'tracing was turned ON for a caller that had it off' \
+  "$untraced_probe" '+ echo AFTER'
+# The status is the body's, not the helper's own bookkeeping.
+nexa_untraced true && untraced_status=0 || untraced_status=$?
+assert_equals 'a succeeding body did not return 0' 0 "$untraced_status"
+nexa_untraced false && untraced_status=0 || untraced_status=$?
+assert_equals 'a failing body did not return its own status' 1 "$untraced_status"
+nexa_untraced bash -c 'exit 7' && untraced_status=0 || untraced_status=$?
+assert_equals 'a body exiting 7 did not return 7' 7 "$untraced_status"
+
 test_case 'secrets migrate-config: a traced run prints no key material'
 # This command HOLDS the master key by necessity: it reads SECRETS_KEK out of the file
 # and writes it back under the canonical name. Under `bash -x` the capture, the blank
@@ -3029,7 +3056,7 @@ test_case 'secrets migrate-config: a traced run prints no key material'
 seed_nexa_env legacy
 trace="$(bash -x "$BOTCTL" secrets migrate-config 2>&1 || true)"
 assert_not_contains 'a traced conversion printed the key material' "$trace" "$TEST_KEK"
-assert_not_contains 'a traced conversion printed the database password' "$trace" 'nexa:'
+assert_not_contains 'a traced conversion printed the database password' "$trace" 'nexa:pw@postgres'
 # And the run was real: tracing was on, and the conversion reached its own success line.
 # Without both, this would pass against a command that refused at its first line.
 assert_contains 'nothing was traced at all' "$trace" '+ '
@@ -3113,6 +3140,13 @@ assert_not_contains 'an unreachable acceptance state was reported as a completed
   "$out" 'v1 shutdown'
 assert_contains 'the absence of rows was left looking like a stack that is down' \
   "$out" 'No row is shown below'
+# And the claim is about the rows BELOW: the two above it — the configuration and the
+# acceptance — came from the resolved listing, not from any container, so saying "every
+# row in this section" contradicted the two lines printed immediately before.
+assert_contains 'the paragraph disowned the two rows it had just printed' \
+  "$out" 'every row BELOW'
+assert_not_contains 'the paragraph claimed every row in the section comes from a container' \
+  "$out" 'every row in this'
 # A value with a trailing newline is the same case: the rendering is `false\\n`, which
 # is not the spelling the enum allows.
 fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","SECRETS_KEYS":"k1:v","SECRETS_ACTIVE_KEY_ID":"k1","SECRETS_ACCEPT_V1":"false\n"}'
@@ -3734,16 +3768,28 @@ run_botctl status
 assert_contains 'the heading does not name compose as the resolver' \
   "$BOTCTL_OUTPUT" 'as compose resolves'
 assert_contains 'the standing caveat is missing' "$BOTCTL_OUTPUT" 'STARTED NOW'
-# And the caveat is keyed to CREATION, not to `botctl restart` alone. `update` and
-# `rollback` both bring the stack up through `nexa_bring_up_with_edge`, so naming only
-# `restart` told an operator who had just updated that their change was still pending and
-# sent them to restart a stack that had already loaded it.
+# And the caveat is keyed to CREATION, claiming nothing about whether a restart already
+# happened. Two earlier versions were wrong in opposite directions: "since the last
+# `botctl restart`" omitted `update`, `rollback` and `secrets disable-v1`, which also
+# bring the stack up; then naming three of them plus "nothing else here does" was a
+# universal negative that omitted `secrets disable-v1` — the one command whose whole
+# point is that the setting is APPLIED. And the claim that a successful one of those has
+# already loaded the values is not established at all: measured on Compose v5.1.1, the
+# service config hash does not change when `env_file` CONTENT changes, and whether
+# `up -d` recreates anyway is the daemon's decision (UNK-DEPLOY-001). So the text says
+# only what holds either way.
 assert_contains 'the caveat was keyed to restart alone' \
   "$BOTCTL_OUTPUT" 'since that container was CREATED'
-assert_contains 'update and rollback were not named as loading the values' \
-  "$BOTCTL_OUTPUT" '`botctl update` and `botctl rollback` each bring the stack up'
+assert_contains 'recreation was not named as the thing that loads a change' \
+  "$BOTCTL_OUTPUT" 'Only RECREATING'
+assert_contains 'the section claimed to know whether a restart had happened' \
+  "$BOTCTL_OUTPUT" 'do not say whether'
 assert_not_contains 'the caveat still claims only a restart can load a change' \
   "$BOTCTL_OUTPUT" 'since the last `botctl restart` is not in force'
+assert_not_contains 'an unestablished claim that a restart already loaded the values' \
+  "$BOTCTL_OUTPUT" 'has already loaded these values'
+assert_not_contains 'a universal negative that omits secrets disable-v1' \
+  "$BOTCTL_OUTPUT" 'nothing else here does'
 assert_contains 'the caveat does not say what a running container keeps' \
   "$BOTCTL_OUTPUT" 'created with'
 # And it still does not pretend to know the running state of any of them.
@@ -3899,6 +3945,15 @@ assert_contains 'the required-variable reason was dropped entirely' \
   "$BOTCTL_OUTPUT" 'required variable KEYRING is missing a value'
 assert_not_contains 'the operator-supplied error text carried the key material through' \
   "$BOTCTL_OUTPUT" 'AAAfakeKeyMaterial'
+# And the cut is never silent. `deploy/compose.yml` uses `${VAR:?text}` four times and
+# that text is operator guidance, not a value — it is cut anyway, because this function
+# cannot tell guidance from a keyring, so the operator is told a cut happened.
+assert_contains 'the cut was silent' "$BOTCTL_OUTPUT" 'is withheld'
+fake_set compose_config_stderr 'failed to read /etc/nexa/deploy.env: required variable NEXA_IMAGE is missing a value: NEXA_IMAGE must be an image digest reference'
+run_botctl status
+assert_contains 'the variable name was lost with the guidance' \
+  "$BOTCTL_OUTPUT" 'required variable NEXA_IMAGE is missing a value'
+assert_contains 'a cut of non-secret guidance was silent' "$BOTCTL_OUTPUT" 'is withheld'
 fake_set compose_config_fails 0
 fake_set compose_config_stderr ''
 # And a document that defines no `api` is a refusal too, not a column of defaults.

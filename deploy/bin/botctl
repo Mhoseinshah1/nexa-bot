@@ -213,9 +213,13 @@ status_capabilities() {
   # The cost is real and is accepted: the resolution, the refusal-reason redaction, the
   # `docker inspect` provenance lookups and the set arithmetic below are all invisible
   # under `bash -x`. What an operator needs from them is printed either way — a refusal
-  # carries Compose's own reason, and a provenance that could not be computed says so —
-  # and `docker compose --env-file /etc/nexa/nexa.env config` reproduces the resolution
-  # step by hand. A trace that prints the keyring is not a fair trade for that.
+  # carries Compose's own reason, and a provenance that could not be computed says so.
+  # The resolution step is reproducible by hand with the SAME invocation `nexa_compose`
+  # uses, which is `docker compose --env-file /etc/nexa/deploy.env -f
+  # /etc/nexa/deploy/compose.yml config`. Not `--env-file …/nexa.env`: that flag is the
+  # interpolation source for the compose FILE, not the services' `env_file`, and pointing
+  # it at `nexa.env` fails outright because `nexa.env` carries no `NEXA_IMAGE`. A trace
+  # that prints the keyring is not a fair trade for the rest.
   ( set +x; status_capabilities_untraced )
 }
 
@@ -332,16 +336,30 @@ status_capabilities_untraced() {
   # DETECTION of that would have to be right about every field and every owning
   # process to be worth printing. This sentence is right about all of them.
   #
-  # Keyed to CREATION, not to `botctl restart`. `restart` is not the only command that
-  # brings the stack up: `update` and `rollback` both go through
-  # `nexa_bring_up_with_edge`, so a successful update has already recreated the
-  # containers from the edited file. Naming only `restart` told an operator who had just
-  # updated that their change was still pending, and sent them to restart again.
+  # Keyed to CREATION, and deliberately claiming nothing about whether a restart
+  # already happened. Two earlier versions of this paragraph were wrong in opposite
+  # directions. "since the last `botctl restart`" was incomplete: `update`, `rollback`
+  # and `secrets disable-v1` all bring the stack up too. Then naming those three and
+  # adding "nothing else here does" was a universal negative that was false — it
+  # omitted `secrets disable-v1`, which is the one command whose whole point is that
+  # the setting is APPLIED and not merely written.
+  #
+  # And the replacement claim, that a successful restart has already loaded these
+  # values, is not established. Measured on Compose v5.1.1: the service config hash
+  # does NOT change when `env_file` CONTENT changes, while an inline `environment:`
+  # value does change it. Whether `up -d` then recreates the container is the daemon's
+  # decision and cannot be measured in this environment — and `cmd_restart` above
+  # documents the same mechanism for the edge, where replacing a bind-mounted file
+  # changes no service definition and a plain `up -d` left that container alone.
+  # `docs/open-questions.md` carries it as UNK-DEPLOY-001. So this says what is true
+  # — only recreation loads a changed value — names the command for it, and does not
+  # claim your last one did.
   printf '\n  These are the values compose would hand a container STARTED NOW. A running\n'
   printf '  container keeps the configuration it was created with, so anything changed\n'
-  printf '  since that container was CREATED is not in force in it yet. `botctl restart`,\n'
-  printf '  `botctl update` and `botctl rollback` each bring the stack up, so a successful\n'
-  printf '  one of those has already loaded these values; nothing else here does.\n'
+  printf '  since that container was CREATED is not in force in it yet. Only RECREATING\n'
+  printf '  the container loads it, and `botctl restart` is the command for that. These\n'
+  printf '  rows read the configuration, not the containers, so they do not say whether\n'
+  printf '  your last restart, update or rollback already did.\n'
 
   if [ "$scheduled" = off ]; then
     printf '\n  This configuration takes no AUTOMATIC backup. `botctl backup` still works, and\n'
@@ -539,9 +557,10 @@ status_secrets_untraced() {
     printf '  `botctl restart` or `botctl update` will fail, and `botctl logs api` shows the\n'
     printf '  refusal. An API already running keeps the acceptance it was created with.\n'
     printf '\n'
-    printf '  No row is shown below, and that is not a stack that is down: every row in this\n'
-    printf '  section is counted by a one-off container created from THIS configuration, and\n'
-    printf '  that container cannot start either. Set the value, then run `botctl status`.\n'
+    printf '  No row is shown below, and that is not a stack that is down: every row BELOW\n'
+    printf '  is counted by a one-off container created from THIS configuration, and that\n'
+    printf '  container cannot start either. The two rows above came from the configuration\n'
+    printf '  itself. Set the value, then run `botctl status`.\n'
     return 0
   fi
 

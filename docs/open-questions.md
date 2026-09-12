@@ -735,3 +735,51 @@ buys and there is no way to have both.
 
 **Trigger to revisit:** the first deployment that legitimately holds two
 installations' archives — a migration tool, or a managed multi-install operator.
+
+## UNK-DEPLOY-001 — does `compose up -d` recreate a container when only `nexa.env` changed?
+
+`botctl status` tells an operator to set a value in `/etc/nexa/nexa.env` and run
+`botctl restart`. Every remedy in the capabilities and secrets sections ends that
+way, and so does the v1 shutdown sequence. The whole advice rests on an assumption
+nobody has measured against a real daemon: that bringing the stack up loads an
+edited `env_file`.
+
+**Measured on the Compose client this deployment pins, v5.1.1, with no daemon:**
+
+```
+docker compose config --hash='*'
+
+baseline                                     api 5fc5df86…
+append BACKUP_SCHEDULE_ENABLED=true to env_file   api 5fc5df86…   unchanged
+change DATABASE_URL's password in env_file        api 5fc5df86…   unchanged
+change an inline `environment:` value             api c26660b1…   CHANGED
+```
+
+So the service config hash — the value `up -d` compares against the running
+container's `com.docker.compose.config-hash` label to decide whether to recreate —
+does not track `env_file` content. An inline `environment:` entry does track.
+
+**This is not a new mechanism; this repository already hit it once.** `cmd_restart`
+carries the comment that "a plain `up -d` leaves the edge container alone, because
+replacing a bind-mounted file changes no service definition, and the operator would
+run the command they were told to run and see no change". The fix there was to make
+the edge's configuration generation an INTERPOLATED value (`NEXA_EDGE_CONFIG`), so
+the service definition itself changes. `nexa.env` has had no equivalent.
+
+**What is still unknown.** Whether `up -d` recreates anyway — the hash is one input
+to that decision and the daemon may consider others. That cannot be settled here: the
+deploy suite runs against a fake docker, and both smoke scripts write `nexa.env`
+BEFORE the first `up`, so neither exercises "edit `nexa.env` on a running stack, then
+restart, and read the value back out of the container".
+
+**What was done instead of guessing.** `botctl status` no longer claims that a
+successful restart, update or rollback has loaded anything. It says only what holds
+either way: a container keeps the configuration it was created with, only recreating
+it loads a change, and `botctl restart` is the command for that.
+
+**Trigger to resolve:** the first run of `docs/vps-acceptance.md` against a real
+server. The check is three commands — edit one boolean in `nexa.env`, `botctl
+restart`, then `docker inspect` the api container's `.Config.Env` for the new value.
+If it is absent, the remedy is the one the edge already uses: fingerprint `nexa.env`
+and interpolate that fingerprint into the service definitions, so a content change
+becomes a definition change.

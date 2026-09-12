@@ -242,8 +242,13 @@ question. The section claims nothing about what those processes are currently
 running: a container keeps the configuration it was created with, so a value
 changed since that container was CREATED is not yet in force in it, and the section
 says so as a standing caveat rather than pretending to detect it. The caveat names
-creation rather than `botctl restart` because `update` and `rollback` bring the stack
-up too, so a successful update has already loaded the edited file. The delivery
+CREATION rather than any command, and deliberately does not say whether your last
+restart loaded anything: four subcommands bring the stack up (`restart`, `update`,
+`rollback` and `secrets disable-v1`), and whether `compose up -d` recreates a
+container when only `nexa.env` changed is recorded as `UNK-DEPLOY-001` in
+`docs/open-questions.md` — measured on the pinned client, the service config hash
+does not track `env_file` content, and this deployment already hit the same mechanism
+once with the edge's bind-mounted configuration. The delivery
 destination names three processes because three deliver — the worker schedules,
 the API serves the Web Admin's manual run, and the recovery executor takes the
 pre-restore backup.

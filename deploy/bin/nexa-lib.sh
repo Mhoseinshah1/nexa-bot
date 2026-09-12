@@ -912,12 +912,24 @@ nexa_commit_release() {
 # invisible under `bash -x`. It is bounded here to functions whose failures are all
 # `nexa_die` with a reason on stderr, which is what an operator needs from them.
 nexa_untraced() {
-  local had_xtrace=0 status=0
-  case "$-" in *x*) had_xtrace=1 ;; esac
+  # NAMESPACED locals, because these two names live in the dynamic scope of everything
+  # the body calls: a callee that assigned a bare `status=` and then succeeded would make
+  # this wrapper return that value, and one that clobbered `had_xtrace` would flip the
+  # restore. Nothing does today; the prefix is what keeps that true.
+  local __nexa_untraced_had_x=0 __nexa_untraced_status=0
+  case "$-" in *x*) __nexa_untraced_had_x=1 ;; esac
   set +x
-  "$@" || status=$?
-  [ "$had_xtrace" -eq 0 ] || set -x
-  return "$status"
+  # `|| …` SUPPRESSES errexit for the body's whole dynamic extent, which is the price of
+  # catching its status at all — bash offers no way to have both. What makes that safe is
+  # an invariant that must stay true of every function passed here: each one guards every
+  # command that can fail and reports by `nexa_die`, never by a bare non-zero return.
+  # Checked when this was written, for `nexa_env_rewrite_untraced` (mktemp, chmod, chown,
+  # the awk filter, every append, the read-backs and the final mv are each guarded) and
+  # `cmd_secrets_migrate_config_untraced`. A new unguarded command in either would fail
+  # OPEN, in the function that edits the file holding the master key.
+  "$@" || __nexa_untraced_status=$?
+  [ "$__nexa_untraced_had_x" -eq 0 ] || set -x
+  return "$__nexa_untraced_status"
 }
 
 # One line, into place, or not at all. `printf > file` truncates first, so an
@@ -1431,13 +1443,27 @@ for key in sorted(env):
 # Everything else Compose says — a missing env file, a malformed compose file — reads
 # whole, still bounded to 200 characters.
 nexa_compose_refusal_reason() {
-  local text
+  local text withheld=''
   text="$(printf '%s\n' "$1" | sed -n '1p')"
   case "$text" in
-    *' is missing a value:'*) text="${text%% is missing a value:*} is missing a value" ;;
+    # The marker is KEPT and a withheld note added, because the text after it is not
+    # always a secret: `deploy/compose.yml` uses `${VAR:?text}` four times and that text
+    # is operator guidance ("NEXA_IMAGE must be an image digest reference"), reachable
+    # exactly when this section prints REFUSED. Cutting it silently would lose the only
+    # explanation for the commonest refusal there is. It is still cut, because the same
+    # form in `nexa.env` can carry the keyring and this function cannot tell the two
+    # apart — but the operator is told that a cut happened.
+    *' is missing a value:'*)
+      text="${text%% is missing a value:*} is missing a value"
+      withheld=' (the rest of the message is withheld: it is text from the configuration and may contain a value)'
+      ;;
   esac
   text="$(printf '%s\n' "$text" | sed "s/[\"'].*\$//" | cut -c1-200)"
-  printf '%s' "${text:-(compose gave no reason)}"
+  # The note is appended AFTER the quote cut and outside the 200-character bound, because
+  # it is this function's own words and not Compose's. The first version put it inside the
+  # string and the quote cut ate it at the apostrophe in `Compose's` — the redaction
+  # removing the notice that a redaction had happened. Nothing here may contain a quote.
+  printf '%s' "${text:-(compose gave no reason)}${withheld}"
 }
 
 # One value out of a resolved listing, and whether the key is there at all.

@@ -998,3 +998,114 @@ from a script file, with the applied text grepped out of `botctl` before the sui
 fails 3 checks. This is the second time on this branch that a mutation recorded as applied
 was not: the discipline that catches it is proving the mutation landed, not trusting the
 runner.
+
+### Round sixteen — self-review of `69335e1`
+
+One CONFIRMED_BLOCKER, and it is the same shape as the one round fifteen fixed: a
+correction that over-corrected. The fix for U-57 replaced an incomplete claim with a
+**universal negative that is false**.
+
+```
+  `botctl restart`, `botctl update` and `botctl rollback` each bring the stack up, so a
+  successful one of those has already loaded these values; nothing else here does.
+```
+
+`botctl secrets disable-v1` brings the stack up too — `nexa_compose up -d
+--remove-orphans`, twice, at the apply and at the back-out — and its own header says
+that is the point: "the setting is applied rather than merely written". It is also the
+one command the v1 shutdown sequence ends with. So an operator who edited `nexa.env`,
+ran `disable-v1`, and then ran `status` was told their change was not in force and that
+only three other commands could load it. That is U-57 reintroduced one command over,
+and the round-fifteen test asserted the sentence verbatim, which is exactly how the
+round-fourteen assertions locked in the round-fourteen lie. Enumerated from `main`'s
+dispatch rather than from memory this time: `version`, `status`, `backup`, `logs`,
+`help` create nothing; `secrets status|rewrap|retire-check|shutdown-check` are
+`compose run --rm` one-offs; `secrets migrate-config` writes only; `update`,
+`rollback`, `restart` and `secrets disable-v1` bring the stack up. There is no
+`enable-v1` in this tree at all, which a previous note had assumed there was.
+
+**And the replacement claim is not establishable, which is the more serious half.**
+"a successful one of those has already loaded these values" assumes `compose up -d`
+recreates a container when only `env_file` CONTENT changed. Measured on the pinned
+client, v5.1.1, with `docker compose config --hash='*'`:
+
+```
+baseline                                        api 5fc5df86…
+append BACKUP_SCHEDULE_ENABLED=true to env_file api 5fc5df86…   unchanged
+change DATABASE_URL's password in env_file      api 5fc5df86…   unchanged
+change an inline `environment:` value           api c26660b1…   CHANGED
+```
+
+The service config hash is what `up -d` compares against the running container's
+`com.docker.compose.config-hash` label, and it does not track `env_file` content.
+Whether the daemon recreates anyway cannot be measured here, and it is not measured in
+the repository either: the deploy suite runs against a fake docker, and both smoke
+scripts write `nexa.env` BEFORE the first `up`.
+
+**This repository has already hit this exact mechanism once.** `cmd_restart` carries
+the comment that "a plain `up -d` leaves the edge container alone, because replacing a
+bind-mounted file changes no service definition, and the operator would run the command
+they were told to run and see no change" — and the fix was to make the edge's
+generation an interpolated value so the definition itself changes. `nexa.env` has had
+no equivalent. That is strong enough to stop claiming, and not strong enough to claim
+the opposite.
+
+So the paragraph now says only what holds under either answer: a container keeps the
+configuration it was created with, anything changed since it was created is not in
+force in it, only RECREATING it loads the change, `botctl restart` is the command for
+that, and these rows do not say whether your last one already did. `UNK-DEPLOY-001` in
+`docs/open-questions.md` carries the measurement, the edge precedent, the reason it
+cannot be settled here, and the three-command check that settles it on the first real
+server — with the remedy named if the answer is no.
+
+Four smaller ones, all CONFIRMED_NON_BLOCKER:
+
+- **The comment justifying the trace blindness handed the reader a command that cannot
+  work.** It said `docker compose --env-file /etc/nexa/nexa.env config` reproduces the
+  resolution. `--env-file` is the interpolation source for the compose FILE, not the
+  services' `env_file`, and pointed at `nexa.env` it fails outright because `nexa.env`
+  carries no `NEXA_IMAGE`. It now gives the invocation `nexa_compose` actually uses and
+  says why the other one is wrong. `CLAUDE.md` names this class: three separate fixes on
+  the deployment branch each told an operator to run a command that could not work.
+- **"every row in this section" contradicted the two rows printed immediately above it**
+  — the configuration and the acceptance, which come from the resolved listing and not
+  from any container. It says `every row BELOW`, and names where the two above came from.
+- **The required-variable cut is silent, and it cuts guidance as well as values.**
+  `deploy/compose.yml` uses `${VAR:?text}` four times and that text is operator guidance
+  (`NEXA_IMAGE must be an image digest reference`), reachable exactly when the
+  capabilities section prints `REFUSED by compose`. It is still cut, because this
+  function cannot tell guidance from a keyring — but a withheld note is appended, so the
+  loss is never silent.
+
+  **The first version of that note was eaten by the very cut it announces.** It was
+  appended inside the string, before the quote cut, and contained the apostrophe in
+  `Compose's message` — so the redaction removed the notice that a redaction had
+  happened, and the new assertion caught it on its first run. The note is added after the
+  quote cut and outside the 200-character bound now, because it is this function's own
+  words and not Compose's, and the comment says nothing there may contain a quote.
+
+- **`nexa_untraced`'s two locals sat in the dynamic scope of everything the body calls.**
+  A callee assigning a bare `status=` and then succeeding would have made the wrapper
+  return that value. Nothing does; the names are prefixed now so it stays that way. The
+  errexit suppression that `|| status=$?` introduces is documented with the invariant
+  that makes it safe — every failure in both bodies is a `nexa_die`, enumerated — because
+  the next unguarded command added to the rewriter would fail OPEN.
+
+**One rule had no test, found by mutation rather than by reading.** Deleting
+`nexa_untraced`'s restore line left all 223 checks green: every command that uses the
+helper has nothing traced after it returns, so no command-level case can see the
+restore. A new case calls the helper directly and asserts both directions — tracing on
+before stays on after, tracing off before stays off — and the status pass-through for
+0, 1 and 7.
+
+| #    | Rule                                                                        | Mutation                                                                               | Named test                                                                                             | Result |
+| ---- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ------ |
+| H-86 | The caveat claims nothing about whether a restart already loaded the values | `botctl`: the caveat back to "has already loaded these values; nothing else here does" | `botctl.test.sh` › status: the section names COMPOSE as its resolver and claims nothing more           | KILLED |
+| H-87 | `nexa_untraced` restores tracing exactly as it found it                     | `nexa-lib.sh`: delete the `set -x` restore                                             | `botctl.test.sh` › nexa_untraced turns tracing off and puts it back exactly as it found it             | KILLED |
+| H-88 | A required-variable cut is never silent                                     | `nexa-lib.sh`: drop the withheld note from the cut                                     | `botctl.test.sh` › status: a refusal reports the reason Compose gave, with the value it echoed cut off | KILLED |
+| H-89 | The no-rows paragraph disowns only the rows BELOW it                        | `botctl`: back to "every row in this section"                                          | `botctl.test.sh` › status: an explicit SECRETS_ACCEPT_V1 outside the enum is invalid, not a default    | KILLED |
+
+Counts, each restore confirmed by `cmp` against a pre-mutation snapshot and each mutation
+grepped out of the file before the suite ran: H-86 fails 4 of 224, H-87 1, H-88 2, H-89 2.
+H-87's mutation is the one that was missing a test at all — deleting the restore line left
+223 green before the new case existed.
