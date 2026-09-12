@@ -1412,3 +1412,42 @@ formatter and a phrase straddling a line break is not a substring of the file.
 
 H-109 fails 1 of 42 unit checks; restore confirmed by `cmp` against a snapshot, and the
 mutated phrase grepped out of the restored file.
+
+### A failure this branch did not cause, root-caused rather than re-run
+
+CI on `bed8083` failed one unit test this PR does not touch — `web-asset-publication` ›
+_admits exactly one of many processes racing for an abandoned lock_ — and the stack names
+the defect exactly:
+
+```
+AssertionError: contender 1:
+Error: ENOENT: no such file or directory,
+  open '/tmp/nexa-web-assets-VsxBI5/srv-web/.publish.lock/holder'
+  at acquireLock (deploy/bin/publish-web-assets.mjs:206:7)
+: expected 1 to be +0
+```
+
+`acquireLock` takes the lock with `mkdirSync`, then stamps a holder file into it. A waiter
+that judged the PREVIOUS lock stale renames whatever is at that path away — and what it
+finds can be the brand-new empty lock another contender created one instruction earlier. Its
+holder write then fails ENOENT, outside the `EEXIST` guard, so the process DIES. The function
+already handles losing the lock between the mkdir and the write — that is what the token
+read-back two lines later is for — but only when the holder file was REPLACED, not when the
+directory was taken. So a publisher that simply did not win a race exited non-zero.
+
+It is not this PR's: the code is untouched here and the race is in `main`. It is also not a
+flake to re-run away — "flake" is not a root cause, and this one has a stack trace, a
+mechanism and a two-line fix in the same shape as the handling beside it. The ENOENT now
+means what the read-back means: somebody took it over, and this run does not hold it.
+
+| #     | Rule                                                                    | Mutation                                   | Named test                                                                                                   | Result |
+| ----- | ----------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------ | ------ |
+| H-110 | A holder write that loses its directory loses the race, it does not die | remove the holder write's own ENOENT catch | `web-asset-publication.test.ts` › loses the race rather than dying when the holder write loses its directory | KILLED |
+
+H-110 fails 1 of 22 checks in that file; restore confirmed by `cmp`. The assertion is on the
+SOURCE, and says so: the eight-process case above reproduces the interleaving only
+sometimes, so an assertion that waits for it is a test that passes for the wrong reason most
+of the time — the same reasoning as H-93 and H-106. **The first version of this assertion was
+itself wrong and is worth recording:** a non-greedy `.*?` between the write and its `catch`
+matched a LATER `ENOENT` catch in the same function, so the mutation left it green. It is an
+exact substring now.
