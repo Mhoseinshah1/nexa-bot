@@ -1514,3 +1514,50 @@ round changed no application code at all, which is what made the signature recog
 `CLAUDE.md` records the same class from two suites sharing one database, 122 failures that
 "looked exactly like real ones". Dropping and recreating `nexa_dev`, re-migrating and
 re-running gave 57 files and 1018 tests green, and that is the run the gate line below cites.
+
+## Round twenty-two — the same lesson, a third time: a value is not a vocabulary
+
+One finding from the independent review of `b053a13`, confirmed against the schema.
+
+The transport check the round before added refused `recording` on a production installation.
+It did not refuse `smtp`. `NOTIFICATION_TRANSPORT` is
+`z.enum(['telegram', 'recording'])` in `config.schema.ts`, so anything outside those two
+values is refused by the schema at every `NODE_ENV` — including an EMPTY assignment, which is
+a key that is present with a value of no characters. Measured against the compiled CLI: a
+present `NOTIFICATION_TRANSPORT=smtp` fails validation with
+`Invalid option: expected one of "telegram"|"recording"`, and so does
+`NOTIFICATION_TRANSPORT=`. So `botctl status` printed `notifications on` for two
+configurations the worker will not start on, which is the same defect U-89 recorded, reported
+by the round that fixed U-89.
+
+This is the third time on this branch that a fix enumerated the one bad value it had been
+shown instead of the set of accepted ones — the colon record before the whitespace record
+(U-84 then U-88), and now `recording` before the enum. The shape of the mistake is worth
+naming, because it is cheap to make and each instance looks like a complete fix: a check built
+from the failing example is only ever as wide as the example. The correction is to read the
+vocabulary from the thing that enforces it. Here that is the Zod enum, so the row is
+classified by a `case` over it — `telegram` is the capability, `recording` is the
+development-only transport, and `*)` is everything the schema will refuse, with a paragraph
+naming the two accepted values rather than the one value it happened to see.
+
+One distinction the classification has to make that the enum does not: an ABSENT
+`NOTIFICATION_TRANSPORT` is not an invalid one. The schema defaults it to `telegram`, so a
+host that never wrote the key is genuinely `on`, and `*)` would otherwise report every
+ordinary installation as broken. `nexa_listing_has` separates absent from present-and-empty
+before the `case` runs, which is why the empty assignment lands in `*)` and the missing key
+does not.
+
+| #     | Rule                                                                  | Mutation                                                         | Named test                                                                                           | Result |
+| ----- | --------------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------ |
+| H-114 | The notifications row refuses the whole vocabulary, not one bad value | `botctl`: drop the `telegram` and `*)` arms, keeping `recording` | `botctl.test.sh` › status: the notifications row is the transport too, not the dispatcher flag alone | KILLED |
+
+H-114 fails 3 of 231 deploy checks — `smtp` reads `on`, the empty assignment reads `on`, and
+the paragraph naming the accepted values is absent — in its own worktree, with
+`git status --porcelain` on the primary checkout showing only the two files this round edits.
+Two negative cases guard it against over-firing: an ABSENT key still reads `on` with no
+refusal paragraph, and a development installation with `recording` still reads `on`.
+
+It shares its named test with H-112, and that is recorded rather than papered over with a
+second test name: the test is the row's contract, and the two mutations remove different arms
+of the one `case` that implements it. A reader who wants to know which arm a failure names has
+the assertion text, which says `smtp` or `recording` explicitly.

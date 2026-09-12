@@ -4287,11 +4287,33 @@ assert_contains 'a development installation was told its transport is invalid' \
   "$BOTCTL_OUTPUT" 'notifications      on'
 assert_not_contains 'the development case printed the refusal paragraph' \
   "$BOTCTL_OUTPUT" 'keeps messages in MEMORY'
-# And the default transport reads on, or this case proves nothing.
+# And a transport OUTSIDE the vocabulary is invalid too. `NOTIFICATION_TRANSPORT` is
+# `z.enum(['telegram', 'recording'])`, so `smtp` is refused by the enum and the worker will
+# not start — and the first version of this check tested `recording` alone and left that
+# reading `notifications on`, which is the same "closed one member of the family" mistake the
+# secrets guard made a round earlier, made again in the round that recorded the lesson.
+seed_nexa_env canonical
+append_resolved_env 'NOTIFICATION_TRANSPORT=smtp'
+run_botctl status
+assert_contains 'an out-of-vocabulary transport was reported as notifications on' \
+  "$BOTCTL_OUTPUT" 'notifications      invalid'
+assert_contains 'the vocabulary was not named' \
+  "$BOTCTL_OUTPUT" 'other than `telegram` or `recording`'
+# An EMPTY assignment is outside it as well: an environment variable is a string, and the
+# empty one is not a member of the enum — the same distinction `nexa_listing_has` exists for.
+seed_nexa_env canonical
+append_resolved_env 'NOTIFICATION_TRANSPORT='
+run_botctl status
+assert_contains 'an empty transport was read as the default' \
+  "$BOTCTL_OUTPUT" 'notifications      invalid'
+# And the default transport reads on, or none of these cases prove anything. ABSENT is the
+# default, which is telegram — not invalid.
 seed_nexa_env canonical
 run_botctl status
 assert_contains 'the telegram transport was reported as invalid' \
   "$BOTCTL_OUTPUT" 'notifications      on'
+assert_not_contains 'an absent transport printed a refusal' \
+  "$BOTCTL_OUTPUT" 'other than `telegram` or `recording`'
 seed_nexa_env canonical
 
 test_case 'status: an EMPTY assignment is invalid, not the default'

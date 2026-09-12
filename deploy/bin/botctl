@@ -315,21 +315,43 @@ status_capabilities_untraced() {
         webhook='short-secret'
       fi
     fi
-    # The dispatcher flag is not the capability either. `NOTIFICATION_TRANSPORT=recording`
-    # keeps messages in MEMORY instead of sending them, so an installation with the flag on
-    # and that transport delivers nothing — and `configSchema` refuses the combination
-    # outright unless `NODE_ENV=development`, which a production installation is not. So the
-    # row is `invalid` for the same reason the webhook row is: reporting a capability as
-    # working for a configuration the next start refuses. NODE_ENV is read from the same
-    # resolved listing rather than assumed, because `recording` IS legitimate in development
-    # and a development installation must not be told its configuration is broken.
+    # The dispatcher flag is not the capability either, and the transport is checked by its
+    # whole VOCABULARY rather than one value. `NOTIFICATION_TRANSPORT` is
+    # `z.enum(['telegram', 'recording']).default('telegram')`, so:
+    #
+    #   telegram                      the capability exists
+    #   recording, NODE_ENV!=development   refused by a superRefine: it keeps messages in
+    #                                 MEMORY, so nothing is delivered, and the API will not
+    #                                 start at all
+    #   recording, NODE_ENV=development    legitimate; `recording` is what tests run on
+    #   anything else, `smtp` say     refused by the enum; the worker will not start
+    #   an EMPTY assignment           refused by the enum too, because an environment
+    #                                 variable is a string and '' is not a member
+    #   ABSENT                        the schema default applies, which is telegram
+    #
+    # The first version of this checked `recording` alone and left `smtp` reading
+    # `notifications on` — the same "closed one member of the family" mistake the secrets
+    # guard made one round earlier, made again in the round that recorded the lesson. NODE_ENV
+    # is read from the same resolved listing rather than assumed, because a development
+    # installation must not be told its configuration is broken.
     if [ "$key" = NOTIFICATION_DISPATCH_ENABLED ] && [ "$configured" = on ]; then
       local transport node_env
-      transport="$(nexa_listing_rendered "$resolved" NOTIFICATION_TRANSPORT)" || transport=''
       node_env="$(nexa_listing_rendered "$resolved" NODE_ENV)" || node_env=''
-      if [ "$transport" = recording ] && [ "$node_env" != development ]; then
-        configured='invalid'
-        notifications='recording-transport'
+      if nexa_listing_has "$resolved" NOTIFICATION_TRANSPORT; then
+        transport="$(nexa_listing_rendered "$resolved" NOTIFICATION_TRANSPORT)" || transport=''
+        case "$transport" in
+          telegram) : ;;
+          recording)
+            if [ "$node_env" != development ]; then
+              configured='invalid'
+              notifications='recording-transport'
+            fi
+            ;;
+          *)
+            configured='invalid'
+            notifications='unknown-transport'
+            ;;
+        esac
       fi
     fi
     [ "$key" != BACKUP_SCHEDULE_ENABLED ] || scheduled="$configured"
@@ -388,6 +410,13 @@ status_capabilities_untraced() {
     printf '\n  TELEGRAM_WEBHOOK_ENABLED is on but TELEGRAM_WEBHOOK_SECRET is shorter than the\n'
     printf '  16 characters the schema requires, so the API will REFUSE to start. Every\n'
     printf '  update is authenticated by that header; set it and run `botctl restart`.\n'
+  fi
+  if [ "$notifications" = unknown-transport ]; then
+    printf '\n  NOTIFICATION_DISPATCH_ENABLED is on and NOTIFICATION_TRANSPORT is set to\n'
+    printf '  something other than `telegram` or `recording`, which are the only two the\n'
+    printf '  schema accepts — an empty assignment included, because an environment variable\n'
+    printf '  is a string and the empty one is not a member. The API will REFUSE to start.\n'
+    printf '  Set NOTIFICATION_TRANSPORT=telegram and run `botctl restart`.\n'
   fi
   if [ "$notifications" = recording-transport ]; then
     printf '\n  NOTIFICATION_DISPATCH_ENABLED is on and NOTIFICATION_TRANSPORT is `recording`,\n'
