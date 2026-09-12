@@ -4316,6 +4316,44 @@ assert_not_contains 'an absent transport printed a refusal' \
   "$BOTCTL_OUTPUT" 'other than `telegram` or `recording`'
 seed_nexa_env canonical
 
+test_case 'status: the notifications row says it has not checked the Telegram endpoint'
+# `notifications on` with the telegram transport is the dispatcher and the transport NAME.
+# The schema checks two more things: TELEGRAM_API_BASE_URL is `z.string().url()`, and a
+# superRefine requires its parsed protocol to be https when NODE_ENV=production — the bot
+# token is in the path of every call, so an http base publishes the credential. Either
+# refusal stops the API starting, so the row can read `on` for a configuration that will
+# not boot. It is SAID rather than re-implemented, for the reason the monitor row gives
+# about its five cross-field rules: a shell reimplementation of an application rule
+# converges on a different wrong answer, and WHATWG URL parsing is not a shell job.
+seed_nexa_env canonical
+run_botctl status
+assert_contains 'the endpoint the row does not check was not named' \
+  "$BOTCTL_OUTPUT" 'TELEGRAM_API_BASE_URL to parse as a URL'
+assert_contains 'the https-in-production rule was not named' \
+  "$BOTCTL_OUTPUT" 'https when'
+assert_contains 'the row did not say what it is' \
+  "$BOTCTL_OUTPUT" 'is the dispatcher and the transport NAME'
+# An explicit telegram transport says the same thing.
+seed_nexa_env canonical
+append_resolved_env 'NOTIFICATION_TRANSPORT=telegram'
+run_botctl status
+assert_contains 'an explicit telegram transport lost the endpoint caveat' \
+  "$BOTCTL_OUTPUT" 'TELEGRAM_API_BASE_URL to parse as a URL'
+# And the caveat belongs to the telegram arm only. A dispatcher that is OFF delivers
+# nothing through any endpoint, and a transport the schema refuses has its own paragraph —
+# printing this one beside either would point an operator at the wrong key.
+seed_nexa_env canonical
+append_resolved_env 'NOTIFICATION_DISPATCH_ENABLED=false'
+run_botctl status
+assert_not_contains 'a disabled dispatcher printed the endpoint caveat' \
+  "$BOTCTL_OUTPUT" 'TELEGRAM_API_BASE_URL to parse as a URL'
+seed_nexa_env canonical
+append_resolved_env 'NOTIFICATION_TRANSPORT=smtp'
+run_botctl status
+assert_not_contains 'an out-of-vocabulary transport printed the endpoint caveat' \
+  "$BOTCTL_OUTPUT" 'TELEGRAM_API_BASE_URL to parse as a URL'
+seed_nexa_env canonical
+
 test_case 'status: an EMPTY assignment is invalid, not the default'
 # Zod applies a default to an ABSENT value, and an environment variable is a
 # string: `PANEL_MONITOR_ENABLED=` reaches the schema as '"'"''"'"' and both the enum and
@@ -4831,6 +4869,54 @@ assert_fails 'the rewritten file ends inside a quoted value' \
   nexa_compose_env_unterminated "${NEXA_CONFIG_DIR}/nexa.env"
 assert_equals 'an unrelated key was lost' 'https://admin.example.test' \
   "$(nexa_env_key WEB_ADMIN_ORIGINS)"
+
+test_case 'update: a value opened with any separator Compose accepts is still one value'
+# The escaped-delimiter case above, one separator over. Compose accepts `NAME=`,
+# `NAME =`, `NAME:` and `NAME :` in an `env_file`, and measured on v5.1.1 all four open a
+# quoted value that spans lines identically — so an interior `BUILD_COMMIT=` line is TEXT
+# in every one of them. The scanners opened a quoted region only on `NAME=`, which left
+# them out of sync with Compose for the other three: the interior line was classified as a
+# top-level assignment, and this automatic reconciliation DELETED it out of the middle of
+# the operator's value while reporting a successful cleanup of a key that never existed.
+#
+# A secret is the fixture on purpose. The real case is an operator who wrote
+# `TELEGRAM_WEBHOOK_SECRET = '...'`: every Telegram update is authenticated by that
+# header, so a silently shortened value breaks the webhook and nothing says why.
+for separator in ' =' ':' ' :'; do
+  seed_nexa_env canonical
+  printf '%s\n' "TELEGRAM_WEBHOOK_SECRET${separator}'abcdefghijklmnop" \
+    'BUILD_COMMIT=interior' "tail'" 'TAIL_KEY=ok' \
+    >>"${NEXA_CONFIG_DIR}/nexa.env"
+  run_botctl update vA
+  assert_equals "separator '${separator}': the interior line was deleted out of the secret" '1' \
+    "$(grep -c '^BUILD_COMMIT=interior' "${NEXA_CONFIG_DIR}/nexa.env")"
+  assert_equals "separator '${separator}': the closing line of the value was lost" '1' \
+    "$(grep -c "^tail'" "${NEXA_CONFIG_DIR}/nexa.env")"
+  assert_not_contains "separator '${separator}': a removal was reported for a key that is not a record" \
+    "$BOTCTL_OUTPUT" 'removed from nexa.env'
+  assert_fails "separator '${separator}': the rewritten file ends inside a quoted value" \
+    nexa_compose_env_unterminated "${NEXA_CONFIG_DIR}/nexa.env"
+  assert_equals "separator '${separator}': an unrelated key after the value was lost" 'ok' \
+    "$(nexa_env_key TAIL_KEY)"
+  # And `status` does not report the interior line as a setting either.
+  run_botctl status
+  assert_not_contains "separator '${separator}': an interior line was reported as a setting" \
+    "$BOTCTL_OUTPUT" 'This file sets BUILD_COMMIT'
+done
+# The negative case, or the rule above is just "never remove anything": a REAL top-level
+# obsolete assignment is still found and still removed, and a colon inside a VALUE — which
+# the keyring grammar always has — is not a separator.
+seed_nexa_env canonical
+printf '%s\n' 'BUILD_COMMIT=deadbeef' 'TAIL_KEY=ok' >>"${NEXA_CONFIG_DIR}/nexa.env"
+run_botctl update vA
+assert_contains 'a real top-level obsolete assignment stopped being removed' \
+  "$BOTCTL_OUTPUT" 'removed from nexa.env'
+assert_equals 'the real obsolete assignment survived' '' \
+  "$(grep -c '^BUILD_COMMIT=deadbeef' "${NEXA_CONFIG_DIR}/nexa.env" | tr -d '0')"
+assert_equals 'an unrelated key was lost' 'ok' "$(nexa_env_key TAIL_KEY)"
+assert_contains 'the keyring was damaged by the wider quote tracking' \
+  "$(cat "${NEXA_CONFIG_DIR}/nexa.env")" 'SECRETS_KEYS='
+seed_nexa_env canonical
 
 test_case 'update: says nothing and changes nothing when there is nothing to remove'
 seed_nexa_env canonical

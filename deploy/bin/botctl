@@ -293,6 +293,9 @@ status_capabilities_untraced() {
   fi
 
   local entry key label fallback vocab owner configured monitor='' notifications=''
+  # Which arm the transport took, kept for the endpoint caveat below. Not the raw value:
+  # this is a classification, and the raw value is never printed.
+  local transport_named=''
   for entry in "${settings[@]}"; do
     IFS='|' read -r key label fallback vocab owner <<<"$entry"
     configured="$(nexa_listing_boolean "$resolved" "$key" "$fallback" "$vocab")"
@@ -337,22 +340,31 @@ status_capabilities_untraced() {
     if [ "$key" = NOTIFICATION_DISPATCH_ENABLED ] && [ "$configured" = on ]; then
       local transport node_env
       node_env="$(nexa_listing_rendered "$resolved" NODE_ENV)" || node_env=''
+      # ABSENT takes the schema default, which IS telegram — so the endpoint caveat
+      # below applies to it too, and classifying only the present case would have left
+      # every ordinary installation without it.
+      transport_named=telegram
       if nexa_listing_has "$resolved" NOTIFICATION_TRANSPORT; then
         transport="$(nexa_listing_rendered "$resolved" NOTIFICATION_TRANSPORT)" || transport=''
         case "$transport" in
-          telegram) : ;;
+          telegram) transport_named=telegram ;;
           recording)
+            transport_named=recording
             if [ "$node_env" != development ]; then
               configured='invalid'
               notifications='recording-transport'
             fi
             ;;
           *)
+            transport_named=other
             configured='invalid'
             notifications='unknown-transport'
             ;;
         esac
       fi
+    fi
+    if [ "$key" = NOTIFICATION_DISPATCH_ENABLED ] && [ -z "$notifications" ]; then
+      notifications="$configured"
     fi
     [ "$key" != BACKUP_SCHEDULE_ENABLED ] || scheduled="$configured"
     [ "$key" != PANEL_MONITOR_ENABLED ] || monitor="$configured"
@@ -417,6 +429,26 @@ status_capabilities_untraced() {
     printf '  schema accepts — an empty assignment included, because an environment variable\n'
     printf '  is a string and the empty one is not a member. The API will REFUSE to start.\n'
     printf '  Set NOTIFICATION_TRANSPORT=telegram and run `botctl restart`.\n'
+  fi
+  # `notifications on` with the `telegram` transport is the dispatcher and the transport
+  # NAME, and it says so, because the schema checks two more things about the endpoint:
+  # `TELEGRAM_API_BASE_URL` is `z.string().url()`, and a `superRefine` requires its parsed
+  # protocol to be `https:` when `NODE_ENV=production` — a bot token travels in the path of
+  # every Telegram call, so an `http:` base publishes the credential. Either refusal stops
+  # the API starting, so the row can be `on` for a configuration that will not boot.
+  #
+  # SAID, not reimplemented. `z.string().url()` is WHATWG URL parsing plus Zod's own rules,
+  # and this branch has five rounds of evidence that a shell reimplementation of an
+  # application rule converges on a different wrong answer rather than the right one — the
+  # monitor row reaches the same conclusion about the five cross-field rules above, for the
+  # same reason, and names the same principled fix: ask the application. Naming the keys the
+  # operator must check is a true statement this script can make; a verdict on a URL is not.
+  if [ "$notifications" = on ] && [ "$transport_named" = telegram ]; then
+    printf '\n  `notifications on` is the dispatcher and the transport NAME. The schema also\n'
+    printf '  requires TELEGRAM_API_BASE_URL to parse as a URL, and to use https when\n'
+    printf '  NODE_ENV=production — the bot token is in the path of every call, so an http\n'
+    printf '  base publishes it. This row does not check either; the API does, at START. If\n'
+    printf '  a start fails, read `botctl logs api` after a recreate has been attempted.\n'
   fi
   if [ "$notifications" = recording-transport ]; then
     printf '\n  NOTIFICATION_DISPATCH_ENABLED is on and NOTIFICATION_TRANSPORT is `recording`,\n'

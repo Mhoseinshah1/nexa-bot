@@ -1048,11 +1048,21 @@ nexa_env_rewrite_untraced() {
           print line
           next
         }
-        if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) == 0) { print line; next }
-        name = substr(line, RSTART, RLENGTH)
-        sub(/^[ \t]*(export[ \t]+)?/, "", name)
-        sub(/=$/, "", name)
-        rest = substr(line, RSTART + RLENGTH)
+        # Every separator Compose accepts opens a value here, because this is the
+        # function that DELETES: a value opened with `NAME ='"'"'` or `NAME:'"'"'` and left
+        # untracked put its interior lines at top level, and a `BUILD_COMMIT=` among them
+        # was dropped out of the middle of somebody'"'"'s secret. Which key a record IS stays
+        # the strict `NAME=` shape, so the key reported obsolete is the key dropped and
+        # nothing new becomes droppable.
+        vi = record_value_index(line)
+        if (vi == 0) { print line; next }
+        name = ""
+        if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) > 0) {
+          name = substr(line, RSTART, RLENGTH)
+          sub(/^[ \t]*(export[ \t]+)?/, "", name)
+          sub(/=$/, "", name)
+        }
+        rest = substr(line, vi)
         sub(/^[ \t]+/, "", rest)
         first = substr(rest, 1, 1)
         if (first == dq || first == sq) {
@@ -1241,6 +1251,29 @@ nexa_reconcile_app_env() {
 #
 # Backslashes are counted only back to the START OF THE LINE, which is correct: a
 # backslash at the end of the previous line precedes a newline, not this delimiter.
+#
+# `record_value_index` is the second half of the same rule, and it is here for the same
+# reason: where a top-level record'"'"'s VALUE begins, for EVERY separator Compose accepts.
+# Measured on v5.1.1, all four of these open a quoted value that spans lines exactly as
+# `NAME=` does, and a record after the closing quote is read normally again:
+#
+#   NOTES='"'"'first        NOTES ='"'"'first       NOTES:'"'"'first       NOTES :'"'"'first
+#   BUILD_COMMIT=masked   (interior TEXT in every one of the four — not a record)
+#   last'"'"'
+#
+# The scanners used to open a quoted region only on `NAME=`, so a value opened with any
+# other separator left them OUT OF SYNC with Compose, and the interior line was classified
+# as a top-level assignment. That made `botctl update`'"'"'s automatic reconciliation delete a
+# line out of the middle of an operator'"'"'s `TELEGRAM_WEBHOOK_SECRET` and report a
+# successful cleanup of a key that never existed — reproduced end to end, measured against
+# `docker compose config` both before and after.
+#
+# Tracking is deliberately WIDER than reading. Which key a record belongs to is still
+# decided by the strict `NAME=` shape everywhere that decision is made, so nothing new is
+# read and nothing new is dropped; recognising more quoted regions can only classify FEWER
+# lines as top-level records, which is the safe direction for a function whose answer sends
+# a rewriter to delete. Teaching the readers the other separators is still
+# `UNK-DEPLOY-002`.
 NEXA_ENV_AWK_LIB='
 function unescaped_index(s, q,   i, n, b, j) {
   n = length(s)
@@ -1252,6 +1285,10 @@ function unescaped_index(s, q,   i, n, b, j) {
     if (b % 2 == 0) return i
   }
   return 0
+}
+function record_value_index(line) {
+  if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*[:=]/) == 0) return 0
+  return RSTART + RLENGTH
 }
 '
 
@@ -1325,10 +1362,13 @@ nexa_env_has_bare_record() {
         if (name == want) { found = 1; if (first_match == 0) first_match = NR }
         next
       }
-      # Otherwise track quoted regions exactly as the reader does, so an interior line
-      # is never mistaken for a record.
-      if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) == 0) next
-      rest = substr(line, RSTART + RLENGTH)
+      # Otherwise track quoted regions exactly as COMPOSE does, so an interior line is
+      # never mistaken for a record — for every separator, not only `=`. A value opened
+      # with `NAME ='"'"'` or `NAME:'"'"'` spans lines identically (measured), and a tracker that
+      # missed it reported the interior `BUILD_COMMIT` line as a bare record.
+      vi = record_value_index(line)
+      if (vi == 0) next
+      rest = substr(line, vi)
       sub(/^[ \t]+/, "", rest)
       first = substr(rest, 1, 1)
       if (first == dq || first == sq) {
@@ -1482,12 +1522,21 @@ nexa_compose_env_value() {
         acc = acc line "\\n"
         next
       }
-      if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) == 0) next
-      name = substr(line, RSTART, RLENGTH)
-      sub(/^[ \t]*(export[ \t]+)?/, "", name)
-      sub(/=$/, "", name)
-      mine = (name == want)
-      rest = substr(line, RSTART + RLENGTH)
+      # Quote tracking takes EVERY separator Compose accepts; the key this record
+      # belongs to is still the strict `NAME=` shape alone. Those are different
+      # questions: reading `NAME:value` here would change what `secrets migrate-config`
+      # calls canonical, which `nexa_env_has_unreadable_record` refuses instead and
+      # `UNK-DEPLOY-002` defers. Not tracking it corrupted a value.
+      vi = record_value_index(line)
+      if (vi == 0) next
+      mine = 0
+      if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) > 0) {
+        name = substr(line, RSTART, RLENGTH)
+        sub(/^[ \t]*(export[ \t]+)?/, "", name)
+        sub(/=$/, "", name)
+        mine = (name == want)
+      }
+      rest = substr(line, vi)
       sub(/^[ \t]+/, "", rest)
       first = substr(rest, 1, 1)
       if (first == dq || first == sq) {
@@ -1539,8 +1588,10 @@ nexa_compose_env_unterminated() {
         if (unescaped_index(line, quote) > 0) { inq = 0 }
         next
       }
-      if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) == 0) next
-      rest = substr(line, RSTART + RLENGTH)
+      # The same separators as the rewriter, or this stops being its oracle.
+      vi = record_value_index(line)
+      if (vi == 0) next
+      rest = substr(line, vi)
       sub(/^[ \t]+/, "", rest)
       first = substr(rest, 1, 1)
       if (first != dq && first != sq) next

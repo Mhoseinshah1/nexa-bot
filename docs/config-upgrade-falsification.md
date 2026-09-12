@@ -1561,3 +1561,83 @@ It shares its named test with H-112, and that is recorded rather than papered ov
 second test name: the test is the row's contract, and the two mutations remove different arms
 of the one `case` that implements it. A reader who wants to know which arm a failure names has
 the assertion text, which says `smtp` or `recording` explicitly.
+
+## Round twenty-three — the separator the quote trackers did not know about
+
+Two findings from the independent review of `dec420d`. The first is the only defect on this
+branch that **destroys an operator's data**, and it was introduced by this PR.
+
+`botctl update` gained an automatic reconciliation that removes the three obsolete
+`BUILD_*` keys from `nexa.env`. Everything in it was written around one rule — a line that
+looks like an assignment may be TEXT inside another variable's multiline value, and
+deleting it would corrupt that value — and the rule was enforced by a quote tracker that
+recognised a value as opening only on `NAME=`. Measured on Compose v5.1.1, all four of
+these open a quoted value that spans lines identically, and a record after the closing
+quote is read normally again:
+
+```
+TELEGRAM_WEBHOOK_SECRET='first      TELEGRAM_WEBHOOK_SECRET ='first
+TELEGRAM_WEBHOOK_SECRET:'first      TELEGRAM_WEBHOOK_SECRET :'first
+BUILD_COMMIT=masked                      <- interior TEXT in every one of the four
+tail'
+TAIL_KEY=ok                              <- a record again, in every one of the four
+```
+
+So for three of the four separators the tracker was out of sync with Compose, the interior
+line was classified as a top-level obsolete assignment, and the rewriter deleted it.
+Reproduced end to end before the fix: `docker compose config` reported
+`TELEGRAM_WEBHOOK_SECRET` as a three-line value and **no `BUILD_COMMIT` variable at all**;
+after `nexa_env_rewrite`, the same file reported a two-line value. The deleted line was
+part of a secret. Every Telegram update is authenticated by that header, so the webhook
+stops working and the update that broke it printed `removed from nexa.env: BUILD_COMMIT` —
+a successful cleanup of a key that never existed.
+
+The fix is one shared `record_value_index` in `NEXA_ENV_AWK_LIB`, used by the four programs
+that must agree with Compose about where a value ends: the value reader, the bare-record
+detector, the rewriter, and the rewriter's own oracle — which had to move with it or stop
+being an oracle. Two properties make this narrow rather than a rewrite of the grammar:
+
+- **Tracking is wider than reading.** Which key a record IS stays the strict `NAME=` shape
+  at every point that decision is made, so nothing new is read and nothing new is dropped.
+  `UNK-DEPLOY-002` still defers teaching the READERS the other separators, and a colon
+  record is still not reported as obsolete.
+- **The change can only reduce deletions.** Recognising more quoted regions classifies
+  FEWER lines as top-level records. For a function whose answer sends a rewriter to delete,
+  that is the only safe direction for an error to point.
+
+`nexa_env_has_unreadable_record` is deliberately NOT changed. Its comment already argues
+that treating these shapes as opening no quoted region can only make its answer yes too
+readily, and its answer is a refusal, which writes nothing. Widening it would introduce the
+possibility of a false negative into the one function whose false negative is a write.
+
+The second finding is the same class as round twenty-two's, one field further out:
+`notifications on` with the `telegram` transport was a claim about an endpoint nobody had
+looked at. `TELEGRAM_API_BASE_URL` is `z.string().url()` and must parse to the `https:`
+protocol under `NODE_ENV=production`, because the bot token is in the path of every
+Telegram call. Either refusal stops the API starting. This one is **said, not computed** —
+the same conclusion the monitor row reached about its five cross-field rules, for the same
+reason: a shell reimplementation of an application rule converges on a different wrong
+answer, and WHATWG URL parsing is not a shell job. Naming the keys an operator must check
+is a true statement this script can make; a verdict on a URL is not.
+
+| #     | Rule                                                               | Mutation                                                       | Named test                                                                                      | Result |
+| ----- | ------------------------------------------------------------------ | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------ |
+| H-115 | The quote trackers open a value on every separator Compose accepts | `nexa-lib.sh`: restrict `record_value_index` back to `=` alone | `botctl.test.sh` › update: a value opened with any separator Compose accepts is still one value | KILLED |
+| H-116 | The notifications row names the endpoint rules it has NOT checked  | `botctl`: delete the endpoint caveat block                     | `botctl.test.sh` › status: the notifications row says it has not checked the Telegram endpoint  | KILLED |
+
+H-115 fails 6 of 233 deploy checks — two per separator, the deleted interior line and the
+lost closing line — in its own worktree, with `git status --porcelain` on the primary
+checkout showing only the three files this round edits. Its negative case is the one that
+makes the rule mean something rather than "never remove anything": a REAL top-level
+`BUILD_COMMIT=deadbeef` is still found and still removed, an unrelated key after the value
+survives, and `SECRETS_KEYS=k1:abc` — a colon inside a VALUE, which the keyring grammar
+always has — is untouched. H-116 has three negative cases: a disabled dispatcher and an
+out-of-vocabulary transport must NOT print the endpoint caveat, because each has its own
+paragraph and printing this one beside either points the operator at the wrong key, and an
+ABSENT transport must print it, because the schema default is `telegram`.
+
+One note on scope, since this round is the one that closes the branch. Both findings were
+classified before being acted on: the first is a blocker because it writes, and it was
+fixed. The second is not a blocker — it prints — and it was fixed anyway because the
+remedy is a paragraph and the alternative is shipping a known-false claim in the PR whose
+subject is `botctl status` telling the truth. Nothing else from this review was acted on.
