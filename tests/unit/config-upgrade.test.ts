@@ -970,6 +970,21 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
     expect(tail, 'the last byte can reach the trace').toContain("tr -dc '\\n'");
     expect(tail, 'the byte is turned back into text somewhere').not.toContain('od ');
     expect(tail, 'the last byte is assigned to a variable').not.toMatch(/\blast=/);
+    // And the acceptance probe that closes UNK-DEPLOY-001 has to be RUNNABLE by the operator
+    // the rest of that checklist assumes. `/etc/nexa` is installed 0700 and root-owned, so a
+    // plain `grep` fails with permission denied — and step 1 failing for that reason would
+    // stop the probe before it tested recreation at all.
+    const acceptance = readFileSync(join(__dirname, '../../docs/vps-acceptance.md'), 'utf8');
+    const probes = acceptance
+      .split('\n')
+      .filter((l) => /grep -n '\^LOG_LEVEL='/.test(l))
+      .filter((l) => !l.includes('docker inspect'));
+    expect(probes.length, 'step 12c no longer reads LOG_LEVEL out of the file').toBe(2);
+    for (const probe of probes) {
+      expect(probe, 'a file-reading probe in step 12c is not run with sudo').toMatch(
+        /^sudo grep -n/,
+      );
+    }
   });
 
   it('reads what the application receives, and refuses to freeze a substitution', () => {

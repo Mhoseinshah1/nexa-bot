@@ -1344,6 +1344,62 @@ nexa_env_has_bare_record() {
   ' "$file"
 }
 
+# Is there a top-level COLON-form record for this key — `SECRETS_KEYS:<value>`?
+#
+# A REFUSAL detector, and only that. Measured on Compose v5.1.1, a colon record is
+# effective and the LAST record for a key wins:
+#
+#   SECRETS_KEYS:realkeyring                  ->  realkeyring
+#   SECRETS_KEYS:realkeyring                  ->  staleappended   the APPENDED one wins
+#   SECRETS_KEYS=staleappended
+#   SECRETS_KEYS: value / SECRETS_KEYS :value / export SECRETS_KEYS:value   all effective
+#
+# `nexa_compose_env_value` reads only `=`, so on a file whose canonical keyring is written
+# in the colon form, `botctl secrets migrate-config` saw no SECRETS_KEYS, concluded the host
+# was legacy, and appended `SECRETS_KEYS=<the old SECRETS_KEK>` AFTER it — which Compose then
+# prefers. The restart it advises would leave every row encrypted under the real keyring
+# unreadable, while the command reported the key material unchanged.
+#
+# Deliberately NOT wired into `nexa_obsolete_app_env_keys`: reporting a key there sends the
+# REWRITER to remove it, and teaching the rewriter a second separator is the change
+# UNK-DEPLOY-002 defers to its own commit and its own adversarial round. Refusing is safe
+# without that, because a refusal writes nothing.
+#
+# A scanner, for the same reason the others are: a `SECRETS_KEYS:` line inside another
+# variable's multiline value is text. A colon record is treated as opening no quoted region,
+# which can only make this answer yes too readily — and a false yes is a refusal, never a
+# write.
+nexa_env_has_colon_record() {
+  local file="$1" key="$2"
+  [ -r "$file" ] || return 1
+  awk -v want="$key" -v sq="'" -v dq='"' "$NEXA_ENV_AWK_LIB"'
+    BEGIN { found = 0; inq = 0 }
+    {
+      line = $0
+      if (inq) {
+        if (unescaped_index(line, quote) > 0) inq = 0
+        next
+      }
+      if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*:/) > 0) {
+        name = substr(line, RSTART, RLENGTH)
+        sub(/^[ \t]*(export[ \t]+)?/, "", name)
+        sub(/[ \t]*:$/, "", name)
+        if (name == want) found = 1
+        next
+      }
+      if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) == 0) next
+      rest = substr(line, RSTART + RLENGTH)
+      sub(/^[ \t]+/, "", rest)
+      first = substr(rest, 1, 1)
+      if (first == dq || first == sq) {
+        quote = first
+        if (unescaped_index(substr(rest, 2), quote) == 0) inq = 1
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$file"
+}
+
 # One assignment out of a file Docker Compose reads, as the file's TEXT spells it after
 # Compose's quoting and comment rules — and deliberately NOT what the container receives.
 #

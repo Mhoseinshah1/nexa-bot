@@ -292,14 +292,19 @@ to detect: the step would read as refuting the deduction whenever it was run, on
 where nothing was wrong. That is why step 1 exists — it proves the key is there before
 anything is deduced from the absence of a value.
 
+Every command here is `sudo`, the two `grep`s included: `/etc/nexa` is installed `0700` and
+root-owned, and `nexa.env` is a secret file, so a plain `grep` fails with permission denied
+for the non-root operator the rest of this checklist assumes — and step 1 failing for that
+reason would stop the probe before it tested anything.
+
 ```bash
 # 1. The key this step edits must already be in the file. If this prints
 #    nothing, STOP: nothing below proves anything either way.
-grep -n '^LOG_LEVEL=' /etc/nexa/nexa.env
+sudo grep -n '^LOG_LEVEL=' /etc/nexa/nexa.env
 
 # 2. Change it, and confirm the change landed in the FILE before restarting.
 sudo sed -i 's/^LOG_LEVEL=.*/LOG_LEVEL=debug/' /etc/nexa/nexa.env
-grep -n '^LOG_LEVEL=' /etc/nexa/nexa.env
+sudo grep -n '^LOG_LEVEL=' /etc/nexa/nexa.env
 
 # 3. Restart, and read the value back out of the container.
 sudo botctl restart

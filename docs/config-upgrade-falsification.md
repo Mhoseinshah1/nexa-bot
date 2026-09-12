@@ -1307,10 +1307,10 @@ U-70 scoped the API-refusal paragraph to AFTER a failed recreate, because an API
 running has nothing in its log about a configuration it was not created with. The monitor
 paragraph, written after that fix, sent the operator to `botctl logs monitor` unqualified.
 
-| #     | Rule                                                        | Mutation                                                    | Named test                                                                                            | Result |
-| ----- | ----------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------ |
-| H-104 | `migrate-config` refuses a BARE record for any key it reads | `botctl`: empty the key list so the refusal loop never runs | `botctl.test.sh` › secrets migrate-config: a BARE record for a key it reads is refused, not converted | KILLED |
-| H-105 | The monitor-log advice is scoped to a failed recreate       | `botctl`: back to "names the one that failed"               | `botctl.test.sh` › status: `panel monitor on` is reported as the flag, not as a verdict               | KILLED |
+| #     | Rule                                                        | Mutation                                                    | Named test                                                                                         | Result |
+| ----- | ----------------------------------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------ |
+| H-104 | `migrate-config` refuses a BARE record for any key it reads | `botctl`: empty the key list so the refusal loop never runs | `botctl.test.sh` › secrets migrate-config: a record shape it cannot read is refused, not converted | KILLED |
+| H-105 | The monitor-log advice is scoped to a failed recreate       | `botctl`: back to "names the one that failed"               | `botctl.test.sh` › status: `panel monitor on` is reported as the flag, not as a verdict            | KILLED |
 
 Counts, each in its own worktree: H-104 fails 5 of 230, H-105 3 of 230. H-104's mutation
 keeps the `nexa_die` call reachable in the source so the removal cannot be mistaken for a
@@ -1346,3 +1346,49 @@ H-106 fails 1 of 42 unit checks; restore confirmed by `cmp` against a snapshot t
 the mutation, and `grep` confirmed the mutated text is gone. It is pinned at the unit level
 for the same reason as H-93: no deploy case can observe a shell trace of this function, and
 the honest statement is that the rule is a source-level one.
+
+### Round nineteen — the other shape the secrets guard did not cover, and a probe a non-root operator cannot run
+
+The independent review of `36bfc4f` raised two, both confirmed by measurement.
+
+**The bare-record refusal covered one of the two shapes the scanner cannot read.** Measured
+on Compose v5.1.1, a colon record is effective, and the LAST record for a key wins:
+
+```
+SECRETS_KEYS:realkeyring                     ->  realkeyring
+SECRETS_KEYS:realkeyring                     ->  staleappended    the APPENDED one wins
+SECRETS_KEYS=staleappended
+SECRETS_KEYS: v / SECRETS_KEYS :v / export SECRETS_KEYS:v     all effective
+SECRETS_KEYS:v  with no final newline                         still effective
+```
+
+So on a host whose canonical keyring is written in the colon form, `secrets migrate-config`
+read no `SECRETS_KEYS`, concluded the installation was legacy, and APPENDED
+`SECRETS_KEYS=<the old SECRETS_KEK>` — which Compose then prefers. The restart it advises
+would leave every row encrypted under the real keyring unreadable, while the command
+reported the key material unchanged. That is worse than the bare-record case the round
+before, and it is the same lesson one shape over.
+
+The detector added for it is **refusal-only**, and deliberately not wired into
+`nexa_obsolete_app_env_keys`: reporting a key there sends the REWRITER to remove it, and
+teaching the rewriter a second separator is the change `UNK-DEPLOY-002` defers to its own
+commit. Refusing is safe without that, because a refusal writes nothing — and a false yes
+can therefore only cost an operator one hand-edit, never a key.
+
+**And step 12c still could not be run by the operator it is written for.** `/etc/nexa` is
+installed `0700` and root-owned, so the two plain `grep`s fail with permission denied for a
+non-root operator — and step 1 failing for THAT reason stops the probe before it tests
+recreation. The same shape as the defect one round earlier: a step that cannot reach its own
+conclusion, failing in a way that reads like a result.
+
+| #     | Rule                                                           | Mutation                                                   | Named test                                                                                                   | Result |
+| ----- | -------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------ |
+| H-107 | `migrate-config` refuses a COLON record for any key it reads   | `botctl`: replace the colon check with an always-true test | `botctl.test.sh` › secrets migrate-config: a record shape it cannot read is refused, not converted           | KILLED |
+| H-108 | Step 12c's file-reading probes are runnable as a non-root user | `docs/vps-acceptance.md`: drop `sudo` from both `grep`s    | `config-upgrade.test.ts` › decides a bare record by what Compose accepts, and never prints the byte it reads | KILLED |
+
+H-107 fails 2 of 230 deploy checks, in its own worktree, with the primary checkout
+untouched. H-108 fails 1 of 42 unit checks, restore confirmed by `cmp` against a snapshot.
+Two negative cases guard the colon detector against over-firing, because `id:key` is the
+canonical keyring grammar and a detector that fired on a colon inside a VALUE would refuse
+every well-formed host there is: a colon in a value is not a record, and neither is a colon
+line inside another variable's multiline value.

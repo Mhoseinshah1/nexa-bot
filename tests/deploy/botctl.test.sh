@@ -3018,7 +3018,7 @@ assert_equals 'the file was changed by a refused conversion' "$before" \
 assert_not_contains 'the refusal printed key material' "$BOTCTL_OUTPUT" 'VAULT_KEK}'
 seed_nexa_env canonical
 
-test_case 'secrets migrate-config: a BARE record for a key it reads is refused, not converted'
+test_case 'secrets migrate-config: a record shape it cannot read is refused, not converted'
 # This command reads the FILE and writes the FILE, and a bare record is the one shape
 # whose value is not in the file. Measured on Compose v5.1.1, with `SECRETS_KEK=old`
 # followed by a bare `SECRETS_KEK` and that variable exported:
@@ -3052,7 +3052,32 @@ run_botctl secrets migrate-config || true
 assert_contains 'a bare SECRETS_KEYS record was converted over' "$BOTCTL_OUTPUT" 'BARE record'
 assert_equals 'the file was changed by a refused conversion' "$before" \
   "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
-# A file with no bare record still converts: the refusal is the shape, not the command.
+# The COLON shape is refused too, and it is the worse case: measured on v5.1.1,
+# `SECRETS_KEYS:realkeyring` is effective and a LATER `SECRETS_KEYS=...` wins, so this
+# command read no SECRETS_KEYS, called the host legacy, and appended the old SECRETS_KEK as
+# the canonical keyring — which Compose then prefers over the keyring the application is
+# actually running with. The restart it advises would make every existing row unreadable.
+seed_nexa_env empty
+append_resolved_env 'SECRETS_KEK=b2xkLWtleS1tYXRlcmlhbC1uZXZlci1wcmludGVk' 'SECRETS_KEK_ID=install-1'
+printf 'SECRETS_KEYS:aWQ6cmVhbC1rZXlyaW5n\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl secrets migrate-config || true
+assert_contains 'a colon-form keyring was converted over' "$BOTCTL_OUTPUT" 'COLON form'
+assert_equals 'the file was changed by a refused conversion' "$before" \
+  "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_not_contains 'the refusal printed key material' \
+  "$BOTCTL_OUTPUT" 'aWQ6cmVhbC1rZXlyaW5n'
+# And a colon inside a VALUE is not a colon RECORD: `id:key` is the canonical keyring
+# grammar, so a detector that fired on it would refuse every well-formed host there is.
+seed_nexa_env empty
+append_resolved_env 'SECRETS_KEK=b2xkLWtleS1tYXRlcmlhbC1uZXZlci1wcmludGVk' 'SECRETS_KEK_ID=install-1'
+assert_fails 'a colon inside a value was read as a colon record' \
+  nexa_env_has_colon_record "${NEXA_CONFIG_DIR}/nexa.env" SECRETS_KEK
+# Nor is a colon line inside another variable's multiline value.
+printf "NOTE='line one\nSECRETS_KEYS:interior\nline three'\n" >>"${NEXA_CONFIG_DIR}/nexa.env"
+assert_fails 'an interior colon line was read as a record' \
+  nexa_env_has_colon_record "${NEXA_CONFIG_DIR}/nexa.env" SECRETS_KEYS
+# A file with neither shape still converts: the refusal is the shape, not the command.
 seed_nexa_env empty
 append_resolved_env 'SECRETS_KEK=b2xkLWtleS1tYXRlcmlhbC1uZXZlci1wcmludGVk' 'SECRETS_KEK_ID=install-1'
 run_botctl secrets migrate-config

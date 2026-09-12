@@ -848,13 +848,17 @@ survive the event meant to close it. The check names ONE key rather than dumping
 `.Config.Env`, which holds `DATABASE_URL`, `SECRETS_KEYS` and the backup bot token:
 
 ```
-grep -n '^LOG_LEVEL=' /etc/nexa/nexa.env                      # must print LOG_LEVEL=info
+sudo grep -n '^LOG_LEVEL=' /etc/nexa/nexa.env                 # must print LOG_LEVEL=info
 sudo sed -i 's/^LOG_LEVEL=.*/LOG_LEVEL=debug/' /etc/nexa/nexa.env
-grep -n '^LOG_LEVEL=' /etc/nexa/nexa.env                      # must print LOG_LEVEL=debug
+sudo grep -n '^LOG_LEVEL=' /etc/nexa/nexa.env                 # must print LOG_LEVEL=debug
 sudo botctl restart
 sudo docker inspect nexa-api-1 \
   --format '{{range .Config.Env}}{{println .}}{{end}}' | grep '^LOG_LEVEL='
 ```
+
+The `grep`s are `sudo` too: `/etc/nexa` is installed `0700` and root-owned, so a plain one
+fails for a non-root operator — and step 1 failing for THAT reason would stop the probe
+before it tested anything.
 
 **The key is `LOG_LEVEL` because `deploy/nexa.env.template` writes it, and the first draft
 of that step got this wrong in a way that would have reopened this entry on a healthy
@@ -904,7 +908,23 @@ recognises a colon separator. Three consequences, all measured through the real 
 3. The capabilities section would miss a colon-form value for any setting, reading the
    schema default instead of what the container receives.
 
-**Why this is recorded rather than fixed.** The fix is a second separator in three
+**One consequence IS fixed, because refusing needs no new parser.** `SECRETS_KEYS` written
+in the colon form made `botctl secrets migrate-config` dangerous rather than merely
+incomplete: it read no `SECRETS_KEYS`, concluded the installation was legacy, and appended
+`SECRETS_KEYS=<the old SECRETS_KEK>` — and the LAST record for a key wins, measured:
+
+```
+nexa.env        SECRETS_KEYS:realkeyring
+                SECRETS_KEYS=staleappended      ->  container receives `staleappended`
+```
+
+So the restart that command advises would have left every row encrypted under the real
+keyring unreadable. `nexa_env_has_colon_record` now refuses that shape for the four keys
+`migrate-config` reads. It is a REFUSAL detector and is deliberately not wired into
+`nexa_obsolete_app_env_keys`: reporting a key there sends the rewriter to remove it, which
+is the change this entry defers.
+
+**Why the rest is recorded rather than fixed.** The fix is a second separator in three
 scanners, one of which is the awk that in round twelve suppressed every line after an
 unterminated quote and nearly installed a `nexa.env` with no encryption key. That edit
 belongs in its own commit with its own adversarial round and its own mutation set, not

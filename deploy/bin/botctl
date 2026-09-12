@@ -1549,6 +1549,14 @@ cmd_secrets_migrate_config_untraced() {
   for bare_key in SECRETS_KEYS SECRETS_ACTIVE_KEY_ID SECRETS_KEK SECRETS_KEK_ID; do
     ! nexa_env_has_bare_record "$file" "$bare_key" ||
       nexa_die "${file} carries ${bare_key} as a BARE record — the name with no \`=\` — so Compose takes its value from the environment running compose, and this file does not say what the application receives. Give it a literal assignment, or remove the line, before converting; nothing was changed."
+    # The COLON shape, for the same reason and with a worse ending. Measured on v5.1.1,
+    # `SECRETS_KEYS:<keyring>` is effective and the LAST record for a key wins — so on a host
+    # whose canonical keyring is written that way this command saw no SECRETS_KEYS, concluded
+    # the installation was legacy, and APPENDED `SECRETS_KEYS=<the old SECRETS_KEK>` after it.
+    # Compose then prefers the appended one, and the restart this command advises would make
+    # every row encrypted under the real keyring unreadable.
+    ! nexa_env_has_colon_record "$file" "$bare_key" ||
+      nexa_die "${file} carries ${bare_key} in the COLON form (\`${bare_key}:<value>\`), which Compose accepts and this conversion cannot read, so it would append an assignment Compose then prefers over the value the application is running with. Rewrite that line as \`${bare_key}=<value>\` first; nothing was changed."
   done
 
   # Already canonical? Say so and stop. Rerunning must be free — an operator who
