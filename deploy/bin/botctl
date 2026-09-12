@@ -202,6 +202,17 @@ cmd_version() {
 # The BACKUP destination is reported by PRESENCE only: one of its two keys is a
 # bot token and does not belong in an output an operator pastes into a ticket.
 status_capabilities() {
+  # A SUBSHELL with tracing off, because the resolved listing this reads holds
+  # DATABASE_URL, the keyring and the backup bot token — and under `bash -x` the
+  # assignment that captures it, and every later expansion of it, would print all of
+  # them into a trace an operator pastes into a ticket. The presence-only readers
+  # keep values out of the OUTPUT; this keeps them out of the TRACE. A subshell
+  # rather than a save-and-restore pair: this body has several early returns, and a
+  # restore one of them skipped would leave tracing off for the rest of the command.
+  ( set +x; status_capabilities_untraced )
+}
+
+status_capabilities_untraced() {
   local file="${NEXA_CONFIG_DIR}/nexa.env"
   local resolved
   # COMPOSE resolves it, not this script. Five review rounds were spent reimplementing
@@ -418,6 +429,17 @@ status_capabilities() {
 # Nothing here prints a key, a ciphertext or a token. The application's
 # `--json` summary carries counts and booleans and nothing else.
 status_secrets() {
+  # A SUBSHELL with tracing off, because the resolved listing this reads holds
+  # DATABASE_URL, the keyring and the backup bot token — and under `bash -x` the
+  # assignment that captures it, and every later expansion of it, would print all of
+  # them into a trace an operator pastes into a ticket. The presence-only readers
+  # keep values out of the OUTPUT; this keeps them out of the TRACE. A subshell
+  # rather than a save-and-restore pair: this body has several early returns, and a
+  # restore one of them skipped would leave tracing off for the rest of the command.
+  ( set +x; status_secrets_untraced )
+}
+
+status_secrets_untraced() {
   local file="${NEXA_CONFIG_DIR}/nexa.env"
   printf '\nsecrets:\n'
   [ -r "$file" ] || {
@@ -475,10 +497,16 @@ status_secrets() {
   printf '  configuration  %s\n' "$format"
   printf '  accept v1      %s  (%s)\n' "$accept" "$accept_source"
   if [ "$accept" = invalid ]; then
+    # About a container CREATED from this configuration, not about one already running:
+    # an API started before the edit keeps its creation-time environment and goes on
+    # accepting or refusing v1 exactly as it was, which is the same distinction the
+    # capabilities refusal draws. Claiming no acceptance state is in force would
+    # contradict the readiness row this command prints below.
     printf '\n'
     printf '  SECRETS_ACCEPT_V1 is set to something other than `true` or `false`, which the\n'
-    printf '  schema refuses — the API will not start until it is one of those two. Until\n'
-    printf '  then no acceptance state is in force, so nothing below describes what is read.\n'
+    printf '  schema refuses, so no API can be CREATED or RECREATED from this configuration —\n'
+    printf '  the next `botctl restart` or `botctl update` will fail. An API already running\n'
+    printf '  keeps the acceptance it was created with, and the rows below are read by it.\n'
   fi
 
   # The rows. One bounded read through the application; a stack that is down

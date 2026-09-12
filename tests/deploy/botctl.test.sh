@@ -2998,6 +2998,26 @@ assert_equals 'the file was changed by a refused conversion' "$before" \
 assert_not_contains 'the refusal printed key material' "$BOTCTL_OUTPUT" 'VAULT_KEK}'
 seed_nexa_env canonical
 
+test_case 'status: a traced run prints no resolved value'
+# `bash -x` is what an operator reaches for when `botctl status` misbehaves, and the
+# resolved listing holds DATABASE_URL, the keyring and the backup bot token. Capturing
+# it into a variable and expanding it as an argument put every one of them in the
+# trace — in a command whose output is deliberately safe to paste into a ticket. Both
+# sections run with tracing off now, and this asserts that on the trace itself.
+seed_nexa_env canonical
+fake_set compose_env ''
+fake_set compose_env_json '{"DATABASE_URL":"postgres://nexa:tracepw@postgres:5432/nexa","REDIS_URL":"r","SECRETS_KEYS":"k1:TRACEKEYMATERIAL","SECRETS_ACTIVE_KEY_ID":"k1","BACKUP_TELEGRAM_CHAT_ID":"-1001","BACKUP_TELEGRAM_BOT_TOKEN":"777:TRACEBOTTOKEN"}'
+trace="$(bash -x "$BOTCTL" status 2>&1 || true)"
+assert_not_contains 'a traced run printed the keyring' "$trace" 'TRACEKEYMATERIAL'
+assert_not_contains 'a traced run printed the bot token' "$trace" 'TRACEBOTTOKEN'
+assert_not_contains 'a traced run printed the database password' "$trace" 'tracepw'
+# And the trace is still a trace: the surrounding command IS traced, or this would
+# pass against a botctl that simply printed nothing.
+assert_contains 'nothing was traced at all' "$trace" '+ '
+assert_contains 'the status output itself is missing' "$trace" 'capabilities'
+fake_set compose_env_json ''
+seed_nexa_env canonical
+
 test_case 'status: an explicit SECRETS_ACCEPT_V1 outside the enum is invalid, not a default'
 # `SECRETS_ACCEPT_V1` is z.enum(['true', 'false']), so `yes` — a spelling several other
 # settings in this very section accept — and a value with a trailing newline are
@@ -3012,6 +3032,12 @@ out="$(status_secrets_probe)"
 assert_contains 'a value outside the enum was reported as a derived default' \
   "$out" 'accept v1      invalid'
 assert_contains 'the reason was not named' "$out" 'neither true nor false'
+# And the claim is about what can be CREATED: an API started before the edit keeps the
+# acceptance it was created with, and the rows below are read by it.
+assert_contains 'the refusal claimed no acceptance state is in force anywhere' \
+  "$out" 'keeps the acceptance it was created with'
+assert_not_contains 'the refusal over-claimed about the running API' \
+  "$out" 'no acceptance state is in force'
 assert_not_contains 'an unreachable acceptance state was presented as in force' \
   "$out" 'accept v1      no  (default)'
 # A value with a trailing newline is the same case: the rendering is `false\\n`, which

@@ -840,8 +840,17 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
     );
     // And the capability section gets its values from compose, not from the file.
     const botctlSrc = readFileSync(join(__dirname, '../../deploy/bin/botctl'), 'utf8');
-    const section = /status_capabilities\(\) \{[\s\S]*?\n\}/.exec(botctlSrc)?.[0] ?? '';
-    expect(section, 'status_capabilities is gone').not.toBe('');
+    // The BODY is `status_capabilities_untraced`. The exported name is a thin wrapper
+    // that runs it in a SUBSHELL with tracing off, because the resolved listing holds
+    // DATABASE_URL, the keyring and the backup bot token — and under `bash -x` the
+    // capture and every later expansion of it would print all of them into a trace.
+    const capWrapper = /status_capabilities\(\) \{[\s\S]*?\n\}/.exec(botctlSrc)?.[0] ?? '';
+    expect(capWrapper, 'status_capabilities is gone').not.toBe('');
+    expect(capWrapper, 'the capability section runs in the traced shell').toContain(
+      '( set +x; status_capabilities_untraced )',
+    );
+    const section = /status_capabilities_untraced\(\) \{[\s\S]*?\n\}/.exec(botctlSrc)?.[0] ?? '';
+    expect(section, 'status_capabilities_untraced is gone').not.toBe('');
     expect(section, 'the section does not ask compose to resolve the configuration').toContain(
       'nexa_compose_resolved_env api',
     );
@@ -893,8 +902,16 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
     // never meant to hold — so it refuses rather than choosing. The cost of choosing
     // wrong there is an installation that cannot decrypt anything.
     const botctl = readFileSync(join(__dirname, '../../deploy/bin/botctl'), 'utf8');
-    const secrets = /status_secrets\(\) \{[\s\S]*?\n\}/.exec(botctl)?.[0] ?? '';
-    expect(secrets, 'status_secrets is gone').not.toBe('');
+    // Same split as the capability section, and for the same reason: the exported name
+    // is a wrapper that runs the body with tracing off, so the listing cannot reach a
+    // `bash -x` trace an operator pastes into a ticket.
+    const secWrapper = /status_secrets\(\) \{[\s\S]*?\n\}/.exec(botctl)?.[0] ?? '';
+    expect(secWrapper, 'status_secrets is gone').not.toBe('');
+    expect(secWrapper, 'the secrets section runs in the traced shell').toContain(
+      '( set +x; status_secrets_untraced )',
+    );
+    const secrets = /status_secrets_untraced\(\) \{[\s\S]*?\n\}/.exec(botctl)?.[0] ?? '';
+    expect(secrets, 'status_secrets_untraced is gone').not.toBe('');
     expect(secrets, 'the secrets section does not ask compose').toContain(
       'nexa_compose_resolved_env api',
     );

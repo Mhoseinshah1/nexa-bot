@@ -856,3 +856,46 @@ response.
 | #    | Rule                                                                       | Mutation                                               | Named test                                                                                          | Result |
 | ---- | -------------------------------------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------- | ------ |
 | H-78 | A present `SECRETS_ACCEPT_V1` outside the enum is `invalid`, not a default | `botctl`: the wildcard arm back to the derived default | `botctl.test.sh` › status: an explicit SECRETS_ACCEPT_V1 outside the enum is invalid, not a default | KILLED |
+
+### Round fourteen, Codex, on `5e62dfc`
+
+Two findings, both CONFIRMED_NON_BLOCKER, and both are about a claim being wider than
+the evidence behind it.
+
+The first is the refusal paragraph H-78 had just introduced. `no acceptance state is in
+force, so nothing below describes what is read` is true of a container that has yet to
+be created and false of the one already running, which keeps the environment it was
+created with and goes on accepting or refusing v1 exactly as before. The same command
+prints a readiness row two lines later, so the paragraph contradicted its own output.
+It now says no API can be CREATED or RECREATED from this configuration, names the two
+commands that would fail, and says the running API keeps the acceptance it was created
+with — the same distinction the capabilities refusal already drew.
+
+The second is `bash -x`. Both sections read the Compose-resolved listing into a local,
+and that listing holds `DATABASE_URL`, the keyring and the backup bot token. Presence-only
+readers keep those values out of the OUTPUT, which is the property the whole section was
+built for; under xtrace the assignment that captures the listing, and every later
+expansion of it, printed all of them anyway — in a command whose output is deliberately
+safe to paste into a ticket, and `bash -x` is exactly what an operator reaches for when
+that command misbehaves. Each section is now a wrapper around `( set +x; …_untraced )`.
+A subshell rather than a save-and-restore pair: both bodies have several early returns,
+and a restore that one of them skipped would leave tracing off for the rest of the run.
+
+The new test traces a real `botctl status` and asserts the keyring, the token and the
+database password are absent from the trace. It also asserts the trace contains `+ ` and
+the status output contains `capabilities`, because without those two a botctl that
+printed nothing at all would pass. That guard earned itself immediately: the first
+version of the test invoked the installed copy under a path the harness does not use,
+botctl answered `unknown command`, and the three secret assertions were passing
+vacuously.
+
+Two unit assertions extracted `status_capabilities` and `status_secrets` by name to
+prove each asks Compose, so the split moved their subject out from under them. They
+now read the `_untraced` body for that question and the wrapper for the new one, which
+means the H-80 mutation is caught at two levels: removing the wrapper fails three
+checks in the deploy suite and two assertions in the unit suite.
+
+| #    | Rule                                                                                | Mutation                                                          | Named test                                                                                          | Result |
+| ---- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ------ |
+| H-79 | The invalid-acceptance refusal is about creation, not about the API already running | `botctl`: the paragraph back to "no acceptance state is in force" | `botctl.test.sh` › status: an explicit SECRETS_ACCEPT_V1 outside the enum is invalid, not a default | KILLED |
+| H-80 | A traced `botctl status` prints no resolved value                                   | `botctl`: both sections back to running in the traced shell       | `botctl.test.sh` › status: a traced run prints no resolved value                                    | KILLED |
