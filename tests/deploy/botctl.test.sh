@@ -2458,6 +2458,34 @@ assert_equals "the refused rewrite modified the file" "$before" "$(cat "${NEXA_C
 assert_fails "the refused rewrite left a temporary file behind" \
   test -n "$(find "$NEXA_CONFIG_DIR" -name 'nexa.env.??????' -print -quit)"
 
+test_case "the refusal scanner tracks quotes for every record, not only assignments"
+# Tracking is SHARED STATE, which is why this detector cannot keep a narrower tracker than
+# the others. Measured on v5.1.1: NOTE opens a value that closes on the `DUMMY='` line, and
+# `SECRETS_KEYS:realkeyring` after it IS set. A tracker that opened a region only on
+# `NAME=` took `DUMMY='` for the opener, swallowed the rest and reported NO unreadable
+# record — so with the legacy pair also present, `migrate-config` would have appended the
+# old SECRETS_KEK as the canonical keyring, which Compose prefers, making every existing
+# ciphertext undecryptable. A false negative here is the write this refusal exists to
+# prevent, which is the opposite of what this function's comment used to claim.
+seed_nexa_env legacy
+printf '%s\n' "NOTE:'first" "DUMMY='" 'SECRETS_KEYS:realkeyring' \
+  >>"${NEXA_CONFIG_DIR}/nexa.env"
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl secrets migrate-config
+assert_fails "a hidden effective SECRETS_KEYS record was converted over" \
+  test "$BOTCTL_STATUS" -eq 0
+assert_contains "the refusal did not name the unreadable shape" \
+  "$BOTCTL_OUTPUT" 'in a form Compose reads and this conversion cannot'
+assert_equals "the refused conversion modified the file" \
+  "$before" "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+# And the refusal is not unconditional, or it is just a broken command: an ordinary legacy
+# host still converts, and a colon inside a VALUE — which the keyring grammar always has —
+# is not a record separator.
+seed_nexa_env legacy
+run_botctl secrets migrate-config
+assert_equals "an ordinary legacy host stopped converting" '0' "$BOTCTL_STATUS"
+assert_fails "the conversion wrote no keyring" test -z "$(nexa_env_key SECRETS_KEYS)"
+
 test_case "a host with no key configuration at all is refused"
 seed_nexa_env empty
 run_botctl secrets migrate-config
@@ -4916,6 +4944,39 @@ assert_equals 'the real obsolete assignment survived' '' \
 assert_equals 'an unrelated key was lost' 'ok' "$(nexa_env_key TAIL_KEY)"
 assert_contains 'the keyring was damaged by the wider quote tracking' \
   "$(cat "${NEXA_CONFIG_DIR}/nexa.env")" 'SECRETS_KEYS='
+seed_nexa_env canonical
+
+test_case 'update: a record Compose accepts is a record whatever its NAME looks like'
+# The separator case above, reached through the other half of the grammar. Measured on
+# v5.1.1, Compose accepts names this repository would never write — `notes.value`,
+# `notes-value`, `1notes`, `NOTES[0]` — and refuses `@`, `/` and `#`. A tracker built on
+# `[A-Za-z_][A-Za-z0-9_]*` missed a DOTTED record opening a multiline value, put its
+# interior lines back at top level, and the reconciliation deleted one: the same data loss
+# as the wrong separator, so the same test shape.
+for name in 'notes.value' 'notes-value' '1notes' 'NOTES[0]'; do
+  seed_nexa_env canonical
+  printf '%s\n' "${name}:'first" 'BUILD_COMMIT=interior' "last'" 'TAIL_KEY=ok' \
+    >>"${NEXA_CONFIG_DIR}/nexa.env"
+  run_botctl update vA
+  assert_equals "name '${name}': the interior line was deleted out of the value" '1' \
+    "$(grep -c '^BUILD_COMMIT=interior' "${NEXA_CONFIG_DIR}/nexa.env")"
+  assert_equals "name '${name}': the closing line of the value was lost" '1' \
+    "$(grep -c "^last'" "${NEXA_CONFIG_DIR}/nexa.env")"
+  assert_not_contains "name '${name}': a removal was reported for a key that is not a record" \
+    "$BOTCTL_OUTPUT" 'removed from nexa.env'
+  assert_equals "name '${name}': an unrelated key after the value was lost" 'ok' \
+    "$(nexa_env_key TAIL_KEY)"
+done
+# A comment is still a comment and a blank line is still blank, or the wider name grammar
+# has turned the whole file into records.
+seed_nexa_env canonical
+printf '%s\n' '# BUILD_COMMIT=not-a-record' '' 'TAIL_KEY=ok' >>"${NEXA_CONFIG_DIR}/nexa.env"
+run_botctl update vA
+assert_not_contains 'a commented line was reported as an obsolete record' \
+  "$BOTCTL_OUTPUT" 'removed from nexa.env'
+assert_equals 'a commented line was deleted' '1' \
+  "$(grep -c '^# BUILD_COMMIT=not-a-record' "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_equals 'a key after a comment and a blank line was lost' 'ok' "$(nexa_env_key TAIL_KEY)"
 seed_nexa_env canonical
 
 test_case 'update: says nothing and changes nothing when there is nothing to remove'

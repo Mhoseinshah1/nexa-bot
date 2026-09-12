@@ -1268,12 +1268,33 @@ nexa_reconcile_app_env() {
 # successful cleanup of a key that never existed — reproduced end to end, measured against
 # `docker compose config` both before and after.
 #
+# The NAME grammar is equally not the application's. Measured on v5.1.1, Compose accepts
+# names this repository would never write -- `notes.value`, `notes-value`, `1notes`,
+# `NOTES[0]`, and non-ASCII letters -- and refuses `@`, `/` and `#` with
+# `unexpected character "X" in variable name`. A tracker built on `[A-Za-z_][A-Za-z0-9_]*`
+# therefore missed a DOTTED record opening a multiline value and put its interior lines back
+# at top level: the same deletion, reached through the name instead of the separator. So a
+# name here is any run of characters that is not blank, not `#` and not the separator. Where
+# that is wider than Compose it cannot matter, because a name Compose refuses is a file
+# Compose refuses WHOLE: nothing in it is in force, and `nexa_env_rewrite`'s own validation
+# leaves such a file alone. Where it were narrower, a value's interior gets deleted. Only one
+# of those two errors destroys data, and this grammar cannot make it.
+#
 # Tracking is deliberately WIDER than reading. Which key a record belongs to is still
 # decided by the strict `NAME=` shape everywhere that decision is made, so nothing new is
-# read and nothing new is dropped; recognising more quoted regions can only classify FEWER
-# lines as top-level records, which is the safe direction for a function whose answer sends
-# a rewriter to delete. Teaching the readers the other separators is still
+# read and nothing new is dropped. Teaching the readers the other separators is still
 # `UNK-DEPLOY-002`.
+#
+# EVERY scanner that tracks quotes uses this, the refusal detector included. An earlier
+# version of this comment argued that detector could keep the `=`-only tracker because its
+# errors could only be false positives. That was wrong: tracking is SHARED STATE, so a
+# region this function fails to open is attributed to the next line that looks like one.
+# Measured, with `NOTE:` opening a value that closes on a `DUMMY='` line and an effective
+# `SECRETS_KEYS:` record after it -- Compose sets `SECRETS_KEYS`, and the `=`-only tracker
+# took `DUMMY='` for the opener, swallowed the rest and reported NO unreadable record.
+# `migrate-config` would then have appended the legacy `SECRETS_KEK` as the canonical
+# keyring, which Compose prefers, making every existing ciphertext undecryptable. A false
+# negative there is exactly the write this refusal exists to prevent.
 NEXA_ENV_AWK_LIB='
 function unescaped_index(s, q,   i, n, b, j) {
   n = length(s)
@@ -1287,7 +1308,7 @@ function unescaped_index(s, q,   i, n, b, j) {
   return 0
 }
 function record_value_index(line) {
-  if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*[:=]/) == 0) return 0
+  if (match(line, /^[ \t]*(export[ \t]+)?[^ \t\r#:=]+[ \t]*[:=]/) == 0) return 0
   return RSTART + RLENGTH
 }
 '
@@ -1416,8 +1437,12 @@ nexa_env_has_bare_record() {
 # so a false yes costs an operator one hand-edit, never a key.
 #
 # A scanner, for the same reason the others are: such a line inside another variable's
-# multiline value is text. These records are treated as opening no quoted region, which can
-# only make this answer yes too readily, and a false yes is a refusal rather than a write.
+# multiline value is text -- and it tracks quoted regions through the SHARED
+# `record_value_index`, like every other scanner here. It did not always: the comment that
+# stood here argued the `=`-only tracker was safe because its errors could only be false
+# positives. That was wrong, and the measurement is in the library's own comment. A region
+# this function failed to open was attributed to the next line that looked like one, and an
+# effective `SECRETS_KEYS:` record went unseen -- and unseen is the direction that writes.
 nexa_env_has_unreadable_record() {
   local file="$1" key="$2"
   [ -r "$file" ] || return 1
@@ -1429,8 +1454,15 @@ nexa_env_has_unreadable_record() {
         if (unescaped_index(line, quote) > 0) inq = 0
         next
       }
+      # Where the value of this record begins, for every separator and every name Compose
+      # accepts. Taken FIRST, because the name matches below clobber RSTART, and because
+      # this is the state that decides whether the NEXT line is a record at all.
+      vi = record_value_index(line)
+      if (vi == 0) next
       # A colon separator, or one or more blanks before the `=`. Both are read by Compose
-      # and neither is read by `nexa_compose_env_value`, whose `=` follows the name.
+      # and neither is read by `nexa_compose_env_value`, whose `=` follows the name. The
+      # key grammar of the application is the right one HERE: the keys this is asked about
+      # are plain names, and matching more would answer about a key nobody can configure.
       if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*:/) > 0 ||
           match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]+=/) > 0) {
         name = substr(line, RSTART, RLENGTH)
@@ -1438,10 +1470,11 @@ nexa_env_has_unreadable_record() {
         sub(/[ \t]*[:=]$/, "", name)
         sub(/[ \t]+$/, "", name)
         if (name == want) found = 1
-        next
       }
-      if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) == 0) next
-      rest = substr(line, RSTART + RLENGTH)
+      # Tracked for EVERY record, including the one just matched: a colon record opens a
+      # multiline value exactly as an assignment does, so returning here without tracking
+      # is what mis-attributed the next opener.
+      rest = substr(line, vi)
       sub(/^[ \t]+/, "", rest)
       first = substr(rest, 1, 1)
       if (first == dq || first == sq) {

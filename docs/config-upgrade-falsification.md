@@ -1641,3 +1641,76 @@ classified before being acted on: the first is a blocker because it writes, and 
 fixed. The second is not a blocker — it prints — and it was fixed anyway because the
 remedy is a paragraph and the alternative is shipping a known-false claim in the PR whose
 subject is `botctl status` telling the truth. Nothing else from this review was acted on.
+
+## Round twenty-four — the same tracker, through the name, and the comment that was the bug
+
+Two findings from the independent review of `cc6a879`, both **P1**, both confirmed by
+measurement, and both inside the fix written one round earlier. Round twenty-three closed
+the separator half of the quote tracker and got the other two halves wrong.
+
+**The name grammar was the application's, not Compose's.** Measured on v5.1.1, Compose
+accepts variable names this repository would never write, and refuses only a few characters:
+
+```
+notes.value=x     ACCEPTED        no@te=x   REFUSED: unexpected character "@"
+notes-value=x     ACCEPTED        no/te=x   REFUSED: unexpected character "/"
+1notes=x          ACCEPTED        no#te=x   REFUSED: unexpected character "#"
+NOTES[0]=x        ACCEPTED
+non-ASCII letters ACCEPTED
+```
+
+So `notes.value:'first` opens a multiline value that a tracker built on
+`[A-Za-z_][A-Za-z0-9_]*` does not see, its interior lines return to top level, and a
+`BUILD_COMMIT=` among them is deleted — the round-twenty-three data loss reached through the
+name instead of the separator. Reproduced: `docker compose config` reported `notes.value` as
+a three-line value with **no `BUILD_COMMIT` variable**, while `nexa_obsolete_app_env_keys`
+reported one.
+
+A name is now any run of characters that is not blank, not `#` and not the separator. The
+asymmetry is the argument: where that is wider than Compose it cannot matter, because a name
+Compose refuses is a file Compose refuses WHOLE — nothing in it is in force, and the
+rewriter's own validation leaves such a file alone. Where it were narrower, a value's
+interior gets deleted. Only one of those two errors destroys data, and this grammar cannot
+make it.
+
+**The second finding was a comment, and the comment was the bug.** Round twenty-three left
+`nexa_env_has_unreadable_record` on the `=`-only tracker and wrote down why: its errors could
+only be false positives, and a false positive is a refusal, which writes nothing. That
+reasoning is wrong, and it is wrong in the way that matters — quote tracking is **shared
+state**, so failing to open a region for one shape does not merely lose that shape, it
+mis-attributes the NEXT opener. Measured:
+
+```
+NOTE:'first                      Compose: NOTE = "first\nDUMMY="
+DUMMY='                                   SECRETS_KEYS = realkeyring
+SECRETS_KEYS:realkeyring         scanner: no unreadable record  <- FALSE NEGATIVE
+SECRETS_KEK=stale                         (DUMMY=' taken for the opener)
+SECRETS_KEK_ID=old
+```
+
+With the legacy pair present and the canonical keyring hidden, `migrate-config` would have
+appended the old `SECRETS_KEK` as `SECRETS_KEYS` — which Compose prefers, the last record
+winning — and advised a restart that makes every existing ciphertext undecryptable. A false
+negative in that detector is precisely the write it exists to prevent. It now tracks through
+the same shared function as everything else, and its comment states the corrected reasoning
+in place of the one that justified the gap.
+
+| #     | Rule                                                                  | Mutation                                                         | Named test                                                                                   | Result |
+| ----- | --------------------------------------------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ------ |
+| H-117 | The tracker accepts every NAME Compose accepts, not the application's | `nexa-lib.sh`: restore `[A-Za-z_][A-Za-z0-9_]*` as the name      | `botctl.test.sh` › update: a record Compose accepts is a record whatever its NAME looks like | KILLED |
+| H-118 | The refusal detector tracks quotes for every record it matches        | `nexa-lib.sh`: `next` out of the matched record without tracking | `botctl.test.sh` › the refusal scanner tracks quotes for every record, not only assignments  | KILLED |
+
+H-117 fails 8 of 235 deploy checks — two per accepted name shape — in its own worktree, with
+the primary checkout showing only the files this round edits. Its negative cases: a comment
+is still a comment and a blank line still blank, so the wider grammar has not turned the file
+into records, and a genuine top-level `BUILD_COMMIT=deadbeef` is still removed. H-118's
+negative case is that the refusal is not unconditional — an ordinary legacy host still
+converts, and a colon inside a VALUE, which the keyring grammar always has, is not a
+separator.
+
+The lesson this round records is not about `env_file` at all. Round twenty-three wrote a
+comment asserting that one error direction was impossible, and that assertion is what stopped
+the gap being examined. A claim about safety in a comment is not evidence; the measurement
+that would have falsified it took one file and one `docker compose config`. Where this branch
+has said "safe because", the next reader should read it as "untested unless a row below
+names the test".
