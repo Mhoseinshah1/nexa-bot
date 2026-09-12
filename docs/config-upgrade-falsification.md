@@ -834,3 +834,25 @@ python3 to produce the listing at all.
 | H-75 | Presence trims the SCHEMA's whitespace set, not the interpreter's             | `nexa-lib.sh`: `nexa_listing_present` back to `value.strip()` | `botctl.test.sh` › status: a chat id that is only a no-break space is not configured                         | KILLED |
 | H-76 | A refused removal leaves the update itself successful                         | `nexa-lib.sh`: let the rewriter's die escape the subshell     | `botctl.test.sh` › update: an obsolete record whose quote never closes is refused, and the file is UNCHANGED | KILLED |
 | H-77 | An API that is not running makes the provenance unknown, like a failed lookup | `nexa-lib.sh`: the missing-container guard back to `return 0` | `botctl.test.sh` › status: a provenance it cannot compute makes no claim about the running API               | KILLED |
+
+### Round thirteen, Codex, on `035ce6c`
+
+One finding, CONFIRMED_NON_BLOCKER, and it is the webhook lie in the secrets section:
+`SECRETS_ACCEPT_V1` is `z.enum(['true', 'false'])`, so `yes` — a spelling several other
+settings in the very same output accept — and a value with a trailing newline are
+configurations the API REFUSES to start on. The wildcard arm sent both to the
+keyring-derived default and labelled the source `default`, describing an acceptance
+state no container can reach. Absent still gets the derived default; PRESENT but
+outside the vocabulary reads `invalid`, with a sentence saying the API will not start
+until the value is one of the two and that nothing below it describes what is read. The
+value is never printed.
+
+Codex had raised the same shape in round five, against `fd3f441`, and that thread was
+closed when the reader moved to Compose resolution rather than when the vocabulary was
+applied — the fix answered the reading, not the validating. Recorded here rather than
+silently repaired, because a finding that comes back is evidence about the first
+response.
+
+| #    | Rule                                                                       | Mutation                                               | Named test                                                                                          | Result |
+| ---- | -------------------------------------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------- | ------ |
+| H-78 | A present `SECRETS_ACCEPT_V1` outside the enum is `invalid`, not a default | `botctl`: the wildcard arm back to the derived default | `botctl.test.sh` › status: an explicit SECRETS_ACCEPT_V1 outside the enum is invalid, not a default | KILLED |

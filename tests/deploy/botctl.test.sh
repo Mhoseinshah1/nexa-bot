@@ -2998,6 +2998,37 @@ assert_equals 'the file was changed by a refused conversion' "$before" \
 assert_not_contains 'the refusal printed key material' "$BOTCTL_OUTPUT" 'VAULT_KEK}'
 seed_nexa_env canonical
 
+test_case 'status: an explicit SECRETS_ACCEPT_V1 outside the enum is invalid, not a default'
+# `SECRETS_ACCEPT_V1` is z.enum(['true', 'false']), so `yes` — a spelling several other
+# settings in this very section accept — and a value with a trailing newline are
+# configurations the API REFUSES to start on. Reporting the keyring-derived default
+# for them describes an acceptance state no container can reach, which is the same
+# lie as a capability reported `on` for a value the schema rejects.
+seed_nexa_env canonical
+fake_set compose_env ''
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","SECRETS_KEYS":"k1:v","SECRETS_ACTIVE_KEY_ID":"k1","SECRETS_ACCEPT_V1":"yes"}'
+fake_set secrets_json '{"format":"canonical","acceptV1":false,"explicit":false,"v1Rows":0,"rows":4,"mismatched":0}'
+out="$(status_secrets_probe)"
+assert_contains 'a value outside the enum was reported as a derived default' \
+  "$out" 'accept v1      invalid'
+assert_contains 'the reason was not named' "$out" 'neither true nor false'
+assert_not_contains 'an unreachable acceptance state was presented as in force' \
+  "$out" 'accept v1      no  (default)'
+# A value with a trailing newline is the same case: the rendering is `false\\n`, which
+# is not the spelling the enum allows.
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","SECRETS_KEYS":"k1:v","SECRETS_ACTIVE_KEY_ID":"k1","SECRETS_ACCEPT_V1":"false\n"}'
+out="$(status_secrets_probe)"
+assert_contains 'a trailing newline was accepted as the enum value' \
+  "$out" 'accept v1      invalid'
+# And exactly `false` is still explicit rather than invalid, so this is about the
+# vocabulary and not about refusing every present value.
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","SECRETS_KEYS":"k1:v","SECRETS_ACTIVE_KEY_ID":"k1","SECRETS_ACCEPT_V1":"false"}'
+out="$(status_secrets_probe)"
+assert_contains 'an exact enum value was reported as invalid' \
+  "$out" 'accept v1      no  (SECRETS_ACCEPT_V1)'
+fake_set compose_env_json ''
+seed_nexa_env canonical
+
 test_case 'status: an explicit SECRETS_ACCEPT_V1=true on a canonical keyring is reported as explicit'
 seed_nexa_env canonical
 append_resolved_env 'SECRETS_ACCEPT_V1=true'

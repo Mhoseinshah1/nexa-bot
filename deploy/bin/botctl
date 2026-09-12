@@ -450,16 +450,36 @@ status_secrets() {
   else
     format=unknown
   fi
+  # ABSENT gets the derived default; PRESENT but outside the vocabulary does not.
+  # `SECRETS_ACCEPT_V1` is `z.enum(['true', 'false'])`, so `yes` — a spelling several
+  # other settings here accept — and a value with a trailing newline are configurations
+  # the application REFUSES to start on. Reporting the derived default for them would
+  # describe an acceptance state no container can reach, which is the same lie as
+  # reporting a capability `on` for a value the schema rejects. The value itself is
+  # never printed: only that it is not one of the two the schema allows.
+  local explicit_present=0
+  ! nexa_listing_has "$resolved" SECRETS_ACCEPT_V1 || explicit_present=1
   case "$explicit" in
     true) accept=yes; accept_source='SECRETS_ACCEPT_V1' ;;
     false) accept=no; accept_source='SECRETS_ACCEPT_V1' ;;
     *)
-      if [ "$format" = legacy ]; then accept=yes; else accept=no; fi
-      accept_source='default'
+      if [ "$explicit_present" -eq 1 ]; then
+        accept=invalid
+        accept_source='SECRETS_ACCEPT_V1 is neither true nor false'
+      else
+        if [ "$format" = legacy ]; then accept=yes; else accept=no; fi
+        accept_source='default'
+      fi
       ;;
   esac
   printf '  configuration  %s\n' "$format"
   printf '  accept v1      %s  (%s)\n' "$accept" "$accept_source"
+  if [ "$accept" = invalid ]; then
+    printf '\n'
+    printf '  SECRETS_ACCEPT_V1 is set to something other than `true` or `false`, which the\n'
+    printf '  schema refuses — the API will not start until it is one of those two. Until\n'
+    printf '  then no acceptance state is in force, so nothing below describes what is read.\n'
+  fi
 
   # The rows. One bounded read through the application; a stack that is down
   # answers nothing, and that is reported as exactly that.
