@@ -1392,3 +1392,23 @@ Two negative cases guard the colon detector against over-firing, because `id:key
 canonical keyring grammar and a detector that fired on a colon inside a VALUE would refuse
 every well-formed host there is: a colon in a value is not a record, and neither is a colon
 line inside another variable's multiline value.
+
+### Round twenty — the same unbounded claim, one document over
+
+The independent review of `27c6a31` raised one finding, and it is the fourth time this
+branch has had to learn the same thing in a different place. `botctl status` stopped claiming
+that a successful recreating command had loaded an edit, because two of the four return 0
+having recreated nothing. `docs/deployment.md` — the prose that DESCRIBES that section —
+went on making the unbounded claim: _"A successful one of those has loaded the edited file."_
+
+No new measurement was needed; the evidence was already in this repository, in the section
+the paragraph describes. What the round adds is that the bound is now pinned in the document
+too, and the assertion collapses whitespace first, because prose is re-wrapped by the
+formatter and a phrase straddling a line break is not a substring of the file.
+
+| #     | Rule                                                                    | Mutation                                                            | Named test                                                                                                   | Result |
+| ----- | ----------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------ |
+| H-109 | `docs/deployment.md` carries the same bound as the section it describes | restore the unbounded claim and delete the paragraph that bounds it | `config-upgrade.test.ts` › decides a bare record by what Compose accepts, and never prints the byte it reads | KILLED |
+
+H-109 fails 1 of 42 unit checks; restore confirmed by `cmp` against a snapshot, and the
+mutated phrase grepped out of the restored file.

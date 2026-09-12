@@ -985,6 +985,22 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
         /^sudo grep -n/,
       );
     }
+    // And the prose that DESCRIBES the capabilities section has to carry the same bound the
+    // section itself carries. `botctl status` stopped claiming that a successful recreating
+    // command had loaded the edited file — two of the four return 0 having recreated nothing
+    // — and `docs/deployment.md` went on making the unbounded claim for two more rounds.
+    // Whitespace-collapsed, because prose is re-wrapped by the formatter and a phrase that
+    // straddles a line break is not a substring of the file.
+    const deployment = readFileSync(join(__dirname, '../../docs/deployment.md'), 'utf8').replace(
+      /\s+/g,
+      ' ',
+    );
+    expect(deployment, 'the guide still claims a successful command loaded the edit').not.toMatch(
+      /A successful one of those has loaded/,
+    );
+    expect(deployment, 'the guide does not name the no-op commands').toContain(
+      'return 0 having recreated nothing',
+    );
   });
 
   it('reads what the application receives, and refuses to freeze a substitution', () => {

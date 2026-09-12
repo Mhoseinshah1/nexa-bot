@@ -243,13 +243,23 @@ running: a container keeps the configuration it was created with, so a value
 changed since that container was CREATED is not yet in force in it, and the section
 says so as a standing caveat rather than pretending to detect it. The caveat names
 CREATION, and then names the four subcommands that recreate: `restart`, `update`,
-`rollback` and `secrets disable-v1`. A successful one of those has loaded the edited
-file, because `up -d` resolves `env_file` into the service environment before hashing it
-and that hash is what decides recreation — established from the Compose binary in
-`UNK-DEPLOY-001`, which records it after two rounds of claiming the opposite on the
-strength of `docker compose config --hash`, a probe that does not resolve `env_file` and
-so answers a different question. The one thing still unobserved is any of it against a
-real daemon; `docs/vps-acceptance.md` step 12c is three commands that settle it. The delivery
+`rollback` and `secrets disable-v1`. A recreation loads the edited file, because `up -d`
+resolves `env_file` into the service environment before hashing it and that hash is what
+decides recreation — established from the Compose binary in `UNK-DEPLOY-001`, which
+records it after two rounds of claiming the opposite on the strength of
+`docker compose config --hash`, a probe that does not resolve `env_file` and so answers a
+different question.
+
+But a successful command is NOT a recreation. Two of those four return 0 having recreated
+nothing — `update` on the release already installed, and `secrets disable-v1` when the
+setting is already false — so "a successful one of those has loaded the edited file", which
+this paragraph said for two rounds, is false in exactly the states the rest of this document
+describes. Each of those commands says what it did in its own output, which is why the
+section points an operator at that output rather than guessing: naming the commands that CAN
+recreate is a true statement `status` can make, and claiming one of them DID is not.
+
+The one thing still unobserved is any of it against a real daemon; `docs/vps-acceptance.md`
+step 12c is three numbered steps that settle it. The delivery
 destination names three processes because three deliver — the worker schedules,
 the API serves the Web Admin's manual run, and the recovery executor takes the
 pre-restore backup.
