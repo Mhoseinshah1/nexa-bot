@@ -1270,13 +1270,17 @@ function unescaped_index(s, q,   i, n, b, j) {
 # a bare record for a key Compose does not set, and the rewriter would have deleted the
 # line on that report.
 #
-# The byte is compared as an OCTAL CODE and never as text, because the last byte of
-# nexa.env is the last character of somebody else's value.
+# The byte itself never reaches a variable, an argument or a trace. `tr -dc` DELETES every
+# byte that is not a newline, so the only thing that can survive the first pipe IS a
+# newline; the second turns that into an `N` so the answer survives command substitution,
+# which strips trailing newlines and would otherwise make both cases look empty. An earlier
+# version compared the byte's octal code, which put one character of somebody's value into
+# an assignment `bash -x` prints — the class U-53, U-55 and U-56 are about, and not a class
+# this repository argues the likelihood of.
 nexa_env_tail_unterminated() {
-  local file="$1" last
+  local file="$1"
   [ -s "$file" ] || return 1
-  last="$(tail -c1 -- "$file" | od -An -to1 | tr -d " \n")"
-  [ "$last" != '012' ]
+  [ -z "$(tail -c1 -- "$file" | tr -dc '\n' | tr '\n' 'N')" ]
 }
 
 # Is there a top-level BARE record for this key — `BUILD_COMMIT` with no `=` at all?

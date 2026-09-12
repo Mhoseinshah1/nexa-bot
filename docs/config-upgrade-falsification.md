@@ -1315,3 +1315,34 @@ paragraph, written after that fix, sent the operator to `botctl logs monitor` un
 Counts, each in its own worktree: H-104 fails 5 of 230, H-105 3 of 230. H-104's mutation
 keeps the `nexa_die` call reachable in the source so the removal cannot be mistaken for a
 syntax error, and `bash -n` was run on the mutated file before the suite.
+
+### And one found by reviewing this round's own fix
+
+The tail predicate that round eighteen introduced read the last byte of `nexa.env` and
+compared its OCTAL CODE — which put one character of somebody's value into an assignment
+`bash -x` prints. That is the class U-53, U-55 and U-56 are about, introduced by the commit
+that fixed four other things, in a function reachable from `botctl status` and
+`botctl update`. It is narrow — it needs tracing, a file that does not end with a newline,
+and a secret on the last line — and this repository does not argue the likelihood of this
+class.
+
+The byte now cannot reach a variable at all: `tr -dc '\n'` DELETES every byte that is not a
+newline, so nothing but a newline survives the first pipe, and the second turns that into an
+`N` so the answer survives a command substitution that strips trailing newlines. Measured
+under `set -x`, with `SECRETS_KEYS=k1:AAAsecretKeyMaterialZ` and no final newline:
+
+```
++++ tail -c1 -- /tmp/…/f
++++ tr -dc '\n'
++++ tr '\n' N
+++ '[' -z '' ']'
+```
+
+| #     | Rule                                              | Mutation                                                  | Named test                                                                                                   | Result |
+| ----- | ------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------ |
+| H-106 | The last byte of `nexa.env` never reaches a trace | `nexa-lib.sh`: back to the `od -An -to1` octal comparison | `config-upgrade.test.ts` › decides a bare record by what Compose accepts, and never prints the byte it reads | KILLED |
+
+H-106 fails 1 of 42 unit checks; restore confirmed by `cmp` against a snapshot taken before
+the mutation, and `grep` confirmed the mutated text is gone. It is pinned at the unit level
+for the same reason as H-93: no deploy case can observe a shell trace of this function, and
+the honest statement is that the rule is a source-level one.

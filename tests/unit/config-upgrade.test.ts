@@ -960,15 +960,16 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
       rewriter,
       'the rewriter normalises an unterminated bare ending instead of refusing',
     ).toMatch(/last_bare == NR\) exit 4/);
-    // And the predicate itself reads the last BYTE of nexa.env, which is the last
-    // character of somebody's value. It is compared as an octal code and never as text:
-    // a `printf` of it, or an unquoted expansion, is one `set -x` away from the keyring.
+    // And the predicate itself reads the last BYTE of nexa.env, which is the last character
+    // of somebody's value. That byte must never reach a variable, an argument or a trace:
+    // `tr -dc` deletes everything that is not a newline, so the only byte that can survive
+    // the pipe IS a newline. An earlier version compared the byte's octal code, which put
+    // one character of the value into an assignment `bash -x` prints.
     const tail = /nexa_env_tail_unterminated\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '';
     expect(tail, 'the tail predicate is gone').not.toBe('');
-    expect(tail, 'the last byte is read as text rather than as an octal code').toContain(
-      'od -An -to1',
-    );
-    expect(tail, 'the last byte is printed').not.toMatch(/printf[^\n]*\$last/);
+    expect(tail, 'the last byte can reach the trace').toContain("tr -dc '\\n'");
+    expect(tail, 'the byte is turned back into text somewhere').not.toContain('od ');
+    expect(tail, 'the last byte is assigned to a variable').not.toMatch(/\blast=/);
   });
 
   it('reads what the application receives, and refuses to freeze a substitution', () => {
