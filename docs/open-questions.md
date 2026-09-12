@@ -735,3 +735,241 @@ buys and there is no way to have both.
 
 **Trigger to revisit:** the first deployment that legitimately holds two
 installations' archives — a migration tool, or a managed multi-install operator.
+
+## UNK-DEPLOY-001 — RESOLVED: `compose up -d` does recreate when `nexa.env` changed
+
+**Recorded as an open question on one reading of one measurement, and closed two rounds
+later against it. The measurement was real; the inference from it was wrong, and it was
+asserted here as fact.** Kept rather than deleted, because the way it was wrong is the
+reusable part.
+
+**What was measured.** On the pinned client, v5.1.1, `docker compose config --hash='*'`
+does not change when `env_file` CONTENT changes, while an inline `environment:` value does
+change it:
+
+```
+baseline                                        api 5fc5df86…
+append BACKUP_SCHEDULE_ENABLED=true to env_file api 5fc5df86…   unchanged
+change DATABASE_URL's password in env_file      api 5fc5df86…   unchanged
+change an inline `environment:` value           api c26660b1…   CHANGED
+```
+
+**What was inferred, and is false.** That this is "the value `up -d` compares against the
+running container's `com.docker.compose.config-hash` label", and therefore that an edit to
+`nexa.env` cannot cause a recreation. `config --hash` is the wrong probe. In the pinned
+binary:
+
+```
+callers of pkg/compose.ServiceHash
+  (*convergence).mustRecreate        the recreation decision
+  (*composeService).prepareLabels    stamping the label
+  cmd/compose.runHash                behind `config --hash`
+
+callers of types.Project.WithServicesEnvironmentResolved
+  loader.ModelToProject
+  cmd/compose.runConfigInterpolate
+  cmd/compose.createCommand…WithServices.func5
+  cmd/compose.runCommand.func2
+  cmd/compose.upCommand…WithServices.func5      <-- up resolves env_file
+  (runHash is NOT among them)
+```
+
+So `up` hashes a project whose `env_file` has been merged into `Environment` and
+`config --hash` hashes one where it has not — the same function over different inputs.
+`Environment` is demonstrably inside the hash, because the inline change above moves it.
+An edit to `nexa.env` therefore changes the hash `mustRecreate` compares, and the
+container is recreated.
+
+**Three further measurements, because the symbol table alone leaves a gap: it shows `up`
+calls the resolver, not what the resolver does to the field the hash reads.**
+
+1. The resolver takes one argument, `discardEnvFiles`, and **`up` passes `true`**. In the
+   pinned binary the instruction immediately before the call sets the boolean register:
+
+   ```
+   ff1913: mov  $0x1,%eax
+   ff1918: call b44c20 <types.Project.WithServicesEnvironmentResolved>
+   ```
+
+   Four call sites set it that way — `createCommand`, `runCommand`, `upCommand` and
+   `runConfigInterpolate`. So after resolution the service carries the file's content in
+   `Environment` and no longer carries the `env_file` list at all.
+
+2. That is observable without a daemon, through the one command that resolves and prints.
+   With `env_file: [one.env]` holding `A=2`, `docker compose config` emits
+
+   ```
+   services:
+     api:
+       environment:
+         A: "2"
+       image: busybox:latest
+   ```
+
+   — the content under `environment:`, and **no `env_file:` key**. The discard is not an
+   inference about a flag name; it is in the output.
+
+3. `EnvFiles` is itself inside the hashed struct, which is what makes the discard decisive
+   rather than merely tidy. Changing only the env file's PATH, with identical content,
+   moves `config --hash`:
+
+   ```
+   env_file: [one.env]   A=1        api 7273e293…
+   env_file: [two.env]   A=1        api a6823960…   CHANGED (path only)
+   env_file: [two.env]   A=2        api a6823960…   unchanged (content only)
+   ```
+
+   So the hash reads both fields. For `config --hash` the content is in neither of them —
+   it sits in a file named by `EnvFiles`, which is why only the path moves the hash. For
+   `up` the path is gone and the content IS `Environment`. The probe that was mistaken for
+   the answer measured the one project model in which `nexa.env`'s content is invisible.
+
+Two further corrections to the original text. The decision is **client-side**, in
+`mustRecreate`; the daemon never sees a service definition, so "the daemon may consider
+other inputs" was wrong about where the decision lives — and that is why this was
+settleable here at all. And the `cmd_restart` edge precedent, quoted accurately, is **not
+the same mechanism**: a bind-mounted file's content never enters a service definition
+because Compose never reads it, while an `env_file`'s content is read by the client and
+merged into `Environment`. `nexa.env` needs no `NEXA_EDGE_CONFIG`-style trigger, and the
+remedy this question originally proposed would have added a second fingerprint, a new
+`deploy.env` key and a new divergence surface to solve a problem that does not exist.
+
+**What is still unobserved.** None of this has been watched against a real daemon. The
+deploy suite runs against a fake docker, and both smoke scripts write `nexa.env` before
+the first `up` (`scripts/deployment-smoke.sh` writes at 128 and 139, first `up` at 184;
+`scripts/deployment-update-smoke.sh` at 353, 360 and 362, first `up` at 387), so neither
+exercises "edit `nexa.env` on a running stack, then restart, and read the value back".
+The symbol evidence above is a deduction about a binary, not an observation of a
+container.
+
+**Where that is closed:** `docs/vps-acceptance.md` carries it as step 12c, because
+pinning it to "the first run" of a checklist that had no such step would have let it
+survive the event meant to close it. The check names ONE key rather than dumping
+`.Config.Env`, which holds `DATABASE_URL`, `SECRETS_KEYS` and the backup bot token:
+
+```
+sudo grep -n '^LOG_LEVEL=' /etc/nexa/nexa.env                 # must print LOG_LEVEL=info
+sudo sed -i 's/^LOG_LEVEL=.*/LOG_LEVEL=debug/' /etc/nexa/nexa.env
+sudo grep -n '^LOG_LEVEL=' /etc/nexa/nexa.env                 # must print LOG_LEVEL=debug
+sudo botctl restart
+sudo docker inspect nexa-api-1 \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' | grep '^LOG_LEVEL='
+```
+
+The `grep`s are `sudo` too: `/etc/nexa` is installed `0700` and root-owned, so a plain one
+fails for a non-root operator — and step 1 failing for THAT reason would stop the probe
+before it tested anything.
+
+**The key is `LOG_LEVEL` because `deploy/nexa.env.template` writes it, and the first draft
+of that step got this wrong in a way that would have reopened this entry on a healthy
+host.** It used `BACKUP_SCHEDULE_ENABLED`, which the template does not write and the
+installer never adds — so the `sed` matched nothing, the file was unchanged, the restart
+changed nothing, and the final `grep` printed nothing. Printing nothing is precisely the
+outcome the step documents as _"the deduction is wrong … Reopen `UNK-DEPLOY-001`"_. The one
+check pinned to close this question was wired to reopen it, on every host, from an edit
+that never happened. Hence the two `grep`s around the `sed`: the step proves the key is in
+the file, and proves the edit landed in the file, before anything is concluded from a
+container's silence.
+
+**The lesson, which is why this entry survives.** A measurement is evidence about the
+command that produced it and nothing else. `config --hash` answers a question about
+`config --hash`; treating it as an answer about `up -d` turned one reading into a
+documented fact, and that fact deleted a true sentence from an operator-facing output for
+two rounds. `CLAUDE.md` says never to resolve an UNKNOWN by guessing. This created one by
+guessing, which the rule does not say and should.
+
+## UNK-DEPLOY-002 — two `env_file` shapes the text scanners do not see: `NAME:value` and `NAME =value`
+
+Two shapes of record in `/etc/nexa/nexa.env` are read by `deploy/`: an assignment
+(`BUILD_COMMIT=deadbeef`) and a bare record (`BUILD_COMMIT`, which takes the variable
+from the environment running Compose). **Compose v5.1.1 accepts a third.** Measured:
+
+```
+nexa.env        BUILD_COMMIT:deadbeef
+                OTHER=1
+
+docker compose config
+    environment:
+      BUILD_COMMIT: deadbeef
+      OTHER: "1"
+```
+
+**And a fourth, found a round later, which is why this entry is about a FAMILY and not a
+separator:** blanks before the equals sign. Measured, all effective:
+
+```
+SECRETS_KEYS =realkey        SECRETS_KEYS<TAB>=realkey      export SECRETS_KEYS =realkey
+SECRETS_KEYS: v              SECRETS_KEYS :v                export SECRETS_KEYS:v
+```
+
+Neither `nexa_compose_env_value`, nor `nexa_env_has_bare_record`, nor the rewriter's awk
+recognises either separator — the value reader requires the `=` to follow the name
+immediately. Two consequences, both measured through the real functions:
+
+1. `nexa_obsolete_app_env_keys` reports nothing, so `botctl update` says it removed the
+   obsolete keys and leaves the record in place — the exact sentence the bare-record fix
+   was written to retire, one shape over.
+2. `botctl status` then reads the running container's `BUILD_COMMIT` against a file that
+   appears not to set it, classifies it `stale`, and prints "The file no longer sets
+   BUILD_COMMIT, but the RUNNING API container answers something other than its own
+   image … Run `botctl restart`." The file DOES set it, so the restart re-applies the
+   mask and the operator loops.
+
+**A third consequence was claimed here and is false**, and it is recorded rather than
+quietly deleted: "the capabilities section would miss a colon-form value, reading the schema
+default instead of what the container receives". It would not. That section reads
+`nexa_compose_resolved_env`, which runs `docker compose config` — so COMPOSE resolves the
+shape and the section sees the real value, as the measurement at the top of this entry shows.
+The scope of this open question is the TEXT scanners and the rewriter, and writing it wider
+than that expanded deferred work into a path that was already correct.
+
+**One consequence IS fixed, because refusing needs no new parser.** `SECRETS_KEYS` written
+in the colon form made `botctl secrets migrate-config` dangerous rather than merely
+incomplete: it read no `SECRETS_KEYS`, concluded the installation was legacy, and appended
+`SECRETS_KEYS=<the old SECRETS_KEK>` — and the LAST record for a key wins, measured:
+
+```
+nexa.env        SECRETS_KEYS:realkeyring
+                SECRETS_KEYS=staleappended      ->  container receives `staleappended`
+```
+
+So the restart that command advises would have left every row encrypted under the real
+keyring unreadable. `nexa_env_has_unreadable_record` now refuses BOTH shapes for the four
+keys `migrate-config` reads — one predicate for the family, after the colon form was closed
+alone and the whitespace form turned up a round later. It is a REFUSAL detector and is
+deliberately not wired into `nexa_obsolete_app_env_keys`: reporting a key there sends the
+rewriter to remove it, which is the change this entry defers.
+
+**Why the rest is recorded rather than fixed.** The fix is a second separator in three
+scanners, one of which is the awk that in round twelve suppressed every line after an
+unterminated quote and nearly installed a `nexa.env` with no encryption key. That edit
+belongs in its own commit with its own adversarial round and its own mutation set, not
+appended to a round that is already fixing four blockers. What is fixed now is the
+CLAIM: the comment above the detector said "TWO shapes, because Compose accepts two",
+which was false, and it now names the shape it does not cover.
+
+**Reachability.** No template ever wrote either shape and the installer never does, so both
+require a hand-edited file — the same reachability as the bare-record case, which was fixed
+because it was cheap rather than because it was likely.
+
+**Two further shapes, measured in the same round and FIXED rather than recorded**, since
+they needed no new separator — only the removal of a claim and one extra input:
+
+```
+BUILD_COMMIT # why      REFUSED: unexpected character "#" in variable name
+BUILD_COMMIT  (no final newline)          "": BUILD_COMMIT      the key is never set
+BUILD_COMMIT=abc (no final newline)       BUILD_COMMIT: abc     honoured as usual
+BUILD_COMMIT\r\n                          BUILD_COMMIT: <host>  CR stripped
+```
+
+So a trailing comment is not a bare record but a file Compose refuses whole, and a bare
+name needs its newline to BE a record — an unterminated one is a variable with an empty
+name. The bare-record scanner had allowed `(#.*)?`, on a behaviour Compose does not have,
+and could not see a missing final newline at all; both are now driven by the measurements
+above, and `nexa_env_rewrite` refuses a file ending in an unterminated bare name rather
+than normalising the ending and thereby creating the record.
+
+**Trigger to resolve:** the next change to `NEXA_ENV_AWK_LIB` or to any of the three
+scanners. Whoever opens that file does this at the same time, with cases for `NAME:value`,
+`NAME :value`, `NAME: value`, `NAME =value`, `NAME<TAB>=value`, a colon inside a quoted
+value, and either form inside another variable's multiline value.

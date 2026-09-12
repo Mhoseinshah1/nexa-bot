@@ -110,6 +110,22 @@ nexa_require_version() {
     nexa_die "\"$1\" is not a usable version: letters, digits, dot, dash and underscore only, up to 64 characters."
 }
 
+# The shape of an assignment line, as COMPOSE recognises one.
+#
+# Not `^KEY=`. Compose accepts leading whitespace before the key and an `export `
+# prefix, and both were MEASURED — `  E=indented` and `export B=true` each reach the
+# container with the value they look like they have. A matcher anchored on `^KEY=`
+# read both as ABSENT, so the reader reported the schema DEFAULT: `export
+# PANEL_MONITOR_ENABLED=false` came out as `panel monitor on`, which is the next
+# start turning the monitor off while `status` says it is running.
+#
+# ONE definition, used by everything that finds, reads or removes an assignment,
+# because a detector and a rewriter that disagree about what an assignment looks like
+# produce an update that reports a line removed while it is still in the file — and
+# then reports it again on the next run.
+nexa_env_key_pattern() { printf '^[[:space:]]*(export[[:space:]]+)?%s=' "$1"; }
+
+
 # --- Reading configuration ---------------------------------------------------
 
 # Read ONE value out of a KEY=VALUE file, without sourcing it.
@@ -124,7 +140,7 @@ nexa_env_value() {
   local file="$1" key="$2" line
   [ -r "$file" ] || return 1
   # The LAST assignment wins, matching how a shell would read the file.
-  line="$(grep -E "^${key}=" -- "$file" | tail -n 1 || true)"
+  line="$(grep -E "$(nexa_env_key_pattern "$key")" -- "$file" | tail -n 1 || true)"
   [ -n "$line" ] || return 1
   local value="${line#*=}"
   # Strip one layer of surrounding quotes if present.
@@ -548,7 +564,14 @@ nexa_acquire_lock() {
   lock_dir="$(dirname "$NEXA_LOCK_FILE")"
   if [ ! -d "$lock_dir" ]; then
     mkdir -p "$lock_dir" || nexa_die "cannot create ${lock_dir} for the update lock."
-    chmod 0750 "$lock_dir"
+    # GUARDED, because this function is reached from inside `nexa_untraced`, which
+    # suppresses errexit for its body's whole dynamic extent. A bare `chmod` here used to
+    # abort the command; under that wrapper it would not, and a flock that then succeeded
+    # would return 0 and let the secret-file rewrite proceed with the state directory at
+    # whatever mkdir and the umask gave it. That is the invariant `nexa_untraced` documents
+    # — every failure reported by `nexa_die` — and it was false the day it was written.
+    chmod 0750 "$lock_dir" ||
+      nexa_die "cannot set the mode on ${lock_dir}; refusing to continue with the state directory world-readable."
   fi
   exec {NEXA_LOCK_FD}>>"$NEXA_LOCK_FILE" ||
     nexa_die "cannot open the lock file at ${NEXA_LOCK_FILE}."
@@ -874,6 +897,48 @@ nexa_commit_release() {
   nexa_write_atomic "$NEXA_CURRENT_FILE" "$target"
 }
 
+# Run a function with xtrace OFF, restoring it afterwards, and return its status.
+#
+# Some of this library's work cannot avoid holding a secret in a shell variable:
+# `nexa_env_rewrite` is handed the keyring BY NAME precisely so no value becomes a
+# process argument, and then expands that name to append the line. Under `bash -x`
+# every such assignment, test and expansion is printed — which is how `botctl secrets
+# migrate-config` came to print the master key six times and then report that the key
+# material "was never printed". An operator runs that command under `-x` exactly
+# because it rewrites /etc/nexa/nexa.env.
+#
+# A save-and-restore rather than a subshell, which is the opposite of the choice the
+# two `status` sections make, and the difference is `nexa_die`: every refusal in these
+# functions must end the COMMAND, and inside a subshell it would end only the subshell
+# while the caller carried on as though nothing had been refused. `nexa_die` exits the
+# process, so the restore below is reached only on the paths that return — the only
+# paths where restoring matters. `$-` is the authority on whether tracing was on;
+# it is read before anything can change it.
+#
+# What this costs is real and is the same cost the `status` sections pay: the body is
+# invisible under `bash -x`. It is bounded here to functions whose failures are all
+# `nexa_die` with a reason on stderr, which is what an operator needs from them.
+nexa_untraced() {
+  # NAMESPACED locals, because these two names live in the dynamic scope of everything
+  # the body calls: a callee that assigned a bare `status=` and then succeeded would make
+  # this wrapper return that value, and one that clobbered `had_xtrace` would flip the
+  # restore. Nothing does today; the prefix is what keeps that true.
+  local __nexa_untraced_had_x=0 __nexa_untraced_status=0
+  case "$-" in *x*) __nexa_untraced_had_x=1 ;; esac
+  set +x
+  # `|| …` SUPPRESSES errexit for the body's whole dynamic extent, which is the price of
+  # catching its status at all — bash offers no way to have both. What makes that safe is
+  # an invariant that must stay true of every function passed here: each one guards every
+  # command that can fail and reports by `nexa_die`, never by a bare non-zero return.
+  # Checked when this was written, for `nexa_env_rewrite_untraced` (mktemp, chmod, chown,
+  # the awk filter, every append, the read-backs and the final mv are each guarded) and
+  # `cmd_secrets_migrate_config_untraced`. A new unguarded command in either would fail
+  # OPEN, in the function that edits the file holding the master key.
+  "$@" || __nexa_untraced_status=$?
+  [ "$__nexa_untraced_had_x" -eq 0 ] || set -x
+  return "$__nexa_untraced_status"
+}
+
 # One line, into place, or not at all. `printf > file` truncates first, so an
 # interruption mid-write leaves an empty `current` — an installation that
 # reports no release at all.
@@ -900,6 +965,10 @@ nexa_commit_release() {
 # whose value is the value — passed by reference precisely so no value is ever
 # an argument.
 nexa_env_rewrite() {
+  nexa_untraced nexa_env_rewrite_untraced "$@"
+}
+
+nexa_env_rewrite_untraced() {
   local file="$1" remove="$2"
   shift 2
 
@@ -916,32 +985,125 @@ nexa_env_rewrite() {
 
   # Every key this rewrite touches, so the old assignments are dropped exactly
   # once and the new ones are appended in a known order.
-  local names=() name key drop_pattern
+  local names=() name
   for name in "$@"; do names+=("$name"); done
 
   local removals="${remove}"
   for name in "${names[@]}"; do removals="${removals},${name}"; done
 
-  drop_pattern=""
-  local IFS_SAVE="$IFS"
-  IFS=','
-  for key in $removals; do
-    [ -n "$key" ] || continue
-    drop_pattern="${drop_pattern}${drop_pattern:+|}^${key}="
-  done
-  IFS="$IFS_SAVE"
+  # Whether the file ends without a newline, which decides what its last line MEANS —
+  # see `nexa_env_tail_unterminated`. A rewrite normalises that ending (awk prints a
+  # newline after every record, and an appended assignment must start its own line), and
+  # for a bare-shaped last line that normalisation CHANGES the configuration: `""` =
+  # `BUILD_COMMIT` becomes a genuine bare record taking BUILD_COMMIT from the environment.
+  local tail_open=0
+  if nexa_env_tail_unterminated "$file"; then tail_open=1; fi
 
   local status=0
-  if [ -n "$drop_pattern" ]; then
-    # 0 (lines kept) and 1 (everything matched) are both fine; anything else
-    # means the file we would write is not the file we meant to write.
-    grep -Ev "$drop_pattern" -- "$file" >"$tmp" || status=$?
+  if [ -n "${removals//,/}" ]; then
+    # A SCANNER, not `grep -v`, and for the same reason the reader is one: a value may
+    # span lines, so a line that looks like `BUILD_VERSION=...` may be text inside
+    # another variable's value. Dropping it by pattern would delete a line out of the
+    # middle of somebody's value and leave a file whose remaining quote closes
+    # somewhere else entirely — silent corruption of /etc/nexa/nexa.env, done by an
+    # update that reported success.
+    #
+    # Only TOP-LEVEL assignments of the named keys are dropped, and when one of them
+    # opens a multiline value its continuation lines go with it.
+    awk -v drop="$removals" -v tail_open="$tail_open" -v sq="'" -v dq='"' "$NEXA_ENV_AWK_LIB"'
+      BEGIN {
+        n = split(drop, a, ",")
+        for (i = 1; i <= n; i++) if (a[i] != "") kill[a[i]] = 1
+        inq = 0; skip = 0
+      }
+      {
+        line = $0
+        if (inq) {
+          closed = (unescaped_index(line, quote) > 0)
+          if (!skip) print line
+          if (closed) { inq = 0; skip = 0 }
+          next
+        }
+        # Reset at EVERY top-level record. `skip` means "suppress the continuation
+        # lines of the value being dropped", and leaving it set after dropping a
+        # SINGLE-line assignment made the next multiline value lose its continuation
+        # lines — including its closing quote. That is an update that installs an
+        # unterminated nexa.env, which Compose refuses outright, and reports success.
+        skip = 0
+        # A BARE record for a dropped key goes too. It is a real record — Compose takes
+        # the variable from the environment — and leaving it behind is how an obsolete
+        # key survived an update that said it had removed it. It opens no quoted value,
+        # having no value, so no continuation handling applies and `skip` stays 0.
+        #
+        # No trailing comment in the shape, measured on v5.1.1: `BUILD_COMMIT # why` is
+        # refused outright as `unexpected character "#" in variable name`, so it is not a
+        # record to drop. `last_bare` remembers the line for the END check below, because
+        # whether this IS a record depends on a newline awk cannot see.
+        if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t\r]*$/) > 0) {
+          last_bare = NR
+          bare = line
+          sub(/^[ \t]*(export[ \t]+)?/, "", bare)
+          sub(/[ \t\r]*$/, "", bare)
+          if (bare in kill) next
+          print line
+          next
+        }
+        # Every separator Compose accepts opens a value here, because this is the
+        # function that DELETES: a value opened with `NAME ='"'"'` or `NAME:'"'"'` and left
+        # untracked put its interior lines at top level, and a `BUILD_COMMIT=` among them
+        # was dropped out of the middle of somebody'"'"'s secret. Which key a record IS stays
+        # the strict `NAME=` shape, so the key reported obsolete is the key dropped and
+        # nothing new becomes droppable.
+        vi = record_value_index(line)
+        if (vi == 0) { print line; next }
+        name = ""
+        if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) > 0) {
+          name = substr(line, RSTART, RLENGTH)
+          sub(/^[ \t]*(export[ \t]+)?/, "", name)
+          sub(/=$/, "", name)
+        }
+        rest = substr(line, vi)
+        sub(/^[ \t]+/, "", rest)
+        first = substr(rest, 1, 1)
+        if (first == dq || first == sq) {
+          quote = first
+          if (unescaped_index(substr(rest, 2), quote) == 0) inq = 1
+        }
+        if (name in kill) { skip = 1; next }
+        print line
+      }
+      # A file that ENDS inside a quoted value is refused, whatever opened it. When
+      # the unterminated record is one being dropped, `skip` stays set to EOF and
+      # every later line — the keyring, the backup destination — would be deleted
+      # by an update that reported success. When it is any other record, the file
+      # is one Compose refuses whole, and a rewrite of it cannot be reasoned about.
+      # Either way the original stays: exit 3 is the caller'"'"'s signal to say so.
+      #
+      # Exit 4 is the other file this rewrite must not touch: one ending in a bare-shaped
+      # line with NO newline. Compose reads that as a variable with an empty name, not as a
+      # record (measured; see `nexa_env_tail_unterminated`), and every rewrite normalises
+      # the ending — so carrying the line through would CREATE the bare record, and
+      # dropping it would remove a variable the file does set. Neither is this function'"'"'s
+      # to decide, so the original stays and the caller says so.
+      END {
+        if (inq) exit 3
+        if (tail_open == 1 && last_bare == NR) exit 4
+      }
+    ' <"$file" >"$tmp" || status=$?
   else
     cat -- "$file" >"$tmp" || status=$?
   fi
-  if [ "$status" -gt 1 ]; then
+  if [ "$status" -eq 3 ]; then
     rm -f "$tmp"
-    nexa_die "could not read ${file} (grep exited ${status}); it is UNCHANGED. Check free space on /var."
+    nexa_die "${file} ends inside a quoted value, so no line after that quote can be told from the value it is in; it is UNCHANGED. Close the quote first."
+  fi
+  if [ "$status" -eq 4 ]; then
+    rm -f "$tmp"
+    nexa_die "${file} ends in a name with no value and no final newline, which Compose reads as a variable with an empty NAME rather than as a record; any rewrite would change what the file means. It is UNCHANGED. End the file with a newline first."
+  fi
+  if [ "$status" -ne 0 ]; then
+    rm -f "$tmp"
+    nexa_die "could not read ${file} (the filter exited ${status}); it is UNCHANGED. Check free space on /var."
   fi
 
   for name in "${names[@]}"; do
@@ -969,6 +1131,929 @@ nexa_env_rewrite() {
 
   sync "$tmp" 2>/dev/null || true
   mv -f "$tmp" "$file" || nexa_die "cannot install ${file}."
+}
+
+# Keys the application no longer takes from `/etc/nexa/nexa.env`.
+#
+# A FROZEN list, and short on purpose: a key belongs here only when leaving it in
+# place is actively wrong, not merely unnecessary. Restating a default is
+# harmless; these three are not.
+#
+# `env_file` beats an image's own ENV, so a BUILD_* line in nexa.env REPLACES the
+# identity stamped into the release at build time. The first production template
+# wrote all three, and the installer substituted `pending` for the commit and the
+# build time — it had built nothing and could not know them. The template stopped
+# writing them the next day, and nothing ever removed them from a file that
+# already had them, because `botctl update` does not rewrite nexa.env. So an
+# installation created then reports the installer's placeholder from
+# /health/info for the rest of its life, and an operator has no way to tie a
+# running container back to its source.
+#
+# Removing them is safe in the strongest sense available: the schema defaults all
+# three, so the file still boots, and the defaults (`0.0.0-dev`, `unknown`) are
+# true statements where `pending` was a claim that something was about to be
+# filled in. They are not operator choices — no operator was ever asked.
+NEXA_OBSOLETE_APP_ENV_KEYS="BUILD_VERSION BUILD_COMMIT BUILD_TIME"
+
+# Which of them a file actually carries, one per line. Names only, never values.
+nexa_obsolete_app_env_keys() {
+  local file="$1" key
+  [ -r "$file" ] || return 0
+  # Through the SCANNER, not a grep: a `BUILD_VERSION=` line sitting inside another
+  # variable's multiline value is not an assignment, and reporting it as one would send
+  # the rewriter to delete a line out of the middle of somebody's value.
+  for key in $NEXA_OBSOLETE_APP_ENV_KEYS; do
+    # TWO shapes, measured rather than counted: an assignment has a value in the file; a
+    # bare record takes its value from the environment running Compose and so has none,
+    # which is why asking only for a value reported it absent and left `botctl update`
+    # claiming it had removed a key it never saw.
+    #
+    # NOT a claim that Compose accepts only two. Measured on v5.1.1, it also accepts
+    # `NAME:value` in an `env_file` — `BUILD_COMMIT:deadbeef` reaches the container as
+    # `BUILD_COMMIT=deadbeef` — and NEITHER scanner here sees that, nor does the value
+    # reader. So a colon-form obsolete record survives an update that reports success,
+    # and `status` then reads it as a STALE override and sends the operator to
+    # `botctl restart`, which re-applies the mask. UNK-DEPLOY-002 in
+    # `docs/open-questions.md` carries it, because extending three scanners to a second
+    # separator is a change to the awk that nearly deleted a keyring and belongs in its
+    # own commit with its own adversarial round. What is fixed here is the CLAIM: this
+    # covers the assignment and bare shapes, and names the one it does not.
+    if nexa_compose_env_value "$file" "$key" >/dev/null 2>&1 ||
+      nexa_env_has_bare_record "$file" "$key"; then
+      printf '%s\n' "$key"
+    fi
+  done
+  return 0
+}
+
+# Remove them, in ONE atomic rewrite, or leave the file exactly as it is.
+#
+# NON-FATAL by contract: the caller is `botctl update`, and a stale build label is
+# not worth failing an update over. `nexa_env_rewrite` dies on any problem and
+# leaves the original in place, so running it in a subshell turns that into a
+# return code the caller can warn about and carry on.
+#
+# Returns 0 when there was nothing to do or the removal succeeded, 1 when the
+# removal was attempted and did not happen.
+nexa_reconcile_app_env() {
+  local file="${1:-${NEXA_CONFIG_DIR}/nexa.env}" present csv
+  present="$(nexa_obsolete_app_env_keys "$file")"
+  [ -n "$present" ] || return 0
+
+  csv="$(printf '%s' "$present" | tr '\n' ',' | sed 's/,$//')"
+  nexa_step "removing configuration the application no longer reads"
+  # The rewriter's own reason is kept — it is the operator's only way to learn WHY a
+  # file was left alone, and "ends inside a quoted value" names a file Compose will
+  # refuse whole at the next start. Only stderr, and only its last line: the
+  # rewriter prints no value anywhere, so the reason carries none.
+  #
+  # The call is inside a command substitution, which forks — so the `nexa_die` in the
+  # rewriter cannot exit `botctl`, and a removal refused on an unterminated file leaves
+  # the update itself successful. That is the property: a stale build label is not worth
+  # failing an update over. The inner `( … )` is redundant beside the substitution and
+  # kept deliberately, so the protection does not rest on the substitution alone.
+  local reason=''
+  if reason="$( (nexa_env_rewrite "$file" "$csv") 2>&1 >/dev/null)"; then
+    # The NAMES, because they are not secrets and an operator should see what
+    # changed in a file they are responsible for.
+    nexa_ok "removed from $(basename "$file"): $(printf '%s' "$present" | tr '\n' ' ')"
+    nexa_log "The image supplies the build identity; these lines were masking it."
+    return 0
+  fi
+  nexa_warn "could not remove $(printf '%s' "$present" | tr '\n' ' ') from ${file}; it is UNCHANGED."
+  [ -z "$reason" ] || nexa_warn "$(printf '%s\n' "$reason" | sed -n '$p')"
+  nexa_warn "The release's own build identity stays masked until they are gone. Nothing else is affected."
+  return 1
+}
+
+# Where a quoted value ENDS, as Compose decides it.
+#
+# Not the first matching delimiter. Compose honours an escaped delimiter inside a
+# quoted value, and the rule is the usual one — a delimiter is escaped when an ODD
+# number of backslashes immediately precedes it. Measured on v5.1.1, and the two
+# halves of the rule each need one of these:
+#
+#   KEY='it\'s fine'   ->  it's fine      one backslash: the quote is escaped
+#   KEY='ends\\'       ->  ends\\         two: the quote is NOT escaped, value ends
+#   KEY="ends\\"       ->  ends\          same in double quotes
+#   KEY='a\\\'b'       ->  a\\'b          three: escaped again
+#
+# A reader that took the first matching character would end `'it\'s fine'` at the
+# escaped quote — and then treat the REST of a multiline value as top-level lines, so
+# an interior `BUILD_COMMIT=` would be classified as an assignment and deleted out of
+# the operator's value by the rewriter.
+#
+# Defined ONCE and prepended to each of the three awk programs below, because this is
+# the rule that must not drift between the one that finds an assignment, the one that
+# removes lines, and the one the deploy suite uses to assert the rewriter never leaves
+# a file Compose refuses. Three copies of it would be three chances for two of them to
+# disagree.
+#
+# Backslashes are counted only back to the START OF THE LINE, which is correct: a
+# backslash at the end of the previous line precedes a newline, not this delimiter.
+#
+# `record_value_index` is the second half of the same rule, and it is here for the same
+# reason: where a top-level record'"'"'s VALUE begins, for EVERY separator Compose accepts.
+# Measured on v5.1.1, all four of these open a quoted value that spans lines exactly as
+# `NAME=` does, and a record after the closing quote is read normally again:
+#
+#   NOTES='"'"'first        NOTES ='"'"'first       NOTES:'"'"'first       NOTES :'"'"'first
+#   BUILD_COMMIT=masked   (interior TEXT in every one of the four — not a record)
+#   last'"'"'
+#
+# The scanners used to open a quoted region only on `NAME=`, so a value opened with any
+# other separator left them OUT OF SYNC with Compose, and the interior line was classified
+# as a top-level assignment. That made `botctl update`'"'"'s automatic reconciliation delete a
+# line out of the middle of an operator'"'"'s `TELEGRAM_WEBHOOK_SECRET` and report a
+# successful cleanup of a key that never existed — reproduced end to end, measured against
+# `docker compose config` both before and after.
+#
+# The NAME grammar is equally not the application's. Measured on v5.1.1, Compose accepts
+# names this repository would never write -- `notes.value`, `notes-value`, `1notes`,
+# `NOTES[0]`, and non-ASCII letters -- and refuses `@`, `/` and `#` with
+# `unexpected character "X" in variable name`. A tracker built on `[A-Za-z_][A-Za-z0-9_]*`
+# therefore missed a DOTTED record opening a multiline value and put its interior lines back
+# at top level: the same deletion, reached through the name instead of the separator. So a
+# name here is any run of characters that is not blank, not `#` and not the separator. Where
+# that is wider than Compose it cannot matter, because a name Compose refuses is a file
+# Compose refuses WHOLE: nothing in it is in force, and `nexa_env_rewrite`'s own validation
+# leaves such a file alone. Where it were narrower, a value's interior gets deleted. Only one
+# of those two errors destroys data, and this grammar cannot make it.
+#
+# Tracking is deliberately WIDER than reading. Which key a record belongs to is still
+# decided by the strict `NAME=` shape everywhere that decision is made, so nothing new is
+# read and nothing new is dropped. Teaching the readers the other separators is still
+# `UNK-DEPLOY-002`.
+#
+# EVERY scanner that tracks quotes uses this, the refusal detector included. An earlier
+# version of this comment argued that detector could keep the `=`-only tracker because its
+# errors could only be false positives. That was wrong: tracking is SHARED STATE, so a
+# region this function fails to open is attributed to the next line that looks like one.
+# Measured, with `NOTE:` opening a value that closes on a `DUMMY='` line and an effective
+# `SECRETS_KEYS:` record after it -- Compose sets `SECRETS_KEYS`, and the `=`-only tracker
+# took `DUMMY='` for the opener, swallowed the rest and reported NO unreadable record.
+# `migrate-config` would then have appended the legacy `SECRETS_KEK` as the canonical
+# keyring, which Compose prefers, making every existing ciphertext undecryptable. A false
+# negative there is exactly the write this refusal exists to prevent.
+NEXA_ENV_AWK_LIB='
+function unescaped_index(s, q,   i, n, b, j) {
+  n = length(s)
+  for (i = 1; i <= n; i++) {
+    if (substr(s, i, 1) != q) continue
+    b = 0
+    j = i - 1
+    while (j >= 1 && substr(s, j, 1) == "\\") { b++; j-- }
+    if (b % 2 == 0) return i
+  }
+  return 0
+}
+function record_value_index(line) {
+  if (match(line, /^[ \t]*(export[ \t]+)?[^ \t\r#:=]+[ \t]*[:=]/) == 0) return 0
+  return RSTART + RLENGTH
+}
+'
+
+# Does this file END without a newline? Measured on Compose v5.1.1, because it decides
+# what the last line MEANS, and only for a bare record:
+#
+#   file ends `BUILD_COMMIT=abc`  (no newline)   ->  BUILD_COMMIT: abc
+#   file ends `BUILD_COMMIT`      (no newline)   ->  "": BUILD_COMMIT
+#   file ends `BUILD_COMMIT\n`                   ->  BUILD_COMMIT: <host value>
+#
+# So an unterminated ASSIGNMENT is honoured exactly as a terminated one, while an
+# unterminated bare name is NOT a bare record at all: Compose reads it as a variable with
+# an EMPTY name whose value is that text, and the key is never set. A trailing `\r`
+# instead of a newline behaves the same way. `awk` cannot see the difference — it hands a
+# final partial line to the program like any other record — so the scanners were reporting
+# a bare record for a key Compose does not set, and the rewriter would have deleted the
+# line on that report.
+#
+# The byte itself never reaches a variable, an argument or a trace. `tr -dc` DELETES every
+# byte that is not a newline, so the only thing that can survive the first pipe IS a
+# newline; the second turns that into an `N` so the answer survives command substitution,
+# which strips trailing newlines and would otherwise make both cases look empty. An earlier
+# version compared the byte's octal code, which put one character of somebody's value into
+# an assignment `bash -x` prints — the class U-53, U-55 and U-56 are about, and not a class
+# this repository argues the likelihood of.
+nexa_env_tail_unterminated() {
+  local file="$1"
+  [ -s "$file" ] || return 1
+  [ -z "$(tail -c1 -- "$file" | tr -dc '\n' | tr '\n' 'N')" ]
+}
+
+# Is there a top-level BARE record for this key — `BUILD_COMMIT` with no `=` at all?
+#
+# Compose supports that form in an `env_file`, and it does NOT mean "assigned to
+# nothing": it means "take this variable from the environment running Compose".
+# Measured on v5.1.1 with `BUILD_COMMIT` bare in the file — host variable set, the
+# container receives the host's value; unset, the key is omitted entirely. So a bare
+# obsolete record can mask the build identity stamped into the image exactly as an
+# assignment can, and the obsolete-key detector saw neither, because it asks for a VALUE
+# and a bare record has none in the file. `botctl update` then reported that it had
+# removed the obsolete keys while leaving that one in place.
+#
+# A SCANNER for the same reason the reader is one: a line reading `BUILD_COMMIT` inside
+# another variable's multiline value is text, not a record, and reporting it would send
+# the rewriter to delete a line out of the middle of somebody else's value.
+nexa_env_has_bare_record() {
+  local file="$1" key="$2" tail_open=0
+  [ -r "$file" ] || return 1
+  if nexa_env_tail_unterminated "$file"; then tail_open=1; fi
+  awk -v want="$key" -v tail_open="$tail_open" -v sq="'" -v dq='"' "$NEXA_ENV_AWK_LIB"'
+    BEGIN { found = 0; first_match = 0; inq = 0 }
+    {
+      line = $0
+      if (inq) {
+        if (unescaped_index(line, quote) > 0) inq = 0
+        next
+      }
+      # The bare shape first: a name alone, optionally exported, with nothing after it
+      # but blanks or a carriage return. It cannot open a quoted value, having no value at
+      # all, so none of the continuation bookkeeping below applies to it.
+      #
+      # NOT a trailing comment. Measured on v5.1.1, `BUILD_COMMIT # why` is REFUSED —
+      # `unexpected character "#" in variable name "BUILD_COMMIT # why"` — so that line is
+      # not a bare record, it is a file Compose will not read at all, and `status` reports
+      # it through the refusal path. The earlier `(#.*)?` here claimed a shape Compose
+      # accepts and does not, which made this answer yes about a file that has no records.
+      if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t\r]*$/) > 0) {
+        name = line
+        sub(/^[ \t]*(export[ \t]+)?/, "", name)
+        sub(/[ \t\r]*$/, "", name)
+        if (name == want) { found = 1; if (first_match == 0) first_match = NR }
+        next
+      }
+      # Otherwise track quoted regions exactly as COMPOSE does, so an interior line is
+      # never mistaken for a record — for every separator, not only `=`. A value opened
+      # with `NAME ='"'"'` or `NAME:'"'"'` spans lines identically (measured), and a tracker that
+      # missed it reported the interior `BUILD_COMMIT` line as a bare record.
+      vi = record_value_index(line)
+      if (vi == 0) next
+      rest = substr(line, vi)
+      sub(/^[ \t]+/, "", rest)
+      first = substr(rest, 1, 1)
+      if (first == dq || first == sq) {
+        quote = first
+        if (unescaped_index(substr(rest, 2), quote) == 0) inq = 1
+      }
+    }
+    # A bare name on a final line with no newline is not a record — Compose reads it as a
+    # variable with an empty NAME (`"": BUILD_COMMIT`) and never sets the key. If that is
+    # the FIRST line matching, it is the only one, because there is one final line; an
+    # earlier terminated record keeps the answer yes, which is what Compose does too.
+    END { if (found && tail_open == 1 && first_match == NR) found = 0; exit(found ? 0 : 1) }
+  ' "$file"
+}
+
+# Is there a top-level record for this key that Compose READS and
+# `nexa_compose_env_value` does NOT — `SECRETS_KEYS:<value>` or `SECRETS_KEYS =<value>`?
+#
+# A REFUSAL detector, and only that. Measured on Compose v5.1.1, all of these set the
+# variable, and the LAST record for a key wins:
+#
+#   SECRETS_KEYS:realkeyring          SECRETS_KEYS: v        SECRETS_KEYS :v
+#   export SECRETS_KEYS:v             SECRETS_KEYS:v with no final newline
+#   SECRETS_KEYS =realkeyring         SECRETS_KEYS<TAB>=v    export SECRETS_KEYS =v
+#
+#   SECRETS_KEYS:realkeyring                  ->  staleappended   the APPENDED one wins
+#   SECRETS_KEYS=staleappended
+#   SECRETS_KEYS =realkeyring                 ->  staleappended   likewise
+#   SECRETS_KEYS=staleappended
+#
+# `nexa_compose_env_value` requires the `=` to follow the name immediately, so on a file
+# whose canonical keyring is written either of those ways `botctl secrets migrate-config`
+# read no SECRETS_KEYS, concluded the installation was legacy, and appended
+# `SECRETS_KEYS=<the old SECRETS_KEK>` — which Compose then prefers. The restart it advises
+# would leave every row encrypted under the real keyring unreadable.
+#
+# ONE predicate for the whole family rather than one per separator, because the family is
+# what matters: a shape Compose reads and the text reader does not. The colon form was
+# fixed first and the whitespace form found a round later, one member over, which is the
+# argument for closing the class instead of its members.
+#
+# Deliberately NOT wired into `nexa_obsolete_app_env_keys`: reporting a key there sends the
+# REWRITER to remove it, and teaching the rewriter these separators is the change
+# UNK-DEPLOY-002 defers. Refusing is safe without that, because a refusal writes nothing —
+# so a false yes costs an operator one hand-edit, never a key.
+#
+# A scanner, for the same reason the others are: such a line inside another variable's
+# multiline value is text -- and it tracks quoted regions through the SHARED
+# `record_value_index`, like every other scanner here. It did not always: the comment that
+# stood here argued the `=`-only tracker was safe because its errors could only be false
+# positives. That was wrong, and the measurement is in the library's own comment. A region
+# this function failed to open was attributed to the next line that looked like one, and an
+# effective `SECRETS_KEYS:` record went unseen -- and unseen is the direction that writes.
+nexa_env_has_unreadable_record() {
+  local file="$1" key="$2"
+  [ -r "$file" ] || return 1
+  awk -v want="$key" -v sq="'" -v dq='"' "$NEXA_ENV_AWK_LIB"'
+    BEGIN { found = 0; inq = 0 }
+    {
+      line = $0
+      if (inq) {
+        if (unescaped_index(line, quote) > 0) inq = 0
+        next
+      }
+      # Where the value of this record begins, for every separator and every name Compose
+      # accepts. Taken FIRST, because the name matches below clobber RSTART, and because
+      # this is the state that decides whether the NEXT line is a record at all.
+      vi = record_value_index(line)
+      if (vi == 0) next
+      # A colon separator, or one or more blanks before the `=`. Both are read by Compose
+      # and neither is read by `nexa_compose_env_value`, whose `=` follows the name. The
+      # key grammar of the application is the right one HERE: the keys this is asked about
+      # are plain names, and matching more would answer about a key nobody can configure.
+      if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*:/) > 0 ||
+          match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]+=/) > 0) {
+        name = substr(line, RSTART, RLENGTH)
+        sub(/^[ \t]*(export[ \t]+)?/, "", name)
+        sub(/[ \t]*[:=]$/, "", name)
+        sub(/[ \t]+$/, "", name)
+        if (name == want) found = 1
+      }
+      # Tracked for EVERY record, including the one just matched: a colon record opens a
+      # multiline value exactly as an assignment does, so returning here without tracking
+      # is what mis-attributed the next opener.
+      rest = substr(line, vi)
+      sub(/^[ \t]+/, "", rest)
+      first = substr(rest, 1, 1)
+      if (first == dq || first == sq) {
+        quote = first
+        if (unescaped_index(substr(rest, 2), quote) == 0) inq = 1
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$file"
+}
+
+# One assignment out of a file Docker Compose reads, as the file's TEXT spells it after
+# Compose's quoting and comment rules — and deliberately NOT what the container receives.
+#
+# This is the scanner, and it survives for questions about lines only: which top-level
+# assignments a file makes (`nexa_obsolete_app_env_keys`), and what `migrate-config`
+# must read before it REWRITES the file, because writing a resolved value there would
+# freeze an interpolation meant to be evaluated at every start. Anything that reports
+# what the application RECEIVES asks Compose instead — `nexa_compose_resolved_env` —
+# because Compose interpolates these values and this scanner does not.
+#
+# It SCANS rather than greps, and that is the point. A value may span lines, so a line
+# that looks like an assignment may be text inside another variable's value:
+#
+#   IGNORED_NOTE='first
+#   BACKUP_SCHEDULE_ENABLED=true
+#   last'
+#
+# defines ONE variable, and a grep for `^BACKUP_SCHEDULE_ENABLED=` would find the
+# middle line and delete it out of the operator's value. The quoted regions have to be
+# tracked across the whole file, which is what the scanner does.
+#
+# The rules are not inferred from the documentation; they were established by running
+# 25 shapes through `docker compose config --format json` (Compose v5.1.1) and reading
+# the resolved environment back:
+#
+#   KEY=false # off       ->  false        a SPACE before `#` starts a comment
+#   KEY=false#off         ->  false#off    no space: not a comment
+#   KEY=true<TAB># off    ->  unchanged    a TAB before `#` is NOT a comment
+#   KEY=__true__          ->  true         unquoted values ARE trimmed, both ends
+#   KEY=_# off            ->  # off        trimmed first, so this `#` leads
+#   KEY=t rue             ->  t rue        INTERNAL whitespace is preserved
+#   KEY="false # x"       ->  false # x    quotes win over the comment rule
+#   KEY="false" # x       ->  false        after the closing quote, dropped
+#   KEY=_"true"_          ->  true         leading space before a quote is fine
+#   export KEY=true       ->  true         an `export` prefix is an assignment
+#   __KEY=true            ->  true         so is an indented key
+#   KEY=a then KEY=b      ->  b            the last assignment wins
+#   KEY=true<CR>          ->  true         a CRLF file is read, not mangled
+#
+# A newline INSIDE a value is rendered as the two characters `\n`, because command
+# substitution cannot carry a trailing newline.
+#
+# NOT mirrored, deliberately: interpolation (`${OTHER}`) and the escape expansion
+# Compose applies inside double quotes. A value that contains either is passed through
+# as text, and the one caller that would WRITE such a value — `migrate-config` —
+# refuses it rather than freeze it.
+#
+# Exit 0 with the value, or 1 when the file does not assign that key at all.
+nexa_compose_env_value() {
+  local file="$1" key="$2"
+  [ -r "$file" ] || return 1
+  awk -v want="$key" -v sq="'" -v dq='"' "$NEXA_ENV_AWK_LIB"'
+    function trim_end(s) { sub(/[ \t\r]+$/, "", s); return s }
+    BEGIN { found = 0; inq = 0 }
+    {
+      line = $0
+      if (inq) {
+        # Inside a quoted value. Everything up to the closing quote belongs to it,
+        # assignments included: that is the whole reason this is a scanner.
+        idx = unescaped_index(line, quote)
+        if (idx > 0) {
+          acc = acc substr(line, 1, idx - 1)
+          inq = 0
+          if (mine) { found = 1; out = acc }
+          next
+        }
+        acc = acc line "\\n"
+        next
+      }
+      # Quote tracking takes EVERY separator Compose accepts; the key this record
+      # belongs to is still the strict `NAME=` shape alone. Those are different
+      # questions: reading `NAME:value` here would change what `secrets migrate-config`
+      # calls canonical, which `nexa_env_has_unreadable_record` refuses instead and
+      # `UNK-DEPLOY-002` defers. Not tracking it corrupted a value.
+      vi = record_value_index(line)
+      if (vi == 0) next
+      mine = 0
+      if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) > 0) {
+        name = substr(line, RSTART, RLENGTH)
+        sub(/^[ \t]*(export[ \t]+)?/, "", name)
+        sub(/=$/, "", name)
+        mine = (name == want)
+      }
+      rest = substr(line, vi)
+      sub(/^[ \t]+/, "", rest)
+      first = substr(rest, 1, 1)
+      if (first == dq || first == sq) {
+        quote = first
+        body = substr(rest, 2)
+        idx = unescaped_index(body, quote)
+        if (idx > 0) {
+          if (mine) { found = 1; out = substr(body, 1, idx - 1) }
+          next
+        }
+        inq = 1
+        acc = body "\\n"
+        next
+      }
+      v = trim_end(rest)
+      i = index(v, " #")
+      if (i > 0) v = trim_end(substr(v, 1, i - 1))
+      if (mine) { found = 1; out = v }
+    }
+    END {
+      # A file that ENDS inside a quote is one Compose refuses outright
+      # ("unterminated quoted value"), so nothing it assigns is in force. What is
+      # reported for the key is the text accumulated so far, which carries a rendered
+      # newline and is therefore refused by every validator — `invalid` rather than a
+      # value, which is the nearest true thing a per-key reader can say.
+      if (inq && mine) { found = 1; out = acc }
+      if (!found) exit 1
+      printf "%s", out
+    }
+  ' <"$file"
+}
+
+# Does this file end inside a quoted value — the shape Compose refuses whole?
+#
+# No production caller: `botctl status` asks Compose itself now, and Compose says why.
+# This is the deploy suite's ORACLE for the rewriter — after `nexa_env_rewrite` drops a
+# line, the suite asserts the result is not a file Compose would refuse — and it lives
+# here rather than in the harness because it must share `NEXA_ENV_AWK_LIB` with the
+# rewriter: the delimiter rule that decides where a value ends is the one rule the
+# oracle and the code under test must not be allowed to disagree about.
+nexa_compose_env_unterminated() {
+  local file="$1"
+  [ -r "$file" ] || return 1
+  awk -v sq="'" -v dq='"' "$NEXA_ENV_AWK_LIB"'
+    BEGIN { inq = 0 }
+    {
+      line = $0
+      if (inq) {
+        if (unescaped_index(line, quote) > 0) { inq = 0 }
+        next
+      }
+      # The same separators as the rewriter, or this stops being its oracle.
+      vi = record_value_index(line)
+      if (vi == 0) next
+      rest = substr(line, vi)
+      sub(/^[ \t]+/, "", rest)
+      first = substr(rest, 1, 1)
+      if (first != dq && first != sq) next
+      quote = first
+      if (unescaped_index(substr(rest, 2), quote) == 0) inq = 1
+    }
+    END { exit (inq ? 0 : 1) }
+  ' <"$file"
+}
+
+# The resolved environment of a service, as COMPOSE resolves it.
+#
+# NOT a reimplementation, and that is the point. Five review rounds were spent
+# approaching Compose env_file semantics from the outside — inline comments, trimming,
+# quoting, escaped delimiters, values spanning lines — and each round found a new way
+# the outside view differed. Round nine found the one that settles it: Compose
+# INTERPOLATES env_file values. `${UNSET:-true}` reaches the container as `true` and
+# `${HOME}` resolves from the ambient environment, so reproducing it faithfully means
+# reproducing Compose variable precedence. A shell reader cannot, and one that tries
+# reports `invalid` for a file the application accepts.
+#
+# So this asks the authority. `docker compose config` is client-side, needs no daemon,
+# and resolves exactly what the containers will receive — including the compose file's
+# own `environment:` entries, which a reader of nexa.env never saw at all.
+#
+# One thing about that output is NOT what the container receives, and it was found by
+# review after this function claimed otherwise: `config` emits a RE-LOADABLE document,
+# so every literal `$` in a resolved value comes out doubled — measured on v5.1.1,
+# `S='abc$'` is `abc$$` in the JSON, one character longer than what the application
+# gets. Undone here, once, so that a caller measuring or comparing a value is measuring
+# the value. Nothing else is re-escaped: newlines and backslashes arrive intact.
+#
+# Output is one `KEY=value` per line with any newline inside a value rendered as the
+# two characters \n and a backslash doubled, because a multiline value cannot travel
+# through a line-based caller intact. No caller decodes that rendering back into a
+# value: `nexa_listing_rendered` compares it, `nexa_listing_length` measures through
+# it and `nexa_listing_present` trims through it, each in one pass that cannot lose a
+# trailing newline the way a command substitution does.
+#
+# Exit 1 when Compose REFUSES the configuration — an unterminated quoted value, a
+# missing env file, an unsatisfiable substitution, a malformed compose file — with
+# Compose's own error line on stderr; and exit 1 when the document
+# defines no such service, which is the same answer for the caller: nothing will start
+# as asked. Compose's stderr is kept apart from its stdout because it WARNS there on
+# success too — one line per unset substitution, meaning a value was silently blanked —
+# and a warning glued onto the JSON would read as a refusal. Those warnings are NOT
+# surfaced on success; nothing here claims to report them.
+nexa_compose_resolved_env() {
+  local service="${1:-api}" json err
+  err="$(mktemp)" || return 1
+  if ! json="$(nexa_compose config --format json 2>"$err")"; then
+    # The REFUSAL, not the first line. Compose logs warnings to stderr BEFORE the
+    # error — `The "X" variable is not set. Defaulting to a blank string.` for every
+    # unset substitution in the file — and the error itself is a plain line after
+    # them. Measured on v5.1.1. The first line that is not a logged warning is the
+    # reason; if none survives the filter — every line is a warning, or the error line
+    # itself happens to contain `level=warning`, as an unterminated value spelled that
+    # way does — the last line is the best there is. Written so that it does not
+    # depend on being called from an `if`: under errexit and pipefail a `grep` that
+    # matched nothing would otherwise abort the group before the fallback ran.
+    local reason
+    reason="$(grep -v 'level=warning' "$err" | sed -n '1p')" || reason=''
+    [ -n "$reason" ] || reason="$(sed -n '$p' "$err")"
+    printf '%s\n' "$reason" >&2
+    rm -f "$err"
+    return 1
+  fi
+  rm -f "$err"
+  [ -n "$json" ] || return 1
+  printf '%s' "$json" | NEXA_SERVICE="$service" python3 -c '
+import json, os, sys
+
+try:
+    doc = json.load(sys.stdin)
+except Exception:
+    sys.stderr.write("docker compose config did not produce a document this script can read\n")
+    sys.exit(1)
+name = os.environ.get("NEXA_SERVICE", "api")
+services = doc.get("services") or {}
+if name not in services:
+    sys.stderr.write("the compose file defines no service named " + name + "\n")
+    sys.exit(1)
+env = (services.get(name) or {}).get("environment") or {}
+if not isinstance(env, dict):
+    sys.stderr.write("the compose file gives " + name + " an environment this script cannot read\n")
+    sys.exit(1)
+back = chr(92)
+for key in sorted(env):
+    raw = env[key]
+    # A null entry is a variable Compose left UNSET — a bare `KEY` line whose host
+    # variable is absent — so the application never receives it. Rendering it as
+    # `KEY=` would turn the schema default into an invalid explicit empty value.
+    # Measured on v5.1.1: an `env_file` bare key is omitted, but a bare `- KEY` in the
+    # `environment:` list of the compose file itself — which this reads — IS a null.
+    if raw is None:
+        continue
+    text = str(raw)
+    # `config` re-escapes the document it prints; the container gets one `$`.
+    text = text.replace("$$", "$")
+    text = text.replace(back, back + back).replace(chr(10), back + "n")
+    sys.stdout.write(str(key) + "=" + text + chr(10))
+'
+}
+
+# Compose's refusal, fit to print. TWO redactions, because Compose has two ways of
+# putting a value out of nexa.env into its own diagnostic, and the first version of this
+# function knew about only one. The values in that file include the encryption keyring,
+# the database password and a bot token, and this output is meant to be safe to paste
+# into a ticket.
+#
+# 1. It echoes the offending VALUE, quoted, when a quoted value is never closed:
+#    `unterminated quoted value '7777:AAA…`. Cutting at the first quote drops it.
+# 2. The required-variable forms `${VAR?text}` and `${VAR:?text}` put the OPERATOR'S own
+#    text in the message, and that text needs no quote at all. Measured on v5.1.1, with
+#    `SECRETS_KEYS=${KEYRING:?k1:<key material>}` and KEYRING unset:
+#      failed to read /etc/nexa/nexa.env: required variable KEYRING is missing a value:
+#      k1:<key material>
+#    so the keyring went straight through the quote cut. Everything from that marker on
+#    is withheld and the marker itself is kept, which leaves Compose's own prose whole:
+#    `required variable KEYRING is missing a value`. The variable NAME is what an
+#    operator needs and is not a value.
+#
+# Everything else Compose says — a missing env file, a malformed compose file — reads
+# whole, still bounded to 200 characters. Both cuts SAY they happened, which neither
+# used to: a cut that leaves a grammatical sentence behind is read as the whole
+# message, and case 1 above is exactly that shape.
+nexa_compose_refusal_reason() {
+  local text cut bounded withheld=''
+  text="$(printf '%s\n' "$1" | sed -n '1p')"
+  # It CAN tell the two apart, which an earlier version of this said it could not.
+  # Measured on v5.1.1, the two required-variable channels carry different prefixes:
+  #
+  #   env_file   failed to read /etc/nexa/nexa.env: required variable KEYRING is missing
+  #              a value: k1:<key material>
+  #   compose    error while interpolating x-app-common.image: required variable
+  #              NEXA_IMAGE is missing a value: NEXA_IMAGE must be an image digest reference
+  #
+  # Only the first can carry a value out of `nexa.env`. The second comes from the four
+  # `${VAR:?text}` forms in `deploy/compose.yml`, whose text is operator guidance, and
+  # whose variables live in `deploy.env`, which holds no secrets by design. That message
+  # is the commonest refusal there is — a half-written `deploy.env` — and cutting it lost
+  # the only explanation while telling the operator a value had been withheld, which was
+  # false about it.
+  case "$text" in
+    'error while interpolating'*) : ;;
+    *' is missing a value:'*)
+      text="${text%% is missing a value:*} is missing a value"
+      withheld=' (the rest of the message is withheld: it is text from the configuration and may contain a value)'
+      ;;
+  esac
+  cut="$(printf '%s\n' "$text" | sed "s/[\"'].*\$//")"
+  bounded="$(printf '%s\n' "$cut" | cut -c1-200)"
+  # The quote cut and the 200-character bound each announce THEMSELVES, rather than only
+  # the one channel whose marker is recognised above. They were silent, and the silent one
+  # is the channel that actually carries a value: measured on v5.1.1, a quoted value that
+  # is never closed is echoed into the message —
+  #   failed to read /etc/nexa/nexa.env: line 2: unterminated quoted value "<value>
+  # — and the cut at the quote removed it leaving a message that reads as complete. An
+  # operator comparing that output against the file sees a refusal about a line whose
+  # value is simply absent from the diagnostic, with nothing saying anything was removed.
+  # Neither note claims WHICH it was: this function cannot tell a keyring from a path.
+  if [ -z "$withheld" ] && [ "$cut" != "$text" ]; then
+    withheld=' (cut at a quote: what followed it may be a value out of the configuration)'
+  fi
+  if [ "$bounded" != "$cut" ]; then
+    withheld="${withheld} (cut at 200 characters)"
+  fi
+  # The notes are appended AFTER the quote cut and outside the 200-character bound, because
+  # they are this function's own words and not Compose's. The first version put one inside
+  # the string and the quote cut ate it at the apostrophe in `Compose's` — the redaction
+  # removing the notice that a redaction had happened. Nothing here may contain a quote.
+  printf '%s' "${bounded:-(compose gave no reason)}${withheld}"
+}
+
+# One value out of a resolved listing, and whether the key is there at all.
+#
+# Separate from reading it, because "absent" and "assigned to nothing" are different
+# states with different meanings: zod defaults an UNDEFINED value, and an environment
+# variable is a string, so `KEY=` reaches the schema as '' and is refused.
+nexa_listing_has() {
+  # A bash pattern rather than a pipeline into `grep -q`: under `pipefail` a consumer
+  # that exits early makes the writer die of SIGPIPE and the pipeline return 141 when it
+  # SUCCEEDED. `scripts/check-shell.sh` refuses that shape, and it is right to.
+  case "$1" in
+    "$2="*) return 0 ;;
+    *"
+$2="*) return 0 ;;
+  esac
+  return 1
+}
+
+# The value AS THE LISTING RENDERS IT: a newline inside it is the two characters
+# `\n`, a backslash is doubled, and nothing else is escaped.
+#
+# This is what a VOCABULARY check must read. Decoding first and capturing the result
+# in a command substitution loses a trailing newline — `true` + newline arrived as
+# `true` and read `on`, for a value `booleanish` refuses, which is the original
+# cry-wolf-in-reverse this reader exists to avoid. No accepted spelling contains a
+# backslash or a newline, so a rendering that differs from the spelling IS a value
+# the schema refuses: comparing renderings is exact here, and needs no decode.
+nexa_listing_rendered() {
+  printf '%s\n' "$1" | sed -n "s/^${2}=//p" | sed -n '1p'
+}
+
+# The LENGTH of a value, as `configSchema` measures it.
+#
+# Not `${#value}`, for two reasons found by review. Command substitution drops a
+# trailing newline, so a quoted value that ends its line — 16 characters to the
+# schema, which accepts it — arrived as 15 and read `invalid`. And `${#}` counts
+# characters under a UTF-8 locale and BYTES under C/POSIX, while JavaScript's
+# `.length` counts UTF-16 code units; `botctl` sets no locale, so the answer would
+# depend on how it was invoked. This decodes the rendering itself and counts what
+# the schema counts, so a value is accepted here exactly when it is accepted there.
+nexa_listing_length() {
+  printf '%s\n' "$1" | sed -n "s/^${2}=//p" | sed -n '1p' | python3 -c '
+import sys
+
+rendered = sys.stdin.read()
+if rendered.endswith(chr(10)):
+    rendered = rendered[:-1]
+back = chr(92)
+out = []
+i = 0
+while i < len(rendered):
+    ch = rendered[i]
+    if ch == back and i + 1 < len(rendered):
+        nxt = rendered[i + 1]
+        out.append(chr(10) if nxt == "n" else nxt)
+        i += 2
+    else:
+        out.append(ch)
+        i += 1
+value = "".join(out)
+print(len(value.encode("utf-16-le")) // 2)
+'
+}
+
+# Is a value PRESENT after the trim the schema applies?
+#
+# `configSchema` trims the backup destination with JavaScript'"'"'s `.trim()`, whose
+# whitespace is the ECMAScript set — the ASCII blanks, the no-break space, the
+# Unicode space separators, the line separators and the byte-order mark — while the
+# shell'"'"'s `[[:space:]]` is the ASCII set, whatever the locale. A chat id that is only
+# a no-break space is nothing to the application and "present" to the shell, and the
+# next start refuses a destination the report called configured. Python'"'"'s own
+# `str.isspace()` is a third set (it lacks U+FEFF and has the ASCII separators
+# U+001C..U+001F and U+0085), so the ECMAScript set is spelled out.
+#
+# Exit 0 when something remains after the trim, 1 when nothing does or the key is
+# absent.
+nexa_listing_present() {
+  printf '%s\n' "$1" | sed -n "s/^${2}=//p" | sed -n '1p' | python3 -c '
+import sys
+
+rendered = sys.stdin.read()
+if rendered.endswith(chr(10)):
+    rendered = rendered[:-1]
+back = chr(92)
+out = []
+i = 0
+while i < len(rendered):
+    ch = rendered[i]
+    if ch == back and i + 1 < len(rendered):
+        nxt = rendered[i + 1]
+        out.append(chr(10) if nxt == "n" else nxt)
+        i += 2
+    else:
+        out.append(ch)
+        i += 1
+value = "".join(out)
+ecma = set(chr(c) for c in (
+    0x9, 0xA, 0xB, 0xC, 0xD, 0x20, 0xA0, 0x1680,
+    0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A,
+    0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF,
+))
+sys.exit(0 if any(ch not in ecma for ch in value) else 1)
+'
+}
+
+# Is a boolean setting on, in the vocabulary the application accepts FOR THAT KEY?
+#
+# Takes a RESOLVED listing from `nexa_compose_resolved_env`, not a file. Resolution is
+# Compose's job and validation is this one, and keeping them apart is what finally made
+# this function correct: five rounds of failure here were all attempts to resolve and
+# validate in the same place, getting comments, trimming, escapes, multiline values and
+# finally interpolation wrong in turn.
+#
+# The vocabulary is per key, because the schema does not have one. `booleanish` takes
+# true/false/1/0/yes/no, so a reader accepting only `true` would report a monitor an
+# operator enabled with `yes` as disabled. But `PANEL_MONITOR_ENABLED` is
+# `z.enum(['true', 'false'])` and nothing wider, so accepting `yes` there would report
+# `on` for a value the application REFUSES to boot on — the same lie from the other
+# side, and the worse one.
+#
+# ABSENT gets the default; ASSIGNED TO NOTHING does not. Zod applies `.default()` to an
+# UNDEFINED value and an environment variable is a string, so `KEY=` reaches the schema
+# as '' and is refused by both vocabularies.
+#
+# Usage: nexa_listing_boolean LISTING KEY DEFAULT VOCAB
+#   DEFAULT  `on` or `off`
+#   VOCAB    `loose` for a booleanish key, `strict` for a true/false enum
+nexa_listing_boolean() {
+  local listing="$1" key="$2" fallback="$3" vocab="${4:-loose}" raw
+  nexa_listing_has "$listing" "$key" || {
+    printf '%s' "$fallback"
+    return 0
+  }
+  # The RENDERING, not the decoded value: see `nexa_listing_rendered`. A decode
+  # through a command substitution drops a trailing newline, so `true` + newline read
+  # as `true` and was reported `on` for a value the schema refuses.
+  raw="$(nexa_listing_rendered "$listing" "$key")"
+  [ -n "$raw" ] || {
+    printf 'invalid'
+    return 0
+  }
+  if [ "$vocab" = strict ]; then
+    case "$raw" in
+      true) printf 'on' ;;
+      false) printf 'off' ;;
+      # A value the application would REFUSE to boot on. Saying so beats guessing.
+      *) printf 'invalid' ;;
+    esac
+    return 0
+  fi
+  case "$raw" in
+    true | 1 | yes) printf 'on' ;;
+    false | 0 | no) printf 'off' ;;
+    *) printf 'invalid' ;;
+  esac
+}
+
+# The id of a service's running container, or nothing.
+#
+# Separate from reading its environment, because "there is no container" and "the
+# inspect failed" and "the key is not set" are three different facts, and a single
+# function returning an empty string cannot tell a caller which it got. Each of them
+# makes the provenance comparison below report something different, so each is asked
+# for separately and each failure stops it.
+nexa_running_container() {
+  local id
+  id="$(nexa_compose ps -q "$1" 2>/dev/null | sed -n '1p')" || return 1
+  [ -n "$id" ] || return 1
+  printf '%s' "$id"
+}
+
+# A whole environment, as an IMAGE stamps it or as a CONTAINER holds it.
+#
+# The WHOLE environment and not one variable, and the exit status preserved, because
+# the difference between "the key is not set" and "the inspect failed" cannot be read
+# out of an empty string — and the comparison below is wrong in opposite directions
+# depending on which it got. A per-key reader that swallowed the failure reported
+# every stamped value as an override and sent the operator to restart; that was a
+# defect in this file's previous revision, not a hypothetical.
+#
+# `$1` is `image` or `container`; `$2` is the reference or id.
+nexa_inspect_env() {
+  local kind="$1" ref="$2"
+  [ -n "$ref" ] || return 1
+  # `printf "%q"` per entry, not `println`. An environment value may contain a newline
+  # — Compose lets a quoted value span lines — and `println` put the continuation on
+  # its own line, so a line-based reader returned only the first part. Two different
+  # values whose first lines matched then compared EQUAL, and a stale override went
+  # unreported. `%q` renders each entry as one quoted, escaped line, so one entry is
+  # one line and two entries are equal only when they are.
+  case "$kind" in
+    image) docker image inspect "$ref" --format '{{range .Config.Env}}{{printf "%q" .}}{{"\n"}}{{end}}' 2>/dev/null ;;
+    container) docker inspect "$ref" --format '{{range .Config.Env}}{{printf "%q" .}}{{"\n"}}{{end}}' 2>/dev/null ;;
+    *) return 1 ;;
+  esac
+}
+
+# One ENTRY out of an environment already read, quoted exactly as `%q` rendered it.
+#
+# The whole entry rather than the value, because the caller compares two of them and a
+# quoted entry is already a faithful one-line representation — unquoting it would add a
+# step that can be wrong for no gain.
+nexa_quoted_env_entry() {
+  printf '%s\n' "$1" | sed -n "s/^\"${2}=/${2}=/p" | sed -n '1p'
+}
+
+# Which obsolete keys a RUNNING container carries BECAUSE SOMETHING OVERRODE ITS
+# IMAGE.
+#
+# Not the same question as which ones the FILE has: the removal happens before the
+# fallible steps of an update, so a run that stops at the image pull leaves the file
+# clean and the containers still carrying the stale identity — at which point a
+# report reading the file alone says nothing is wrong while /health/info still
+# answers `pending`.
+#
+# But PRESENCE is not the question either, and asking it was a defect that fired on
+# every healthy installation. `Dockerfile` lines 89-92 stamp BUILD_VERSION,
+# BUILD_COMMIT and BUILD_TIME into the runtime image itself — that is where the
+# release's identity is SUPPOSED to come from — so a correctly built container
+# always carries all three. A check keyed on presence told every operator their API
+# was masked and to restart it, after which the recreated container carried them
+# again and the warning never cleared.
+#
+# The question is PROVENANCE: does the container's value come from its image, or
+# from something that replaced it? `env_file` beats an image's own ENV, so a
+# DIFFERENCE between the container's value and its image's value IS the override,
+# and an agreement is the image reporting itself. That comparison needs no
+# inference about where a value came from, which is the property the presence check
+# did not have. An empty assignment is covered by construction rather than by a
+# special case: `BUILD_COMMIT=` in a container whose image stamps a real commit is
+# a difference like any other.
+#
+# Nothing is reported unless BOTH halves were actually read. Three separate lookups
+# can fail — the container's image id, the container's environment, the image's
+# environment — and a failure of any of them makes every key look overridden, which
+# is advice to restart that would not change the answer. Each one therefore bails,
+# and each one has its own case in `tests/deploy/botctl.test.sh`: a guard that only
+# covered the first lookup was the defect in the previous revision of this function.
+nexa_container_overridden_obsolete_keys() {
+  local id="$1" image key running_env stamped_env running stamped
+  # Exit 1 when the answer cannot be computed — no running container, or any of the
+  # three lookups failing — which is a different fact from "computed, and nothing is
+  # overridden". A caller that took an empty answer as the second turned every lookup
+  # failure into the claim that the running API carries none of the file's keys.
+  [ -n "$id" ] || return 1
+  image="$(docker inspect "$id" --format '{{.Image}}' 2>/dev/null || true)"
+  [ -n "$image" ] || return 1
+  running_env="$(nexa_inspect_env container "$id")" || return 1
+  stamped_env="$(nexa_inspect_env image "$image")" || return 1
+  for key in $NEXA_OBSOLETE_APP_ENV_KEYS; do
+    running="$(nexa_quoted_env_entry "$running_env" "$key")"
+    stamped="$(nexa_quoted_env_entry "$stamped_env" "$key")"
+    [ "$running" = "$stamped" ] || printf '%s\n' "$key"
+  done
+  return 0
 }
 
 nexa_write_atomic() {

@@ -207,8 +207,90 @@ botctl logs [service]      follow logs
 botctl restart             restart the stack
 ```
 
-None of these print a secret. `botctl status` deliberately shows container
-state rather than configuration, so its output can be pasted into a ticket.
+None of these print a secret. `botctl status` reports container state and the
+resolved configuration by key and by presence, never a secret's value, so its
+output can be pasted into a ticket.
+
+`botctl status` reports a `capabilities:` section, because several settings
+default OFF and that is correct — an upgrade must not start taking and delivering
+backups, or start dialling an operator's panels, because a new release learned
+how to. The cost of that correctness is that an installation which never added
+the line is in the disabled state, and until this section existed no command
+would say so. It applies the same defaults and the same PER-KEY vocabulary the
+application applies — `PANEL_MONITOR_ENABLED`
+is a `true`/`false` enum while the others also take `1`/`0`/`yes`/`no`, and a value
+outside its own key's vocabulary reads as `invalid` rather than being guessed at.
+Values come from `docker compose config`, not from reading the file. Compose resolves
+`env_file` semantics — quoting, inline comments, trimming, values spanning lines, and
+**interpolation**, so `${UNSET:-true}` arrives as `true` and `${HOME}` comes from the
+ambient environment — and reproducing that in a shell script means reproducing
+Compose's variable precedence. So `status` asks Compose what a container started now
+would receive, and applies only the part that is the application's own: the per-key
+vocabulary the schema accepts. It also surfaces the one answer that matters more than
+any value, because Compose reports it directly: a configuration Compose REFUSES, from
+which no container can be created or recreated — repeating Compose's own reason, cut
+before any value Compose echoed back, and saying nothing about a container already
+running, which keeps the environment it was created with. The backup delivery destination is
+reported by PRESENCE only, because one of its two keys is a bot token. Neither
+section's values reach a `bash -x` trace either: both run with tracing off, because a
+trace of the resolved listing would carry the keyring, the database password and the
+backup bot token into output an operator pastes into a ticket. `botctl secrets
+migrate-config` and the `nexa.env` rewriter do the same, for the same reason.
+
+Each line names the process that READS the value, which is the operator's next
+question. The section claims nothing about what those processes are currently
+running: a container keeps the configuration it was created with, so a value
+changed since that container was CREATED is not yet in force in it, and the section
+says so as a standing caveat rather than pretending to detect it. The caveat names
+CREATION, and then names the four subcommands that recreate: `restart`, `update`,
+`rollback` and `secrets disable-v1`. A recreation loads the edited file, because `up -d`
+resolves `env_file` into the service environment before hashing it and that hash is what
+decides recreation — established from the Compose binary in `UNK-DEPLOY-001`, which
+records it after two rounds of claiming the opposite on the strength of
+`docker compose config --hash`, a probe that does not resolve `env_file` and so answers a
+different question.
+
+But a successful command is NOT a recreation. Two of those four return 0 having recreated
+nothing — `update` on the release already installed, and `secrets disable-v1` when the
+setting is already false — so "a successful one of those has loaded the edited file", which
+this paragraph said for two rounds, is false in exactly the states the rest of this document
+describes. Each of those commands says what it did in its own output, which is why the
+section points an operator at that output rather than guessing: naming the commands that CAN
+recreate is a true statement `status` can make, and claiming one of them DID is not.
+
+The one thing still unobserved is any of it against a real daemon; `docs/vps-acceptance.md`
+step 12c is three numbered steps that settle it. The delivery
+destination names three processes because three deliver — the worker schedules,
+the API serves the Web Admin's manual run, and the recovery executor takes the
+pre-restore backup.
+
+So `scheduled backup   off` is not a fault report. It means no automatic backup
+is taken, `botctl backup` still works, and a backup somebody remembers to run is
+not a backup policy. `backup delivery    not configured` means a run still dumps,
+verifies against a real scratch restore and retains locally, with its delivery
+outcome recorded as `NOT_ATTEMPTED`.
+
+`docs/config-upgrade-audit.md` classifies every configuration variable an
+installation runs on: whether it must be set deliberately, whether a missing line
+is a safe schema default, whether its absence is a real disabled state, and which
+old spellings still map to the current model. It exists because `botctl update`
+does not rewrite `nexa.env` — deliberately, so it cannot overwrite an operator's
+choice — which makes "a missing line is safe" a claim about every variable added
+after the first install.
+
+`botctl update` does remove the three keys that audit classifies as obsolete:
+`BUILD_VERSION`, `BUILD_COMMIT` and `BUILD_TIME`. The first production template
+wrote them into `nexa.env`, `env_file` beats an image's own ENV, and nothing ever
+took them out again — so `/health/info` reported what the installer substituted
+rather than what was built. The removal is one atomic rewrite and is non-fatal: a
+stale build label is not worth failing an update over.
+
+Because that removal happens before the image is pulled, `botctl status` also asks
+the running API whether its build identity is its own IMAGE's. Not whether it HAS
+one — the release image stamps all three keys on every build, so that question
+answers yes on every healthy installation — but whether the values agree with the
+image they came from. A difference is a container created while the file still set
+them, and the remedy is `botctl restart`.
 
 `botctl status` also reports the installation's position on v1 ciphertext,
 because an operator should not have to know that `botctl secrets status` exists

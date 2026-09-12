@@ -954,6 +954,33 @@ describe('publishing the Web Admin bundle', () => {
       expect(existsSync(lockDir)).toBe(false);
     });
 
+    it('loses the race rather than dying when the holder write loses its directory', () => {
+      // OBSERVED, in CI, on the case above: a contender whose `mkdirSync` had just
+      // succeeded was killed by an uncaught ENOENT from the holder write —
+      //
+      //   Error: ENOENT: no such file or directory,
+      //     open '/tmp/nexa-web-assets-VsxBI5/srv-web/.publish.lock/holder'
+      //     at acquireLock (deploy/bin/publish-web-assets.mjs:206:7)
+      //
+      // — because another waiter, which had judged the PREVIOUS lock stale, renamed
+      // whatever was at that path away, and what it found was that brand-new empty
+      // lock. The function already handles losing the lock between the mkdir and the
+      // write — that is what the token read-back is for — but only when the holder
+      // file was REPLACED, not when the directory was taken. So a publisher that
+      // simply did not win the race exited non-zero.
+      //
+      // The case above reproduces it only when eight processes interleave exactly
+      // that way, which is why this assertion is on the SOURCE: the rule is that the
+      // ENOENT is tolerated and the loop retries, and an assertion that waits for the
+      // interleaving is a test that passes for the wrong reason most of the time.
+      const source = readFileSync(publisher, 'utf8').replace(/\s+/g, ' ');
+      expect(source, 'the holder write no longer has its own ENOENT catch').toContain(
+        "try { writeFileSync( join(lockDir, 'holder'), " +
+          '`${JSON.stringify({ token, pid: process.pid, host: hostname(), at: Date.now() })}' +
+          "\\n`, ); } catch (error) { if (error.code !== 'ENOENT') throw error; continue; }",
+      );
+    });
+
     it('takes over a lock whose holder died and refuses one whose holder lives', () => {
       const rootDir = root();
       run(source('one'), rootDir);

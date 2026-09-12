@@ -203,10 +203,23 @@ export function acquireLock(rootDir, token) {
   for (;;) {
     try {
       mkdirSync(lockDir);
-      writeFileSync(
-        join(lockDir, 'holder'),
-        `${JSON.stringify({ token, pid: process.pid, host: hostname(), at: Date.now() })}\n`,
-      );
+      // The holder write can lose the directory it is writing INTO. A waiter
+      // that judged the PREVIOUS lock stale renames whatever is at this path
+      // away, and what it finds may be the brand-new empty lock this run just
+      // created — so the write fails ENOENT. That means exactly what the
+      // read-back below means: somebody took it over between the mkdir and the
+      // write, and this run does not hold it. Observed in CI as an uncaught
+      // ENOENT that killed the contender instead of making it lose the race,
+      // which is a publisher exiting non-zero on a lock it simply did not win.
+      try {
+        writeFileSync(
+          join(lockDir, 'holder'),
+          `${JSON.stringify({ token, pid: process.pid, host: hostname(), at: Date.now() })}\n`,
+        );
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        continue;
+      }
       // Read back, so a lock this run believes it holds is one that carries
       // its own token. Anything else means somebody took it over between the
       // mkdir and the write, and this run does not hold it.

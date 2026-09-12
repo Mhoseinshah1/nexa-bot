@@ -174,6 +174,434 @@ cmd_version() {
 # status
 # ---------------------------------------------------------------------------
 
+# What this installation is CONFIGURED to do, for the capabilities whose absence
+# is silent.
+#
+# Several settings default OFF or UNCONFIGURED, and that is correct: an upgrade
+# must not start taking and delivering backups, or start dialling an operator's
+# panels, because a new release learned how to. The cost of that correctness is
+# that an installation which never added the line is in the disabled state and
+# NOTHING said so — `botctl status` reported version, containers, edge, secrets
+# and readiness, and an operator had no command that would tell them their
+# backups were not running.
+#
+# THE FILE, and the heading says so. An earlier version claimed to report "what
+# the running processes do" and then tried to make that true by comparing each
+# value against the worker's created environment, which was wrong in a new way at
+# every field: the worker is not the process that owns PANEL_MONITOR_ENABLED, a
+# key a container does not set is the default rather than unknown, the Telegram
+# destination was not compared at all, and the advice paragraph could contradict
+# the line above it. Reporting the file and SAYING it is the file is the version
+# that cannot be wrong — which is what the review asked for, put the other way
+# round: distinguish configuration from runtime state rather than conflating them.
+#
+# Each line names the process that reads the value, because "is the monitor on"
+# and "which container would have to restart" are the two questions an operator
+# asks next, and neither needs a claim about what that container is running.
+#
+# The BACKUP destination is reported by PRESENCE only: one of its two keys is a
+# bot token and does not belong in an output an operator pastes into a ticket.
+status_capabilities() {
+  # A SUBSHELL with tracing off, because the resolved listing this reads holds
+  # DATABASE_URL, the keyring and the backup bot token — and under `bash -x` the
+  # assignment that captures it, and every later expansion of it, would print all of
+  # them into a trace an operator pastes into a ticket. The presence-only readers
+  # keep values out of the OUTPUT; this keeps them out of the TRACE. A subshell
+  # rather than a save-and-restore pair: this body has several early returns, and a
+  # restore one of them skipped would leave tracing off for the rest of the command.
+  #
+  # The cost is real and is accepted: the resolution, the refusal-reason redaction, the
+  # `docker inspect` provenance lookups and the set arithmetic below are all invisible
+  # under `bash -x`. What an operator needs from them is printed either way — a refusal
+  # carries Compose's own reason, and a provenance that could not be computed says so.
+  # The resolution step is reproducible by hand with the SAME invocation `nexa_compose`
+  # uses, which is `docker compose --env-file /etc/nexa/deploy.env -f
+  # /opt/nexa/deploy/compose.yml config`. Two ways to get that command wrong, both of
+  # which were written here first: `--env-file …/nexa.env` is the interpolation source for
+  # the compose FILE and not the services' `env_file`, so it fails outright because
+  # `nexa.env` carries no `NEXA_IMAGE`; and the compose file lives under `NEXA_DEPLOY_DIR`,
+  # which is `/opt/nexa/deploy`, not beside `deploy.env` in `/etc/nexa`. `install.sh`
+  # prints the correct form for the owner-bootstrap command and is the reference.
+  # A trace that prints the keyring is not a fair trade for the rest.
+  ( set +x; status_capabilities_untraced )
+}
+
+status_capabilities_untraced() {
+  local file="${NEXA_CONFIG_DIR}/nexa.env"
+  local resolved
+  # COMPOSE resolves it, not this script. Five review rounds were spent reimplementing
+  # env_file semantics and the last one found the case that ends the argument: Compose
+  # INTERPOLATES these values, so `${UNSET:-true}` is `true` to the container and
+  # `${HOME}` comes from the ambient environment. Reproducing that means reproducing
+  # Compose variable precedence. Asking Compose is right about every shape by
+  # construction, and it also sees the compose file's own `environment:` entries, which a
+  # reader of nexa.env never did.
+  local reason errfile
+  errfile="$(mktemp)"
+  if ! resolved="$(nexa_compose_resolved_env api 2>"$errfile")"; then
+    # Compose's own error line, because guessing at "common causes" told an operator
+    # with a missing env file to look for an unclosed quote. REDACTED past the first
+    # quote character: Compose echoes the offending VALUE in an unterminated-quote
+    # refusal (`unterminated quoted value '7777:AAA…`), and this section reports the
+    # backup destination by presence precisely so that a bot token never appears in
+    # an output an operator pastes into a ticket.
+    reason="$(nexa_compose_refusal_reason "$(cat "$errfile")")"
+    rm -f "$errfile"
+    printf '\ncapabilities:\n'
+    printf '  configuration  REFUSED by compose\n'
+    # About what can be CREATED, not about what is running: a container already up
+    # keeps the environment it was created with and may pass the readiness check
+    # printed below this section, so "no value is in force" would contradict it.
+    printf '\n  `docker compose config` cannot resolve this installation'"'"'s configuration, so\n'
+    printf '  no container can be CREATED or RECREATED from it: the next `botctl restart` or\n'
+    printf '  `botctl update` will fail. A container already running keeps the environment\n'
+    printf '  it was created with, and this section does not describe it. Compose said:\n'
+    printf '    %s\n' "$reason"
+    printf '  Fix that, then run `botctl restart`.\n'
+    return 0
+  fi
+  rm -f "$errfile"
+  printf '\ncapabilities, as compose resolves %s:\n' "$file"
+
+  # Key, label, default, the vocabulary the SCHEMA gives that key, and the process
+  # that reads it. The vocabulary is not uniform: PANEL_MONITOR_ENABLED is a
+  # true/false enum, so `yes` there is a value the application refuses rather than
+  # one it accepts.
+  local -a settings=(
+    'BACKUP_SCHEDULE_ENABLED|scheduled backup  |off|loose|worker'
+    'RECOVERY_UPLOAD_ENABLED|recovery upload   |on|loose|api'
+    'PANEL_MONITOR_ENABLED|panel monitor     |on|strict|monitor'
+    'NOTIFICATION_DISPATCH_ENABLED|notifications     |on|loose|worker'
+    'OUTBOX_RELAY_ENABLED|outbox relay      |on|loose|worker'
+    'TELEGRAM_WEBHOOK_ENABLED|telegram webhook  |off|loose|api'
+  )
+
+  local chat_present=0 token_present=0 destination scheduled='' webhook=''
+  # The schema `.trim()`s both with JavaScript's whitespace set, which is wider than
+  # the shell's: a chat id that is only a no-break space is nothing to the application.
+  # Presence is decided by that set, never by reading the value into this script.
+  ! nexa_listing_present "$resolved" BACKUP_TELEGRAM_CHAT_ID || chat_present=1
+  ! nexa_listing_present "$resolved" BACKUP_TELEGRAM_BOT_TOKEN || token_present=1
+  if [ "$chat_present" -eq 1 ] && [ "$token_present" -eq 1 ]; then
+    destination='configured'
+  elif [ "$chat_present" -eq 0 ] && [ "$token_present" -eq 0 ]; then
+    destination='not configured'
+  else
+    # The application refuses to boot on this, so it can only be a configuration
+    # nobody has restarted on yet. Worth saying before the restart finds out.
+    destination='HALF configured'
+  fi
+
+  local entry key label fallback vocab owner configured monitor='' notifications=''
+  # Which arm the transport took, kept for the endpoint caveat below. Not the raw value:
+  # this is a classification, and the raw value is never printed.
+  local transport_named=''
+  for entry in "${settings[@]}"; do
+    IFS='|' read -r key label fallback vocab owner <<<"$entry"
+    configured="$(nexa_listing_boolean "$resolved" "$key" "$fallback" "$vocab")"
+    # The webhook needs a secret of at least 16 characters, and `configSchema`
+    # refuses the WHOLE configuration without one — so an operator who enabled the
+    # webhook and has not yet set the secret has an API that will not start. A line
+    # reading `telegram webhook on` for that configuration is the same lie as
+    # accepting a spelling the schema does not: it reports working where the next
+    # start fails. The secret itself is never printed; only whether it satisfies the
+    # length the schema demands.
+    if [ "$key" = TELEGRAM_WEBHOOK_ENABLED ] && [ "$configured" = on ]; then
+      local secret_length
+      # A measurement that fails is a secret that cannot be shown to satisfy the
+      # schema, so it reads as too short. The `||` is what makes that reachable: an
+      # assignment whose substitution fails aborts this function under errexit, and a
+      # default applied afterwards would never run.
+      secret_length="$(nexa_listing_length "$resolved" TELEGRAM_WEBHOOK_SECRET)" || secret_length=0
+      if [ "$secret_length" -lt 16 ]; then
+        configured='invalid'
+        webhook='short-secret'
+      fi
+    fi
+    # The dispatcher flag is not the capability either, and the transport is checked by its
+    # whole VOCABULARY rather than one value. `NOTIFICATION_TRANSPORT` is
+    # `z.enum(['telegram', 'recording']).default('telegram')`, so:
+    #
+    #   telegram                      the capability exists
+    #   recording, NODE_ENV!=development   refused by a superRefine: it keeps messages in
+    #                                 MEMORY, so nothing is delivered, and the API will not
+    #                                 start at all
+    #   recording, NODE_ENV=development    legitimate; `recording` is what tests run on
+    #   anything else, `smtp` say     refused by the enum; the worker will not start
+    #   an EMPTY assignment           refused by the enum too, because an environment
+    #                                 variable is a string and '' is not a member
+    #   ABSENT                        the schema default applies, which is telegram
+    #
+    # The first version of this checked `recording` alone and left `smtp` reading
+    # `notifications on` — the same "closed one member of the family" mistake the secrets
+    # guard made one round earlier, made again in the round that recorded the lesson. NODE_ENV
+    # is read from the same resolved listing rather than assumed, because a development
+    # installation must not be told its configuration is broken.
+    if [ "$key" = NOTIFICATION_DISPATCH_ENABLED ] && [ "$configured" = on ]; then
+      local transport node_env
+      node_env="$(nexa_listing_rendered "$resolved" NODE_ENV)" || node_env=''
+      # ABSENT takes the schema default, which IS telegram — so the endpoint caveat
+      # below applies to it too, and classifying only the present case would have left
+      # every ordinary installation without it.
+      transport_named=telegram
+      if nexa_listing_has "$resolved" NOTIFICATION_TRANSPORT; then
+        transport="$(nexa_listing_rendered "$resolved" NOTIFICATION_TRANSPORT)" || transport=''
+        case "$transport" in
+          telegram) transport_named=telegram ;;
+          recording)
+            transport_named=recording
+            if [ "$node_env" != development ]; then
+              configured='invalid'
+              notifications='recording-transport'
+            fi
+            ;;
+          *)
+            transport_named=other
+            configured='invalid'
+            notifications='unknown-transport'
+            ;;
+        esac
+      fi
+    fi
+    if [ "$key" = NOTIFICATION_DISPATCH_ENABLED ] && [ -z "$notifications" ]; then
+      notifications="$configured"
+    fi
+    [ "$key" != BACKUP_SCHEDULE_ENABLED ] || scheduled="$configured"
+    [ "$key" != PANEL_MONITOR_ENABLED ] || monitor="$configured"
+    printf '  %s %-8s %s\n' "$label" "$configured" "$owner"
+  done
+  # The monitor's row reports its FLAG and nothing more, and says so, because
+  # `configSchema.superRefine` guards FIVE cross-field invariants behind
+  # `if (PANEL_MONITOR_ENABLED)` and a `panel monitor on` that ignored them is the same
+  # lie the webhook check above exists to prevent: a capability reported working for a
+  # configuration the next start refuses.
+  #
+  # Counted from the schema, not from memory: the first version of this said four, and
+  # missed the one that refuses `PANEL_MONITOR_BUDGET_RESERVE_PERCENT=0` outright — which
+  # is the only one of the five that catches that value, because the reserve FLOOR the
+  # fourth rule compares against is itself 0 there. A list of rules is a claim that can
+  # go stale; when the schema grows a sixth this row must grow with it, or say "at least".
+  #
+  # The keys are NAMED and the arithmetic is NOT reimplemented. Two of these invariants
+  # are computed by helpers in the schema (a tick-derived ceiling, and a cooldown floor
+  # derived from the probe budget), and five rounds of this branch went into learning that
+  # a shell reimplementation of an application rule converges on a different wrong answer,
+  # not the right one. Pointing at the keys is a true statement this script can make; a
+  # verdict is not.
+  #
+  # The principled fix is the one the secrets section already uses: ask the application.
+  # A one-off `compose run --rm api` that calls `loadConfig` and reports pass or fail with
+  # the schema's own message would make this row a verdict rather than a flag, and would
+  # cover every conditional invariant at once rather than a list that can go stale. That
+  # is a new surface with its own fake and its own review, so it is named here and not
+  # smuggled in: it is the fix, when the capabilities section is next opened.
+  if [ "$monitor" = on ]; then
+    printf '\n  `panel monitor on` is the FLAG. The schema also checks five cross-field rules\n'
+    printf '  only when the monitor is on — PANEL_MONITOR_TENANTS_PER_TICK against\n'
+    printf '  PANEL_MONITOR_BATCH_SIZE, PANEL_MONITOR_HEALTHY_INTERVAL_MS against\n'
+    printf '  PANEL_MONITOR_TICK_MS and against the probe cooldown,\n'
+    printf '  PANEL_MONITOR_BUDGET_RESERVE_PERCENT against PANEL_PROBE_TENANT_LIMIT, and\n'
+    printf '  PANEL_MONITOR_BUDGET_RESERVE_PERCENT=0 refused outright — and it\n'
+    printf '  refuses the whole configuration if any disagree. This row does not check them;\n'
+    printf '  the monitor does, at START — so `botctl logs monitor` names the rule that failed\n'
+    printf '  only AFTER a recreate has been attempted and refused. A monitor already running\n'
+    printf '  keeps the settings it accepted, and its log has nothing to show about an edit\n'
+    printf '  made since. `botctl restart` is what asks it.\n'
+  fi
+  # THREE processes, not the worker alone. `createContainer` builds one
+  # `BackupService` with these credentials and every role gets it: the worker
+  # schedules, `RecoveryController.runBackup` serves the Web Admin's «تهیه بکاپ
+  # جدید», and the recovery executor takes the PRE_RESTORE backup. After a
+  # service-specific recreation those three can hold different destinations, so
+  # naming only the worker would point a diagnosis away from the process that is
+  # actually delivering. BACKUP_SCHEDULE_ENABLED above is genuinely the worker's —
+  # it gates the scheduler in `main.worker.ts` and nothing else.
+  printf '  backup delivery    %-8s %s\n' "$destination" 'worker, api, recovery'
+
+  if [ "$webhook" = short-secret ]; then
+    printf '\n  TELEGRAM_WEBHOOK_ENABLED is on but TELEGRAM_WEBHOOK_SECRET is shorter than the\n'
+    printf '  16 characters the schema requires, so the API will REFUSE to start. Every\n'
+    printf '  update is authenticated by that header; set it and run `botctl restart`.\n'
+  fi
+  if [ "$notifications" = unknown-transport ]; then
+    printf '\n  NOTIFICATION_DISPATCH_ENABLED is on and NOTIFICATION_TRANSPORT is set to\n'
+    printf '  something other than `telegram` or `recording`, which are the only two the\n'
+    printf '  schema accepts — an empty assignment included, because an environment variable\n'
+    printf '  is a string and the empty one is not a member. The API will REFUSE to start.\n'
+    printf '  Set NOTIFICATION_TRANSPORT=telegram and run `botctl restart`.\n'
+  fi
+  # `notifications on` with the `telegram` transport is the dispatcher and the transport
+  # NAME, and it says so, because the schema checks two more things about the endpoint:
+  # `TELEGRAM_API_BASE_URL` is `z.string().url()`, and a `superRefine` requires its parsed
+  # protocol to be `https:` when `NODE_ENV=production` — a bot token travels in the path of
+  # every Telegram call, so an `http:` base publishes the credential. Either refusal stops
+  # the API starting, so the row can be `on` for a configuration that will not boot.
+  #
+  # SAID, not reimplemented. `z.string().url()` is WHATWG URL parsing plus Zod's own rules,
+  # and this branch has five rounds of evidence that a shell reimplementation of an
+  # application rule converges on a different wrong answer rather than the right one — the
+  # monitor row reaches the same conclusion about the five cross-field rules above, for the
+  # same reason, and names the same principled fix: ask the application. Naming the keys the
+  # operator must check is a true statement this script can make; a verdict on a URL is not.
+  if [ "$notifications" = on ] && [ "$transport_named" = telegram ]; then
+    printf '\n  `notifications on` is the dispatcher and the transport NAME. The schema also\n'
+    printf '  requires TELEGRAM_API_BASE_URL to parse as a URL, and to use https when\n'
+    printf '  NODE_ENV=production — the bot token is in the path of every call, so an http\n'
+    printf '  base publishes it. This row does not check either; the API does, at START. If\n'
+    printf '  a start fails, read `botctl logs api` after a recreate has been attempted.\n'
+  fi
+  if [ "$notifications" = recording-transport ]; then
+    printf '\n  NOTIFICATION_DISPATCH_ENABLED is on and NOTIFICATION_TRANSPORT is `recording`,\n'
+    printf '  which keeps messages in MEMORY instead of sending them — so every operational\n'
+    printf '  alert goes nowhere while the installation looks healthy. The schema permits it\n'
+    printf '  only when NODE_ENV=development, and this one is not, so the API will REFUSE to\n'
+    printf '  start. Set NOTIFICATION_TRANSPORT=telegram and run `botctl restart`.\n'
+  fi
+
+  # Always, not on a detected mismatch. A container keeps the environment it was
+  # created with, so any of the values above may not be in force yet — and a
+  # DETECTION of that would have to be right about every field and every owning
+  # process to be worth printing. This sentence is right about all of them.
+  #
+  # FOUR commands bring the stack up, and the list is the third attempt at it.
+  # `restart`, `update` and `rollback` go through `nexa_bring_up_with_edge`; `secrets
+  # disable-v1` runs `nexa_compose up -d` directly, and its header says that is the point.
+  # Naming only `restart` was incomplete; naming three and adding "nothing else here does"
+  # was a universal negative that omitted the fourth.
+  #
+  # The third attempt withdrew the claim entirely, on a measurement that turned out not to
+  # mean what it was read to mean: `docker compose config --hash` does not change when
+  # `env_file` CONTENT changes, so it looked as though `up -d` could not see an edit to
+  # nexa.env. It is the wrong probe. In the pinned client, `ServiceHash` is called by
+  # `runHash` (behind `config --hash`), by `prepareLabels` and by `mustRecreate` — the
+  # recreation decision, client-side, not the daemon's — and `upCommand`'s project hook
+  # calls `WithServicesEnvironmentResolved` while `runHash` does not. So `up` hashes a
+  # project whose `env_file` has been merged into `Environment`, and `config --hash`
+  # hashes one where it has not: the same function over different inputs. `Environment` is
+  # demonstrably inside the hash, because changing an inline `environment:` value does move
+  # `config --hash`. An edit to nexa.env therefore changes the hash `up -d` compares.
+  #
+  # So the claim is back, with the fourth command in it. `docs/open-questions.md`
+  # carries UNK-DEPLOY-001 as RESOLVED with that evidence, and with the one thing still
+  # unobserved: none of this has been watched against a real daemon.
+  #
+  # And it is bounded, which the first restored version was not. "A successful one of
+  # those has already loaded these values" is FALSE in three states this file documents
+  # itself: `update <the release already installed>` returns 0 without recreating, twice
+  # over (deploy.env agreeing, and deploy.env divergent — where it prints "The running
+  # containers were not changed"), and `disable-v1` returns 0 before its `up` when the
+  # setting is already false. Each of those says so in its own output, which is why this
+  # section points at that output rather than guessing: naming the commands that CAN
+  # recreate is true, and claiming one of them DID is not this section's to know.
+  printf '\n  These are the values compose would hand a container STARTED NOW. A running\n'
+  printf '  container keeps the configuration it was created with, so anything changed\n'
+  printf '  since that container was CREATED is not in force in it yet. Only RECREATING\n'
+  printf '  the container loads it, and four commands can: `botctl restart`, `botctl update`,\n'
+  printf '  `botctl rollback` and `botctl secrets disable-v1`. TWO of those\n'
+  printf '  can also return success having recreated nothing — `update` on the release\n'
+  printf '  already installed, and `disable-v1` when the setting is already false — and each\n'
+  printf '  says so when it does.\n'
+  printf '  Read that, not this section, for whether your last one recreated.\n'
+  printf '  The ROWS above read the configuration and not the containers. The build-identity\n'
+  printf '  paragraphs below do inspect the running API, and say so where they do.\n'
+
+  if [ "$scheduled" = off ]; then
+    printf '\n  This configuration takes no AUTOMATIC backup. `botctl backup` still works, and\n'
+    printf '  a backup an operator remembers to run is not a backup policy. To schedule\n'
+    printf '  them, set BACKUP_SCHEDULE_ENABLED=true in %s and run `botctl restart`.\n' "$file"
+    if [ "$destination" = 'not configured' ]; then
+      printf '  With no delivery destination a run still dumps, verifies and RETAINS locally;\n'
+      printf '  its delivery outcome is recorded as NOT_ATTEMPTED.\n'
+    fi
+  fi
+
+  # Lines the application no longer reads, and that actively mask the image.
+  #
+  # Asked of the FILE and of the running API, because they can disagree and the
+  # disagreement is the state an operator most needs to see. The removal happens
+  # early in an update, before the image is pulled and the backup is taken, so a
+  # run that stops at one of those leaves the file clean and the containers still
+  # carrying the stale identity — and a report that read only the file would say
+  # nothing was wrong while /health/info still answered `pending`.
+  #
+  # The API, because /health/info is the API's route. This is the one place the
+  # section does look at a container, and it is the one place where the remedy is
+  # unambiguous whatever the answer: restart.
+  #
+  # What is asked of that container is whether its build identity is its IMAGE's,
+  # not whether it has one. The image stamps all three keys on every correct build,
+  # so a presence check warned every healthy installation and the restart it
+  # advised could never clear it.
+  local obsolete running_obsolete api_id running_known=1
+  api_id="$(nexa_running_container api 2>/dev/null || true)"
+  obsolete="$(nexa_obsolete_app_env_keys "$file")"
+  # A provenance that cannot be computed — no running API, or a failed lookup — is
+  # UNKNOWN, not "nothing is overridden". Taking the empty answer as the latter
+  # classified every file key as pending and claimed the running API does not carry
+  # it, which is exactly the fact that could not be established.
+  running_obsolete="$(nexa_container_overridden_obsolete_keys "$api_id")" || running_known=0
+  if [ "$running_known" -eq 0 ]; then
+    if [ -n "$obsolete" ]; then
+      printf '\n  This file sets %s, which REPLACES the\n' "$(printf '%s' "$obsolete" | tr '\n' ' ')"
+      printf '  build identity stamped into the release image. Whether the RUNNING API carries\n'
+      printf '  them could not be determined (no running API container, or `docker inspect`\n'
+      printf '  failed), so nothing is claimed about /health/info. The next `botctl update`\n'
+      printf '  removes the lines first.\n'
+    fi
+    return 0
+  fi
+  # THREE states, per KEY, because the two lists need not hold the same keys.
+  #
+  # A file that newly sets BUILD_VERSION while the running API retains an old
+  # BUILD_COMMIT override is both states at once, and a conjunction over the lists
+  # reported it as one: it named BUILD_VERSION and claimed the container differs from
+  # its image "for them", while the key that actually differs went unmentioned. So the
+  # sets are intersected and differenced, and each sentence names only the keys it is
+  # true of.
+  local masked pending stale
+  masked="$(comm -12 <(printf '%s\n' "$obsolete" | sort -u) <(printf '%s\n' "$running_obsolete" | sort -u) | tr '\n' ' ')"
+  pending="$(comm -23 <(printf '%s\n' "$obsolete" | sort -u) <(printf '%s\n' "$running_obsolete" | sort -u) | tr '\n' ' ')"
+  stale="$(comm -13 <(printf '%s\n' "$obsolete" | sort -u) <(printf '%s\n' "$running_obsolete" | sort -u) | tr '\n' ' ')"
+  # `comm` ends its output with a newline and `tr` turns that into a TRAILING space, so
+  # every one of these sentences read `sets BUILD_COMMIT , which REPLACES`. Both ends.
+  masked="${masked# }"
+  masked="${masked% }"
+  pending="${pending# }"
+  pending="${pending% }"
+  stale="${stale# }"
+  stale="${stale% }"
+
+  if [ -n "${masked// /}" ]; then
+    printf '\n  This file sets %s, which REPLACES the\n' "$masked"
+    printf '  build identity stamped into the release image, and the RUNNING API container\n'
+    printf '  answers something other than its own image for them — so /health/info reports\n'
+    printf '  what the installer wrote rather than what is running. The next `botctl update`\n'
+    printf '  removes the lines; the containers then need recreating to pick that up.\n'
+  fi
+  if [ -n "${pending// /}" ]; then
+    # What is OBSERVED is that the container answers its own image for these keys. That
+    # is not the same as the container not carrying them: a file assignment equal to the
+    # image stamp is carried and compares equal, so the provenance comparison omits it
+    # either way. Claiming absence was an inference from equality, and `/health/info`
+    # matching the image is the fact the comparison actually establishes.
+    printf '\n  This file sets %s, which REPLACES the\n' "$pending"
+    printf '  build identity stamped into the release image. The running API answers its own\n'
+    printf '  image for them, so /health/info is correct for NOW — either the container was\n'
+    printf '  created before these lines, or it carries a value equal to the image stamp.\n'
+    printf '  A DIFFERENT value here takes effect at the next start — unless the line is a\n'
+    printf '  BARE record, which assigns nothing and instead takes whatever the environment\n'
+    printf '  running compose holds for that name, or nothing at all. The next\n'
+    printf '  `botctl update` removes the lines either way.\n'
+  fi
+  if [ -n "${stale// /}" ]; then
+    printf '\n  The file no longer sets %s, but the RUNNING\n' "$stale"
+    printf '  API container answers something other than its own image for them, so it was\n'
+    printf '  created while the file still set them and /health/info still reports what the\n'
+    printf '  installer wrote. Run `botctl restart`.\n'
+  fi
+}
+
+
 # The v1-ciphertext position, in `botctl status`, so an operator does not have
 # to know that `botctl secrets status` exists to learn they are still carrying
 # the envelope this project is retiring.
@@ -192,6 +620,18 @@ cmd_version() {
 # Nothing here prints a key, a ciphertext or a token. The application's
 # `--json` summary carries counts and booleans and nothing else.
 status_secrets() {
+  # A SUBSHELL with tracing off, because the resolved listing this reads holds
+  # DATABASE_URL, the keyring and the backup bot token — and under `bash -x` the
+  # assignment that captures it, and every later expansion of it, would print all of
+  # them into a trace an operator pastes into a ticket. The presence-only readers
+  # keep values out of the OUTPUT; this keeps them out of the TRACE. A subshell
+  # rather than a save-and-restore pair: this body has several early returns, and a
+  # restore one of them skipped would leave tracing off for the rest of the command.
+  # The cost is the same one the capabilities wrapper accepts, for the same reason.
+  ( set +x; status_secrets_untraced )
+}
+
+status_secrets_untraced() {
   local file="${NEXA_CONFIG_DIR}/nexa.env"
   printf '\nsecrets:\n'
   [ -r "$file" ] || {
@@ -199,27 +639,93 @@ status_secrets() {
     return 0
   }
 
-  local keys kek explicit format accept accept_source
-  keys="$(nexa_env_value "$file" SECRETS_KEYS 2>/dev/null || true)"
-  kek="$(nexa_env_value "$file" SECRETS_KEK 2>/dev/null || true)"
-  explicit="$(nexa_env_value "$file" SECRETS_ACCEPT_V1 2>/dev/null || true)"
-  if [ -n "${keys//[[:space:]]/}" ]; then
+  # Resolved by COMPOSE, like the capabilities section and for the same reason: the
+  # application reads what Compose made of this file, and `SECRETS_ACCEPT_V1` below is
+  # switched on EXACTLY `true` or `false` with anything else falling through to the
+  # derived default — so an interpolated or comment-bearing line read literally gives
+  # the OPPOSITE answer whenever that default disagrees with what the operator wrote.
+  local resolved
+  if ! resolved="$(nexa_compose_resolved_env api 2>/dev/null)"; then
+    printf '  configuration  REFUSED by compose; see the capabilities section below\n'
+    return 0
+  fi
+
+  local explicit format accept accept_source
+  # PRESENCE for the two key-material variables, through the same trim the schema
+  # applies — and without reading either value into this script. The spelling that
+  # came before held the KEK in a shell variable purely to test whether it was blank,
+  # which puts the key that decrypts every stored credential into an environment a
+  # `set -x` or a crash trace would print. The question was only ever "is it there".
+  explicit="$(nexa_listing_rendered "$resolved" SECRETS_ACCEPT_V1)"
+  if nexa_listing_present "$resolved" SECRETS_KEYS; then
     format=canonical
-  elif [ -n "${kek//[[:space:]]/}" ]; then
+  elif nexa_listing_present "$resolved" SECRETS_KEK; then
     format=legacy
   else
     format=unknown
   fi
+  # ABSENT gets the derived default; PRESENT but outside the vocabulary does not.
+  # `SECRETS_ACCEPT_V1` is `z.enum(['true', 'false'])`, so `yes` — a spelling several
+  # other settings here accept — and a value with a trailing newline are configurations
+  # the application REFUSES to start on. Reporting the derived default for them would
+  # describe an acceptance state no container can reach, which is the same lie as
+  # reporting a capability `on` for a value the schema rejects. The value itself is
+  # never printed: only that it is not one of the two the schema allows.
+  local explicit_present=0
+  ! nexa_listing_has "$resolved" SECRETS_ACCEPT_V1 || explicit_present=1
   case "$explicit" in
     true) accept=yes; accept_source='SECRETS_ACCEPT_V1' ;;
     false) accept=no; accept_source='SECRETS_ACCEPT_V1' ;;
     *)
-      if [ "$format" = legacy ]; then accept=yes; else accept=no; fi
-      accept_source='default'
+      if [ "$explicit_present" -eq 1 ]; then
+        accept=invalid
+        accept_source='SECRETS_ACCEPT_V1 is neither true nor false'
+      else
+        if [ "$format" = legacy ]; then accept=yes; else accept=no; fi
+        accept_source='default'
+      fi
       ;;
   esac
   printf '  configuration  %s\n' "$format"
   printf '  accept v1      %s  (%s)\n' "$accept" "$accept_source"
+  if [ "$accept" = invalid ]; then
+    # And RETURN, printing no rows. Three separate claims collapse here, and the two
+    # previous versions of this paragraph each got one of them wrong.
+    #
+    # The rows below come from `compose run --rm api`, which creates a ONE-OFF container
+    # from the CURRENT configuration, never from the API already running. So they cannot
+    # be attributed to a running API, which the previous wording did; and they cannot be
+    # produced at all from a configuration the schema refuses, because `secrets.cli.js`
+    # calls `loadConfig()` as its first statement and `SECRETS_ACCEPT_V1` is a two-value
+    # enum, so the one-off exits before it reaches the database.
+    #
+    # Worse if it ever did answer. `$accept` gained a third value and the branches below
+    # test only `no` and `yes`, so an `invalid` acceptance falls past every guard to
+    # `v1 shutdown complete: no v1 ciphertext, v1 not accepted` — an acceptance state no
+    # container can reach, which is the lie this whole check was written to kill.
+    # Returning is what makes that unreachable rather than merely unlikely.
+    #
+    # Compose is NOT what refuses here: the listing resolved, which is how the value was
+    # read at all. The container is created and then exits on the schema error, so the
+    # reason is in the API's log and the operator is sent there rather than told the
+    # container could not be created.
+    printf '\n'
+    # Wrapped so that every phrase a test names stays on ONE line. Output is joined by
+    # newline and two spaces, so a phrase split across two printfs is not a substring of
+    # it — two assertions were written against phrases this paragraph never contained.
+    printf '  SECRETS_ACCEPT_V1 is set to something other than `true` or `false`, which the\n'
+    printf '  schema refuses, so the API will not START from this configuration: the next\n'
+    printf '  `botctl restart`, or any `botctl update` that recreates, will fail.\n'
+    printf '  `botctl logs api` names the refusal AFTER that attempt, not before it.\n'
+    printf '  An API already running\n'
+    printf '  keeps the acceptance it was created with, and its log has nothing to show.\n'
+    printf '\n'
+    printf '  No row is shown below, and that is not a stack that is down: every row BELOW\n'
+    printf '  is counted by a one-off container created from THIS configuration, and that\n'
+    printf '  container cannot start either. The two rows above came from the configuration\n'
+    printf '  itself. Set the value, then run `botctl status`.\n'
+    return 0
+  fi
 
   # The rows. One bounded read through the application; a stack that is down
   # answers nothing, and that is reported as exactly that.
@@ -325,6 +831,7 @@ cmd_status() {
   fi
 
   status_secrets
+  status_capabilities
 
   printf '\nreadiness: '
   if nexa_wait_ready 5; then
@@ -458,6 +965,25 @@ cmd_update() {
   current="$(nexa_current_version || true)"
   [ -n "$current" ] || nexa_die "no current release is recorded; refusing to update."
 
+  # Configuration the application no longer reads, removed before anything else.
+  #
+  # HERE rather than after the commit, and before the early returns below, because
+  # `botctl update <the version already installed>` is the command an operator
+  # runs to repair an installation — and on a host carrying a stale BUILD_* line
+  # that repair is the whole point. Non-fatal: a stale build label is not worth
+  # failing an update over, and `nexa_reconcile_app_env` leaves the file untouched
+  # if it cannot rewrite it cleanly.
+  # Whether anything was actually removed, observed rather than inferred from the
+  # return code: `nexa_reconcile_app_env` answers 0 both when it removed keys and
+  # when there was nothing to remove, so reading its status would have announced a
+  # pending restart on every update of a clean installation.
+  local app_env="${NEXA_CONFIG_DIR}/nexa.env" reconciled=0 had_obsolete=0
+  [ -z "$(nexa_obsolete_app_env_keys "$app_env")" ] || had_obsolete=1
+  nexa_reconcile_app_env "$app_env" || true
+  if [ "$had_obsolete" -eq 1 ] && [ -z "$(nexa_obsolete_app_env_keys "$app_env")" ]; then
+    reconciled=1
+  fi
+
   if [ "$target" = "$current" ]; then
     # Not unconditionally "nothing to do": if deploy.env disagrees with the
     # recorded release, re-running the update for the CURRENT version is
@@ -482,6 +1008,14 @@ cmd_update() {
     fi
     if [ "$divergence" -eq 0 ]; then
       nexa_ok "already running ${target}. Nothing to do."
+      # Unless something WAS done. The removal above edited nexa.env and this
+      # path recreates no container, so the running processes still carry the
+      # values that were just taken out of the file — and `botctl status` would
+      # stop warning about keys whose effect is still in force. Saying so is the
+      # difference between a repair an operator completes and one they believe
+      # already happened.
+      [ "$reconciled" -eq 0 ] ||
+        nexa_log "The lines removed above are still in the running containers' environment. Run 'botctl restart' so ${target} reports its own build identity."
       return 0
     fi
     # divergence == 2: no manifest. Fall through to the full update path, which
@@ -1061,28 +1595,94 @@ cmd_restart() {
 # the application, and does not print, log or pass through argv one byte of key
 # material. It moves two values from one spelling to another, in place.
 cmd_secrets_migrate_config() {
+  # UNTRACED, because this command is the one that holds the master key: it reads
+  # SECRETS_KEK out of the file and writes it back under the canonical name, so the
+  # value is in a local and in the rewriter's environment by necessity. Under
+  # `bash -x` the capture, the blank test, the `id:key` concatenation, the rewrite and
+  # the read-back each printed it — and then this command printed that the key
+  # material "was never printed". An operator runs this under `-x` precisely because
+  # it rewrites /etc/nexa/nexa.env.
+  #
+  # `nexa_untraced` and not a subshell: every refusal below is `nexa_die`, which must
+  # end the command rather than a subshell the caller would then ignore.
+  nexa_untraced cmd_secrets_migrate_config_untraced "$@"
+}
+
+cmd_secrets_migrate_config_untraced() {
   local file="${NEXA_CONFIG_DIR}/nexa.env"
   [ -r "$file" ] || nexa_die "cannot read ${file}."
+
+  # A BARE record for any key this command reads, and it refuses outright — before the
+  # canonical check, because one of the four keys is the one that check reads.
+  #
+  # Measured on Compose v5.1.1: with `SECRETS_KEK=old` followed by a bare `SECRETS_KEK`
+  # and that variable exported, the container receives the AMBIENT value and not `old`.
+  # Compose takes the LAST record, and a bare record's value is not in this file at all.
+  # `nexa_compose_env_value` reads the file — deliberately, see below — so it answers
+  # `old`, and the conversion would write the stale key as SECRETS_KEYS while reporting
+  # that "the key material is unchanged". The restart it then advises leaves every
+  # existing ciphertext undecryptable, which is the one outcome this command exists to
+  # avoid. (Duplicate ASSIGNMENTS are fine: the scanner takes the last one, measured to
+  # agree with Compose. It is only the shape whose value is elsewhere that diverges.)
+  #
+  # Same class as the `$` refusal further down, and the same answer: refuse rather than
+  # choose, because the cost of choosing wrong is an installation that cannot decrypt
+  # anything. SECRETS_KEYS and SECRETS_ACTIVE_KEY_ID are in the list because a bare
+  # record for either makes the already-canonical check below read EMPTY, so this command
+  # would convert over a keyring the application is already running from.
+  local bare_key
+  for bare_key in SECRETS_KEYS SECRETS_ACTIVE_KEY_ID SECRETS_KEK SECRETS_KEK_ID; do
+    ! nexa_env_has_bare_record "$file" "$bare_key" ||
+      nexa_die "${file} carries ${bare_key} as a BARE record — the name with no \`=\` — so Compose takes its value from the environment running compose, and this file does not say what the application receives. Give it a literal assignment, or remove the line, before converting; nothing was changed."
+    # And every other shape Compose READS that the text reader does not: `KEY:value`, and
+    # `KEY =value` with blanks before the `=`. Measured on v5.1.1, both are effective and the
+    # LAST record for a key wins — so on a host whose canonical keyring is written either way
+    # this command saw no SECRETS_KEYS, concluded the installation was legacy, and APPENDED
+    # `SECRETS_KEYS=<the old SECRETS_KEK>` after it. Compose then prefers the appended one,
+    # and the restart this command advises would make every row encrypted under the real
+    # keyring unreadable. The colon form was closed first and the whitespace form turned up a
+    # round later, which is why the predicate now covers the FAMILY rather than a separator.
+    ! nexa_env_has_unreadable_record "$file" "$bare_key" ||
+      nexa_die "${file} sets ${bare_key} in a form Compose reads and this conversion cannot — a colon (\`${bare_key}:<value>\`) or a blank before the equals (\`${bare_key} =<value>\`) — so it would append an assignment Compose then prefers over the value the application is running with. Rewrite that line as \`${bare_key}=<value>\`, with no space, first; nothing was changed."
+  done
 
   # Already canonical? Say so and stop. Rerunning must be free — an operator who
   # cannot tell whether they ran it should be able to just run it again.
   local existing_keys
-  existing_keys="$(nexa_env_value "$file" SECRETS_KEYS 2>/dev/null || true)"
+  existing_keys="$(nexa_compose_env_value "$file" SECRETS_KEYS 2>/dev/null || true)"
   if [ -n "${existing_keys//[[:space:]]/}" ]; then
     nexa_ok "the secret configuration is already canonical; nothing to do."
     # Deliberately reported, because a host can be canonical AND still carry the
     # legacy pair — the parser prefers SECRETS_KEYS, so those two lines are dead
     # weight that reads like configuration.
     local stale_kek
-    stale_kek="$(nexa_env_value "$file" SECRETS_KEK 2>/dev/null || true)"
+    stale_kek="$(nexa_compose_env_value "$file" SECRETS_KEK 2>/dev/null || true)"
     [ -z "${stale_kek//[[:space:]]/}" ] ||
       nexa_warn "SECRETS_KEK is still present and is IGNORED (SECRETS_KEYS wins). Remove those two lines by hand once you are satisfied."
     return 0
   fi
 
   local SECRETS_ACTIVE_KEY_ID legacy_key
-  SECRETS_ACTIVE_KEY_ID="$(nexa_env_value "$file" SECRETS_KEK_ID 2>/dev/null || true)"
-  legacy_key="$(nexa_env_value "$file" SECRETS_KEK 2>/dev/null || true)"
+  # The FILE, through the scanner — deliberately not what Compose resolves. This
+  # command REWRITES nexa.env, so a resolved value written back would freeze an
+  # interpolation meant to be evaluated at every start. The scanner still applies
+  # Compose's quoting and comment rules, which is what keeps `SECRETS_KEK_ID=install-1
+  # # original` from becoming an active key id with a comment in it, and a commented
+  # SECRETS_KEK from becoming a SECRETS_KEYS entry the base64 refinement refuses.
+  SECRETS_ACTIVE_KEY_ID="$(nexa_compose_env_value "$file" SECRETS_KEK_ID 2>/dev/null || true)"
+  legacy_key="$(nexa_compose_env_value "$file" SECRETS_KEK 2>/dev/null || true)"
+
+  # But neither reading is safe if the value carries a `$`. To Compose that is a
+  # substitution (`${VAULT_KEK}`) or an escaped dollar (`$$`): the literal text is not
+  # a key, and the resolved text is a key this file was never meant to contain. A valid
+  # key id and a valid base64 key contain no `$` at all, so nothing legitimate is
+  # refused here. Refuse instead of choosing, because the cost of choosing wrong is an
+  # installation that cannot decrypt anything.
+  case "${SECRETS_ACTIVE_KEY_ID}${legacy_key}" in
+    *'$'*)
+      nexa_die "${file} gives SECRETS_KEK or SECRETS_KEK_ID a value containing \`\$\`, which Compose treats as a substitution, so this conversion cannot know what to write without freezing it. Set those two lines to literal values first; nothing was changed."
+      ;;
+  esac
 
   # Refusals name the KEY, never the value.
   [ -n "${SECRETS_ACTIVE_KEY_ID//[[:space:]]/}" ] ||
@@ -1108,7 +1708,7 @@ cmd_secrets_migrate_config() {
   # lengths, never the values: an operator watching this run must learn that the
   # key survived without learning the key.
   local written
-  written="$(nexa_env_value "$file" SECRETS_KEYS 2>/dev/null || true)"
+  written="$(nexa_compose_env_value "$file" SECRETS_KEYS 2>/dev/null || true)"
   [ "${#written}" -eq "${#SECRETS_KEYS}" ] ||
     nexa_die "the converted ${file} does not read back as written. Inspect it before restarting."
 
@@ -1143,7 +1743,7 @@ cmd_secrets_disable_v1() {
   fi
 
   local previous SECRETS_ACCEPT_V1
-  previous="$(nexa_env_value "$file" SECRETS_ACCEPT_V1 2>/dev/null || true)"
+  previous="$(nexa_compose_env_value "$file" SECRETS_ACCEPT_V1 2>/dev/null || true)"
   if [ "$previous" = "false" ]; then
     nexa_ok "SECRETS_ACCEPT_V1 is already false; nothing to do."
     return 0

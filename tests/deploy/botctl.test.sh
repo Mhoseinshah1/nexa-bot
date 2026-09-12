@@ -1092,6 +1092,17 @@ teardown_root
 # version and status
 # =============================================================================
 setup_root
+
+test_case 'harness: a second root seeds the resolved environment too'
+# `setup_root` seeds nexa.env, and the environment Compose resolves from it, BEFORE
+# `setup_fake_docker` runs. The fake's state directory used to be setup_fake_docker's,
+# so every root after the first wrote that environment into the previous root's
+# deleted directory — a `No such file` warning on stderr and a `status` that resolved
+# nothing, in 57 tests, under a green suite. Asserted on a root that is not the first,
+# before the fake docker is installed, which is exactly where it went wrong.
+assert_equals 'the fake directory is not under THIS root' "${NEXA_ROOT}/fake" "$FAKE_DIR"
+assert_ok 'the resolved environment was not seeded into this root' test -s "${FAKE_DIR}/compose_env"
+
 setup_fake_docker
 seed_release 'v1.0.0' "$DIGEST_A"
 
@@ -2447,6 +2458,34 @@ assert_equals "the refused rewrite modified the file" "$before" "$(cat "${NEXA_C
 assert_fails "the refused rewrite left a temporary file behind" \
   test -n "$(find "$NEXA_CONFIG_DIR" -name 'nexa.env.??????' -print -quit)"
 
+test_case "the refusal scanner tracks quotes for every record, not only assignments"
+# Tracking is SHARED STATE, which is why this detector cannot keep a narrower tracker than
+# the others. Measured on v5.1.1: NOTE opens a value that closes on the `DUMMY='` line, and
+# `SECRETS_KEYS:realkeyring` after it IS set. A tracker that opened a region only on
+# `NAME=` took `DUMMY='` for the opener, swallowed the rest and reported NO unreadable
+# record — so with the legacy pair also present, `migrate-config` would have appended the
+# old SECRETS_KEK as the canonical keyring, which Compose prefers, making every existing
+# ciphertext undecryptable. A false negative here is the write this refusal exists to
+# prevent, which is the opposite of what this function's comment used to claim.
+seed_nexa_env legacy
+printf '%s\n' "NOTE:'first" "DUMMY='" 'SECRETS_KEYS:realkeyring' \
+  >>"${NEXA_CONFIG_DIR}/nexa.env"
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl secrets migrate-config
+assert_fails "a hidden effective SECRETS_KEYS record was converted over" \
+  test "$BOTCTL_STATUS" -eq 0
+assert_contains "the refusal did not name the unreadable shape" \
+  "$BOTCTL_OUTPUT" 'in a form Compose reads and this conversion cannot'
+assert_equals "the refused conversion modified the file" \
+  "$before" "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+# And the refusal is not unconditional, or it is just a broken command: an ordinary legacy
+# host still converts, and a colon inside a VALUE — which the keyring grammar always has —
+# is not a record separator.
+seed_nexa_env legacy
+run_botctl secrets migrate-config
+assert_equals "an ordinary legacy host stopped converting" '0' "$BOTCTL_STATUS"
+assert_fails "the conversion wrote no keyring" test -z "$(nexa_env_key SECRETS_KEYS)"
+
 test_case "a host with no key configuration at all is refused"
 seed_nexa_env empty
 run_botctl secrets migrate-config
@@ -2486,6 +2525,26 @@ assert_equals "the keyring was disturbed" "${TEST_KEY_ID}:${TEST_KEK}" "$(nexa_e
 assert_not_contains "the key appeared in the shutdown output" "$BOTCTL_OUTPUT" "$TEST_KEK"
 assert_contains "the backup rule was not restated at the moment it starts to matter" \
   "$BOTCTL_OUTPUT" "BACKUPS"
+
+test_case "a traced disable-v1 prints no database password"
+# The rewriter is the other place a secret is held by necessity: it is handed the keys to
+# write BY NAME and expands those names to append the lines, and it then proves the
+# candidate file would still boot by reading DATABASE_URL back out of it. Under `bash -x`
+# that read-back printed the database password on EVERY call — so `secrets disable-v1`,
+# which writes nothing secret at all, leaked it anyway. `botctl update` is the same path
+# through `nexa_reconcile_app_env`; it happens to capture the subshell's stderr, which is
+# why this command and not that one is the case that can observe the rule.
+fake_set shutdown_ready 1
+seed_nexa_env canonical
+trace="$(bash -x "$BOTCTL" secrets disable-v1 2>&1 || true)"
+assert_not_contains 'a traced shutdown printed the database password' "$trace" 'nexa:pw'
+assert_not_contains 'a traced shutdown printed the key material' "$trace" "$TEST_KEK"
+# And the run was real: traced, and it reached the write.
+assert_contains 'nothing was traced at all' "$trace" '+ '
+assert_equals 'SECRETS_ACCEPT_V1 was not set to false' 'false' "$(nexa_env_key SECRETS_ACCEPT_V1)"
+# Deliberately NOT re-seeded: the case below asserts that rerunning is free, which needs
+# the state this one leaves — SECRETS_ACCEPT_V1 already false on a canonical keyring.
+# Re-seeding here made that case perform the change instead of declining it.
 
 test_case "rerunning disable-v1 is free"
 run_botctl secrets disable-v1
@@ -2971,9 +3030,278 @@ assert_contains 'the compatibility-only case was not distinguished' "$out" 'no r
 assert_contains 'the conversion step was not named' "$out" 'botctl secrets migrate-config'
 assert_not_contains 'rewrap was suggested with nothing to rewrap' "$out" 'botctl secrets rewrap'
 
+test_case 'secrets migrate-config: a substitution is refused, not frozen'
+# This command REWRITES nexa.env, so it reads the FILE: writing what Compose resolved
+# would freeze an interpolation meant to be evaluated at every start. But then neither
+# reading is safe when the value IS a substitution — the literal `${VAULT_KEK}` is not a
+# key, and the resolved one is a key the file was never meant to contain — so it refuses
+# rather than choosing. Choosing wrong here leaves an installation that cannot decrypt.
+seed_nexa_env empty
+append_resolved_env 'SECRETS_KEK=${VAULT_KEK}' 'SECRETS_KEK_ID=install-1'
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl secrets migrate-config || true
+assert_contains 'the refusal did not name the cause' "$BOTCTL_OUTPUT" 'substitution'
+assert_equals 'the file was changed by a refused conversion' "$before" \
+  "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_not_contains 'the refusal printed key material' "$BOTCTL_OUTPUT" 'VAULT_KEK}'
+seed_nexa_env canonical
+
+test_case 'secrets migrate-config: a record shape it cannot read is refused, not converted'
+# This command reads the FILE and writes the FILE, and a bare record is the one shape
+# whose value is not in the file. Measured on Compose v5.1.1, with `SECRETS_KEK=old`
+# followed by a bare `SECRETS_KEK` and that variable exported:
+#
+#   SECRETS_KEK=old            container receives `ambientvalue`  — the LAST record wins
+#   SECRETS_KEK                and a bare record takes the ambient value
+#
+# `nexa_compose_env_value` scans the file, so it answers `old`. Converting on that writes
+# the STALE key as SECRETS_KEYS while reporting that the key material is unchanged, and
+# the restart it advises then leaves every existing ciphertext undecryptable. Refused,
+# like the `$` case, because choosing wrong here cannot be undone from the file.
+seed_nexa_env empty
+append_resolved_env 'SECRETS_KEK=b2xkLWtleS1tYXRlcmlhbC1uZXZlci1wcmludGVk' 'SECRETS_KEK_ID=install-1'
+printf 'SECRETS_KEK\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl secrets migrate-config || true
+assert_contains 'the refusal did not name the shape' "$BOTCTL_OUTPUT" 'BARE record'
+assert_contains 'the refusal did not name the key' "$BOTCTL_OUTPUT" 'SECRETS_KEK'
+assert_equals 'the file was changed by a refused conversion' "$before" \
+  "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_not_contains 'the refusal printed key material' \
+  "$BOTCTL_OUTPUT" 'b2xkLWtleS1tYXRlcmlhbC1uZXZlci1wcmludGVk'
+# And SECRETS_KEYS is in the refused set too, because a bare record for IT makes the
+# already-canonical check read empty — so the command would convert over a keyring the
+# application is already running from.
+seed_nexa_env empty
+append_resolved_env 'SECRETS_KEK=b2xkLWtleS1tYXRlcmlhbC1uZXZlci1wcmludGVk' 'SECRETS_KEK_ID=install-1'
+printf 'SECRETS_KEYS\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl secrets migrate-config || true
+assert_contains 'a bare SECRETS_KEYS record was converted over' "$BOTCTL_OUTPUT" 'BARE record'
+assert_equals 'the file was changed by a refused conversion' "$before" \
+  "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+# The COLON shape is refused too, and it is the worse case: measured on v5.1.1,
+# `SECRETS_KEYS:realkeyring` is effective and a LATER `SECRETS_KEYS=...` wins, so this
+# command read no SECRETS_KEYS, called the host legacy, and appended the old SECRETS_KEK as
+# the canonical keyring — which Compose then prefers over the keyring the application is
+# actually running with. The restart it advises would make every existing row unreadable.
+seed_nexa_env empty
+append_resolved_env 'SECRETS_KEK=b2xkLWtleS1tYXRlcmlhbC1uZXZlci1wcmludGVk' 'SECRETS_KEK_ID=install-1'
+printf 'SECRETS_KEYS:aWQ6cmVhbC1rZXlyaW5n\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl secrets migrate-config || true
+assert_contains 'a colon-form keyring was converted over' \
+  "$BOTCTL_OUTPUT" 'a form Compose reads and this conversion cannot'
+assert_equals 'the file was changed by a refused conversion' "$before" \
+  "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_not_contains 'the refusal printed key material' \
+  "$BOTCTL_OUTPUT" 'aWQ6cmVhbC1rZXlyaW5n'
+# And a colon inside a VALUE is not a colon RECORD: `id:key` is the canonical keyring
+# grammar, so a detector that fired on it would refuse every well-formed host there is.
+seed_nexa_env empty
+append_resolved_env 'SECRETS_KEK=b2xkLWtleS1tYXRlcmlhbC1uZXZlci1wcmludGVk' 'SECRETS_KEK_ID=install-1'
+assert_fails 'a colon inside a value was read as an unreadable record' \
+  nexa_env_has_unreadable_record "${NEXA_CONFIG_DIR}/nexa.env" SECRETS_KEK
+# Nor is a colon line inside another variable's multiline value.
+printf "NOTE='line one\nSECRETS_KEYS:interior\nline three'\n" >>"${NEXA_CONFIG_DIR}/nexa.env"
+assert_fails 'an interior colon line was read as a record' \
+  nexa_env_has_unreadable_record "${NEXA_CONFIG_DIR}/nexa.env" SECRETS_KEYS
+# And the WHITESPACE shape, which is the same family one separator over and turned up a
+# round after the colon form was closed alone. Measured on v5.1.1: `SECRETS_KEYS =realkey`,
+# a tab before the `=`, and `export SECRETS_KEYS =realkey` are all effective, and a later
+# `SECRETS_KEYS=` wins over them — so this command would have appended the stale key as the
+# canonical keyring on a host whose real one is written that way.
+seed_nexa_env empty
+append_resolved_env 'SECRETS_KEK=b2xkLWtleS1tYXRlcmlhbC1uZXZlci1wcmludGVk' 'SECRETS_KEK_ID=install-1'
+printf 'SECRETS_KEYS =aWQ6cmVhbC1rZXlyaW5n\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl secrets migrate-config || true
+assert_contains 'a whitespace-form keyring was converted over' \
+  "$BOTCTL_OUTPUT" 'a form Compose reads and this conversion cannot'
+assert_equals 'the file was changed by a refused conversion' "$before" \
+  "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_not_contains 'the refusal printed key material' \
+  "$BOTCTL_OUTPUT" 'aWQ6cmVhbC1rZXlyaW5n'
+# A tab before the `=` is the same shape, and a space AFTER the `=` is not: `KEY= value` is
+# read by the value reader exactly as Compose reads it, so refusing it would refuse a file
+# that converts correctly.
+seed_nexa_env empty
+printf 'SECRETS_KEYS\t=x\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+assert_ok 'a tab before the equals was not seen' \
+  nexa_env_has_unreadable_record "${NEXA_CONFIG_DIR}/nexa.env" SECRETS_KEYS
+seed_nexa_env empty
+printf 'SECRETS_KEYS= x\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+assert_fails 'a space AFTER the equals was refused' \
+  nexa_env_has_unreadable_record "${NEXA_CONFIG_DIR}/nexa.env" SECRETS_KEYS
+# A file with neither shape still converts: the refusal is the shape, not the command.
+seed_nexa_env empty
+append_resolved_env 'SECRETS_KEK=b2xkLWtleS1tYXRlcmlhbC1uZXZlci1wcmludGVk' 'SECRETS_KEK_ID=install-1'
+run_botctl secrets migrate-config
+assert_contains 'a clean legacy file was refused' "$BOTCTL_OUTPUT" 'the key id is install-1'
+seed_nexa_env canonical
+
+test_case 'nexa_untraced turns tracing off and puts it back exactly as it found it'
+# The OFF half is covered by three command-level cases. The RESTORE half was not:
+# deleting the restore line left all checks green, because every command that uses this
+# helper has nothing traced after it returns. A rule with no test is a rule that will be
+# silently reverted, so this calls the helper directly, in both directions.
+#
+# Tracing ON before the call must be ON after it: a command that went dark for the rest
+# of its run after one untraced step is the diagnostic failure this helper is bounded to
+# avoid, and `deploy/install.sh` is not the only script that may come to wrap a step.
+untraced_probe="$( ( set -x; nexa_untraced true; echo AFTER ) 2>&1 )"
+assert_contains 'tracing was not restored after the untraced call' \
+  "$untraced_probe" '+ echo AFTER'
+assert_not_contains 'the body was traced' "$untraced_probe" '+ true'
+# And tracing OFF before the call must stay OFF: turning it on for a caller that never
+# asked would print the rest of that command, which for `secrets migrate-config` is the
+# read-back of the keyring.
+untraced_probe="$( ( nexa_untraced true; echo AFTER ) 2>&1 )"
+assert_not_contains 'tracing was turned ON for a caller that had it off' \
+  "$untraced_probe" '+ echo AFTER'
+# And after a FAILING body, which is the whole reason the status is captured rather than
+# let through: a restore written as "only when the body succeeded" passes every assertion
+# above and loses tracing for the rest of a command that hit a refusal — exactly when an
+# operator running under `-x` needs the rest.
+untraced_probe="$( ( set -x; nexa_untraced false; echo AFTER ) 2>&1 )"
+assert_contains 'tracing was not restored after a FAILING body' \
+  "$untraced_probe" '+ echo AFTER'
+# The status is the body's, not the helper's own bookkeeping.
+nexa_untraced true && untraced_status=0 || untraced_status=$?
+assert_equals 'a succeeding body did not return 0' 0 "$untraced_status"
+nexa_untraced false && untraced_status=0 || untraced_status=$?
+assert_equals 'a failing body did not return its own status' 1 "$untraced_status"
+nexa_untraced bash -c 'exit 7' && untraced_status=0 || untraced_status=$?
+assert_equals 'a body exiting 7 did not return 7' 7 "$untraced_status"
+
+test_case 'secrets migrate-config: a traced run prints no key material'
+# This command HOLDS the master key by necessity: it reads SECRETS_KEK out of the file
+# and writes it back under the canonical name. Under `bash -x` the capture, the blank
+# test, the `id:key` concatenation, the rewriter's own `printf` and the read-back each
+# printed it — six times — and then the command printed that the key material "was never
+# printed". The `status` sections were fixed for exactly this and this command, the one
+# that actually moves the key, was left open. `botctl status` is what sends an operator
+# here, and a command that rewrites /etc/nexa/nexa.env is one they run under `-x`.
+seed_nexa_env legacy
+trace="$(bash -x "$BOTCTL" secrets migrate-config 2>&1 || true)"
+assert_not_contains 'a traced conversion printed the key material' "$trace" "$TEST_KEK"
+assert_not_contains 'a traced conversion printed the database password' "$trace" 'nexa:pw'
+# And the run was real: tracing was on, and the conversion reached its own success line.
+# Without both, this would pass against a command that refused at its first line.
+assert_contains 'nothing was traced at all' "$trace" '+ '
+assert_contains 'the conversion did not complete' "$trace" 'was never printed'
+assert_contains 'the converted keyring was not written' \
+  "$(cat "${NEXA_CONFIG_DIR}/nexa.env")" 'SECRETS_KEYS='
+seed_nexa_env canonical
+
+test_case 'status: a traced run prints no resolved value'
+# `bash -x` is what an operator reaches for when `botctl status` misbehaves, and the
+# resolved listing holds DATABASE_URL, the keyring and the backup bot token. Capturing
+# it into a variable and expanding it as an argument put every one of them in the
+# trace — in a command whose output is deliberately safe to paste into a ticket. Both
+# sections run with tracing off now, and this asserts that on the trace itself.
+seed_nexa_env canonical
+fake_set compose_env ''
+fake_set compose_env_json '{"DATABASE_URL":"postgres://nexa:tracepw@postgres:5432/nexa","REDIS_URL":"r","SECRETS_KEYS":"k1:TRACEKEYMATERIAL","SECRETS_ACTIVE_KEY_ID":"k1","BACKUP_TELEGRAM_CHAT_ID":"-1001","BACKUP_TELEGRAM_BOT_TOKEN":"777:TRACEBOTTOKEN"}'
+trace="$(bash -x "$BOTCTL" status 2>&1 || true)"
+assert_not_contains 'a traced run printed the keyring' "$trace" 'TRACEKEYMATERIAL'
+assert_not_contains 'a traced run printed the bot token' "$trace" 'TRACEBOTTOKEN'
+assert_not_contains 'a traced run printed the database password' "$trace" 'tracepw'
+# And the trace is still a trace: the surrounding command IS traced, or this would
+# pass against a botctl that simply printed nothing.
+assert_contains 'nothing was traced at all' "$trace" '+ '
+# Both sections must have REACHED the resolved listing, or the secret assertions above
+# are vacuous. `capabilities` alone proved nothing: under `bash -x` the call itself
+# traces as `+ status_capabilities`, which contains that word, so the guard passed with
+# `compose_config_fails=1` (both sections print REFUSED and never read the listing) and
+# with both bodies replaced by `return 0`. These two rows cannot come from a trace line:
+# the value is a separate argv word in the `printf`, so the format string a trace would
+# echo carries `%-8s` and `%s`, never `configured` or `canonical` in those columns. And
+# each row is reachable only THROUGH the listing — `backup delivery` needs both
+# BACKUP_TELEGRAM_* present in it, `configuration  canonical` needs SECRETS_KEYS.
+assert_contains 'the capability section never read the resolved listing' \
+  "$trace" 'backup delivery    configured'
+assert_contains 'the secrets section never read the resolved listing' \
+  "$trace" 'configuration  canonical'
+fake_set compose_env_json ''
+seed_nexa_env canonical
+
+test_case 'status: an explicit SECRETS_ACCEPT_V1 outside the enum is invalid, not a default'
+# `SECRETS_ACCEPT_V1` is z.enum(['true', 'false']), so `yes` — a spelling several other
+# settings in this very section accept — and a value with a trailing newline are
+# configurations the API REFUSES to start on. Reporting the keyring-derived default
+# for them describes an acceptance state no container can reach, which is the same
+# lie as a capability reported `on` for a value the schema rejects.
+seed_nexa_env canonical
+fake_set compose_env ''
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","SECRETS_KEYS":"k1:v","SECRETS_ACTIVE_KEY_ID":"k1","SECRETS_ACCEPT_V1":"yes"}'
+fake_set secrets_json '{"format":"canonical","acceptV1":false,"explicit":false,"v1Rows":0,"rows":4,"mismatched":0}'
+out="$(status_secrets_probe)"
+assert_contains 'a value outside the enum was reported as a derived default' \
+  "$out" 'accept v1      invalid'
+assert_contains 'the reason was not named' "$out" 'neither true nor false'
+# And the claim is scoped: an API started before the edit keeps the acceptance it was
+# created with, so the refusal must not say no acceptance state is in force anywhere.
+assert_contains 'the refusal claimed no acceptance state is in force anywhere' \
+  "$out" 'keeps the acceptance it was created with'
+assert_not_contains 'the refusal over-claimed about the running API' \
+  "$out" 'no acceptance state is in force'
+assert_not_contains 'an unreachable acceptance state was presented as in force' \
+  "$out" 'accept v1      no  (default)'
+# Compose is NOT what refuses here — the listing resolved, which is how the value was
+# read — so the container IS created and then exits on the schema error. Saying it
+# cannot be created sends the operator away from `botctl logs api`, where the reason is.
+assert_contains 'the refusal did not say the API will not start' \
+  "$out" 'will not START from this configuration'
+assert_not_contains 'the refusal blamed compose for a refusal it did not make' \
+  "$out" 'no API can be CREATED'
+assert_contains 'the operator was not sent to the log that carries the reason' \
+  "$out" 'botctl logs api'
+# And the log promise is SCOPED. An API already running was created with a value the
+# schema accepted, so its log has no refusal to show, and this branch returns before the
+# one-off that would produce one — so "logs api shows the refusal" was an instruction
+# that produces nothing until a recreate has been attempted and failed.
+assert_contains 'the log promise was not scoped to after the attempt' \
+  "$out" 'AFTER that attempt'
+assert_contains 'the reason an already-running API shows nothing was not given' \
+  "$out" 'has nothing to show'
+# And NO ROW is printed. Every row below is counted by a one-off `compose run` container
+# created from THIS configuration, which cannot start either — so a row here is either
+# attributed to the wrong process or invented. The fall-through is the dangerous one:
+# `$accept` has three values and the guards below test only `no` and `yes`, so an
+# `invalid` acceptance used to reach `v1 shutdown complete: … v1 not accepted` — an
+# acceptance state no container can reach, which is the lie this case exists to kill.
+assert_not_contains 'a row was counted from a configuration no container can read' \
+  "$out" 'v1 rows'
+assert_not_contains 'an unreachable acceptance state was reported as a completed shutdown' \
+  "$out" 'v1 shutdown'
+assert_contains 'the absence of rows was left looking like a stack that is down' \
+  "$out" 'No row is shown below'
+# And the claim is about the rows BELOW: the two above it — the configuration and the
+# acceptance — came from the resolved listing, not from any container, so saying "every
+# row in this section" contradicted the two lines printed immediately before.
+assert_contains 'the paragraph disowned the two rows it had just printed' \
+  "$out" 'every row BELOW'
+assert_not_contains 'the paragraph claimed every row in the section comes from a container' \
+  "$out" 'every row in this'
+# A value with a trailing newline is the same case: the rendering is `false\\n`, which
+# is not the spelling the enum allows.
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","SECRETS_KEYS":"k1:v","SECRETS_ACTIVE_KEY_ID":"k1","SECRETS_ACCEPT_V1":"false\n"}'
+out="$(status_secrets_probe)"
+assert_contains 'a trailing newline was accepted as the enum value' \
+  "$out" 'accept v1      invalid'
+# And exactly `false` is still explicit rather than invalid, so this is about the
+# vocabulary and not about refusing every present value.
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","SECRETS_KEYS":"k1:v","SECRETS_ACTIVE_KEY_ID":"k1","SECRETS_ACCEPT_V1":"false"}'
+out="$(status_secrets_probe)"
+assert_contains 'an exact enum value was reported as invalid' \
+  "$out" 'accept v1      no  (SECRETS_ACCEPT_V1)'
+fake_set compose_env_json ''
+seed_nexa_env canonical
+
 test_case 'status: an explicit SECRETS_ACCEPT_V1=true on a canonical keyring is reported as explicit'
 seed_nexa_env canonical
-printf 'SECRETS_ACCEPT_V1=true\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+append_resolved_env 'SECRETS_ACCEPT_V1=true'
 fake_set secrets_json '{"format":"canonical","acceptV1":true,"explicit":true,"v1Rows":0,"rows":4,"mismatched":0}'
 out="$(status_secrets_probe)"
 assert_contains 'the explicit setting was reported as a default' "$out" 'accept v1      yes  (SECRETS_ACCEPT_V1)'
@@ -2983,7 +3311,7 @@ assert_contains 'disable-v1 was not named' "$out" 'botctl secrets disable-v1'
 
 test_case 'status: v1 rows with v1 NOT accepted is the loud case'
 seed_nexa_env canonical
-printf 'SECRETS_ACCEPT_V1=false\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+append_resolved_env 'SECRETS_ACCEPT_V1=false'
 fake_set secrets_json '{"format":"canonical","acceptV1":false,"explicit":true,"v1Rows":2,"rows":4,"mismatched":0}'
 out="$(status_secrets_probe)"
 assert_contains 'unreadable rows were not called out' "$out" 'cannot be read'
@@ -3372,6 +3700,1319 @@ assert_contains 'status did not report the edge as serving the installed configu
   "$BOTCTL_OUTPUT" 'serving it'
 assert_not_contains 'status warned about a mismatch that does not exist' \
   "$BOTCTL_OUTPUT" 'DIFFERENT configuration generation'
+teardown_root
+
+# =============================================================================
+# Configuration upgrade audit — capability visibility and obsolete keys
+# =============================================================================
+#
+# `botctl status` reported version, containers, edge, secrets and readiness, and
+# nothing about the capabilities whose default is OFF. An installation that never
+# added BACKUP_SCHEDULE_ENABLED takes no automatic backups, which is the correct
+# default and was an invisible state.
+
+# A line in the file AND in what Compose resolves from it, which is the ordinary case:
+# an assignment Compose passes through literally. `botctl status` asks
+# `docker compose config` now, so a helper that only wrote the file would leave every
+# capability at its default. A case that wants the two to DIVERGE sets the fake
+# `compose_env` itself — the only way to express a divergence now that nothing in
+# `deploy/` parses env_file semantics for reporting.
+append_env() { append_resolved_env "$@"; }
+
+setup_root
+setup_fake_docker
+seed_release 'vA' "$DIGEST_A"
+fake_set secrets_json '{"format":"canonical","acceptV1":false,"explicit":false,"v1Rows":0,"rows":4,"mismatched":0}'
+
+test_case 'status: an installation that never configured backups is told so'
+seed_nexa_env canonical
+run_botctl status
+assert_contains 'the capabilities section is missing' "$BOTCTL_OUTPUT" 'capabilities, as compose resolves'
+assert_contains 'the scheduled backup default was not reported as off' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   off'
+assert_contains 'an unconfigured destination was not reported' \
+  "$BOTCTL_OUTPUT" 'backup delivery    not configured'
+assert_contains 'the operator was not told this configuration takes no automatic backup' \
+  "$BOTCTL_OUTPUT" 'takes no AUTOMATIC backup'
+assert_contains 'the local-retention behaviour was not explained' \
+  "$BOTCTL_OUTPUT" 'NOT_ATTEMPTED'
+assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'BACKUP_SCHEDULE_ENABLED=true'
+# The defaults that are ON must read as on, or the section is just a list of offs.
+assert_contains 'recovery upload was not reported as on by default' \
+  "$BOTCTL_OUTPUT" 'recovery upload    on'
+assert_contains 'the panel monitor was not reported as on by default' \
+  "$BOTCTL_OUTPUT" 'panel monitor      on'
+
+test_case 'status: a chat id that is only a no-break space is not configured'
+# The schema trims the destination with JavaScript's `.trim()`, whose whitespace set
+# includes the no-break space; the shell's `[[:space:]]` does not. A chat id of one
+# U+00A0 is nothing to the application — a half-configured destination the next start
+# refuses — and "present" to a shell test, which reported it configured.
+seed_nexa_env canonical
+fake_set compose_env ''
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","BACKUP_TELEGRAM_CHAT_ID":" ","BACKUP_TELEGRAM_BOT_TOKEN":"123456:AAAfakeToken"}'
+run_botctl status
+assert_contains 'a no-break-space chat id was read as present' \
+  "$BOTCTL_OUTPUT" 'backup delivery    HALF configured'
+# And a chat id with real characters around such a space is present, so this is about
+# the trim and not about refusing the character.
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","BACKUP_TELEGRAM_CHAT_ID":"-100 1","BACKUP_TELEGRAM_BOT_TOKEN":"123456:AAAfakeToken"}'
+run_botctl status
+assert_contains 'a chat id containing a no-break space was read as absent' \
+  "$BOTCTL_OUTPUT" 'backup delivery    configured'
+# The set is the SCHEMA's, not whichever set the interpreter happens to have.
+# Measured: Python trims U+FEFF and U+001C..U+001F; JavaScript trims the first and
+# NOT the second. So a byte-order mark alone is absent to the application, and a file
+# separator alone is a VALUE — `value.strip()` gets the second one backwards, and
+# nothing in this suite could see that until these two cases.
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","BACKUP_TELEGRAM_CHAT_ID":"\ufeff","BACKUP_TELEGRAM_BOT_TOKEN":"123456:AAAfakeToken"}'
+run_botctl status
+assert_contains 'a byte-order-mark chat id was read as present, which the schema trims away' \
+  "$BOTCTL_OUTPUT" 'backup delivery    HALF configured'
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","BACKUP_TELEGRAM_CHAT_ID":"\u001c","BACKUP_TELEGRAM_BOT_TOKEN":"123456:AAAfakeToken"}'
+run_botctl status
+assert_contains 'a file-separator chat id was trimmed away, which the schema does not do' \
+  "$BOTCTL_OUTPUT" 'backup delivery    configured'
+fake_set compose_env_json ''
+seed_nexa_env canonical
+
+test_case 'status: a boolean with a trailing newline is invalid, not on'
+# Compose lets a quoted value span lines, so `BACKUP_SCHEDULE_ENABLED='true\n'` reaches
+# the container as `true` WITH the newline and `booleanish` refuses it. The validator
+# read the DECODED value through a command substitution, which drops a trailing
+# newline, so it saw `true` and reported `on` for a configuration the next start
+# refuses. It reads the listing's rendering now, where that value is `true\n` and
+# matches no accepted spelling.
+seed_nexa_env canonical
+fake_set compose_env ''
+fake_set compose_env_json "$(printf '{"DATABASE_URL":"d","REDIS_URL":"r","BACKUP_SCHEDULE_ENABLED":"true\\n","PANEL_MONITOR_ENABLED":"false\\n"}')"
+run_botctl status
+assert_contains 'a booleanish value with a trailing newline was reported as on' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   invalid'
+assert_contains 'a strict-enum value with a trailing newline was reported as off' \
+  "$BOTCTL_OUTPUT" 'panel monitor      invalid'
+# And the same values without the newline are read normally, so this is about the
+# boundary rather than about refusing every value.
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","BACKUP_SCHEDULE_ENABLED":"true","PANEL_MONITOR_ENABLED":"false"}'
+run_botctl status
+assert_contains 'a clean booleanish value stopped being read' "$BOTCTL_OUTPUT" 'scheduled backup   on'
+assert_contains 'a clean strict value stopped being read' "$BOTCTL_OUTPUT" 'panel monitor      off'
+fake_set compose_env_json ''
+seed_nexa_env canonical
+
+test_case 'status: a null entry Compose resolved is an absent variable, not an empty one'
+# A bare `KEY` line in nexa.env takes the variable from the host, and when the host
+# has none the application never receives it and applies its default. Compose v5.1.1
+# omits such a key from `config` output; the Compose contract also allows a null. A
+# null rendered as `KEY=` would turn that default into an invalid explicit empty value.
+seed_nexa_env canonical
+fake_set compose_env ''
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","PANEL_MONITOR_ENABLED":null}'
+run_botctl status
+assert_contains 'a null entry was reported as an invalid empty value' \
+  "$BOTCTL_OUTPUT" 'panel monitor      on'
+assert_not_contains 'a null entry read as invalid' "$BOTCTL_OUTPUT" 'panel monitor      invalid'
+fake_set compose_env_json ''
+seed_nexa_env canonical
+
+test_case 'status: a destination that resolves to only a newline is not configured'
+# The listing renders a newline as the two characters `\n` so that one entry is one
+# line, and `nexa_listing_present` trims through that rendering. A reader of the
+# RENDERING would see two non-blank characters where the application — which
+# `.trim()`s the chat id — sees nothing, and report a destination as configured that
+# the next start refuses as half-configured. This is the case that keeps the decode
+# honest: the secret length is measured elsewhere, so nothing else could observe it.
+seed_nexa_env canonical
+fake_set compose_env ''
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","BACKUP_TELEGRAM_CHAT_ID":"\n","BACKUP_TELEGRAM_BOT_TOKEN":"123456:AAAfakeToken"}'
+run_botctl status
+assert_contains 'a chat id that is only a newline was read as present' \
+  "$BOTCTL_OUTPUT" 'backup delivery    HALF configured'
+assert_not_contains 'status printed the token' "$BOTCTL_OUTPUT" 'AAAfakeToken'
+fake_set compose_env_json ''
+seed_nexa_env canonical
+
+test_case 'status: a configured schedule and destination stop the advice, and print no token'
+seed_nexa_env canonical
+append_env 'BACKUP_SCHEDULE_ENABLED=true' \
+  'BACKUP_TELEGRAM_CHAT_ID=-1001234567890' \
+  'BACKUP_TELEGRAM_BOT_TOKEN=123456:AAsecrettokenvalue'
+run_botctl status
+assert_contains 'an enabled schedule was not reported' "$BOTCTL_OUTPUT" 'scheduled backup   on'
+assert_contains 'a configured destination was not reported' \
+  "$BOTCTL_OUTPUT" 'backup delivery    configured'
+assert_not_contains 'the advice was printed to an installation that does not need it' \
+  "$BOTCTL_OUTPUT" 'takes no AUTOMATIC backup'
+assert_not_contains 'status printed the delivery bot token' \
+  "$BOTCTL_OUTPUT" 'AAsecrettokenvalue'
+assert_not_contains 'status printed the delivery chat id' "$BOTCTL_OUTPUT" '-1001234567890'
+
+test_case 'status: a half-configured destination is named as half, not as configured'
+seed_nexa_env canonical
+append_env 'BACKUP_TELEGRAM_CHAT_ID=-1001234567890'
+run_botctl status
+assert_contains 'a half-configured destination was not reported' \
+  "$BOTCTL_OUTPUT" 'backup delivery    HALF configured'
+assert_not_contains 'status printed the chat id' "$BOTCTL_OUTPUT" '-1001234567890'
+
+test_case 'status: every spelling the application accepts is read the same way'
+# `booleanish` takes true/false/1/0/yes/no. A reader that took only `true` would
+# report a monitor an operator enabled with `yes` as disabled.
+for spelling in true 1 yes; do
+  seed_nexa_env canonical
+  append_env "BACKUP_SCHEDULE_ENABLED=${spelling}"
+  run_botctl status
+  assert_contains "the spelling ${spelling} was not read as on" \
+    "$BOTCTL_OUTPUT" 'scheduled backup   on'
+done
+for spelling in false 0 no; do
+  seed_nexa_env canonical
+  append_env "RECOVERY_UPLOAD_ENABLED=${spelling}"
+  run_botctl status
+  assert_contains "the spelling ${spelling} was not read as off" \
+    "$BOTCTL_OUTPUT" 'recovery upload    off'
+done
+
+test_case 'status: a value the application would refuse is reported as invalid, not guessed'
+seed_nexa_env canonical
+append_env 'PANEL_MONITOR_ENABLED=maybe'
+run_botctl status
+assert_contains 'an unparseable value was guessed at' "$BOTCTL_OUTPUT" 'panel monitor      invalid'
+
+test_case 'status: a key with a narrower validator does not accept the wider spellings'
+# `PANEL_MONITOR_ENABLED` is `z.enum(['true', 'false'])`, not `booleanish`. Reading
+# `yes` there as `on` would report a working monitor where the next start REFUSES
+# to boot — the same lie as reading an enabled monitor as off, and the worse one.
+seed_nexa_env canonical
+append_env 'PANEL_MONITOR_ENABLED=yes'
+run_botctl status
+assert_contains 'the narrower vocabulary was not applied' "$BOTCTL_OUTPUT" 'panel monitor      invalid'
+# And the same spelling on a booleanish key IS accepted, so this is a per-key
+# rule rather than a reader that simply refuses `yes`.
+seed_nexa_env canonical
+append_env 'BACKUP_SCHEDULE_ENABLED=yes'
+run_botctl status
+assert_contains 'a booleanish key stopped accepting yes' "$BOTCTL_OUTPUT" 'scheduled backup   on'
+
+test_case 'status: `panel monitor on` is reported as the flag, not as a verdict'
+# `configSchema.superRefine` guards four cross-field rules behind
+# `if (PANEL_MONITOR_ENABLED)` — PANEL_MONITOR_TENANTS_PER_TICK against
+# PANEL_MONITOR_BATCH_SIZE, PANEL_MONITOR_HEALTHY_INTERVAL_MS against
+# PANEL_MONITOR_TICK_MS and against the probe cooldown, and
+# PANEL_MONITOR_BUDGET_RESERVE_PERCENT against PANEL_PROBE_TENANT_LIMIT — and it refuses
+# the WHOLE configuration if any disagree. So `panel monitor on` with
+# TENANTS_PER_TICK=2 and BATCH_SIZE=1 is a monitor that will not start, and an
+# unqualified `on` there is the same lie the webhook's secret-length check prevents.
+#
+# The arithmetic is deliberately NOT reimplemented: two of those rules are computed by
+# helpers in the schema, and five rounds of this branch went into learning that a shell
+# reimplementation of an application rule converges on a different wrong answer. Naming
+# the keys is a true statement this script can make; a verdict is not.
+seed_nexa_env canonical
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r\nPANEL_MONITOR_ENABLED=true\nPANEL_MONITOR_TENANTS_PER_TICK=2\nPANEL_MONITOR_BATCH_SIZE=1')"
+run_botctl status
+# The ROW, not the label: `panel monitor` alone matches `on`, `off` and `invalid` alike,
+# because the label is part of the format string. The value has to be in the needle.
+assert_contains 'the monitor was not reported on' "$BOTCTL_OUTPUT" 'panel monitor      on'
+assert_contains 'the monitor row claimed more than the flag' \
+  "$BOTCTL_OUTPUT" 'is the FLAG'
+assert_contains 'the cross-field keys were not named' \
+  "$BOTCTL_OUTPUT" 'PANEL_MONITOR_TENANTS_PER_TICK against'
+assert_contains 'the refusal of the whole configuration was not stated' \
+  "$BOTCTL_OUTPUT" 'refuses the whole configuration'
+# FIVE, counted from the schema rather than from memory. The first version of this said
+# four and missed the rule that refuses PANEL_MONITOR_BUDGET_RESERVE_PERCENT=0 outright —
+# which is the only one of the five that catches that value, because the reserve floor the
+# fourth rule compares against is itself 0 there. A `panel monitor on` beside a caveat
+# naming four rules the operator satisfies, for a monitor that refuses to start on the
+# fifth, is the same lie with an extra step.
+assert_contains 'the rule count is wrong' "$BOTCTL_OUTPUT" 'five cross-field rules'
+assert_contains 'the reserve-zero refusal was not named' \
+  "$BOTCTL_OUTPUT" 'PANEL_MONITOR_BUDGET_RESERVE_PERCENT=0 refused outright'
+assert_not_contains 'the caveat still claims four rules' \
+  "$BOTCTL_OUTPUT" 'four cross-field rules'
+assert_contains 'the monitor-log advice is not scoped to a failed recreate' \
+  "$BOTCTL_OUTPUT" 'only AFTER a recreate has been attempted and refused'
+assert_contains 'the running monitor is not said to keep what it accepted' \
+  "$BOTCTL_OUTPUT" 'keeps the settings it accepted'
+assert_not_contains 'the log is still claimed to name the failure unconditionally' \
+  "$BOTCTL_OUTPUT" 'names the one that failed'
+assert_contains 'the operator was not told where the failing rule is named' \
+  "$BOTCTL_OUTPUT" 'botctl logs monitor'
+# And the caveat is conditional: a monitor that is OFF has no such rules to satisfy, so
+# printing the paragraph there would be noise about a process that is not running.
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r\nPANEL_MONITOR_ENABLED=false')"
+run_botctl status
+assert_not_contains 'the flag caveat printed for a monitor that is off' \
+  "$BOTCTL_OUTPUT" 'is the FLAG'
+fake_set compose_env ''
+seed_nexa_env canonical
+
+test_case 'status: the section names COMPOSE as its resolver and claims nothing more'
+# Three review rounds produced a per-setting runtime claim that was wrong in a new way
+# at every field, and five more produced a reimplementation of Compose env_file
+# semantics that was wrong in a new way at every shape. What is left says where the
+# values came from and what they are not: Compose resolved them, and a RUNNING container
+# keeps whatever it was created with.
+seed_nexa_env canonical
+run_botctl status
+assert_contains 'the heading does not name compose as the resolver' \
+  "$BOTCTL_OUTPUT" 'as compose resolves'
+assert_contains 'the standing caveat is missing' "$BOTCTL_OUTPUT" 'STARTED NOW'
+# The caveat is keyed to CREATION and then names ALL FOUR commands that recreate. Three
+# versions of this were wrong in three different ways. "since the last `botctl restart`"
+# omitted `update`, `rollback` and `secrets disable-v1`. Naming three of them plus
+# "nothing else here does" was a universal negative that omitted `secrets disable-v1`, the
+# one command whose whole point is that the setting is APPLIED. Then the claim was
+# withdrawn entirely, on `docker compose config --hash` not moving when `env_file` content
+# changes — which is a fact about `config --hash`, not about `up -d`: `upCommand` resolves
+# `env_file` into the service environment before hashing and `runHash` does not, so the
+# two hash different project models. UNK-DEPLOY-001 carries the binary evidence.
+assert_contains 'the caveat was keyed to restart alone' \
+  "$BOTCTL_OUTPUT" 'since that container was CREATED'
+assert_contains 'recreation was not named as the thing that loads a change' \
+  "$BOTCTL_OUTPUT" 'Only RECREATING'
+assert_contains 'the fourth recreating command is missing' \
+  "$BOTCTL_OUTPUT" '`botctl secrets disable-v1`'
+# And the claim is BOUNDED. "A successful one of those has already loaded these values"
+# is false in three states this file documents itself: `update <the release already
+# installed>` returns 0 without recreating, twice over, and `disable-v1` returns 0 before
+# its `up` when the setting is already false. Each says so in its own output — which is
+# why the section points at that output instead of guessing. Naming the commands that CAN
+# recreate is true; claiming one of them DID is not this section's to know.
+assert_contains 'the two commands that can succeed without recreating are not named' \
+  "$BOTCTL_OUTPUT" 'can also return success having recreated nothing'
+assert_contains 'the operator was not pointed at the command output that knows' \
+  "$BOTCTL_OUTPUT" 'Read that, not this section'
+assert_not_contains 'an unbounded claim that a successful command loaded the values' \
+  "$BOTCTL_OUTPUT" 'has already loaded these values'
+assert_not_contains 'the caveat still claims only a restart can load a change' \
+  "$BOTCTL_OUTPUT" 'since the last `botctl restart` is not in force'
+assert_not_contains 'a universal negative that omits secrets disable-v1' \
+  "$BOTCTL_OUTPUT" 'nothing else here does'
+# And the caveat is scoped to the ROWS: the build-identity paragraphs below it do inspect
+# the running API, so disowning the containers for the whole section was the same
+# contradiction as "every row in this section", mirrored into the other half of status.
+assert_contains 'the caveat disowned facts the same section computes from docker inspect' \
+  "$BOTCTL_OUTPUT" 'The ROWS above read the configuration'
+assert_not_contains 'the caveat still disowns the containers for the whole section' \
+  "$BOTCTL_OUTPUT" 'These rows read the configuration, not the containers'
+assert_contains 'the caveat does not say what a running container keeps' \
+  "$BOTCTL_OUTPUT" 'created with'
+# And it still does not pretend to know the running state of any of them.
+assert_not_contains 'the section claims a running value' "$BOTCTL_OUTPUT" 'running:'
+test_case 'status: the capabilities section reports what COMPOSE resolved'
+# `botctl status` asks `docker compose config` rather than reading nexa.env, because
+# Compose INTERPOLATES env_file values — `${UNSET:-true}` reaches the container as
+# `true` and `${HOME}` comes from the ambient environment — so no shell reader can be
+# right about them without reproducing Compose variable precedence. Five rounds of
+# trying is the evidence. What this asserts is the remaining rule: the section reports
+# the resolved value, whatever the file happens to spell.
+seed_nexa_env canonical
+# The file says one thing; Compose resolves another. Only the resolved value may appear.
+append_env 'BACKUP_SCHEDULE_ENABLED=false'
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r\nSECRETS_KEYS=k1:v\nSECRETS_ACTIVE_KEY_ID=k1\nBACKUP_SCHEDULE_ENABLED=true')"
+run_botctl status
+assert_contains 'status reported the file value rather than what compose resolved' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   on'
+
+# A resolved value outside the key's own vocabulary is still `invalid`: resolution is
+# Compose's job, validation is this one, and PANEL_MONITOR_ENABLED is a true/false enum
+# while the others also take 1/0/yes/no.
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r\nPANEL_MONITOR_ENABLED=yes\nNOTIFICATION_DISPATCH_ENABLED=yes')"
+run_botctl status
+assert_contains 'a value the strict enum refuses was not reported as invalid' \
+  "$BOTCTL_OUTPUT" 'panel monitor      invalid'
+assert_contains 'a value booleanish accepts was reported as invalid' \
+  "$BOTCTL_OUTPUT" 'notifications      on'
+
+# Assigned to nothing is invalid; absent is the default. The two are different states.
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r\nPANEL_MONITOR_ENABLED=')"
+run_botctl status
+assert_contains 'an empty resolved value was read as the default' \
+  "$BOTCTL_OUTPUT" 'panel monitor      invalid'
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r')"
+run_botctl status
+assert_contains 'an absent key stopped getting its default' "$BOTCTL_OUTPUT" 'panel monitor      on'
+seed_nexa_env canonical
+
+test_case 'status: a configuration Compose REFUSES is reported as refused, not summarised'
+# An unterminated quoted value, an unsatisfiable substitution, a malformed compose file:
+# Compose rejects the configuration WHOLE, so no container starts and no individual
+# value is in force. A tidy column of values no container will ever receive is the most
+# misleading thing this section could print — and it is also the one condition this
+# script no longer has to detect for itself, because the authority reports it.
+seed_nexa_env canonical
+fake_set compose_config_fails 1
+run_botctl status
+assert_contains 'a refused configuration was not reported as refused' \
+  "$BOTCTL_OUTPUT" 'REFUSED by compose'
+assert_contains 'the consequence was not stated' \
+  "$BOTCTL_OUTPUT" 'no container can be CREATED or RECREATED'
+# And not more than the consequence: a container already running keeps its creation-time
+# environment and may pass readiness below, so the claim is about creation, not force.
+assert_contains 'the running-container caveat is missing' \
+  "$BOTCTL_OUTPUT" 'keeps the environment'
+assert_not_contains 'the refusal claimed no value is in force anywhere' \
+  "$BOTCTL_OUTPUT" 'no individual value is in force'
+assert_not_contains 'values were summarised from a configuration compose refuses' \
+  "$BOTCTL_OUTPUT" 'scheduled backup'
+fake_set compose_config_fails 0
+
+test_case 'status: an enabled webhook with a short secret is invalid, not on'
+# `configSchema.superRefine` refuses the WHOLE configuration when the webhook is on and
+# the secret is shorter than 16 characters, so the API will not start. Reporting
+# `telegram webhook on` there is the same lie as accepting a spelling the schema does
+# not: it says working where the next start fails. The secret is never printed.
+seed_nexa_env canonical
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r\nTELEGRAM_WEBHOOK_ENABLED=true\nTELEGRAM_WEBHOOK_SECRET=tooshort')"
+run_botctl status
+assert_contains 'an enabled webhook with a short secret was reported as on' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   invalid'
+assert_contains 'the reason was not named' "$BOTCTL_OUTPUT" '16 characters'
+assert_not_contains 'status printed the webhook secret' "$BOTCTL_OUTPUT" 'tooshort'
+# With a secret of the required length it is on, so this is about the dependency rather
+# than about refusing the webhook.
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r\nTELEGRAM_WEBHOOK_ENABLED=true\nTELEGRAM_WEBHOOK_SECRET=0123456789abcdef')"
+run_botctl status
+assert_contains 'a webhook with a long enough secret was not reported as on' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   on'
+assert_not_contains 'status printed the webhook secret' "$BOTCTL_OUTPUT" '0123456789abcdef'
+seed_nexa_env canonical
+
+test_case 'status: a dollar Compose re-escapes is measured as the application receives it'
+# `docker compose config` prints a RE-LOADABLE document, so every literal `$` in a
+# resolved value comes out doubled — measured on v5.1.1: `S='abcdefghijklmn$'` is
+# `abcdefghijklmn$$` in the JSON. Fifteen characters to the application, sixteen to a
+# reader of that document, and the schema refuses fifteen. Reported `on` for a webhook
+# the API will refuse to start with, which is exactly the lie the length check exists
+# to prevent. The doubling is undone before anything is measured.
+seed_nexa_env canonical
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r\nTELEGRAM_WEBHOOK_ENABLED=true\nTELEGRAM_WEBHOOK_SECRET=abcdefghijklmn$$')"
+run_botctl status
+assert_contains 'a 15-character secret ending in a dollar was measured as 16' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   invalid'
+# And sixteen real characters, one of them a dollar, is on — so this is about the
+# doubling, not about refusing a dollar.
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r\nTELEGRAM_WEBHOOK_ENABLED=true\nTELEGRAM_WEBHOOK_SECRET=abcdefghijklmno$$')"
+run_botctl status
+assert_contains 'a 16-character secret containing a dollar was refused' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   on'
+seed_nexa_env canonical
+
+test_case 'status: a value is measured by its characters, not by its one-line rendering'
+# The listing renders a backslash as two characters and a newline as `\n`, so that one
+# entry stays one line. A caller that measured the RENDERING counted eight backslashes
+# as sixteen characters and reported a webhook secret the schema refuses as `on`.
+# `nexa_listing_length` reads through the rendering; these values cannot be spelled in the
+# line-based `compose_env`, so the resolved environment is stated as JSON.
+seed_nexa_env canonical
+fake_set compose_env ''
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","TELEGRAM_WEBHOOK_ENABLED":"true","TELEGRAM_WEBHOOK_SECRET":"\\\\\\\\\\\\\\\\"}'
+run_botctl status
+assert_contains 'eight backslashes were measured as sixteen characters' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   invalid'
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","TELEGRAM_WEBHOOK_ENABLED":"true","TELEGRAM_WEBHOOK_SECRET":"abcdefgh\nijklmn"}'
+run_botctl status
+assert_contains 'a 15-character value with a newline was measured as 16' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   invalid'
+# Sixteen characters INCLUDING the newline is what the schema counts, so it is on.
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","TELEGRAM_WEBHOOK_ENABLED":"true","TELEGRAM_WEBHOOK_SECRET":"abcdefgh\nijklmno"}'
+run_botctl status
+assert_contains 'a 16-character value with a newline was refused' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   on'
+fake_set compose_env_json ''
+seed_nexa_env canonical
+
+test_case 'status: a refusal reports the reason Compose gave, with the value it echoed cut off'
+# Guessing at "common causes" told an operator whose env file was missing to look for an
+# unclosed quote. Compose says why, so `status` repeats Compose — but not whole: an
+# unterminated-quote refusal echoes the offending VALUE, and the offending value in this
+# file can be the bot token. Everything from the first quote character on is dropped.
+seed_nexa_env canonical
+fake_set compose_config_fails 1
+fake_set compose_config_stderr "failed to read /etc/nexa/nexa.env: line 9: unterminated quoted value '7777777:AAAfakeBotTokenValue"
+run_botctl status
+assert_contains 'the refusal was not reported' "$BOTCTL_OUTPUT" 'REFUSED by compose'
+assert_contains "Compose's reason was not repeated" "$BOTCTL_OUTPUT" 'line 9: unterminated quoted value'
+assert_not_contains 'the echoed token was printed' "$BOTCTL_OUTPUT" 'AAAfakeBotTokenValue'
+assert_not_contains 'a guessed cause was printed beside the real one' "$BOTCTL_OUTPUT" 'Common causes'
+# A reason without a quote reads whole.
+fake_set compose_config_stderr 'env file /etc/nexa/nexa.env not found: stat /etc/nexa/nexa.env: no such file or directory'
+run_botctl status
+assert_contains 'a quote-free reason was cut short' "$BOTCTL_OUTPUT" 'no such file or directory'
+# The SECOND channel, and the quote cut does nothing about it: Compose's required-variable
+# forms `${VAR?text}` and `${VAR:?text}` put the operator's own text in the diagnostic,
+# and that text needs no quote. Measured on v5.1.1 with `SECRETS_KEYS=${KEYRING:?k1:<key>}`
+# and KEYRING unset, which is how the keyring reached a paste-safe output. Compose's prose
+# is kept whole up to and including the marker, so the variable NAME still reads.
+fake_set compose_config_stderr 'failed to read /etc/nexa/nexa.env: required variable KEYRING is missing a value: k1:AAAfakeKeyMaterial'
+run_botctl status
+assert_contains 'the required-variable reason was dropped entirely' \
+  "$BOTCTL_OUTPUT" 'required variable KEYRING is missing a value'
+assert_not_contains 'the operator-supplied error text carried the key material through' \
+  "$BOTCTL_OUTPUT" 'AAAfakeKeyMaterial'
+# And the cut is never silent. `deploy/compose.yml` uses `${VAR:?text}` four times and
+# that text is operator guidance, not a value — it is cut anyway, because this function
+# cannot tell guidance from a keyring, so the operator is told a cut happened.
+assert_contains 'the cut was silent' "$BOTCTL_OUTPUT" 'is withheld'
+# The compose FILE's own `${VAR:?text}` forms are a DIFFERENT channel, measured on
+# v5.1.1: they carry `error while interpolating …`, their variables live in `deploy.env`
+# which holds no secrets by design, and their text is the only explanation for the
+# commonest refusal there is — a half-written `deploy.env`. It reads WHOLE, and saying a
+# value had been withheld from it was false about that message.
+fake_set compose_config_stderr 'error while interpolating x-app-common.image: required variable NEXA_IMAGE is missing a value: NEXA_IMAGE must be an image digest reference'
+run_botctl status
+assert_contains 'the compose-file guidance was cut' \
+  "$BOTCTL_OUTPUT" 'NEXA_IMAGE must be an image digest reference'
+assert_not_contains 'a message that carries no value was reported as redacted' \
+  "$BOTCTL_OUTPUT" 'is withheld'
+fake_set compose_config_fails 0
+fake_set compose_config_stderr ''
+# And a document that defines no `api` is a refusal too, not a column of defaults.
+fake_set compose_service_missing 1
+run_botctl status
+assert_contains 'a missing service was summarised as defaults' "$BOTCTL_OUTPUT" 'REFUSED by compose'
+assert_contains 'the missing service was not named' "$BOTCTL_OUTPUT" 'no service named api'
+assert_not_contains 'values were printed for a service that does not exist' \
+  "$BOTCTL_OUTPUT" 'scheduled backup'
+fake_set compose_service_missing 0
+seed_nexa_env canonical
+
+test_case 'status: a cut refusal says a cut happened, on the channel that carries a value'
+# The quote cut is the redaction that matters, and it was the silent one. Measured on
+# v5.1.1, an unterminated quoted value is echoed into the message —
+#   failed to read /etc/nexa/nexa.env: line 2: unterminated quoted value "<value>
+# — and what the cut leaves behind is a grammatical sentence ending in `unterminated quoted
+# value`. An operator comparing that against the file sees a refusal about a line whose
+# value is simply missing from the diagnostic, with nothing saying anything was removed.
+# The required-variable channel announced itself; this one did not.
+seed_nexa_env canonical
+fake_set compose_config_fails 1
+fake_set compose_config_stderr "failed to read /etc/nexa/nexa.env: line 9: unterminated quoted value '7777777:AAAfakeBotTokenValue"
+run_botctl status
+assert_contains 'the quote cut was silent' "$BOTCTL_OUTPUT" 'cut at a quote'
+assert_not_contains 'the echoed token was printed' "$BOTCTL_OUTPUT" 'AAAfakeBotTokenValue'
+# And a message that was not cut gains no note. Announcing a redaction that did not happen
+# is the same defect in the other direction, and it is the one that withdrew a true
+# explanation from the compose-file channel two rounds ago.
+fake_set compose_config_stderr 'env file /etc/nexa/nexa.env not found: stat /etc/nexa/nexa.env: no such file or directory'
+run_botctl status
+assert_contains 'the reason was not reported' "$BOTCTL_OUTPUT" 'no such file or directory'
+assert_not_contains 'an uncut message was reported as cut at a quote' \
+  "$BOTCTL_OUTPUT" 'cut at a quote'
+assert_not_contains 'an uncut message was reported as bounded' \
+  "$BOTCTL_OUTPUT" 'cut at 200 characters'
+# The 200-character bound is the other silent cut: a long refusal was truncated
+# mid-sentence and read as the whole of what Compose said.
+long_reason="validating /opt/nexa/deploy/compose.yml: $(printf 'x%.0s' $(seq 1 260))"
+fake_set compose_config_stderr "$long_reason"
+run_botctl status
+assert_contains 'the length bound was silent' "$BOTCTL_OUTPUT" 'cut at 200 characters'
+fake_set compose_config_fails 0
+fake_set compose_config_stderr ''
+seed_nexa_env canonical
+
+test_case 'status: a refusal is the error line Compose printed, not the warning it logged first'
+# Compose logs warnings to stderr BEFORE the error — one per unset substitution in
+# the file, `The "X" variable is not set. Defaulting to a blank string.` — and the
+# refusal is a plain line after them. Measured on v5.1.1. Taking the first line, and
+# cutting it at its first quote, printed `Compose said: time=` for exactly the
+# interpolation shape that ended the reimplementation.
+seed_nexa_env canonical
+fake_set compose_config_fails 1
+fake_set compose_config_stderr "$(printf 'time="2026-09-11T17:34:07Z" level=warning msg="The \\"UNSETVAR\\" variable is not set. Defaulting to a blank string."\nfailed to read /etc/nexa/nexa.env: line 3: unterminated quoted value '"'"'7777777:AAAfakeBotTokenValue')"
+run_botctl status
+assert_contains 'the warning was reported as the reason' "$BOTCTL_OUTPUT" 'line 3: unterminated quoted value'
+assert_not_contains 'the warning line was printed as the reason' "$BOTCTL_OUTPUT" 'Compose said:
+    time='
+assert_not_contains 'the echoed token was printed' "$BOTCTL_OUTPUT" 'AAAfakeBotTokenValue'
+fake_set compose_config_fails 0
+fake_set compose_config_stderr ''
+seed_nexa_env canonical
+
+test_case 'status: a refusal whose error line itself says level=warning is still reported'
+# The warning filter drops every stderr line containing `level=warning`. An
+# unterminated value spelled `TOKEN="level=warning` makes Compose's ERROR line
+# contain it too — measured on v5.1.1 — so the filter leaves nothing, and the reason
+# has to come from the fallback: the last line. Without it `status` reports that
+# Compose gave no reason, for a refusal Compose explained.
+seed_nexa_env canonical
+fake_set compose_config_fails 1
+fake_set compose_config_stderr "$(printf 'time="2026-09-11T17:34:07Z" level=warning msg="The \\"UNSETVAR\\" variable is not set. Defaulting to a blank string."\nfailed to read /etc/nexa/nexa.env: line 4: unterminated quoted value "level=warning')"
+run_botctl status
+assert_contains 'the error line was filtered away with the warnings' \
+  "$BOTCTL_OUTPUT" 'line 4: unterminated quoted value'
+assert_not_contains 'a refusal Compose explained was reported as unexplained' \
+  "$BOTCTL_OUTPUT" 'compose gave no reason'
+fake_set compose_config_fails 0
+fake_set compose_config_stderr ''
+seed_nexa_env canonical
+
+test_case 'status: the secret is measured as the schema measures it, trailing newline and all'
+# `configSchema` refuses a webhook secret under 16 `.length` — UTF-16 code units — and
+# a quoted value that ends its line keeps that newline. Command substitution drops a
+# trailing newline, so `${#value}` measured a 16-character secret ending in a newline
+# as 15 and reported `invalid` for a configuration the application accepts; and `${#}`
+# is characters or BYTES depending on the locale botctl happens to run under. The
+# length is computed from the rendering, in code units, so it agrees with the schema.
+seed_nexa_env canonical
+fake_set compose_env ''
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","TELEGRAM_WEBHOOK_ENABLED":"true","TELEGRAM_WEBHOOK_SECRET":"abcdefghijklmno\n"}'
+run_botctl status
+assert_contains 'a 16-character secret ending in a newline was measured as 15' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   on'
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","TELEGRAM_WEBHOOK_ENABLED":"true","TELEGRAM_WEBHOOK_SECRET":"abcdefghijklmn\n"}'
+run_botctl status
+assert_contains 'a 15-character secret ending in a newline was accepted' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   invalid'
+# Eight astral characters are 16 code units to the schema, 8 characters to a UTF-8
+# `${#}` and 32 bytes to a C-locale one; only the schema's count is the rule.
+fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","TELEGRAM_WEBHOOK_ENABLED":"true","TELEGRAM_WEBHOOK_SECRET":"😀😀😀😀😀😀😀😀"}'
+run_botctl status
+assert_contains 'eight astral characters were not measured as sixteen code units' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   on'
+fake_set compose_env_json ''
+seed_nexa_env canonical
+
+test_case 'status: every capability names the process that reads it'
+# PANEL_MONITOR_ENABLED belongs to the monitor, TELEGRAM_WEBHOOK_ENABLED and
+# RECOVERY_UPLOAD_ENABLED to the API, and the rest to the worker. An
+# operator asking "which container would have to restart" needs that, and naming
+# it costs nothing and claims nothing.
+seed_nexa_env canonical
+run_botctl status
+assert_contains 'the monitor flag is not attributed to the monitor' \
+  "$BOTCTL_OUTPUT" 'panel monitor      on       monitor'
+assert_contains 'the webhook flag is not attributed to the api' \
+  "$BOTCTL_OUTPUT" 'telegram webhook   off      api'
+assert_contains 'the upload flag is not attributed to the api' \
+  "$BOTCTL_OUTPUT" 'recovery upload    on       api'
+assert_contains 'the schedule is not attributed to the worker' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   off      worker'
+
+test_case 'status: the notifications row is the transport too, not the dispatcher flag alone'
+# `NOTIFICATION_TRANSPORT=recording` keeps messages in MEMORY instead of sending them, so an
+# installation with the dispatcher on and that transport delivers nothing while looking
+# healthy — and `configSchema` refuses the combination outright unless NODE_ENV=development,
+# which a production installation is not. A row reading `notifications on` for it is the same
+# lie the webhook row's secret check exists to prevent: a capability reported working for a
+# configuration the next start refuses.
+seed_nexa_env canonical
+append_resolved_env 'NOTIFICATION_TRANSPORT=recording'
+run_botctl status
+assert_contains 'the recording transport was reported as notifications on' \
+  "$BOTCTL_OUTPUT" 'notifications      invalid'
+assert_contains 'the reason was not named' "$BOTCTL_OUTPUT" 'keeps messages in MEMORY'
+assert_contains 'the remedy was not named' \
+  "$BOTCTL_OUTPUT" 'Set NOTIFICATION_TRANSPORT=telegram'
+# NODE_ENV is READ, not assumed: `recording` is legitimate in development, and telling a
+# development installation its configuration is broken is the same defect in reverse.
+seed_nexa_env canonical
+append_resolved_env 'NOTIFICATION_TRANSPORT=recording' 'NODE_ENV=development'
+run_botctl status
+assert_contains 'a development installation was told its transport is invalid' \
+  "$BOTCTL_OUTPUT" 'notifications      on'
+assert_not_contains 'the development case printed the refusal paragraph' \
+  "$BOTCTL_OUTPUT" 'keeps messages in MEMORY'
+# And a transport OUTSIDE the vocabulary is invalid too. `NOTIFICATION_TRANSPORT` is
+# `z.enum(['telegram', 'recording'])`, so `smtp` is refused by the enum and the worker will
+# not start — and the first version of this check tested `recording` alone and left that
+# reading `notifications on`, which is the same "closed one member of the family" mistake the
+# secrets guard made a round earlier, made again in the round that recorded the lesson.
+seed_nexa_env canonical
+append_resolved_env 'NOTIFICATION_TRANSPORT=smtp'
+run_botctl status
+assert_contains 'an out-of-vocabulary transport was reported as notifications on' \
+  "$BOTCTL_OUTPUT" 'notifications      invalid'
+assert_contains 'the vocabulary was not named' \
+  "$BOTCTL_OUTPUT" 'other than `telegram` or `recording`'
+# An EMPTY assignment is outside it as well: an environment variable is a string, and the
+# empty one is not a member of the enum — the same distinction `nexa_listing_has` exists for.
+seed_nexa_env canonical
+append_resolved_env 'NOTIFICATION_TRANSPORT='
+run_botctl status
+assert_contains 'an empty transport was read as the default' \
+  "$BOTCTL_OUTPUT" 'notifications      invalid'
+# And the default transport reads on, or none of these cases prove anything. ABSENT is the
+# default, which is telegram — not invalid.
+seed_nexa_env canonical
+run_botctl status
+assert_contains 'the telegram transport was reported as invalid' \
+  "$BOTCTL_OUTPUT" 'notifications      on'
+assert_not_contains 'an absent transport printed a refusal' \
+  "$BOTCTL_OUTPUT" 'other than `telegram` or `recording`'
+seed_nexa_env canonical
+
+test_case 'status: the notifications row says it has not checked the Telegram endpoint'
+# `notifications on` with the telegram transport is the dispatcher and the transport NAME.
+# The schema checks two more things: TELEGRAM_API_BASE_URL is `z.string().url()`, and a
+# superRefine requires its parsed protocol to be https when NODE_ENV=production — the bot
+# token is in the path of every call, so an http base publishes the credential. Either
+# refusal stops the API starting, so the row can read `on` for a configuration that will
+# not boot. It is SAID rather than re-implemented, for the reason the monitor row gives
+# about its five cross-field rules: a shell reimplementation of an application rule
+# converges on a different wrong answer, and WHATWG URL parsing is not a shell job.
+seed_nexa_env canonical
+run_botctl status
+assert_contains 'the endpoint the row does not check was not named' \
+  "$BOTCTL_OUTPUT" 'TELEGRAM_API_BASE_URL to parse as a URL'
+assert_contains 'the https-in-production rule was not named' \
+  "$BOTCTL_OUTPUT" 'https when'
+assert_contains 'the row did not say what it is' \
+  "$BOTCTL_OUTPUT" 'is the dispatcher and the transport NAME'
+# An explicit telegram transport says the same thing.
+seed_nexa_env canonical
+append_resolved_env 'NOTIFICATION_TRANSPORT=telegram'
+run_botctl status
+assert_contains 'an explicit telegram transport lost the endpoint caveat' \
+  "$BOTCTL_OUTPUT" 'TELEGRAM_API_BASE_URL to parse as a URL'
+# And the caveat belongs to the telegram arm only. A dispatcher that is OFF delivers
+# nothing through any endpoint, and a transport the schema refuses has its own paragraph —
+# printing this one beside either would point an operator at the wrong key.
+seed_nexa_env canonical
+append_resolved_env 'NOTIFICATION_DISPATCH_ENABLED=false'
+run_botctl status
+assert_not_contains 'a disabled dispatcher printed the endpoint caveat' \
+  "$BOTCTL_OUTPUT" 'TELEGRAM_API_BASE_URL to parse as a URL'
+seed_nexa_env canonical
+append_resolved_env 'NOTIFICATION_TRANSPORT=smtp'
+run_botctl status
+assert_not_contains 'an out-of-vocabulary transport printed the endpoint caveat' \
+  "$BOTCTL_OUTPUT" 'TELEGRAM_API_BASE_URL to parse as a URL'
+seed_nexa_env canonical
+
+test_case 'status: an EMPTY assignment is invalid, not the default'
+# Zod applies a default to an ABSENT value, and an environment variable is a
+# string: `PANEL_MONITOR_ENABLED=` reaches the schema as '"'"''"'"' and both the enum and
+# `booleanish` refuse it. Mapping an empty assignment to the default reported a
+# healthy value for a file the next start rejects.
+seed_nexa_env canonical
+append_env 'PANEL_MONITOR_ENABLED='
+run_botctl status
+assert_contains 'an empty assignment was read as the default' \
+  "$BOTCTL_OUTPUT" 'panel monitor      invalid'
+seed_nexa_env canonical
+append_env 'BACKUP_SCHEDULE_ENABLED='
+run_botctl status
+assert_contains 'an empty booleanish assignment was read as the default' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   invalid'
+# And an ABSENT key still gets the default, so this is about emptiness rather
+# than a reader that refuses everything.
+seed_nexa_env canonical
+run_botctl status
+assert_contains 'an absent key stopped getting its default' "$BOTCTL_OUTPUT" 'panel monitor      on'
+
+test_case 'status: the delivery destination names every process that delivers'
+# Not the worker alone. `createContainer` builds one BackupService and every role
+# gets it: the worker schedules, RecoveryController.runBackup serves the Web
+# Admin's manual run, and the recovery executor takes the PRE_RESTORE backup.
+# Naming only the worker points a diagnosis away from the process that is actually
+# delivering after a service-specific recreation.
+seed_nexa_env canonical
+run_botctl status
+assert_contains 'the delivery line does not name all three consumers' \
+  "$BOTCTL_OUTPUT" 'backup delivery    not configured worker, api, recovery'
+# The schedule is genuinely the worker's, so this is not "name everything".
+assert_contains 'the schedule stopped being attributed to the worker alone' \
+  "$BOTCTL_OUTPUT" 'scheduled backup   off      worker'
+
+test_case 'status: the file and the running API are two facts, reported as three states'
+# Conflating them got one of the three wrong. Saying "/health/info reports what the
+# installer wrote" whenever the FILE carries the lines is false when the container
+# predates them — a line added or restored since the API was created is not in force
+# yet — and false again when the API is not running at all.
+
+# 1. The file sets them AND the running API confirms the override: masked NOW.
+seed_nexa_env canonical
+append_env 'BUILD_VERSION=v0.1.0-staging.1' 'BUILD_COMMIT=pending' 'BUILD_TIME=pending'
+fake_set api_env 'BUILD_COMMIT=pending'
+run_botctl status
+assert_contains 'the stale build keys were not named' "$BOTCTL_OUTPUT" 'BUILD_VERSION'
+assert_contains 'the masking was not stated when both facts agree' \
+  "$BOTCTL_OUTPUT" '/health/info reports'
+assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'botctl update'
+
+# 2. The file sets them but the running API answers its own image: PENDING, not masked.
+seed_nexa_env canonical
+append_env 'BUILD_VERSION=v0.1.0-staging.1'
+fake_set api_env ''
+run_botctl status
+assert_contains 'a pending override was not named' "$BOTCTL_OUTPUT" 'BUILD_VERSION'
+assert_contains 'a pending override was not described as taking effect at the next start' \
+  "$BOTCTL_OUTPUT" 'next start'
+assert_not_contains 'a pending override was reported as already masking /health/info' \
+  "$BOTCTL_OUTPUT" '/health/info reports what the installer wrote rather than'
+assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'botctl update'
+# And it says what it OBSERVED rather than inferring absence. A file assignment equal to
+# the image stamp IS carried by the container and compares equal, so the provenance
+# comparison omits it either way — "the running API does not carry them" was an inference
+# from equality, and `/health/info` matching the image is the fact actually established.
+assert_contains 'the report inferred absence from an equal value' \
+  "$BOTCTL_OUTPUT" 'answers its own'
+assert_not_contains 'the report still claims the running API does not carry the key' \
+  "$BOTCTL_OUTPUT" 'The running API does not carry'
+assert_contains 'the equal-value possibility was not named' \
+  "$BOTCTL_OUTPUT" 'equal to the image stamp'
+
+# 3. A stopped API is not masking anything and is not carrying a stale override
+#    either, so a missing container gets neither state: the provenance is UNKNOWN
+#    and the case below it says so — never a claim about an endpoint that is not
+#    answering.
+seed_nexa_env canonical
+append_env 'BUILD_VERSION=v0.1.0-staging.1'
+fake_set api_state absent
+run_botctl status
+assert_not_contains 'a stopped API was reported as masking /health/info' \
+  "$BOTCTL_OUTPUT" '/health/info reports what the installer wrote rather than'
+assert_contains 'a stopped API suppressed the file warning entirely' \
+  "$BOTCTL_OUTPUT" 'BUILD_VERSION'
+fake_set api_state running
+
+test_case 'status: a clean file whose API still carries the stale identity is reported'
+# The removal runs early in an update, before the image is pulled and the backup is
+# taken. A run that stops at one of those leaves the file clean and the containers
+# still carrying the stale identity — and a report that read only the file would say
+# nothing was wrong while /health/info still answered `pending`.
+#
+# The API, because /health/info is the API's route. Reading the worker's environment
+# for it would be reporting one container's state as another's.
+seed_nexa_env canonical
+fake_set api_env 'BUILD_COMMIT=pending'
+run_botctl status
+assert_contains 'the running API was not reported' "$BOTCTL_OUTPUT" 'RUNNING'
+assert_contains 'the stale key was not named' "$BOTCTL_OUTPUT" 'BUILD_COMMIT'
+assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'botctl restart'
+assert_not_contains 'the file was blamed for something it does not set' \
+  "$BOTCTL_OUTPUT" 'This file still sets'
+fake_set api_env ''
+
+test_case 'status: an API answering its own image says nothing about them'
+# The ordinary case, and the one a presence check got wrong about every healthy
+# installation: `Dockerfile` lines 89-92 stamp all three keys into the runtime
+# image, so a correctly built container ALWAYS carries them. A check keyed on
+# presence told every operator their build identity was masked and to restart,
+# after which the recreated container carried them again and the warning never
+# cleared. What is asked is PROVENANCE — does the container answer its image, or
+# something that replaced it?
+seed_nexa_env canonical
+fake_set api_env ''
+# Asserted of the fake first, because this case is only meaningful if the API
+# container really does carry the image's stamped identity. A fake carrying none
+# of the keys would make the assertion below pass for the wrong reason, which is
+# exactly how the presence check survived its own tests.
+api_stamped="$(docker inspect fakeapicontainerid --format '{{range .Config.Env}}{{println .}}{{end}}')"
+assert_contains 'the fake API container carries no stamped build identity at all' \
+  "$api_stamped" 'BUILD_VERSION=0.1.0-test'
+assert_contains 'the fake API container carries no stamped commit' \
+  "$api_stamped" 'BUILD_COMMIT=cafebabe'
+run_botctl status
+assert_not_contains 'a warning was printed with nothing to warn about' \
+  "$BOTCTL_OUTPUT" '/health/info reports'
+assert_not_contains 'a healthy installation was told to restart' \
+  "$BOTCTL_OUTPUT" 'still reports what the'
+
+test_case 'status: a mixed pending/stale pair is reported per key, not as one state'
+# The two lists need not hold the same keys. A file that newly sets BUILD_VERSION while
+# the running API retains an old BUILD_COMMIT override is BOTH states at once, and a
+# conjunction over the lists reported it as one — naming BUILD_VERSION while claiming
+# the container differs from its image for it, and never mentioning the key that does.
+seed_nexa_env canonical
+append_env 'BUILD_VERSION=v0.1.0-staging.1'
+fake_set api_env 'BUILD_COMMIT=pending'
+run_botctl status
+# The file-only key is PENDING...
+assert_contains 'the file-only key was not reported as taking effect at the next start' \
+  "$BOTCTL_OUTPUT" 'next start'
+# ...and the container-only key is STALE, with its own remedy.
+assert_contains 'the container-only key was not reported at all' \
+  "$BOTCTL_OUTPUT" 'The file no longer sets BUILD_COMMIT'
+assert_contains 'the stale container was not given its remedy' "$BOTCTL_OUTPUT" 'botctl restart'
+# And neither sentence claims the other key.
+assert_not_contains 'the pending key was named as stale' \
+  "$BOTCTL_OUTPUT" 'The file no longer sets BUILD_VERSION'
+# The key list is joined from `comm` output by `tr`, which turns the final newline into a
+# TRAILING space — so every one of these sentences read `sets BUILD_VERSION , which
+# REPLACES`. Both ends are trimmed, and this is what notices if one of them goes again.
+assert_contains 'the key list kept a stray space before the comma' \
+  "$BOTCTL_OUTPUT" 'sets BUILD_VERSION, which REPLACES'
+assert_not_contains 'a space survived between the key list and its comma' \
+  "$BOTCTL_OUTPUT" 'BUILD_VERSION ,'
+fake_set api_env ''
+
+test_case 'status: a stale multiline override is not mistaken for a match'
+# `docker inspect --format '{{println .}}'` put a value containing a newline on two
+# lines, so a line-based comparison saw only its first part — and a container carrying
+# `BUILD_COMMIT=cafebabe` + newline + `pending` over an image stamped `cafebabe` compared
+# EQUAL, leaving a stale override unreported while /health/info exposed the whole thing.
+# Both sides are rendered with Go `%q` now: one entry is one line.
+seed_nexa_env canonical
+fake_set api_env "$(printf 'BUILD_COMMIT=cafebabe\npending')"
+run_botctl status
+assert_contains 'a multiline override whose first line matches the image was not reported' \
+  "$BOTCTL_OUTPUT" 'BUILD_COMMIT'
+assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'botctl restart'
+# And a container that genuinely matches its image still reports nothing, so this is
+# about the rendering rather than about warning always.
+fake_set api_env ''
+run_botctl status
+assert_not_contains 'a matching container was reported as overridden' \
+  "$BOTCTL_OUTPUT" 'still reports what the'
+
+test_case 'harness: the fake docker renders the --format template it was asked for'
+# The fake participated in the proof above and lied: it rendered `%q`-shaped lines
+# whatever template it was passed, so reverting `nexa_inspect_env` to `println`
+# requested one shape and received the other, and the test above stayed green
+# (falsification H-58, first run). A fake that answers one way regardless of the
+# question cannot falsify the question. The same fixture is therefore asked for both
+# shapes, on a value where they must differ, and a template the fake does not model
+# must be refused rather than rendered as something else.
+fake_set api_env "$(printf 'BUILD_COMMIT=cafebabe\npending')"
+quoted="$("${FAKE_DIR}/bin/docker" inspect fakeapicontainerid \
+  --format '{{range .Config.Env}}{{printf "%q" .}}{{"\n"}}{{end}}')"
+plain="$("${FAKE_DIR}/bin/docker" inspect fakeapicontainerid \
+  --format '{{range .Config.Env}}{{println .}}{{end}}')"
+assert_contains 'the %q shape did not render the entry as ONE quoted line' \
+  "$quoted" '"BUILD_COMMIT=cafebabe\npending"'
+assert_not_contains 'the println shape quoted its entries' "$plain" '"BUILD_COMMIT='
+assert_contains 'the println shape did not put the continuation on its own line' \
+  "$plain" "$(printf 'BUILD_COMMIT=cafebabe\npending\n')"
+assert_fails 'a template the fake does not model was rendered anyway' \
+  "${FAKE_DIR}/bin/docker" inspect fakeapicontainerid --format '{{range .Config.Env}}{{.}}{{end}}'
+fake_set api_env ''
+
+test_case 'status: an EMPTY override of the image identity is still an override'
+# `BUILD_COMMIT=` is not an absent key. An update that removed the line and then
+# failed before recreating the API leaves a container whose commit is the empty
+# string while the image stamps a real one, and /health/info reports the empty
+# value — so a check that asked whether the value was NON-EMPTY reported nothing
+# wrong. The provenance comparison covers it by construction rather than by a
+# special case: empty differs from the stamped value like anything else.
+seed_nexa_env canonical
+fake_set api_env 'BUILD_COMMIT='
+run_botctl status
+assert_contains 'an empty override was treated as no override' "$BOTCTL_OUTPUT" 'BUILD_COMMIT'
+assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'botctl restart'
+fake_set api_env ''
+
+test_case 'status: a provenance it cannot compute produces no warning, at any of three lookups'
+# The remedy this warning feeds is a restart, and a restart would not change an
+# answer that could not be computed, so a file AT ITS DEFAULTS gets silence.
+# A file that carries the keys gets the unknown-state paragraph instead — the case
+# after this one — because there the operator has something to act on.
+#
+# THREE lookups, each tested, because a guard that covered only the first was the
+# defect in the previous revision: an `image inspect` that failed made every stamped
+# value read as empty, so all three keys looked overridden and every operator was
+# told to restart.
+seed_nexa_env canonical
+for failure in image_absent container_env_fails image_env_fails; do
+  fake_set "$failure" 1
+  run_botctl status
+  assert_not_contains "a failed ${failure} lookup produced a warning anyway" \
+    "$BOTCTL_OUTPUT" 'still reports what the'
+  fake_set "$failure" 0
+done
+# And with all three working, the override IS still reported — or the loop above
+# would pass against a check that never reports anything.
+fake_set api_env 'BUILD_COMMIT=pending'
+run_botctl status
+assert_contains 'the check reports nothing even when it can compute an override' \
+  "$BOTCTL_OUTPUT" 'BUILD_COMMIT'
+fake_set api_env ''
+
+test_case 'status: a provenance it cannot compute makes no claim about the running API'
+# A failed lookup used to return an EMPTY answer, which the per-key classifier read as
+# "nothing is overridden" — so a file that sets the keys was reported as pending, with
+# the sentence that the running API does not carry them and /health/info is correct
+# for now. That is the fact that could not be established. Unknown is reported as
+# unknown, for each of the three lookups AND for an API that is not running at all:
+# the fourth arm below, which is the missing-container branch.
+seed_nexa_env canonical
+append_env 'BUILD_COMMIT=pending'
+for failure in image_absent container_env_fails image_env_fails api_state_absent; do
+  if [ "$failure" = api_state_absent ]; then fake_set api_state absent; else fake_set "$failure" 1; fi
+  run_botctl status
+  assert_contains "a failed ${failure} lookup claimed the running API does not carry the key" \
+    "$BOTCTL_OUTPUT" 'could not be determined'
+  assert_not_contains "a failed ${failure} lookup reported the file key as pending" \
+    "$BOTCTL_OUTPUT" 'correct for NOW'
+  if [ "$failure" = api_state_absent ]; then fake_set api_state running; else fake_set "$failure" 0; fi
+done
+# With every lookup working, the same file IS classified — pending, because the fake
+# container carries the image's own value — so this is about failure, not silence.
+run_botctl status
+assert_contains 'a computable provenance was reported as unknown' "$BOTCTL_OUTPUT" 'correct for NOW'
+assert_not_contains 'a computable provenance was reported as unknown' \
+  "$BOTCTL_OUTPUT" 'could not be determined'
+teardown_root
+
+# --- update removes them -----------------------------------------------------
+
+setup_root
+setup_fake_docker
+seed_release 'vA' "$DIGEST_A"
+fake_set secrets_json '{"format":"canonical","acceptV1":false,"explicit":false,"v1Rows":0,"rows":4,"mismatched":0}'
+
+test_case 'update: removes the build identity the first template wrote, and nothing else'
+seed_nexa_env canonical
+append_env 'BUILD_VERSION=v0.1.0-staging.1' 'BUILD_COMMIT=pending' 'BUILD_TIME=pending'
+before_db="$(nexa_env_key DATABASE_URL)"
+before_keys="$(nexa_env_key SECRETS_KEYS)"
+run_botctl update vA
+assert_contains 'the removal was not reported' "$BOTCTL_OUTPUT" 'removed from nexa.env'
+assert_equals 'BUILD_VERSION survived' '' "$(nexa_env_key BUILD_VERSION)"
+assert_equals 'BUILD_COMMIT survived' '' "$(nexa_env_key BUILD_COMMIT)"
+assert_equals 'BUILD_TIME survived' '' "$(nexa_env_key BUILD_TIME)"
+# Everything else is the operator's, including the key that decrypts every
+# stored credential. A rewrite that lost it would be an installation that cannot
+# boot, discovered at the restart.
+assert_equals 'DATABASE_URL was changed' "$before_db" "$(nexa_env_key DATABASE_URL)"
+assert_equals 'the keyring was changed' "$before_keys" "$(nexa_env_key SECRETS_KEYS)"
+assert_equals 'an operator value was changed' 'https://admin.example.test' \
+  "$(nexa_env_key WEB_ADMIN_ORIGINS)"
+assert_file_mode 'the rewritten file lost its mode' "${NEXA_CONFIG_DIR}/nexa.env" 600
+assert_not_contains 'the removal printed a value' "$BOTCTL_OUTPUT" 'staging.1'
+
+test_case 'update: removes an obsolete line however it is spelled'
+# The detector and the rewriter have to agree about what an assignment looks like.
+# If the detector accepts `export BUILD_VERSION=` and the rewriter does not, `update`
+# reports the line removed, leaves it in place, and reports it again next time.
+seed_nexa_env canonical
+append_env 'export BUILD_VERSION=v0.1.0-staging.1' '  BUILD_COMMIT=pending'
+run_botctl update vA
+assert_contains 'the removal was not reported' "$BOTCTL_OUTPUT" 'removed from nexa.env'
+assert_equals 'an exported BUILD_VERSION survived the removal' '' "$(nexa_env_key BUILD_VERSION)"
+assert_equals 'an indented BUILD_COMMIT survived the removal' '' "$(grep -cE '^[[:space:]]*BUILD_COMMIT=' "${NEXA_CONFIG_DIR}/nexa.env" | tr -d '0')"
+run_botctl status
+assert_not_contains 'status still reports a line the rewrite claimed to remove' \
+  "$BOTCTL_OUTPUT" 'This file still sets'
+
+test_case 'update: a BARE obsolete record is removed too, and an interior one is not'
+# Compose accepts `BUILD_COMMIT` with no `=` in an env_file, and it does not mean
+# "assigned to nothing": it means take the variable from the environment running Compose.
+# Measured on v5.1.1 — host variable set, the container receives the host's value; unset,
+# the key is omitted. So a bare obsolete record masks the build identity exactly as an
+# assignment does, while the detector, which asked for a VALUE, reported it absent and
+# `botctl update` said it had removed the obsolete keys without seeing that one.
+seed_nexa_env canonical
+printf 'BUILD_COMMIT\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+# And the same name inside another variable's multiline value, which is TEXT and must
+# survive: deleting it cuts a line out of an operator's value and leaves a quote that
+# closes somewhere else, which is the defect the quoted-region scanner exists to prevent.
+printf "NOTE='line one\nBUILD_TIME\nline three'\n" >>"${NEXA_CONFIG_DIR}/nexa.env"
+assert_ok 'the predicate missed a top-level bare record' \
+  nexa_env_has_bare_record "${NEXA_CONFIG_DIR}/nexa.env" BUILD_COMMIT
+assert_fails 'an interior line was reported as a bare record' \
+  nexa_env_has_bare_record "${NEXA_CONFIG_DIR}/nexa.env" BUILD_TIME
+assert_contains 'the detector did not list the bare record' \
+  "$(nexa_obsolete_app_env_keys "${NEXA_CONFIG_DIR}/nexa.env")" 'BUILD_COMMIT'
+run_botctl update vA
+assert_contains 'the removal was not reported' "$BOTCTL_OUTPUT" 'removed from nexa.env'
+assert_fails 'the bare obsolete record survived the update' \
+  nexa_env_has_bare_record "${NEXA_CONFIG_DIR}/nexa.env" BUILD_COMMIT
+assert_equals "NOTE's first line was lost" '1' \
+  "$(grep -c "^NOTE='line one" "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_equals "the interior bare line was deleted out of NOTE's value" '1' \
+  "$(grep -c '^BUILD_TIME$' "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_equals "NOTE's closing line was lost" '1' \
+  "$(grep -c "^line three'" "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_equals 'the keyring did not survive the removal' "${TEST_KEY_ID}:${TEST_KEK}" \
+  "$(nexa_env_key SECRETS_KEYS)"
+seed_nexa_env canonical
+
+test_case 'update: the removal never reaches inside another variable value'
+# The rewriter has to track quoted regions for the same reason the reader does. A line
+# that reads `BUILD_COMMIT=...` inside NOTE's multiline value is not an assignment, and
+# dropping it by pattern deletes a line out of the middle of an operator's value —
+# silent corruption of /etc/nexa/nexa.env, by an update that reported success.
+seed_nexa_env canonical
+printf "NOTE='line one\nBUILD_COMMIT=interior\nline three'\nBUILD_COMMIT=pending\n" \
+  >>"${NEXA_CONFIG_DIR}/nexa.env"
+run_botctl update vA
+assert_contains 'the removal was not reported' "$BOTCTL_OUTPUT" 'removed from nexa.env'
+# The TOP-LEVEL assignment is gone...
+assert_equals 'the top-level BUILD_COMMIT survived' '' \
+  "$(grep -c '^BUILD_COMMIT=pending' "${NEXA_CONFIG_DIR}/nexa.env" | tr -d '0')"
+# ...and every line of NOTE's value is still there, interior assignment included.
+assert_equals "NOTE's first line was lost" '1' \
+  "$(grep -c "^NOTE='line one" "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_equals "the interior line was deleted out of NOTE's value" '1' \
+  "$(grep -c '^BUILD_COMMIT=interior' "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_equals "NOTE's closing line was lost" '1' \
+  "$(grep -c "^line three'" "${NEXA_CONFIG_DIR}/nexa.env")"
+
+test_case 'update: a name with a trailing comment is not a bare record, and is left alone'
+# Measured on v5.1.1: `BUILD_COMMIT # why` in an env_file is REFUSED —
+# `unexpected character "#" in variable name "BUILD_COMMIT # why"`. So that line is not a
+# record Compose reads; it is a file Compose will not read at all, and `status` reports it
+# through the refusal path. The scanner's shape allowed a trailing comment anyway, on a
+# behaviour Compose does not have, which made the detector answer yes about a file that has
+# no records and sent the rewriter to delete a line on that answer.
+seed_nexa_env canonical
+printf 'BUILD_COMMIT # why\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+assert_fails 'a name with a trailing comment was reported as a bare record' \
+  nexa_env_has_bare_record "${NEXA_CONFIG_DIR}/nexa.env" BUILD_COMMIT
+assert_equals 'the detector listed a line Compose refuses whole' '' \
+  "$(nexa_obsolete_app_env_keys "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl update vA
+assert_equals 'the line was deleted on a report Compose does not agree with' '1' \
+  "$(grep -c '^BUILD_COMMIT # why$' "${NEXA_CONFIG_DIR}/nexa.env")"
+seed_nexa_env canonical
+
+test_case 'update: a bare name on an unterminated last line is not a record, and a rewrite refuses'
+# The newline is part of what makes a bare record a record. Measured on v5.1.1:
+#   ends `BUILD_COMMIT\n`  ->  BUILD_COMMIT: <host value>
+#   ends `BUILD_COMMIT`    ->  "": BUILD_COMMIT   a variable with an EMPTY name, and
+#                              BUILD_COMMIT is never set at all
+#   ends `BUILD_COMMIT=abc`->  BUILD_COMMIT: abc  an assignment is honoured either way
+# `awk` hands a final partial line to the program like any other record, so the scanner
+# reported a mask that does not exist.
+seed_nexa_env canonical
+printf 'BUILD_COMMIT' >>"${NEXA_CONFIG_DIR}/nexa.env"
+assert_ok 'the harness wrote a terminated file, so the case is not exercised' \
+  nexa_env_tail_unterminated "${NEXA_CONFIG_DIR}/nexa.env"
+assert_fails 'an unterminated bare name was reported as a record' \
+  nexa_env_has_bare_record "${NEXA_CONFIG_DIR}/nexa.env" BUILD_COMMIT
+assert_equals 'the detector listed a key Compose does not set' '' \
+  "$(nexa_obsolete_app_env_keys "${NEXA_CONFIG_DIR}/nexa.env")"
+# An EARLIER terminated record still counts. Measured, both appear in the resolved
+# environment: `BUILD_COMMIT: <host>` from the terminated line and `"": BUILD_VERSION` from
+# the unterminated one — so the answer for BUILD_COMMIT is yes.
+seed_nexa_env canonical
+printf 'BUILD_COMMIT\nOTHER=1\nBUILD_VERSION' >>"${NEXA_CONFIG_DIR}/nexa.env"
+assert_ok 'a terminated record was dropped because a LATER line is unterminated' \
+  nexa_env_has_bare_record "${NEXA_CONFIG_DIR}/nexa.env" BUILD_COMMIT
+# And the rewrite of that file is REFUSED by name, with the file untouched. Every rewrite
+# normalises the ending — awk prints a newline after each record, and an appended
+# assignment must start its own line — so carrying the last line through would CREATE a
+# bare record Compose does not currently see, and dropping it would remove a variable the
+# file does set. Neither is the rewriter's to choose.
+run_botctl update vA
+assert_contains 'the refusal did not name the reason' "$BOTCTL_OUTPUT" 'no final newline'
+assert_contains 'the file was reported as changed' "$BOTCTL_OUTPUT" 'it is UNCHANGED'
+assert_equals 'the terminated bare record was removed anyway' '1' \
+  "$(grep -c '^BUILD_COMMIT$' "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_ok 'the rewrite normalised the unterminated ending' \
+  nexa_env_tail_unterminated "${NEXA_CONFIG_DIR}/nexa.env"
+assert_equals 'the keyring did not survive the refusal' "${TEST_KEY_ID}:${TEST_KEK}" \
+  "$(nexa_env_key SECRETS_KEYS)"
+seed_nexa_env canonical
+
+test_case 'harness: the loadability oracle sees an unterminated file'
+# Three cases below assert that the rewriter never leaves a file Compose would refuse,
+# through `nexa_compose_env_unterminated`. They used to call it in a `bash -c` that had
+# not sourced the library — `! undefined-command` exits 0 — so all three passed
+# vacuously against any rewriter at all. The oracle is asked here about a file that IS
+# unterminated and one that is not, so that a green run below means what it says.
+oracle_file="$(mktemp)"
+printf "OK=1\nNOTE='never closed\n" >"$oracle_file"
+assert_ok 'an unterminated file was not detected' nexa_compose_env_unterminated "$oracle_file"
+printf "OK=1\nNOTE='closed'\nTAIL=ok\n" >"$oracle_file"
+assert_fails 'a complete file was reported as unterminated' nexa_compose_env_unterminated "$oracle_file"
+rm -f "$oracle_file"
+
+test_case 'update: dropping a single-line key does not swallow the NEXT value'
+# The suppression flag means "skip the continuation lines of the value being dropped".
+# Leaving it set after dropping a SINGLE-line assignment made the next multiline value
+# lose its continuation lines — including its closing quote — so the update installed
+# an unterminated nexa.env, which Compose refuses outright, and reported success.
+seed_nexa_env canonical
+printf "BUILD_COMMIT=pending\nNOTE='first\nsecond'\nTAIL=ok\n" >>"${NEXA_CONFIG_DIR}/nexa.env"
+run_botctl update vA
+assert_equals 'the single-line key was not removed' '' "$(nexa_env_key BUILD_COMMIT)"
+assert_equals "the next value's closing line was swallowed" '1' \
+  "$(grep -c "^second'" "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_fails 'the rewritten file ends inside a quoted value' \
+  nexa_compose_env_unterminated "${NEXA_CONFIG_DIR}/nexa.env"
+assert_equals 'a key after the multiline value was lost' 'ok' "$(nexa_env_key TAIL)"
+
+test_case 'update: an obsolete record whose quote never closes is refused, and the file is UNCHANGED'
+# `BUILD_COMMIT='pending` with no closing quote is a record the rewriter is asked to
+# drop. It set `skip` on entering the value and, with no closing quote, stayed in it to
+# EOF — so every later line, the keyring included, was deleted by an update that
+# reported success. Compose refuses such a file whole anyway, but a rewrite that
+# cannot tell a later line from the value it is in has no safe output, so the original
+# stays and the operator is told to close the quote.
+seed_nexa_env canonical
+printf '%s\n' "BUILD_COMMIT='pending" 'TAIL_KEY=still-here' >>"${NEXA_CONFIG_DIR}/nexa.env"
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl update vA
+assert_equals 'the file was rewritten from an unterminated record' "$before" \
+  "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_contains 'the reason for leaving the file alone was not given' \
+  "$BOTCTL_OUTPUT" 'ends inside a quoted value'
+assert_contains 'the keyring after the unterminated record was lost' \
+  "$(cat "${NEXA_CONFIG_DIR}/nexa.env")" 'SECRETS_KEYS='
+assert_contains 'the last line was lost' "$(cat "${NEXA_CONFIG_DIR}/nexa.env")" 'TAIL_KEY=still-here'
+# And the update as a whole still SUCCEEDS: a stale build label is not worth failing
+# an update over, which is why the removal is non-fatal. A die that escaped the
+# subshell would turn a cosmetic repair into a refused update.
+assert_equals 'a refused removal failed the whole update' 0 "$BOTCTL_STATUS"
+seed_nexa_env canonical
+
+test_case 'update: an ESCAPED delimiter does not end a value early'
+# Compose honours an escaped delimiter: a quote is escaped when an ODD number of
+# backslashes precedes it, measured on v5.1.1. A reader that stopped at the first
+# matching character would end this value at `it\'` and then treat the interior
+# BUILD_COMMIT line as a top-level assignment — which the rewriter deletes, silently
+# changing the operator's value.
+seed_nexa_env canonical
+# `printf '%s\n' ARG...` rather than a format string with escapes in it: the first
+# version of this fixture wrote `NOTE='it's fine`, losing the backslash, because
+# printf treats `\'` as an unknown escape and drops it. The case then described a file
+# whose quote is NOT escaped — where deleting the interior line is the right answer —
+# so it failed against correct code. A fixture that does not contain what the case
+# says it contains is the same defect as a test that cannot fail.
+printf '%s\n' "NOTE='it\\'s fine" 'BUILD_COMMIT=interior' "done'" 'TAIL=ok' \
+  >>"${NEXA_CONFIG_DIR}/nexa.env"
+assert_equals 'the fixture lost the escaping backslash it is about' '1' \
+  "$(grep -c "^NOTE='it\\\\'s fine$" "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl update vA
+assert_equals "the interior line was deleted out of NOTE's value" '1' \
+  "$(grep -c '^BUILD_COMMIT=interior' "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_equals "NOTE's closing line was lost" '1' \
+  "$(grep -c "^done'" "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_fails 'the rewritten file ends inside a quoted value' \
+  nexa_compose_env_unterminated "${NEXA_CONFIG_DIR}/nexa.env"
+# And `status` does not report the interior line as a setting either.
+run_botctl status
+assert_not_contains 'an interior line after an escaped quote was reported as a setting' \
+  "$BOTCTL_OUTPUT" 'This file sets BUILD_COMMIT'
+
+test_case 'update: removing a multiline obsolete value takes its continuation lines'
+# The other half. If an obsolete key opens a multiline value and only its first line
+# goes, what is left is a dangling fragment and a quote that now closes somewhere
+# else — a file Compose refuses whole, produced by a repair.
+seed_nexa_env canonical
+printf "BUILD_TIME='first\nsecond'\nWEB_ADMIN_ORIGINS=https://admin.example.test\n" \
+  >>"${NEXA_CONFIG_DIR}/nexa.env"
+run_botctl update vA
+assert_equals 'the first line of the multiline value survived' '' \
+  "$(grep -c "^BUILD_TIME='first" "${NEXA_CONFIG_DIR}/nexa.env" | tr -d '0')"
+assert_equals 'the continuation line was left behind as a fragment' '' \
+  "$(grep -c "^second'" "${NEXA_CONFIG_DIR}/nexa.env" | tr -d '0')"
+# And the file is still one Compose will read.
+assert_fails 'the rewritten file ends inside a quoted value' \
+  nexa_compose_env_unterminated "${NEXA_CONFIG_DIR}/nexa.env"
+assert_equals 'an unrelated key was lost' 'https://admin.example.test' \
+  "$(nexa_env_key WEB_ADMIN_ORIGINS)"
+
+test_case 'update: a value opened with any separator Compose accepts is still one value'
+# The escaped-delimiter case above, one separator over. Compose accepts `NAME=`,
+# `NAME =`, `NAME:` and `NAME :` in an `env_file`, and measured on v5.1.1 all four open a
+# quoted value that spans lines identically — so an interior `BUILD_COMMIT=` line is TEXT
+# in every one of them. The scanners opened a quoted region only on `NAME=`, which left
+# them out of sync with Compose for the other three: the interior line was classified as a
+# top-level assignment, and this automatic reconciliation DELETED it out of the middle of
+# the operator's value while reporting a successful cleanup of a key that never existed.
+#
+# A secret is the fixture on purpose. The real case is an operator who wrote
+# `TELEGRAM_WEBHOOK_SECRET = '...'`: every Telegram update is authenticated by that
+# header, so a silently shortened value breaks the webhook and nothing says why.
+for separator in ' =' ':' ' :'; do
+  seed_nexa_env canonical
+  printf '%s\n' "TELEGRAM_WEBHOOK_SECRET${separator}'abcdefghijklmnop" \
+    'BUILD_COMMIT=interior' "tail'" 'TAIL_KEY=ok' \
+    >>"${NEXA_CONFIG_DIR}/nexa.env"
+  run_botctl update vA
+  assert_equals "separator '${separator}': the interior line was deleted out of the secret" '1' \
+    "$(grep -c '^BUILD_COMMIT=interior' "${NEXA_CONFIG_DIR}/nexa.env")"
+  assert_equals "separator '${separator}': the closing line of the value was lost" '1' \
+    "$(grep -c "^tail'" "${NEXA_CONFIG_DIR}/nexa.env")"
+  assert_not_contains "separator '${separator}': a removal was reported for a key that is not a record" \
+    "$BOTCTL_OUTPUT" 'removed from nexa.env'
+  assert_fails "separator '${separator}': the rewritten file ends inside a quoted value" \
+    nexa_compose_env_unterminated "${NEXA_CONFIG_DIR}/nexa.env"
+  assert_equals "separator '${separator}': an unrelated key after the value was lost" 'ok' \
+    "$(nexa_env_key TAIL_KEY)"
+  # And `status` does not report the interior line as a setting either.
+  run_botctl status
+  assert_not_contains "separator '${separator}': an interior line was reported as a setting" \
+    "$BOTCTL_OUTPUT" 'This file sets BUILD_COMMIT'
+done
+# The negative case, or the rule above is just "never remove anything": a REAL top-level
+# obsolete assignment is still found and still removed, and a colon inside a VALUE — which
+# the keyring grammar always has — is not a separator.
+seed_nexa_env canonical
+printf '%s\n' 'BUILD_COMMIT=deadbeef' 'TAIL_KEY=ok' >>"${NEXA_CONFIG_DIR}/nexa.env"
+run_botctl update vA
+assert_contains 'a real top-level obsolete assignment stopped being removed' \
+  "$BOTCTL_OUTPUT" 'removed from nexa.env'
+assert_equals 'the real obsolete assignment survived' '' \
+  "$(grep -c '^BUILD_COMMIT=deadbeef' "${NEXA_CONFIG_DIR}/nexa.env" | tr -d '0')"
+assert_equals 'an unrelated key was lost' 'ok' "$(nexa_env_key TAIL_KEY)"
+assert_contains 'the keyring was damaged by the wider quote tracking' \
+  "$(cat "${NEXA_CONFIG_DIR}/nexa.env")" 'SECRETS_KEYS='
+seed_nexa_env canonical
+
+test_case 'update: a record Compose accepts is a record whatever its NAME looks like'
+# The separator case above, reached through the other half of the grammar. Measured on
+# v5.1.1, Compose accepts names this repository would never write — `notes.value`,
+# `notes-value`, `1notes`, `NOTES[0]` — and refuses `@`, `/` and `#`. A tracker built on
+# `[A-Za-z_][A-Za-z0-9_]*` missed a DOTTED record opening a multiline value, put its
+# interior lines back at top level, and the reconciliation deleted one: the same data loss
+# as the wrong separator, so the same test shape.
+for name in 'notes.value' 'notes-value' '1notes' 'NOTES[0]'; do
+  seed_nexa_env canonical
+  printf '%s\n' "${name}:'first" 'BUILD_COMMIT=interior' "last'" 'TAIL_KEY=ok' \
+    >>"${NEXA_CONFIG_DIR}/nexa.env"
+  run_botctl update vA
+  assert_equals "name '${name}': the interior line was deleted out of the value" '1' \
+    "$(grep -c '^BUILD_COMMIT=interior' "${NEXA_CONFIG_DIR}/nexa.env")"
+  assert_equals "name '${name}': the closing line of the value was lost" '1' \
+    "$(grep -c "^last'" "${NEXA_CONFIG_DIR}/nexa.env")"
+  assert_not_contains "name '${name}': a removal was reported for a key that is not a record" \
+    "$BOTCTL_OUTPUT" 'removed from nexa.env'
+  assert_equals "name '${name}': an unrelated key after the value was lost" 'ok' \
+    "$(nexa_env_key TAIL_KEY)"
+done
+# A comment is still a comment and a blank line is still blank, or the wider name grammar
+# has turned the whole file into records.
+seed_nexa_env canonical
+printf '%s\n' '# BUILD_COMMIT=not-a-record' '' 'TAIL_KEY=ok' >>"${NEXA_CONFIG_DIR}/nexa.env"
+run_botctl update vA
+assert_not_contains 'a commented line was reported as an obsolete record' \
+  "$BOTCTL_OUTPUT" 'removed from nexa.env'
+assert_equals 'a commented line was deleted' '1' \
+  "$(grep -c '^# BUILD_COMMIT=not-a-record' "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_equals 'a key after a comment and a blank line was lost' 'ok' "$(nexa_env_key TAIL_KEY)"
+seed_nexa_env canonical
+
+test_case 'update: says nothing and changes nothing when there is nothing to remove'
+seed_nexa_env canonical
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl update vA
+assert_not_contains 'a removal was reported with nothing to remove' \
+  "$BOTCTL_OUTPUT" 'removed from nexa.env'
+assert_equals 'the file was rewritten for no reason' "$before" \
+  "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+
+test_case 'update: repairs the file even when the target version is already current'
+# The command an operator runs to repair an installation is
+# `botctl update <the version it already has>`, and that path returns early.
+# Reconciling after the early return would have made the repair unreachable on
+# the one host that needed it.
+seed_nexa_env canonical
+append_env 'BUILD_COMMIT=pending'
+run_botctl update vA
+assert_contains 'the no-op update did not report the removal' "$BOTCTL_OUTPUT" 'removed from nexa.env'
+assert_equals 'BUILD_COMMIT survived a no-op update' '' "$(nexa_env_key BUILD_COMMIT)"
+# And it must say the removal has not taken effect yet. This path recreates no
+# container, so the running processes still carry the values just removed — and
+# `status` reading the cleaned file would stop warning about an effect still in
+# force. Without this line the operator is told a repair happened that has not.
+assert_contains 'the operator was not told the repair needs a restart' \
+  "$BOTCTL_OUTPUT" "still in the running containers' environment"
+assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'botctl restart'
+
+test_case 'update: an already-current release with nothing to remove says nothing about restarting'
+# The pending-restart note must follow a removal, not every no-op update.
+seed_nexa_env canonical
+run_botctl update vA
+assert_contains 'the no-op was not reported' "$BOTCTL_OUTPUT" 'Nothing to do'
+assert_not_contains 'a restart was advised with nothing removed' \
+  "$BOTCTL_OUTPUT" "still in the running containers' environment"
 teardown_root
 
 report
