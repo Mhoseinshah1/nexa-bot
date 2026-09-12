@@ -899,3 +899,102 @@ checks in the deploy suite and two assertions in the unit suite.
 | ---- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ------ |
 | H-79 | The invalid-acceptance refusal is about creation, not about the API already running | `botctl`: the paragraph back to "no acceptance state is in force" | `botctl.test.sh` › status: an explicit SECRETS_ACCEPT_V1 outside the enum is invalid, not a default | KILLED |
 | H-80 | A traced `botctl status` prints no resolved value                                   | `botctl`: both sections back to running in the traced shell       | `botctl.test.sh` › status: a traced run prints no resolved value                                    | KILLED |
+
+### Round fifteen — self-review of `d9cdc0a`, and Codex on the same head
+
+Two reviews found the same defect independently, which is the strongest evidence on this
+branch that it was real: the sentence round fourteen added to the invalid-acceptance
+refusal, `the rows below are read by it`, is false in every state in which it prints.
+
+The rows come from `nexa_compose run --rm --no-deps api dist/secrets.cli.js status
+--json`. `compose run` creates a ONE-OFF container from the CURRENT configuration, never
+from the API already running, so no row can be attributed to a running API. And in the
+state where this paragraph prints, no row exists at all: `secrets.cli.ts` calls
+`loadConfig()` as the first statement of `main()`, `SECRETS_ACCEPT_V1` is
+`z.enum(['true','false'])`, so the one-off exits before it reaches the database and the
+only row is `v1 rows unable to determine (the application could not read the database)` —
+whose parenthetical is wrong too, because the database was never reached.
+
+Worse if it ever did answer. `$accept` gained a third value in round thirteen and the
+branches below it test only `no` and `yes`, so an `invalid` acceptance falls past every
+guard to `v1 shutdown complete: no v1 ciphertext, v1 not accepted` — an acceptance state
+no container can reach, which is precisely the lie H-78 was written to kill. The previous
+wording at least disclaimed the rows; the new wording endorsed them, and two assertions
+had been added that locked the endorsement in. **The fix for a lie reintroduced the lie
+one layer down.** The section now RETURNS before the rows, which makes the fall-through
+unreachable rather than merely unlikely, and says why no row is shown so the absence
+cannot be read as a stack that is down.
+
+The wording is corrected in the other direction too: Compose does NOT refuse here — the
+listing resolved, which is how the value was read at all — so the container IS created
+and then exits on the schema error. `no API can be CREATED` sent an operator away from
+`botctl logs api`, where the reason is. It says the API will not START, and names the log.
+
+**Three more, and two of them are the same class as the round-fourteen finding: a secret
+in a variable under `bash -x`, in the commands that round did not look at.**
+
+`botctl secrets migrate-config` printed the master key SIX times and then printed that
+the key material `was never printed`. It holds the key by necessity — it reads
+`SECRETS_KEK` out of the file and writes it back under the canonical name — and every
+capture, blank test, `id:key` concatenation, rewrite and read-back traced with the value
+in it. It is also the command `botctl status` sends an operator to, and one they run under
+`-x` precisely because it rewrites `/etc/nexa/nexa.env`. Measured before the fix, on the
+legacy fixture: 6 occurrences of the key, 1 of the database password, and the false claim.
+After: 0, 0, and the claim is true.
+
+`nexa_env_rewrite` leaked on EVERY call, including from commands that write nothing
+secret: it proves the candidate file would still boot by reading `DATABASE_URL` back out
+of it, and under `-x` that expansion printed the database password. `botctl secrets
+disable-v1` writes one boolean and leaked the database URL anyway. `botctl update` takes
+the same path but captures the subshell's stderr, which is why `disable-v1` and not
+`update` is the case that can observe the rule.
+
+Both are fixed by `nexa_untraced`, and it is a save-and-restore rather than the subshell
+the two `status` sections use. The difference is `nexa_die`: every refusal in these two
+functions must end the COMMAND, and inside a subshell it would end only the subshell while
+the caller carried on as though nothing had been refused. `nexa_die` exits the process, so
+the restore is reached only on the paths that return — the only paths where it matters.
+
+The last one is the refusal redaction, and it is the second channel by which a value out
+of `nexa.env` reaches a paste-safe output. The cut-at-the-first-quote rule handles the
+echoed value of an unterminated quote. It does nothing about Compose's required-variable
+forms, which put the OPERATOR'S text in the diagnostic — and that text needs no quote.
+Measured on v5.1.1 with `SECRETS_KEYS=${KEYRING:?k1:<key material>}` and `KEYRING` unset:
+
+```
+failed to read /tmp/cprobe/nexa.env: required variable KEYRING is missing a value: k1:SUPERSECRETKEYMATERIAL
+```
+
+Everything from that marker on is withheld now and the marker itself is kept, so Compose's
+own prose still reads whole and the variable NAME, which is what an operator needs and is
+not a value, survives.
+
+**One test weakness of my own, found by the same review and worth recording because it is
+the guard I had just congratulated myself on.** The trace test asserted the output
+contained `capabilities` to prove the section had really run. Under `bash -x` the call
+itself traces as `+ status_capabilities`, which contains that word — so the guard passed
+with `compose_config_fails=1` (both sections print REFUSED and never read the listing) and
+passed with both bodies replaced by `return 0`, which is verbatim the failure the guard was
+written to prevent. It now asserts `backup delivery    configured` and `configuration
+canonical`, two rows that can only be produced by the section's own formatted output (a
+trace would echo the format string, carrying `%-8s`, not the value) and only reached
+THROUGH the resolved listing.
+
+| #    | Rule                                                                           | Mutation                                                                 | Named test                                                                                             | Result |
+| ---- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ------ |
+| H-81 | An invalid acceptance prints NO row, rather than falling through to the guards | `botctl`: drop the `return 0` so the row block runs                      | `botctl.test.sh` › status: an explicit SECRETS_ACCEPT_V1 outside the enum is invalid, not a default    | KILLED |
+| H-82 | `secrets migrate-config` runs with tracing off                                 | `botctl`: call the body directly instead of through `nexa_untraced`      | `botctl.test.sh` › secrets migrate-config: a traced run prints no key material                         | KILLED |
+| H-83 | The env rewriter runs with tracing off                                         | `nexa-lib.sh`: call the body directly instead of through `nexa_untraced` | `botctl.test.sh` › a traced disable-v1 prints no database password                                     | KILLED |
+| H-84 | The standing caveat is keyed to container CREATION, not to `botctl restart`    | `botctl`: the caveat back to "since the last `botctl restart`"           | `botctl.test.sh` › status: the section names COMPOSE as its resolver and claims nothing more           | KILLED |
+| H-85 | Compose's required-variable error text is redacted like a quoted value         | `nexa-lib.sh`: drop the `is missing a value` cut                         | `botctl.test.sh` › status: a refusal reports the reason Compose gave, with the value it echoed cut off | KILLED |
+
+Counts, each with the restore confirmed by `cmp` against a pre-mutation snapshot: H-81
+fails 2 of 223, H-82 1, H-83 1, H-84 3, H-85 1, and H-80 re-run on this tree still fails 3.
+
+**H-84 SURVIVED its first run and is recorded that way.** The batch script applied it
+through a `python3 -c` whose nested quoting was a syntax error, so nothing was mutated and
+223 checks passed — a survivor that proved only that the mutation had not happened. Re-run
+from a script file, with the applied text grepped out of `botctl` before the suite ran, it
+fails 3 checks. This is the second time on this branch that a mutation recorded as applied
+was not: the discipline that catches it is proving the mutation landed, not trusting the
+runner.

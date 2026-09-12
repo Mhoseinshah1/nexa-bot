@@ -231,13 +231,19 @@ any value, because Compose reports it directly: a configuration Compose REFUSES,
 which no container can be created or recreated — repeating Compose's own reason, cut
 before any value Compose echoed back, and saying nothing about a container already
 running, which keeps the environment it was created with. The backup delivery destination is
-reported by PRESENCE only, because one of its two keys is a bot token.
+reported by PRESENCE only, because one of its two keys is a bot token. Neither
+section's values reach a `bash -x` trace either: both run with tracing off, because a
+trace of the resolved listing would carry the keyring, the database password and the
+backup bot token into output an operator pastes into a ticket. `botctl secrets
+migrate-config` and the `nexa.env` rewriter do the same, for the same reason.
 
 Each line names the process that READS the value, which is the operator's next
 question. The section claims nothing about what those processes are currently
 running: a container keeps the configuration it was created with, so a value
-changed since the last `botctl restart` is not yet in force, and the section says
-so as a standing caveat rather than pretending to detect it. The delivery
+changed since that container was CREATED is not yet in force in it, and the section
+says so as a standing caveat rather than pretending to detect it. The caveat names
+creation rather than `botctl restart` because `update` and `rollback` bring the stack
+up too, so a successful update has already loaded the edited file. The delivery
 destination names three processes because three deliver — the worker schedules,
 the API serves the Web Admin's manual run, and the recovery executor takes the
 pre-restore backup.

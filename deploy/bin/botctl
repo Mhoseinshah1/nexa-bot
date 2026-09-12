@@ -209,6 +209,13 @@ status_capabilities() {
   # keep values out of the OUTPUT; this keeps them out of the TRACE. A subshell
   # rather than a save-and-restore pair: this body has several early returns, and a
   # restore one of them skipped would leave tracing off for the rest of the command.
+  #
+  # The cost is real and is accepted: the resolution, the refusal-reason redaction, the
+  # `docker inspect` provenance lookups and the set arithmetic below are all invisible
+  # under `bash -x`. What an operator needs from them is printed either way — a refusal
+  # carries Compose's own reason, and a provenance that could not be computed says so —
+  # and `docker compose --env-file /etc/nexa/nexa.env config` reproduces the resolution
+  # step by hand. A trace that prints the keyring is not a fair trade for that.
   ( set +x; status_capabilities_untraced )
 }
 
@@ -324,9 +331,17 @@ status_capabilities_untraced() {
   # created with, so any of the values above may not be in force yet — and a
   # DETECTION of that would have to be right about every field and every owning
   # process to be worth printing. This sentence is right about all of them.
+  #
+  # Keyed to CREATION, not to `botctl restart`. `restart` is not the only command that
+  # brings the stack up: `update` and `rollback` both go through
+  # `nexa_bring_up_with_edge`, so a successful update has already recreated the
+  # containers from the edited file. Naming only `restart` told an operator who had just
+  # updated that their change was still pending, and sent them to restart again.
   printf '\n  These are the values compose would hand a container STARTED NOW. A running\n'
   printf '  container keeps the configuration it was created with, so anything changed\n'
-  printf '  since the last `botctl restart` is not in force yet.\n'
+  printf '  since that container was CREATED is not in force in it yet. `botctl restart`,\n'
+  printf '  `botctl update` and `botctl rollback` each bring the stack up, so a successful\n'
+  printf '  one of those has already loaded these values; nothing else here does.\n'
 
   if [ "$scheduled" = off ]; then
     printf '\n  This configuration takes no AUTOMATIC backup. `botctl backup` still works, and\n'
@@ -436,6 +451,7 @@ status_secrets() {
   # keep values out of the OUTPUT; this keeps them out of the TRACE. A subshell
   # rather than a save-and-restore pair: this body has several early returns, and a
   # restore one of them skipped would leave tracing off for the rest of the command.
+  # The cost is the same one the capabilities wrapper accepts, for the same reason.
   ( set +x; status_secrets_untraced )
 }
 
@@ -497,16 +513,36 @@ status_secrets_untraced() {
   printf '  configuration  %s\n' "$format"
   printf '  accept v1      %s  (%s)\n' "$accept" "$accept_source"
   if [ "$accept" = invalid ]; then
-    # About a container CREATED from this configuration, not about one already running:
-    # an API started before the edit keeps its creation-time environment and goes on
-    # accepting or refusing v1 exactly as it was, which is the same distinction the
-    # capabilities refusal draws. Claiming no acceptance state is in force would
-    # contradict the readiness row this command prints below.
+    # And RETURN, printing no rows. Three separate claims collapse here, and the two
+    # previous versions of this paragraph each got one of them wrong.
+    #
+    # The rows below come from `compose run --rm api`, which creates a ONE-OFF container
+    # from the CURRENT configuration, never from the API already running. So they cannot
+    # be attributed to a running API, which the previous wording did; and they cannot be
+    # produced at all from a configuration the schema refuses, because `secrets.cli.js`
+    # calls `loadConfig()` as its first statement and `SECRETS_ACCEPT_V1` is a two-value
+    # enum, so the one-off exits before it reaches the database.
+    #
+    # Worse if it ever did answer. `$accept` gained a third value and the branches below
+    # test only `no` and `yes`, so an `invalid` acceptance falls past every guard to
+    # `v1 shutdown complete: no v1 ciphertext, v1 not accepted` — an acceptance state no
+    # container can reach, which is the lie this whole check was written to kill.
+    # Returning is what makes that unreachable rather than merely unlikely.
+    #
+    # Compose is NOT what refuses here: the listing resolved, which is how the value was
+    # read at all. The container is created and then exits on the schema error, so the
+    # reason is in the API's log and the operator is sent there rather than told the
+    # container could not be created.
     printf '\n'
     printf '  SECRETS_ACCEPT_V1 is set to something other than `true` or `false`, which the\n'
-    printf '  schema refuses, so no API can be CREATED or RECREATED from this configuration —\n'
-    printf '  the next `botctl restart` or `botctl update` will fail. An API already running\n'
-    printf '  keeps the acceptance it was created with, and the rows below are read by it.\n'
+    printf '  schema refuses, so the API will not START from this configuration: the next\n'
+    printf '  `botctl restart` or `botctl update` will fail, and `botctl logs api` shows the\n'
+    printf '  refusal. An API already running keeps the acceptance it was created with.\n'
+    printf '\n'
+    printf '  No row is shown below, and that is not a stack that is down: every row in this\n'
+    printf '  section is counted by a one-off container created from THIS configuration, and\n'
+    printf '  that container cannot start either. Set the value, then run `botctl status`.\n'
+    return 0
   fi
 
   # The rows. One bounded read through the application; a stack that is down
@@ -1377,6 +1413,20 @@ cmd_restart() {
 # the application, and does not print, log or pass through argv one byte of key
 # material. It moves two values from one spelling to another, in place.
 cmd_secrets_migrate_config() {
+  # UNTRACED, because this command is the one that holds the master key: it reads
+  # SECRETS_KEK out of the file and writes it back under the canonical name, so the
+  # value is in a local and in the rewriter's environment by necessity. Under
+  # `bash -x` the capture, the blank test, the `id:key` concatenation, the rewrite and
+  # the read-back each printed it — and then this command printed that the key
+  # material "was never printed". An operator runs this under `-x` precisely because
+  # it rewrites /etc/nexa/nexa.env.
+  #
+  # `nexa_untraced` and not a subshell: every refusal below is `nexa_die`, which must
+  # end the command rather than a subshell the caller would then ignore.
+  nexa_untraced cmd_secrets_migrate_config_untraced "$@"
+}
+
+cmd_secrets_migrate_config_untraced() {
   local file="${NEXA_CONFIG_DIR}/nexa.env"
   [ -r "$file" ] || nexa_die "cannot read ${file}."
 

@@ -2498,6 +2498,26 @@ assert_not_contains "the key appeared in the shutdown output" "$BOTCTL_OUTPUT" "
 assert_contains "the backup rule was not restated at the moment it starts to matter" \
   "$BOTCTL_OUTPUT" "BACKUPS"
 
+test_case "a traced disable-v1 prints no database password"
+# The rewriter is the other place a secret is held by necessity: it is handed the keys to
+# write BY NAME and expands those names to append the lines, and it then proves the
+# candidate file would still boot by reading DATABASE_URL back out of it. Under `bash -x`
+# that read-back printed the database password on EVERY call — so `secrets disable-v1`,
+# which writes nothing secret at all, leaked it anyway. `botctl update` is the same path
+# through `nexa_reconcile_app_env`; it happens to capture the subshell's stderr, which is
+# why this command and not that one is the case that can observe the rule.
+fake_set shutdown_ready 1
+seed_nexa_env canonical
+trace="$(bash -x "$BOTCTL" secrets disable-v1 2>&1 || true)"
+assert_not_contains 'a traced shutdown printed the database password' "$trace" 'nexa:'
+assert_not_contains 'a traced shutdown printed the key material' "$trace" "$TEST_KEK"
+# And the run was real: traced, and it reached the write.
+assert_contains 'nothing was traced at all' "$trace" '+ '
+assert_equals 'SECRETS_ACCEPT_V1 was not set to false' 'false' "$(nexa_env_key SECRETS_ACCEPT_V1)"
+# Deliberately NOT re-seeded: the case below asserts that rerunning is free, which needs
+# the state this one leaves — SECRETS_ACCEPT_V1 already false on a canonical keyring.
+# Re-seeding here made that case perform the change instead of declining it.
+
 test_case "rerunning disable-v1 is free"
 run_botctl secrets disable-v1
 assert_equals "the rerun failed" 0 "$BOTCTL_STATUS"
@@ -2998,6 +3018,26 @@ assert_equals 'the file was changed by a refused conversion' "$before" \
 assert_not_contains 'the refusal printed key material' "$BOTCTL_OUTPUT" 'VAULT_KEK}'
 seed_nexa_env canonical
 
+test_case 'secrets migrate-config: a traced run prints no key material'
+# This command HOLDS the master key by necessity: it reads SECRETS_KEK out of the file
+# and writes it back under the canonical name. Under `bash -x` the capture, the blank
+# test, the `id:key` concatenation, the rewriter's own `printf` and the read-back each
+# printed it — six times — and then the command printed that the key material "was never
+# printed". The `status` sections were fixed for exactly this and this command, the one
+# that actually moves the key, was left open. `botctl status` is what sends an operator
+# here, and a command that rewrites /etc/nexa/nexa.env is one they run under `-x`.
+seed_nexa_env legacy
+trace="$(bash -x "$BOTCTL" secrets migrate-config 2>&1 || true)"
+assert_not_contains 'a traced conversion printed the key material' "$trace" "$TEST_KEK"
+assert_not_contains 'a traced conversion printed the database password' "$trace" 'nexa:'
+# And the run was real: tracing was on, and the conversion reached its own success line.
+# Without both, this would pass against a command that refused at its first line.
+assert_contains 'nothing was traced at all' "$trace" '+ '
+assert_contains 'the conversion did not complete' "$trace" 'was never printed'
+assert_contains 'the converted keyring was not written' \
+  "$(cat "${NEXA_CONFIG_DIR}/nexa.env")" 'SECRETS_KEYS='
+seed_nexa_env canonical
+
 test_case 'status: a traced run prints no resolved value'
 # `bash -x` is what an operator reaches for when `botctl status` misbehaves, and the
 # resolved listing holds DATABASE_URL, the keyring and the backup bot token. Capturing
@@ -3014,7 +3054,19 @@ assert_not_contains 'a traced run printed the database password' "$trace" 'trace
 # And the trace is still a trace: the surrounding command IS traced, or this would
 # pass against a botctl that simply printed nothing.
 assert_contains 'nothing was traced at all' "$trace" '+ '
-assert_contains 'the status output itself is missing' "$trace" 'capabilities'
+# Both sections must have REACHED the resolved listing, or the secret assertions above
+# are vacuous. `capabilities` alone proved nothing: under `bash -x` the call itself
+# traces as `+ status_capabilities`, which contains that word, so the guard passed with
+# `compose_config_fails=1` (both sections print REFUSED and never read the listing) and
+# with both bodies replaced by `return 0`. These two rows cannot come from a trace line:
+# the value is a separate argv word in the `printf`, so the format string a trace would
+# echo carries `%-8s` and `%s`, never `configured` or `canonical` in those columns. And
+# each row is reachable only THROUGH the listing — `backup delivery` needs both
+# BACKUP_TELEGRAM_* present in it, `configuration  canonical` needs SECRETS_KEYS.
+assert_contains 'the capability section never read the resolved listing' \
+  "$trace" 'backup delivery    configured'
+assert_contains 'the secrets section never read the resolved listing' \
+  "$trace" 'configuration  canonical'
 fake_set compose_env_json ''
 seed_nexa_env canonical
 
@@ -3032,14 +3084,35 @@ out="$(status_secrets_probe)"
 assert_contains 'a value outside the enum was reported as a derived default' \
   "$out" 'accept v1      invalid'
 assert_contains 'the reason was not named' "$out" 'neither true nor false'
-# And the claim is about what can be CREATED: an API started before the edit keeps the
-# acceptance it was created with, and the rows below are read by it.
+# And the claim is scoped: an API started before the edit keeps the acceptance it was
+# created with, so the refusal must not say no acceptance state is in force anywhere.
 assert_contains 'the refusal claimed no acceptance state is in force anywhere' \
   "$out" 'keeps the acceptance it was created with'
 assert_not_contains 'the refusal over-claimed about the running API' \
   "$out" 'no acceptance state is in force'
 assert_not_contains 'an unreachable acceptance state was presented as in force' \
   "$out" 'accept v1      no  (default)'
+# Compose is NOT what refuses here — the listing resolved, which is how the value was
+# read — so the container IS created and then exits on the schema error. Saying it
+# cannot be created sends the operator away from `botctl logs api`, where the reason is.
+assert_contains 'the refusal did not say the API will not start' \
+  "$out" 'will not START from this configuration'
+assert_not_contains 'the refusal blamed compose for a refusal it did not make' \
+  "$out" 'no API can be CREATED'
+assert_contains 'the operator was not sent to the log that carries the reason' \
+  "$out" 'botctl logs api'
+# And NO ROW is printed. Every row below is counted by a one-off `compose run` container
+# created from THIS configuration, which cannot start either — so a row here is either
+# attributed to the wrong process or invented. The fall-through is the dangerous one:
+# `$accept` has three values and the guards below test only `no` and `yes`, so an
+# `invalid` acceptance used to reach `v1 shutdown complete: … v1 not accepted` — an
+# acceptance state no container can reach, which is the lie this case exists to kill.
+assert_not_contains 'a row was counted from a configuration no container can read' \
+  "$out" 'v1 rows'
+assert_not_contains 'an unreachable acceptance state was reported as a completed shutdown' \
+  "$out" 'v1 shutdown'
+assert_contains 'the absence of rows was left looking like a stack that is down' \
+  "$out" 'No row is shown below'
 # A value with a trailing newline is the same case: the rendering is `false\\n`, which
 # is not the spelling the enum allows.
 fake_set compose_env_json '{"DATABASE_URL":"d","REDIS_URL":"r","SECRETS_KEYS":"k1:v","SECRETS_ACTIVE_KEY_ID":"k1","SECRETS_ACCEPT_V1":"false\n"}'
@@ -3661,6 +3734,16 @@ run_botctl status
 assert_contains 'the heading does not name compose as the resolver' \
   "$BOTCTL_OUTPUT" 'as compose resolves'
 assert_contains 'the standing caveat is missing' "$BOTCTL_OUTPUT" 'STARTED NOW'
+# And the caveat is keyed to CREATION, not to `botctl restart` alone. `update` and
+# `rollback` both bring the stack up through `nexa_bring_up_with_edge`, so naming only
+# `restart` told an operator who had just updated that their change was still pending and
+# sent them to restart a stack that had already loaded it.
+assert_contains 'the caveat was keyed to restart alone' \
+  "$BOTCTL_OUTPUT" 'since that container was CREATED'
+assert_contains 'update and rollback were not named as loading the values' \
+  "$BOTCTL_OUTPUT" '`botctl update` and `botctl rollback` each bring the stack up'
+assert_not_contains 'the caveat still claims only a restart can load a change' \
+  "$BOTCTL_OUTPUT" 'since the last `botctl restart` is not in force'
 assert_contains 'the caveat does not say what a running container keeps' \
   "$BOTCTL_OUTPUT" 'created with'
 # And it still does not pretend to know the running state of any of them.
@@ -3805,6 +3888,17 @@ assert_not_contains 'a guessed cause was printed beside the real one' "$BOTCTL_O
 fake_set compose_config_stderr 'env file /etc/nexa/nexa.env not found: stat /etc/nexa/nexa.env: no such file or directory'
 run_botctl status
 assert_contains 'a quote-free reason was cut short' "$BOTCTL_OUTPUT" 'no such file or directory'
+# The SECOND channel, and the quote cut does nothing about it: Compose's required-variable
+# forms `${VAR?text}` and `${VAR:?text}` put the operator's own text in the diagnostic,
+# and that text needs no quote. Measured on v5.1.1 with `SECRETS_KEYS=${KEYRING:?k1:<key>}`
+# and KEYRING unset, which is how the keyring reached a paste-safe output. Compose's prose
+# is kept whole up to and including the marker, so the variable NAME still reads.
+fake_set compose_config_stderr 'failed to read /etc/nexa/nexa.env: required variable KEYRING is missing a value: k1:AAAfakeKeyMaterial'
+run_botctl status
+assert_contains 'the required-variable reason was dropped entirely' \
+  "$BOTCTL_OUTPUT" 'required variable KEYRING is missing a value'
+assert_not_contains 'the operator-supplied error text carried the key material through' \
+  "$BOTCTL_OUTPUT" 'AAAfakeKeyMaterial'
 fake_set compose_config_fails 0
 fake_set compose_config_stderr ''
 # And a document that defines no `api` is a refusal too, not a column of defaults.

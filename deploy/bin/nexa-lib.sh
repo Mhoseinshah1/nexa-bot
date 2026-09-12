@@ -890,6 +890,36 @@ nexa_commit_release() {
   nexa_write_atomic "$NEXA_CURRENT_FILE" "$target"
 }
 
+# Run a function with xtrace OFF, restoring it afterwards, and return its status.
+#
+# Some of this library's work cannot avoid holding a secret in a shell variable:
+# `nexa_env_rewrite` is handed the keyring BY NAME precisely so no value becomes a
+# process argument, and then expands that name to append the line. Under `bash -x`
+# every such assignment, test and expansion is printed — which is how `botctl secrets
+# migrate-config` came to print the master key six times and then report that the key
+# material "was never printed". An operator runs that command under `-x` exactly
+# because it rewrites /etc/nexa/nexa.env.
+#
+# A save-and-restore rather than a subshell, which is the opposite of the choice the
+# two `status` sections make, and the difference is `nexa_die`: every refusal in these
+# functions must end the COMMAND, and inside a subshell it would end only the subshell
+# while the caller carried on as though nothing had been refused. `nexa_die` exits the
+# process, so the restore below is reached only on the paths that return — the only
+# paths where restoring matters. `$-` is the authority on whether tracing was on;
+# it is read before anything can change it.
+#
+# What this costs is real and is the same cost the `status` sections pay: the body is
+# invisible under `bash -x`. It is bounded here to functions whose failures are all
+# `nexa_die` with a reason on stderr, which is what an operator needs from them.
+nexa_untraced() {
+  local had_xtrace=0 status=0
+  case "$-" in *x*) had_xtrace=1 ;; esac
+  set +x
+  "$@" || status=$?
+  [ "$had_xtrace" -eq 0 ] || set -x
+  return "$status"
+}
+
 # One line, into place, or not at all. `printf > file` truncates first, so an
 # interruption mid-write leaves an empty `current` — an installation that
 # reports no release at all.
@@ -916,6 +946,10 @@ nexa_commit_release() {
 # whose value is the value — passed by reference precisely so no value is ever
 # an argument.
 nexa_env_rewrite() {
+  nexa_untraced nexa_env_rewrite_untraced "$@"
+}
+
+nexa_env_rewrite_untraced() {
   local file="$1" remove="$2"
   shift 2
 
@@ -1376,14 +1410,33 @@ for key in sorted(env):
 '
 }
 
-# Compose's refusal, fit to print: its first line, cut at the first quote character and
-# bounded in length. Compose echoes the offending VALUE when a quoted value is never
-# closed (`unterminated quoted value '7777:AAA…`), and the values in nexa.env include a
-# bot token and the encryption key. Everything else Compose says — a missing env file,
-# a required variable without a value, a malformed compose file — reads whole.
+# Compose's refusal, fit to print. TWO redactions, because Compose has two ways of
+# putting a value out of nexa.env into its own diagnostic, and the first version of this
+# function knew about only one. The values in that file include the encryption keyring,
+# the database password and a bot token, and this output is meant to be safe to paste
+# into a ticket.
+#
+# 1. It echoes the offending VALUE, quoted, when a quoted value is never closed:
+#    `unterminated quoted value '7777:AAA…`. Cutting at the first quote drops it.
+# 2. The required-variable forms `${VAR?text}` and `${VAR:?text}` put the OPERATOR'S own
+#    text in the message, and that text needs no quote at all. Measured on v5.1.1, with
+#    `SECRETS_KEYS=${KEYRING:?k1:<key material>}` and KEYRING unset:
+#      failed to read /etc/nexa/nexa.env: required variable KEYRING is missing a value:
+#      k1:<key material>
+#    so the keyring went straight through the quote cut. Everything from that marker on
+#    is withheld and the marker itself is kept, which leaves Compose's own prose whole:
+#    `required variable KEYRING is missing a value`. The variable NAME is what an
+#    operator needs and is not a value.
+#
+# Everything else Compose says — a missing env file, a malformed compose file — reads
+# whole, still bounded to 200 characters.
 nexa_compose_refusal_reason() {
   local text
-  text="$(printf '%s\n' "$1" | sed -n '1p' | sed "s/[\"'].*\$//" | cut -c1-200)"
+  text="$(printf '%s\n' "$1" | sed -n '1p')"
+  case "$text" in
+    *' is missing a value:'*) text="${text%% is missing a value:*} is missing a value" ;;
+  esac
+  text="$(printf '%s\n' "$text" | sed "s/[\"'].*\$//" | cut -c1-200)"
   printf '%s' "${text:-(compose gave no reason)}"
 }
 

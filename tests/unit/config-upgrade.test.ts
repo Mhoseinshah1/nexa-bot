@@ -877,7 +877,17 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
     expect(detector, 'the detector is gone').not.toBe('');
     expect(detector, 'the detector greps instead of scanning').not.toMatch(/grep/);
     expect(detector, 'the detector does not use the scanner').toContain('nexa_compose_env_value');
-    const rewriter = code(/nexa_env_rewrite\(\) \{[\s\S]*?\n\}\n/.exec(lib)?.[0] ?? '');
+    // The BODY is `nexa_env_rewrite_untraced`: the exported name runs it through
+    // `nexa_untraced`, because this function is handed the keyring BY NAME and then
+    // expands that name to append the line, so `bash -x` printed the key material.
+    // A save-and-restore there rather than a subshell, because every refusal below is
+    // `nexa_die` and must end the command, not a subshell the caller would ignore.
+    const rewriteWrapper = /nexa_env_rewrite\(\) \{[\s\S]*?\n\}\n/.exec(lib)?.[0] ?? '';
+    expect(rewriteWrapper, 'nexa_env_rewrite is gone').not.toBe('');
+    expect(rewriteWrapper, 'the rewriter runs in the traced shell').toContain(
+      'nexa_untraced nexa_env_rewrite_untraced',
+    );
+    const rewriter = code(/nexa_env_rewrite_untraced\(\) \{[\s\S]*?\n\}\n/.exec(lib)?.[0] ?? '');
     expect(rewriter, 'the rewriter is gone').not.toBe('');
     expect(rewriter, 'the rewriter drops lines by pattern').not.toMatch(/grep/);
     expect(rewriter, 'the rewriter does not track quoted regions').toMatch(/if \(inq\) \{/);
@@ -915,7 +925,16 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
     expect(secrets, 'the secrets section does not ask compose').toContain(
       'nexa_compose_resolved_env api',
     );
-    const migrate = /cmd_secrets_migrate_config\(\) \{[\s\S]*?\n\}/.exec(botctl)?.[0] ?? '';
+    // Same wrapper split again, and this is the command the split matters most for: it
+    // holds the master key in a local by necessity, and under `bash -x` printed it six
+    // times before reporting that the key material was never printed.
+    const migrateWrapper = /cmd_secrets_migrate_config\(\) \{[\s\S]*?\n\}/.exec(botctl)?.[0] ?? '';
+    expect(migrateWrapper, 'migrate-config is gone').not.toBe('');
+    expect(migrateWrapper, 'the conversion runs in the traced shell').toContain(
+      'nexa_untraced cmd_secrets_migrate_config_untraced',
+    );
+    const migrate =
+      /cmd_secrets_migrate_config_untraced\(\) \{[\s\S]*?\n\}/.exec(botctl)?.[0] ?? '';
     expect(migrate, 'migrate-config is gone').not.toBe('');
     expect(migrate, 'migrate-config stopped reading the file it rewrites').toContain(
       'nexa_compose_env_value "$file" SECRETS_KEK_ID',
