@@ -7,6 +7,7 @@ import {
   NOTIFICATION_TRANSPORTS,
 } from './notifications.js';
 import { uuidV7Schema } from './ids.js';
+import { CUSTOMER_STATUSES } from './customer.js';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
 import {
   SETTING_CLASSIFICATIONS,
@@ -1194,6 +1195,94 @@ export const providerListResponseSchema = z.object({
   providers: z.array(providerDescriptorSchema),
 });
 export type ProviderListResponse = z.infer<typeof providerListResponseSchema>;
+
+// --- Customers (Phase 4A) ---------------------------------------------------
+
+/**
+ * The page and reason bounds, as CONTRACT values.
+ *
+ * Here rather than in the service, because a schema at the boundary may not import from
+ * `apps/` — and because a bound a caller is held to is part of the interface. The service
+ * clamps to the same numbers; the schema refuses past them, so an oversized request is a
+ * 400 rather than a silently smaller page.
+ */
+export const CUSTOMER_PAGE_DEFAULT = 25;
+export const CUSTOMER_PAGE_MAX = 100;
+export const CUSTOMER_BLOCK_REASON_MAX_LENGTH = 500;
+
+/**
+ * One customer, as the Web Admin renders them.
+ *
+ * What is NOT here is the point. No message text, no order history inline, no wallet
+ * balance — a list row that carried a balance would make every page a financial
+ * aggregate, and a list that carried message text would put third-party prose into a
+ * response an operator's browser caches.
+ *
+ * `telegramUserId` is a STRING, matching the column and `provider-note.ts`: every use of
+ * it is identity, and a JSON number above 2^53 is a different id than the one stored.
+ *
+ * `blockedReason` is an OPERATOR note and is returned only to an operator — it is never
+ * rendered to the customer, and `bot.blocked` declares no placeholder for it.
+ */
+export const customerSummarySchema = z.object({
+  id: z.string(),
+  telegramUserId: z.string(),
+  username: z.string().nullable(),
+  firstName: z.string().nullable(),
+  lastName: z.string().nullable(),
+  languageCode: z.string().nullable(),
+  status: z.enum(CUSTOMER_STATUSES),
+  firstSeenAt: z.string(),
+  lastSeenAt: z.string(),
+  blockedAt: z.string().nullable(),
+  blockedReason: z.string().nullable(),
+});
+export type CustomerSummaryResponse = z.infer<typeof customerSummarySchema>;
+
+/**
+ * The list query.
+ *
+ * `telegramUserId` is EXACT and `username` is a prefix, which is the asymmetry the
+ * repository enforces and the reason is worth repeating at the boundary: a partial match
+ * on a Telegram id would be a way to enumerate ids, while a username is half-remembered
+ * and a prefix is what an operator actually has.
+ */
+export const customerListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(CUSTOMER_PAGE_MAX).optional(),
+  cursor: z.string().max(512).optional(),
+  telegramUserId: z.string().max(32).optional(),
+  username: z.string().max(64).optional(),
+  status: z.enum(CUSTOMER_STATUSES).optional(),
+});
+export type CustomerListQuery = z.infer<typeof customerListQuerySchema>;
+
+export const customerListResponseSchema = z.object({
+  customers: z.array(customerSummarySchema),
+  nextCursor: z.string().nullable(),
+});
+export type CustomerListResponse = z.infer<typeof customerListResponseSchema>;
+
+export const customerResponseSchema = z.object({ customer: customerSummarySchema });
+export type CustomerResponse = z.infer<typeof customerResponseSchema>;
+
+/**
+ * Block or unblock.
+ *
+ * The reason is optional and bounded. It is an operator note, so it is not required — an
+ * operator who must type a justification to press a button types "x" — and it is bounded
+ * because it lands in a durable column and an audit row.
+ */
+export const blockCustomerRequestSchema = z.object({
+  reason: z.string().trim().max(CUSTOMER_BLOCK_REASON_MAX_LENGTH).optional(),
+});
+export type BlockCustomerRequest = z.infer<typeof blockCustomerRequestSchema>;
+
+export const CUSTOMER_ROUTES = {
+  list: '/users',
+  detail: (id: string) => `/users/${encodeURIComponent(id)}`,
+  block: (id: string) => `/users/${encodeURIComponent(id)}/block`,
+  unblock: (id: string) => `/users/${encodeURIComponent(id)}/unblock`,
+} as const;
 
 // --- Backup and disaster recovery -------------------------------------------
 

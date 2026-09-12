@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import {
   COMMERCE_ERROR_CODES,
+  CUSTOMER_BLOCK_REASON_MAX_LENGTH,
+  CUSTOMER_PAGE_DEFAULT,
+  CUSTOMER_PAGE_MAX,
   errors,
   profileFactsFrom,
   telegramUserIdSchema,
@@ -49,9 +52,13 @@ export const CUSTOMER_VIEW_PERMISSION: PermissionKey = 'users.view';
 export const CUSTOMER_SEARCH_PERMISSION: PermissionKey = 'users.search';
 export const CUSTOMER_BLOCK_PERMISSION: PermissionKey = 'users.block';
 
-export const CUSTOMER_PAGE_DEFAULT = 25;
-export const CUSTOMER_PAGE_MAX = 100;
-export const BLOCK_REASON_MAX_LENGTH = 500;
+/*
+ * The page and reason bounds come from the CONTRACT, not from here.
+ *
+ * `http.ts` declares them because a bound a caller is held to is part of the interface.
+ * Two copies would be two numbers to keep in step, and the one that drifts is the one a
+ * schema refuses past while a service silently clamps to something else.
+ */
 
 export interface CustomerServiceDeps {
   readonly repository: CustomerRepository;
@@ -339,7 +346,7 @@ export class CustomerService {
     const reason =
       input.reason === null || input.reason.trim() === ''
         ? null
-        : input.reason.trim().slice(0, BLOCK_REASON_MAX_LENGTH);
+        : input.reason.trim().slice(0, CUSTOMER_BLOCK_REASON_MAX_LENGTH);
     const requestHash = hashRequest({ customerId: input.customerId, to: input.to, reason });
 
     const replay = await this.deps.idempotency.find<{ customerId: string }>(
