@@ -1001,6 +1001,21 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
     expect(deployment, 'the guide does not name the no-op commands').toContain(
       'return 0 having recreated nothing',
     );
+    // And an open question must not be written wider than it is. UNK-DEPLOY-002 claimed the
+    // capabilities section would miss a colon-form value and read the schema default; it
+    // would not, because that section reads `nexa_compose_resolved_env`, so COMPOSE resolves
+    // the shape and the section sees the real value. Writing the scope wider than the text
+    // scanners expanded deferred work into a path that was already correct.
+    const questions = readFileSync(join(__dirname, '../../docs/open-questions.md'), 'utf8').replace(
+      /\s+/g,
+      ' ',
+    );
+    expect(questions, 'the open question still claims the capabilities section is wrong').toContain(
+      'A third consequence was claimed here and is false',
+    );
+    expect(questions, 'the false consequence is still stated as live').not.toContain(
+      'The capabilities section would miss a colon-form value for any setting, reading the schema default',
+    );
   });
 
   it('reads what the application receives, and refuses to freeze a substitution', () => {

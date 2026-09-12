@@ -1451,3 +1451,66 @@ of the time — the same reasoning as H-93 and H-106. **The first version of thi
 itself wrong and is worth recording:** a non-greedy `.*?` between the write and its `catch`
 matched a LATER `ENOENT` catch in the same function, so the mutation left it green. It is an
 exact substring now.
+
+## Round twenty-one — the rest of the shape family, and two claims about capabilities
+
+Three findings from the independent review of `bed8083`, all confirmed by measurement.
+
+**The secrets guard closed one member of a family, not the family.** A round earlier it
+learned that a colon record is a record; this round, that blanks before the `=` are too.
+Measured on v5.1.1, every one of these sets the variable, and a later plain assignment wins
+over all of them:
+
+```
+SECRETS_KEYS =realkey        SECRETS_KEYS<TAB>=realkey      export SECRETS_KEYS =realkey
+SECRETS_KEYS: v              SECRETS_KEYS :v                export SECRETS_KEYS:v
+
+SECRETS_KEYS =realkey   +   SECRETS_KEYS=staleappended   ->  staleappended
+```
+
+`nexa_compose_env_value` requires the `=` to follow the name immediately, so the whitespace
+form reached `migrate-config` as "no SECRETS_KEYS" — legacy host, append the old
+`SECRETS_KEK` as the canonical keyring, advise a restart that makes every existing row
+unreadable. The predicate is now `nexa_env_has_unreadable_record` and covers the FAMILY: a
+shape Compose reads that the text reader does not. Fixing members one at a time is what
+produced two rounds for one defect.
+
+**A claim in `UNK-DEPLOY-002` was false, and is corrected in place rather than deleted.** It
+said the capabilities section would miss a colon-form value and fall back to the schema
+default. It would not: that section reads `nexa_compose_resolved_env`, which runs
+`docker compose config`, so COMPOSE resolves the shape and the section sees the real value —
+as the measurement at the top of that entry already showed. Writing an open question wider
+than it is expands deferred work into a path that is already correct, which is the mirror of
+the mistake `UNK-DEPLOY-001` made in the other direction.
+
+**And `notifications on` was a flag, not a capability.** `NOTIFICATION_TRANSPORT=recording`
+keeps messages in MEMORY instead of sending them, and `configSchema` refuses that combination
+unless `NODE_ENV=development` — so on a production installation the row reported a capability
+working for a configuration the next start refuses, which is exactly what the webhook row's
+secret check exists to prevent. `NODE_ENV` is read from the same resolved listing rather than
+assumed, because `recording` is legitimate in development and telling a development
+installation its configuration is broken is the same defect reversed.
+
+| #     | Rule                                                                    | Mutation                                                        | Named test                                                                                                   | Result |
+| ----- | ----------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------ |
+| H-111 | `migrate-config` refuses blanks before the `=`, not only the colon form | `nexa-lib.sh`: drop the whitespace alternative from the matcher | `botctl.test.sh` › secrets migrate-config: a record shape it cannot read is refused, not converted           | KILLED |
+| H-112 | The notifications row accounts for the transport, not the flag alone    | `botctl`: make the recording-transport branch unreachable       | `botctl.test.sh` › status: the notifications row is the transport too, not the dispatcher flag alone         | KILLED |
+| H-113 | `UNK-DEPLOY-002` does not claim a consequence that is false             | `docs/open-questions.md`: restate the claim as live             | `config-upgrade.test.ts` › decides a bare record by what Compose accepts, and never prints the byte it reads | KILLED |
+
+H-111 and H-112 each fail 3 of 231 deploy checks, each in its own worktree, with the primary
+checkout untouched; H-113 fails 1 of 42 unit checks, restore confirmed by `cmp`. Three
+negative cases guard H-111 against over-firing: a colon inside a VALUE is not a record
+(`id:key` is the canonical keyring grammar), a space AFTER the `=` is read by the text reader
+exactly as Compose reads it, and a line inside another variable's multiline value is text.
+H-112 has its own negative case too — a development installation with the recording transport
+still reads `on`, and the refusal paragraph is absent.
+
+One process note, because a discarded run is worth recording rather than quietly re-running:
+the container restarted mid-`test:integration`, and the next run of that suite reported
+**112 failures across 4 files** — deadlocks, missing seed roles, `backup.run_missing`. None
+of them were real. A killed run leaves the database part-way through a test, and the suite
+truncates between tests rather than rebuilding, so the next run starts on that state. This
+round changed no application code at all, which is what made the signature recognisable:
+`CLAUDE.md` records the same class from two suites sharing one database, 122 failures that
+"looked exactly like real ones". Dropping and recreating `nexa_dev`, re-migrating and
+re-running gave 57 files and 1018 tests green, and that is the run the gate line below cites.

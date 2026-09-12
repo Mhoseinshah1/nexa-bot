@@ -1344,32 +1344,41 @@ nexa_env_has_bare_record() {
   ' "$file"
 }
 
-# Is there a top-level COLON-form record for this key — `SECRETS_KEYS:<value>`?
+# Is there a top-level record for this key that Compose READS and
+# `nexa_compose_env_value` does NOT — `SECRETS_KEYS:<value>` or `SECRETS_KEYS =<value>`?
 #
-# A REFUSAL detector, and only that. Measured on Compose v5.1.1, a colon record is
-# effective and the LAST record for a key wins:
+# A REFUSAL detector, and only that. Measured on Compose v5.1.1, all of these set the
+# variable, and the LAST record for a key wins:
 #
-#   SECRETS_KEYS:realkeyring                  ->  realkeyring
+#   SECRETS_KEYS:realkeyring          SECRETS_KEYS: v        SECRETS_KEYS :v
+#   export SECRETS_KEYS:v             SECRETS_KEYS:v with no final newline
+#   SECRETS_KEYS =realkeyring         SECRETS_KEYS<TAB>=v    export SECRETS_KEYS =v
+#
 #   SECRETS_KEYS:realkeyring                  ->  staleappended   the APPENDED one wins
 #   SECRETS_KEYS=staleappended
-#   SECRETS_KEYS: value / SECRETS_KEYS :value / export SECRETS_KEYS:value   all effective
+#   SECRETS_KEYS =realkeyring                 ->  staleappended   likewise
+#   SECRETS_KEYS=staleappended
 #
-# `nexa_compose_env_value` reads only `=`, so on a file whose canonical keyring is written
-# in the colon form, `botctl secrets migrate-config` saw no SECRETS_KEYS, concluded the host
-# was legacy, and appended `SECRETS_KEYS=<the old SECRETS_KEK>` AFTER it — which Compose then
-# prefers. The restart it advises would leave every row encrypted under the real keyring
-# unreadable, while the command reported the key material unchanged.
+# `nexa_compose_env_value` requires the `=` to follow the name immediately, so on a file
+# whose canonical keyring is written either of those ways `botctl secrets migrate-config`
+# read no SECRETS_KEYS, concluded the installation was legacy, and appended
+# `SECRETS_KEYS=<the old SECRETS_KEK>` — which Compose then prefers. The restart it advises
+# would leave every row encrypted under the real keyring unreadable.
+#
+# ONE predicate for the whole family rather than one per separator, because the family is
+# what matters: a shape Compose reads and the text reader does not. The colon form was
+# fixed first and the whitespace form found a round later, one member over, which is the
+# argument for closing the class instead of its members.
 #
 # Deliberately NOT wired into `nexa_obsolete_app_env_keys`: reporting a key there sends the
-# REWRITER to remove it, and teaching the rewriter a second separator is the change
-# UNK-DEPLOY-002 defers to its own commit and its own adversarial round. Refusing is safe
-# without that, because a refusal writes nothing.
+# REWRITER to remove it, and teaching the rewriter these separators is the change
+# UNK-DEPLOY-002 defers. Refusing is safe without that, because a refusal writes nothing —
+# so a false yes costs an operator one hand-edit, never a key.
 #
-# A scanner, for the same reason the others are: a `SECRETS_KEYS:` line inside another
-# variable's multiline value is text. A colon record is treated as opening no quoted region,
-# which can only make this answer yes too readily — and a false yes is a refusal, never a
-# write.
-nexa_env_has_colon_record() {
+# A scanner, for the same reason the others are: such a line inside another variable's
+# multiline value is text. These records are treated as opening no quoted region, which can
+# only make this answer yes too readily, and a false yes is a refusal rather than a write.
+nexa_env_has_unreadable_record() {
   local file="$1" key="$2"
   [ -r "$file" ] || return 1
   awk -v want="$key" -v sq="'" -v dq='"' "$NEXA_ENV_AWK_LIB"'
@@ -1380,10 +1389,14 @@ nexa_env_has_colon_record() {
         if (unescaped_index(line, quote) > 0) inq = 0
         next
       }
-      if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*:/) > 0) {
+      # A colon separator, or one or more blanks before the `=`. Both are read by Compose
+      # and neither is read by `nexa_compose_env_value`, whose `=` follows the name.
+      if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*:/) > 0 ||
+          match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]+=/) > 0) {
         name = substr(line, RSTART, RLENGTH)
         sub(/^[ \t]*(export[ \t]+)?/, "", name)
-        sub(/[ \t]*:$/, "", name)
+        sub(/[ \t]*[:=]$/, "", name)
+        sub(/[ \t]+$/, "", name)
         if (name == want) found = 1
         next
       }

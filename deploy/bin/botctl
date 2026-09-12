@@ -292,7 +292,7 @@ status_capabilities_untraced() {
     destination='HALF configured'
   fi
 
-  local entry key label fallback vocab owner configured monitor=''
+  local entry key label fallback vocab owner configured monitor='' notifications=''
   for entry in "${settings[@]}"; do
     IFS='|' read -r key label fallback vocab owner <<<"$entry"
     configured="$(nexa_listing_boolean "$resolved" "$key" "$fallback" "$vocab")"
@@ -313,6 +313,23 @@ status_capabilities_untraced() {
       if [ "$secret_length" -lt 16 ]; then
         configured='invalid'
         webhook='short-secret'
+      fi
+    fi
+    # The dispatcher flag is not the capability either. `NOTIFICATION_TRANSPORT=recording`
+    # keeps messages in MEMORY instead of sending them, so an installation with the flag on
+    # and that transport delivers nothing — and `configSchema` refuses the combination
+    # outright unless `NODE_ENV=development`, which a production installation is not. So the
+    # row is `invalid` for the same reason the webhook row is: reporting a capability as
+    # working for a configuration the next start refuses. NODE_ENV is read from the same
+    # resolved listing rather than assumed, because `recording` IS legitimate in development
+    # and a development installation must not be told its configuration is broken.
+    if [ "$key" = NOTIFICATION_DISPATCH_ENABLED ] && [ "$configured" = on ]; then
+      local transport node_env
+      transport="$(nexa_listing_rendered "$resolved" NOTIFICATION_TRANSPORT)" || transport=''
+      node_env="$(nexa_listing_rendered "$resolved" NODE_ENV)" || node_env=''
+      if [ "$transport" = recording ] && [ "$node_env" != development ]; then
+        configured='invalid'
+        notifications='recording-transport'
       fi
     fi
     [ "$key" != BACKUP_SCHEDULE_ENABLED ] || scheduled="$configured"
@@ -371,6 +388,13 @@ status_capabilities_untraced() {
     printf '\n  TELEGRAM_WEBHOOK_ENABLED is on but TELEGRAM_WEBHOOK_SECRET is shorter than the\n'
     printf '  16 characters the schema requires, so the API will REFUSE to start. Every\n'
     printf '  update is authenticated by that header; set it and run `botctl restart`.\n'
+  fi
+  if [ "$notifications" = recording-transport ]; then
+    printf '\n  NOTIFICATION_DISPATCH_ENABLED is on and NOTIFICATION_TRANSPORT is `recording`,\n'
+    printf '  which keeps messages in MEMORY instead of sending them — so every operational\n'
+    printf '  alert goes nowhere while the installation looks healthy. The schema permits it\n'
+    printf '  only when NODE_ENV=development, and this one is not, so the API will REFUSE to\n'
+    printf '  start. Set NOTIFICATION_TRANSPORT=telegram and run `botctl restart`.\n'
   fi
 
   # Always, not on a detected mismatch. A container keeps the environment it was
@@ -1549,14 +1573,16 @@ cmd_secrets_migrate_config_untraced() {
   for bare_key in SECRETS_KEYS SECRETS_ACTIVE_KEY_ID SECRETS_KEK SECRETS_KEK_ID; do
     ! nexa_env_has_bare_record "$file" "$bare_key" ||
       nexa_die "${file} carries ${bare_key} as a BARE record — the name with no \`=\` — so Compose takes its value from the environment running compose, and this file does not say what the application receives. Give it a literal assignment, or remove the line, before converting; nothing was changed."
-    # The COLON shape, for the same reason and with a worse ending. Measured on v5.1.1,
-    # `SECRETS_KEYS:<keyring>` is effective and the LAST record for a key wins — so on a host
-    # whose canonical keyring is written that way this command saw no SECRETS_KEYS, concluded
-    # the installation was legacy, and APPENDED `SECRETS_KEYS=<the old SECRETS_KEK>` after it.
-    # Compose then prefers the appended one, and the restart this command advises would make
-    # every row encrypted under the real keyring unreadable.
-    ! nexa_env_has_colon_record "$file" "$bare_key" ||
-      nexa_die "${file} carries ${bare_key} in the COLON form (\`${bare_key}:<value>\`), which Compose accepts and this conversion cannot read, so it would append an assignment Compose then prefers over the value the application is running with. Rewrite that line as \`${bare_key}=<value>\` first; nothing was changed."
+    # And every other shape Compose READS that the text reader does not: `KEY:value`, and
+    # `KEY =value` with blanks before the `=`. Measured on v5.1.1, both are effective and the
+    # LAST record for a key wins — so on a host whose canonical keyring is written either way
+    # this command saw no SECRETS_KEYS, concluded the installation was legacy, and APPENDED
+    # `SECRETS_KEYS=<the old SECRETS_KEK>` after it. Compose then prefers the appended one,
+    # and the restart this command advises would make every row encrypted under the real
+    # keyring unreadable. The colon form was closed first and the whitespace form turned up a
+    # round later, which is why the predicate now covers the FAMILY rather than a separator.
+    ! nexa_env_has_unreadable_record "$file" "$bare_key" ||
+      nexa_die "${file} sets ${bare_key} in a form Compose reads and this conversion cannot — a colon (\`${bare_key}:<value>\`) or a blank before the equals (\`${bare_key} =<value>\`) — so it would append an assignment Compose then prefers over the value the application is running with. Rewrite that line as \`${bare_key}=<value>\`, with no space, first; nothing was changed."
   done
 
   # Already canonical? Say so and stop. Rerunning must be free — an operator who

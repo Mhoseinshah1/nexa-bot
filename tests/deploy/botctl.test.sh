@@ -3062,7 +3062,8 @@ append_resolved_env 'SECRETS_KEK=b2xkLWtleS1tYXRlcmlhbC1uZXZlci1wcmludGVk' 'SECR
 printf 'SECRETS_KEYS:aWQ6cmVhbC1rZXlyaW5n\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
 before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
 run_botctl secrets migrate-config || true
-assert_contains 'a colon-form keyring was converted over' "$BOTCTL_OUTPUT" 'COLON form'
+assert_contains 'a colon-form keyring was converted over' \
+  "$BOTCTL_OUTPUT" 'a form Compose reads and this conversion cannot'
 assert_equals 'the file was changed by a refused conversion' "$before" \
   "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
 assert_not_contains 'the refusal printed key material' \
@@ -3071,12 +3072,39 @@ assert_not_contains 'the refusal printed key material' \
 # grammar, so a detector that fired on it would refuse every well-formed host there is.
 seed_nexa_env empty
 append_resolved_env 'SECRETS_KEK=b2xkLWtleS1tYXRlcmlhbC1uZXZlci1wcmludGVk' 'SECRETS_KEK_ID=install-1'
-assert_fails 'a colon inside a value was read as a colon record' \
-  nexa_env_has_colon_record "${NEXA_CONFIG_DIR}/nexa.env" SECRETS_KEK
+assert_fails 'a colon inside a value was read as an unreadable record' \
+  nexa_env_has_unreadable_record "${NEXA_CONFIG_DIR}/nexa.env" SECRETS_KEK
 # Nor is a colon line inside another variable's multiline value.
 printf "NOTE='line one\nSECRETS_KEYS:interior\nline three'\n" >>"${NEXA_CONFIG_DIR}/nexa.env"
 assert_fails 'an interior colon line was read as a record' \
-  nexa_env_has_colon_record "${NEXA_CONFIG_DIR}/nexa.env" SECRETS_KEYS
+  nexa_env_has_unreadable_record "${NEXA_CONFIG_DIR}/nexa.env" SECRETS_KEYS
+# And the WHITESPACE shape, which is the same family one separator over and turned up a
+# round after the colon form was closed alone. Measured on v5.1.1: `SECRETS_KEYS =realkey`,
+# a tab before the `=`, and `export SECRETS_KEYS =realkey` are all effective, and a later
+# `SECRETS_KEYS=` wins over them — so this command would have appended the stale key as the
+# canonical keyring on a host whose real one is written that way.
+seed_nexa_env empty
+append_resolved_env 'SECRETS_KEK=b2xkLWtleS1tYXRlcmlhbC1uZXZlci1wcmludGVk' 'SECRETS_KEK_ID=install-1'
+printf 'SECRETS_KEYS =aWQ6cmVhbC1rZXlyaW5n\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+before="$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl secrets migrate-config || true
+assert_contains 'a whitespace-form keyring was converted over' \
+  "$BOTCTL_OUTPUT" 'a form Compose reads and this conversion cannot'
+assert_equals 'the file was changed by a refused conversion' "$before" \
+  "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_not_contains 'the refusal printed key material' \
+  "$BOTCTL_OUTPUT" 'aWQ6cmVhbC1rZXlyaW5n'
+# A tab before the `=` is the same shape, and a space AFTER the `=` is not: `KEY= value` is
+# read by the value reader exactly as Compose reads it, so refusing it would refuse a file
+# that converts correctly.
+seed_nexa_env empty
+printf 'SECRETS_KEYS\t=x\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+assert_ok 'a tab before the equals was not seen' \
+  nexa_env_has_unreadable_record "${NEXA_CONFIG_DIR}/nexa.env" SECRETS_KEYS
+seed_nexa_env empty
+printf 'SECRETS_KEYS= x\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+assert_fails 'a space AFTER the equals was refused' \
+  nexa_env_has_unreadable_record "${NEXA_CONFIG_DIR}/nexa.env" SECRETS_KEYS
 # A file with neither shape still converts: the refusal is the shape, not the command.
 seed_nexa_env empty
 append_resolved_env 'SECRETS_KEK=b2xkLWtleS1tYXRlcmlhbC1uZXZlci1wcmludGVk' 'SECRETS_KEK_ID=install-1'
@@ -4234,6 +4262,37 @@ assert_contains 'the upload flag is not attributed to the api' \
   "$BOTCTL_OUTPUT" 'recovery upload    on       api'
 assert_contains 'the schedule is not attributed to the worker' \
   "$BOTCTL_OUTPUT" 'scheduled backup   off      worker'
+
+test_case 'status: the notifications row is the transport too, not the dispatcher flag alone'
+# `NOTIFICATION_TRANSPORT=recording` keeps messages in MEMORY instead of sending them, so an
+# installation with the dispatcher on and that transport delivers nothing while looking
+# healthy — and `configSchema` refuses the combination outright unless NODE_ENV=development,
+# which a production installation is not. A row reading `notifications on` for it is the same
+# lie the webhook row's secret check exists to prevent: a capability reported working for a
+# configuration the next start refuses.
+seed_nexa_env canonical
+append_resolved_env 'NOTIFICATION_TRANSPORT=recording'
+run_botctl status
+assert_contains 'the recording transport was reported as notifications on' \
+  "$BOTCTL_OUTPUT" 'notifications      invalid'
+assert_contains 'the reason was not named' "$BOTCTL_OUTPUT" 'keeps messages in MEMORY'
+assert_contains 'the remedy was not named' \
+  "$BOTCTL_OUTPUT" 'Set NOTIFICATION_TRANSPORT=telegram'
+# NODE_ENV is READ, not assumed: `recording` is legitimate in development, and telling a
+# development installation its configuration is broken is the same defect in reverse.
+seed_nexa_env canonical
+append_resolved_env 'NOTIFICATION_TRANSPORT=recording' 'NODE_ENV=development'
+run_botctl status
+assert_contains 'a development installation was told its transport is invalid' \
+  "$BOTCTL_OUTPUT" 'notifications      on'
+assert_not_contains 'the development case printed the refusal paragraph' \
+  "$BOTCTL_OUTPUT" 'keeps messages in MEMORY'
+# And the default transport reads on, or this case proves nothing.
+seed_nexa_env canonical
+run_botctl status
+assert_contains 'the telegram transport was reported as invalid' \
+  "$BOTCTL_OUTPUT" 'notifications      on'
+seed_nexa_env canonical
 
 test_case 'status: an EMPTY assignment is invalid, not the default'
 # Zod applies a default to an ABSENT value, and an environment variable is a

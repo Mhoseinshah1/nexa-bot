@@ -878,7 +878,7 @@ documented fact, and that fact deleted a true sentence from an operator-facing o
 two rounds. `CLAUDE.md` says never to resolve an UNKNOWN by guessing. This created one by
 guessing, which the rule does not say and should.
 
-## UNK-DEPLOY-002 — a third `env_file` shape the scanners do not see: `NAME:value`
+## UNK-DEPLOY-002 — two `env_file` shapes the text scanners do not see: `NAME:value` and `NAME =value`
 
 Two shapes of record in `/etc/nexa/nexa.env` are read by `deploy/`: an assignment
 (`BUILD_COMMIT=deadbeef`) and a bare record (`BUILD_COMMIT`, which takes the variable
@@ -894,8 +894,17 @@ docker compose config
       OTHER: "1"
 ```
 
+**And a fourth, found a round later, which is why this entry is about a FAMILY and not a
+separator:** blanks before the equals sign. Measured, all effective:
+
+```
+SECRETS_KEYS =realkey        SECRETS_KEYS<TAB>=realkey      export SECRETS_KEYS =realkey
+SECRETS_KEYS: v              SECRETS_KEYS :v                export SECRETS_KEYS:v
+```
+
 Neither `nexa_compose_env_value`, nor `nexa_env_has_bare_record`, nor the rewriter's awk
-recognises a colon separator. Three consequences, all measured through the real functions:
+recognises either separator — the value reader requires the `=` to follow the name
+immediately. Two consequences, both measured through the real functions:
 
 1. `nexa_obsolete_app_env_keys` reports nothing, so `botctl update` says it removed the
    obsolete keys and leaves the record in place — the exact sentence the bare-record fix
@@ -905,8 +914,14 @@ recognises a colon separator. Three consequences, all measured through the real 
    BUILD_COMMIT, but the RUNNING API container answers something other than its own
    image … Run `botctl restart`." The file DOES set it, so the restart re-applies the
    mask and the operator loops.
-3. The capabilities section would miss a colon-form value for any setting, reading the
-   schema default instead of what the container receives.
+
+**A third consequence was claimed here and is false**, and it is recorded rather than
+quietly deleted: "the capabilities section would miss a colon-form value, reading the schema
+default instead of what the container receives". It would not. That section reads
+`nexa_compose_resolved_env`, which runs `docker compose config` — so COMPOSE resolves the
+shape and the section sees the real value, as the measurement at the top of this entry shows.
+The scope of this open question is the TEXT scanners and the rewriter, and writing it wider
+than that expanded deferred work into a path that was already correct.
 
 **One consequence IS fixed, because refusing needs no new parser.** `SECRETS_KEYS` written
 in the colon form made `botctl secrets migrate-config` dangerous rather than merely
@@ -919,10 +934,11 @@ nexa.env        SECRETS_KEYS:realkeyring
 ```
 
 So the restart that command advises would have left every row encrypted under the real
-keyring unreadable. `nexa_env_has_colon_record` now refuses that shape for the four keys
-`migrate-config` reads. It is a REFUSAL detector and is deliberately not wired into
-`nexa_obsolete_app_env_keys`: reporting a key there sends the rewriter to remove it, which
-is the change this entry defers.
+keyring unreadable. `nexa_env_has_unreadable_record` now refuses BOTH shapes for the four
+keys `migrate-config` reads — one predicate for the family, after the colon form was closed
+alone and the whitespace form turned up a round later. It is a REFUSAL detector and is
+deliberately not wired into `nexa_obsolete_app_env_keys`: reporting a key there sends the
+rewriter to remove it, which is the change this entry defers.
 
 **Why the rest is recorded rather than fixed.** The fix is a second separator in three
 scanners, one of which is the awk that in round twelve suppressed every line after an
@@ -932,9 +948,9 @@ appended to a round that is already fixing four blockers. What is fixed now is t
 CLAIM: the comment above the detector said "TWO shapes, because Compose accepts two",
 which was false, and it now names the shape it does not cover.
 
-**Reachability.** No template ever wrote a colon-form record and the installer never
-does, so this requires a hand-edited file — the same reachability as the bare-record
-case, which was fixed because it was cheap rather than because it was likely.
+**Reachability.** No template ever wrote either shape and the installer never does, so both
+require a hand-edited file — the same reachability as the bare-record case, which was fixed
+because it was cheap rather than because it was likely.
 
 **Two further shapes, measured in the same round and FIXED rather than recorded**, since
 they needed no new separator — only the removal of a claim and one extra input:
@@ -954,6 +970,6 @@ above, and `nexa_env_rewrite` refuses a file ending in an unterminated bare name
 than normalising the ending and thereby creating the record.
 
 **Trigger to resolve:** the next change to `NEXA_ENV_AWK_LIB` or to any of the three
-scanners. Whoever opens that file does this at the same time, with cases for
-`NAME:value`, `NAME :value`, `NAME: value`, a colon inside a quoted value, and a colon
-form inside another variable's multiline value.
+scanners. Whoever opens that file does this at the same time, with cases for `NAME:value`,
+`NAME :value`, `NAME: value`, `NAME =value`, `NAME<TAB>=value`, a colon inside a quoted
+value, and either form inside another variable's multiline value.
