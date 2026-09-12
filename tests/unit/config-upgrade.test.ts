@@ -887,6 +887,32 @@ describe('the obsolete build keys are detected by provenance, not by presence', 
     expect(rewriteWrapper, 'the rewriter runs in the traced shell').toContain(
       'nexa_untraced nexa_env_rewrite_untraced',
     );
+    // `nexa_untraced` suppresses errexit for its body's WHOLE dynamic extent, so every
+    // command reachable from one of these bodies has to report by `nexa_die` rather than
+    // by a bare non-zero return. The invariant was documented and already false:
+    // `nexa_acquire_lock`, reached from `migrate-config`, chmodded the state directory
+    // unguarded, so under the wrapper a failed chmod no longer aborted and a flock that
+    // then succeeded let the secret-file rewrite proceed with the directory at whatever
+    // the umask gave it.
+    const acquire = /nexa_acquire_lock\(\) \{[\s\S]*?\n\}/.exec(lib)?.[0] ?? '';
+    expect(acquire, 'nexa_acquire_lock is gone').not.toBe('');
+    expect(acquire, 'the state-directory chmod can fail silently under nexa_untraced').toMatch(
+      /chmod 0750 "\$lock_dir" \|\|\s*\n?\s*nexa_die/,
+    );
+    // The reproduction command in the capabilities wrapper has to be runnable. Two ways
+    // it was not: `--env-file …/nexa.env` is the interpolation source for the compose
+    // FILE and nexa.env carries no NEXA_IMAGE; and the compose file lives under
+    // NEXA_DEPLOY_DIR, which is /opt/nexa/deploy, not beside deploy.env in /etc/nexa.
+    const botctlAll = readFileSync(join(__dirname, '../../deploy/bin/botctl'), 'utf8');
+    expect(botctlAll, 'the reproduction command names the wrong compose path').toContain(
+      '/opt/nexa/deploy/compose.yml',
+    );
+    expect(botctlAll, 'the reproduction command still points --env-file at nexa.env').not.toMatch(
+      /--env-file \/etc\/nexa\/nexa\.env/,
+    );
+    expect(botctlAll, 'the compose file is still placed beside deploy.env').not.toContain(
+      '/etc/nexa/deploy/compose.yml',
+    );
     const rewriter = code(/nexa_env_rewrite_untraced\(\) \{[\s\S]*?\n\}\n/.exec(lib)?.[0] ?? '');
     expect(rewriter, 'the rewriter is gone').not.toBe('');
     expect(rewriter, 'the rewriter drops lines by pattern').not.toMatch(/grep/);

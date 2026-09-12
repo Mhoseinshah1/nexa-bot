@@ -2509,7 +2509,7 @@ test_case "a traced disable-v1 prints no database password"
 fake_set shutdown_ready 1
 seed_nexa_env canonical
 trace="$(bash -x "$BOTCTL" secrets disable-v1 2>&1 || true)"
-assert_not_contains 'a traced shutdown printed the database password' "$trace" 'nexa:pw@postgres'
+assert_not_contains 'a traced shutdown printed the database password' "$trace" 'nexa:'
 assert_not_contains 'a traced shutdown printed the key material' "$trace" "$TEST_KEK"
 # And the run was real: traced, and it reached the write.
 assert_contains 'nothing was traced at all' "$trace" '+ '
@@ -3037,6 +3037,13 @@ assert_not_contains 'the body was traced' "$untraced_probe" '+ true'
 untraced_probe="$( ( nexa_untraced true; echo AFTER ) 2>&1 )"
 assert_not_contains 'tracing was turned ON for a caller that had it off' \
   "$untraced_probe" '+ echo AFTER'
+# And after a FAILING body, which is the whole reason the status is captured rather than
+# let through: a restore written as "only when the body succeeded" passes every assertion
+# above and loses tracing for the rest of a command that hit a refusal — exactly when an
+# operator running under `-x` needs the rest.
+untraced_probe="$( ( set -x; nexa_untraced false; echo AFTER ) 2>&1 )"
+assert_contains 'tracing was not restored after a FAILING body' \
+  "$untraced_probe" '+ echo AFTER'
 # The status is the body's, not the helper's own bookkeeping.
 nexa_untraced true && untraced_status=0 || untraced_status=$?
 assert_equals 'a succeeding body did not return 0' 0 "$untraced_status"
@@ -3056,7 +3063,7 @@ test_case 'secrets migrate-config: a traced run prints no key material'
 seed_nexa_env legacy
 trace="$(bash -x "$BOTCTL" secrets migrate-config 2>&1 || true)"
 assert_not_contains 'a traced conversion printed the key material' "$trace" "$TEST_KEK"
-assert_not_contains 'a traced conversion printed the database password' "$trace" 'nexa:pw@postgres'
+assert_not_contains 'a traced conversion printed the database password' "$trace" 'nexa:'
 # And the run was real: tracing was on, and the conversion reached its own success line.
 # Without both, this would pass against a command that refused at its first line.
 assert_contains 'nothing was traced at all' "$trace" '+ '
@@ -3128,6 +3135,14 @@ assert_not_contains 'the refusal blamed compose for a refusal it did not make' \
   "$out" 'no API can be CREATED'
 assert_contains 'the operator was not sent to the log that carries the reason' \
   "$out" 'botctl logs api'
+# And the log promise is SCOPED. An API already running was created with a value the
+# schema accepted, so its log has no refusal to show, and this branch returns before the
+# one-off that would produce one — so "logs api shows the refusal" was an instruction
+# that produces nothing until a recreate has been attempted and failed.
+assert_contains 'the log promise was not scoped to after the attempt' \
+  "$out" 'AFTER that attempt'
+assert_contains 'the reason an already-running API shows nothing was not given' \
+  "$out" 'has nothing to show'
 # And NO ROW is printed. Every row below is counted by a one-off `compose run` container
 # created from THIS configuration, which cannot start either — so a row here is either
 # attributed to the wrong process or invented. The fall-through is the dangerous one:
@@ -3757,6 +3772,41 @@ append_env 'BACKUP_SCHEDULE_ENABLED=yes'
 run_botctl status
 assert_contains 'a booleanish key stopped accepting yes' "$BOTCTL_OUTPUT" 'scheduled backup   on'
 
+test_case 'status: `panel monitor on` is reported as the flag, not as a verdict'
+# `configSchema.superRefine` guards four cross-field rules behind
+# `if (PANEL_MONITOR_ENABLED)` — PANEL_MONITOR_TENANTS_PER_TICK against
+# PANEL_MONITOR_BATCH_SIZE, PANEL_MONITOR_HEALTHY_INTERVAL_MS against
+# PANEL_MONITOR_TICK_MS and against the probe cooldown, and
+# PANEL_MONITOR_BUDGET_RESERVE_PERCENT against PANEL_PROBE_TENANT_LIMIT — and it refuses
+# the WHOLE configuration if any disagree. So `panel monitor on` with
+# TENANTS_PER_TICK=2 and BATCH_SIZE=1 is a monitor that will not start, and an
+# unqualified `on` there is the same lie the webhook's secret-length check prevents.
+#
+# The arithmetic is deliberately NOT reimplemented: two of those rules are computed by
+# helpers in the schema, and five rounds of this branch went into learning that a shell
+# reimplementation of an application rule converges on a different wrong answer. Naming
+# the keys is a true statement this script can make; a verdict is not.
+seed_nexa_env canonical
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r\nPANEL_MONITOR_ENABLED=true\nPANEL_MONITOR_TENANTS_PER_TICK=2\nPANEL_MONITOR_BATCH_SIZE=1')"
+run_botctl status
+assert_contains 'the monitor was not reported on' "$BOTCTL_OUTPUT" 'panel monitor'
+assert_contains 'the monitor row claimed more than the flag' \
+  "$BOTCTL_OUTPUT" 'is the FLAG'
+assert_contains 'the cross-field keys were not named' \
+  "$BOTCTL_OUTPUT" 'PANEL_MONITOR_TENANTS_PER_TICK against'
+assert_contains 'the refusal of the whole configuration was not stated' \
+  "$BOTCTL_OUTPUT" 'refuses the whole configuration'
+assert_contains 'the operator was not told where the failing rule is named' \
+  "$BOTCTL_OUTPUT" 'botctl logs monitor'
+# And the caveat is conditional: a monitor that is OFF has no such rules to satisfy, so
+# printing the paragraph there would be noise about a process that is not running.
+fake_set compose_env "$(printf 'DATABASE_URL=d\nREDIS_URL=r\nPANEL_MONITOR_ENABLED=false')"
+run_botctl status
+assert_not_contains 'the flag caveat printed for a monitor that is off' \
+  "$BOTCTL_OUTPUT" 'is the FLAG'
+fake_set compose_env ''
+seed_nexa_env canonical
+
 test_case 'status: the section names COMPOSE as its resolver and claims nothing more'
 # Three review rounds produced a per-setting runtime claim that was wrong in a new way
 # at every field, and five more produced a reimplementation of Compose env_file
@@ -3768,28 +3818,34 @@ run_botctl status
 assert_contains 'the heading does not name compose as the resolver' \
   "$BOTCTL_OUTPUT" 'as compose resolves'
 assert_contains 'the standing caveat is missing' "$BOTCTL_OUTPUT" 'STARTED NOW'
-# And the caveat is keyed to CREATION, claiming nothing about whether a restart already
-# happened. Two earlier versions were wrong in opposite directions: "since the last
-# `botctl restart`" omitted `update`, `rollback` and `secrets disable-v1`, which also
-# bring the stack up; then naming three of them plus "nothing else here does" was a
-# universal negative that omitted `secrets disable-v1` — the one command whose whole
-# point is that the setting is APPLIED. And the claim that a successful one of those has
-# already loaded the values is not established at all: measured on Compose v5.1.1, the
-# service config hash does not change when `env_file` CONTENT changes, and whether
-# `up -d` recreates anyway is the daemon's decision (UNK-DEPLOY-001). So the text says
-# only what holds either way.
+# The caveat is keyed to CREATION and then names ALL FOUR commands that recreate. Three
+# versions of this were wrong in three different ways. "since the last `botctl restart`"
+# omitted `update`, `rollback` and `secrets disable-v1`. Naming three of them plus
+# "nothing else here does" was a universal negative that omitted `secrets disable-v1`, the
+# one command whose whole point is that the setting is APPLIED. Then the claim was
+# withdrawn entirely, on `docker compose config --hash` not moving when `env_file` content
+# changes — which is a fact about `config --hash`, not about `up -d`: `upCommand` resolves
+# `env_file` into the service environment before hashing and `runHash` does not, so the
+# two hash different project models. UNK-DEPLOY-001 carries the binary evidence.
 assert_contains 'the caveat was keyed to restart alone' \
   "$BOTCTL_OUTPUT" 'since that container was CREATED'
 assert_contains 'recreation was not named as the thing that loads a change' \
   "$BOTCTL_OUTPUT" 'Only RECREATING'
-assert_contains 'the section claimed to know whether a restart had happened' \
-  "$BOTCTL_OUTPUT" 'do not say whether'
+assert_contains 'the fourth recreating command is missing' \
+  "$BOTCTL_OUTPUT" '`botctl secrets disable-v1` each bring the stack up'
+assert_contains 'the claim that a successful one of those has loaded the values is missing' \
+  "$BOTCTL_OUTPUT" 'has already loaded these values'
 assert_not_contains 'the caveat still claims only a restart can load a change' \
   "$BOTCTL_OUTPUT" 'since the last `botctl restart` is not in force'
-assert_not_contains 'an unestablished claim that a restart already loaded the values' \
-  "$BOTCTL_OUTPUT" 'has already loaded these values'
 assert_not_contains 'a universal negative that omits secrets disable-v1' \
   "$BOTCTL_OUTPUT" 'nothing else here does'
+# And the caveat is scoped to the ROWS: the build-identity paragraphs below it do inspect
+# the running API, so disowning the containers for the whole section was the same
+# contradiction as "every row in this section", mirrored into the other half of status.
+assert_contains 'the caveat disowned facts the same section computes from docker inspect' \
+  "$BOTCTL_OUTPUT" 'The ROWS above read the configuration'
+assert_not_contains 'the caveat still disowns the containers for the whole section' \
+  "$BOTCTL_OUTPUT" 'These rows read the configuration, not the containers'
 assert_contains 'the caveat does not say what a running container keeps' \
   "$BOTCTL_OUTPUT" 'created with'
 # And it still does not pretend to know the running state of any of them.
@@ -3949,11 +4005,17 @@ assert_not_contains 'the operator-supplied error text carried the key material t
 # that text is operator guidance, not a value — it is cut anyway, because this function
 # cannot tell guidance from a keyring, so the operator is told a cut happened.
 assert_contains 'the cut was silent' "$BOTCTL_OUTPUT" 'is withheld'
-fake_set compose_config_stderr 'failed to read /etc/nexa/deploy.env: required variable NEXA_IMAGE is missing a value: NEXA_IMAGE must be an image digest reference'
+# The compose FILE's own `${VAR:?text}` forms are a DIFFERENT channel, measured on
+# v5.1.1: they carry `error while interpolating …`, their variables live in `deploy.env`
+# which holds no secrets by design, and their text is the only explanation for the
+# commonest refusal there is — a half-written `deploy.env`. It reads WHOLE, and saying a
+# value had been withheld from it was false about that message.
+fake_set compose_config_stderr 'error while interpolating x-app-common.image: required variable NEXA_IMAGE is missing a value: NEXA_IMAGE must be an image digest reference'
 run_botctl status
-assert_contains 'the variable name was lost with the guidance' \
-  "$BOTCTL_OUTPUT" 'required variable NEXA_IMAGE is missing a value'
-assert_contains 'a cut of non-secret guidance was silent' "$BOTCTL_OUTPUT" 'is withheld'
+assert_contains 'the compose-file guidance was cut' \
+  "$BOTCTL_OUTPUT" 'NEXA_IMAGE must be an image digest reference'
+assert_not_contains 'a message that carries no value was reported as redacted' \
+  "$BOTCTL_OUTPUT" 'is withheld'
 fake_set compose_config_fails 0
 fake_set compose_config_stderr ''
 # And a document that defines no `api` is a refusal too, not a column of defaults.
@@ -4106,6 +4168,16 @@ assert_contains 'a pending override was not described as taking effect at the ne
 assert_not_contains 'a pending override was reported as already masking /health/info' \
   "$BOTCTL_OUTPUT" '/health/info reports what the installer wrote rather than'
 assert_contains 'the remedy was not named' "$BOTCTL_OUTPUT" 'botctl update'
+# And it says what it OBSERVED rather than inferring absence. A file assignment equal to
+# the image stamp IS carried by the container and compares equal, so the provenance
+# comparison omits it either way — "the running API does not carry them" was an inference
+# from equality, and `/health/info` matching the image is the fact actually established.
+assert_contains 'the report inferred absence from an equal value' \
+  "$BOTCTL_OUTPUT" 'answers its own'
+assert_not_contains 'the report still claims the running API does not carry the key' \
+  "$BOTCTL_OUTPUT" 'The running API does not carry'
+assert_contains 'the equal-value possibility was not named' \
+  "$BOTCTL_OUTPUT" 'equal to the image stamp'
 
 # 3. A stopped API is not masking anything and is not carrying a stale override
 #    either, so a missing container gets neither state: the provenance is UNKNOWN
@@ -4332,6 +4404,39 @@ assert_equals 'an indented BUILD_COMMIT survived the removal' '' "$(grep -cE '^[
 run_botctl status
 assert_not_contains 'status still reports a line the rewrite claimed to remove' \
   "$BOTCTL_OUTPUT" 'This file still sets'
+
+test_case 'update: a BARE obsolete record is removed too, and an interior one is not'
+# Compose accepts `BUILD_COMMIT` with no `=` in an env_file, and it does not mean
+# "assigned to nothing": it means take the variable from the environment running Compose.
+# Measured on v5.1.1 — host variable set, the container receives the host's value; unset,
+# the key is omitted. So a bare obsolete record masks the build identity exactly as an
+# assignment does, while the detector, which asked for a VALUE, reported it absent and
+# `botctl update` said it had removed the obsolete keys without seeing that one.
+seed_nexa_env canonical
+printf 'BUILD_COMMIT\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+# And the same name inside another variable's multiline value, which is TEXT and must
+# survive: deleting it cuts a line out of an operator's value and leaves a quote that
+# closes somewhere else, which is the defect the quoted-region scanner exists to prevent.
+printf "NOTE='line one\nBUILD_TIME\nline three'\n" >>"${NEXA_CONFIG_DIR}/nexa.env"
+assert_ok 'the predicate missed a top-level bare record' \
+  nexa_env_has_bare_record "${NEXA_CONFIG_DIR}/nexa.env" BUILD_COMMIT
+assert_fails 'an interior line was reported as a bare record' \
+  nexa_env_has_bare_record "${NEXA_CONFIG_DIR}/nexa.env" BUILD_TIME
+assert_contains 'the detector did not list the bare record' \
+  "$(nexa_obsolete_app_env_keys "${NEXA_CONFIG_DIR}/nexa.env")" 'BUILD_COMMIT'
+run_botctl update vA
+assert_contains 'the removal was not reported' "$BOTCTL_OUTPUT" 'removed from nexa.env'
+assert_fails 'the bare obsolete record survived the update' \
+  nexa_env_has_bare_record "${NEXA_CONFIG_DIR}/nexa.env" BUILD_COMMIT
+assert_equals "NOTE's first line was lost" '1' \
+  "$(grep -c "^NOTE='line one" "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_equals "the interior bare line was deleted out of NOTE's value" '1' \
+  "$(grep -c '^BUILD_TIME$' "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_equals "NOTE's closing line was lost" '1' \
+  "$(grep -c "^line three'" "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_equals 'the keyring did not survive the removal' "${TEST_KEY_ID}:${TEST_KEK}" \
+  "$(nexa_env_key SECRETS_KEYS)"
+seed_nexa_env canonical
 
 test_case 'update: the removal never reaches inside another variable value'
 # The rewriter has to track quoted regions for the same reason the reader does. A line

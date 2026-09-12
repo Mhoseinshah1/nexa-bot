@@ -242,13 +242,14 @@ question. The section claims nothing about what those processes are currently
 running: a container keeps the configuration it was created with, so a value
 changed since that container was CREATED is not yet in force in it, and the section
 says so as a standing caveat rather than pretending to detect it. The caveat names
-CREATION rather than any command, and deliberately does not say whether your last
-restart loaded anything: four subcommands bring the stack up (`restart`, `update`,
-`rollback` and `secrets disable-v1`), and whether `compose up -d` recreates a
-container when only `nexa.env` changed is recorded as `UNK-DEPLOY-001` in
-`docs/open-questions.md` — measured on the pinned client, the service config hash
-does not track `env_file` content, and this deployment already hit the same mechanism
-once with the edge's bind-mounted configuration. The delivery
+CREATION, and then names the four subcommands that recreate: `restart`, `update`,
+`rollback` and `secrets disable-v1`. A successful one of those has loaded the edited
+file, because `up -d` resolves `env_file` into the service environment before hashing it
+and that hash is what decides recreation — established from the Compose binary in
+`UNK-DEPLOY-001`, which records it after two rounds of claiming the opposite on the
+strength of `docker compose config --hash`, a probe that does not resolve `env_file` and
+so answers a different question. The one thing still unobserved is any of it against a
+real daemon; `docs/vps-acceptance.md` step 12c is three commands that settle it. The delivery
 destination names three processes because three deliver — the worker schedules,
 the API serves the Web Admin's manual run, and the recovery executor takes the
 pre-restore backup.

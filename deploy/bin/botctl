@@ -216,10 +216,13 @@ status_capabilities() {
   # carries Compose's own reason, and a provenance that could not be computed says so.
   # The resolution step is reproducible by hand with the SAME invocation `nexa_compose`
   # uses, which is `docker compose --env-file /etc/nexa/deploy.env -f
-  # /etc/nexa/deploy/compose.yml config`. Not `--env-file …/nexa.env`: that flag is the
-  # interpolation source for the compose FILE, not the services' `env_file`, and pointing
-  # it at `nexa.env` fails outright because `nexa.env` carries no `NEXA_IMAGE`. A trace
-  # that prints the keyring is not a fair trade for the rest.
+  # /opt/nexa/deploy/compose.yml config`. Two ways to get that command wrong, both of
+  # which were written here first: `--env-file …/nexa.env` is the interpolation source for
+  # the compose FILE and not the services' `env_file`, so it fails outright because
+  # `nexa.env` carries no `NEXA_IMAGE`; and the compose file lives under `NEXA_DEPLOY_DIR`,
+  # which is `/opt/nexa/deploy`, not beside `deploy.env` in `/etc/nexa`. `install.sh`
+  # prints the correct form for the owner-bootstrap command and is the reference.
+  # A trace that prints the keyring is not a fair trade for the rest.
   ( set +x; status_capabilities_untraced )
 }
 
@@ -289,7 +292,7 @@ status_capabilities_untraced() {
     destination='HALF configured'
   fi
 
-  local entry key label fallback vocab owner configured
+  local entry key label fallback vocab owner configured monitor=''
   for entry in "${settings[@]}"; do
     IFS='|' read -r key label fallback vocab owner <<<"$entry"
     configured="$(nexa_listing_boolean "$resolved" "$key" "$fallback" "$vocab")"
@@ -313,8 +316,37 @@ status_capabilities_untraced() {
       fi
     fi
     [ "$key" != BACKUP_SCHEDULE_ENABLED ] || scheduled="$configured"
+    [ "$key" != PANEL_MONITOR_ENABLED ] || monitor="$configured"
     printf '  %s %-8s %s\n' "$label" "$configured" "$owner"
   done
+  # The monitor's row reports its FLAG and nothing more, and says so, because
+  # `configSchema.superRefine` guards four cross-field invariants behind
+  # `if (PANEL_MONITOR_ENABLED)` and a `panel monitor on` that ignored them is the same
+  # lie the webhook check above exists to prevent: a capability reported working for a
+  # configuration the next start refuses.
+  #
+  # The keys are NAMED and the arithmetic is NOT reimplemented. Two of these invariants
+  # are computed by helpers in the schema (a tick-derived ceiling, and a cooldown floor
+  # derived from the probe budget), and five rounds of this branch went into learning that
+  # a shell reimplementation of an application rule converges on a different wrong answer,
+  # not the right one. Pointing at the keys is a true statement this script can make; a
+  # verdict is not.
+  #
+  # The principled fix is the one the secrets section already uses: ask the application.
+  # A one-off `compose run --rm api` that calls `loadConfig` and reports pass or fail with
+  # the schema's own message would make this row a verdict rather than a flag, and would
+  # cover every conditional invariant at once rather than a list that can go stale. That
+  # is a new surface with its own fake and its own review, so it is named here and not
+  # smuggled in: it is the fix, when the capabilities section is next opened.
+  if [ "$monitor" = on ]; then
+    printf '\n  `panel monitor on` is the FLAG. The schema also checks four cross-field rules\n'
+    printf '  only when the monitor is on — PANEL_MONITOR_TENANTS_PER_TICK against\n'
+    printf '  PANEL_MONITOR_BATCH_SIZE, PANEL_MONITOR_HEALTHY_INTERVAL_MS against\n'
+    printf '  PANEL_MONITOR_TICK_MS and against the probe cooldown, and\n'
+    printf '  PANEL_MONITOR_BUDGET_RESERVE_PERCENT against PANEL_PROBE_TENANT_LIMIT — and it\n'
+    printf '  refuses the whole configuration if any disagree. This row does not check them;\n'
+    printf '  the monitor does, at start, and `botctl logs monitor` names the one that failed.\n'
+  fi
   # THREE processes, not the worker alone. `createContainer` builds one
   # `BackupService` with these credentials and every role gets it: the worker
   # schedules, `RecoveryController.runBackup` serves the Web Admin's «تهیه بکاپ
@@ -336,30 +368,35 @@ status_capabilities_untraced() {
   # DETECTION of that would have to be right about every field and every owning
   # process to be worth printing. This sentence is right about all of them.
   #
-  # Keyed to CREATION, and deliberately claiming nothing about whether a restart
-  # already happened. Two earlier versions of this paragraph were wrong in opposite
-  # directions. "since the last `botctl restart`" was incomplete: `update`, `rollback`
-  # and `secrets disable-v1` all bring the stack up too. Then naming those three and
-  # adding "nothing else here does" was a universal negative that was false — it
-  # omitted `secrets disable-v1`, which is the one command whose whole point is that
-  # the setting is APPLIED and not merely written.
+  # FOUR commands bring the stack up, and the list is the third attempt at it.
+  # `restart`, `update` and `rollback` go through `nexa_bring_up_with_edge`; `secrets
+  # disable-v1` runs `nexa_compose up -d` directly, and its header says that is the point.
+  # Naming only `restart` was incomplete; naming three and adding "nothing else here does"
+  # was a universal negative that omitted the fourth.
   #
-  # And the replacement claim, that a successful restart has already loaded these
-  # values, is not established. Measured on Compose v5.1.1: the service config hash
-  # does NOT change when `env_file` CONTENT changes, while an inline `environment:`
-  # value does change it. Whether `up -d` then recreates the container is the daemon's
-  # decision and cannot be measured in this environment — and `cmd_restart` above
-  # documents the same mechanism for the edge, where replacing a bind-mounted file
-  # changes no service definition and a plain `up -d` left that container alone.
-  # `docs/open-questions.md` carries it as UNK-DEPLOY-001. So this says what is true
-  # — only recreation loads a changed value — names the command for it, and does not
-  # claim your last one did.
+  # The third attempt withdrew the claim entirely, on a measurement that turned out not to
+  # mean what it was read to mean: `docker compose config --hash` does not change when
+  # `env_file` CONTENT changes, so it looked as though `up -d` could not see an edit to
+  # nexa.env. It is the wrong probe. In the pinned client, `ServiceHash` is called by
+  # `runHash` (behind `config --hash`), by `prepareLabels` and by `mustRecreate` — the
+  # recreation decision, client-side, not the daemon's — and `upCommand`'s project hook
+  # calls `WithServicesEnvironmentResolved` while `runHash` does not. So `up` hashes a
+  # project whose `env_file` has been merged into `Environment`, and `config --hash`
+  # hashes one where it has not: the same function over different inputs. `Environment` is
+  # demonstrably inside the hash, because changing an inline `environment:` value does move
+  # `config --hash`. An edit to nexa.env therefore changes the hash `up -d` compares.
+  #
+  # So the claim is back, with the fourth command in it. `docs/open-questions.md`
+  # carries UNK-DEPLOY-001 as RESOLVED with that evidence, and with the one thing still
+  # unobserved: none of this has been watched against a real daemon.
   printf '\n  These are the values compose would hand a container STARTED NOW. A running\n'
   printf '  container keeps the configuration it was created with, so anything changed\n'
   printf '  since that container was CREATED is not in force in it yet. Only RECREATING\n'
-  printf '  the container loads it, and `botctl restart` is the command for that. These\n'
-  printf '  rows read the configuration, not the containers, so they do not say whether\n'
-  printf '  your last restart, update or rollback already did.\n'
+  printf '  the container loads it. `botctl restart`, `botctl update`, `botctl rollback` and\n'
+  printf '  `botctl secrets disable-v1` each bring the stack up, so a successful one of those\n'
+  printf '  has already loaded these values; no other command here does.\n'
+  printf '  The ROWS above read the configuration and not the containers. The build-identity\n'
+  printf '  paragraphs below do inspect the running API, and say so where they do.\n'
 
   if [ "$scheduled" = off ]; then
     printf '\n  This configuration takes no AUTOMATIC backup. `botctl backup` still works, and\n'
@@ -430,10 +467,17 @@ status_capabilities_untraced() {
     printf '  removes the lines; the containers then need recreating to pick that up.\n'
   fi
   if [ -n "${pending// /}" ]; then
+    # What is OBSERVED is that the container answers its own image for these keys. That
+    # is not the same as the container not carrying them: a file assignment equal to the
+    # image stamp is carried and compares equal, so the provenance comparison omits it
+    # either way. Claiming absence was an inference from equality, and `/health/info`
+    # matching the image is the fact the comparison actually establishes.
     printf '\n  This file sets %s, which REPLACES the\n' "$pending"
-    printf '  build identity stamped into the release image. The running API does not carry\n'
-    printf '  them, so /health/info is correct for NOW and these lines take effect at the\n'
-    printf '  next start. The next `botctl update` removes them first.\n'
+    printf '  build identity stamped into the release image. The running API answers its own\n'
+    printf '  image for them, so /health/info is correct for NOW — either the container was\n'
+    printf '  created before these lines, or it carries a value equal to the image stamp.\n'
+    printf '  A DIFFERENT value here takes effect at the next start; the next `botctl update`\n'
+    printf '  removes the lines first.\n'
   fi
   if [ -n "${stale// /}" ]; then
     printf '\n  The file no longer sets %s, but the RUNNING\n' "$stale"
@@ -552,10 +596,14 @@ status_secrets_untraced() {
     # reason is in the API's log and the operator is sent there rather than told the
     # container could not be created.
     printf '\n'
+    # Wrapped so that every phrase a test names stays on ONE line. Output is joined by
+    # newline and two spaces, so a phrase split across two printfs is not a substring of
+    # it — two assertions were written against phrases this paragraph never contained.
     printf '  SECRETS_ACCEPT_V1 is set to something other than `true` or `false`, which the\n'
     printf '  schema refuses, so the API will not START from this configuration: the next\n'
-    printf '  `botctl restart` or `botctl update` will fail, and `botctl logs api` shows the\n'
-    printf '  refusal. An API already running keeps the acceptance it was created with.\n'
+    printf '  `botctl restart` or `botctl update` will fail, and `botctl logs api` names the\n'
+    printf '  refusal AFTER that attempt, not before it. An API already running\n'
+    printf '  keeps the acceptance it was created with, and its log has nothing to show.\n'
     printf '\n'
     printf '  No row is shown below, and that is not a stack that is down: every row BELOW\n'
     printf '  is counted by a one-off container created from THIS configuration, and that\n'

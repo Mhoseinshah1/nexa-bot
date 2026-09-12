@@ -1018,10 +1018,11 @@ ran `disable-v1`, and then ran `status` was told their change was not in force a
 only three other commands could load it. That is U-57 reintroduced one command over,
 and the round-fifteen test asserted the sentence verbatim, which is exactly how the
 round-fourteen assertions locked in the round-fourteen lie. Enumerated from `main`'s
-dispatch rather than from memory this time: `version`, `status`, `backup`, `logs`,
-`help` create nothing; `secrets status|rewrap|retire-check|shutdown-check` are
-`compose run --rm` one-offs; `secrets migrate-config` writes only; `update`,
-`rollback`, `restart` and `secrets disable-v1` bring the stack up. There is no
+dispatch rather than from memory this time, and about bringing the STACK up rather than
+creating any container at all — `status` itself creates a one-off, and so do `secrets
+status|rewrap|retire-check|shutdown-check`: `version`, `backup`, `logs` and `help` create
+nothing; `secrets migrate-config` writes only; `update`, `rollback`, `restart` and
+`secrets disable-v1` bring the stack up. There is no
 `enable-v1` in this tree at all, which a previous note had assumed there was.
 
 **And the replacement claim is not establishable, which is the more serious half.**
@@ -1109,3 +1110,86 @@ Counts, each restore confirmed by `cmp` against a pre-mutation snapshot and each
 grepped out of the file before the suite ran: H-86 fails 4 of 224, H-87 1, H-88 2, H-89 2.
 H-87's mutation is the one that was missing a test at all — deleting the restore line left
 223 green before the new case existed.
+
+### Round seventeen — self-review of `ecb3a89`, and Codex on `69335e1` and `ecb3a89`
+
+**The round-sixteen fix was built on a false premise, and the premise was mine.** It is
+recorded in full at `UNK-DEPLOY-001` in `docs/open-questions.md`, which now closes against
+itself. In short: `docker compose config --hash` does not move when `env_file` content
+changes, which I read as "`up -d` cannot see an edit to nexa.env" and wrote down as
+measured fact. It is a fact about `config --hash`. In the pinned binary, `ServiceHash` is
+called by `runHash` (behind `config --hash`), by `prepareLabels`, and by `mustRecreate` —
+the recreation decision, **client-side**, not the daemon's — and `upCommand`'s project hook
+calls `WithServicesEnvironmentResolved` while `runHash` does not. So `up` hashes a project
+whose `env_file` has been merged into `Environment` and `config --hash` hashes one where it
+has not. `Environment` is inside the hash, because an inline `environment:` change moves
+it. An edit to `nexa.env` therefore changes the hash `up -d` compares.
+
+So the claim is restored, with the fourth command in it this time, and the caveat has now
+been wrong in four distinct ways across four rounds: incomplete (`restart` only), a false
+universal negative (three commands plus "nothing else here does"), withdrawn on a
+misread measurement, and finally correct. The measurement was never wrong; every reading
+of it was.
+
+Two more from the same class, both the fix-introduces-the-next-defect pattern:
+
+- **The command that replaced a command that cannot work still could not work.** Round
+  sixteen corrected `--env-file …/nexa.env` and wrote `-f /etc/nexa/deploy/compose.yml`.
+  The compose file is installed to `${NEXA_DEPLOY_DIR}`, which is `/opt/nexa/deploy`;
+  `install.sh` puts it there and prints the correct form elsewhere. That line was the only
+  occurrence of `/etc/nexa/deploy/` in the repository. Codex and my own review found it
+  independently. It is the fifth instance of the class `CLAUDE.md` names, and the second
+  introduced by a fix for the fourth.
+- **The invariant `nexa_untraced` documents was false the day it was written.**
+  `nexa_acquire_lock`, reached from `migrate-config`, chmodded the state directory
+  unguarded. Under the wrapper's suppressed errexit a failed chmod no longer aborts, and a
+  flock that then succeeds returns 0 — so the secret-file rewrite would proceed with the
+  state directory at whatever the umask gave it. Guarded now, and pinned by a unit
+  assertion on the source rather than by the deploy suite, which is why its mutation
+  survives there and is recorded as such.
+
+Four more, each a claim narrower or wider than its evidence:
+
+- `panel monitor on` was a FLAG reported as a verdict. `configSchema.superRefine` guards
+  four cross-field rules behind `if (PANEL_MONITOR_ENABLED)` and refuses the whole
+  configuration if any disagree. The keys are named and the arithmetic is deliberately NOT
+  reimplemented — two of those rules are computed by schema helpers, and the principled
+  fix (ask the application, as the secrets section already does) is named in the code
+  rather than smuggled in.
+- "the running API does not carry them" was an inference from equality. A file assignment
+  equal to the image stamp IS carried and compares equal, so the comparison omits it
+  either way; what it establishes is that `/health/info` matches the image.
+- "`botctl logs api` shows the refusal" pointed at a log that has nothing in it until a
+  recreate has been attempted and failed.
+- A bare `BUILD_COMMIT` record — no `=` — is a real record: Compose takes the variable from
+  the environment running it. Measured on v5.1.1: host variable set, the container gets the
+  host value; unset, the key is omitted. The detector asked for a VALUE and reported it
+  absent, so `botctl update` said it had removed the obsolete keys without seeing that one.
+
+And two of my own corrections were themselves wrong. The withheld note said this function
+"cannot tell the two apart"; measured, it can — the env_file channel reads `failed to read
+…nexa.env:` and the compose-file channel `error while interpolating …`, and only the first
+can carry a value out of `nexa.env`. The compose-file message reads whole again. And the
+caveat's "these rows read the configuration, not the containers" disowned the
+build-identity paragraphs in the same section, which do inspect the running API — the U-62
+contradiction, mirrored into the other half of `status` by the commit that fixed it.
+
+| #    | Rule                                                                 | Mutation                                                                  | Named test                                                                                             | Result |
+| ---- | -------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ------ |
+| H-90 | The caveat names all four commands that bring the stack up           | `botctl`: drop `secrets disable-v1` from the list                         | `botctl.test.sh` › status: the section names COMPOSE as its resolver and claims nothing more           | KILLED |
+| H-91 | A compose-FILE required-variable message is not cut                  | `nexa-lib.sh`: drop the `error while interpolating` arm                   | `botctl.test.sh` › status: a refusal reports the reason Compose gave, with the value it echoed cut off | KILLED |
+| H-92 | A bare obsolete record is removed by the rewriter                    | `nexa-lib.sh`: drop the bare-record arm from the rewriter                 | `botctl.test.sh` › update: a BARE obsolete record is removed too, and an interior one is not           | KILLED |
+| H-93 | The state-directory chmod cannot fail silently under `nexa_untraced` | `nexa-lib.sh`: unguard `chmod 0750 "$lock_dir"`                           | `config-upgrade.test.ts` › finds and removes assignments with the same scanner, not with a pattern     | KILLED |
+| H-94 | The caveat is scoped to the ROWS, not to the whole section           | `botctl`: back to "these rows read the configuration, not the containers" | `botctl.test.sh` › status: the section names COMPOSE as its resolver and claims nothing more           | KILLED |
+| H-95 | `nexa_untraced` restores tracing after a FAILING body too            | `nexa-lib.sh`: restore only when the body returned 0                      | `botctl.test.sh` › nexa_untraced turns tracing off and puts it back exactly as it found it             | KILLED |
+
+Counts, each restore confirmed by `cmp`: H-90 fails 1 of 226, H-91 2, H-92 1, H-94 2,
+H-95 1. **H-93 SURVIVES the deploy suite** — 226 green — because no deploy case exercises a
+failing chmod; it is pinned at the unit level instead and fails 1 of 41 there. Recorded
+that way rather than moved, because the honest statement is that the rule is a source-level
+assertion and not a behavioural one.
+
+One process note, because it cost a run: the confirming pass of this batch was polluted by
+my own concurrent mutation of `nexa-lib.sh` while it was executing, which is the
+shared-checkout failure `CLAUDE.md` warns about — self-inflicted this time. Its result is
+discarded; `pnpm test:deploy` in the gate chain below is the clean run.

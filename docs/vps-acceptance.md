@@ -271,6 +271,35 @@ that does not work:
 - [ ] `sudo ls -la <RECOVERY_WORK_DIR>` after all of the above: no world-readable
       files, and no leftover directory for a recovery that failed.
 
+## 12c. Does a `nexa.env` edit actually reach a container?
+
+Everything `botctl status` tells an operator to do ends "set it in
+`/etc/nexa/nexa.env` and run `botctl restart`". That advice has never been watched
+against a real daemon. `UNK-DEPLOY-001` in `docs/open-questions.md` establishes from the
+Compose binary that `up -d` resolves `env_file` into the service environment before
+hashing, and that the hash is what decides recreation — a deduction, not an observation.
+This is the observation, and it is three commands.
+
+One key, not a dump: `.Config.Env` holds `DATABASE_URL`, `SECRETS_KEYS` and the backup
+bot token, and this whole checklist is about a box you are pasting output from.
+
+```bash
+sudo sed -i 's/^BACKUP_SCHEDULE_ENABLED=.*/BACKUP_SCHEDULE_ENABLED=true/' /etc/nexa/nexa.env
+sudo botctl restart
+sudo docker inspect nexa-api-1 \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' | grep '^BACKUP_SCHEDULE_ENABLED='
+```
+
+The third command must print `BACKUP_SCHEDULE_ENABLED=true`. Put it back afterwards if
+this installation is not meant to take scheduled backups.
+
+**If it prints nothing, or the old value:** the deduction is wrong, every `run botctl
+restart` remedy in `botctl status` is advice that cannot work, and `botctl secrets
+disable-v1` reports «v1 ciphertext is no longer accepted» for a container that still
+accepts it. The fix is the one the edge already uses: fingerprint `nexa.env` and
+interpolate that fingerprint into the service definitions, so a content change becomes a
+definition change. Reopen `UNK-DEPLOY-001` with what you saw.
+
 ## 13. Delegation, if you delegate
 
 Only if `botctl` is reachable through `sudo` for a non-root operator:
@@ -309,5 +338,6 @@ status`, the variable is set in **sudo's** own environment, where `env_reset`
 | Writes were refused during the restore |        |       |
 | The displaced database is still there  |        |       |
 | A corrupt archive was refused          |        |       |
+| A nexa.env edit reached a container    |        |       |
 
 Only when every row passes should this deployment model carry a customer.

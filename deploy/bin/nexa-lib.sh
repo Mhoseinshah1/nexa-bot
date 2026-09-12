@@ -564,7 +564,14 @@ nexa_acquire_lock() {
   lock_dir="$(dirname "$NEXA_LOCK_FILE")"
   if [ ! -d "$lock_dir" ]; then
     mkdir -p "$lock_dir" || nexa_die "cannot create ${lock_dir} for the update lock."
-    chmod 0750 "$lock_dir"
+    # GUARDED, because this function is reached from inside `nexa_untraced`, which
+    # suppresses errexit for its body's whole dynamic extent. A bare `chmod` here used to
+    # abort the command; under that wrapper it would not, and a flock that then succeeded
+    # would return 0 and let the secret-file rewrite proceed with the state directory at
+    # whatever mkdir and the umask gave it. That is the invariant `nexa_untraced` documents
+    # — every failure reported by `nexa_die` — and it was false the day it was written.
+    chmod 0750 "$lock_dir" ||
+      nexa_die "cannot set the mode on ${lock_dir}; refusing to continue with the state directory world-readable."
   fi
   exec {NEXA_LOCK_FD}>>"$NEXA_LOCK_FILE" ||
     nexa_die "cannot open the lock file at ${NEXA_LOCK_FILE}."
@@ -1015,6 +1022,18 @@ nexa_env_rewrite_untraced() {
         # lines — including its closing quote. That is an update that installs an
         # unterminated nexa.env, which Compose refuses outright, and reports success.
         skip = 0
+        # A BARE record for a dropped key goes too. It is a real record — Compose takes
+        # the variable from the environment — and leaving it behind is how an obsolete
+        # key survived an update that said it had removed it. It opens no quoted value,
+        # having no value, so no continuation handling applies and `skip` stays 0.
+        if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*(#.*)?$/) > 0) {
+          bare = line
+          sub(/^[ \t]*(export[ \t]+)?/, "", bare)
+          sub(/[ \t]*(#.*)?$/, "", bare)
+          if (bare in kill) next
+          print line
+          next
+        }
         if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) == 0) { print line; next }
         name = substr(line, RSTART, RLENGTH)
         sub(/^[ \t]*(export[ \t]+)?/, "", name)
@@ -1106,7 +1125,14 @@ nexa_obsolete_app_env_keys() {
   # variable's multiline value is not an assignment, and reporting it as one would send
   # the rewriter to delete a line out of the middle of somebody's value.
   for key in $NEXA_OBSOLETE_APP_ENV_KEYS; do
-    nexa_compose_env_value "$file" "$key" >/dev/null 2>&1 && printf '%s\n' "$key"
+    # TWO shapes, because Compose accepts two. An assignment has a value in the file; a
+    # bare record takes its value from the environment running Compose and so has none,
+    # which is why asking only for a value reported it absent and left `botctl update`
+    # claiming it had removed a key it never saw.
+    if nexa_compose_env_value "$file" "$key" >/dev/null 2>&1 ||
+      nexa_env_has_bare_record "$file" "$key"; then
+      printf '%s\n' "$key"
+    fi
   done
   return 0
 }
@@ -1189,6 +1215,56 @@ function unescaped_index(s, q,   i, n, b, j) {
   return 0
 }
 '
+
+# Is there a top-level BARE record for this key — `BUILD_COMMIT` with no `=` at all?
+#
+# Compose supports that form in an `env_file`, and it does NOT mean "assigned to
+# nothing": it means "take this variable from the environment running Compose".
+# Measured on v5.1.1 with `BUILD_COMMIT` bare in the file — host variable set, the
+# container receives the host's value; unset, the key is omitted entirely. So a bare
+# obsolete record can mask the build identity stamped into the image exactly as an
+# assignment can, and the obsolete-key detector saw neither, because it asks for a VALUE
+# and a bare record has none in the file. `botctl update` then reported that it had
+# removed the obsolete keys while leaving that one in place.
+#
+# A SCANNER for the same reason the reader is one: a line reading `BUILD_COMMIT` inside
+# another variable's multiline value is text, not a record, and reporting it would send
+# the rewriter to delete a line out of the middle of somebody else's value.
+nexa_env_has_bare_record() {
+  local file="$1" key="$2"
+  [ -r "$file" ] || return 1
+  awk -v want="$key" -v sq="'" -v dq='"' "$NEXA_ENV_AWK_LIB"'
+    BEGIN { found = 0; inq = 0 }
+    {
+      line = $0
+      if (inq) {
+        if (unescaped_index(line, quote) > 0) inq = 0
+        next
+      }
+      # The bare shape first: a name alone, optionally exported, with nothing after it
+      # but blanks or a comment. It cannot open a quoted value, having no value at all,
+      # so none of the continuation bookkeeping below applies to it.
+      if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*(#.*)?$/) > 0) {
+        name = line
+        sub(/^[ \t]*(export[ \t]+)?/, "", name)
+        sub(/[ \t]*(#.*)?$/, "", name)
+        if (name == want) found = 1
+        next
+      }
+      # Otherwise track quoted regions exactly as the reader does, so an interior line
+      # is never mistaken for a record.
+      if (match(line, /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) == 0) next
+      rest = substr(line, RSTART + RLENGTH)
+      sub(/^[ \t]+/, "", rest)
+      first = substr(rest, 1, 1)
+      if (first == dq || first == sq) {
+        quote = first
+        if (unescaped_index(substr(rest, 2), quote) == 0) inq = 1
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$file"
+}
 
 # One assignment out of a file Docker Compose reads, as the file's TEXT spells it after
 # Compose's quoting and comment rules — and deliberately NOT what the container receives.
@@ -1445,14 +1521,22 @@ for key in sorted(env):
 nexa_compose_refusal_reason() {
   local text withheld=''
   text="$(printf '%s\n' "$1" | sed -n '1p')"
+  # It CAN tell the two apart, which an earlier version of this said it could not.
+  # Measured on v5.1.1, the two required-variable channels carry different prefixes:
+  #
+  #   env_file   failed to read /etc/nexa/nexa.env: required variable KEYRING is missing
+  #              a value: k1:<key material>
+  #   compose    error while interpolating x-app-common.image: required variable
+  #              NEXA_IMAGE is missing a value: NEXA_IMAGE must be an image digest reference
+  #
+  # Only the first can carry a value out of `nexa.env`. The second comes from the four
+  # `${VAR:?text}` forms in `deploy/compose.yml`, whose text is operator guidance, and
+  # whose variables live in `deploy.env`, which holds no secrets by design. That message
+  # is the commonest refusal there is — a half-written `deploy.env` — and cutting it lost
+  # the only explanation while telling the operator a value had been withheld, which was
+  # false about it.
   case "$text" in
-    # The marker is KEPT and a withheld note added, because the text after it is not
-    # always a secret: `deploy/compose.yml` uses `${VAR:?text}` four times and that text
-    # is operator guidance ("NEXA_IMAGE must be an image digest reference"), reachable
-    # exactly when this section prints REFUSED. Cutting it silently would lose the only
-    # explanation for the commonest refusal there is. It is still cut, because the same
-    # form in `nexa.env` can carry the keyring and this function cannot tell the two
-    # apart — but the operator is told that a cut happened.
+    'error while interpolating'*) : ;;
     *' is missing a value:'*)
       text="${text%% is missing a value:*} is missing a value"
       withheld=' (the rest of the message is withheld: it is text from the configuration and may contain a value)'

@@ -736,50 +736,83 @@ buys and there is no way to have both.
 **Trigger to revisit:** the first deployment that legitimately holds two
 installations' archives — a migration tool, or a managed multi-install operator.
 
-## UNK-DEPLOY-001 — does `compose up -d` recreate a container when only `nexa.env` changed?
+## UNK-DEPLOY-001 — RESOLVED: `compose up -d` does recreate when `nexa.env` changed
 
-`botctl status` tells an operator to set a value in `/etc/nexa/nexa.env` and run
-`botctl restart`. Every remedy in the capabilities and secrets sections ends that
-way, and so does the v1 shutdown sequence. The whole advice rests on an assumption
-nobody has measured against a real daemon: that bringing the stack up loads an
-edited `env_file`.
+**Recorded as an open question on one reading of one measurement, and closed two rounds
+later against it. The measurement was real; the inference from it was wrong, and it was
+asserted here as fact.** Kept rather than deleted, because the way it was wrong is the
+reusable part.
 
-**Measured on the Compose client this deployment pins, v5.1.1, with no daemon:**
+**What was measured.** On the pinned client, v5.1.1, `docker compose config --hash='*'`
+does not change when `env_file` CONTENT changes, while an inline `environment:` value does
+change it:
 
 ```
-docker compose config --hash='*'
-
-baseline                                     api 5fc5df86…
-append BACKUP_SCHEDULE_ENABLED=true to env_file   api 5fc5df86…   unchanged
-change DATABASE_URL's password in env_file        api 5fc5df86…   unchanged
-change an inline `environment:` value             api c26660b1…   CHANGED
+baseline                                        api 5fc5df86…
+append BACKUP_SCHEDULE_ENABLED=true to env_file api 5fc5df86…   unchanged
+change DATABASE_URL's password in env_file      api 5fc5df86…   unchanged
+change an inline `environment:` value           api c26660b1…   CHANGED
 ```
 
-So the service config hash — the value `up -d` compares against the running
-container's `com.docker.compose.config-hash` label to decide whether to recreate —
-does not track `env_file` content. An inline `environment:` entry does track.
+**What was inferred, and is false.** That this is "the value `up -d` compares against the
+running container's `com.docker.compose.config-hash` label", and therefore that an edit to
+`nexa.env` cannot cause a recreation. `config --hash` is the wrong probe. In the pinned
+binary:
 
-**This is not a new mechanism; this repository already hit it once.** `cmd_restart`
-carries the comment that "a plain `up -d` leaves the edge container alone, because
-replacing a bind-mounted file changes no service definition, and the operator would
-run the command they were told to run and see no change". The fix there was to make
-the edge's configuration generation an INTERPOLATED value (`NEXA_EDGE_CONFIG`), so
-the service definition itself changes. `nexa.env` has had no equivalent.
+```
+callers of pkg/compose.ServiceHash
+  (*convergence).mustRecreate        the recreation decision
+  (*composeService).prepareLabels    stamping the label
+  cmd/compose.runHash                behind `config --hash`
 
-**What is still unknown.** Whether `up -d` recreates anyway — the hash is one input
-to that decision and the daemon may consider others. That cannot be settled here: the
-deploy suite runs against a fake docker, and both smoke scripts write `nexa.env`
-BEFORE the first `up`, so neither exercises "edit `nexa.env` on a running stack, then
-restart, and read the value back out of the container".
+callers of types.Project.WithServicesEnvironmentResolved
+  loader.ModelToProject
+  cmd/compose.runConfigInterpolate
+  cmd/compose.createCommand…WithServices.func5
+  cmd/compose.runCommand.func2
+  cmd/compose.upCommand…WithServices.func5      <-- up resolves env_file
+  (runHash is NOT among them)
+```
 
-**What was done instead of guessing.** `botctl status` no longer claims that a
-successful restart, update or rollback has loaded anything. It says only what holds
-either way: a container keeps the configuration it was created with, only recreating
-it loads a change, and `botctl restart` is the command for that.
+So `up` hashes a project whose `env_file` has been merged into `Environment` and
+`config --hash` hashes one where it has not — the same function over different inputs.
+`Environment` is demonstrably inside the hash, because the inline change above moves it.
+An edit to `nexa.env` therefore changes the hash `mustRecreate` compares, and the
+container is recreated.
 
-**Trigger to resolve:** the first run of `docs/vps-acceptance.md` against a real
-server. The check is three commands — edit one boolean in `nexa.env`, `botctl
-restart`, then `docker inspect` the api container's `.Config.Env` for the new value.
-If it is absent, the remedy is the one the edge already uses: fingerprint `nexa.env`
-and interpolate that fingerprint into the service definitions, so a content change
-becomes a definition change.
+Two further corrections to the original text. The decision is **client-side**, in
+`mustRecreate`; the daemon never sees a service definition, so "the daemon may consider
+other inputs" was wrong about where the decision lives — and that is why this was
+settleable here at all. And the `cmd_restart` edge precedent, quoted accurately, is **not
+the same mechanism**: a bind-mounted file's content never enters a service definition
+because Compose never reads it, while an `env_file`'s content is read by the client and
+merged into `Environment`. `nexa.env` needs no `NEXA_EDGE_CONFIG`-style trigger, and the
+remedy this question originally proposed would have added a second fingerprint, a new
+`deploy.env` key and a new divergence surface to solve a problem that does not exist.
+
+**What is still unobserved.** None of this has been watched against a real daemon. The
+deploy suite runs against a fake docker, and both smoke scripts write `nexa.env` before
+the first `up` (`scripts/deployment-smoke.sh` writes at 128 and 139, first `up` at 184;
+`scripts/deployment-update-smoke.sh` at 353, 360 and 362, first `up` at 387), so neither
+exercises "edit `nexa.env` on a running stack, then restart, and read the value back".
+The symbol evidence above is a deduction about a binary, not an observation of a
+container.
+
+**Where that is closed:** `docs/vps-acceptance.md` carries it as a numbered step, because
+pinning it to "the first run" of a checklist that had no such step would have let it
+survive the event meant to close it. The check names ONE key rather than dumping
+`.Config.Env`, which holds `DATABASE_URL`, `SECRETS_KEYS` and the backup bot token:
+
+```
+sudo sed -i 's/^BACKUP_SCHEDULE_ENABLED=.*/BACKUP_SCHEDULE_ENABLED=true/' /etc/nexa/nexa.env
+sudo botctl restart
+sudo docker inspect nexa-api-1 \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' | grep '^BACKUP_SCHEDULE_ENABLED='
+```
+
+**The lesson, which is why this entry survives.** A measurement is evidence about the
+command that produced it and nothing else. `config --hash` answers a question about
+`config --hash`; treating it as an answer about `up -d` turned one reading into a
+documented fact, and that fact deleted a true sentence from an operator-facing output for
+two rounds. `CLAUDE.md` says never to resolve an UNKNOWN by guessing. This created one by
+guessing, which the rule does not say and should.
