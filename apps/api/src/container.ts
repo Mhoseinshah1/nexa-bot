@@ -1233,6 +1233,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         // wrong question.
         botInstances,
         opsLog,
+        // Whether this bot's send-failure condition is still open, read from the
+        // row. It decides whether a successful send writes a recovery, so it must
+        // not be a field this process set on itself: a replica that restarted, or
+        // a second replica, could not then close a condition it did not open.
+        new DrizzleOperationalConditionReader(database.db),
         config.TELEGRAM_API_BASE_URL,
         config.NOTIFICATION_SEND_TIMEOUT_MS,
       ),

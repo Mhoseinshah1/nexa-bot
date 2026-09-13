@@ -691,6 +691,24 @@ function SignIn() {
     mutationFn: () => signIn(username, password),
     onSuccess: async () => {
       setPassword('');
+      /*
+       * Everything the PREVIOUS session cached is dropped before this one reads
+       * anything.
+       *
+       * The console is a single-page app and a session can end without anyone
+       * signing out: the cookie expires, the shell falls back to this screen, and
+       * someone else signs in — on the shared operations machine that the sign-out
+       * path below exists for. Every query key in this app is tenant-independent,
+       * so without this the first frame of `/users` renders the previous tenant's
+       * customer names, usernames and Telegram ids, and `staleTime` plus "keep the
+       * previous data through a failed refetch" can hold them there.
+       *
+       * Dropped HERE rather than by adding a tenant to ~40 query keys: the keys are
+       * correct as cache identities and the thing that changed is WHO is asking, so
+       * the boundary is the session change. `removeQueries` and not `clear`, so the
+       * session query this invalidate is about survives to be re-read.
+       */
+      client.removeQueries({ predicate: (query) => query.queryKey[0] !== 'session' });
       await client.invalidateQueries({ queryKey: ['session'] });
     },
   });
@@ -823,7 +841,18 @@ function SignedIn({
       // afterwards and overwrites the `null` with the session it fetched. The
       // console came back for a full minute after a successful sign-out, on the
       // shared machine this whole path exists for.
-      await client.cancelQueries({ queryKey: ['session'] });
+      // CANCEL EVERYTHING, not only the session. A `/customers` or `/panels`
+      // request already in flight was sent with a still-valid cookie, so it
+      // resolves after the removal below and writes the previous operator's rows
+      // back into an empty cache — the same race as the session query, with
+      // customer names in it.
+      await client.cancelQueries();
+      // And drop every cached answer. Signing out is the point at which this
+      // browser must stop holding one tenant's data: the next person to sign in
+      // re-renders this same app instance, and `['customers', …]` carries no
+      // tenant, so the stale page would be theirs to read. The session key is
+      // spared so the resolved `null` below is the one value left standing.
+      client.removeQueries({ predicate: (query) => query.queryKey[0] !== 'session' });
       client.setQueryData(['session'], null);
     },
   });

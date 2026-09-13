@@ -28,6 +28,74 @@ const list = (customers: unknown[], nextCursor: string | null = null) => [
 ];
 
 describe('the customer list', () => {
+  /**
+   * Navigating away from a search must not leave its criteria in the boxes.
+   *
+   * The sidebar's «کاربران» link re-renders THIS component with an empty query
+   * instead of remounting it, and `useState(appliedTelegramId)` runs its
+   * initialiser once per mount. So after a search that link left the inputs
+   * showing the old criteria above an unfiltered list, with Clear disabled
+   * because nothing was applied any more — the screen telling the operator three
+   * different things about what they had asked for.
+   *
+   * `rerender` is exactly that navigation: same component instance, new props.
+   */
+  it('clears the search boxes when navigation drops the query', async () => {
+    stubApi([
+      { url: '/users?', body: { customers: [customer()], nextCursor: null } },
+      { url: '/users', body: { customers: [customer()], nextCursor: null } },
+    ]);
+    const searched = {
+      path: '/users',
+      query: new URLSearchParams({ telegramUserId: '5551234567', username: 'ali_tehran' }),
+    };
+    const { rerender } = renderPage(<UsersPage route={searched} maySearch denied={false} />);
+    await screen.findByText('5551234567');
+    expect((screen.getByLabelText('شناسهٔ تلگرام') as HTMLInputElement).value).toBe('5551234567');
+    expect((screen.getByLabelText('نام کاربری') as HTMLInputElement).value).toBe('ali_tehran');
+
+    // The sidebar link: same component, empty query.
+    rerender(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
+
+    expect(
+      (screen.getByLabelText('شناسهٔ تلگرام') as HTMLInputElement).value,
+      'the Telegram id box still shows a search that is no longer applied',
+    ).toBe('');
+    expect(
+      (screen.getByLabelText('نام کاربری') as HTMLInputElement).value,
+      'the username box still shows a search that is no longer applied',
+    ).toBe('');
+  });
+
+  /**
+   * And the draft must SURVIVE a render that does not change the applied search.
+   *
+   * The fix derives the draft from the URL, so the mistake it could introduce is
+   * the opposite one: resetting on every render would erase what the operator is
+   * typing. The status filter is the case that proves the signature is the two
+   * values the form owns and not all three.
+   */
+  it('keeps what the operator is typing when the status filter changes', async () => {
+    stubApi([{ url: '/users', body: { customers: [customer()], nextCursor: null } }]);
+    const { rerender } = renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
+    await screen.findByText('5551234567');
+
+    fireEvent.change(screen.getByLabelText('نام کاربری'), { target: { value: 'half' } });
+    expect((screen.getByLabelText('نام کاربری') as HTMLInputElement).value).toBe('half');
+
+    rerender(
+      <UsersPage
+        route={{ path: '/users', query: new URLSearchParams({ status: 'BLOCKED' }) }}
+        maySearch
+        denied={false}
+      />,
+    );
+    expect(
+      (screen.getByLabelText('نام کاربری') as HTMLInputElement).value,
+      'changing the status filter discarded a half-typed username',
+    ).toBe('half');
+  });
+
   it('renders the six real columns and invents no commercial telemetry', async () => {
     stubApi(list([customer()]));
     renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);

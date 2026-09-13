@@ -104,7 +104,23 @@ export class DrizzleCustomerRepository implements CustomerRepository {
           firstName: input.profile.firstName,
           lastName: input.profile.lastName,
           languageCode: input.profile.languageCode,
-          lastSeenAt: input.now,
+          /*
+           * The GREATER of the two, so activity never moves backwards.
+           *
+           * Each turn captures `Clock.now()` before opening its transaction, so two
+           * concurrent updates from one customer can commit out of order: the one
+           * holding the earlier timestamp reaches this upsert last and, assigning
+           * unconditionally, overwrote `last_seen_at` with the older value. An operator
+           * reading that column is answering "when did I last hear from them", and a
+           * column that goes backwards is the "reads as activity and is not" case
+           * `bot-runtime.ts` names as the reason this is written on every contact.
+           *
+           * `excluded` is the row this statement proposed; `customers.last_seen_at` is
+           * what is already stored. `updatedAt` is deliberately NOT guarded the same
+           * way — it records when the row was last written, which is now, whichever
+           * statement wins.
+           */
+          lastSeenAt: sql`greatest(${customers.lastSeenAt}, excluded.last_seen_at)`,
           updatedAt: input.now,
         },
       })

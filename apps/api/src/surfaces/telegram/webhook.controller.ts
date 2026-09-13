@@ -234,7 +234,9 @@ export class TelegramWebhookController {
       }
     }
 
-    // Always 200: a non-2xx makes Telegram retry the same update indefinitely,
+    // Always a SUCCESSFUL 2xx — 201, which is Nest's POST default and what the
+    // integration suite asserts. The rule is about the CLASS, not the number: a
+    // non-2xx makes Telegram retry the same update indefinitely,
     // and an update we do not handle is not an error.
     return { ok: true };
   }

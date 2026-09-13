@@ -109,8 +109,36 @@ export function UsersPage({
   const appliedTelegramId = route.query.get('telegramUserId') ?? '';
   const appliedUsername = route.query.get('username') ?? '';
   const appliedStatus = statusFromQuery(route.query.get('status'));
-  const [draftTelegramId, setDraftTelegramId] = useState(appliedTelegramId);
-  const [draftUsername, setDraftUsername] = useState(appliedUsername);
+
+  /*
+   * The draft FOLLOWS the applied values, derived rather than initialised.
+   *
+   * `useState(appliedTelegramId)` runs its initialiser once per mount, and the
+   * sidebar's own «کاربران» link re-renders THIS component with an empty query
+   * instead of remounting it. So after a search, clicking that link left the
+   * inputs showing the old criteria over an unfiltered list, with the Clear
+   * button disabled because nothing was applied any more — three things on the
+   * screen disagreeing about what the operator had asked for.
+   *
+   * Compared rather than synchronised in an effect, the same shape the cursor
+   * trail below uses: an effect would render one frame of the stale draft first,
+   * and React's own guidance is to derive during render. The signature covers the
+   * two URL values the form owns and NOT the status, so changing the status
+   * dropdown does not wipe a half-typed username.
+   */
+  const appliedSignature = [appliedTelegramId, appliedUsername].join('|');
+  const [draft, setDraft] = useState<{
+    signature: string;
+    telegramId: string;
+    username: string;
+  }>({ signature: appliedSignature, telegramId: appliedTelegramId, username: appliedUsername });
+  const fresh = draft.signature === appliedSignature;
+  const draftTelegramId = fresh ? draft.telegramId : appliedTelegramId;
+  const draftUsername = fresh ? draft.username : appliedUsername;
+  const setDraftTelegramId = (value: string) =>
+    setDraft({ signature: appliedSignature, telegramId: value, username: draftUsername });
+  const setDraftUsername = (value: string) =>
+    setDraft({ signature: appliedSignature, telegramId: draftTelegramId, username: value });
 
   /*
    * The cursor stack, and the SEARCH it belongs to.
@@ -163,7 +191,17 @@ export function UsersPage({
       ? t('web.users_search_invalid_telegram')
       : undefined;
 
+  /*
+   * Two predicates, because they answer different questions.
+   *
+   * `searching` is about the ROWS — whether the empty state should read "nothing
+   * matched your search" or "no customers yet" — so it is the applied URL and
+   * nothing else. `clearable` is about the FORM: there is something to clear if
+   * either the URL carries a filter or the inputs hold text. Folding them left
+   * Clear disabled over inputs full of text nobody could empty by button.
+   */
   const searching = appliedTelegramId !== '' || appliedUsername !== '';
+  const clearable = searching || draftTelegramId !== '' || draftUsername !== '';
 
   const customers = useQuery({
     // The search is part of the key. Sharing one key across filters would serve
@@ -191,8 +229,11 @@ export function UsersPage({
   };
 
   const clear = () => {
-    setDraftTelegramId('');
-    setDraftUsername('');
+    // Both, because the two can differ: the URL may already be empty while the
+    // inputs hold text the operator typed and never applied. Clearing the URL
+    // alone would leave that text on screen, and clearing the draft alone would
+    // leave the filter applied.
+    setDraft({ signature: appliedSignature, telegramId: '', username: '' });
     setQuery(route, 'telegramUserId', null);
     setQuery(route, 'username', null);
   };
@@ -288,7 +329,7 @@ export function UsersPage({
               >
                 {t('web.users_search_apply')}
               </button>
-              <button type="button" className="btn sm" onClick={clear} disabled={!searching}>
+              <button type="button" className="btn sm" onClick={clear} disabled={!clearable}>
                 {t('web.users_search_clear')}
               </button>
             </form>

@@ -171,7 +171,29 @@ export class CustomerService {
         scope,
         replay.result.customerId as UserId,
       );
-      if (existing !== null) return { customer: existing, arrival: replay.result.arrival };
+      if (existing !== null) {
+        /*
+         * The arrival is RECOMPUTED for a blocked customer, never replayed.
+         *
+         * The stored arrival is a fact about the first processing; `status` is a fact
+         * about now. An operator can block somebody between the two, and Telegram can
+         * redeliver an update whose response was lost — which is the whole reason this
+         * replay branch exists. Returning the stored `FIRST_SEEN` or `RETURNING`
+         * alongside a row that is now BLOCKED made `replyFor` greet a blocked customer,
+         * because it decides from the arrival alone.
+         *
+         * So the one rule that outranks everything is re-derived here rather than
+         * trusted from the record. `FIRST_SEEN` and `RETURNING` are still replayed
+         * verbatim: the difference between them is a fact about the first processing and
+         * does not change afterwards.
+         *
+         * Found by review. M6 mutated `replyFor`'s BLOCKED branch and was killed by two
+         * tests — both on the NON-replay path, so neither could see this.
+         */
+        const arrival: CustomerArrival =
+          existing.status === 'BLOCKED' ? 'BLOCKED' : replay.result.arrival;
+        return { customer: existing, arrival };
+      }
       // The idempotency row survived its customer, which a restore can produce. Fall
       // through and resolve again rather than fail: the command is idempotent by
       // construction, so redoing it is safe and reporting a missing customer is not.

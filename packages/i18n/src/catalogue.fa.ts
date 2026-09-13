@@ -47,9 +47,21 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   //
   // Wording is deliberately plain and short. These are read on a phone, in a chat,
   // by someone who wants to buy something — not an operations channel.
-  'bot.start.welcome': 'خوش آمدید. برای دیدن سرویس‌های قابل خرید از منو استفاده کنید.',
-  'bot.start.welcome_back':
-    'خوش آمدید. از منو می‌توانید سرویس‌های خود را ببینید یا خرید جدیدی انجام دهید.',
+  //
+  // NEITHER greeting mentions a menu, and that is a correctness rule rather than a
+  // style choice. Both of these said "use the menu to see the services you can buy" —
+  // to every customer, as the first and only thing this head of the product says to
+  // them — while `bot-runtime.ts` handles exactly two things: `/start`, and "I did not
+  // understand that". There is no menu, no catalogue, no order and no service flow, so
+  // the copy instructed a customer to do something that could only answer
+  // `bot.unknown_command`.
+  //
+  // The keys below them — `bot.catalog.*`, `bot.order.*`, `bot.wallet.*` — are the
+  // frozen catalogue for phases that have not shipped, and nothing renders them. These
+  // two ARE rendered, on every customer's first contact, so they say what is true now.
+  // When the catalogue ships, the sentence changes with it.
+  'bot.start.welcome': 'خوش آمدید. حساب شما در این ربات ساخته شد. خرید سرویس هنوز فعال نیست.',
+  'bot.start.welcome_back': 'خوش آمدید. حساب شما فعال است. خرید سرویس هنوز فعال نیست.',
   'bot.blocked': 'دسترسی این حساب به ربات بسته شده است.',
 
   'bot.catalog.empty': 'در حال حاضر سرویسی برای فروش تنظیم نشده است.',

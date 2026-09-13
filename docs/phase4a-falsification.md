@@ -12,7 +12,11 @@ refuses to continue if `git status` is not clean again afterwards. No cosmetic
 mutation catalogue: a mutation is here because a specific sentence of behaviour
 depends on the line it removes.
 
-Everything ran in a **separate git worktree against a separate database**
+A **second round** follows the first table: one independent Codex review of the
+pushed head found nine defects, all nine were real, and each fix earns a mutation
+of its own (M15-M26). Its method differs in one respect, stated where it applies.
+
+Everything in the FIRST round ran in a **separate git worktree against a separate database**
 (`nexa_falsify_4a`). `CLAUDE.md` records both reasons: a reviewer sharing the
 implementation checkout once deleted a real fix mid-edit, and two suites sharing
 one database once produced 122 false failures that looked exactly like real ones.
@@ -38,6 +42,58 @@ one database once produced 122 false failures that looked exactly like real ones
 
 Fourteen of fourteen killed — **after two of them were fixed, and the fixing is
 the finding.**
+
+## The second round: the nine Codex findings
+
+One independent Codex review of the pushed head produced nine findings. All nine
+were validated against the code and all nine were real, so each fix gets a
+mutation of its own — the rule `CLAUDE.md` states after the deployment branch,
+where four review rounds each found their defect inside the fix written for the
+round before.
+
+These ran in the PRIMARY checkout against the shared development database rather
+than in a worktree, because nothing here mutates a reviewer's tree: each row is
+one `cp`-backed edit, run, and restore, and `git status` was confirmed clean of
+every mutation afterwards (recorded below). The diff was printed for each.
+
+| #   | Codex | Rule                                                                   | Mutation                                                                        | Named test                                                                                                                 | Result |
+| --- | ----- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ------ |
+| M15 | C6    | A replay recomputes BLOCKED instead of replaying the stored arrival    | `customer.service.ts`: the replay returns `replay.result.arrival` unchanged     | `telegram-customer-turn.test.ts` › replies with the blocked text when the REPLAYED update predates the block               | KILLED |
+| M16 | C9    | A successful send RESOLVES the bot's open send-failure condition       | `telegram-customer-messenger.ts`: the `recordRecovery` call on SUCCEEDED is cut | `telegram-customer-turn.test.ts` › resolves the condition on the next successful reply, and REOPENS it on the next failure | KILLED |
+| M17 | C9    | The recovery is written ONLY when the condition is open                | `telegram-customer-messenger.ts`: the `conditionIsOpen` guard is deleted        | `telegram-customer-turn.test.ts` › writes NO recovery when no condition is open, so the log is not a send log              | KILLED |
+| M18 | C9    | The recovery names its SUBJECT, so one bot does not resolve another    | `telegram-customer-messenger.ts`: `recoversDedupeKey` is dropped                | `telegram-customer-turn.test.ts` › resolves only the BOT whose reply succeeded, not every bot in the tenant                | KILLED |
+| M19 | C2    | `last_seen_at` never moves backwards                                   | `drizzle-customer.repository.ts`: `greatest(...)` becomes `input.now`           | `customers-http.test.ts` › never moves last_seen_at BACKWARDS when two contacts commit out of order                        | KILLED |
+| M20 | C1    | The operator search refuses a malformed Telegram id                    | `http.ts`: `telegramUserIdSchema` becomes `z.string().max(32)`                  | `bot-runtime.test.ts` › refuses the same ids in the OPERATOR search, not only at the webhook                               | KILLED |
+| M21 | C5    | No rendered greeting points the customer at a menu that does not exist | `catalogue.fa.ts`: `bot.start.welcome` is put back as it was                    | `bot-runtime.test.ts` › sends no copy that promises a flow this head does not have                                         | KILLED |
+| M22 | C7    | The customer entity has ONE name in the frozen contract                | `customer.ts`: `export type CustomerId = UserId` is reinstated                  | `bot-runtime.test.ts` › gives the customer entity ONE name in the frozen contract                                          | KILLED |
+| M23 | C4    | Signing out drops every cached page, not only the session              | `app.tsx`: the sign-OUT `removeQueries` is deleted                              | `shell-recovery.test.tsx` › drops every cached page on sign-out, so the next operator cannot read the last one             | KILLED |
+| M24 | C4    | Signing IN drops what the expired session cached                       | `app.tsx`: the sign-IN `removeQueries` is deleted                               | `shell-recovery.test.tsx` › drops the expired session cached pages when the NEXT operator signs in                         | KILLED |
+| M25 | C3    | The search draft FOLLOWS the applied URL                               | `users.tsx`: `fresh` is hard-coded `true`                                       | `users.test.tsx` › clears the search boxes when navigation drops the query                                                 | KILLED |
+| M26 | C3    | ...and is not reset by a render that changes nothing the form owns     | `users.tsx`: `fresh` is hard-coded `false`                                      | `users.test.tsx` › keeps what the operator is typing when the status filter changes                                        | KILLED |
+
+Two of these deserve their reasoning written down rather than left in the table.
+
+**M18 survived its first attempt, and the test was wrong rather than the rule.**
+The case had one bot failing and the other succeeding, so `recordRecovery`
+returned early at the `conditionIsOpen` guard and the narrowing was never reached:
+the mutation changed nothing observable. The case now has BOTH bots failing and
+one recovering, which is the only arrangement in which a too-broad recovery has a
+second row to resolve. A mutation that survives is as often a statement about the
+test as about the code, and taking the first green as proof is how a rule ends up
+with a test that cannot fail.
+
+**C4 needed two tests, because it is two rules.** Deleting the sign-OUT clear
+left the sign-in test green — the cache was empty by then either way — so a single
+test would have pinned one half and silently permitted the other to be removed.
+The second case is the path where nobody signs out at all: the cookie expires, the
+shell falls back to the sign-in screen, and the next operator signs in. M23 and
+M24 each kill exactly one case.
+
+**C8 has no mutation, and that is not an omission.** It was a false sentence in
+`docs/phase4-audit.md` — "always 200" for a controller with no `@HttpCode(200)`,
+which Nest answers 201. There is no rule to revert; the assertion that makes the
+corrected sentence true already exists and is named in the document
+(`telegram-customer-turn.test.ts` asserts `statusCode === 201` in eight places).
 
 ## The two that survived the first round
 

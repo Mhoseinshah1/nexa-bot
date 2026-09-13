@@ -9,6 +9,7 @@ import type { Database } from '../../../../infrastructure/persistence/database.j
 import { operationalEvents } from '../../../../infrastructure/persistence/schema.js';
 import {
   requireTenantId,
+  scopeRef,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
@@ -190,6 +191,39 @@ export class DrizzleOperationalConditionReader implements OperationalConditionRe
         and(
           eq(operationalEvents.code, code),
           eq(operationalEvents.tenantId, tenantId),
+          isNull(operationalEvents.resolvedAt),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  /**
+   * Whether ONE SUBJECT'S condition is open, addressed by its dedupe key.
+   *
+   * `tenantConditionIsOpen` answers the question for a whole tenant and a code,
+   * which is the right question for a condition there can only be one of. It is
+   * the wrong one for a condition that is ABOUT something: a tenant with two bot
+   * instances would be told "open" because the OTHER bot is broken, and a
+   * recovery written on that answer resolves nothing while still appending a
+   * row — once per message, for as long as the other bot stayed broken.
+   *
+   * So this is keyed exactly as the recorder dedupes — `dedupe_scope` and
+   * `dedupe_key`, which carry a unique index together — and the answer is about
+   * the one row a recovery would actually resolve.
+   */
+  async conditionIsOpen(
+    scope: ScopeContext,
+    dedupeKey: string,
+    tx?: TransactionScope,
+  ): Promise<boolean> {
+    const rows = await (tx?.tx ?? this.db)
+      .select({ id: operationalEvents.id })
+      .from(operationalEvents)
+      .where(
+        and(
+          eq(operationalEvents.dedupeScope, scopeRef(scope, 'OPSLOG')),
+          eq(operationalEvents.dedupeKey, dedupeKey),
           isNull(operationalEvents.resolvedAt),
         ),
       )

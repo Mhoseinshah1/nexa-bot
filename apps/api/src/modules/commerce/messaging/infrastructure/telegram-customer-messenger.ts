@@ -11,8 +11,68 @@ import { telegramSend, textMessageBody } from '../../../../infrastructure/telegr
 import type {
   CustomerMessage,
   CustomerMessenger,
+  CustomerSendConditionReader,
   CustomerSendOutcome,
 } from '../application/ports.js';
+
+/**
+ * ONE condition per bot instance: "this bot is not replying to customers".
+ *
+ * It used to be three codes — `telegram.customer_send_no_bot`,
+ * `_unknown` and `_refused` — and all three were deduplicated conditions that
+ * nothing ever resolved. An unresolved condition is worse than no condition at
+ * all: `operational-event-projector.ts` suppresses an occurrence that is neither
+ * new nor reopened, so the FIRST transient Telegram failure opened the row and
+ * every later failure through that bot — including a real outage weeks later —
+ * was silently folded onto it and announced to nobody.
+ *
+ * Three codes could not be fixed by adding a recovery, because `recoversCode` is
+ * singular and their dedupe key was `${errorCode}:${botInstanceId}` — an
+ * unbounded set of keys a recovery cannot enumerate, and one that did not carry
+ * its own code, so two codes could collide on one key and the loser would
+ * increment a row belonging to the winner.
+ *
+ * So the operator-facing question is asked once — "are customers getting replies
+ * from this bot?" — and the three answers become `reason` in the context, which
+ * the recorder rewrites on every occurrence. Severity is fixed at ERROR because
+ * a deduplicated row keeps the severity it was first recorded with; of the three
+ * it replaces, ERROR is the one that cannot cause a condition to fall under an
+ * installation's notification threshold unseen.
+ *
+ * Reshaping an operational-event code strands every row still open under the old
+ * one, which is why CLAUDE.md permits it only in the release that introduced the
+ * code. This is that release: all three codes are introduced by this unmerged
+ * branch and no installation has a row under any of them.
+ */
+export const CUSTOMER_SEND_FAILED_CODE = 'telegram.customer_send_failed';
+
+/**
+ * The recovery, and deliberately NOT deduplicated.
+ *
+ * Its whole job is to close the failure row, and a row of its own would need
+ * closing in turn — by the next failure, whose one `recoversCode` is already
+ * spent. `panel.health.restored` is the same shape for the same reason. It is
+ * bounded because it is only written when the condition is actually open, so
+ * there is one of these per failure-to-recovery transition and not one per
+ * message: a recovery on every successful send would make this table a send log
+ * and, deduplicated, would serialise every reply through one locked row.
+ */
+export const CUSTOMER_SEND_OK_CODE = 'telegram.customer_send_ok';
+
+/**
+ * The dedupe key for one bot's failure condition.
+ *
+ * One function, because the format IS the identity: a recovery that computed it
+ * differently from the condition it names would resolve nothing, silently, and
+ * leave an open ERROR for a bot that is fine. `panelConditionKey` exists for
+ * exactly this reason and records the same lesson.
+ */
+export function customerSendConditionKey(botInstanceId: BotInstanceId): string {
+  return `${CUSTOMER_SEND_FAILED_CODE}:${botInstanceId}`;
+}
+
+/** Why a reply did not certainly reach the customer. Context, never a code. */
+type SendFailureReason = 'NO_BOT' | 'UNCERTAIN' | 'REFUSED';
 
 /**
  * What this needs in order to turn a template key into bytes on the wire.
@@ -56,6 +116,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     private readonly templates: CustomerTemplateRenderer,
     private readonly bots: BotInstanceTokenSource,
     private readonly opsLog: OperationalEventRecorder,
+    private readonly conditions: CustomerSendConditionReader,
     private readonly apiBaseUrl: string,
     private readonly timeoutMs: number,
   ) {}
@@ -66,13 +127,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       // Not an exception: a bot an operator disabled between the update arriving and
       // the reply being sent is an ordinary race, and the customer's arrival is already
       // committed. Recorded so the operator can see that replies are going nowhere.
-      await this.opsLog.record(scope, {
-        code: 'telegram.customer_send_no_bot',
-        severity: 'WARN',
-        message: 'A customer reply could not be sent: the bot instance has no usable token.',
-        dedupeKey: `telegram.customer_send_no_bot:${message.botInstanceId}`,
-        context: { botInstanceId: message.botInstanceId, templateKey: message.templateKey },
-      });
+      await this.recordFailure(scope, message, 'NO_BOT', null);
       return 'REFUSED';
     }
 
@@ -93,34 +148,97 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       body: textMessageBody({ chatId: message.chatId, text, html }),
     });
 
-    if (result.outcome === 'SUCCEEDED') return 'DELIVERED';
+    if (result.outcome === 'SUCCEEDED') {
+      await this.recordRecovery(scope, message.botInstanceId);
+      return 'DELIVERED';
+    }
 
     /*
-     * A retryable failure is UNKNOWN, not REFUSED.
+     * A retryable failure is UNCERTAIN, not REFUSED.
      *
      * `telegramSend` calls a timeout, a 5xx, a 429 and an unreadable 2xx retryable,
      * and every one of those means Telegram may have delivered the message. For a
      * queue that is a reason to try again; for a customer reply it is a reason NOT to,
-     * because the customer would see it twice. So the distinction is preserved and the
-     * decision is "tell an operator", which is what the event is.
-     *
-     * The message is NOT the Telegram description verbatim in the dedupe key: a 4xx
-     * description can quote the chat id, and a dedupe key is a durable column.
+     * because the customer would see it twice. So the distinction is preserved — in the
+     * returned outcome and in the event's context — and the decision is "tell an
+     * operator", which is what the event is.
      */
     const unknown = result.outcome === 'FAILED_RETRYABLE';
+    await this.recordFailure(scope, message, unknown ? 'UNCERTAIN' : 'REFUSED', result.errorCode);
+    return unknown ? 'UNKNOWN' : 'REFUSED';
+  }
+
+  /**
+   * Opens or re-opens the one condition for this bot.
+   *
+   * The reason and the Telegram error code go in the CONTEXT, which the recorder
+   * rewrites on every occurrence, so an operator reading the open row sees why it
+   * failed most recently. They are deliberately not in the dedupe key: a dedupe
+   * key is a durable column and a 4xx description can quote a chat id, and a key
+   * that varies per error is a key a recovery cannot name.
+   */
+  private async recordFailure(
+    scope: TenantContext,
+    message: CustomerMessage,
+    reason: SendFailureReason,
+    errorCode: string | null,
+  ): Promise<void> {
     await this.opsLog.record(scope, {
-      code: unknown ? 'telegram.customer_send_unknown' : 'telegram.customer_send_refused',
-      severity: unknown ? 'WARN' : 'ERROR',
-      message: unknown
-        ? 'A customer reply may or may not have been delivered; it was not retried.'
-        : 'Telegram refused a customer reply.',
-      dedupeKey: `${result.errorCode}:${message.botInstanceId}`,
+      code: CUSTOMER_SEND_FAILED_CODE,
+      severity: 'ERROR',
+      message: MESSAGE_FOR[reason],
+      dedupeKey: customerSendConditionKey(message.botInstanceId),
       context: {
         botInstanceId: message.botInstanceId,
         templateKey: message.templateKey,
-        errorCode: result.errorCode,
+        reason,
+        ...(errorCode === null ? {} : { errorCode }),
       },
     });
-    return unknown ? 'UNKNOWN' : 'REFUSED';
+  }
+
+  /**
+   * Closes it, and only when there is something to close.
+   *
+   * The open set is read from the rows rather than from this process, so whichever
+   * replica sees a send succeed resolves the condition — including one that started
+   * after the failure was recorded. A write on every success instead of a read would
+   * either append a row per message or, deduplicated, funnel every reply for a bot
+   * through one `FOR UPDATE`-locked row.
+   *
+   * Two concurrent successes can both read "open" and both record a recovery. That is
+   * two one-shot INFO rows where one would do, the second resolving nothing; it is
+   * bounded by the number of failure-to-recovery transitions and visible in the log,
+   * and the alternative — taking a transaction around a send — is the rule in
+   * `docs/conventions.md` that forbids network calls inside one.
+   */
+  private async recordRecovery(scope: TenantContext, botInstanceId: BotInstanceId): Promise<void> {
+    const dedupeKey = customerSendConditionKey(botInstanceId);
+    if (!(await this.conditions.conditionIsOpen(scope, dedupeKey))) return;
+
+    await this.opsLog.record(scope, {
+      code: CUSTOMER_SEND_OK_CODE,
+      severity: 'INFO',
+      message: 'Customer replies through this bot are reaching Telegram again.',
+      context: { botInstanceId },
+      recoversCode: CUSTOMER_SEND_FAILED_CODE,
+      // Named, so recovering ONE bot does not mark every other bot's open
+      // complaint resolved. The broad form is right only for a condition there
+      // can be one of, and a tenant can run several bots.
+      recoversDedupeKey: dedupeKey,
+    });
   }
 }
+
+/**
+ * What the operator reads. One sentence per reason, all under one code.
+ *
+ * Separate from the context so the row's `message` stays a sentence about the
+ * condition rather than a Telegram description verbatim — which can quote a chat
+ * id, and this table is projected out of the database into an operations channel.
+ */
+const MESSAGE_FOR: Readonly<Record<SendFailureReason, string>> = {
+  NO_BOT: 'A customer reply could not be sent: the bot instance has no usable token.',
+  UNCERTAIN: 'A customer reply may or may not have been delivered; it was not retried.',
+  REFUSED: 'Telegram refused a customer reply.',
+};

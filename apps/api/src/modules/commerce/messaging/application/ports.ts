@@ -48,3 +48,23 @@ export interface CustomerMessenger {
    */
   send(scope: TenantContext, message: CustomerMessage): Promise<CustomerSendOutcome>;
 }
+
+/**
+ * Whether ONE bot instance's send-failure condition is still open.
+ *
+ * Declared here, by the consumer, rather than added to `OperationalConditionReader`
+ * in the opslog module: this file already declares `CustomerTemplateRenderer` and
+ * `BotInstanceTokenSource` as narrow ports for the same reason — a messenger that
+ * held the whole operational-event reader could browse every tenant's operations
+ * log, and a send path has no business being able to. `DrizzleOperationalConditionReader`
+ * satisfies this structurally, so no adapter exists only to narrow it.
+ *
+ * The answer must come from the ROW, never from a field a process set on itself.
+ * A process that remembers "I opened the condition" cannot resolve one it did not
+ * open — a replica restart, or two replicas, and the condition stays open for ever
+ * describing a failure that has ended. That exact defect is recorded on
+ * `OperationalConditionReader` in the opslog module, where it was paid for once.
+ */
+export interface CustomerSendConditionReader {
+  conditionIsOpen(scope: TenantContext, dedupeKey: string): Promise<boolean>;
+}

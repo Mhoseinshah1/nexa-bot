@@ -4,6 +4,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { TELEGRAM_SECRET_TOKEN_HEADER } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import {
+  CUSTOMER_SEND_FAILED_CODE,
+  CUSTOMER_SEND_OK_CODE,
+} from '../../apps/api/src/modules/commerce/messaging/infrastructure/telegram-customer-messenger';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
 
@@ -31,6 +35,8 @@ import { migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
 
 const WEBHOOK_SECRET = 'a-sufficiently-long-secret-for-the-turn';
 const BOT_A = SEED_IDS.botA1;
+/** The tenant's SECOND bot, so a per-bot rule can be told from a per-tenant one. */
+const BOT_A2 = SEED_IDS.botA2;
 const BOT_B = SEED_IDS.botB1;
 
 interface Sent {
@@ -296,6 +302,43 @@ describe('the customer Telegram turn', () => {
     expect(String(after['first_seen_at'])).toBe(String(before['first_seen_at']));
   });
 
+  it('replies with the blocked text when the REPLAYED update predates the block', async () => {
+    /*
+     * The arrival is recomputed from the row, never read back from the stored reply.
+     *
+     * A replay answers from the idempotency record, which holds the arrival as it
+     * was when the update was first handled — `FIRST_SEEN` or `RETURNING`. If the
+     * operator blocks the customer in between and Telegram then redelivers that
+     * same update, answering from the stored arrival greets a blocked customer with
+     * the welcome text. The replay must re-read status and let BLOCKED outrank the
+     * arrival it remembered.
+     */
+    const id = (updateId += 1);
+    await start({ update: id });
+    const row = (await customers())[0] as Record<string, unknown>;
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.start.welcome']);
+
+    await api.container.database.db.execute(sql`
+      UPDATE customers
+         SET status = 'BLOCKED', blocked_at = now(), blocked_reason = 'blocked after the turn'
+       WHERE id = ${row['id'] as string}`);
+    sent = [];
+
+    // The SAME update_id, so this is the replay path and not a fresh contact.
+    const response = await start({ update: id });
+    expect(response.statusCode).toBe(201);
+    // One row still, and still blocked: the replay writes nothing.
+    const after = await customers();
+    expect(after).toHaveLength(1);
+    expect(after[0]?.['status']).toBe('BLOCKED');
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.blocked']);
+    expect(sent[0]?.body['text']).not.toBe(CATALOGUE_FA['bot.start.welcome']);
+    expect(sent[0]?.body['text']).not.toBe(CATALOGUE_FA['bot.start.welcome_back']);
+  });
+
   it('does NOT unblock a blocked customer on /start, and replies with the blocked text', async () => {
     await start();
     const row = (await customers())[0] as Record<string, unknown>;
@@ -404,6 +447,142 @@ describe('the customer Telegram turn', () => {
     const response = await start();
     expect(response.statusCode).toBe(201);
     expect(await customers()).toHaveLength(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // The send-failure condition: opens, closes, and can open AGAIN
+  // -------------------------------------------------------------------------
+
+  /** Every send condition this tenant has, newest state and all. */
+  const sendEvents = async () =>
+    (
+      await api.container.database.db.execute(sql`
+        SELECT code, severity, dedupe_key, occurrence_count, resolved_at, context
+          FROM operational_events
+         WHERE code IN (${CUSTOMER_SEND_FAILED_CODE}, ${CUSTOMER_SEND_OK_CODE})
+         ORDER BY first_seen_at ASC, code ASC`)
+    ).rows as Record<string, unknown>[];
+
+  const failWith = (status: number, description: string) => {
+    reply = (_request, response) => {
+      response.writeHead(status, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: false, description }));
+    };
+  };
+
+  it('collapses every kind of send failure for one bot onto ONE condition row', async () => {
+    // A 500 (retryable, so the outcome is UNKNOWN) and then a 400 (permanent, so
+    // REFUSED). These used to be two codes, `_unknown` and `_refused`, each keyed
+    // by its Telegram error code — which is how one bot accumulated a row per
+    // distinct error and a recovery could name none of them.
+    failWith(500, 'Internal Server Error');
+    await start();
+    failWith(400, 'Bad Request: chat not found');
+    await start({ from: { id: 777000111, is_bot: false, first_name: 'Sara' } });
+
+    const rows = await sendEvents();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.['code']).toBe(CUSTOMER_SEND_FAILED_CODE);
+    expect(rows[0]?.['dedupe_key']).toBe(`${CUSTOMER_SEND_FAILED_CODE}:${BOT_A}`);
+    expect(Number(rows[0]?.['occurrence_count'])).toBe(2);
+    expect(rows[0]?.['resolved_at']).toBeNull();
+    // The kind is in the CONTEXT, which the recorder rewrites per occurrence, so
+    // the open row says why it failed MOST RECENTLY rather than first.
+    const context = rows[0]?.['context'] as Record<string, unknown>;
+    expect(context['reason']).toBe('REFUSED');
+    expect(context['botInstanceId']).toBe(BOT_A);
+  });
+
+  it('resolves the condition on the next successful reply, and REOPENS it on the next failure', async () => {
+    /*
+     * The property Codex found missing, and the reason it matters.
+     *
+     * `operational-event-projector.ts` returns early for an occurrence that is
+     * neither new nor reopened. So a condition nothing ever resolves is announced
+     * exactly once, for ever: the first transient Telegram hiccup opened the row,
+     * and a genuine outage three weeks later was folded onto it silently. The
+     * three-way assertion below — open, resolved, open again with a higher count —
+     * is what a recovery has to produce for the NEXT failure to be seen at all.
+     */
+    failWith(502, 'Bad Gateway');
+    await start();
+    const opened = await sendEvents();
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.['resolved_at']).toBeNull();
+
+    // Telegram comes back. The default `reply` is a success.
+    reply = (_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true, result: { message_id: 12 } }));
+    };
+    await start({ from: { id: 777000222, is_bot: false, first_name: 'Nima' } });
+
+    const recovered = await sendEvents();
+    expect(recovered).toHaveLength(2);
+    const failure = recovered.find((row) => row['code'] === CUSTOMER_SEND_FAILED_CODE);
+    const recovery = recovered.find((row) => row['code'] === CUSTOMER_SEND_OK_CODE);
+    expect(failure?.['resolved_at']).not.toBeNull();
+    // The recovery is one-shot: no dedupe key, so it never needs closing itself.
+    expect(recovery?.['dedupe_key']).toBeNull();
+    expect(recovery?.['severity']).toBe('INFO');
+
+    // And now the failure can be SEEN again. Same row, reopened, counter advanced —
+    // which is what makes the projector announce it a second time.
+    failWith(502, 'Bad Gateway');
+    await start({ from: { id: 777000333, is_bot: false, first_name: 'Reza' } });
+    const again = await sendEvents();
+    const reopened = again.find((row) => row['code'] === CUSTOMER_SEND_FAILED_CODE);
+    expect(reopened?.['resolved_at']).toBeNull();
+    expect(Number(reopened?.['occurrence_count'])).toBe(2);
+  });
+
+  it('writes NO recovery when no condition is open, so the log is not a send log', async () => {
+    // Three ordinary, successful replies. A recovery on every success would make
+    // `operational_events` grow by a row per customer message — or, deduplicated,
+    // funnel every reply for a bot through one `FOR UPDATE`-locked row.
+    await start();
+    await start({ from: { id: 777000444, is_bot: false, first_name: 'Mina' } });
+    await start({ from: { id: 777000555, is_bot: false, first_name: 'Omid' } });
+    expect(sent).toHaveLength(3);
+    expect(await sendEvents()).toHaveLength(0);
+  });
+
+  it('resolves only the BOT whose reply succeeded, not every bot in the tenant', async () => {
+    // Two bots in ONE tenant, so the narrowing under test is the dedupe key and
+    // not the tenant. `recoversCode` alone resolves every open row of that code in
+    // the scope, and one bot coming back would then mark the other's condition
+    // resolved — an operator's unresolved list emptying itself of a bot nobody
+    // had fixed.
+    await api.container.database.db.execute(
+      sql`UPDATE bot_instances SET status = 'ACTIVE' WHERE id = ${BOT_A2}`,
+    );
+
+    // BOTH bots are failing, which is what makes the narrowing observable: with
+    // only one open row there is nothing a too-broad recovery could also resolve.
+    failWith(502, 'Bad Gateway');
+    await start({ bot: BOT_A });
+    await start({ bot: BOT_A2, from: { id: 777000666, is_bot: false, first_name: 'Hana' } });
+    expect(await sendEvents()).toHaveLength(2);
+
+    // Only BOT_A comes back.
+    reply = (_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true, result: { message_id: 13 } }));
+    };
+    await start({ bot: BOT_A, from: { id: 777000777, is_bot: false, first_name: 'Kian' } });
+
+    const rows = await sendEvents();
+    const open = rows.filter(
+      (row) => row['code'] === CUSTOMER_SEND_FAILED_CODE && row['resolved_at'] === null,
+    );
+    expect(open).toHaveLength(1);
+    expect(open[0]?.['dedupe_key'], "the recovery resolved the other bot's condition as well").toBe(
+      `${CUSTOMER_SEND_FAILED_CODE}:${BOT_A2}`,
+    );
+    // Exactly one recovery, and it is BOT_A's.
+    const recoveries = rows.filter((row) => row['code'] === CUSTOMER_SEND_OK_CODE);
+    expect(recoveries).toHaveLength(1);
+    expect((recoveries[0]?.['context'] as Record<string, unknown>)['botInstanceId']).toBe(BOT_A);
   });
 
   // -------------------------------------------------------------------------

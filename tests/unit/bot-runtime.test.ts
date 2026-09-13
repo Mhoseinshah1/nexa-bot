@@ -1,12 +1,17 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  CUSTOMER_ARRIVALS,
   CUSTOMER_NAME_MAX_LENGTH,
   CUSTOMER_USERNAME_MAX_LENGTH,
   normaliseProfileField,
   profileFactsFrom,
   referralCodeFor,
   providerUsernameFor,
+  customerListQuerySchema,
   telegramUserIdSchema,
+  type TemplateKey,
   failureOutcome,
   isMutatingOperation,
   debitIsWithinMeans,
@@ -14,7 +19,9 @@ import {
   clampDiscount,
   normaliseDiscountCode,
 } from '@nexa/contracts';
+import { CATALOGUE_FA } from '@nexa/i18n';
 import {
+  BOT_INTENTS,
   intentOf,
   privateChatIdOf,
   replyFor,
@@ -147,6 +154,91 @@ describe('profile metadata, normalised before it is ever stored', () => {
     expect(telegramUserIdSchema.safeParse('-1').success).toBe(false);
     expect(telegramUserIdSchema.safeParse('77 001').success).toBe(false);
     expect(telegramUserIdSchema.safeParse('').success).toBe(false);
+  });
+
+  it('sends no copy that promises a flow this head does not have', () => {
+    /*
+     * The two greetings told every customer to "use the menu to see the services you
+     * can buy". There is no menu: `replyFor` answers `/start` and answers everything
+     * else with "I did not understand that". So the product's first sentence to a
+     * customer instructed them to do the one thing guaranteed to fail.
+     *
+     * The SET is asserted first, and that is the half with teeth. Checking only the
+     * wording would leave the rule behind the moment somebody wires a catalogue send:
+     * the new key's copy would be unreviewed and this test would stay green. Pinning
+     * the reachable set means adding a send fails here and forces the question.
+     */
+    // Over the DECLARED vocabularies, not a typed-out list: adding an intent or an
+    // arrival without reviewing its copy is exactly the drift this case exists for,
+    // and a hand-written list would not notice either.
+    const reachable = new Set<TemplateKey>();
+    for (const intent of BOT_INTENTS) {
+      for (const arrival of CUSTOMER_ARRIVALS) {
+        const key = replyFor(intent, arrival);
+        if (key !== null) reachable.add(key);
+      }
+    }
+    expect([...reachable].sort()).toEqual([
+      'bot.blocked',
+      'bot.start.welcome',
+      'bot.start.welcome_back',
+      'bot.unknown_command',
+    ]);
+
+    // `منو` is "menu"; `خرید` is "purchase". A greeting may say purchasing is not yet
+    // available — it may not direct the customer to a menu, because there is none.
+    for (const key of reachable) {
+      const body = CATALOGUE_FA[key];
+      expect(body, `${key} has no body`).toBeTypeOf('string');
+      expect(body, `${key} points the customer at a menu that does not exist`).not.toContain('منو');
+    }
+  });
+
+  it('refuses the same ids in the OPERATOR search, not only at the webhook', () => {
+    /*
+     * One definition of what a Telegram id is, used on both sides.
+     *
+     * The list query took `z.string().max(32)`, so `?telegramUserId=12ab` was
+     * accepted, matched nothing and returned an empty page — which says "no such
+     * customer" when the truth is "that is not an id". It also made a comment in
+     * `users.tsx` false, because that comment justified client-side validation by
+     * the server's 400.
+     */
+    expect(customerListQuerySchema.safeParse({ telegramUserId: '5551234567' }).success).toBe(true);
+    for (const malformed of ['12ab', '0', '0777', '-1', '55 512', '', ' 5551234567']) {
+      expect(
+        customerListQuerySchema.safeParse({ telegramUserId: malformed }).success,
+        `accepted ${JSON.stringify(malformed)} as a Telegram id`,
+      ).toBe(false);
+    }
+    // A USERNAME search stays a bounded free string: a half-remembered username is
+    // what an operator actually has, and refusing one would remove the feature.
+    expect(customerListQuerySchema.safeParse({ username: 'al' }).success).toBe(true);
+  });
+
+  it('gives the customer entity ONE name in the frozen contract', () => {
+    /*
+     * `UserId` is canonical and `CustomerId` must not exist.
+     *
+     * A type alias is invisible to every other test in this suite — it compiles,
+     * nothing imports it, and the duplicate vocabulary it creates is exactly what
+     * `customer.ts` argues against three lines above where the alias was. Read from
+     * the SOURCE, because a removed export leaves no runtime trace to assert on.
+     */
+    const source = readFileSync(
+      resolve(import.meta.dirname, '../../packages/contracts/src/customer.ts'),
+      'utf8',
+    );
+    // Anchored to column zero, so the sentence IN the replacement comment that
+    // quotes the removed declaration is not mistaken for the declaration.
+    expect(source).not.toMatch(/^export type CustomerId\b/m);
+    expect(source).not.toMatch(/^export (?:const|interface|class) CustomerId\b/m);
+    // And the barrel does not re-export it under any spelling.
+    const barrel = readFileSync(
+      resolve(import.meta.dirname, '../../packages/contracts/src/index.ts'),
+      'utf8',
+    );
+    expect(barrel).not.toMatch(/\bCustomerId\b/);
   });
 });
 

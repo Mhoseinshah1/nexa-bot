@@ -218,6 +218,50 @@ describe('customer HTTP surface', () => {
     expect(typeof row['telegramUserId']).toBe('string');
   });
 
+  it('never moves last_seen_at BACKWARDS when two contacts commit out of order', async () => {
+    /*
+     * `last_seen_at` is `greatest(stored, proposed)`, not an assignment.
+     *
+     * Every turn reads `Clock.now()` before it opens its transaction, so two
+     * contacts from one customer can reach the upsert in the opposite order to
+     * their timestamps — the second request commits first, then the first
+     * request arrives holding the older instant. Assigning unconditionally made
+     * the operator-facing "last heard from" column jump into the past, which is
+     * the one thing a column read as activity must not do.
+     *
+     * Driven through the REAL repository with the two instants chosen explicitly,
+     * because the ordering under test is exactly what a wall clock will not
+     * reproduce on demand.
+     */
+    const repository = new DrizzleCustomerRepository(api.container.database.db);
+    const later = new Date('2026-03-02T10:00:00.000Z');
+    const earlier = new Date('2026-03-01T10:00:00.000Z');
+    const resolveAt = (now: Date) =>
+      repository.resolve(tenantA, {
+        id: api.container.ids.uuid() as UserId,
+        telegramUserId: '5559990001',
+        profile: { username: 'ali', firstName: null, lastName: null, languageCode: null },
+        botInstanceId: SEED_IDS.botA1 as unknown as BotInstanceId,
+        now,
+      });
+
+    await resolveAt(later);
+    const second = await resolveAt(earlier);
+
+    // The later instant stands, in the returned record and in the row.
+    expect(second.customer.lastSeenAt.toISOString()).toBe(later.toISOString());
+    const stored = (
+      await api.container.database.db.execute(sql`
+        SELECT to_char(last_seen_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at,
+               to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS written
+          FROM customers WHERE telegram_user_id = '5559990001'`)
+    ).rows[0] as { at: string; written: string };
+    expect(stored.at).toBe('2026-03-02T10:00:00Z');
+    // `updated_at` is deliberately NOT guarded: it records when the row was last
+    // written, which is this statement, whichever instant it carried.
+    expect(stored.written).toBe('2026-03-01T10:00:00Z');
+  });
+
   // -------------------------------------------------------------------------
   // RBAC — three separate answers
   // -------------------------------------------------------------------------
