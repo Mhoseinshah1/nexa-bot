@@ -795,6 +795,8 @@ export const WEB_FA = {
    */
   'web.product_catalogue': 'در فهرست ربات',
   'web.product_in_catalogue': 'نمایش داده می‌شود',
+  'web.product_currency_hint':
+    'باید همان واحد پولی باشد که در تنظیمات برای فروشگاه انتخاب شده است؛ در غیر این صورت ذخیره نمی‌شود.',
   'web.product_gap_banner_title': 'این محصول در فهرست ربات نیست',
   'web.product_gap_inactive': 'غیرفعال است؛ تا فعال نشود فروخته نمی‌شود.',
   'web.product_gap_unlisted': 'مخاطب آن پنهان است؛ فروخته می‌شود ولی در فهرست نمی‌آید.',

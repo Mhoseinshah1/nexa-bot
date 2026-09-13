@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  CURRENCY_CODES,
+  SALES_CURRENCY_CODES,
   MAX_DEVICE_LIMIT,
   MAX_DURATION_DAYS,
   PRODUCT_DESCRIPTION_MAX_LENGTH,
@@ -705,13 +705,27 @@ function ProductForm({
         />
       </Field>
 
-      <Field label={t('web.product_currency')} htmlFor={`product-currency-${mode}`}>
+      {/*
+        `SALES_CURRENCY_CODES`, NOT the whole money catalogue.
+
+        This offered all five until the Codex review of this branch, three of which no
+        store can sell in: USD, EUR and USDT exist in `CURRENCY_CODES` because a
+        CONVERTED payment quote will need them, which is a different question from what
+        a shop prices in. Offering them made a refusal the only way to discover they
+        were not real options. The hint names the setting that decides which of the two
+        is right, because that is where an operator changes it.
+      */}
+      <Field
+        label={t('web.product_currency')}
+        hint={t('web.product_currency_hint')}
+        htmlFor={`product-currency-${mode}`}
+      >
         <select
           id={`product-currency-${mode}`}
           value={state.priceCurrency}
           onChange={(event) => set('priceCurrency', event.target.value as CurrencyCode)}
         >
-          {CURRENCY_CODES.map((code) => (
+          {SALES_CURRENCY_CODES.map((code) => (
             <option key={code} value={code}>
               {code}
             </option>

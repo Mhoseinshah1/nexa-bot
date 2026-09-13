@@ -594,6 +594,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
   });
 
+  const settingRepository = new DrizzleSettingRepository(database.db);
+  const settingsResolver = new SettingsResolver(settingRepository, opsLog);
+
   /**
    * Products, under the FROZEN `catalog.*` permissions.
    *
@@ -613,6 +616,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      * named 404 rather than an integrity violation reported as a 500.
      */
     panels: new DrizzlePanelDirectory(database.db),
+    /* `sales.currency`. A product is priced in what the tenant sells in, or refused. */
+    settings: settingsResolver,
     guard,
     audit,
     opsLog,
@@ -627,9 +632,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   // ---------------------------------------------------------------------------
   // Control plane
   // ---------------------------------------------------------------------------
-
-  const settingRepository = new DrizzleSettingRepository(database.db);
-  const settingsResolver = new SettingsResolver(settingRepository, opsLog);
 
   /**
    * Orders, up to the boundary where money begins.

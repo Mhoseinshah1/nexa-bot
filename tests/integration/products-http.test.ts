@@ -313,6 +313,66 @@ describe('product HTTP surface', () => {
     expect(unpriced.priceAmount).toBeNull();
   });
 
+  it('refuses a price in a currency the installation does not sell in', async () => {
+    /*
+     * `sales.currency` was declared, rendered by the admin, and enforced by nothing.
+     * `products_price_currency_check` admits the whole money vocabulary — which exists
+     * for CONVERTED payment quotes, a different question from what a shop prices in —
+     * so a tenant selling in Toman could hold a product priced in USD.
+     *
+     * A catalogue in two currencies is the legacy defect made durable: one card-to-card
+     * template said تومان where its twin said ریال for the same `{price}` placeholder,
+     * a factor of ten, invisible in either screen alone.
+     */
+    for (const currency of ['USD', 'EUR', 'USDT', 'IRR'] as const) {
+      const response = await post(
+        PRODUCT_ROUTES.create,
+        editorCookie,
+        body({ priceCurrency: currency }),
+      );
+      expect(response.statusCode, `${currency}: ${response.body}`).toBe(409);
+      expect(response.json().error.code).toBe(COMMERCE_ERROR_CODES.PRODUCT_CURRENCY_UNSUPPORTED);
+    }
+
+    // IRR is in that list on purpose: it is a LEGAL store currency and still wrong
+    // here, because this installation sells in the default IRT. A check that merely
+    // rejected the non-Iranian three would pass a test built from those alone.
+    const list = productListResponseSchema.parse(
+      (await get(PRODUCT_ROUTES.list, editorCookie)).json(),
+    );
+    expect(list.products).toHaveLength(0);
+  });
+
+  it('follows the setting when it changes, and does not re-price what exists', async () => {
+    /*
+     * Two halves of one decision, and the second is the one worth pinning.
+     *
+     * The check reads `sales.currency` inside the write, so moving the store to Rial
+     * makes IRR the accepted currency at once and IRT the refused one. It does NOT
+     * touch products already priced: every stored amount carries its own currency, and
+     * reinterpreting old amounts under a new unit is the factor of ten the setting
+     * exists to prevent.
+     */
+    const priced = await createProduct();
+    expect(priced.priceCurrency).toBe('IRT');
+
+    await api.container.database.db.execute(sql`
+      INSERT INTO setting_values (id, tenant_id, setting_key, value, version, updated_at)
+      VALUES (${api.container.ids.uuid()}, ${tenantA.tenantId}, 'sales.currency',
+              ${JSON.stringify('IRR')}::jsonb, 1, now())`);
+
+    const inRial = await post(PRODUCT_ROUTES.create, editorCookie, body({ priceCurrency: 'IRR' }));
+    expect(inRial.statusCode, inRial.body).toBe(201);
+
+    const nowWrong = await post(PRODUCT_ROUTES.create, editorCookie, body());
+    expect(nowWrong.statusCode).toBe(409);
+    expect(nowWrong.json().error.code).toBe(COMMERCE_ERROR_CODES.PRODUCT_CURRENCY_UNSUPPORTED);
+
+    // The already-priced product is untouched and still says what it was priced in.
+    const unchanged = await get(PRODUCT_ROUTES.detail(priced.id), editorCookie);
+    expect(productResponseSchema.parse(unchanged.json()).product.priceCurrency).toBe('IRT');
+  });
+
   it('refuses a zero price, because free is not a concept here', async () => {
     const response = await post(PRODUCT_ROUTES.create, editorCookie, body({ priceAmount: '0' }));
     expect(response.statusCode).toBe(400);

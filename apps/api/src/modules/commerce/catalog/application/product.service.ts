@@ -7,6 +7,7 @@ import {
   productIdSchema,
   type ActorContext,
   type AuditWriter,
+  type SalesCurrencyCode,
   type Clock,
   type IdGenerator,
   type IdempotencyStore,
@@ -23,6 +24,7 @@ import { rememberOnce } from '../../../platform/idempotency/application/remember
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
+import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { OperationalEventRecorder } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
@@ -73,6 +75,8 @@ export interface ProductServiceDeps {
   readonly sessions: SessionRepository;
   readonly idempotency: IdempotencyStore;
   readonly scopeActivity: ScopeActivityReader;
+  /** Reads `sales.currency`. See `assertPriceCurrency`. */
+  readonly settings: SettingsResolver;
   readonly clock: Clock;
   readonly ids: IdGenerator;
 }
@@ -173,6 +177,7 @@ export class ProductService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         await this.assertPanelIsOurs(scope, input.draft.panelId, tx);
+        await this.assertPriceCurrency(scope, input.draft.price, tx);
 
         const created = await this.deps.repository.create(
           scope,
@@ -249,6 +254,7 @@ export class ProductService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         await this.assertPanelIsOurs(scope, input.edit.panelId, tx);
+        await this.assertPriceCurrency(scope, input.edit.price, tx);
 
         const before = await this.deps.repository.findById(scope, productId, tx);
         if (before === null) {
@@ -449,6 +455,45 @@ export class ProductService {
     if (panelId === null) return;
     if (!(await this.deps.panels.existsInScope(scope, panelId, tx))) {
       throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
+    }
+  }
+
+  /**
+   * A product is priced in the currency the tenant SELLS in, and in no other.
+   *
+   * `sales.currency` was declared, rendered by the admin, and enforced by nothing — the
+   * defect Codex found. A tenant selling in Toman could hold a product priced in USD,
+   * and `products_price_currency_check` would accept it because that constraint admits
+   * the whole money vocabulary, which exists for converted payment quotes rather than
+   * for store prices.
+   *
+   * A catalogue in two currencies is the legacy defect made durable. The research
+   * records one card-to-card template saying تومان where its twin says ریال for the
+   * same `{price}` placeholder — a factor of ten, invisible in either screen alone.
+   *
+   * Read INSIDE the transaction and from the resolver, not from a cached value: the
+   * setting is RUNTIME-mutable, and a price written against a stale reading is exactly
+   * the disagreement this check exists to prevent.
+   *
+   * A null price is not checked, because there is no currency to disagree with. The
+   * catalogue refuses such a product as NOT_PRICED where the message names it.
+   */
+  private async assertPriceCurrency(
+    scope: TenantContext,
+    price: { readonly currency: string } | null,
+    tx: TransactionScope,
+  ): Promise<void> {
+    if (price === null) return;
+    const selling = await this.deps.settings.valueOf<SalesCurrencyCode>(
+      scope,
+      'sales.currency',
+      tx,
+    );
+    if (price.currency !== selling) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PRODUCT_CURRENCY_UNSUPPORTED,
+        `This installation sells in ${selling}.`,
+      );
     }
   }
 

@@ -1,3 +1,4 @@
+import { SALES_CURRENCY_CODES } from '@nexa/contracts';
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
@@ -235,6 +236,22 @@ describe('the product form', () => {
       await screen.findByText(/قیمت باید عددی صحیح و بزرگ‌تر از صفر باشد/),
     ).toBeInTheDocument();
     expect((screen.getByText('ذخیرهٔ تغییرات') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('offers ONLY the currencies a store can sell in', async () => {
+    /*
+     * It offered all five until the Codex review of this branch — USD, EUR and USDT
+     * included, none of which any tenant can sell in. `CURRENCY_CODES` is wide because
+     * a CONVERTED payment quote will need them; `SALES_CURRENCY_CODES` is what a shop
+     * prices in, and the server now refuses everything outside it.
+     *
+     * Asserted as the EXACT option set. A test that only checked USD was gone would
+     * pass a picker that had quietly dropped IRR as well, leaving a Rial installation
+     * unable to price anything.
+     */
+    formFor();
+    const select = (await screen.findByLabelText(/واحد پول/)) as HTMLSelectElement;
+    expect([...select.options].map((option) => option.value)).toEqual([...SALES_CURRENCY_CODES]);
   });
 
   it('refuses an empty title', async () => {
