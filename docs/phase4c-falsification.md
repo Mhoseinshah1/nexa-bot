@@ -159,3 +159,53 @@ Nine mutations over the Telegram rules, eight rules covered. T06 is not a row in
 the table, for the reason W06 is not: a citation table lists rules with tests, and
 T06 names none — it is the second-backstop observation recorded above, and T06b
 is the mutation that states its rule where only one backstop exists.
+
+## What the concurrency round found — a real P0
+
+**A wallet could go negative, and the test written to attack it proved it.**
+`WALLET_ALLOWS_NEGATIVE_BALANCE` is `false`, and it was not enforced: the produced
+interleaving drove a balance to **-250,000**.
+
+The cause is worth recording because it is not obvious and the code's own comment
+asserted the opposite. The ledger is APPEND-ONLY, so two debits contend on **no
+shared row** — there is nothing for a second `INSERT` to block on. Under
+PostgreSQL's default READ COMMITTED a `SELECT SUM(...)` does not wait for another
+transaction's uncommitted insert, so each debit summed a balance that omitted the
+other, each decided it could cover, and both committed. The comment claiming the
+second "blocks, and then sees it" described a row lock nothing was taking.
+
+`WalletRepository.lockCustomer` — `SELECT ... FOR UPDATE` on the customer row,
+taken before every sufficiency read — is what makes the check a decision. C01 and
+C02 are the mutations that state it, one per caller.
+
+## Concurrency, HTTP and the Web Admin
+
+| #    | Rule                                                             | Mutation                                           | Test that dies                                                                                                  | Result |
+| ---- | ---------------------------------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------ |
+| C01  | A debit locks the customer row before reading the balance        | `lockCustomer` removed from `WalletService.adjust` | `financial-concurrency.test.ts` › will not let two debits spend the same money                                  | KILLED |
+| C02  | A wallet settlement locks it too                                 | `lockCustomer` removed from `settleFromWallet`     | `financial-concurrency.test.ts` › will not let an admin debit and a purchase both take the last of the money    | KILLED |
+| H02  | A malformed amount is a 400, not an exception out of `safeParse` | the `superRefine` early `return` removed           | `wallet-payments-http.test.ts` › refuses an amount of zero, a negative, one past the ceiling and a bad currency | KILLED |
+| W01w | The wallet card draws no control that could set a balance        | a «صفر کردن موجودی» button added to the toolbar    | `users.test.tsx` › draws NO control that could set a balance or remove an entry                                 | KILLED |
+| W02w | A confirmation sends a note and NOTHING else                     | an `amount` added to the request body              | `payments.test.tsx` › sends a NOTE and nothing else when confirming                                             | KILLED |
+| W03w | `/payments` resolves to the real page, not the placeholder       | the `/payments` route removed from `resolve`       | `payments.test.tsx` › resolves to the real page, not the planned placeholder                                    | KILLED |
+| W04w | The order page shows WHEN the money arrived                      | `order_settled_at` → `order_expires_at`            | `products-and-orders.test.tsx` › shows when the money arrived, and claims nothing beyond it                     | KILLED |
+
+**H01 is bounded, not untested**, and the bound is checked rather than assumed:
+`PAYMENT_AMOUNT_MAX_MINOR` is 1,000,000,000,000 and 2^53 is 9,007,199,254,740,992,
+so every amount the schema ACCEPTS round-trips through `Number` exactly. The
+precision rule that can actually be violated is on the SUM — a balance grown past
+2^53 across many entries — and that lives in the repository, where
+`wallet.test.ts` appends 9,007,199,254,740,993 and proves it. Recorded as a third
+instance of the shape W06 and T06 named: a mutation that is unobservable because
+another rule makes it so.
+
+Two bad aims are recorded rather than dressed up as coverage: W01w was first run
+as a `data-` attribute, which leaves every button label unchanged and so cannot be
+seen by an enumeration of labels; W03w was first pointed at the maturity badge,
+which is not what makes a page real. Both were re-run against the rule itself.
+
+H01 is therefore not a row in the table — the same rule W06 and T06 follow: a
+citation table lists rules with tests, and a mutation nothing can observe names
+none.
+
+Eight mutations over the concurrency, HTTP and Web rules; seven rules covered.
