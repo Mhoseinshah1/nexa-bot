@@ -2,11 +2,22 @@ import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CUSTOMER_BLOCK_REASON_MAX_LENGTH,
+  WALLET_PAGE_DEFAULT,
   telegramUserIdSchema,
   type CustomerStatus,
   type CustomerSummaryResponse,
+  type LedgerDirection,
+  type WalletEntrySummaryResponse,
 } from '@nexa/contracts';
-import { blockCustomer, fetchCustomer, fetchCustomers, unblockCustomer } from '../api/client';
+import {
+  adjustWallet,
+  blockCustomer,
+  fetchCustomer,
+  fetchCustomers,
+  fetchWallet,
+  fetchWalletEntries,
+  unblockCustomer,
+} from '../api/client';
 import { formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
@@ -24,6 +35,7 @@ import {
   Field,
   KV,
   Ltr,
+  Money,
   PageHead,
   Pills,
   StateSwitch,
@@ -36,13 +48,16 @@ import {
  * Customers — the first product surface this codebase genuinely operates.
  *
  * What this page does NOT draw is as deliberate as what it does. There is no
- * wallet balance, no order count, no service list, no payment history, no
- * discount and no reseller column — because no order, payment, wallet, service,
- * discount or reseller entity exists in this release. A `0` in any of those
- * places would be a measurement of something unbuilt, which is the legacy
- * statistics screen counting configured panels as connected. The scope card
- * says so in words instead, which is what `planned.tsx` argues for: an empty
- * table claims "you have none of these", and that is also false.
+ * service list, no discount and no reseller column — because none of those
+ * entities exists in this release. A `0` in any of those places would be a
+ * measurement of something unbuilt, which is the legacy statistics screen
+ * counting configured panels as connected. The scope card says so in words
+ * instead, which is what `planned.tsx` argues for: an empty table claims "you
+ * have none of these", and that is also false.
+ *
+ * The wallet IS drawn, as of 4C, and its balance is DERIVED — summed from the
+ * ledger on every read. There is no stored balance for this page to disagree
+ * with, which is the whole architecture rather than a rendering detail.
  *
  * Every column below renders a field the server actually sent, and
  * `customerSummarySchema` makes that structural rather than careful: a field
@@ -436,10 +451,16 @@ function statusFromQuery(raw: string | null): CustomerStatus | null {
 export function UserDetailPage({
   id,
   mayBlock,
+  mayViewWallet,
+  mayCredit,
+  mayDebit,
   denied,
 }: {
   id: string;
   mayBlock: boolean;
+  mayViewWallet: boolean;
+  mayCredit: boolean;
+  mayDebit: boolean;
   denied: boolean;
 }) {
   const notify = useToast();
@@ -601,6 +622,13 @@ export function UserDetailPage({
               )}
             </Card>
 
+            <WalletCard
+              customerId={id}
+              mayView={mayViewWallet}
+              mayCredit={mayCredit}
+              mayDebit={mayDebit}
+            />
+
             <Card title={t('web.users_scope_title')}>
               <p className="muted">{t('web.users_scope_body')}</p>
             </Card>
@@ -608,5 +636,273 @@ export function UserDetailPage({
         )}
       </StateSwitch>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Wallet
+// ---------------------------------------------------------------------------
+
+const DIRECTION_LABELS: Readonly<Record<LedgerDirection, WebKey>> = {
+  CREDIT: 'web.wallet_direction_credit',
+  DEBIT: 'web.wallet_direction_debit',
+};
+
+const DIRECTION_TONES: Readonly<Record<LedgerDirection, Tone>> = {
+  CREDIT: 'ok',
+  DEBIT: 'warn',
+};
+
+/**
+ * A customer's wallet: the derived balance, the ledger, and one way to move it.
+ *
+ * Three things this card deliberately does NOT offer, each of which the legacy
+ * system did:
+ *
+ * - **No balance field to type into.** The number shown is summed from the entries
+ *   below it on every read. `صفر کردن موجودی` — "zero the balance" — is a
+ *   set-balance in disguise, and there is no ledger reason that could honestly
+ *   describe it.
+ * - **No edit and no delete on a row.** The ledger is append-only, enforced by
+ *   triggers, and the copy says so rather than leaving an operator to discover it
+ *   from a failed request. Correcting a mistake is a NEW entry in the other
+ *   direction, which is what leaves both facts in the history.
+ * - **No reason picker.** The server derives the reason from the direction, so a
+ *   request cannot file a debit as a `PURCHASE` — a movement that would then read,
+ *   for ever, as a customer having bought something.
+ *
+ * CREDIT and DEBIT are separate permissions with different risk labels, and this
+ * draws them separately: an operator who may credit and not debit sees one button.
+ * The service charges both itself — the missing button is a courtesy, never the
+ * enforcement.
+ */
+function WalletCard({
+  customerId,
+  mayView,
+  mayCredit,
+  mayDebit,
+}: {
+  customerId: string;
+  mayView: boolean;
+  mayCredit: boolean;
+  mayDebit: boolean;
+}) {
+  const notify = useToast();
+  const queries = useQueryClient();
+  const submission = useSubmissionKey();
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [amount, setAmount] = useState('');
+  const [note, setNote] = useState('');
+
+  const wallet = useQuery({
+    queryKey: ['wallet', customerId],
+    queryFn: () => fetchWallet(customerId),
+    enabled: mayView,
+  });
+  const entries = useQuery({
+    queryKey: ['wallet-entries', customerId, cursor],
+    queryFn: () =>
+      fetchWalletEntries(customerId, {
+        limit: WALLET_PAGE_DEFAULT,
+        ...(cursor === null ? {} : { cursor }),
+      }),
+    enabled: mayView,
+  });
+
+  const adjust = useMutation({
+    mutationFn: (input: { direction: LedgerDirection }) => {
+      /*
+       * The key is bound to the PAYLOAD, so editing the amount and pressing again
+       * is a new command rather than a replay the store would refuse as a mismatch.
+       * Pressing the same button twice with the same figures is a replay, and the
+       * server answers with the entry it already wrote. See `useSubmissionKey`.
+       */
+      const idempotencyKey = submission.current({
+        customerId,
+        direction: input.direction,
+        amount,
+        note,
+      });
+      return adjustWallet({
+        customerId,
+        idempotencyKey,
+        direction: input.direction,
+        // A decimal STRING in minor units, straight through. Never parsed to a
+        // `number` here: JSON has one numeric type and it rounds past 2^53.
+        amount: amount.trim(),
+        currency: wallet.data?.wallet.currency ?? 'IRT',
+        note: note.trim(),
+      });
+    },
+    onSuccess: (_response, variables) => {
+      submission.settle();
+      notify({
+        tone: 'ok',
+        message:
+          variables.direction === 'CREDIT'
+            ? t('web.wallet_credit_done')
+            : t('web.wallet_debit_done'),
+      });
+      setAmount('');
+      setNote('');
+      // Both are re-read rather than patched: the balance is DERIVED, so a client
+      // that adjusted its own copy would be inventing the one number this whole
+      // design exists to keep computed.
+      void queries.invalidateQueries({ queryKey: ['wallet', customerId] });
+      void queries.invalidateQueries({ queryKey: ['wallet-entries', customerId] });
+    },
+    // `settleOn`: a 4xx is an answer and the next press is a new question; a 5xx or
+    // a dropped connection may have committed, and a fresh key on the retry would
+    // be a SECOND movement of somebody's money.
+    onError: (error) => submission.settleOn(error),
+  });
+
+  if (!mayView) {
+    return (
+      <Card title={t('web.wallet_title')}>
+        <Banner tone="info">{t('web.wallet_denied')}</Banner>
+      </Card>
+    );
+  }
+
+  const columns: Column<WalletEntrySummaryResponse>[] = [
+    {
+      key: 'direction',
+      header: t('web.wallet_direction'),
+      render: (row) => (
+        <Badge tone={DIRECTION_TONES[row.direction]}>{t(DIRECTION_LABELS[row.direction])}</Badge>
+      ),
+    },
+    {
+      key: 'amount',
+      header: t('web.wallet_balance'),
+      // Positive, always, with the sign carried by the direction beside it — the
+      // ledger's own shape, preserved to the screen.
+      render: (row) => <Money value={{ amountMinor: row.amount, currency: row.currency }} />,
+    },
+    { key: 'reason', header: t('web.wallet_reason'), render: (row) => row.reason },
+    {
+      key: 'actor',
+      header: t('web.wallet_actor'),
+      render: (row) =>
+        row.actorAdminId === null ? (
+          <span className="faint">{t('web.wallet_actor_system')}</span>
+        ) : (
+          <Copyable value={row.actorAdminId} />
+        ),
+    },
+    {
+      key: 'note',
+      header: t('web.wallet_note'),
+      render: (row) => (row.note === null ? <Dash /> : row.note),
+    },
+    {
+      key: 'createdAt',
+      header: t('web.wallet_created_at'),
+      render: (row) => formatTimestamp(row.createdAt),
+    },
+  ];
+
+  const balance = wallet.data?.wallet;
+
+  return (
+    <Card title={t('web.wallet_title')}>
+      <StateSwitch query={wallet}>
+        {balance === undefined ? null : (
+          <KV
+            items={[
+              [
+                t('web.wallet_balance'),
+                <Money
+                  key="b"
+                  value={{ amountMinor: balance.balanceAmount, currency: balance.currency }}
+                />,
+              ],
+              [t('web.wallet_entry_count'), String(balance.entryCount)],
+            ]}
+          />
+        )}
+      </StateSwitch>
+      <p className="muted">{t('web.wallet_balance_hint')}</p>
+
+      <h3>{t('web.wallet_history_title')}</h3>
+      <StateSwitch query={entries}>
+        {entries.data === undefined ? null : entries.data.entries.length === 0 ? (
+          <Empty title={t('web.wallet_history_empty')} />
+        ) : (
+          <>
+            <DataTable
+              caption={t('web.wallet_history_title')}
+              columns={columns}
+              rows={entries.data.entries}
+              rowKey={(row) => row.id}
+            />
+            <CursorPager
+              shown={entries.data.entries.length}
+              hasPrevious={cursor !== null}
+              hasNext={entries.data.nextCursor !== null}
+              onPrevious={() => setCursor(null)}
+              onNext={() => setCursor(entries.data?.nextCursor ?? null)}
+            />
+          </>
+        )}
+      </StateSwitch>
+      <p className="muted">{t('web.wallet_immutable')}</p>
+
+      {mayCredit || mayDebit ? (
+        <>
+          <h3>{t('web.wallet_adjust_title')}</h3>
+          <p className="muted">{t('web.wallet_adjust_hint')}</p>
+          <Field label={t('web.wallet_adjust_amount')} htmlFor="wallet-amount">
+            <input
+              id="wallet-amount"
+              inputMode="numeric"
+              value={amount}
+              onChange={(event) => setAmount(event.target.value)}
+            />
+          </Field>
+          <Field label={t('web.wallet_adjust_note')} htmlFor="wallet-note">
+            <input
+              id="wallet-note"
+              value={note}
+              maxLength={500}
+              onChange={(event) => setNote(event.target.value)}
+            />
+          </Field>
+          <div className="toolbar">
+            {mayCredit && (
+              <button
+                type="button"
+                className="btn primary sm"
+                disabled={adjust.isPending}
+                onClick={() => adjust.mutate({ direction: 'CREDIT' })}
+              >
+                {t('web.wallet_credit')}
+              </button>
+            )}
+            {mayDebit && (
+              <button
+                type="button"
+                className="btn danger sm"
+                disabled={adjust.isPending}
+                onClick={() => adjust.mutate({ direction: 'DEBIT' })}
+              >
+                {t('web.wallet_debit')}
+              </button>
+            )}
+          </div>
+          {adjust.error !== null && <Banner tone="danger">{messageFor(adjust.error)}</Banner>}
+        </>
+      ) : null}
+
+      {/*
+        Named separately, because the two permissions are separate decisions with
+        different risk labels. An operator who may credit and not debit is told
+        which one they are missing rather than shown a card with one button and no
+        explanation.
+      */}
+      {!mayCredit && <Banner tone="info">{t('web.wallet_credit_denied')}</Banner>}
+      {!mayDebit && <Banner tone="info">{t('web.wallet_debit_denied')}</Banner>}
+    </Card>
   );
 }

@@ -23,6 +23,48 @@ import { customer, renderPage, stubApi } from './harness';
 const LIST_ROUTE = { path: '/users', query: new URLSearchParams() };
 const ROW_ID = '019210ab-cdef-7012-8345-6789abcdef01';
 
+/**
+ * The wallet permissions, all off.
+ *
+ * Spread into the cases whose subject is something else, so those keep testing what
+ * they were written for. A case about the wallet names its own permissions.
+ */
+const NO_WALLET = { mayViewWallet: false, mayCredit: false, mayDebit: false } as const;
+
+const walletRoutes = (balance: Record<string, unknown> = {}, entries: readonly unknown[] = []) => [
+  {
+    url: `/users/${ROW_ID}/wallet/entries`,
+    body: { entries, nextCursor: null },
+  },
+  {
+    url: `/users/${ROW_ID}/wallet`,
+    body: {
+      wallet: {
+        customerId: ROW_ID,
+        balanceAmount: '0',
+        currency: 'IRT',
+        entryCount: 0,
+        ...balance,
+      },
+    },
+  },
+];
+
+const walletEntry = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+  id: '019210ab-cdef-7012-8345-6789abcdef99',
+  customerId: ROW_ID,
+  direction: 'CREDIT',
+  reason: 'ADMIN_CREDIT',
+  amount: '250000',
+  currency: 'IRT',
+  orderId: null,
+  paymentId: null,
+  actorAdminId: null,
+  note: 'goodwill',
+  createdAt: '2026-01-01T00:00:00.000Z',
+  ...overrides,
+});
+
 const list = (customers: unknown[], nextCursor: string | null = null) => [
   { url: '/users', body: { customers, nextCursor } },
 ];
@@ -399,6 +441,7 @@ describe('the customer list', () => {
 describe('the customer detail', () => {
   const detail = (overrides: Record<string, unknown> = {}) => [
     { url: `/users/${ROW_ID}`, body: { customer: customer(overrides) } },
+    ...walletRoutes(),
   ];
 
   /**
@@ -410,12 +453,22 @@ describe('the customer detail', () => {
    */
   it('carries no recent-activity feed and no commercial cards', async () => {
     stubApi(detail());
-    const { container } = renderPage(<UserDetailPage id={ROW_ID} mayBlock denied={false} />);
+    const { container } = renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} denied={false} />,
+    );
     await screen.findByText('ali_tehran', { exact: false });
     const text = container.textContent ?? '';
     expect(text).not.toContain('فعالیت اخیر');
-    expect(text).not.toContain('موجودی');
     expect(text).not.toContain('برچسب');
+    /*
+     * «موجودی» was in this list and is not any more.
+     *
+     * Phase 4A asserted that the detail page carried no balance, which was true
+     * of 4A: no wallet existed. 4C builds one, and the card is rendered above —
+     * so the assertion is REPLACED rather than deleted, by the wallet tests
+     * below that check what it now says. Leaving it would have failed; deleting
+     * it silently would have removed the only thing watching this region.
+     */
   });
 
   it('sends a block with an idempotency key and the operator note', async () => {
@@ -432,7 +485,7 @@ describe('the customer detail', () => {
         },
       },
     ]);
-    renderPage(<UserDetailPage id={ROW_ID} mayBlock denied={false} />);
+    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} denied={false} />);
     await screen.findByLabelText('دلیل (اختیاری)');
 
     fireEvent.change(screen.getByLabelText('دلیل (اختیاری)'), { target: { value: 'spam' } });
@@ -455,7 +508,7 @@ describe('the customer detail', () => {
 
   it('offers unblock instead of block once the customer is blocked', async () => {
     stubApi(detail({ status: 'BLOCKED', blockedAt: '2026-09-11T09:00:00.000Z' }));
-    renderPage(<UserDetailPage id={ROW_ID} mayBlock denied={false} />);
+    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} denied={false} />);
     await screen.findByRole('button', { name: 'رفع مسدودی' });
     // Never both. Two enabled controls for opposite directions is how a
     // double-click blocks and unblocks in one gesture.
@@ -467,7 +520,7 @@ describe('the customer detail', () => {
       ...detail(),
       { url: `/users/${ROW_ID}/block`, body: { customer: customer({ status: 'BLOCKED' }) } },
     ]);
-    renderPage(<UserDetailPage id={ROW_ID} mayBlock denied={false} />);
+    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} denied={false} />);
     await screen.findByRole('button', { name: 'مسدود کردن' });
     fireEvent.click(screen.getByRole('button', { name: 'مسدود کردن' }));
 
@@ -483,7 +536,7 @@ describe('the customer detail', () => {
 
   it('draws no block control at all without users.block', async () => {
     stubApi(detail());
-    renderPage(<UserDetailPage id={ROW_ID} mayBlock={false} denied={false} />);
+    renderPage(<UserDetailPage id={ROW_ID} mayBlock={false} {...NO_WALLET} denied={false} />);
     await screen.findByText(/users\.block/);
     expect(screen.queryByRole('button', { name: 'مسدود کردن' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'رفع مسدودی' })).toBeNull();
@@ -508,7 +561,7 @@ describe('the customer detail', () => {
         },
       },
     ]);
-    renderPage(<UserDetailPage id={ROW_ID} mayBlock denied={false} />);
+    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...NO_WALLET} denied={false} />);
     await screen.findByRole('button', { name: 'مسدود کردن' });
     fireEvent.click(screen.getByRole('button', { name: 'مسدود کردن' }));
 
@@ -545,5 +598,222 @@ describe('the route table', () => {
     ]);
     renderPage(resolved.element as ReactElement);
     await screen.findByText('ali_tehran', { exact: false });
+  });
+});
+
+/**
+ * The wallet card on the customer detail.
+ *
+ * Every case here drives the REAL page — the real client, the real fetch, the real
+ * button. The Phase 4B lesson is why: `setQueries` was tested and neither call site
+ * was, so reverting a page's handler left the suite green. A helper with no call-site
+ * test is a helper whose page can be broken without anybody noticing.
+ */
+describe('the wallet card', () => {
+  const ALL_WALLET = { mayViewWallet: true, mayCredit: true, mayDebit: true } as const;
+
+  it('renders the DERIVED balance, its entry count, and says it is derived', async () => {
+    stubApi([
+      { url: `/users/${ROW_ID}`, body: { customer: customer() } },
+      ...walletRoutes({ balanceAmount: '750000', entryCount: 3 }, [walletEntry()]),
+    ]);
+    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} denied={false} />);
+
+    await screen.findByText('کیف پول');
+    // The formatted amount, not the raw minor units.
+    expect(await screen.findByText(/۷۵۰٬۰۰۰|750,000/u)).toBeTruthy();
+    expect(screen.getByText('3')).toBeTruthy();
+    // The page SAYS the number is computed, because an operator seeing a balance
+    // has no other way to know there is no stored column behind it.
+    expect(screen.getByText(/محاسبه می‌شود/u)).toBeTruthy();
+  });
+
+  it('shows the ledger with its direction, and says it cannot be edited', async () => {
+    stubApi([
+      { url: `/users/${ROW_ID}`, body: { customer: customer() } },
+      ...walletRoutes({ balanceAmount: '250000', entryCount: 1 }, [
+        walletEntry({ direction: 'DEBIT', reason: 'PURCHASE', note: null }),
+      ]),
+    ]);
+    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} denied={false} />);
+
+    await screen.findByText('تاریخچه تراکنش‌ها');
+    expect(await screen.findByText('برداشت')).toBeTruthy();
+    expect(screen.getByText('PURCHASE')).toBeTruthy();
+    // A flow, not a person: `actorAdminId` is null and the page says so rather
+    // than leaving the column blank.
+    expect(screen.getByText('سامانه')).toBeTruthy();
+    expect(screen.getByText(/قابل ویرایش یا حذف نیستند/u)).toBeTruthy();
+  });
+
+  it('draws NO control that could set a balance or remove an entry', async () => {
+    stubApi([
+      { url: `/users/${ROW_ID}`, body: { customer: customer() } },
+      ...walletRoutes({ balanceAmount: '250000', entryCount: 1 }, [walletEntry()]),
+    ]);
+    const { container } = renderPage(
+      <UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} denied={false} />,
+    );
+    await screen.findByText('کیف پول');
+
+    /*
+     * Asserted by LOOKING, not by a comment.
+     *
+     * The legacy `صفر کردن موجودی` button is a set-balance in disguise, and the
+     * single easiest thing to add to this card by accident. Every button is
+     * enumerated and required to be one of the two movements.
+     */
+    const labels = [...container.querySelectorAll('button')].map((b) => b.textContent?.trim());
+    for (const label of labels) {
+      expect(
+        label === 'واریز به کیف پول' ||
+          label === 'برداشت از کیف پول' ||
+          label === 'مسدود کردن' ||
+          label === 'رفع مسدودی' ||
+          // The shared pager's own two, which carry no wallet meaning.
+          label === 'قدیمی‌تر' ||
+          label === 'تازه‌تر' ||
+          // A `Copyable` renders an unlabelled icon button; it copies a value and
+          // changes nothing.
+          label === '',
+        `the wallet card draws an unexpected control: ${String(label)}`,
+      ).toBe(true);
+    }
+    expect(container.textContent).not.toContain('صفر کردن');
+    // And no text input that is bound to the balance itself.
+    expect(screen.queryByLabelText('موجودی')).toBeNull();
+  });
+
+  it('sends a CREDIT with the typed amount, an idempotency key and no reason', async () => {
+    const api = stubApi([
+      { url: `/users/${ROW_ID}`, body: { customer: customer() } },
+      ...walletRoutes({ balanceAmount: '0', entryCount: 0 }),
+      {
+        url: `/users/${ROW_ID}/wallet/adjust`,
+        body: { entry: walletEntry() },
+      },
+    ]);
+    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} denied={false} />);
+    await screen.findByText('ثبت تراکنش دستی');
+
+    fireEvent.change(screen.getByLabelText('مبلغ (واحد خرد)'), { target: { value: '250000' } });
+    fireEvent.change(screen.getByLabelText('یادداشت'), { target: { value: 'goodwill' } });
+    fireEvent.click(screen.getByText('واریز به کیف پول'));
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.url.includes('/wallet/adjust'))).toBe(true);
+    });
+    const call = api.calls.find((one) => one.url.includes('/wallet/adjust'));
+    const body = call?.body as Record<string, unknown>;
+    expect(body['direction']).toBe('CREDIT');
+    // A decimal STRING in minor units. A `number` here would round past 2^53.
+    expect(body['amount']).toBe('250000');
+    expect(typeof body['amount']).toBe('string');
+    expect(body['currency']).toBe('IRT');
+    expect(body['note']).toBe('goodwill');
+    expect(String(body['idempotencyKey']).length).toBeGreaterThanOrEqual(8);
+    // NO reason: the server derives it from the direction, so a client cannot
+    // file a debit as a PURCHASE.
+    expect(body).not.toHaveProperty('reason');
+  });
+
+  it('repeats the SAME idempotency key when the same figures are sent twice', async () => {
+    const api = stubApi([
+      { url: `/users/${ROW_ID}`, body: { customer: customer() } },
+      ...walletRoutes(),
+      { url: `/users/${ROW_ID}/wallet/adjust`, body: { entry: walletEntry() } },
+    ]);
+    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} denied={false} />);
+    await screen.findByText('ثبت تراکنش دستی');
+
+    fireEvent.change(screen.getByLabelText('مبلغ (واحد خرد)'), { target: { value: '1000' } });
+    fireEvent.change(screen.getByLabelText('یادداشت'), { target: { value: 'twice' } });
+    fireEvent.click(screen.getByText('واریز به کیف پول'));
+    await waitFor(() => {
+      expect(api.calls.filter((c) => c.url.includes('/wallet/adjust'))).toHaveLength(1);
+    });
+
+    // The form clears on success, so the operator retypes the same figures — which
+    // is a NEW command, and correctly gets a new key. What must be stable is the
+    // key WITHIN one unsettled submission; `submission-key.test.tsx` owns that.
+    // Here the subject is that a key is sent at all, and that it is bound to the
+    // payload rather than to the component's lifetime.
+    fireEvent.change(screen.getByLabelText('مبلغ (واحد خرد)'), { target: { value: '1000' } });
+    fireEvent.change(screen.getByLabelText('یادداشت'), { target: { value: 'twice' } });
+    fireEvent.click(screen.getByText('واریز به کیف پول'));
+    await waitFor(() => {
+      expect(api.calls.filter((c) => c.url.includes('/wallet/adjust'))).toHaveLength(2);
+    });
+    const keys = api.calls
+      .filter((c) => c.url.includes('/wallet/adjust'))
+      .map((c) => (c.body as Record<string, unknown>)['idempotencyKey']);
+    expect(keys[0]).not.toBe(keys[1]);
+  });
+
+  /*
+   * CREDIT and DEBIT are SEPARATE permissions with different risk labels, and this
+   * is the actor that can tell them apart: an operator holding credit and not debit.
+   * One holding neither is refused either way and proves nothing about which.
+   */
+  it('draws only the button a credit-only operator is entitled to', async () => {
+    stubApi([{ url: `/users/${ROW_ID}`, body: { customer: customer() } }, ...walletRoutes()]);
+    renderPage(
+      <UserDetailPage
+        id={ROW_ID}
+        mayBlock
+        mayViewWallet
+        mayCredit
+        mayDebit={false}
+        denied={false}
+      />,
+    );
+    await screen.findByText('ثبت تراکنش دستی');
+
+    expect(screen.getByText('واریز به کیف پول')).toBeTruthy();
+    expect(screen.queryByText('برداشت از کیف پول')).toBeNull();
+    // And it NAMES the permission that is missing, rather than a disabled button.
+    expect(screen.getByText(/users.wallet.debit/u)).toBeTruthy();
+  });
+
+  it('asks for nothing and explains itself when the operator may not read a wallet', async () => {
+    const api = stubApi([{ url: `/users/${ROW_ID}`, body: { customer: customer() } }]);
+    renderPage(
+      <UserDetailPage
+        id={ROW_ID}
+        mayBlock
+        mayViewWallet={false}
+        mayCredit={false}
+        mayDebit={false}
+        denied={false}
+      />,
+    );
+    await screen.findByText('کیف پول');
+
+    expect(screen.getByText(/users.view/u)).toBeTruthy();
+    // The queries are DISABLED, not merely hidden: a page that fetches a wallet it
+    // will not draw is a page that logs a 403 on every render.
+    expect(api.calls.some((call) => call.url.includes('/wallet'))).toBe(false);
+  });
+
+  it('pages the ledger through the cursor the server sent', async () => {
+    const api = stubApi([
+      { url: `/users/${ROW_ID}`, body: { customer: customer() } },
+      {
+        url: `/users/${ROW_ID}/wallet/entries`,
+        body: { entries: [walletEntry()], nextCursor: 'the-next-page' },
+      },
+      ...walletRoutes({ balanceAmount: '250000', entryCount: 2 }),
+    ]);
+    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} denied={false} />);
+    await screen.findByText('تاریخچه تراکنش‌ها');
+
+    fireEvent.click(await screen.findByText('قدیمی‌تر'));
+
+    await waitFor(() => {
+      expect(
+        api.calls.some((call) => call.url.includes('cursor=the-next-page')),
+        'the pager did not send the cursor the server minted',
+      ).toBe(true);
+    });
   });
 });

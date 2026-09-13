@@ -728,15 +728,62 @@ export const WEB_FA = {
    * What this page deliberately does NOT show, said out loud.
    *
    * The legacy customer screen showed a wallet balance, an order count and a
-   * service list, and this release has none of those: no order, payment, wallet
-   * or service entity exists. A zero in any of those columns would be a
-   * measurement of something unbuilt — the same class as the legacy statistics
-   * screen counting configured panels as connected — so the page says what is
-   * true instead of drawing an empty table.
+   * service list. This copy said none of those existed — TRUE of Phase 4A, and
+   * false from 4C, which builds the wallet and payments. It now names only what
+   * is still absent, because a scope card that lists a shipped feature as
+   * missing is the same untruth in the other direction.
+   *
+   * A zero for something unbuilt stays forbidden: that is the legacy statistics
+   * screen counting configured panels as connected.
    */
   'web.users_scope_title': 'آنچه در این نسخه نیست',
   'web.users_scope_body':
-    'کیف پول، سفارش، پرداخت، سرویس، تخفیف و نمایندگی در این نسخه وجود ندارند؛ بنابراین هیچ عدد یا ستونی برای آنها نشان داده نمی‌شود. نمایش صفر برای چیزی که ساخته نشده، گزارشِ نادرست است.',
+    'سرویس، تخفیف و نمایندگی در این نسخه وجود ندارند؛ بنابراین هیچ عدد یا ستونی برای آنها نشان داده نمی‌شود. نمایش صفر برای چیزی که ساخته نشده، گزارشِ نادرست است.',
+
+  // --- Wallet (Phase 4C) ---------------------------------------------------
+  /*
+   * The balance is DERIVED and the history is append-only, and this copy says
+   * both. There is no "set balance" string here because there is no such
+   * control: the legacy `صفر کردن موجودی` button is a set-balance in disguise
+   * and has no ledger reason that could honestly describe it.
+   */
+  'web.wallet_title': 'کیف پول',
+  'web.wallet_balance': 'موجودی',
+  'web.wallet_balance_hint': 'این عدد از مجموع تراکنش‌ها محاسبه می‌شود و در جایی ذخیره نشده است.',
+  'web.wallet_entry_count': 'تعداد تراکنش',
+  'web.wallet_history_title': 'تاریخچه تراکنش‌ها',
+  'web.wallet_history_empty': 'هنوز تراکنشی ثبت نشده است.',
+  'web.wallet_direction': 'جهت',
+  'web.wallet_direction_credit': 'واریز',
+  'web.wallet_direction_debit': 'برداشت',
+  'web.wallet_reason': 'علت',
+  /*
+   * There is deliberately NO `web.wallet_reference`.
+   *
+   * A ledger entry's `reference` is a derived idempotency identity —
+   * `<operationId>:purchase` — and not a code anybody quotes. Labelling it
+   * «کد یکتا» on screen would invite an operator to read it out as a support
+   * reference, and the code a customer actually holds is the PAYMENT's, shown on
+   * the payments surface. A key with no renderer was what `check:i18n` caught.
+   */
+  'web.wallet_note': 'یادداشت',
+  'web.wallet_actor': 'ثبت‌کننده',
+  'web.wallet_actor_system': 'سامانه',
+  'web.wallet_created_at': 'زمان ثبت',
+  'web.wallet_adjust_title': 'ثبت تراکنش دستی',
+  'web.wallet_adjust_hint':
+    'مبلغ به واحد خرد و فقط رقم. علت تراکنش از روی جهت آن تعیین می‌شود و قابل انتخاب نیست.',
+  'web.wallet_adjust_amount': 'مبلغ (واحد خرد)',
+  'web.wallet_adjust_note': 'یادداشت',
+  'web.wallet_credit': 'واریز به کیف پول',
+  'web.wallet_debit': 'برداشت از کیف پول',
+  'web.wallet_credit_done': 'واریز ثبت شد.',
+  'web.wallet_debit_done': 'برداشت ثبت شد.',
+  'web.wallet_credit_denied': 'برای واریز به کیف پول دسترسی users.wallet.credit لازم است.',
+  'web.wallet_debit_denied': 'برای برداشت از کیف پول دسترسی users.wallet.debit لازم است.',
+  'web.wallet_immutable':
+    'تراکنش‌های کیف پول قابل ویرایش یا حذف نیستند. اصلاح یک اشتباه، یک تراکنش جدید در جهت مخالف است.',
+  'web.wallet_denied': 'برای دیدن کیف پول دسترسی users.view لازم است.',
 
   // --- Products (Phase 4B) -------------------------------------------------
   'web.products_title': 'محصولات',

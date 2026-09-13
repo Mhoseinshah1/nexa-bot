@@ -1643,6 +1643,16 @@ export type WalletBalanceResponse = z.infer<typeof walletBalanceSchema>;
 export const walletResponseSchema = z.object({ wallet: walletBalanceSchema });
 export type WalletResponse = z.infer<typeof walletResponseSchema>;
 
+/**
+ * One entry, wrapped, as an adjustment answers with.
+ *
+ * A WRAPPER rather than the bare summary, like every other response here: a top-level
+ * object leaves room for a field to be added without changing the shape a client
+ * destructures, and `apps/web` may not import `zod` to build one of its own.
+ */
+export const walletEntryResponseSchema = z.object({ entry: walletEntrySummarySchema });
+export type WalletEntryResponse = z.infer<typeof walletEntryResponseSchema>;
+
 export const walletEntryListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(WALLET_PAGE_MAX).optional(),
   cursor: z.string().min(1).max(255).optional(),

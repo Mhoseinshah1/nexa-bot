@@ -411,6 +411,9 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
           key={user['id'] ?? ''}
           id={user['id'] ?? ''}
           mayBlock={may('users.block')}
+          mayViewWallet={may('users.view')}
+          mayCredit={may('users.wallet.credit')}
+          mayDebit={may('users.wallet.debit')}
           denied={!may('users.view')}
         />
       ),

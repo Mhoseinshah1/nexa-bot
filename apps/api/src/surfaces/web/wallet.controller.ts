@@ -6,6 +6,7 @@ import {
   walletEntryListQuerySchema,
   type TenantContext,
   type WalletEntryListResponse,
+  type WalletEntryResponse,
   type WalletEntrySummaryResponse,
   type WalletResponse,
 } from '@nexa/contracts';
@@ -105,7 +106,7 @@ export class WalletController {
     @Req() request: FastifyRequest,
     @Param('customerId') customerId: string,
     @Body() body: unknown,
-  ): Promise<{ readonly entry: WalletEntrySummaryResponse }> {
+  ): Promise<WalletEntryResponse> {
     const { scope, actor } = await this.authenticate(request);
     const input = walletAdjustRequestSchema.parse(body);
     const entry = await this.container.wallet.adjust(scope, actor, customerId, {

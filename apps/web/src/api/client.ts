@@ -1,5 +1,20 @@
 import {
   IDENTITY_ERROR_CODES,
+  PAYMENT_ROUTES,
+  WALLET_ROUTES,
+  paymentListResponseSchema,
+  paymentResponseSchema,
+  walletEntryListResponseSchema,
+  walletEntryResponseSchema,
+  walletResponseSchema,
+  type LedgerDirection,
+  type PaymentListResponse,
+  type PaymentMethod,
+  type PaymentResponse,
+  type PaymentState,
+  type WalletEntryListResponse,
+  type WalletEntryResponse,
+  type WalletResponse,
   ADMIN_ROUTES,
   adminListResponseSchema,
   API_PREFIX,
@@ -653,6 +668,102 @@ export function fetchOrders(
 
 export function fetchOrder(id: string): Promise<OrderResponse> {
   return authedGet(ORDER_ROUTES.detail(id), orderResponseSchema);
+}
+
+/*
+ * Wallet and payments (Phase 4C).
+ *
+ * What is NOT here, and would be the easiest thing to add by accident: no
+ * `setWalletBalance`, no `editWalletEntry`, no `deleteWalletEntry`, and no
+ * `createPayment`, `failPayment`, `cancelPayment`, `retryPayment` or `refundPayment`.
+ * None of those routes exists, and a client function for a route that does not exist is
+ * how a button comes to be drawn for it — the reason `fetchOrders` states for the same
+ * absence one phase earlier.
+ */
+export function fetchWallet(customerId: string): Promise<WalletResponse> {
+  return authedGet(WALLET_ROUTES.balance(customerId), walletResponseSchema);
+}
+
+export function fetchWalletEntries(
+  customerId: string,
+  query: { limit?: number; cursor?: string } = {},
+): Promise<WalletEntryListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  const suffix = params.toString();
+  const base = WALLET_ROUTES.entries(customerId);
+  return authedGet(suffix ? `${base}?${suffix}` : base, walletEntryListResponseSchema);
+}
+
+/**
+ * An operator moving a customer's money by hand.
+ *
+ * `amount` is a decimal STRING in minor units, never a `number`: JSON has one numeric
+ * type and it loses precision past 2^53. There is no `reason` parameter — the server
+ * derives it from the direction, so a request cannot file a debit as a `PURCHASE`.
+ */
+export function adjustWallet(input: {
+  customerId: string;
+  idempotencyKey: string;
+  direction: LedgerDirection;
+  amount: string;
+  currency: CurrencyCode;
+  note: string;
+}): Promise<WalletEntryResponse> {
+  const { customerId, ...body } = input;
+  return post(WALLET_ROUTES.adjust(customerId), body, walletEntryResponseSchema);
+}
+
+export function fetchPayments(
+  query: {
+    limit?: number;
+    cursor?: string;
+    state?: PaymentState;
+    method?: PaymentMethod;
+    customerId?: string;
+    orderId?: string;
+    reference?: string;
+  } = {},
+): Promise<PaymentListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  if (query.state !== undefined) params.set('state', query.state);
+  if (query.method !== undefined) params.set('method', query.method);
+  if (query.customerId !== undefined && query.customerId !== '') {
+    params.set('customerId', query.customerId);
+  }
+  if (query.orderId !== undefined && query.orderId !== '') params.set('orderId', query.orderId);
+  if (query.reference !== undefined && query.reference !== '') {
+    params.set('reference', query.reference);
+  }
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${PAYMENT_ROUTES.list}?${suffix}` : PAYMENT_ROUTES.list,
+    paymentListResponseSchema,
+  );
+}
+
+export function fetchPayment(id: string): Promise<PaymentResponse> {
+  return authedGet(PAYMENT_ROUTES.detail(id), paymentResponseSchema);
+}
+
+/**
+ * Confirming that an out-of-band transfer arrived.
+ *
+ * A NOTE and nothing else. There is no amount here and no currency: a confirmation
+ * records that money the payment already names arrived, and an operator able to restate
+ * the figure at approval time is an operator able to approve a different payment from
+ * the one the customer made.
+ */
+export function confirmPayment(input: {
+  id: string;
+  idempotencyKey: string;
+  evidenceNote: string;
+}): Promise<PaymentResponse> {
+  const { id, ...body } = input;
+  return post(PAYMENT_ROUTES.confirm(id), body, paymentResponseSchema);
 }
 
 export function fetchPanels(
