@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
-import { moneySchema } from './money.js';
+import { ORDER_EXPIRY_MINUTES_MAX, ORDER_EXPIRY_MINUTES_MIN } from './commerce.js';
+import { moneySchema, salesCurrencyCodeSchema } from './money.js';
 
 /**
  * The settings registry.
@@ -240,20 +241,29 @@ export const SETTINGS = [
       'The currency this tenant sells in. Every amount the admin renders takes its unit from ' +
       'the value it belongs to, and this is what a new amount is denominated in. It exists ' +
       'because the alternative is a hardcoded Toman: an installation that prices in Rial would ' +
-      'then be shown Toman labels over Rial figures, which is a factor of ten.',
-    // IRT and IRR only. The catalogue in money.ts carries USD, EUR and USDT
-    // because a converted payment quote will need them; a STORE currency is a
-    // different question, and widening this is a contract change to make when
-    // there is a gateway that settles in one of them.
-    schema: z.enum(['IRT', 'IRR']),
+      'then be shown Toman labels over Rial figures, which is a factor of ten. A product ' +
+      'priced in any other currency is refused when it is written.',
+    // The same list the picker offers and the server refuses against, so the
+    // three cannot drift. See SALES_CURRENCY_CODES for why it is narrower than
+    // the money catalogue.
+    schema: salesCurrencyCodeSchema,
     defaultValue: 'IRT',
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     configures: null,
-    // Nothing prices anything yet. The admin already renders it, which is why
-    // it is here rather than waiting for the storefront.
-    consumer: 'PLANNED',
+    /*
+     * ACTIVE since Phase 4B. `ProductService` reads it inside the write and refuses a
+     * price in any other currency — the setting had been PLANNED, and a declared
+     * setting nothing enforces is a setting an operator believes.
+     *
+     * Changing it does NOT re-price existing products, and that is deliberate rather
+     * than an omission: every stored amount carries its own currency, so a product
+     * priced before the change still renders in the unit it was priced in. The
+     * alternative — reinterpreting stored amounts under a new unit — is the factor of
+     * ten this setting exists to prevent.
+     */
+    consumer: 'ACTIVE',
   },
   {
     key: 'support.accounts',
@@ -313,6 +323,33 @@ export const SETTINGS = [
     classification: 'PUBLIC',
     configures: null,
     consumer: 'PLANNED',
+  },
+  {
+    key: 'sales.order_expiry_minutes',
+    description:
+      'How long an unpaid order is held before it may be expired. The window is an operator ' +
+      'setting because a tenant selling to a different market wants a different one, and the ' +
+      'research fixes no number: ORDER_EXPIRY_MINUTES_MIN and _MAX in commerce.ts are the ' +
+      'bounds a configured value is checked against, so a misconfiguration cannot create an ' +
+      'order that never expires or one that expires before a customer can open a payment page. ' +
+      'A DRAFT carries the same deadline and cannot be confirmed past it, which is what stops a ' +
+      'customer holding a stale price open indefinitely.',
+    // Bounded by the CONTRACT's own constants rather than by numbers retyped here.
+    // Two copies of a bound drift; `commerce.ts` owns these.
+    schema: z.number().int().min(ORDER_EXPIRY_MINUTES_MIN).max(ORDER_EXPIRY_MINUTES_MAX),
+    // Sixty minutes. Inside the bounds, and the one number the repository already
+    // records an opinion about: `web.planned_payments_expiry` says the payment window
+    // is at most an hour. That is a PAYMENT decision and this is the order's own
+    // window, but a default longer than the payment deadline would be a default that
+    // guarantees a stranded order.
+    defaultValue: 60,
+    // Zero is outside the schema entirely — the minimum is five — so it can never be
+    // stored and does not need a meaning.
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
   },
   {
     key: 'wallet.topup.minimum',

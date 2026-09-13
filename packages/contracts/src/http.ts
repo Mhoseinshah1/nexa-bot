@@ -8,6 +8,19 @@ import {
 } from './notifications.js';
 import { uuidV7Schema } from './ids.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
+import {
+  MAX_DEVICE_LIMIT,
+  MAX_DURATION_DAYS,
+  MAX_TRAFFIC_BYTES,
+  PRODUCT_AUDIENCES,
+  PRODUCT_DESCRIPTION_MAX_LENGTH,
+  PRODUCT_SORT_MAX,
+  PRODUCT_SORT_MIN,
+  PRODUCT_STATUSES,
+  PRODUCT_TITLE_MAX_LENGTH,
+} from './catalog.js';
+import { ORDER_STATES } from './commerce.js';
+import { CURRENCY_CODES, MAX_MONEY_AMOUNT_MINOR } from './money.js';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
 import {
   SETTING_CLASSIFICATIONS,
@@ -1316,6 +1329,244 @@ export const CUSTOMER_ROUTES = {
   detail: (id: string) => `/users/${encodeURIComponent(id)}`,
   block: (id: string) => `/users/${encodeURIComponent(id)}/block`,
   unblock: (id: string) => `/users/${encodeURIComponent(id)}/unblock`,
+} as const;
+
+// --- Products (Phase 4B) ----------------------------------------------------
+
+export const PRODUCT_PAGE_DEFAULT = 25;
+export const PRODUCT_PAGE_MAX = 100;
+
+/**
+ * One product, as the Web Admin renders it.
+ *
+ * `trafficBytes` and `priceAmount` are STRINGS on the wire and `bigint` in the
+ * database. JSON has one number type and it is a double: a traffic allowance in bytes
+ * passes 2^53 at eight petabytes, and an amount in minor units passes it at ninety
+ * thousand billion Rial — both reachable, and both silently wrong rather than refused.
+ * `money.ts` makes the same choice for the same reason.
+ *
+ * The price is two nullable fields rather than a nested object because the table stores
+ * two columns and the CHECK binds them together; the application layer reassembles them
+ * into one `Money`. What the wire may NOT do is carry one without the other, which is
+ * why the schema refines the pair rather than trusting the caller.
+ */
+export const productSummarySchema = z
+  .object({
+    id: z.string(),
+    title: z.string(),
+    description: z.string().nullable(),
+    status: z.enum(PRODUCT_STATUSES),
+    audience: z.enum(PRODUCT_AUDIENCES),
+    sortOrder: z.number().int(),
+    panelId: z.string().nullable(),
+    durationDays: z.number().int(),
+    trafficBytes: z.string(),
+    deviceLimit: z.number().int().nullable(),
+    priceAmount: z.string().nullable(),
+    priceCurrency: z.enum(CURRENCY_CODES).nullable(),
+    createdAt: z.iso.datetime(),
+    updatedAt: z.iso.datetime(),
+  })
+  .refine((p) => (p.priceAmount === null) === (p.priceCurrency === null), {
+    message: 'A price is an amount and a currency, or it is absent.',
+  });
+export type ProductSummaryResponse = z.infer<typeof productSummarySchema>;
+
+/**
+ * The fields an operator writes.
+ *
+ * `status` is absent deliberately: a product is created INACTIVE and becomes
+ * purchasable through its own command, so one call cannot publish an unpriced,
+ * unfulfillable plan. The same shape serves create and edit, because the set of mutable
+ * properties IS the set of writable ones — and every one of them is snapshotted onto an
+ * order at confirmation, which is what makes editing safe.
+ */
+export const productWriteSchema = z
+  .object({
+    idempotencyKey: z.string().min(8).max(255),
+    title: z.string().trim().min(1).max(PRODUCT_TITLE_MAX_LENGTH),
+    description: z.string().trim().max(PRODUCT_DESCRIPTION_MAX_LENGTH).nullable(),
+    audience: z.enum(PRODUCT_AUDIENCES),
+    sortOrder: z.number().int().min(PRODUCT_SORT_MIN).max(PRODUCT_SORT_MAX),
+    /*
+     * A UUID, validated HERE — this is the REQUEST schema, where a caller's string
+     * arrives. `products.panel_id` is a `uuid` column, so an unvalidated one reaches
+     * PostgreSQL as `invalid input syntax for type uuid` and is answered 500; the
+     * service's own cross-tenant panel check is never reached. The same defect the
+     * order filters had, found by the same review.
+     *
+     * The response projection above stays `z.string()` on purpose: it renders a value
+     * the database already holds, and a validator there would turn a stored row into a
+     * serialization failure rather than refusing anything.
+     */
+    panelId: uuidV7Schema.nullable(),
+    durationDays: z.number().int().min(0).max(MAX_DURATION_DAYS),
+    /* A decimal STRING, parsed to `bigint` by the boundary rather than by the service. */
+    trafficBytes: z.string().regex(/^\d{1,19}$/u),
+    deviceLimit: z.number().int().min(1).max(MAX_DEVICE_LIMIT).nullable(),
+    /*
+     * Positive when present. `products_price_positive_check` says the same thing in the
+     * database; a zero price would otherwise mean "free", and `catalog.ts` is explicit
+     * that free is not a concept here — an absent price means unsellable.
+     */
+    priceAmount: z
+      .string()
+      .regex(/^\d{1,19}$/u)
+      .nullable(),
+    priceCurrency: z.enum(CURRENCY_CODES).nullable(),
+  })
+  .refine((p) => (p.priceAmount === null) === (p.priceCurrency === null), {
+    message: 'A price is an amount and a currency, or it is absent.',
+    path: ['priceAmount'],
+  })
+  .refine((p) => p.priceAmount === null || BigInt(p.priceAmount) > 0n, {
+    message:
+      'A price must be greater than zero. Leave it empty for a product that is not for sale.',
+    path: ['priceAmount'],
+  })
+  .refine((p) => BigInt(p.trafficBytes) <= MAX_TRAFFIC_BYTES, {
+    message: 'That traffic allowance is past any real plan.',
+    path: ['trafficBytes'],
+  })
+  /*
+   * And it FITS. `price_amount` is a PostgreSQL `bigint`, and the regex above admits
+   * nineteen digits — a range that runs past the column by more than an order of
+   * magnitude, so `9999999999999999999` passed validation and failed the INSERT as a
+   * 500. Refused at the boundary under the field's own name instead.
+   *
+   * `trafficBytes` needs no companion rule: `MAX_TRAFFIC_BYTES` already bounds it far
+   * below this.
+   */
+  .refine((p) => p.priceAmount === null || BigInt(p.priceAmount) <= MAX_MONEY_AMOUNT_MINOR, {
+    message: 'That price is past the largest amount this system stores.',
+    path: ['priceAmount'],
+  });
+export type ProductWriteRequest = z.infer<typeof productWriteSchema>;
+
+export const productListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(PRODUCT_PAGE_MAX).optional(),
+  cursor: z.string().max(512).optional(),
+  status: z.enum(PRODUCT_STATUSES).optional(),
+  audience: z.enum(PRODUCT_AUDIENCES).optional(),
+  title: z.string().max(PRODUCT_TITLE_MAX_LENGTH).optional(),
+});
+export type ProductListQuery = z.infer<typeof productListQuerySchema>;
+
+export const productListResponseSchema = z.object({
+  products: z.array(productSummarySchema),
+  nextCursor: z.string().nullable(),
+});
+export type ProductListResponse = z.infer<typeof productListResponseSchema>;
+
+export const productResponseSchema = z.object({ product: productSummarySchema });
+export type ProductResponse = z.infer<typeof productResponseSchema>;
+
+/** A state change carries only its key: the target state is the route. */
+export const productStatusRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type ProductStatusRequest = z.infer<typeof productStatusRequestSchema>;
+
+export const PRODUCT_ROUTES = {
+  list: '/products',
+  create: '/products',
+  detail: (id: string) => `/products/${encodeURIComponent(id)}`,
+  update: (id: string) => `/products/${encodeURIComponent(id)}`,
+  activate: (id: string) => `/products/${encodeURIComponent(id)}/activate`,
+  deactivate: (id: string) => `/products/${encodeURIComponent(id)}/deactivate`,
+} as const;
+
+// --- Orders ------------------------------------------------------------------
+
+export const ORDER_PAGE_DEFAULT = 25;
+export const ORDER_PAGE_MAX = 100;
+
+/**
+ * One order, as the Web Admin renders it.
+ *
+ * Every `line*` field is the SNAPSHOT. `productId` is here for navigation and is
+ * explicitly not how the purchase is reconstructed — the product may since have been
+ * renamed, re-priced or withdrawn, and the legacy «محصول حذف‌شده» is what a report that
+ * joins on today's row produces. So the title an operator reads in this response is the
+ * title the customer bought, not the title the plan has now.
+ *
+ * Amounts are decimal STRINGS for the reason `productSummarySchema` states: JSON has one
+ * number type and an order total in Rial passes 2^53.
+ *
+ * There is deliberately no `quote` field. The trace is stored and an operator will need
+ * it the day a customer disputes a number, but nothing renders it yet, and a field on the
+ * wire with no reader is a field that drifts from the column behind it.
+ */
+export const orderSummarySchema = z.object({
+  id: z.string(),
+  customerId: z.string(),
+  state: z.enum(ORDER_STATES),
+  productId: z.string(),
+  panelId: z.string(),
+  lineTitle: z.string(),
+  lineDurationDays: z.number().int(),
+  lineTrafficBytes: z.string(),
+  lineDeviceLimit: z.number().int().nullable(),
+  lineUnitPriceAmount: z.string(),
+  lineQuantity: z.number().int(),
+  subtotalAmount: z.string(),
+  discountAmount: z.string(),
+  totalAmount: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+  expiresAt: z.iso.datetime().nullable(),
+  confirmedAt: z.iso.datetime().nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type OrderSummaryResponse = z.infer<typeof orderSummarySchema>;
+
+/**
+ * How an operator narrows the list.
+ *
+ * Exact ids and an exact state, and no free-text search: an order has no name, and what
+ * an operator actually quotes from a support conversation is an id.
+ */
+export const orderListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(ORDER_PAGE_MAX).optional(),
+  cursor: z.string().max(512).optional(),
+  state: z.enum(ORDER_STATES).optional(),
+  /*
+   * Checked as IDS, not as bounded strings.
+   *
+   * `orders.customer_id` and `orders.product_id` are `uuid` columns, so
+   * `?customerId=abc` reaches PostgreSQL as `invalid input syntax for type uuid` and is
+   * answered 500 — which tells an operator nothing about what they typed and puts a
+   * stack trace in the log for a typo. `customerListQuerySchema` records the same
+   * defect for `telegramUserId`, where the answer was an empty page reading as "no such
+   * customer"; here it is worse, because a 500 reads as "the server is broken".
+   *
+   * Found by this branch's own self-review, not by a test — which is why the test came
+   * with the fix.
+   */
+  customerId: uuidV7Schema.optional(),
+  productId: uuidV7Schema.optional(),
+});
+export type OrderListQuery = z.infer<typeof orderListQuerySchema>;
+
+export const orderListResponseSchema = z.object({
+  orders: z.array(orderSummarySchema),
+  nextCursor: z.string().nullable(),
+});
+export type OrderListResponse = z.infer<typeof orderListResponseSchema>;
+
+export const orderResponseSchema = z.object({ order: orderSummarySchema });
+export type OrderResponse = z.infer<typeof orderResponseSchema>;
+
+/**
+ * Two routes, both reads.
+ *
+ * No cancel, no mark-paid, no refund, no settle. Those are real operator actions and
+ * every one of them belongs to a phase that has not shipped: a "mark paid" button with
+ * no payment behind it is the legacy system's silent-success pattern with a nicer font.
+ */
+export const ORDER_ROUTES = {
+  list: '/orders',
+  detail: (id: string) => `/orders/${encodeURIComponent(id)}`,
 } as const;
 
 // --- Backup and disaster recovery -------------------------------------------

@@ -165,6 +165,34 @@ export function setQuery(route: Route, key: string, value: string | null): void 
   navigate(suffix ? `${route.path}?${suffix}` : route.path, { replace: true });
 }
 
+/**
+ * Replaces SEVERAL query parameters at once, keeping the rest and the current path.
+ *
+ * This exists because calling `setQuery` twice in one handler silently drops the first
+ * change. Each call builds its `URLSearchParams` from `route.query` — a PROP, captured
+ * when the component rendered — and then navigates. The navigation is asynchronous with
+ * respect to that prop, so the second call reads the same pre-navigation query the first
+ * did and overwrites its result. A two-field filter applied one field.
+ *
+ * Found by the Codex review of the 4B branch on `/orders`; `/users` from 4A had it too.
+ * The SHAPE is the bug, so the fix is a function that cannot be written that way rather
+ * than two careful call sites.
+ *
+ * `replace`, not push, for the same reason `setQuery` gives.
+ */
+export function setQueries(
+  route: Route,
+  entries: ReadonlyArray<readonly [string, string | null]>,
+): void {
+  const next = new URLSearchParams(route.query);
+  for (const [key, value] of entries) {
+    if (value === null || value === '') next.delete(key);
+    else next.set(key, value);
+  }
+  const suffix = next.toString();
+  navigate(suffix ? `${route.path}?${suffix}` : route.path, { replace: true });
+}
+
 /** Puts the document title in step with the route, for tabs and history. */
 export function useDocumentTitle(title: string): void {
   useEffect(() => {

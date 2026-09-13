@@ -17,6 +17,8 @@ import { AlertsPage, NotificationsPage } from './pages/alerts';
 import { SystemPage } from './pages/system';
 import { RecoveryPage } from './pages/recovery';
 import { PlannedPage, PLANNED_SURFACES, type PlannedKey } from './pages/planned';
+import { ProductDetailPage, ProductsPage } from './pages/products';
+import { OrderDetailPage, OrdersPage } from './pages/orders';
 import { UsersPage, UserDetailPage } from './pages/users';
 
 /**
@@ -185,7 +187,13 @@ export const NAV: readonly NavEntry[] = [
     path: '/products',
     label: 'web.nav_products',
     icon: 'products',
-    permission: 'catalog.view',
+    // EITHER, exactly as `/panels` and `/notifications` do above and below, and for
+    // the identical reason. The route renders the CREATE form on `catalog.edit`
+    // whether or not `catalog.view` is held, and the server authorizes creation on
+    // `catalog.edit` alone — so gating the link on `catalog.view` hid a page that
+    // would have served a custom-role editor correctly. Found by the Codex review of
+    // this branch, which is the third time this shape has been the answer.
+    permission: ['catalog.view', 'catalog.edit'],
     group: 'web.navgroup_sales',
   },
   {
@@ -408,6 +416,59 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
       ),
       crumbs: [nav('users'), { label: t('web.user_detail') }],
       title: t('web.user_detail'),
+    };
+  }
+
+  if (route.path === '/products') {
+    return {
+      element: (
+        <ProductsPage route={route} mayEdit={may('catalog.edit')} denied={!may('catalog.view')} />
+      ),
+      crumbs: [{ label: t('web.products_title') }],
+      title: t('web.products_title'),
+    };
+  }
+
+  const product = match('/products/:id', route.path);
+  if (product !== null) {
+    return {
+      element: (
+        // KEYED BY THE PRODUCT ID, for the reason the panel and user details give in
+        // full: React reconciles by position and type, so navigating between two product
+        // URLs would keep one instance mounted and every `useState` initialiser would
+        // hold the previous product's values — here the fields about to be written.
+        <ProductDetailPage
+          key={product['id'] ?? ''}
+          id={product['id'] ?? ''}
+          mayEdit={may('catalog.edit')}
+          denied={!may('catalog.view')}
+        />
+      ),
+      crumbs: [nav('products'), { label: t('web.product_detail') }],
+      title: t('web.product_detail'),
+    };
+  }
+
+  if (route.path === '/orders') {
+    return {
+      element: <OrdersPage route={route} denied={!may('orders.view')} />,
+      crumbs: [{ label: t('web.orders_title') }],
+      title: t('web.orders_title'),
+    };
+  }
+
+  const order = match('/orders/:id', route.path);
+  if (order !== null) {
+    return {
+      element: (
+        <OrderDetailPage
+          key={order['id'] ?? ''}
+          id={order['id'] ?? ''}
+          denied={!may('orders.view')}
+        />
+      ),
+      crumbs: [nav('orders'), { label: t('web.order_detail') }],
+      title: t('web.order_detail'),
     };
   }
 

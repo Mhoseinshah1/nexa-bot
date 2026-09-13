@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react';
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen } from '@testing-library/react';
-import { match, setQuery } from '../../apps/web/src/router';
+import { match, setQueries, setQuery } from '../../apps/web/src/router';
 import { resolve } from '../../apps/web/src/app';
 import { PERMISSION_KEYS } from '@nexa/contracts';
 import { panel as panelBase, renderPage, stubApi } from './harness';
@@ -229,6 +229,56 @@ describe('a filter change is not a place the operator navigated to', () => {
     expect(window.location.search).toBe('');
     setQuery({ path: '/panels', query: new URLSearchParams() }, 'archived', 'only');
     expect(window.location.search).toBe('?archived=only');
+  });
+
+  it('applies EVERY parameter of a multi-field filter, in one navigation', () => {
+    /*
+     * The defect this function exists for, stated as behaviour.
+     *
+     * Two `setQuery` calls in one handler apply ONE change: each builds its
+     * `URLSearchParams` from `route.query`, which is the prop captured at render and is
+     * not updated by the first call's navigation. So the second overwrites the first.
+     * `/orders` lost `customerId` and `/users` lost `telegramUserId`, both silently —
+     * the operator saw a filter chip they had typed and a list that ignored it.
+     *
+     * The stale-prop half is asserted FIRST, so this test fails if `setQueries` is ever
+     * reduced to a loop of `setQuery` calls — which is precisely the regression that
+     * would look like a tidy-up.
+     */
+    const route = { path: '/orders', query: new URLSearchParams() };
+    window.history.replaceState(null, '', '/orders');
+
+    setQuery(route, 'customerId', 'c-1');
+    setQuery(route, 'productId', 'p-1');
+    expect(window.location.search, 'two setQuery calls still drop the first').toBe(
+      '?productId=p-1',
+    );
+
+    window.history.replaceState(null, '', '/orders');
+    setQueries(route, [
+      ['customerId', 'c-1'],
+      ['productId', 'p-1'],
+    ]);
+    const applied = new URLSearchParams(window.location.search);
+    expect(applied.get('customerId')).toBe('c-1');
+    expect(applied.get('productId')).toBe('p-1');
+
+    // Clearing both is the same shape, and the clear handler had the same bug.
+    const filtered = {
+      path: '/orders',
+      query: new URLSearchParams('customerId=c-1&productId=p-1'),
+    };
+    setQueries(filtered, [
+      ['customerId', null],
+      ['productId', null],
+    ]);
+    expect(window.location.search).toBe('');
+
+    // Parameters it was not given are KEPT, so clearing a search does not silently
+    // drop the state filter beside it.
+    const mixed = { path: '/orders', query: new URLSearchParams('state=DRAFT&customerId=c-1') };
+    setQueries(mixed, [['customerId', null]]);
+    expect(window.location.search).toBe('?state=DRAFT');
   });
 
   it('replaces the history entry rather than pushing one', () => {

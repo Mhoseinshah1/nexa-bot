@@ -11,7 +11,7 @@ import { formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
-import { setQuery, useLinkHandler, type Route } from '../router';
+import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
 import {
   Badge,
@@ -224,8 +224,12 @@ export function UsersPage({
   const apply = (event: FormEvent) => {
     event.preventDefault();
     if (telegramIdProblem !== undefined) return;
-    setQuery(route, 'telegramUserId', draftTelegramId === '' ? null : draftTelegramId);
-    setQuery(route, 'username', draftUsername === '' ? null : draftUsername);
+    // ONE navigation for both fields. Two `setQuery` calls here dropped the first:
+    // each builds from the `route.query` prop this render captured. See `setQueries`.
+    setQueries(route, [
+      ['telegramUserId', draftTelegramId === '' ? null : draftTelegramId],
+      ['username', draftUsername === '' ? null : draftUsername],
+    ]);
   };
 
   const clear = () => {
@@ -234,8 +238,10 @@ export function UsersPage({
     // alone would leave that text on screen, and clearing the draft alone would
     // leave the filter applied.
     setDraft({ signature: appliedSignature, telegramId: '', username: '' });
-    setQuery(route, 'telegramUserId', null);
-    setQuery(route, 'username', null);
+    setQueries(route, [
+      ['telegramUserId', null],
+      ['username', null],
+    ]);
   };
 
   const columns: readonly Column<CustomerSummaryResponse>[] = [

@@ -973,3 +973,27 @@ than normalising the ending and thereby creating the record.
 scanners. Whoever opens that file does this at the same time, with cases for `NAME:value`,
 `NAME :value`, `NAME: value`, `NAME =value`, `NAME<TAB>=value`, a colon inside a quoted
 value, and either form inside another variable's multiline value.
+
+## OQ-4B-01 — how a customer reaches a catalogue longer than one Telegram message
+
+`/catalog` answers with a heading and one inline-keyboard button per product, bounded at
+`CATALOG_PAGE_SIZE = 20`. `ProductRepository.listCatalog` reports `hasMore` and the bot
+surface **drops it**: a tenant with twenty-one sellable products shows twenty and says
+nothing about the twenty-first.
+
+**Why it is not resolved here.** Every way of fixing it is a product decision with no
+evidence behind it in `docs/research/`: a next-page button (which needs a cursor over a
+MUTABLE `sort_order` — the defect migration 0026 records), categories (which
+`catalog.ts` deliberately does not have), or a search. The legacy bot's own catalogue is
+not captured in the corpus at a size that decides it, and `NOT_EXPOSED` means "the UI did
+not show it", never "it does not exist".
+
+**Why twenty is safe meanwhile.** `MAX_ORDER_LINES` is 1 and every plan in the research
+is a duration/traffic variant; twenty is above any catalogue the corpus shows. The bound
+is stated in `bot-runtime.ts` where it is applied, so the limit is visible to the next
+reader rather than discovered by a tenant.
+
+**Trigger to resolve:** the first tenant with more than twenty sellable products, or the
+phase that adds categories — whichever comes first. Whoever does it decides the ordering
+key at the same time, because a cursor over `sort_order` is the part that is not
+obvious.

@@ -71,6 +71,7 @@ export const adminIdSchema = brandedId('AdminId');
 export const roleIdSchema = brandedId('RoleId');
 export const adminSessionIdSchema = brandedId('AdminSessionId');
 export const orderIdSchema = brandedId('OrderId');
+export const productIdSchema = brandedId('ProductId');
 export const serviceIdSchema = brandedId('ServiceId');
 export const paymentIdSchema = brandedId('PaymentId');
 export const eventIdSchema = brandedId('EventId');

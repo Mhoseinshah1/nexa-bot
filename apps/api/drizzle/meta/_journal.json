@@ -260,6 +260,13 @@
       "when": 1789283557056,
       "tag": "0036_customer_username_prefix_index",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1789306342751,
+      "tag": "0037_products_tenant_panel_agreement",
+      "breakpoints": true
     }
   ]
 }

@@ -53,26 +53,6 @@ export const PLANNED_SURFACES: readonly PlannedSurface[] = [
     ],
   },
   {
-    key: 'orders',
-    path: '/orders',
-    label: 'web.nav_orders',
-    summary: 'web.planned_orders_summary',
-    missing: ['web.planned_missing_order', 'web.planned_missing_payment'],
-    decisions: [
-      'web.planned_orders_attention',
-      'web.planned_orders_history',
-      'web.planned_orders_shared_projection',
-    ],
-  },
-  {
-    key: 'products',
-    path: '/products',
-    label: 'web.nav_products',
-    summary: 'web.planned_products_summary',
-    missing: ['web.planned_missing_catalog', 'web.planned_missing_pricing'],
-    decisions: ['web.planned_products_panel_choice'],
-  },
-  {
     key: 'payments',
     path: '/payments',
     label: 'web.nav_payments',

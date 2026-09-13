@@ -25,7 +25,36 @@ export const CURRENCY_EXPONENT: Readonly<Record<CurrencyCode, number>> = {
   USDT: 6,
 };
 
+/**
+ * The largest minor-unit amount this system stores: PostgreSQL `bigint`'s maximum.
+ *
+ * Every money column is `bigint`, so this is a property of the storage rather than a
+ * product decision, and it belongs beside the type rather than inside one schema.
+ * Without it a validator that merely counts digits admits values the column cannot
+ * hold, and the refusal arrives as an integrity error reported as a 500 instead of a
+ * named field — which is exactly what `productWriteSchema` did until the Codex review
+ * of the 4B branch.
+ */
+export const MAX_MONEY_AMOUNT_MINOR = 9_223_372_036_854_775_807n;
+
 export const currencyCodeSchema = z.enum(CURRENCY_CODES);
+
+/**
+ * The currencies a tenant may SELL in — a narrower set than the ones money can be in.
+ *
+ * `CURRENCY_CODES` is the full vocabulary because a converted payment quote will need
+ * USD, EUR and USDT. What a STORE prices in is a different question, and the answer
+ * today is one of the two Iranian units. Widening this is a contract change to make
+ * when there is a gateway that settles in one of the others.
+ *
+ * It exists as its own constant so the `sales.currency` setting's schema, the server's
+ * refusal and the Web Admin's currency picker are ONE statement rather than three lists
+ * that agree until somebody edits one. Codex found the products form offering all five,
+ * three of which the store cannot sell in.
+ */
+export const SALES_CURRENCY_CODES = ['IRT', 'IRR'] as const;
+export type SalesCurrencyCode = (typeof SALES_CURRENCY_CODES)[number];
+export const salesCurrencyCodeSchema = z.enum(SALES_CURRENCY_CODES);
 
 export type MoneyAmount = Branded<bigint, 'MoneyAmount'>;
 

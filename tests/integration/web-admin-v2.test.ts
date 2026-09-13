@@ -738,14 +738,16 @@ describe('the Web Admin V2 surface', () => {
       );
       const byKey = new Map(body.settings.map((setting) => [setting.key, setting]));
 
-      for (const key of [
-        'sales.currency',
-        'support.accounts',
-        'telegram.channels',
-        'wallet.topup.minimum',
-      ]) {
+      for (const key of ['support.accounts', 'telegram.channels', 'wallet.topup.minimum']) {
         expect(byKey.get(key)?.consumer, key).toBe('PLANNED');
       }
+      /*
+       * `sales.currency` left that list in Phase 4B. It is ACTIVE because
+       * `ProductService` refuses a price in any other currency — the Codex review
+       * found it declared, rendered and enforced by nothing, which is a setting an
+       * operator believes and the system ignores.
+       */
+      expect(byKey.get('sales.currency')?.consumer).toBe('ACTIVE');
       expect(byKey.get('ops.notifications.max_attempts')?.consumer).toBe('ACTIVE');
     });
 

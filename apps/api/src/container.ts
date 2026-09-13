@@ -104,6 +104,13 @@ import { TemplateResolver } from './modules/control/templates/application/templa
 import { CustomerService } from './modules/commerce/customers/application/customer.service.js';
 import { DrizzleCustomerRepository } from './modules/commerce/customers/infrastructure/drizzle-customer.repository.js';
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
+import { ProductService } from './modules/commerce/catalog/application/product.service.js';
+import {
+  DrizzlePanelDirectory,
+  DrizzleProductRepository,
+} from './modules/commerce/catalog/infrastructure/drizzle-product.repository.js';
+import { OrderService } from './modules/commerce/orders/application/order.service.js';
+import { DrizzleOrderRepository } from './modules/commerce/orders/infrastructure/drizzle-order.repository.js';
 import { BotRuntime } from './surfaces/telegram/bot-runtime.js';
 import { I18nTemplateCatalogue } from './modules/control/templates/infrastructure/i18n-template-catalogue.js';
 import { TemplateManagementService } from './modules/control/templates/application/template-management.service.js';
@@ -211,6 +218,8 @@ export interface Container {
    * controller cannot get it wrong.
    */
   readonly customers: CustomerService;
+  readonly products: ProductService;
+  readonly orders: OrderService;
   readonly botRuntime: BotRuntime;
 
   // Control plane — Phase 2
@@ -566,8 +575,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * their own idempotency view, and a replay handled by one would not be seen by the
    * other.
    */
+  const customerRepository = new DrizzleCustomerRepository(database.db);
+  const productRepository = new DrizzleProductRepository(database.db);
+
   const customerService = new CustomerService({
-    repository: new DrizzleCustomerRepository(database.db),
+    repository: customerRepository,
     guard,
     audit,
     opsLog,
@@ -582,12 +594,73 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
   });
 
+  const settingRepository = new DrizzleSettingRepository(database.db);
+  const settingsResolver = new SettingsResolver(settingRepository, opsLog);
+
+  /**
+   * Products, under the FROZEN `catalog.*` permissions.
+   *
+   * The same platform dependencies every other write path takes, `scopeActivity`
+   * included — the reader panels once skipped, which let a stopped tenant be given new
+   * rows. No outbox: the event catalogue declares no product event and
+   * `AGGREGATE_TYPES` has no `Product`, so a product mutation's evidence is its audit
+   * row.
+   */
+  const productService = new ProductService({
+    repository: productRepository,
+    /*
+     * Membership only, never a panel projection.
+     *
+     * A product may not name another tenant's panel. `products_tenant_panel_fk`
+     * (migration 0037) is what makes that true; this is what makes the refusal a
+     * named 404 rather than an integrity violation reported as a 500.
+     */
+    panels: new DrizzlePanelDirectory(database.db),
+    /* `sales.currency`. A product is priced in what the tenant sells in, or refused. */
+    settings: settingsResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    clock,
+    ids,
+  });
+
   // ---------------------------------------------------------------------------
   // Control plane
   // ---------------------------------------------------------------------------
 
-  const settingRepository = new DrizzleSettingRepository(database.db);
-  const settingsResolver = new SettingsResolver(settingRepository, opsLog);
+  /**
+   * Orders, up to the boundary where money begins.
+   *
+   * Constructed HERE, after the settings resolver, because the draft's hold is an
+   * operator setting (`sales.order_expiry_minutes`) and a service that hard-coded a
+   * window would be a service the setting silently does not configure.
+   *
+   * It takes the same product and customer repositories the two services above hold —
+   * one instance each, so there is one statement of each tenancy rule rather than two
+   * that can drift. It takes the outbox because `OrderConfirmed` is a declared event
+   * with a declared aggregate, which is exactly what products did not have.
+   */
+  const orderService = new OrderService({
+    repository: new DrizzleOrderRepository(database.db),
+    products: productRepository,
+    customers: customerRepository,
+    settings: settingsResolver,
+    guard,
+    audit,
+    opsLog,
+    outbox,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    clock,
+    ids,
+  });
   /**
    * One HTTP client for every provider call this process makes.
    *
@@ -1221,8 +1294,16 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
     recordPing,
     customers: customerService,
+    products: productService,
+    orders: orderService,
     botRuntime: new BotRuntime({
       customers: customerService,
+      // The SAME instances the container exposes, not new ones. Two order services
+      // would each hold their own idempotency view, and a redelivered Telegram update
+      // handled by one would not be seen as a replay by the other — which is the whole
+      // mechanism that stops a redelivery becoming a second order.
+      products: productService,
+      orders: orderService,
       messenger: new TelegramCustomerMessenger(
         // The tenant's own renderer, so an override lands in exactly the messages a
         // customer reads. It validates values against the key's declaration on the way
