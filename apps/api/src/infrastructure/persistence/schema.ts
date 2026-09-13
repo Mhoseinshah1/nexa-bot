@@ -2078,8 +2078,13 @@ export const products = pgTable(
     status: text('status').notNull().default('INACTIVE'),
     audience: text('audience').notNull().default('EVERYONE'),
     sortOrder: integer('sort_order').notNull().default(0),
-    /** Where a purchase of this plan is fulfilled. Null until configured. */
-    panelId: uuid('panel_id').references(() => panels.id),
+    /**
+     * Where a purchase of this plan is fulfilled. Null until configured.
+     *
+     * NO single-column reference. The pair is constrained below — see
+     * `products_tenant_panel_fk`.
+     */
+    panelId: uuid('panel_id'),
     /** 0 means no time limit (`UNLIMITED_DURATION_DAYS`). */
     durationDays: integer('duration_days').notNull(),
     /** 0 means no traffic limit (`UNLIMITED_TRAFFIC_BYTES`). Bytes, never gigabytes. */
@@ -2114,6 +2119,24 @@ export const products = pgTable(
     check('products_duration_check', sql`duration_days >= 0 AND duration_days <= 3650`),
     check('products_traffic_check', sql`traffic_bytes >= 0`),
     check('products_device_limit_check', sql`device_limit IS NULL OR device_limit > 0`),
+    /**
+     * The pair, not the two halves. The same defect 0018 fixed for panel children.
+     *
+     * `panel_id` alone referenced `panels(id)`, which constrained it to SOME panel in
+     * the installation and said nothing about it being THIS tenant's. A product could
+     * therefore name another tenant's panel, and every downstream reader — the
+     * catalogue's fulfillable predicate, the order snapshot, and eventually the
+     * provisioning call that dials it — would have believed the pointer.
+     *
+     * MATCH SIMPLE is what makes this work with a nullable column: a composite foreign
+     * key is not enforced when any of its columns is NULL, so an unconfigured product
+     * (`panel_id IS NULL`) is still legal, exactly as `payments_order_fk` above.
+     */
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'products_tenant_panel_fk',
+    }),
     unique('products_tenant_id_key').on(table.tenantId, table.id),
   ],
 );

@@ -4,6 +4,7 @@ import {
   API_PREFIX,
   AUTH_ROUTES,
   COMMERCE_ERROR_CODES,
+  PANEL_ERROR_CODES,
   PLATFORM_ERROR_CODES,
   PRODUCT_ROUTES,
   productListResponseSchema,
@@ -408,6 +409,97 @@ describe('product HTTP surface', () => {
       (await get(PRODUCT_ROUTES.list, editorCookie)).json(),
     );
     expect(list.products.map((p) => p.id)).toEqual([mine.id]);
+  });
+
+  it('cannot create or edit a product onto another tenant PANEL', async () => {
+    /*
+     * The other direction of the same rule, and the one that was missing.
+     *
+     * A product cannot be READ across the tenant boundary — the test above — but until
+     * the Codex review of this branch it could be WRITTEN pointing across it:
+     * `products.panel_id` referenced `panels(id)`, which says the id is SOME panel in
+     * the installation and nothing about whose. Everything downstream believes that
+     * pointer: the fulfillable predicate, the order snapshot, and in 4D the provisioning
+     * call that dials the panel and creates an account on it.
+     *
+     * 404 and not 403: a refusal that distinguished "not yours" from "no such panel"
+     * would let an operator enumerate another installation's panel ids by watching which
+     * answer comes back.
+     */
+    const bPanel = api.container.ids.uuid();
+    await api.container.database.db.execute(sql`
+      INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+      VALUES (${bPanel}, ${tenantB.tenantId}, 'Panel B', 'sanaei', 'https://b.example.test', 'ACTIVE')`);
+
+    const created = await post(PRODUCT_ROUTES.create, editorCookie, body({ panelId: bPanel }));
+    expect(created.statusCode, created.body).toBe(404);
+    expect(created.json().error.code).toBe(PANEL_ERROR_CODES.PANEL_NOT_FOUND);
+
+    // A panel that exists nowhere is answered identically. That is the point.
+    const absent = await post(
+      PRODUCT_ROUTES.create,
+      editorCookie,
+      body({ panelId: '01999999-9999-7999-8999-999999999999' }),
+    );
+    expect(absent.statusCode).toBe(404);
+    expect(absent.json().error.code).toBe(PANEL_ERROR_CODES.PANEL_NOT_FOUND);
+
+    // Nothing was written by either refusal.
+    const beforeEdit = productListResponseSchema.parse(
+      (await get(PRODUCT_ROUTES.list, editorCookie)).json(),
+    );
+    expect(beforeEdit.products).toHaveLength(0);
+
+    // And an EDIT cannot move a legitimate product onto that panel either — the check
+    // is on both write paths, because an update reaches the same column.
+    const mine = await createProduct();
+    const edited = await post(
+      PRODUCT_ROUTES.update(mine.id),
+      editorCookie,
+      body({ panelId: bPanel }),
+    );
+    expect(edited.statusCode, edited.body).toBe(404);
+    expect(edited.json().error.code).toBe(PANEL_ERROR_CODES.PANEL_NOT_FOUND);
+
+    const after = await get(PRODUCT_ROUTES.detail(mine.id), editorCookie);
+    expect(productResponseSchema.parse(after.json()).product.panelId).toBe(panelA);
+  });
+
+  it('refuses a cross-tenant panel in the DATABASE, not only in the service', async () => {
+    /*
+     * The check above is a read-then-write: it can be raced by a panel deleted between
+     * the read and the commit, and a later caller that forgets it is a caller with no
+     * constraint at all. `products_tenant_panel_fk` (migration 0037) is the guarantee,
+     * and this asserts the guarantee rather than the message.
+     *
+     * Raw SQL on purpose — it bypasses every application layer, which is exactly the
+     * path a migration, an import or a future repository would take.
+     */
+    const bPanel = api.container.ids.uuid();
+    await api.container.database.db.execute(sql`
+      INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
+      VALUES (${bPanel}, ${tenantB.tenantId}, 'Panel B', 'sanaei', 'https://b.example.test', 'ACTIVE')`);
+
+    /*
+     * The RAW client, like `database-invariants.test.ts`. Drizzle's `execute` wraps a
+     * driver error in "Failed query: …" and drops the constraint name, so a test
+     * asserting through it could not tell THIS foreign key from any other failure —
+     * including a typo in the INSERT.
+     */
+    const insert = async (panel: string | null) =>
+      api.container.database.withClient((client) =>
+        client.query(
+          `INSERT INTO products (id, tenant_id, title, panel_id, duration_days, traffic_bytes)
+           VALUES ($1, $2, $3, $4, 30, 1)`,
+          [api.container.ids.uuid(), tenantA.tenantId, 'smuggled', panel],
+        ),
+      );
+
+    await expect(insert(bPanel)).rejects.toThrowError(/products_tenant_panel_fk/);
+
+    // NULL stays legal: MATCH SIMPLE does not enforce a composite key with a null part,
+    // which is what keeps an unconfigured product a real state rather than an error.
+    await insert(null);
   });
 
   it('answers a malformed product id with 400 rather than 500', async () => {

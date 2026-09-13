@@ -1,0 +1,25 @@
+-- A product may not name another tenant's panel.
+--
+-- 0032 gave `products.panel_id` its own foreign key to `panels(id)`. That constrained
+-- it to SOME panel in the installation and said nothing about it being the panel of the
+-- tenant that owns the product — the exact defect 0018 fixed for the panel child tables,
+-- where "a row naming another tenant's panel satisfied both and violated the invariant
+-- every query in the repository relies on".
+--
+-- Downstream, that pointer is believed: the catalogue's fulfillable predicate reads it,
+-- the order snapshot copies it, and 4D's provisioning call dials it. So a cross-tenant
+-- product would eventually have provisioned a service on somebody else's panel.
+--
+-- `panels_tenant_id_key` (0018) is the UNIQUE(tenant_id, id) this references.
+--
+-- The column stays NULLABLE and that is deliberate: a composite foreign key is MATCH
+-- SIMPLE by default, so it is not enforced when any of its columns is NULL. A product an
+-- operator has not finished configuring keeps `panel_id IS NULL` and stays legal.
+--
+-- No backfill. `products` has no producer before this release — the catalogue surface
+-- ships on this branch — so there is no row to repair, and a violating row SHOULD fail
+-- this migration loudly rather than be silently NULLed into an unfulfillable product.
+
+ALTER TABLE "products" DROP CONSTRAINT "products_panel_id_panels_id_fk";
+--> statement-breakpoint
+ALTER TABLE "products" ADD CONSTRAINT "products_tenant_panel_fk" FOREIGN KEY ("tenant_id","panel_id") REFERENCES "public"."panels"("tenant_id","id") ON DELETE no action ON UPDATE no action;

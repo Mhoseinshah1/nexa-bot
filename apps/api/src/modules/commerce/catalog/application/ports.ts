@@ -109,6 +109,34 @@ export interface ProductDraft {
  */
 export type ProductEdit = ProductDraft;
 
+/**
+ * "Is this panel one of MINE?" — the only question the catalogue asks about a panel.
+ *
+ * A NARROW port, deliberately. The catalogue module has no business reading a panel's
+ * address, its credentials or its health; it needs to know that a `panelId` an operator
+ * typed belongs to the tenant writing the product, and nothing else. Depending on
+ * `PanelRepository` here would hand this module every panel field and make the
+ * one-way credential rule (ADR-0023) one careless projection away from being broken.
+ *
+ * The DATABASE is the guarantee — `products_tenant_panel_fk`, migration 0037 — and this
+ * is the good error. Without the constraint this check is a race; without this check the
+ * constraint is a 500 with no field named. Both, and in that order of authority.
+ *
+ * Takes the transaction handle because it is read INSIDE the write, like every other
+ * precondition on this path: a panel archived between the check and the commit must not
+ * be the version the product is written against.
+ */
+export interface PanelDirectory {
+  /**
+   * True when this tenant owns a panel with this id.
+   *
+   * Membership only. An id belonging to another tenant is indistinguishable from an id
+   * belonging to nobody, which is the point: an operator must not be able to probe
+   * another installation's panel ids by watching which of two refusals comes back.
+   */
+  existsInScope(scope: TenantContext, panelId: PanelId, tx?: unknown): Promise<boolean>;
+}
+
 export interface ProductRepository {
   create(
     scope: TenantContext,

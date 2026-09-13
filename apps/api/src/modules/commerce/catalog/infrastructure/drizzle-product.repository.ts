@@ -13,8 +13,9 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { products } from '../../../../infrastructure/persistence/schema.js';
+import { panels, products } from '../../../../infrastructure/persistence/schema.js';
 import type {
+  PanelDirectory,
   ProductCursor,
   ProductDraft,
   ProductEdit,
@@ -285,4 +286,38 @@ function toRecord(row: typeof products.$inferSelect): ProductRecord {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+/**
+ * `PanelDirectory` over the `panels` table. One column, one predicate.
+ *
+ * It selects `panels.id` and nothing else — not the base URL, not a credential
+ * timestamp, not the status — because the port's whole purpose is to keep the catalogue
+ * module from acquiring a panel projection it would then be tempted to return.
+ *
+ * The tenant is in the WHERE clause, not checked afterwards, for the reason the
+ * repository above states: a row that is not this tenant's never leaves the database,
+ * so there is nothing to decide what to do with.
+ *
+ * ARCHIVED panels are deliberately still members. A product may point at a panel an
+ * operator has retired: the catalogue's own fulfillable rule and the order path decide
+ * whether such a product sells, and conflating "not yours" with "not usable right now"
+ * here would give an operator a not-found for a panel they are looking straight at.
+ */
+export class DrizzlePanelDirectory implements PanelDirectory {
+  constructor(private readonly db: Database) {}
+
+  private exec(tx?: unknown): Executor {
+    return (tx as TransactionScope | undefined)?.tx ?? this.db;
+  }
+
+  async existsInScope(scope: TenantContext, panelId: PanelId, tx?: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: panels.id })
+      .from(panels)
+      .where(and(eq(panels.tenantId, tenantId), eq(panels.id, panelId)))
+      .limit(1);
+    return rows.length > 0;
+  }
 }

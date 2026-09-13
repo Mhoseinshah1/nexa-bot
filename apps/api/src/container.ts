@@ -105,7 +105,10 @@ import { CustomerService } from './modules/commerce/customers/application/custom
 import { DrizzleCustomerRepository } from './modules/commerce/customers/infrastructure/drizzle-customer.repository.js';
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
 import { ProductService } from './modules/commerce/catalog/application/product.service.js';
-import { DrizzleProductRepository } from './modules/commerce/catalog/infrastructure/drizzle-product.repository.js';
+import {
+  DrizzlePanelDirectory,
+  DrizzleProductRepository,
+} from './modules/commerce/catalog/infrastructure/drizzle-product.repository.js';
 import { OrderService } from './modules/commerce/orders/application/order.service.js';
 import { DrizzleOrderRepository } from './modules/commerce/orders/infrastructure/drizzle-order.repository.js';
 import { BotRuntime } from './surfaces/telegram/bot-runtime.js';
@@ -602,6 +605,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const productService = new ProductService({
     repository: productRepository,
+    /*
+     * Membership only, never a panel projection.
+     *
+     * A product may not name another tenant's panel. `products_tenant_panel_fk`
+     * (migration 0037) is what makes that true; this is what makes the refusal a
+     * named 404 rather than an integrity violation reported as a 500.
+     */
+    panels: new DrizzlePanelDirectory(database.db),
     guard,
     audit,
     opsLog,

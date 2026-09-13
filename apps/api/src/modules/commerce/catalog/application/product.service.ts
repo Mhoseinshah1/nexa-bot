@@ -1,5 +1,6 @@
 import {
   COMMERCE_ERROR_CODES,
+  PANEL_ERROR_CODES,
   PRODUCT_PAGE_DEFAULT,
   PRODUCT_PAGE_MAX,
   errors,
@@ -9,6 +10,7 @@ import {
   type Clock,
   type IdGenerator,
   type IdempotencyStore,
+  type PanelId,
   type PermissionKey,
   type ProductId,
   type ProductStatus,
@@ -24,6 +26,7 @@ import type { ScopeActivityReader } from '../../../platform/system/application/r
 import type { OperationalEventRecorder } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
+  PanelDirectory,
   ProductDraft,
   ProductEdit,
   ProductPage,
@@ -61,6 +64,8 @@ export const CATALOG_BROWSE_PERMISSION: PermissionKey = 'maintenance.run';
 
 export interface ProductServiceDeps {
   readonly repository: ProductRepository;
+  /** Membership only — see `PanelDirectory`. Never a panel projection. */
+  readonly panels: PanelDirectory;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -167,6 +172,7 @@ export class ProductService {
       { action: 'product.create', entityType: 'Product', entityId: null },
       async (tx) => {
         await this.assertScopeActive(scope, tx);
+        await this.assertPanelIsOurs(scope, input.draft.panelId, tx);
 
         const created = await this.deps.repository.create(
           scope,
@@ -242,6 +248,7 @@ export class ProductService {
       { action: 'product.update', entityType: 'Product', entityId: productId },
       async (tx) => {
         await this.assertScopeActive(scope, tx);
+        await this.assertPanelIsOurs(scope, input.edit.panelId, tx);
 
         const before = await this.deps.repository.findById(scope, productId, tx);
         if (before === null) {
@@ -414,6 +421,37 @@ export class ProductService {
    * skipped it: panels, which let a tenant an operator had stopped be given new panels.
    * A surface checking on arrival is not enough because a stop can commit in between.
    */
+  /**
+   * A product may only be fulfilled on a panel of its own tenant.
+   *
+   * `products_tenant_panel_fk` (migration 0037) is the GUARANTEE; this is the message.
+   * Without the constraint this check is a read-then-write race — a panel deleted
+   * between the two would still be written. Without this check the constraint answers
+   * an operator's typo with a raw integrity violation, which is a 500 naming a
+   * constraint rather than a field.
+   *
+   * Inside the transaction, like every other precondition here, so the panel that was
+   * checked is the panel the product is written against.
+   *
+   * The refusal is `PANEL_NOT_FOUND` and NOT a distinct "belongs to another tenant".
+   * The two cases must be indistinguishable, or the difference between the refusals
+   * tells an operator which panel ids exist in somebody else's installation.
+   *
+   * A null panel is not checked and must not be: `catalog.ts` makes an unconfigured
+   * product a real state, and the catalogue refuses it as NOT_FULFILLABLE later where
+   * the message names the product.
+   */
+  private async assertPanelIsOurs(
+    scope: TenantContext,
+    panelId: PanelId | null,
+    tx: TransactionScope,
+  ): Promise<void> {
+    if (panelId === null) return;
+    if (!(await this.deps.panels.existsInScope(scope, panelId, tx))) {
+      throw errors.notFound(PANEL_ERROR_CODES.PANEL_NOT_FOUND, 'No such panel.');
+    }
+  }
+
   private async assertScopeActive(scope: TenantContext, tx: TransactionScope): Promise<void> {
     if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
       throw errors.conflict(
