@@ -5,9 +5,14 @@ import { Icon } from '../ui/icons';
 /**
  * The surfaces the product will have and this release does not.
  *
- * Nine of the fifteen areas in the owner's route inventory have no backend at
- * all on `main`: there is no customer, service, order, product, payment,
- * wallet, reseller, discount or report endpoint, and no bot runtime. This page
+ * `/users` was here and is not any more: Phase 4A built it, so it renders a real
+ * list of real customers and the entry was REMOVED rather than left behind a
+ * dead path. A planned page still listed for a route that now resolves
+ * elsewhere is unreachable prose claiming the capability is unbuilt.
+ *
+ * Eight of the fifteen areas in the owner's route inventory have no backend at
+ * all: there is no service, order, product, payment, wallet,
+ * reseller, discount or report endpoint, and no bot-management surface. This page
  * is what those routes render.
  *
  * It draws NO control. Not a disabled button, not a greyed table with sample
@@ -35,14 +40,6 @@ export interface PlannedSurface {
 }
 
 export const PLANNED_SURFACES: readonly PlannedSurface[] = [
-  {
-    key: 'users',
-    path: '/users',
-    label: 'web.nav_users',
-    summary: 'web.planned_users_summary',
-    missing: ['web.planned_missing_customer', 'web.planned_missing_wallet'],
-    decisions: ['web.planned_users_no_tags', 'web.planned_users_no_activity'],
-  },
   {
     key: 'services',
     path: '/services',

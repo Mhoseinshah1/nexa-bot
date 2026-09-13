@@ -1,8 +1,11 @@
-import { and, asc, eq, getTableColumns, gt, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, sql, type SQL } from 'drizzle-orm';
 import type { CustomerStatus, UserId } from '@nexa/contracts';
 import type { BotInstanceId, ScopeContext, TenantContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
-import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
+import {
+  requireTenantId,
+  type TransactionScope,
+} from '../../../../infrastructure/persistence/unit-of-work.js';
 import { customers } from '../../../../infrastructure/persistence/schema.js';
 import type {
   CustomerCursor,
@@ -26,8 +29,22 @@ import type {
 export class DrizzleCustomerRepository implements CustomerRepository {
   constructor(private readonly db: Database) {}
 
+  /**
+   * The open transaction's executor, or the pool.
+   *
+   * `.tx`, not the handle itself. A `TransactionScope` WRAPS the drizzle
+   * transaction — it carries the correlation id and the scope alongside it — so
+   * casting it straight to an executor produced an object with no `.select`, and
+   * every call made inside a transaction threw `this.exec(...).select is not a
+   * function`. It was invisible outside a transaction, because the `?? this.db`
+   * branch is the one the reads take; the failing calls were the block, the
+   * unblock and the Telegram resolve, which is to say every write.
+   *
+   * The same three-line helper four other repositories have, spelled the same
+   * way for the same reason.
+   */
   private exec(tx?: unknown): Executor {
-    return (tx as Executor | undefined) ?? this.db;
+    return (tx as TransactionScope | undefined)?.tx ?? this.db;
   }
 
   /**
@@ -137,10 +154,17 @@ export class DrizzleCustomerRepository implements CustomerRepository {
    * One page, by keyset.
    *
    * `limit + 1` rows are read and the extra one is discarded, which is how the page
-   * knows whether there is a next one without a second COUNT. The cursor comparison is
-   * the lexicographic `(created_at, id) > (c, i)` written out, because a tuple
-   * comparison and an `OR` of two predicates index differently and the index declared
-   * for this is `(tenant_id, created_at, id)`.
+   * knows whether there is a next one without a second COUNT.
+   *
+   * The cursor is compared as a ROW — `(created_at, id) > (c::timestamptz, i::uuid)` —
+   * which is the form `drizzle-panel.repository.ts` uses against the same shape of
+   * index, `(tenant_id, created_at, id)`. The instant arrives as PostgreSQL's own
+   * microsecond text and is cast back explicitly, so the value that came out is the
+   * value that goes in; see `CustomerCursor.createdAt` for what a `Date` here costs.
+   *
+   * `created_at` is rendered with `to_char` rather than read through the driver for the
+   * same reason, and explicitly rather than by `::text`, because `::text` follows the
+   * session's `DateStyle` and this has to be the same string on every connection.
    */
   async list(
     scope: TenantContext,
@@ -169,27 +193,28 @@ export class DrizzleCustomerRepository implements CustomerRepository {
     }
     if (cursor !== null) {
       conditions.push(
-        or(
-          gt(customers.createdAt, cursor.createdAt),
-          and(eq(customers.createdAt, cursor.createdAt), gt(customers.id, cursor.id)) as SQL,
-        ) as SQL,
+        sql`(${customers.createdAt}, ${customers.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,
       );
     }
 
     const rows = await this.exec(tx)
-      .select()
+      .select({
+        ...getTableColumns(customers),
+        /** The cursor's own half of the key, in the one spelling the cursor carries. */
+        createdAtText: sql<string>`to_char(${customers.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+      })
       .from(customers)
       .where(and(...conditions))
       .orderBy(asc(customers.createdAt), asc(customers.id))
       .limit(limit + 1);
 
-    const items = rows.slice(0, limit).map(toRecord);
-    const last = items[items.length - 1];
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
     return {
-      items,
+      items: page.map(toRecord),
       nextCursor:
         rows.length > limit && last !== undefined
-          ? { createdAt: last.createdAt, id: last.id }
+          ? { createdAt: last.createdAtText, id: last.id as UserId }
           : null,
     };
   }

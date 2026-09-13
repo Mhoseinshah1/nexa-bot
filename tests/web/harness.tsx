@@ -110,6 +110,31 @@ export function renderPage(element: ReactElement): RenderResult {
 // Fixtures, shaped exactly as the server's schemas describe them
 // ---------------------------------------------------------------------------
 
+/**
+ * One customer, exactly as `customerSummarySchema` describes it.
+ *
+ * Parsed by that schema on the way through the real API client, so a fixture
+ * that drifts from the contract fails here rather than in production. Nothing
+ * here is a wallet balance, an order count or a service — the contract has no
+ * such field, and a fixture that invented one would not parse.
+ */
+export function customer(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: '019210ab-cdef-7012-8345-6789abcdef01',
+    telegramUserId: '5551234567',
+    username: 'ali_tehran',
+    firstName: 'علی',
+    lastName: 'محمدی',
+    languageCode: 'fa',
+    status: 'ACTIVE',
+    firstSeenAt: '2026-02-01T08:00:00.000Z',
+    lastSeenAt: '2026-09-10T12:30:00.000Z',
+    blockedAt: null,
+    blockedReason: null,
+    ...overrides,
+  };
+}
+
 export function panel(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: '01a05e35-c9ad-7e93-bef3-1ed9b55292c8',

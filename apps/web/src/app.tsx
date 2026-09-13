@@ -17,6 +17,7 @@ import { AlertsPage, NotificationsPage } from './pages/alerts';
 import { SystemPage } from './pages/system';
 import { RecoveryPage } from './pages/recovery';
 import { PlannedPage, PLANNED_SURFACES, type PlannedKey } from './pages/planned';
+import { UsersPage, UserDetailPage } from './pages/users';
 
 /**
  * The Web Admin shell.
@@ -368,6 +369,45 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
       element: <DashboardPage permissions={permissions} />,
       crumbs: [{ label: t('web.nav_overview') }],
       title: t('web.nav_overview'),
+    };
+  }
+
+  if (route.path === '/users') {
+    return {
+      element: (
+        <UsersPage
+          route={route}
+          // THREE separate server permissions, passed separately because the
+          // server charges them separately: `users.view` lists, `users.search`
+          // narrows by Telegram id or username, `users.block` changes a status.
+          // Collapsing them would hide a capability the server permits.
+          maySearch={may('users.search')}
+          denied={!may('users.view')}
+        />
+      ),
+      crumbs: [{ label: t('web.users_title') }],
+      title: t('web.users_title'),
+    };
+  }
+
+  const user = match('/users/:id', route.path);
+  if (user !== null) {
+    return {
+      element: (
+        // KEYED BY THE CUSTOMER ID, for the reason the panel detail gives in
+        // full: React reconciles by position and type, so navigating between two
+        // customer URLs would keep one instance mounted and every `useState`
+        // initialiser would hold the previous customer's value — here the block
+        // reason, which would then be written onto the wrong person.
+        <UserDetailPage
+          key={user['id'] ?? ''}
+          id={user['id'] ?? ''}
+          mayBlock={may('users.block')}
+          denied={!may('users.view')}
+        />
+      ),
+      crumbs: [nav('users'), { label: t('web.user_detail') }],
+      title: t('web.user_detail'),
     };
   }
 

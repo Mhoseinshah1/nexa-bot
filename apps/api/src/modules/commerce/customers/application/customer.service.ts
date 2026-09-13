@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   COMMERCE_ERROR_CODES,
   CUSTOMER_BLOCK_REASON_MAX_LENGTH,
@@ -7,6 +6,7 @@ import {
   errors,
   profileFactsFrom,
   telegramUserIdSchema,
+  userIdSchema,
   type ActorContext,
   type AuditWriter,
   type BotInstanceId,
@@ -25,6 +25,19 @@ import type { OutboxWriter } from '../../../platform/eventing/infrastructure/out
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
 import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
+/*
+ * The store's OWN hash, not a second one written here.
+ *
+ * The first version of this file had a private copy built on
+ * `JSON.stringify(payload, Object.keys(payload).sort())`, which is not a key
+ * sort — the second argument is a REPLACER ARRAY, and it applies at every
+ * depth. `profile` is nested, so its keys were not in the list and the profile
+ * serialised as `{}`: every Telegram resolve hashed to the same value whatever
+ * the customer was called, so the one thing the hash exists to catch — a key
+ * reused with a different payload — could not be caught. The store exports a
+ * real recursive stable stringify; there is no reason for a second.
+ */
+import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -135,6 +148,18 @@ export class CustomerService {
     const telegramUserId = telegramUserIdSchema.parse(input.telegramUserId);
     const profile = profileFactsFrom(input.from);
     const requestHash = hashRequest({ telegramUserId, profile, bot: input.botInstanceId });
+
+    /*
+     * 3. Authorize BEFORE the replay lookup, not only inside the transaction.
+     *
+     * `runAuthorizedMutation` re-checks the permission inside the committing
+     * transaction, which is the rule — but a replay never reaches it, and a replay
+     * returns the customer. An unauthorized caller replaying somebody else's key
+     * would have been answered with a row. The check is made twice on the first
+     * call and exactly once on a replay, which is the shape every other command
+     * here has.
+     */
+    await this.deps.guard.check(scope, actor, RESOLVE_CUSTOMER_PERMISSION);
 
     // 5. Idempotency: a replay returns the first result.
     const replay = await this.deps.idempotency.find<{
@@ -253,9 +278,9 @@ export class CustomerService {
   }
 
   /** One customer, for an operator. Never creates. */
-  async get(scope: TenantContext, actor: ActorContext, id: UserId): Promise<CustomerRecord> {
+  async get(scope: TenantContext, actor: ActorContext, id: string): Promise<CustomerRecord> {
     await this.deps.guard.check(scope, actor, CUSTOMER_VIEW_PERMISSION);
-    const found = await this.deps.repository.findById(scope, id);
+    const found = await this.deps.repository.findById(scope, this.customerId(id));
     if (found === null) {
       throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
     }
@@ -290,13 +315,44 @@ export class CustomerService {
     return this.deps.repository.list(scope, search, limit, query.cursor ?? null);
   }
 
+  /**
+   * A customer id, or a refusal that is not a 500.
+   *
+   * `customers.id` is a `uuid` column, so a path segment that is not one reaches
+   * PostgreSQL as `invalid input syntax for type uuid` — an unhandled error, logged as
+   * an internal failure, answered as 500. That is exactly the defect `panels.id` had and
+   * `panelId` was added for, and `userIdSchema` is the contract's own answer: a UUIDv7,
+   * LOWER-CASED. The lower-casing is the load-bearing half. Postgres compares `uuid`
+   * values case-insensitively, so `…89AB` and `…89ab` are one row while JavaScript `===`
+   * says they are two — which is how the admin self-modification guard was once defeated
+   * by re-casing an id in the path.
+   *
+   * Validated HERE rather than in the controller so a Telegram admin surface added later
+   * inherits the rule instead of rediscovering it.
+   *
+   * Stricter than the cursor, deliberately: `keyset-cursor.ts` accepts any uuid version
+   * because the id it carries only ever feeds a `>` comparison, while this one RESOLVES A
+   * PERSON and a customer of this installation is always a v7 because `ids.uuid()` makes
+   * them.
+   */
+  private customerId(candidate: string): UserId {
+    const parsed = userIdSchema.safeParse(candidate);
+    if (!parsed.success) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'That is not a valid customer identifier.',
+      );
+    }
+    return parsed.data;
+  }
+
   /** Block. Idempotent, audited, and enforced by the server. */
   async block(
     scope: TenantContext,
     actor: ActorContext,
     input: {
       readonly idempotencyKey: string;
-      readonly customerId: UserId;
+      readonly customerId: string;
       readonly reason: string | null;
     },
   ): Promise<CustomerRecord> {
@@ -314,7 +370,7 @@ export class CustomerService {
     actor: ActorContext,
     input: {
       readonly idempotencyKey: string;
-      readonly customerId: UserId;
+      readonly customerId: string;
       readonly reason: string | null;
     },
   ): Promise<CustomerRecord> {
@@ -338,16 +394,30 @@ export class CustomerService {
     actor: ActorContext,
     input: {
       readonly idempotencyKey: string;
-      readonly customerId: UserId;
+      readonly customerId: string;
       readonly to: CustomerStatus;
       readonly reason: string | null;
     },
   ): Promise<CustomerRecord> {
+    // Before the hash, so a re-cased id cannot produce a second idempotency record for
+    // the same command against the same row.
+    const customerId = this.customerId(input.customerId);
     const reason =
       input.reason === null || input.reason.trim() === ''
         ? null
         : input.reason.trim().slice(0, CUSTOMER_BLOCK_REASON_MAX_LENGTH);
-    const requestHash = hashRequest({ customerId: input.customerId, to: input.to, reason });
+    const requestHash = hashRequest({ customerId, to: input.to, reason });
+
+    /*
+     * Authorize the replay under the COMMAND's permission, not under `users.view`.
+     *
+     * This called `this.get`, which checks `users.view` — so an actor holding
+     * `users.block` and not `users.view` could block a customer on the first call
+     * and was denied on the replay of the same key. A replay must be the same
+     * decision as the call it replays, or a retry after a timeout reports a
+     * permission failure for a write that already happened.
+     */
+    await this.deps.guard.check(scope, actor, CUSTOMER_BLOCK_PERMISSION);
 
     const replay = await this.deps.idempotency.find<{ customerId: string }>(
       scope,
@@ -356,7 +426,15 @@ export class CustomerService {
       requestHash,
     );
     if (replay !== null) {
-      return this.get(scope, actor, replay.result.customerId as UserId);
+      const replayed = await this.deps.repository.findById(
+        scope,
+        replay.result.customerId as UserId,
+      );
+      if (replayed !== null) return replayed;
+      // The idempotency row outlived its customer, which a restore can produce.
+      // Falling through redoes a command that is idempotent by construction; the
+      // conditional UPDATE below finds no row and the caller gets a 404, which is
+      // the truth rather than a stale success.
     }
 
     const now = this.deps.clock.now();
@@ -377,7 +455,7 @@ export class CustomerService {
       {
         action: input.to === 'BLOCKED' ? 'customer.block' : 'customer.unblock',
         entityType: 'Customer',
-        entityId: input.customerId,
+        entityId: customerId,
       },
       async (tx) => {
         if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
@@ -387,14 +465,14 @@ export class CustomerService {
           );
         }
 
-        const before = await this.deps.repository.findById(scope, input.customerId, tx);
+        const before = await this.deps.repository.findById(scope, customerId, tx);
         if (before === null) {
           throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
         }
 
         const changed = await this.deps.repository.setStatus(
           scope,
-          input.customerId,
+          customerId,
           from,
           input.to,
           reason,
@@ -412,7 +490,7 @@ export class CustomerService {
          * double-clicked Block that failed the second time would teach an operator that
          * the button is unreliable.
          */
-        const after = await this.deps.repository.findById(scope, input.customerId, tx);
+        const after = await this.deps.repository.findById(scope, customerId, tx);
         if (after === null) {
           throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
         }
@@ -455,18 +533,4 @@ export class CustomerService {
       },
     );
   }
-}
-
-/**
- * The request hash an idempotency key is bound to.
- *
- * A key reused with a DIFFERENT payload is a caller bug and must be refused rather than
- * served the stale result — `nexa-conventions` says so, and the store enforces it once
- * it has a hash to compare. Stable key order so two calls with the same meaning hash
- * the same.
- */
-function hashRequest(payload: Record<string, unknown>): string {
-  return createHash('sha256')
-    .update(JSON.stringify(payload, Object.keys(payload).sort()))
-    .digest('hex');
 }

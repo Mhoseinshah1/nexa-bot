@@ -1273,6 +1273,15 @@ export type CustomerResponse = z.infer<typeof customerResponseSchema>;
  * because it lands in a durable column and an audit row.
  */
 export const blockCustomerRequestSchema = z.object({
+  /**
+   * The key, in the BODY, exactly as every other command on this surface carries it.
+   *
+   * Not a header. The non-negotiable is that every state-changing command takes an
+   * idempotency key, and the twelve commands that already exist take it here — a
+   * thirteenth that took it from `Idempotency-Key` would be the one a client forgets,
+   * because nothing in the schema would say it was missing.
+   */
+  idempotencyKey: z.string().min(8).max(255),
   reason: z.string().trim().max(CUSTOMER_BLOCK_REASON_MAX_LENGTH).optional(),
 });
 export type BlockCustomerRequest = z.infer<typeof blockCustomerRequestSchema>;
