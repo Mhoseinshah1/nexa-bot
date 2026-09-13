@@ -58,7 +58,17 @@ export interface BotCommand {
 export const ORDER_CALLBACK_PREFIX = 'p:';
 export const CONFIRM_CALLBACK_PREFIX = 'c:';
 
-/** How many products one `/catalog` answer shows. A bound, not a page: there is no cursor. */
+/**
+ * How many products one `/catalog` answer shows.
+ *
+ * A BOUND, not a page. `listCatalog` reports `hasMore` and this surface drops it on the
+ * floor, so a tenant with more than twenty sellable products shows twenty and says
+ * nothing about the rest. That is a real limit and it is stated here rather than left to
+ * be discovered: how a customer reaches a long catalogue over Telegram — a next button,
+ * categories, a search — is a product decision with no evidence behind it in
+ * `docs/research/`, and `docs/open-questions.md` carries it rather than this file
+ * guessing. Twenty is above any catalogue the research shows.
+ */
 export const CATALOG_PAGE_SIZE = 20;
 
 /**

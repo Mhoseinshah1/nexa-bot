@@ -847,6 +847,8 @@ export const WEB_FA = {
   'web.orders_filter_empty_hint': 'شناسه را بررسی کنید یا صافی‌ها را پاک کنید.',
   'web.orders_filter_customer_hint': 'شناسهٔ داخلی مشتری، نه شناسهٔ تلگرام.',
   'web.orders_filter_product_hint': 'شناسهٔ محصول.',
+  'web.orders_filter_invalid_id':
+    'این یک شناسهٔ معتبر نیست. شناسهٔ داخلی را از صفحهٔ همان مشتری یا محصول بردارید.',
   'web.order_detail': 'جزئیات سفارش',
   'web.order_line': 'سرویس',
   'web.order_line_title': 'آنچه خریداری شده',

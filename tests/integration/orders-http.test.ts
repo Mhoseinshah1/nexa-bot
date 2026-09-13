@@ -367,6 +367,26 @@ describe('order HTTP surface', () => {
     expect(list.orders).toHaveLength(0);
   });
 
+  it('refuses a FILTER that is not an id, rather than answering 500', async () => {
+    /*
+     * `customer_id` and `product_id` are `uuid` columns, so an unvalidated filter
+     * reaches PostgreSQL as `invalid input syntax for type uuid`. That is a 500 with a
+     * stack trace in the log for what is almost always an operator pasting a Telegram id
+     * into the wrong box — and a 500 tells them the server is broken rather than that
+     * the value is not an id.
+     *
+     * Every shape below was accepted by the first version of `orderListQuerySchema`,
+     * which took `z.string().max(64)`.
+     */
+    for (const bad of ['not-a-uuid', '5551234567', '019220ab-cdef-7012-8345', '%20']) {
+      for (const field of ['customerId', 'productId']) {
+        const response = await get(`${ORDER_ROUTES.list}?${field}=${bad}`, viewerCookie);
+        expect(response.statusCode, `${field}=${bad}`).toBe(400);
+        expect(JSON.parse(response.body).error.kind, `${field}=${bad}`).toBe('VALIDATION');
+      }
+    }
+  });
+
   it('answers a malformed id as a refusal rather than a 500', async () => {
     // `orders.id` is a `uuid` column: an unvalidated path segment reaches PostgreSQL as
     // `invalid input syntax for type uuid` and is answered 500.

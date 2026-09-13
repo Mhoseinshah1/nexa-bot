@@ -1506,8 +1506,21 @@ export const orderListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(ORDER_PAGE_MAX).optional(),
   cursor: z.string().max(512).optional(),
   state: z.enum(ORDER_STATES).optional(),
-  customerId: z.string().max(64).optional(),
-  productId: z.string().max(64).optional(),
+  /*
+   * Checked as IDS, not as bounded strings.
+   *
+   * `orders.customer_id` and `orders.product_id` are `uuid` columns, so
+   * `?customerId=abc` reaches PostgreSQL as `invalid input syntax for type uuid` and is
+   * answered 500 — which tells an operator nothing about what they typed and puts a
+   * stack trace in the log for a typo. `customerListQuerySchema` records the same
+   * defect for `telegramUserId`, where the answer was an empty page reading as "no such
+   * customer"; here it is worse, because a 500 reads as "the server is broken".
+   *
+   * Found by this branch's own self-review, not by a test — which is why the test came
+   * with the fix.
+   */
+  customerId: uuidV7Schema.optional(),
+  productId: uuidV7Schema.optional(),
 });
 export type OrderListQuery = z.infer<typeof orderListQuerySchema>;
 

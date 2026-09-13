@@ -4,6 +4,7 @@ import {
   ORDER_STATES,
   UNLIMITED_DURATION_DAYS,
   UNLIMITED_TRAFFIC_BYTES,
+  uuidV7Schema,
   type OrderState,
   type OrderSummaryResponse,
 } from '@nexa/contracts';
@@ -163,8 +164,25 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
   const filtering = appliedCustomer !== '' || appliedProduct !== '';
   const clearable = filtering || draftCustomer !== '' || draftProduct !== '';
 
+  /*
+   * Checked against the CONTRACT's own id schema before it is applied.
+   *
+   * The server refuses a non-id with a 400, which an operator reads as "something is
+   * wrong" without saying which of the two boxes. The commonest mistake here is pasting
+   * a TELEGRAM id — which is what the customer list shows — into a field that wants the
+   * internal one, so naming it is the whole difference between a dead end and a fix.
+   * Same schema as the server parses with, so there is one definition of what an id is.
+   */
+  const idProblem = (value: string): string | undefined =>
+    value !== '' && !uuidV7Schema.safeParse(value).success
+      ? t('web.orders_filter_invalid_id')
+      : undefined;
+  const customerProblem = idProblem(draftCustomer);
+  const productProblem = idProblem(draftProduct);
+
   const apply = (event: FormEvent) => {
     event.preventDefault();
+    if (customerProblem !== undefined || productProblem !== undefined) return;
     setQuery(route, 'customerId', draftCustomer === '' ? null : draftCustomer);
     setQuery(route, 'productId', draftProduct === '' ? null : draftProduct);
   };
@@ -223,6 +241,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
               label={t('web.order_customer')}
               hint={t('web.orders_filter_customer_hint')}
               htmlFor="orders-customer"
+              {...(customerProblem === undefined ? {} : { error: customerProblem })}
             >
               <input
                 id="orders-customer"
@@ -241,6 +260,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
               label={t('web.order_product')}
               hint={t('web.orders_filter_product_hint')}
               htmlFor="orders-product"
+              {...(productProblem === undefined ? {} : { error: productProblem })}
             >
               <input
                 id="orders-product"
@@ -255,7 +275,11 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
                 }
               />
             </Field>
-            <button type="submit" className="btn primary sm">
+            <button
+              type="submit"
+              className="btn primary sm"
+              disabled={customerProblem !== undefined || productProblem !== undefined}
+            >
               {t('web.users_search_apply')}
             </button>
             <button
