@@ -190,6 +190,14 @@ consumer. The tests therefore grant `catalog.edit` through a custom role rather 
 borrowing `owner`, which holds everything and would prove nothing about which key the
 route actually wants.
 
+**Confirmed by the owner as a deferred decision, not a defect.** Asked directly, the
+instruction was: keep `catalog.edit` exactly as the repository defines it, do not grant
+it to `operator` or `sales` in this phase, do not add a backfill migration, and use
+custom roles wherever a test needs a non-owner actor holding it. So the narrowness is
+recorded here as a product decision with a date on it rather than as a finding somebody
+will re-discover and "fix" — which is how a permission model widens by accident. A phase
+that gives an operator a reason to curate the catalogue is the phase that revisits it.
+
 ---
 
 ## 6. Events and audit
