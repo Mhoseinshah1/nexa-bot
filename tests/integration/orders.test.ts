@@ -384,6 +384,51 @@ describe('orders, up to the payment boundary', () => {
     expect(await orderCount()).toBe(0);
   });
 
+  it('records a refused draft under the SAME action a successful one uses', async () => {
+    /*
+     * One command, one audit action — including when it is refused before the
+     * transaction.
+     *
+     * The pre-replay permission check exists so that a caller who has lost the
+     * permission cannot replay somebody else's key and be handed an order. It writes
+     * its own audit row through `recordMutationDenial`, because an early refusal never
+     * reaches `runAuthorizedMutation`. The first version of that fix recorded the
+     * denial as `order.create` while every other row for this command says
+     * `order.draft_create` — so an operator querying the established action would see
+     * successes and transaction-time denials and silently miss exactly the refusals the
+     * fix was written to record. Found by the Codex review of the stabilization round.
+     *
+     * An `operator` is the denial. `maintenance.run` is a `SYSTEM_JOB_PERMISSIONS` key
+     * and the operator role does not list it — deliberately NOT the `owner` this suite
+     * already has, because `owner` is seeded with ALL permissions and would be allowed.
+     */
+    const product = await productIn(tenantA, 'ACTIVE', panelA);
+    const operator = adminActorFor(
+      await createAdmin(ctx.container, tenantA, {
+        username: 'operator-orders',
+        roleKeys: ['operator'],
+      }),
+    );
+
+    await expect(
+      ctx.container.orders.createDraft(tenantA, operator, {
+        idempotencyKey: 'denied-draft-1',
+        customerId: customerA,
+        productId: product.id,
+      }),
+    ).rejects.toMatchObject({ kind: 'PERMISSION_DENIED' });
+
+    const audits = await ctx.container.database.db.execute(
+      sql`SELECT action, result FROM audit_logs WHERE entity_type = 'Order'`,
+    );
+    // Exactly one row, and it carries the canonical action. Asserting the ACTION rather
+    // than merely "an audit row exists" is the whole point: the defect wrote a row.
+    expect(audits.rows).toHaveLength(1);
+    expect((audits.rows[0] as { action: string }).action).toBe('order.draft_create');
+    expect((audits.rows[0] as { result: string }).result).toBe('DENIED');
+    expect(await orderCount()).toBe(0);
+  });
+
   // -------------------------------------------------------------------------
   // CONFIRM — the last edge Phase 4B owns
   // -------------------------------------------------------------------------

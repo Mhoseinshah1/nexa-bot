@@ -169,7 +169,12 @@ export class OrderService {
      * one. See `authorize`.
      */
     await this.authorize(scope, actor, {
-      action: 'order.create',
+      // `order.draft_create`, the SAME action the success row and the transaction-time
+      // denial below use. An early refusal recorded under a second name splits one
+      // command across two audit actions, so a query for the established one silently
+      // omits exactly the denials this early check exists to record. Found by the Codex
+      // review of the stabilization round — introduced by the fix for C2.
+      action: 'order.draft_create',
       entityType: 'Order',
       entityId: null,
     });
