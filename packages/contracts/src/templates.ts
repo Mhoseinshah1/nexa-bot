@@ -391,7 +391,11 @@ export const TEMPLATES = [
   },
   {
     key: 'bot.order.settled',
-    description: 'Confirms that payment was accepted and provisioning will follow.',
+    description:
+      'Confirms that payment was accepted and the order is paid. It says nothing ' +
+      'about a service: a phase that has not provisioned anything may not claim it ' +
+      'has, and 4C is the phase that first sends this key. What follows a payment is ' +
+      "a later phase's to announce, through its own key.",
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -455,6 +459,27 @@ export const TEMPLATES = [
         repeatable: false,
       },
     ],
+  },
+  {
+    key: 'bot.payment.wallet_button',
+    description:
+      'The label on the button a customer presses to pay for an order from their ' +
+      'wallet balance. A button label is customer-facing text like any other, so it ' +
+      'is a key rather than a literal in a surface — the reason ' +
+      '`bot.order.confirm_button` exists, applied to the pair of buttons the payment ' +
+      'choice needs. It carries no amount: the figure a customer is agreeing to is in ' +
+      '`bot.order.awaiting_payment`, and repeating it on a button is a second place ' +
+      'for it to disagree.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.manual_button',
+    description:
+      'The label on the button a customer presses to pay for an order out of band. ' +
+      'A key rather than a literal, for the reason `bot.payment.wallet_button` gives.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
   },
   {
     key: 'bot.payment.unconfigured',
