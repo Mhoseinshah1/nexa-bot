@@ -699,6 +699,14 @@ function WalletCard({
     queryFn: () => fetchWallet(customerId),
     enabled: mayView,
   });
+  /*
+   * Whether an adjustment can name a currency yet.
+   *
+   * The balance response carries the denomination every movement is made in, so an
+   * operator may not submit one before it has arrived — the amount would travel under
+   * a guess. The fieldset below reads this.
+   */
+  const walletReady = wallet.data !== undefined;
   const entries = useQuery({
     queryKey: ['wallet-entries', customerId, cursor],
     queryFn: () =>
@@ -717,10 +725,33 @@ function WalletCard({
        * Pressing the same button twice with the same figures is a replay, and the
        * server answers with the entry it already wrote. See `useSubmissionKey`.
        */
+      /*
+       * The currency comes from the LOADED balance and there is no fallback.
+       *
+       * There used to be `?? 'IRT'`, which is wrong twice over on an installation that
+       * sells in IRR: the request carried a currency the operator never chose, and the
+       * server refused a correctly entered credit with `wallet_currency_unsupported`.
+       * The form is disabled until the balance resolves (see the fieldset below), so
+       * this is unreachable — and it throws rather than guessing, because guessing a
+       * denomination is how an amount travels without its currency.
+       */
+      const currency = wallet.data?.wallet.currency;
+      if (currency === undefined) {
+        throw new Error('The wallet balance has not loaded, so its currency is unknown.');
+      }
+      /*
+       * The CURRENCY is part of the fingerprint too.
+       *
+       * The server hashes it into the request, so a key presented first with one
+       * currency and then another is `platform.idempotency_payload_mismatch` — which
+       * is what `useSubmissionKey` exists to avoid. Leaving it out made the two
+       * fingerprints disagree about what the command was.
+       */
       const idempotencyKey = submission.current({
         customerId,
         direction: input.direction,
         amount,
+        currency,
         note,
       });
       return adjustWallet({
@@ -730,7 +761,7 @@ function WalletCard({
         // A decimal STRING in minor units, straight through. Never parsed to a
         // `number` here: JSON has one numeric type and it rounds past 2^53.
         amount: amount.trim(),
-        currency: wallet.data?.wallet.currency ?? 'IRT',
+        currency,
         note: note.trim(),
       });
     },
@@ -850,7 +881,16 @@ function WalletCard({
       <p className="muted">{t('web.wallet_immutable')}</p>
 
       {mayCredit || mayDebit ? (
-        <>
+        /*
+         * DISABLED until the balance has loaded, because the balance carries the
+         * currency this movement will be denominated in.
+         *
+         * This block is a sibling of the `StateSwitch` above rather than inside it —
+         * an operator may adjust a wallet whose history failed to page — so without
+         * the fieldset the buttons were live while `wallet.data` was undefined, and
+         * the request went out under a hard-coded fallback currency.
+         */
+        <fieldset disabled={walletReady === false}>
           <h3>{t('web.wallet_adjust_title')}</h3>
           <p className="muted">{t('web.wallet_adjust_hint')}</p>
           <Field label={t('web.wallet_adjust_amount')} htmlFor="wallet-amount">
@@ -892,7 +932,7 @@ function WalletCard({
             )}
           </div>
           {adjust.error !== null && <Banner tone="danger">{messageFor(adjust.error)}</Banner>}
-        </>
+        </fieldset>
       ) : null}
 
       {/*

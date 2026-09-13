@@ -326,8 +326,18 @@ describe('financial concurrency', () => {
     ]);
 
     expect(results.filter(Boolean)).toHaveLength(1);
+
+    /*
+     * The WINNER's note, identified by which call returned true — not 'first operator'.
+     *
+     * Nothing orders two statements handed to `Promise.all`, so asserting a fixed note
+     * made this fail on a scheduling accident rather than on a production change. What
+     * IS a rule: the note stored is the one belonging to the call that won, because the
+     * conditional UPDATE writes every column of the winner and none of the loser's.
+     */
+    const winner = results[0] === true ? 'first operator' : 'second operator';
     const after = await repository.findById(tenantA, pending.id);
-    expect(after?.evidenceNote).toBe('first operator');
+    expect(after?.evidenceNote).toBe(winner);
   });
 
   /*
@@ -341,6 +351,79 @@ describe('financial concurrency', () => {
    * payment against an order it did not settle is money recorded as having bought
    * something it did not buy.
    */
+  /*
+   * TWO wallet settlements of ONE order, interleaved on purpose.
+   *
+   * `telegram-payment-flow.test.ts` claimed this case with `Promise.allSettled`, whose
+   * assertions all held under plain serialisation — the second tap is refused by the
+   * order state and writes nothing either way. So the shape it was written to catch was
+   * invisible to it, and the shape was real.
+   *
+   * Produced here: a holder transaction does what a COMPLETED settlement does — it
+   * takes the customer row and moves the order to PAID — and the racer calls the real
+   * service while that is open. The racer blocks on `lockCustomer`, and what it reads
+   * AFTER the lock decides the outcome.
+   *
+   * The order used to be read BEFORE the lock. The racer therefore held an
+   * `AWAITING_PAYMENT` snapshot taken before the holder committed, passed `canCover`,
+   * appended a second debit and only failed at `payments_order_confirmed_key` — a raw
+   * 23505 nothing maps, which the webhook swallows into a failed turn, so the customer
+   * who double-tapped got no reply at all.
+   */
+  it('refuses the loser of two interleaved settlements instead of violating an index', async () => {
+    const order = await awaitingPayment('race-double-settle');
+    await credit(1_000_000n, 'race-double-credit-0001');
+    const orders = new DrizzleOrderRepository(ctx.container.database.db);
+
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const holder = ctx.container.uow.run(tenantA, async (tx) => {
+      // The customer row, so the racer blocks exactly where a real settlement would.
+      expect(await wallet.lockCustomer(tenantA, customerA, tx)).toBe(true);
+      // And the order settled, which is what the racer must see once it gets the lock.
+      const moved = await orders.transition(
+        tenantA,
+        order.id,
+        'AWAITING_PAYMENT',
+        'PAID',
+        { settledAt: ctx.container.clock.now() },
+        ctx.container.clock.now(),
+        tx,
+      );
+      expect(moved).toBe(true);
+      await held;
+    });
+
+    const racing = ctx.container.payments
+      .settleFromWallet(tenantA, systemActor('race-double'), customerA, {
+        idempotencyKey: 'race-double-settle-0001',
+        orderId: order.id,
+      })
+      .then(
+        () => 'settled' as const,
+        (error: unknown) => error,
+      );
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    release();
+    await holder;
+
+    /*
+     * The ORDINARY refusal, by code. Asserting the code rather than merely that it
+     * threw is the point: a raw `duplicate key value violates unique constraint` also
+     * throws, and that is the defect this test exists to catch.
+     */
+    expect(await racing).toMatchObject({ code: 'commerce.order_state_invalid' });
+
+    // Nothing of the loser survives: no debit, no payment row.
+    expect(await countOf('wallet_entries')).toBe(1);
+    expect(await countOf('payments')).toBe(0);
+    const after = await balance();
+    expect(after.amountMinor).toBe(1_000_000n);
+  }, 30_000);
+
   it('rolls a confirmation back when the order settles underneath it', async () => {
     const order = await awaitingPayment('race-stale');
     const pending = await ctx.container.payments.requestManualTransfer(

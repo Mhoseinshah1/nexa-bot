@@ -279,7 +279,7 @@ describe('the wallet ledger', () => {
     expect((await balance(tenantA, customerB)).amountMinor).toBe(0n);
 
     // ...the history is scoped the same way...
-    expect((await repository.list(tenantA, customerB, 50, null)).items).toEqual([]);
+    expect((await repository.list(tenantA, customerB, 'IRT', 50, null)).items).toEqual([]);
 
     // ...and so is the reference lookup, which is what a replay reads back. A shared
     // reference string across tenants is two different movements.
@@ -308,12 +308,12 @@ describe('the wallet ledger', () => {
       await append(tenantA, customerA, 'CREDIT', BigInt(i + 1), `page-${String(i)}`);
     }
 
-    const first = await repository.list(tenantA, customerA, 2, null);
+    const first = await repository.list(tenantA, customerA, 'IRT', 2, null);
     expect(first.items).toHaveLength(2);
     expect(first.nextCursor).not.toBeNull();
 
-    const second = await repository.list(tenantA, customerA, 2, first.nextCursor);
-    const third = await repository.list(tenantA, customerA, 2, second.nextCursor);
+    const second = await repository.list(tenantA, customerA, 'IRT', 2, first.nextCursor);
+    const third = await repository.list(tenantA, customerA, 'IRT', 2, second.nextCursor);
 
     const seen = [...first.items, ...second.items, ...third.items].map((e) => e.reference);
     expect(seen).toHaveLength(5);
@@ -353,10 +353,10 @@ describe('the wallet ledger', () => {
       }
     });
 
-    const first = await repository.list(tenantA, customerA, 2, null);
+    const first = await repository.list(tenantA, customerA, 'IRT', 2, null);
     expect(first.nextCursor?.createdAt).toMatch(/\.\d{6}Z$/u);
 
-    const second = await repository.list(tenantA, customerA, 2, first.nextCursor);
+    const second = await repository.list(tenantA, customerA, 'IRT', 2, first.nextCursor);
     const seen = [...first.items, ...second.items].map((e) => e.reference);
     expect(seen, 'a microsecond-distinct entry was skipped or repeated').toEqual([
       'micro-2',
@@ -367,7 +367,7 @@ describe('the wallet ledger', () => {
 
   it('reassembles an amount with its currency, never one without the other', async () => {
     await append(tenantA, customerA, 'DEBIT', 12_345n, 'shape-1');
-    const [entry] = (await repository.list(tenantA, customerA, 1, null)).items;
+    const [entry] = (await repository.list(tenantA, customerA, 'IRT', 1, null)).items;
 
     expect(entry?.amount).toEqual(money(12_345n, 'IRT'));
     expect(entry?.direction).toBe('DEBIT');

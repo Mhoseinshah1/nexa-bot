@@ -390,7 +390,16 @@ describe('the customer payment flow over Telegram', () => {
 
     await tap(`w:${orderId}`);
 
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.unavailable']);
+    /*
+     * About the ORDER, and not about the product.
+     *
+     * This asserted `bot.order.unavailable` — «این سرویس در حال حاضر قابل خرید نیست» —
+     * which told a customer who had just been debited that their service could not be
+     * bought. The awaiting-payment message keeps its buttons after settlement, so the
+     * second tap is the ORDINARY case rather than an edge, and the sentence it gets is
+     * the one thing this test is for.
+     */
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.not_awaiting_payment']);
     expect((await entries()).filter((e) => e['reason'] === 'PURCHASE')).toHaveLength(1);
   });
 

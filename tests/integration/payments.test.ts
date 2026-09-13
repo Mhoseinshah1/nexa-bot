@@ -828,4 +828,165 @@ describe('payments and settlement', () => {
     )) as unknown as { rows: { n: number }[] };
     expect(services.rows[0]?.n).toBe(0);
   });
+
+  // -------------------------------------------------------------------------
+  // What the SERVICE refuses, regardless of what a surface checked on arrival
+  // -------------------------------------------------------------------------
+
+  /*
+   * These four are here rather than in the Telegram suite on purpose.
+   *
+   * `telegram-payment-flow.test.ts` blocks the customer BEFORE the tap, so it proves
+   * only that the surface gate works. The case that matters is the operator acting
+   * BETWEEN the surface's check and the write, which no surface test can produce — so
+   * the service is called directly, which is exactly what that race looks like from
+   * here.
+   */
+  describe('refusals the surface cannot be trusted to make', () => {
+    const block = (customerId: UserId) =>
+      ctx.container.database.db.execute(
+        sql`UPDATE customers SET status = 'BLOCKED', blocked_at = now()
+            WHERE id = ${customerId}` as never,
+      );
+
+    it('refuses a wallet settlement for a customer blocked after the turn began', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'blk-w');
+      await credit(tenantA, customerA, 1_000_000n, 'blk-w-credit');
+      await block(customerA);
+
+      await expect(
+        ctx.container.payments.settleFromWallet(tenantA, systemActor('blk-w'), customerA, {
+          idempotencyKey: 'blk-w-settle-0001',
+          orderId: order.id,
+        }),
+      ).rejects.toMatchObject({ code: 'commerce.customer_blocked' });
+
+      // No debit, and the order is untouched.
+      expect(await balanceOf(tenantA, customerA)).toMatchObject({ amountMinor: 1_000_000n });
+      expect((await ctx.container.orders.get(tenantA, owner, order.id)).state).toBe(
+        'AWAITING_PAYMENT',
+      );
+    });
+
+    it('refuses a manual transfer request for a customer blocked after the turn began', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'blk-m');
+      await block(customerA);
+
+      await expect(
+        ctx.container.payments.requestManualTransfer(tenantA, systemActor('blk-m'), customerA, {
+          idempotencyKey: 'blk-m-request-0001',
+          orderId: order.id,
+        }),
+      ).rejects.toMatchObject({ code: 'commerce.customer_blocked' });
+    });
+
+    it('refuses to settle an order whose stated deadline has passed', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'exp-w');
+      await credit(tenantA, customerA, 1_000_000n, 'exp-w-credit');
+      /*
+       * The deadline moved into the PAST rather than the clock moved forward: it is the
+       * order's own `expires_at` the customer was shown, and this is the value the
+       * refusal must read. Nothing sweeps a stale order, so it is still AWAITING_PAYMENT
+       * — which is precisely why the state check alone never fired.
+       */
+      await ctx.container.database.db.execute(
+        sql`UPDATE orders SET expires_at = now() - interval '1 day' WHERE id = ${order.id}` as never,
+      );
+
+      await expect(
+        ctx.container.payments.settleFromWallet(tenantA, systemActor('exp-w'), customerA, {
+          idempotencyKey: 'exp-w-settle-0001',
+          orderId: order.id,
+        }),
+      ).rejects.toMatchObject({ code: 'commerce.order_expired' });
+
+      expect(await balanceOf(tenantA, customerA)).toMatchObject({ amountMinor: 1_000_000n });
+    });
+
+    it('refuses to print transfer instructions for an order whose deadline has passed', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'exp-m');
+      await ctx.container.database.db.execute(
+        sql`UPDATE orders SET expires_at = now() - interval '1 day' WHERE id = ${order.id}` as never,
+      );
+
+      await expect(
+        ctx.container.payments.requestManualTransfer(tenantA, systemActor('exp-m'), customerA, {
+          idempotencyKey: 'exp-m-request-0001',
+          orderId: order.id,
+        }),
+      ).rejects.toMatchObject({ code: 'commerce.order_expired' });
+    });
+
+    /*
+     * The asymmetry, asserted so it cannot be "tidied" into consistency.
+     *
+     * An OPERATOR confirming a transfer that already arrived is not a customer starting
+     * to pay late. The money is in the bank; refusing because the deadline lapsed while
+     * the receipt sat in the review queue would strand it, and 4C has no refund path.
+     */
+    it('still lets an operator confirm a transfer that arrived before the deadline', async () => {
+      const lateReviewer = adminActorFor(
+        await createAdmin(ctx.container, tenantA, {
+          username: 'finance-late',
+          roleKeys: ['finance'],
+        }),
+      );
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'exp-c');
+      const pending = await ctx.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor('exp-c'),
+        customerA,
+        { idempotencyKey: 'exp-c-request-0001', orderId: order.id },
+      );
+      await ctx.container.database.db.execute(
+        sql`UPDATE orders SET expires_at = now() - interval '1 day' WHERE id = ${order.id}` as never,
+      );
+
+      const confirmed = await ctx.container.payments.confirmManualTransfer(
+        tenantA,
+        lateReviewer,
+        pending.id,
+        { idempotencyKey: 'exp-c-confirm-0001', note: 'arrived in time' },
+      );
+
+      expect(confirmed.payment.state).toBe('CONFIRMED');
+      expect((await ctx.container.orders.get(tenantA, owner, order.id)).state).toBe('PAID');
+    });
+
+    /*
+     * ONE open transfer per order, however many times the customer taps.
+     *
+     * A second tap is a different `update_id`, so a different idempotency key and a
+     * different derived reference — which used to mean a second PENDING row. The
+     * customer would hold two codes for one order and the operator two identical rows,
+     * with nothing saying which the bank reference names.
+     */
+    it('hands back the open transfer rather than issuing a second code for one order', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'one-m');
+
+      const first = await ctx.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor('one-m-1'),
+        customerA,
+        { idempotencyKey: 'one-m-request-0001', orderId: order.id },
+      );
+      // A DIFFERENT key: the second tap, not a replay of the first.
+      const second = await ctx.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor('one-m-2'),
+        customerA,
+        { idempotencyKey: 'one-m-request-0002', orderId: order.id },
+      );
+
+      expect(second.id).toBe(first.id);
+      expect(second.reference).toBe(first.reference);
+      const rows = await ctx.container.database.db.execute(
+        sql`SELECT id FROM payments WHERE order_id = ${order.id}` as never,
+      );
+      expect((rows as unknown as { rows: unknown[] }).rows, 'a second code was issued').toHaveLength(
+        1,
+      );
+    });
+  });
+
 });

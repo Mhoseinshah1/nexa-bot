@@ -710,6 +710,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     repository: new DrizzlePaymentRepository(database.db),
     orders: orderRepository,
     wallet: walletRepository,
+    customers: customerRepository,
     guard,
     audit,
     opsLog,

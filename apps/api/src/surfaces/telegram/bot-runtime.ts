@@ -264,7 +264,14 @@ const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   // An order that is gone, or that belongs to somebody else — the service answers both
   // the same way on purpose, so this does too.
   [COMMERCE_ERROR_CODES.ORDER_NOT_FOUND]: 'bot.order.unavailable',
-  [COMMERCE_ERROR_CODES.ORDER_STATE_INVALID]: 'bot.order.unavailable',
+  /*
+   * The ORDER, not the product. `bot.order.unavailable` says a PLAN cannot be bought,
+   * and the ordinary way to reach this code is a customer tapping the pay button a
+   * second time on the message they just paid from — the buttons stay in the chat
+   * after settlement. Telling somebody who has just been debited that their service is
+   * unavailable is the class of untruth 4C rewrote `bot.order.settled` to remove.
+   */
+  [COMMERCE_ERROR_CODES.ORDER_STATE_INVALID]: 'bot.order.not_awaiting_payment',
   [COMMERCE_ERROR_CODES.ORDER_EXPIRED]: 'bot.order.expired',
   // Reachable despite the surface's own check: an operator can block a customer between
   // the resolve and the order write, and the service refuses it inside the transaction.
@@ -286,10 +293,24 @@ const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
    */
   [COMMERCE_ERROR_CODES.SETTLEMENT_NOT_FUNDED]: 'bot.order.unavailable',
   /*
-   * NOT a refusal with its own sentence — `bot.wallet.insufficient` needs the shortfall,
-   * which this map cannot carry. `walletPayment` handles it where the detail is, and
-   * this entry exists so a code that reached here without one is still answered rather
-   * than re-thrown as a bug.
+   * This entry is for `WALLET_CURRENCY_UNSUPPORTED`, and the comment here used to
+   * describe a DIFFERENT code — it explained a fallback for
+   * `WALLET_INSUFFICIENT_FUNDS`, which is not the key below and is not in this map.
+   *
+   * What is actually true of each:
+   *
+   * - `WALLET_INSUFFICIENT_FUNDS` is answered inside `walletPayment`, because
+   *   `bot.wallet.insufficient` renders the shortfall and this map carries no values.
+   *   It has NO entry here, so if that handler could not read the shortfall the turn
+   *   would reach `refusal`'s `throw` and the customer would get no reply. It cannot
+   *   today: the service always attaches a positive `shortfallMinor` bounded by
+   *   `PAYMENT_AMOUNT_MAX_MINOR` and a valid `currency`, which is exactly what
+   *   `shortfallOf` parses. Left as is rather than given a key that would exist for an
+   *   unreachable branch — but stated, because the previous comment implied a
+   *   protection that is not here.
+   * - `WALLET_CURRENCY_UNSUPPORTED` has no Telegram producer at all: only
+   *   `WalletService.adjust` raises it and no customer path calls that. It stays
+   *   listed because an unlisted code is the failure mode, not a tidy absence.
    */
   [COMMERCE_ERROR_CODES.WALLET_CURRENCY_UNSUPPORTED]: 'bot.order.unavailable',
 };
@@ -560,9 +581,13 @@ export class BotRuntime {
       return {
         key: 'bot.order.awaiting_payment',
         /*
-         * What is owed, and until when. Nothing about HOW to pay, because there is no
-         * way to pay: payment is the next phase's, and an instruction a customer cannot
-         * follow is the defect the `bot.start.*` copy was corrected for.
+         * What is owed, until when, and — since 4C — the buttons that pay it.
+         *
+         * The sentence here used to say there was no way to pay, which was true when
+         * this message was written and false the moment `paymentButtons` was attached
+         * below. The deadline it renders is now enforced where the money moves:
+         * `orderAwaitingPayment` refuses a tap after `expiresAt`, so «اعتبار تا» is a
+         * fact rather than decoration on a button that worked for ever.
          *
          * `expiresAt` is required by the key's declaration, and an order that reached
          * AWAITING_PAYMENT always has one — the draft carried it. The fallback is the

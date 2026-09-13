@@ -154,9 +154,18 @@ export interface WalletRepository {
     tx?: unknown,
   ): Promise<WalletBalance>;
 
+  /**
+   * A page of movements, newest first, in ONE currency.
+   *
+   * The currency is a parameter for the reason `balanceOf` takes one: this page is read
+   * directly beneath that balance, and a history that ranges wider than the number above
+   * it is the legacy "residual nobody can explain" shape. They must answer about the same
+   * money or neither can be trusted.
+   */
   list(
     scope: TenantContext,
     customerId: UserId,
+    currency: CurrencyCode,
     limit: number,
     cursor: WalletCursor | null,
     tx?: unknown,

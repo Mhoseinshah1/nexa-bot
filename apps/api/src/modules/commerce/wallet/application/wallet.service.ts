@@ -206,7 +206,22 @@ export class WalletService {
     const id = this.customerId(customerId);
     await this.assertCustomerExists(scope, id);
     const limit = Math.min(Math.max(query.limit ?? WALLET_PAGE_DEFAULT, 1), WALLET_PAGE_MAX);
-    return this.deps.repository.list(scope, id, limit, query.cursor ?? null);
+    /*
+     * The SAME currency the balance above is computed in, resolved once here.
+     *
+     * A history wider than the balance it sits under is the legacy residual shape; a
+     * tenant that changed `sales.currency` saw a zero balance over a populated table.
+     * Entries in a currency this installation no longer sells are therefore not shown
+     * by this surface at all — that is a real gap and OQ-4C-04 records it, because
+     * deciding what happens to funds held in a retired currency is a product rule.
+     */
+    return this.deps.repository.list(
+      scope,
+      id,
+      await this.sellingCurrency(scope),
+      limit,
+      query.cursor ?? null,
+    );
   }
 
   /**
@@ -259,9 +274,22 @@ export class WalletService {
     if (replay !== null) {
       const existing = await this.deps.repository.findByReference(scope, replay.result.reference);
       if (existing !== null) return existing;
-      // The idempotency row outlived its entry, which a restore can produce. Falling
-      // through re-appends under the SAME reference, which the unique index makes
-      // safe: it either writes the missing row or returns the one that is there.
+      /*
+       * An idempotency row whose entry is gone. Falling through re-appends under the
+       * SAME reference, which the unique index makes safe.
+       *
+       * Read the limit honestly: this transaction ENDS at `rememberOnce`, and the row
+       * whose existence brought us into this branch is still there, so the remember
+       * conflicts and the whole transaction — the re-appended entry included — rolls
+       * back with `platform.idempotency_in_flight`. The fall-through therefore does not
+       * heal anything; it fails loudly instead of returning a success for a movement
+       * that is not in the ledger, which is the behaviour worth having.
+       *
+       * It is also unreachable: `wallet_entries_no_delete` forbids removing an entry
+       * and the two rows commit together. The OPPOSITE asymmetry — an entry whose
+       * idempotency row is gone — is reachable, takes the ordinary path below, and is
+       * what `wallet.test.ts` produces to test the `inserted` gate.
+       */
     }
 
     const now = this.deps.clock.now();
@@ -365,10 +393,10 @@ export class WalletService {
         /*
          * The event follows the MOVEMENT, not the command succeeding.
          *
-         * `inserted` is false on the fall-through the replay branch above documents —
-         * an idempotency row that outlived its entry. Emitting there would be a second
-         * `WalletEntryRecorded` for one movement, which a consumer acting per event
-         * would act on twice.
+         * `inserted` is false when this transaction re-read an entry it did not write:
+         * an idempotency row that is gone while its entry remains, which a restore can
+         * produce. Emitting there would be a second `WalletEntryRecorded` for one
+         * movement, which a consumer acting per event would act on twice.
          */
         if (inserted) {
           await this.deps.outbox.write(tx, actor, {

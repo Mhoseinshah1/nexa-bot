@@ -599,6 +599,29 @@ describe('the route table', () => {
     renderPage(resolved.element as ReactElement);
     await screen.findByText('ali_tehran', { exact: false });
   });
+
+  /*
+   * The ROUTE deriving credit and debit from their OWN permissions.
+   *
+   * Every wallet permission case below constructs the card with `mayDebit={false}`,
+   * which proves the card honours the prop and nothing about `app.tsx` computing it.
+   * `mayDebit={may('users.view')}` — every reader offered the CRITICAL debit button —
+   * left that whole suite green. This is the call site, and debit is the half worth
+   * asserting because it takes money away.
+   */
+  it('derives debit from users.wallet.debit, not from a permission that merely reads', async () => {
+    stubApi([{ url: `/users/${ROW_ID}`, body: { customer: customer() } }, ...walletRoutes()]);
+    const resolved = resolve({ path: `/users/${ROW_ID}`, query: new URLSearchParams() }, [
+      'users.view',
+      'users.wallet.credit',
+    ]);
+    renderPage(resolved.element as ReactElement);
+
+    // Credit is granted, so the card has drawn — the absence below is a decision
+    // rather than a card that has not rendered yet.
+    await screen.findByText('واریز به کیف پول');
+    expect(screen.queryByText('برداشت از کیف پول')).toBeNull();
+  });
 });
 
 /**

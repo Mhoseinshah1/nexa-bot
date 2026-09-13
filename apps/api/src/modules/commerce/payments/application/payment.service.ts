@@ -35,6 +35,7 @@ import type { ScopeActivityReader } from '../../../platform/system/application/r
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { OrderRecord, OrderRepository } from '../../orders/application/ports.js';
+import type { CustomerRepository } from '../../customers/application/ports.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import { canCover, shortfallMinor } from '../../wallet/domain/balance.js';
 import { settlementRefusal } from '../domain/settlement.js';
@@ -78,6 +79,17 @@ export interface PaymentServiceDeps {
   readonly repository: PaymentRepository;
   readonly orders: OrderRepository;
   readonly wallet: WalletRepository;
+  /**
+   * Read to refuse a BLOCKED customer INSIDE the transaction that would move their money.
+   *
+   * `OrderService` has held this since 4B and payments did not, which left a block
+   * stopping a customer placing new orders while leaving them free to spend the balance
+   * on the ones they already had. The surface checks on arrival and an operator can
+   * block between that check and this write — `REFUSAL_REPLIES` already says exactly
+   * that for the order codes, and the sentence was false for the payment codes beside
+   * them.
+   */
+  readonly customers: CustomerRepository;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -215,26 +227,43 @@ export class PaymentService {
         await this.assertScopeActive(scope, tx);
 
         /*
-         * The order is re-read HERE, inside the transaction that will move the money.
+         * The customer row FIRST, and everything authoritative is read AFTER it.
          *
-         * Everything the callback could have carried is discarded in favour of this
-         * row: the amount, the currency, the owner and the state. A tampered or stale
-         * callback fails at MUTATION time rather than at render time.
-         */
-        const order = await this.orderAwaitingPayment(scope, orderId, customerId, tx);
-        const total = order.totals.total;
-
-        /*
-         * The customer row FIRST, so the balance read below is a DECISION.
+         * Two reasons, and the second was found by review rather than by design.
          *
          * An admin debit racing this purchase must not let both take the last of the
          * money. The ledger is append-only and gives two appends nothing to contend
          * on, so the serialisation point is the customer row — see
          * `WalletRepository.lockCustomer`.
+         *
+         * And the ORDER must be read inside that serialised window, not before it. It
+         * used to be read first: two taps on one order both saw `AWAITING_PAYMENT`, the
+         * loser then blocked here, and resumed holding an order row that had since been
+         * PAID. It went on to pass `canCover`, append a second debit and only fail at
+         * `payments_order_confirmed_key` — a raw 23505 nothing maps, which the webhook
+         * swallows, so the customer who double-tapped got silence. Reading after the
+         * lock makes the loser see `PAID` and refuse in the ordinary way.
          */
         if (!(await this.deps.wallet.lockCustomer(scope, customerId, tx))) {
           throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
         }
+        await this.assertCustomerMayPay(scope, customerId, tx);
+
+        /*
+         * Everything the callback could have carried is discarded in favour of this
+         * row: the amount, the currency, the owner, the state and the deadline. A
+         * tampered or stale callback fails at MUTATION time rather than at render time.
+         */
+        const order = await this.orderAwaitingPayment(
+          scope,
+          orderId,
+          customerId,
+          tx,
+          now,
+          'REFUSE_AFTER_DEADLINE',
+        );
+        const total = order.totals.total;
+
         const balance = await this.deps.wallet.balanceOf(scope, customerId, total.currency, tx);
         if (!canCover(balance.amountMinor, total.amountMinor)) {
           throw errors.conflict(
@@ -403,30 +432,71 @@ export class PaymentService {
       denial,
       async (tx) => {
         await this.assertScopeActive(scope, tx);
-        const order = await this.orderAwaitingPayment(scope, orderId, customerId, tx);
-
-        const payment = await this.deps.repository.create(
+        await this.assertCustomerMayPay(scope, customerId, tx);
+        const order = await this.orderAwaitingPayment(
           scope,
-          {
-            id: paymentId,
-            customerId,
-            orderId,
-            method: 'MANUAL_TRANSFER',
-            // The order's frozen total, never a figure the request carried.
-            amount: order.totals.total,
-            reference,
-            /*
-             * The order's own deadline, carried onto the payment.
-             *
-             * Not a new window invented here: the order already has one and a payment
-             * that outlived it would be an instruction to send money for something that
-             * can no longer be bought.
-             */
-            expiresAt: order.expiresAt,
-            now,
-          },
+          orderId,
+          customerId,
+          tx,
+          now,
+          'REFUSE_AFTER_DEADLINE',
+        );
+
+        /*
+         * ONE pending transfer per order, because two are indistinguishable to everybody.
+         *
+         * The idempotency key is the UPDATE's, so a second tap is a different key, a
+         * different derived reference and — without this — a second PENDING row. Nothing
+         * in the schema forbade it: `payments_order_confirmed_key` is partial on
+         * CONFIRMED. The customer would hold two codes for one order, transfer the money
+         * quoting one of them, and the operator would see two identical pending rows with
+         * no way to tell which the bank reference names. Confirming either settles the
+         * order and strands the other PENDING for ever — there is no cancel, fail or
+         * expire path in this release.
+         *
+         * Answering with the EXISTING payment rather than refusing is what makes the
+         * second tap useful: the customer gets the same reference and the same amount
+         * back, which is what they were reaching for.
+         */
+        const pending = await this.deps.repository.list(
+          scope,
+          { orderId, state: 'PENDING', method: 'MANUAL_TRANSFER' },
+          1,
+          null,
           tx,
         );
+        const already = pending.items[0];
+        /*
+         * NOT an early return: the audit row and the idempotency row below are the point.
+         *
+         * Returning here would leave this command unaudited and its key unremembered,
+         * so the NEXT redelivery of this very update would take the create path again —
+         * which is the defect this block exists to close, reintroduced one line above it.
+         */
+        const payment =
+          already ??
+          (await this.deps.repository.create(
+            scope,
+            {
+              id: paymentId,
+              customerId,
+              orderId,
+              method: 'MANUAL_TRANSFER',
+              // The order's frozen total, never a figure the request carried.
+              amount: order.totals.total,
+              reference,
+              /*
+               * The order's own deadline, carried onto the payment.
+               *
+               * Not a new window invented here: the order already has one and a payment
+               * that outlived it would be an instruction to send money for something
+               * that can no longer be bought.
+               */
+              expiresAt: order.expiresAt,
+              now,
+            },
+            tx,
+          ));
 
         await this.deps.audit.record(
           scope,
@@ -443,6 +513,12 @@ export class PaymentService {
               amountMinor: payment.amount.amountMinor.toString(),
               currency: payment.amount.currency,
               reference: payment.reference,
+              /*
+               * Whether this command issued a code or read back the one already open.
+               * Same ACTION either way — one command, one name, the rule S2 records —
+               * and the difference stated in the row rather than by splitting it.
+               */
+              reissued: already !== undefined,
             },
             result: 'SUCCESS',
           },
@@ -548,6 +624,8 @@ export class PaymentService {
           payment.orderId,
           payment.customerId,
           tx,
+          now,
+          'OPERATOR_MAY_CONFIRM_LATE',
         );
 
         return this.confirmAndSettle(
@@ -770,6 +848,19 @@ export class PaymentService {
     orderId: OrderId,
     customerId: UserId,
     tx: TransactionScope,
+    now: Date,
+    /*
+     * Whether the order's own deadline refuses this caller, spelled out at every call
+     * site rather than inferred.
+     *
+     * A CUSTOMER may not start paying for an order whose stated deadline has passed.
+     * An OPERATOR confirming a transfer that already arrived is the opposite case:
+     * the money is in the bank, and refusing the confirmation because the deadline
+     * lapsed while the receipt sat in the queue would strand it — 4C has no refund
+     * path, which is what OQ-4C-02 is about. So the operator lane is allowed to be
+     * late, deliberately and by name.
+     */
+    deadline: 'REFUSE_AFTER_DEADLINE' | 'OPERATOR_MAY_CONFIRM_LATE',
   ): Promise<OrderRecord> {
     const order = await this.deps.orders.findById(scope, orderId, tx);
     if (order === null || order.customerId !== customerId) {
@@ -781,7 +872,64 @@ export class PaymentService {
         'That order is not awaiting payment.',
       );
     }
+    /*
+     * The deadline the CUSTOMER was shown, enforced where the money moves.
+     *
+     * `bot.order.awaiting_payment` renders «اعتبار تا: {expiresAt}» and 4C attaches the
+     * two pay buttons to that same message. Those buttons live in the chat for ever, so
+     * without this the sentence is false: a tap weeks later settled the order at a price
+     * quoted with an expiry the customer had been told, and on the manual rail it
+     * printed bank instructions for an order whose own `expires_at` was long past.
+     *
+     * The comparison is `>=` and against the ORDER's own column, which is the value the
+     * customer read — not a second window invented here. `OrderService.confirm` refuses
+     * a stale DRAFT the same way one state earlier; this is the same rule at the state
+     * where it had been missing.
+     *
+     * This does NOT move the order to `EXPIRED` — nothing sweeps, which is the half of
+     * OQ-4C-01 that stays open. Refusing is what 4C can do without inventing a window.
+     */
+    if (
+      deadline === 'REFUSE_AFTER_DEADLINE' &&
+      order.expiresAt !== null &&
+      now.getTime() >= order.expiresAt.getTime()
+    ) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.ORDER_EXPIRED,
+        'The time allowed to pay for that order has passed.',
+      );
+    }
     return order;
+  }
+
+  /**
+   * A BLOCKED customer moves no money, checked INSIDE the committing transaction.
+   *
+   * `OrderService.assertCustomerMayOrder` is the same rule at order creation, and this
+   * is the half that was missing: a block stopped a customer placing new orders while
+   * leaving them free to spend their balance on orders they already had. A surface
+   * checks on arrival and an operator can block in between, which is why the check
+   * belongs here rather than at the surface.
+   *
+   * Only the two CUSTOMER-initiated paths call it. An operator confirming a transfer
+   * that already arrived is a different act by a different actor, and refusing it would
+   * strand real money with no refund path in this release — see OQ-4C-02.
+   */
+  private async assertCustomerMayPay(
+    scope: TenantContext,
+    customerId: UserId,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const customer = await this.deps.customers.findById(scope, customerId, tx);
+    if (customer === null) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+    }
+    if (customer.status === 'BLOCKED') {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.CUSTOMER_BLOCKED,
+        'This account cannot pay for orders.',
+      );
+    }
   }
 
   private async orderOf(

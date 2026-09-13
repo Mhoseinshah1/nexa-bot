@@ -205,6 +205,7 @@ export class DrizzleWalletRepository implements WalletRepository {
   async list(
     scope: TenantContext,
     customerId: UserId,
+    currency: CurrencyCode,
     limit: number,
     cursor: WalletCursor | null,
     tx?: unknown,
@@ -217,6 +218,10 @@ export class DrizzleWalletRepository implements WalletRepository {
         and(
           eq(walletEntries.tenantId, tenantId),
           eq(walletEntries.customerId, customerId),
+          // The SAME predicate `balanceOf` applies. Without it this page listed entries
+          // in every currency under a balance computed from one of them, so a tenant
+          // that changed `sales.currency` showed «موجودی: ۰» above a table of movements.
+          eq(walletEntries.currency, currency),
           ...(cursor === null ? [] : [beforeCursor(cursor)]),
         ),
       )

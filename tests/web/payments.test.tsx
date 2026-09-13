@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { PaymentDetailPage, PaymentsPage } from '../../apps/web/src/pages/payments';
 import { resolve } from '../../apps/web/src/app';
@@ -308,6 +308,44 @@ describe('the payments route', () => {
     // The placeholder's own heading, which must NOT be here any more.
     expect(view.container.textContent).not.toContain('چرا هنوز فعال نیست');
     expect(view.container.textContent).toContain('پرداخت‌ها');
+  });
+
+  /*
+   * The ROUTE deriving each prop from a permission, not a page handed one directly.
+   *
+   * Every other permission case in this file and in `users.test.tsx` constructs the page
+   * with `mayReview={false}`, which proves the page honours the prop and says nothing
+   * about `app.tsx` computing it. `mayReview={may('payments.view')}` — every reader
+   * offered the approve form — left that whole suite green. This is the call site.
+   */
+  it('derives the review affordance from receipts.review, not from payments.view', async () => {
+    stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
+    const reader = resolve(
+      { path: `/payments/${ROW_ID}`, query: new URLSearchParams() },
+      ['payments.view'],
+    );
+    const readerView = renderPage(reader.element as ReactElement);
+    // The settled detail, so the assertion below is about a rendered page rather than a
+    // spinner that has not drawn the button yet either.
+    await waitFor(() => {
+      expect(readerView.container.textContent).toContain('a1b2c3d4e5f60718:manual');
+    });
+    expect(readerView.queryByText('تأیید دریافت')).toBeNull();
+    // Named, not merely absent: the reader is told which permission they lack.
+    expect(readerView.container.textContent).toContain('receipts.review');
+
+    cleanup();
+
+    stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
+    const approver = resolve(
+      { path: `/payments/${ROW_ID}`, query: new URLSearchParams() },
+      ['payments.view', 'receipts.review'],
+    );
+    renderPage(approver.element as ReactElement);
+    // The card title first, then the BUTTON — the reader above sees the title too, and
+    // asserting on it would not distinguish the two operators at all.
+    await screen.findByText('تأیید دریافت وجه');
+    expect(screen.getByText('تأیید دریافت')).toBeTruthy();
   });
 
   it('refuses the page to an operator without payments.view', async () => {
