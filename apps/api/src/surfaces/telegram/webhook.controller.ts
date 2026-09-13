@@ -166,6 +166,25 @@ export class TelegramWebhookController {
         idempotencyKey,
         source: 'telegram',
       });
+      /*
+       * `/ping` returns HERE, so it does NOT also run the customer turn.
+       *
+       * That is a real exclusion and it is stated rather than left to be noticed:
+       * somebody who types `/ping` at the bot gets no customer row and no
+       * `last_seen_at`, even though a contact is a contact. The reason is the
+       * idempotency key. `RecordPingService` namespaces by `actor.surface`, which on
+       * this path is `TELEGRAM` — the same namespace `resolveFromUpdate` uses — and
+       * both would present `telegram:<bot>:update:<id>` with DIFFERENT request
+       * hashes. The second would be refused as `platform.idempotency_payload_mismatch`,
+       * the catch below would record `telegram.turn_failed`, and the ping would look
+       * broken.
+       *
+       * Suffixing one of the two keys would fix the collision and cost more than it
+       * buys: the key would stop being the update's identity, which is the one thing
+       * every comment about it depends on. `/ping` is an operator affordance for
+       * proving the pipeline end to end, not a customer command, so the customer it
+       * does not create is a customer nobody was asking about.
+       */
       return { ok: true };
     }
 

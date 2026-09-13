@@ -1232,9 +1232,17 @@ export const customerSummarySchema = z.object({
   lastName: z.string().nullable(),
   languageCode: z.string().nullable(),
   status: z.enum(CUSTOMER_STATUSES),
-  firstSeenAt: z.string(),
-  lastSeenAt: z.string(),
-  blockedAt: z.string().nullable(),
+  /*
+   * `z.iso.datetime()`, not `z.string()`.
+   *
+   * The Web Admin hands each of these straight to `formatTimestamp`, which would
+   * render a non-date string as garbage rather than refuse it — and the response
+   * schema is the only thing between the wire and that call. The backup and recovery
+   * shapes below already use the strict form; `z.string()` here was the loose one.
+   */
+  firstSeenAt: z.iso.datetime(),
+  lastSeenAt: z.iso.datetime(),
+  blockedAt: z.iso.datetime().nullable(),
   blockedReason: z.string().nullable(),
 });
 export type CustomerSummaryResponse = z.infer<typeof customerSummarySchema>;

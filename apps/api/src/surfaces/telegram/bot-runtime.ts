@@ -119,11 +119,19 @@ export class BotRuntime {
   ): Promise<BotTurnResult> {
     const intent = intentOf(input.update);
 
-    // 1. The state change, committed.
-    //
-    // Runs for EVERY intent, not only `/start`. The customer's existence and their
-    // `last_seen_at` are facts about any contact, and "last seen" that only moved on
-    // `/start` would be a column an operator reads as activity and is not.
+    /*
+     * 1. The state change, committed.
+     *
+     * Runs for every intent this runtime SEES, not only `/start`. The customer's
+     * existence and their `last_seen_at` are facts about any contact, and a "last seen"
+     * that only moved on `/start` would be a column an operator reads as activity and
+     * is not.
+     *
+     * One update never reaches here: `/ping`, which the webhook answers and returns
+     * from. That is an idempotency-key collision rather than a product decision, and
+     * `webhook.controller.ts` states it where the `return` is — named here too, because
+     * "every intent" is the sentence a reader would otherwise take as complete.
+     */
     const { customer, arrival } = await this.deps.customers.resolveFromUpdate(scope, actor, {
       idempotencyKey: input.idempotencyKey,
       telegramUserId: input.telegramUserId,
