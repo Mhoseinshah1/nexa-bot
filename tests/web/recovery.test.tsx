@@ -165,14 +165,19 @@ describe('the recovery page', () => {
   });
 
   it('does not activate any Phase 4 placeholder', () => {
-    // The nine planned surfaces stay planned. Asserted here because this branch
-    // touched `NAV` and `resolve`, which is exactly where an accidental
+    // The remaining planned surfaces stay planned. Asserted here because this
+    // branch touched `NAV` and `resolve`, which is exactly where an accidental
     // activation would land — and asserted by RENDERING each path, because a
     // claim about `resolve`'s return value that never mounts it cannot tell a
     // planned page from a live one.
+    //
+    // `/users` is NOT in this list any more: Phase 4A built it, so it is a live
+    // surface with a table, a search form and a pager. It was removed from the
+    // list rather than from the rule — `planned-and-absent.test.tsx` asserts
+    // that the same nine-minus-one set is what `PLANNED_SURFACES` still holds,
+    // so dropping a path here cannot silently deactivate the check for it.
     stubApi([]);
     for (const path of [
-      '/users',
       '/services',
       '/orders',
       '/products',

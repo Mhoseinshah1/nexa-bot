@@ -47,6 +47,25 @@ import {
   TEMPLATE_REVISION_ACTIONS,
   TENANT_KINDS,
   TENANT_STATUSES,
+  // Phase 4. Every CHECK below is built from one of these, so the database's
+  // vocabulary cannot drift from the contract's.
+  CUSTOMER_STATUSES,
+  PRODUCT_STATUSES,
+  PRODUCT_AUDIENCES,
+  ORDER_STATES,
+  PAYMENT_STATES,
+  PAYMENT_METHODS,
+  PAYMENT_EVIDENCE_KINDS,
+  LEDGER_DIRECTIONS,
+  LEDGER_REASONS,
+  SERVICE_STATES,
+  OPERATION_STATES,
+  OPERATION_TYPES,
+  DISCOUNT_TYPES,
+  DISCOUNT_STATUSES,
+  REFERRAL_TRIGGERS,
+  RESELLER_STATUSES,
+  RESELLER_PRICING_MODES,
 } from '@nexa/contracts';
 
 /**
@@ -1926,3 +1945,947 @@ export const APPEND_ONLY_TABLES = [
   // back and adding one silently returns an attempt that was not.
   'notification_released_claims',
 ] as const;
+
+// ---------------------------------------------------------------------------
+// Phase 4 — customers, catalogue, commerce, settlement and provisioning
+//
+// Three rules run through every table below, each of which the legacy system
+// breaks and pays for:
+//
+//   - Money is `bigint` minor units plus an explicit currency column, always as a
+//     pair, and a CHECK refuses half a pair. There is no `doublePrecision` money
+//     column anywhere and there is no `balance` column at all: a balance is
+//     `SUM(signed amount)` over `wallet_entries`, which `check-boundaries.sh`
+//     enforces by rejecting a migration that adds one.
+//   - A historical fact is a SNAPSHOT, not a join. An order carries the title,
+//     specification and price it was confirmed at; reading them back from
+//     `products` is how «محصول حذف‌شده» happens and how renaming a plan rewrites
+//     last month's report.
+//   - Uniqueness that matters is a CONSTRAINT, not a count. One trial per
+//     customer, one redemption per order, one attribution per referee and one
+//     provider user per panel are partial or composite unique indexes, because a
+//     count is a read followed by a write and two concurrent requests both read
+//     zero.
+// ---------------------------------------------------------------------------
+
+/**
+ * The customer.
+ *
+ * Keyed on `(tenant_id, telegram_user_id)` and deliberately not on the bot
+ * instance: one tenant's several bots must converge on one customer, or a wallet
+ * balance differs per bot and nobody can explain why. `first_bot_instance_id`
+ * records where they arrived, which is reporting rather than identity — and it is
+ * nullable because a customer created by an operator import has no such bot.
+ *
+ * `telegram_user_id` is TEXT. Every use of it is identity, never arithmetic, and
+ * `provider-note.ts` already fixes the same choice for the same value.
+ *
+ * There is no `deleted_at`. A block is not a deletion: the orders, payments,
+ * ledger entries and services survive it because they are facts, and a soft-delete
+ * column would give two ways to express "not served" that every query would have to
+ * know about.
+ */
+export const customers = pgTable(
+  'customers',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    telegramUserId: text('telegram_user_id').notNull(),
+    /** Mutable metadata. Never identity, and nothing resolves a customer by it. */
+    username: text('username'),
+    firstName: text('first_name'),
+    lastName: text('last_name'),
+    /** Recorded and deliberately not yet consulted — the product ships one catalogue. */
+    languageCode: text('language_code'),
+    status: text('status').notNull().default('ACTIVE'),
+    /** Where this customer first arrived. Reporting, not identity, hence nullable. */
+    firstBotInstanceId: uuid('first_bot_instance_id').references(() => botInstances.id),
+    firstSeenAt: timestamptz('first_seen_at').notNull().defaultNow(),
+    lastSeenAt: timestamptz('last_seen_at').notNull().defaultNow(),
+    blockedAt: timestamptz('blocked_at'),
+    /**
+     * Why an operator blocked this customer.
+     *
+     * An operator note, and it is never rendered to the customer — `bot.blocked`
+     * carries no placeholder. A reason shown to the person it is about is a reason an
+     * operator will stop writing honestly.
+     */
+    blockedReason: text('blocked_reason'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    /** The identity. Per tenant, so the same human may be a customer of two. */
+    uniqueIndex('customers_tenant_telegram_key').on(table.tenantId, table.telegramUserId),
+    /** The list's deterministic keyset: created_at then id, never a mutable column. */
+    index('customers_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    /**
+     * Username search, lowercased, with `text_pattern_ops`.
+     *
+     * An expression index rather than a lowercased column, because storing a second
+     * copy of a mutable field is a second thing to keep in step. Searches are
+     * case-insensitive because a customer telling an operator their username does not
+     * preserve case.
+     *
+     * `text_pattern_ops` is the part that makes it READABLE, and it was missing.
+     * `/users?username=` is a PREFIX search, and a default-collation btree cannot
+     * serve `LIKE 'x%'` at all — measured on 20 000 rows, the planner ignored this
+     * index, walked `customers_tenant_created_idx` instead and discarded 12 289 rows
+     * to return 26, at 364 shared buffers. With the operator class it is an Index
+     * Cond carrying the prefix range: 111 rows and 31 buffers, and the gap grows with
+     * the tenant's customer count. The repository's comment claimed this index served
+     * the search all along, which made it a promise the plan did not keep — and an
+     * index with no reader is the `callback_refs` situation from migration 0002.
+     *
+     * `customers-plan.test.ts` pins the plan, because a claim about an index that no
+     * test reads is the claim that drifts.
+     */
+    index('customers_tenant_username_idx').on(
+      table.tenantId,
+      sql`lower(username) text_pattern_ops`,
+    ),
+    check('customers_status_check', enumCheck('status', CUSTOMER_STATUSES)),
+    /** A blocked customer has a time; an active one does not. Neither state can lie. */
+    check('customers_blocked_at_check', sql`(status = 'BLOCKED') = (blocked_at IS NOT NULL)`),
+    /** The target of the composite references the child tables use. */
+    unique('customers_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
+ * A product — one sellable plan.
+ *
+ * `price_amount` and `price_currency` are NULLABLE together, and that is the
+ * "do not invent a value" rule expressed in DDL: a tenant that has not priced a plan
+ * has an unpriced plan, not a free one. `PRODUCT_NOT_PRICED` is the refusal, and it
+ * fires at order confirmation where an operator can read it.
+ *
+ * `panel_id` is nullable for the same reason: a product an operator is still
+ * configuring cannot be fulfilled, and the honest encoding of that is an absent
+ * panel rather than a pointer to an arbitrary one.
+ */
+export const products = pgTable(
+  'products',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    title: text('title').notNull(),
+    description: text('description'),
+    status: text('status').notNull().default('INACTIVE'),
+    audience: text('audience').notNull().default('EVERYONE'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    /** Where a purchase of this plan is fulfilled. Null until configured. */
+    panelId: uuid('panel_id').references(() => panels.id),
+    /** 0 means no time limit (`UNLIMITED_DURATION_DAYS`). */
+    durationDays: integer('duration_days').notNull(),
+    /** 0 means no traffic limit (`UNLIMITED_TRAFFIC_BYTES`). Bytes, never gigabytes. */
+    trafficBytes: bigint('traffic_bytes', { mode: 'bigint' }).notNull(),
+    /** Null means "the provider's default", which is not the same as a cap of zero. */
+    deviceLimit: integer('device_limit'),
+    priceAmount: bigint('price_amount', { mode: 'bigint' }),
+    priceCurrency: text('price_currency'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    index('products_tenant_status_idx').on(table.tenantId, table.status),
+    /** The catalogue's order, and the list's keyset: sort, then created, then id. */
+    index('products_tenant_sort_idx').on(
+      table.tenantId,
+      table.sortOrder,
+      table.createdAt,
+      table.id,
+    ),
+    check('products_status_check', enumCheck('status', PRODUCT_STATUSES)),
+    check('products_audience_check', enumCheck('audience', PRODUCT_AUDIENCES)),
+    check('products_price_currency_check', nullableEnumCheck('price_currency', CURRENCY_CODES)),
+    /**
+     * A price is an amount AND a currency, or it is absent.
+     *
+     * Half a price is the shape that makes a total meaningless, and it is exactly what
+     * an interrupted edit or a partial import leaves behind.
+     */
+    check('products_price_pair_check', sql`(price_amount IS NULL) = (price_currency IS NULL)`),
+    check('products_price_positive_check', sql`price_amount IS NULL OR price_amount > 0`),
+    check('products_duration_check', sql`duration_days >= 0 AND duration_days <= 3650`),
+    check('products_traffic_check', sql`traffic_bytes >= 0`),
+    check('products_device_limit_check', sql`device_limit IS NULL OR device_limit > 0`),
+    unique('products_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
+ * An order — one commercial intent and its snapshot of what was bought.
+ *
+ * Every `line_*` column is a snapshot taken at confirmation. `product_id` and
+ * `panel_id` are kept so an operator can navigate, and are explicitly NOT how the
+ * purchase is reconstructed.
+ *
+ * `quote` is the full `PriceQuote` including its mandatory trace, so the order can
+ * always answer "why this number" — the question the legacy system cannot answer for
+ * any of its prices. It is `jsonb` because it is a document read as a whole and never
+ * queried by its parts.
+ */
+export const orders = pgTable(
+  'orders',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    state: text('state').notNull().default('DRAFT'),
+
+    /** Navigation only. The snapshot below is the truth about this purchase. */
+    productId: uuid('product_id').notNull(),
+    panelId: uuid('panel_id').notNull(),
+    lineTitle: text('line_title').notNull(),
+    lineDurationDays: integer('line_duration_days').notNull(),
+    lineTrafficBytes: bigint('line_traffic_bytes', { mode: 'bigint' }).notNull(),
+    lineDeviceLimit: integer('line_device_limit'),
+    lineUnitPriceAmount: bigint('line_unit_price_amount', { mode: 'bigint' }).notNull(),
+    lineQuantity: integer('line_quantity').notNull().default(1),
+
+    subtotalAmount: bigint('subtotal_amount', { mode: 'bigint' }).notNull(),
+    discountAmount: bigint('discount_amount', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    totalAmount: bigint('total_amount', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    /** The full quote with its trace. A quote without one is refused by the contract. */
+    quote: jsonb('quote').notNull(),
+    /** Normalised upper case, or null. At most one per order (`MAX_DISCOUNT_CODES_PER_ORDER`). */
+    discountCode: text('discount_code'),
+
+    expiresAt: timestamptz('expires_at'),
+    confirmedAt: timestamptz('confirmed_at'),
+    settledAt: timestamptz('settled_at'),
+    cancelledAt: timestamptz('cancelled_at'),
+    refundedAt: timestamptz('refunded_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    /** A child row may not name a customer of another tenant. */
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'orders_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.productId],
+      foreignColumns: [products.tenantId, products.id],
+      name: 'orders_product_fk',
+    }),
+    index('orders_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    index('orders_tenant_state_idx').on(table.tenantId, table.state),
+    index('orders_customer_created_idx').on(table.customerId, table.createdAt, table.id),
+    /** The expiry sweeper's only path: unpaid orders, oldest deadline first. */
+    index('orders_expiry_idx')
+      .on(table.expiresAt)
+      .where(sql`state = 'AWAITING_PAYMENT'`),
+    check('orders_state_check', enumCheck('state', ORDER_STATES)),
+    check('orders_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    /**
+     * A total is never negative, and the parts agree with the whole.
+     *
+     * `clampDiscount` enforces the first in the application; this is the half that
+     * survives a direct write and a future code path that forgets.
+     */
+    check(
+      'orders_amounts_check',
+      sql`subtotal_amount >= 0 AND discount_amount >= 0 AND total_amount >= 0`,
+    ),
+    check('orders_total_consistent_check', sql`total_amount = subtotal_amount - discount_amount`),
+    check('orders_discount_bounded_check', sql`discount_amount <= subtotal_amount`),
+    check('orders_quantity_check', sql`line_quantity >= 1`),
+    /** Each lifecycle timestamp exists exactly when its state has been reached. */
+    check(
+      'orders_settled_at_check',
+      sql`(state = 'PAID' OR state = 'REFUNDED') = (settled_at IS NOT NULL)`,
+    ),
+    check('orders_refunded_at_check', sql`(state = 'REFUNDED') = (refunded_at IS NOT NULL)`),
+    check('orders_cancelled_at_check', sql`(state = 'CANCELLED') = (cancelled_at IS NOT NULL)`),
+    unique('orders_tenant_id_key').on(table.tenantId, table.id),
+    /**
+     * Redundant against the primary key, and the target of a CUSTOMER-bearing
+     * composite reference.
+     *
+     * `payments`, `services` and `discount_redemptions` each carry their own
+     * `customer_id` beside an `order_id`, and a two-column `(tenant_id, order_id)`
+     * foreign key lets a child row name order A while claiming customer B. Every one of
+     * those is a real bypass: a payment that settles another customer's order, a service
+     * that appears in the wrong customer's list, and — the one that motivated this — a
+     * discount redemption whose `(discount_id, customer_id)` pair is a fiction, which
+     * makes a per-customer redemption limit advisory rather than enforced.
+     *
+     * So the children reference `(tenant_id, id, customer_id)` and the agreement becomes
+     * impossible to express rather than merely unlikely. Found by the automated security
+     * review of the schema commit, which is exactly the class of thing a reviewer sees
+     * and an author does not: each FK looked correct on its own.
+     */
+    unique('orders_tenant_id_customer_key').on(table.tenantId, table.id, table.customerId),
+  ],
+);
+
+/**
+ * A payment — one attempt to settle money.
+ *
+ * `reference` is the string a customer quotes and an operator searches, unique per
+ * tenant, and it is what makes a manual transfer reconcilable at all. It is generated,
+ * never customer-supplied.
+ *
+ * `external_reference` holds a gateway's own identifier. There is no gateway adapter in
+ * this release, so the column is empty — and it is here rather than added later because
+ * a payment without a place to record external identity is a payment that cannot be
+ * reconciled, and the first gateway would have to migrate live rows to get one.
+ */
+export const payments = pgTable(
+  'payments',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    /** Null for a wallet top-up, which settles no order. */
+    orderId: uuid('order_id'),
+    state: text('state').notNull().default('PENDING'),
+    method: text('method').notNull(),
+    amount: bigint('amount', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    /** Generated, unique per tenant, quoted by the customer. Never customer-supplied. */
+    reference: text('reference').notNull(),
+    /** What a confirmation rests on. Null until confirmed. */
+    evidenceKind: text('evidence_kind'),
+    /**
+     * An operator's note about the evidence, bounded.
+     *
+     * Never the customer's own message text and never a gateway response body: the
+     * first is arbitrary third-party text and the second routinely carries a token.
+     */
+    evidenceNote: text('evidence_note'),
+    /** The gateway's own id. Unused in this release; see the docblock. */
+    externalReference: text('external_reference'),
+    confirmedAt: timestamptz('confirmed_at'),
+    /** Which administrator confirmed it, for an `OPERATOR_REVIEW`. */
+    confirmedByAdminId: uuid('confirmed_by_admin_id').references(() => admins.id),
+    expiresAt: timestamptz('expires_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'payments_customer_fk',
+    }),
+    /*
+     * The customer travels WITH the order.
+     *
+     * `order_id` is nullable — a wallet top-up settles no order — and a MATCH SIMPLE
+     * composite foreign key is not enforced when any of its columns is NULL, which is
+     * exactly the behaviour wanted here: a top-up has no order to agree with, and every
+     * payment that names one must name its owner too. Without the third column a wallet
+     * debit could settle another customer's order.
+     */
+    foreignKey({
+      columns: [table.tenantId, table.orderId, table.customerId],
+      foreignColumns: [orders.tenantId, orders.id, orders.customerId],
+      name: 'payments_order_fk',
+    }),
+    uniqueIndex('payments_tenant_reference_key').on(table.tenantId, table.reference),
+    index('payments_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    index('payments_tenant_state_idx').on(table.tenantId, table.state),
+    index('payments_customer_created_idx').on(table.customerId, table.createdAt, table.id),
+    /**
+     * At most ONE confirmed payment per order.
+     *
+     * A partial unique index rather than an application check, because two concurrent
+     * confirmations both read "no confirmed payment yet". This is the constraint that
+     * makes a double charge impossible rather than unlikely.
+     */
+    uniqueIndex('payments_order_confirmed_key')
+      .on(table.orderId)
+      .where(sql`state = 'CONFIRMED' AND order_id IS NOT NULL`),
+    /** The reconciliation queue: payments whose outcome nobody knows. */
+    index('payments_unknown_idx')
+      .on(table.tenantId, table.createdAt)
+      .where(sql`state = 'UNKNOWN'`),
+    check('payments_state_check', enumCheck('state', PAYMENT_STATES)),
+    check('payments_method_check', enumCheck('method', PAYMENT_METHODS)),
+    check('payments_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    check(
+      'payments_evidence_kind_check',
+      nullableEnumCheck('evidence_kind', PAYMENT_EVIDENCE_KINDS),
+    ),
+    check('payments_amount_check', sql`amount > 0`),
+    /**
+     * A confirmed payment has a time AND evidence. Both, together.
+     *
+     * A confirmation with no recorded evidence is the legacy receipt review, which
+     * records neither reviewer nor time (UNK-PR-010) — so "was this approved by a
+     * human" is unanswerable there.
+     */
+    check(
+      'payments_confirmed_check',
+      sql`(state = 'CONFIRMED') = (confirmed_at IS NOT NULL AND evidence_kind IS NOT NULL)`,
+    ),
+    unique('payments_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
+ * The wallet ledger — append-only, and the only authority on a balance.
+ *
+ * There is no balance column anywhere in this schema. A balance is
+ * `SUM(CASE direction WHEN 'CREDIT' THEN amount ELSE -amount END)` over a customer's
+ * entries, and the index below is what makes that a single ranged scan. The legacy
+ * system's mutable balance column with no ledger is what produces its unexplained
+ * 916,550 residual.
+ *
+ * `amount` is always POSITIVE and `direction` carries the sign, which `ledger.ts`
+ * fixes. A signed amount column would let a CREDIT of -500 express a debit, and then
+ * two representations of one movement exist.
+ *
+ * `reference` is the idempotency identity of a MOVEMENT, unique per tenant. It is what
+ * makes a double debit impossible under a retried command: the second insert violates
+ * the index and the whole transaction rolls back.
+ *
+ * The table is append-only by trigger, like `audit_logs` — see the migration. A reversal
+ * is a new entry naming the original in `reverses_entry_id`, never an edit.
+ */
+export const walletEntries = pgTable(
+  'wallet_entries',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    direction: text('direction').notNull(),
+    reason: text('reason').notNull(),
+    /** Always positive. The sign lives in `direction`. */
+    amount: bigint('amount', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    /** The movement's idempotency identity, unique per tenant. */
+    reference: text('reference').notNull(),
+    /** Set for a `REVERSAL_REASONS` entry, naming the entry it reverses. */
+    reversesEntryId: uuid('reverses_entry_id'),
+    orderId: uuid('order_id'),
+    paymentId: uuid('payment_id'),
+    /** Who caused it, when that was an administrator rather than a flow. */
+    actorAdminId: uuid('actor_admin_id').references(() => admins.id),
+    /** Bounded operator note. Never customer text. */
+    note: text('note'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'wallet_entries_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId],
+      foreignColumns: [orders.tenantId, orders.id],
+      name: 'wallet_entries_order_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'wallet_entries_payment_fk',
+    }),
+    /** The one thing that makes a double debit impossible rather than unlikely. */
+    uniqueIndex('wallet_entries_tenant_reference_key').on(table.tenantId, table.reference),
+    /**
+     * The balance scan, and the history page, in one index.
+     *
+     * `(customer_id, created_at, id)` — the sum reads the whole of a customer's slice
+     * and the page reads the tail of it, so one index serves both and neither needs a
+     * sort.
+     */
+    index('wallet_entries_customer_created_idx').on(table.customerId, table.createdAt, table.id),
+    index('wallet_entries_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    check('wallet_entries_direction_check', enumCheck('direction', LEDGER_DIRECTIONS)),
+    check('wallet_entries_reason_check', enumCheck('reason', LEDGER_REASONS)),
+    check('wallet_entries_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    /** Positive, always. This is the invariant the whole ledger rests on. */
+    check('wallet_entries_amount_check', sql`amount > 0`),
+    unique('wallet_entries_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
+ * A service — what the customer is entitled to, as Nexa knows it.
+ *
+ * Nexa is the authority on the entitlement; the provider holds external reality that
+ * is RECONCILED into `traffic_used_bytes` and `usage_synced_at`. Both halves matter: a
+ * provider treated as authoritative means a panel outage deletes an entitlement, and a
+ * provider ignored means billing for something that does not exist.
+ *
+ * `provider_username` is derived from the service id (`providerUsernameFor`) and unique
+ * per PANEL, which is the constraint that makes adoption after an unknown outcome safe:
+ * a reconcile asks the panel for that exact name, and the index guarantees at most one
+ * service claims it.
+ *
+ * `usage_synced_at` is nullable and is rendered to the customer beside the figure,
+ * because a usage number with no "as of" is a number a customer reads as live.
+ */
+export const services = pgTable(
+  'services',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    /** The order that created it. A renewal is a NEW order against the SAME service. */
+    orderId: uuid('order_id').notNull(),
+    panelId: uuid('panel_id').notNull(),
+    /** Navigation and reporting. The snapshot of what was bought is on the order. */
+    productId: uuid('product_id').notNull(),
+    state: text('state').notNull().default('PENDING_PROVISION'),
+    /** Derived from this row's own id. Unique per panel, which is what adoption needs. */
+    providerUsername: text('provider_username').notNull(),
+    /** The provider's own identifier, once a provider has told us one. */
+    providerUserId: text('provider_user_id'),
+    /**
+     * The subscription URL the customer receives.
+     *
+     * Delivered to its owner by design, so it is stored in the clear — but it is a
+     * bearer capability for that one service, which is why no list endpoint returns it
+     * and only the owner's own detail view does.
+     */
+    subscriptionUrl: text('subscription_url'),
+    expiresAt: timestamptz('expires_at'),
+    /** 0 means unlimited, matching the product snapshot it came from. */
+    trafficLimitBytes: bigint('traffic_limit_bytes', { mode: 'bigint' }).notNull(),
+    trafficUsedBytes: bigint('traffic_used_bytes', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    usageSyncedAt: timestamptz('usage_synced_at'),
+    provisionedAt: timestamptz('provisioned_at'),
+    terminatedAt: timestamptz('terminated_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'services_customer_fk',
+    }),
+    /** The customer travels with the order, or a service lands in the wrong list. */
+    foreignKey({
+      columns: [table.tenantId, table.orderId, table.customerId],
+      foreignColumns: [orders.tenantId, orders.id, orders.customerId],
+      name: 'services_order_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'services_panel_fk',
+    }),
+    /**
+     * One provider user per panel.
+     *
+     * Not per tenant: two tenants may legitimately use the same panel, and the name
+     * they would collide on is derived from a service id, so a collision here means two
+     * services claim one provider account — which is the duplicate that makes usage
+     * figures meaningless.
+     */
+    uniqueIndex('services_panel_provider_username_key').on(table.panelId, table.providerUsername),
+    index('services_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    index('services_tenant_state_idx').on(table.tenantId, table.state),
+    index('services_customer_created_idx').on(table.customerId, table.createdAt, table.id),
+    /** The expiry sweeper, and the reconciliation queue, each their own partial index. */
+    index('services_expiry_idx')
+      .on(table.expiresAt)
+      .where(sql`state = 'ACTIVE' OR state = 'SUSPENDED'`),
+    index('services_unreconciled_idx')
+      .on(table.tenantId, table.createdAt)
+      .where(sql`state = 'UNRECONCILED'`),
+    check('services_state_check', enumCheck('state', SERVICE_STATES)),
+    check('services_traffic_check', sql`traffic_limit_bytes >= 0 AND traffic_used_bytes >= 0`),
+    /** A provisioned service has a time; one that never was does not. */
+    check(
+      'services_provisioned_at_check',
+      sql`(state = 'PENDING_PROVISION' OR state = 'UNRECONCILED') = (provisioned_at IS NULL)`,
+    ),
+    check(
+      'services_terminated_at_check',
+      sql`(state = 'TERMINATED') = (terminated_at IS NOT NULL)`,
+    ),
+    /** A usage figure and its "as of" travel together, or the figure is a lie. */
+    check(
+      'services_usage_synced_check',
+      sql`traffic_used_bytes = 0 OR usage_synced_at IS NOT NULL`,
+    ),
+    unique('services_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
+ * One attempt at one external effect.
+ *
+ * `operation_id` is the 16-hex value DERIVED from the idempotency key under the
+ * `provider` namespace, and it is unique per tenant. That is what makes the whole design
+ * work: two workers retrying one command derive the same id with no lookup, so the
+ * second insert loses on this index rather than starting a second provider call.
+ *
+ * `call_started_at` is the column that decides whether a crashed operation may be
+ * released. Set immediately BEFORE the provider call and committed on its own — so if
+ * the process dies during the call, the row says a call was started and the lease expiry
+ * must not hand it to another worker as though nothing had happened.
+ */
+export const provisioningOperations = pgTable(
+  'provisioning_operations',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** Derived, never generated. 16 lowercase hex characters. */
+    operationId: text('operation_id').notNull(),
+    serviceId: uuid('service_id').notNull(),
+    /** Null for an operation not caused by an order — a reconcile, a usage sync. */
+    orderId: uuid('order_id'),
+    panelId: uuid('panel_id').notNull(),
+    type: text('type').notNull(),
+    state: text('state').notNull().default('PLANNED'),
+    attempts: integer('attempts').notNull().default(0),
+    /** Who holds the claim, and until when. Both null when unclaimed. */
+    claimedBy: text('claimed_by'),
+    leaseUntil: timestamptz('lease_until'),
+    /**
+     * Set before the provider call and committed separately.
+     *
+     * The one fact that distinguishes "a worker died before calling" from "a worker died
+     * during a call", and therefore the one fact that decides whether a release is safe.
+     */
+    callStartedAt: timestamptz('call_started_at'),
+    /** The provider's own reference for the effect, when it gave one. */
+    providerReference: text('provider_reference'),
+    /** A kind from the EXISTING provider taxonomy. Never a new vocabulary. */
+    failureKind: text('failure_kind'),
+    /** Bounded, redacted diagnostic. Never a raw provider response. */
+    failureMessage: text('failure_message'),
+    completedAt: timestamptz('completed_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'provisioning_operations_service_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId],
+      foreignColumns: [orders.tenantId, orders.id],
+      name: 'provisioning_operations_order_fk',
+    }),
+    /** The derivation's whole purpose: a retry collides here instead of calling twice. */
+    uniqueIndex('provisioning_operations_tenant_operation_key').on(
+      table.tenantId,
+      table.operationId,
+    ),
+    /** The worker's claim scan: due work, oldest first, nothing else read. */
+    index('provisioning_operations_due_idx')
+      .on(table.createdAt)
+      .where(sql`state = 'PLANNED'`),
+    /** Expired leases, for the release sweep. */
+    index('provisioning_operations_lease_idx')
+      .on(table.leaseUntil)
+      .where(sql`state = 'IN_FLIGHT'`),
+    index('provisioning_operations_service_idx').on(table.serviceId, table.createdAt, table.id),
+    index('provisioning_operations_unknown_idx')
+      .on(table.tenantId, table.createdAt)
+      .where(sql`state = 'UNKNOWN'`),
+    check('provisioning_operations_state_check', enumCheck('state', OPERATION_STATES)),
+    check('provisioning_operations_type_check', enumCheck('type', OPERATION_TYPES)),
+    check(
+      'provisioning_operations_failure_kind_check',
+      nullableEnumCheck('failure_kind', PROVIDER_FAILURE_KINDS),
+    ),
+    check('provisioning_operations_operation_id_check', sql`operation_id ~ '^[0-9a-f]{16}$'`),
+    check('provisioning_operations_attempts_check', sql`attempts >= 0 AND attempts <= 100`),
+    /** A claim is a holder AND a deadline, together or not at all. */
+    check('provisioning_operations_claim_check', sql`(claimed_by IS NULL) = (lease_until IS NULL)`),
+    /** Terminal states have a completion time; live ones do not. */
+    check(
+      'provisioning_operations_completed_check',
+      sql`(state IN ('SUCCEEDED', 'FAILED', 'ABANDONED')) = (completed_at IS NOT NULL)`,
+    ),
+    unique('provisioning_operations_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
+ * A discount code.
+ *
+ * `value` is whole percent for `PERCENTAGE` and minor units for `FIXED_AMOUNT`, and
+ * `currency` is required for the second and forbidden for the first — a percentage with
+ * a currency is a category error that would eventually be read as an amount.
+ *
+ * `redemption_count` is a counter and NOT the authority on whether the limit is
+ * exhausted: the authority is the conditional UPDATE that increments it
+ * (`WHERE redemption_count < limit`), so two concurrent redemptions cannot both pass.
+ * The counter exists so a list can show usage without aggregating.
+ */
+export const discounts = pgTable(
+  'discounts',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** Normalised to upper case before storage, so case cannot split a counter. */
+    code: text('code').notNull(),
+    type: text('type').notNull(),
+    status: text('status').notNull().default('INACTIVE'),
+    /** Whole percent, or minor units. See the docblock. */
+    value: bigint('value', { mode: 'bigint' }).notNull(),
+    currency: text('currency'),
+    startsAt: timestamptz('starts_at'),
+    endsAt: timestamptz('ends_at'),
+    /** Null means unlimited. Two limits, because "100 uses" and "1 each" differ. */
+    totalRedemptionsLimit: integer('total_redemptions_limit'),
+    perCustomerLimit: integer('per_customer_limit'),
+    minimumSubtotalAmount: bigint('minimum_subtotal_amount', { mode: 'bigint' }),
+    redemptionCount: integer('redemption_count').notNull().default(0),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('discounts_tenant_code_key').on(table.tenantId, table.code),
+    index('discounts_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    check('discounts_type_check', enumCheck('type', DISCOUNT_TYPES)),
+    check('discounts_status_check', enumCheck('status', DISCOUNT_STATUSES)),
+    check('discounts_currency_check', nullableEnumCheck('currency', CURRENCY_CODES)),
+    check('discounts_value_check', sql`value > 0`),
+    /** A percentage is 1..100 and carries no currency; a fixed amount carries one. */
+    check(
+      'discounts_percentage_check',
+      sql`type <> 'PERCENTAGE' OR (value <= 100 AND currency IS NULL)`,
+    ),
+    check('discounts_fixed_check', sql`type <> 'FIXED_AMOUNT' OR currency IS NOT NULL`),
+    check(
+      'discounts_window_check',
+      sql`starts_at IS NULL OR ends_at IS NULL OR starts_at < ends_at`,
+    ),
+    check(
+      'discounts_limits_check',
+      sql`(total_redemptions_limit IS NULL OR total_redemptions_limit > 0) AND (per_customer_limit IS NULL OR per_customer_limit > 0)`,
+    ),
+    check('discounts_count_check', sql`redemption_count >= 0`),
+    /** The code is ASCII and upper case in the database, not only in the application. */
+    check('discounts_code_shape_check', sql`code ~ '^[A-Z0-9_-]{3,40}$'`),
+    unique('discounts_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
+ * One redemption — the fact that a code was applied to an order.
+ *
+ * Unique on `(tenant_id, order_id)` so an order cannot redeem twice even if a retry
+ * re-enters the discount step, and indexed on `(discount_id, customer_id)` so the
+ * per-customer limit is a bounded count rather than a scan.
+ */
+export const discountRedemptions = pgTable(
+  'discount_redemptions',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    discountId: uuid('discount_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    orderId: uuid('order_id').notNull(),
+    /** What it actually took off, snapshotted — the code may be re-tuned later. */
+    amount: bigint('amount', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.discountId],
+      foreignColumns: [discounts.tenantId, discounts.id],
+      name: 'discount_redemptions_discount_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'discount_redemptions_customer_fk',
+    }),
+    /**
+     * The customer travels with the order.
+     *
+     * This is the one the review found. The per-customer redemption limit is counted over
+     * `(discount_id, customer_id)`, so a row whose customer does not own its order makes
+     * the limit advisory — a customer could redeem a once-per-person code repeatedly by
+     * attributing each redemption elsewhere.
+     */
+    foreignKey({
+      columns: [table.tenantId, table.orderId, table.customerId],
+      foreignColumns: [orders.tenantId, orders.id, orders.customerId],
+      name: 'discount_redemptions_order_fk',
+    }),
+    /** One redemption per order, as a constraint rather than a check-then-write. */
+    uniqueIndex('discount_redemptions_order_key').on(table.tenantId, table.orderId),
+    index('discount_redemptions_discount_customer_idx').on(table.discountId, table.customerId),
+    check('discount_redemptions_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    check('discount_redemptions_amount_check', sql`amount > 0`),
+  ],
+);
+
+/**
+ * A referral attribution.
+ *
+ * Unique on `(tenant_id, referee_id)`: a customer is attributed to at most one referrer,
+ * ever, and the constraint is what makes that true under concurrent `/start` commands
+ * carrying different codes.
+ *
+ * `reward_entry_id` names the ledger entry that paid it, so "did this pay out" is a
+ * column rather than a search. Null until the trigger fires, which for
+ * `ON_FIRST_PAID_ORDER` may be much later than the attribution.
+ */
+export const referrals = pgTable(
+  'referrals',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    referrerId: uuid('referrer_id').notNull(),
+    refereeId: uuid('referee_id').notNull(),
+    /** The policy in force when the attribution was made, snapshotted. */
+    trigger: text('trigger').notNull(),
+    rewardEntryId: uuid('reward_entry_id'),
+    rewardedAt: timestamptz('rewarded_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.referrerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'referrals_referrer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.refereeId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'referrals_referee_fk',
+    }),
+    /** One attribution per referee, for ever. */
+    uniqueIndex('referrals_referee_key').on(table.tenantId, table.refereeId),
+    index('referrals_referrer_idx').on(table.referrerId, table.createdAt, table.id),
+    /** Unrewarded attributions, for the payout pass. */
+    index('referrals_unrewarded_idx')
+      .on(table.tenantId, table.createdAt)
+      .where(sql`rewarded_at IS NULL`),
+    check('referrals_trigger_check', enumCheck('trigger', REFERRAL_TRIGGERS)),
+    /** Self-referral is impossible in the database too, not only in the service. */
+    check('referrals_not_self_check', sql`referrer_id <> referee_id`),
+    /** A reward has an entry and a time, or neither. */
+    check('referrals_reward_pair_check', sql`(reward_entry_id IS NULL) = (rewarded_at IS NULL)`),
+  ],
+);
+
+/**
+ * A trial grant.
+ *
+ * One row per customer per tenant, enforced by a unique index — `TRIALS_PER_CUSTOMER`.
+ * `CLAUDE.md` records the same reasoning for the backup lease: one at a time is an
+ * index, not a process, because a count is a read followed by a write.
+ *
+ * `service_id` is set once provisioning has a service to point at, so a grant is the
+ * record of the decision and the service is the record of the thing — and a failed
+ * provisioning does not let the customer take a second trial, which is the abuse a
+ * nullable service would otherwise open.
+ */
+export const trialGrants = pgTable(
+  'trial_grants',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    /** The product configured as the trial when the grant was made, snapshotted. */
+    productId: uuid('product_id').notNull(),
+    serviceId: uuid('service_id'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'trial_grants_customer_fk',
+    }),
+    /** One trial per customer. The index IS the rule. */
+    uniqueIndex('trial_grants_customer_key').on(table.tenantId, table.customerId),
+    index('trial_grants_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+  ],
+);
+
+/**
+ * A reseller — a customer with a pricing policy and, possibly, a credit line.
+ *
+ * `credit_limit_amount` defaults to ZERO, which is `RESELLER_DEFAULT_CREDIT_LIMIT_MINOR`
+ * and the owner's instruction: a credit feature defaults to no credit, because the other
+ * default means a tenant discovers it has extended unsecured credit to everyone it ever
+ * marked a reseller. The limit is stored POSITIVE and means "the balance may reach minus
+ * this", so no comparison is a double negative.
+ *
+ * `discount_percentage` is required for `PERCENTAGE_DISCOUNT` and forbidden for
+ * `LIST_PRICE`, checked by the database. There is no default margin.
+ */
+export const resellers = pgTable(
+  'resellers',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    status: text('status').notNull().default('ACTIVE'),
+    pricingMode: text('pricing_mode').notNull().default('LIST_PRICE'),
+    /** Whole percent off list. Null unless the mode is PERCENTAGE_DISCOUNT. */
+    discountPercentage: integer('discount_percentage'),
+    /** Positive, and zero by default. See the docblock. */
+    creditLimitAmount: bigint('credit_limit_amount', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    creditLimitCurrency: text('credit_limit_currency').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'resellers_customer_fk',
+    }),
+    /** A customer is a reseller once, or not at all. */
+    uniqueIndex('resellers_customer_key').on(table.tenantId, table.customerId),
+    index('resellers_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    check('resellers_status_check', enumCheck('status', RESELLER_STATUSES)),
+    check('resellers_pricing_mode_check', enumCheck('pricing_mode', RESELLER_PRICING_MODES)),
+    check('resellers_credit_currency_check', enumCheck('credit_limit_currency', CURRENCY_CODES)),
+    /** Stored positive, so every comparison against it reads forwards. */
+    check('resellers_credit_limit_check', sql`credit_limit_amount >= 0`),
+    check(
+      'resellers_discount_mode_check',
+      sql`(pricing_mode = 'PERCENTAGE_DISCOUNT') = (discount_percentage IS NOT NULL)`,
+    ),
+    check(
+      'resellers_discount_range_check',
+      sql`discount_percentage IS NULL OR (discount_percentage >= 1 AND discount_percentage <= 100)`,
+    ),
+  ],
+);

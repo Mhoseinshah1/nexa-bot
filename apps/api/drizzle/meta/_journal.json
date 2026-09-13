@@ -225,6 +225,41 @@
       "when": 1789081276442,
       "tag": "0031_backup_recovery_role_backfill",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1789245728732,
+      "tag": "0032_phase4_commerce",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1789245729732,
+      "tag": "0033_phase4_invariants",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1789246186386,
+      "tag": "0034_phase4_cross_entity_customer_agreement",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1789246187386,
+      "tag": "0035_phase4_freeze_confirmation_reviewer",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1789283557056,
+      "tag": "0036_customer_username_prefix_index",
+      "breakpoints": true
     }
   ]
 }

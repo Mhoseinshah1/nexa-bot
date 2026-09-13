@@ -84,7 +84,22 @@ export async function resetDatabase(db: Database): Promise<void> {
        admin_roles, role_permissions, roles, admins,
        panel_health, panel_probe_claims, panel_probe_budgets, panel_credentials, panels,
        bot_instances, tenants,
-       backup_runs, recovery_requests
+       backup_runs, recovery_requests,
+       -- The Phase 4 tables, listed EXPLICITLY rather than left to CASCADE.
+       --
+       -- The tenants table is in this list and every one of these references it, so
+       -- CASCADE does reach them today. Named anyway: what gets truncated is the one
+       -- thing that decides whether a suite sees another test's rows, and a table
+       -- whose clearing depends on a foreign key somebody may later make nullable is
+       -- a table that silently stops being cleared. CLAUDE.md records 122 false
+       -- failures from two suites sharing one database; this is the cheap half of
+       -- not repeating it.
+       --
+       -- No backticks in here: this statement is a plain template literal, so a
+       -- backtick in a comment ends it and the parse error lands twenty lines away.
+       wallet_entries, discount_redemptions, referrals, trial_grants, resellers,
+       provisioning_operations, services, payments, orders, discounts, products,
+       customers
      RESTART IDENTITY CASCADE` as never,
   );
 }

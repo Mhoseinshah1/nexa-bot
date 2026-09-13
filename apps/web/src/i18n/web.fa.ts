@@ -409,7 +409,6 @@ export const WEB_FA = {
   'web.planned_status_body':
     'هیچ دکمه‌ای در این صفحه وجود ندارد، چون هیچ کاری از سرور برنمی‌آید. دکمهٔ غیرفعال هم نگذاشته‌ایم: دکمهٔ غیرفعال یعنی «هست ولی دسترسی ندارید»، و این درست نیست.',
 
-  'web.planned_users_summary': 'حساب مشتریان، کیف پول و سرویس‌های هر مشتری.',
   'web.planned_services_summary': 'سرویس‌های تحویل‌شده و مدیریت آنها.',
   'web.planned_orders_summary': 'سفارش‌ها، وضعیت پرداخت و تحویل.',
   'web.planned_products_summary': 'محصولات، دسته‌ها و قیمت‌گذاری فروشگاه.',
@@ -419,7 +418,6 @@ export const WEB_FA = {
   'web.planned_reports_summary': 'گزارش‌های فروش، مشتری و مالی.',
   'web.planned_bots_summary': 'ربات‌های تلگرام و پیکربندی آنها.',
 
-  'web.planned_missing_customer': 'موجودیت مشتری و هیچ سرویس یا اندپوینتی برای آن وجود ندارد.',
   'web.planned_missing_wallet': 'دفتر کیف پول (ledger) هنوز مصرف‌کننده‌ای روی HTTP ندارد.',
   'web.planned_missing_service': 'موجودیت سرویس تحویل‌شده وجود ندارد.',
   'web.planned_missing_provisioning':
@@ -434,10 +432,6 @@ export const WEB_FA = {
   'web.planned_missing_bot_runtime':
     'اجرای ربات تلگرام بخشی از فاز بعدی است و در این نسخه ساخته نمی‌شود.',
 
-  'web.planned_users_no_tags':
-    'برچسب کاربر وجود نخواهد داشت: نه ستون، نه فیلتر، نه در صفحهٔ کاربر.',
-  'web.planned_users_no_activity':
-    'بخش «فعالیت اخیر» ساخته نمی‌شود؛ صفحهٔ کاربر روی حساب، سرویس، سفارش، مالی و نمایندگی متمرکز می‌ماند.',
   'web.planned_services_no_protocol':
     'پروتکل (VLESS/VMess/…) در رابط عادی سرویس‌ها نمایش داده نمی‌شود؛ انتزاع سرویس، لینک اشتراک است.',
   'web.planned_services_ordering':
@@ -692,6 +686,62 @@ export const WEB_FA = {
   'web.topup_precedence_title': 'اولویت حداقل شارژ',
   'web.topup_precedence_body':
     'حداقلِ مخصوص هر درگاه بر این مقدار عمومی مقدم است. چنین چیزی هنوز قابل تعریف نیست: در این سامانه هیچ درگاه پرداختی ثبت نشده که بتوان تنظیم اختصاصی را به آن نسبت داد.',
+
+  // --- Customers (Phase 4A) ------------------------------------------------
+  'web.users_title': 'کاربران',
+  'web.users_intro': 'مشتریان ثبت‌شده از طریق ربات تلگرام، و وضعیت دسترسی آنها.',
+  'web.users_empty': 'هنوز هیچ مشتری‌ای ثبت نشده است.',
+  'web.users_empty_hint': 'مشتری با نخستین پیام /start به ربات ساخته می‌شود.',
+  'web.users_search_empty': 'هیچ مشتری‌ای با این جست‌وجو پیدا نشد.',
+  'web.users_search_empty_hint':
+    'شناسهٔ عددی تلگرام باید کامل و دقیق باشد؛ نام کاربری با ابتدای آن جست‌وجو می‌شود.',
+  'web.users_search_telegram': 'شناسهٔ تلگرام',
+  'web.users_search_telegram_hint': 'تطبیق کامل و دقیق. بخشی از شناسه جست‌وجو نمی‌شود.',
+  'web.users_search_username': 'نام کاربری',
+  'web.users_search_username_hint': 'با ابتدای نام کاربری، بدون حساسیت به بزرگی و کوچکی حرف‌ها.',
+  'web.users_search_invalid_telegram': 'شناسهٔ تلگرام فقط رقم است و با صفر آغاز نمی‌شود.',
+  'web.users_search_apply': 'جست‌وجو',
+  'web.users_search_clear': 'پاک کردن',
+  'web.users_search_denied':
+    'برای جست‌وجو به دسترسی users.search نیاز است. فهرست بدون جست‌وجو در دسترس شماست.',
+  'web.users_filter_all': 'همه',
+  'web.user_telegram_id': 'شناسهٔ تلگرام',
+  'web.user_username': 'نام کاربری',
+  'web.user_name': 'نام',
+  'web.user_language': 'زبان',
+  'web.user_first_seen': 'نخستین تماس',
+  'web.user_last_seen': 'آخرین تماس',
+  'web.user_status_active': 'فعال',
+  'web.user_status_blocked': 'مسدود',
+  'web.user_detail': 'مشتری',
+  'web.user_identity_title': 'هویت',
+  'web.user_access_title': 'دسترسی',
+  'web.user_blocked_at': 'زمان مسدودسازی',
+  'web.user_blocked_reason': 'دلیل مسدودسازی',
+  'web.user_block': 'مسدود کردن',
+  'web.user_unblock': 'رفع مسدودی',
+  'web.user_block_reason_label': 'دلیل (اختیاری)',
+  'web.user_block_reason_hint':
+    'این یادداشت برای اپراتور است و هرگز به مشتری نشان داده نمی‌شود. با رفع مسدودی پاک می‌شود.',
+  'web.user_blocked_banner_title': 'این مشتری مسدود است',
+  'web.user_blocked_banner_body':
+    'ربات به پیام‌های او فقط با متن «مسدود» پاسخ می‌دهد و /start این مسدودی را برنمی‌دارد.',
+  'web.user_block_denied': 'برای مسدود کردن یا رفع مسدودی به دسترسی users.block نیاز است.',
+  'web.user_blocked_done': 'مشتری مسدود شد.',
+  'web.user_unblocked_done': 'مسدودی مشتری برداشته شد.',
+  /*
+   * What this page deliberately does NOT show, said out loud.
+   *
+   * The legacy customer screen showed a wallet balance, an order count and a
+   * service list, and this release has none of those: no order, payment, wallet
+   * or service entity exists. A zero in any of those columns would be a
+   * measurement of something unbuilt — the same class as the legacy statistics
+   * screen counting configured panels as connected — so the page says what is
+   * true instead of drawing an empty table.
+   */
+  'web.users_scope_title': 'آنچه در این نسخه نیست',
+  'web.users_scope_body':
+    'کیف پول، سفارش، پرداخت، سرویس، تخفیف و نمایندگی در این نسخه وجود ندارند؛ بنابراین هیچ عدد یا ستونی برای آنها نشان داده نمی‌شود. نمایش صفر برای چیزی که ساخته نشده، گزارشِ نادرست است.',
 
   // --- Units ---------------------------------------------------------------
   'web.unit_seconds': 'ثانیه',

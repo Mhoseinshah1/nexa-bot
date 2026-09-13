@@ -1,4 +1,7 @@
 import { RECOVERY_MACHINE } from './recovery.js';
+import { ORDER_MACHINE } from './commerce.js';
+import { PAYMENT_MACHINE } from './payment.js';
+import { SERVICE_MACHINE, OPERATION_MACHINE } from './provisioning.js';
 
 /**
  * State machines as data.
@@ -140,4 +143,16 @@ export function nextState<TState extends string, TEvent extends string>(
  */
 export const STATE_MACHINES: readonly StateMachineDefinition<string, string>[] = [
   RECOVERY_MACHINE as StateMachineDefinition<string, string>,
+  /*
+   * Phase 4's four. Registered here and not only declared beside their own
+   * vocabularies, because the registry is what the validation test walks: a machine
+   * declared and not registered is a machine nothing checks for unreachable states or
+   * dead ends, and the Phase 4 graphs each have a state — `UNKNOWN`, `UNRECONCILED` —
+   * whose only exits are reconciliation paths. Those are exactly the edges a typo
+   * removes silently.
+   */
+  ORDER_MACHINE as StateMachineDefinition<string, string>,
+  PAYMENT_MACHINE as StateMachineDefinition<string, string>,
+  SERVICE_MACHINE as StateMachineDefinition<string, string>,
+  OPERATION_MACHINE as StateMachineDefinition<string, string>,
 ];

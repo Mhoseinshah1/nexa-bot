@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../apps/web/src/app';
 import { t } from '../../apps/web/src/i18n/web.fa';
-import { stubApi } from './harness';
+import { customer, stubApi } from './harness';
 
 /**
  * The shell, rendered whole.
@@ -20,11 +20,17 @@ const renderShell = () => {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
   });
-  return render(
-    <QueryClientProvider client={client}>
-      <App />
-    </QueryClientProvider>,
-  );
+  return {
+    ...render(
+      <QueryClientProvider client={client}>
+        <App />
+      </QueryClientProvider>,
+    ),
+    // Returned so a test can ask the CACHE what it still holds. One rule below is
+    // about data that must no longer exist, and "is it on screen" cannot see the
+    // difference between removed and merely unmounted.
+    client,
+  };
 };
 
 const UNAVAILABLE =
@@ -42,6 +48,24 @@ const SESSION = {
     lastLoginAt: '2026-09-06T08:00:00.000Z',
   },
   permissions: ['panels.view'],
+  expiresAt: '2026-09-07T08:00:00.000Z',
+};
+
+/** The first operator, holding the two permissions `/users` needs. */
+const FIRST_SESSION = {
+  ...SESSION,
+  permissions: ['users.view', 'users.search'],
+};
+
+/** A SECOND operator, so "the cache is the previous session's" is testable. */
+const OTHER_SESSION = {
+  admin: {
+    ...SESSION.admin,
+    id: '01a05e35-c9ad-7e93-bef3-1ed9b55292c9',
+    username: 'second',
+    displayName: 'مدیر دوم',
+  },
+  permissions: ['users.view', 'users.search'],
   expiresAt: '2026-09-07T08:00:00.000Z',
 };
 
@@ -177,6 +201,94 @@ describe('a session that expires under an open tab', () => {
     await vi.advanceTimersByTimeAsync(65_000);
     expect(await screen.findByLabelText('نام کاربری')).toBeInTheDocument();
     expect(screen.queryByText('مدیر اصلی')).toBeNull();
+  });
+
+  /**
+   * The other way a session ends: nobody signs out.
+   *
+   * The cookie expires, the shell falls back to the sign-in screen by the rule
+   * above, and somebody else signs in — on the same shared machine, in the same
+   * app instance. Sign-OUT clearing the cache does not cover this path at all,
+   * because sign-out never ran: the customer page cached under the first session
+   * is still there when the second one signs in, and `['customers', …]` carries no
+   * tenant to tell them apart. So the sign-IN handler drops it too, and this case
+   * is what distinguishes the two halves — deleting either one fails exactly one
+   * of these two tests.
+   */
+  it('drops the expired session cached pages when the NEXT operator signs in', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubApi([
+      { url: '/auth/session', body: FIRST_SESSION },
+      { url: '/system/readiness', body: { status: 'ok', dependencies: [] } },
+      { url: '/health/info', body: { version: '1', commit: 'abc', builtAt: null } },
+      { url: '/users', body: { customers: [customer()], nextCursor: null } },
+    ]);
+    const { client } = renderShell();
+    await screen.findByText('مدیر اصلی');
+    fireEvent.click(screen.getByRole('link', { name: t('web.nav_users') }));
+    await screen.findByText('5551234567');
+
+    // The cookie expires. No sign-out runs.
+    stubApi([
+      {
+        url: '/auth/session',
+        status: 401,
+        body: {
+          error: {
+            kind: 'UNAUTHENTICATED',
+            code: 'auth.session_invalid',
+            message: 'The session is not valid. Sign in again.',
+            correlationId: 'c1',
+          },
+        },
+      },
+    ]);
+    await vi.advanceTimersByTimeAsync(65_000);
+    const passwordInput = await screen.findByLabelText('گذرواژه');
+    const usernameInput = screen.getByLabelText('نام کاربری');
+    // Still cached at this point, which is the premise: nothing has cleared it.
+    expect(client.getQueryCache().find({ queryKey: ['customers'], exact: false })).toBeDefined();
+
+    /*
+     * The second operator's own list CANNOT be served, which is what makes the
+     * assertion below about the cache rather than about the network.
+     *
+     * The route is still `/users` — an expiry navigates nowhere — so the page
+     * remounts under the new session and creates its own query. Asking whether a
+     * `['customers', …]` entry EXISTS cannot tell that new query from the old one;
+     * asking whether the previous operator's row is readable can.
+     */
+    const second = stubApi([
+      { url: '/auth/login', body: OTHER_SESSION },
+      { url: '/auth/session', body: OTHER_SESSION },
+      { url: '/system/readiness', body: { status: 'ok', dependencies: [] } },
+      { url: '/health/info', body: { version: '1', commit: 'abc', builtAt: null } },
+      {
+        url: '/users',
+        status: 500,
+        body: {
+          error: { kind: 'INTERNAL', code: 'boom', message: 'no', correlationId: 'c2' },
+        },
+      },
+    ]);
+    fireEvent.change(usernameInput, { target: { value: 'second' } });
+    fireEvent.change(passwordInput, { target: { value: 'whatever-long' } });
+    fireEvent.submit(usernameInput.closest('form') as HTMLFormElement);
+    await screen.findByText('مدیر دوم');
+
+    // The page really did ask, so "not on screen" is not "never rendered".
+    await waitFor(() => {
+      expect(
+        second.calls.filter((call) => call.url.includes('/users')).length,
+        'the users page did not ask under the new session',
+      ).toBeGreaterThan(0);
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByText('5551234567'),
+        "the previous operator's customer is readable after someone else signed in",
+      ).toBeNull();
+    });
   });
 
   /**
@@ -395,6 +507,114 @@ describe('the shell in the states a pure function cannot see', () => {
         'the stub must be reachable for the zero above to mean anything',
       ).toBeGreaterThan(0);
     });
+  });
+
+  /**
+   * Signing out must drop the DATA, not only the session.
+   *
+   * This console is one long-lived page in a browser, and the operations machine it
+   * runs on is shared — which is the premise of every rule above it. Signing out
+   * cleared `['session']` and nothing else, while `['customers', …]` carries no
+   * tenant and no operator: the next person to sign in re-rendered this same app
+   * instance and `/users` drew the PREVIOUS tenant's customer names, usernames and
+   * Telegram ids from cache while its own request ran — and React Query keeps the
+   * previous data through a failed refetch, so a transient failure left them there.
+   *
+   * The second `/users` route below answers 500 on purpose. With the cache dropped
+   * there is nothing to fall back to and the page shows its error state; with the
+   * cache kept, the row from the first session renders under the second session's
+   * heading. That is the difference the assertion measures.
+   */
+  it('drops every cached page on sign-out, so the next operator cannot read the last one', async () => {
+    stubApi([
+      { url: '/auth/session', body: FIRST_SESSION },
+      { url: '/system/readiness', body: { status: 'ok', dependencies: [] } },
+      { url: '/health/info', body: { version: '1', commit: 'abc', builtAt: null } },
+      { url: '/users', body: { customers: [customer()], nextCursor: null } },
+    ]);
+    const { client } = renderShell();
+    await screen.findByText('مدیر اصلی');
+
+    fireEvent.click(screen.getByRole('link', { name: t('web.nav_users') }));
+    // The first operator's customer is on screen and therefore in the cache.
+    await screen.findByText('5551234567');
+
+    stubApi([
+      { url: '/auth/logout', body: { ok: true } },
+      {
+        url: '/auth/session',
+        status: 401,
+        body: {
+          error: {
+            kind: 'UNAUTHENTICATED',
+            code: 'auth.no_session',
+            message: 'no',
+            correlationId: 'c1',
+          },
+        },
+      },
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'خروج' }));
+    // Waited on the PASSWORD field, which only the sign-in screen has. `نام کاربری`
+    // is also the users list's own search label, so waiting on that one resolved
+    // instantly against the page we were trying to leave and the test proved nothing.
+    const passwordInput = await screen.findByLabelText('گذرواژه');
+    const usernameInput = screen.getByLabelText('نام کاربری');
+
+    /*
+     * The customer page is GONE FROM THE CACHE, not merely off screen.
+     *
+     * Asked of the cache rather than the DOM, because unmounting the page hides the
+     * rows either way — and what matters is whether this browser is still holding
+     * one tenant's customer names after the operator signed out. Nothing re-creates
+     * the key: `leave` navigates to `/` first, so no observer for it is mounted.
+     */
+    expect(
+      client.getQueryCache().find({ queryKey: ['customers'], exact: false }),
+      "sign-out left the previous operator's customers in the cache",
+    ).toBeUndefined();
+
+    // A DIFFERENT operator signs in on the same browser, and their own customer
+    // list cannot be served.
+    //
+    // The two inputs are captured BEFORE the stub is replaced. Replacing it makes
+    // `/auth/session` answer with the second operator, and the shell may pick that
+    // up on its own interval and swap this tree out from under a later lookup —
+    // which failed the test for a reason that had nothing to do with the rule.
+    // Either way the assertion below runs as the second operator.
+    stubApi([
+      // The login response carries the session itself, so it is the same body —
+      // `loginResponseSchema` would reject an `{ ok: true }` stand-in.
+      { url: '/auth/login', body: OTHER_SESSION },
+      { url: '/auth/session', body: OTHER_SESSION },
+      { url: '/system/readiness', body: { status: 'ok', dependencies: [] } },
+      { url: '/health/info', body: { version: '1', commit: 'abc', builtAt: null } },
+      {
+        url: '/users',
+        status: 500,
+        body: {
+          error: { kind: 'INTERNAL', code: 'boom', message: 'no', correlationId: 'c2' },
+        },
+      },
+    ]);
+    fireEvent.change(usernameInput, { target: { value: 'second' } });
+    fireEvent.change(passwordInput, { target: { value: 'whatever-long' } });
+    fireEvent.submit(usernameInput.closest('form') as HTMLFormElement);
+    await screen.findByText('مدیر دوم');
+
+    fireEvent.click(screen.getByRole('link', { name: t('web.nav_users') }));
+    // The request failed, so SOMETHING has to be on screen — and it must not be
+    // the previous operator's customer.
+    await waitFor(() => {
+      expect(
+        screen.queryByText('5551234567'),
+        "the previous operator's customer is still readable",
+      ).toBeNull();
+    });
+    expect(
+      screen.queryByText('ali_tehran'),
+      "the previous operator's customer username is still readable",
+    ).toBeNull();
   });
 
   /**

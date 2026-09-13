@@ -423,3 +423,41 @@ export const PANEL_ERROR_CODES = {
    */
   PANEL_CAPABILITY_UNSUPPORTED: 'panel.capability_unsupported',
 } as const;
+
+/**
+ * Phase 4 — commerce, settlement and provisioning.
+ *
+ * One family rather than five, because the distinction an error code family draws is
+ * "which module owns the remedy", and for all of these it is the same surface and the
+ * same operator. Splitting them would mean a customer-facing refusal whose prefix told
+ * a reader which of our modules refused, which is not information they have.
+ *
+ * Every code here is a statement a surface can safely render the template for. None of
+ * them carries a value, a balance or a provider response: `errors.ts` already fixes
+ * that, and `docs/open-questions.md` records customer-supplied text reaching an
+ * operational projection as the Phase 4 hazard.
+ */
+export const COMMERCE_ERROR_CODES = {
+  /** The request body does not match its contract schema. */
+  COMMERCE_REQUEST_INVALID: 'commerce.request_invalid',
+
+  CUSTOMER_NOT_FOUND: 'commerce.customer_not_found',
+} as const;
+
+/*
+ * The rest of the family arrives WITH its producer, one subphase at a time.
+ *
+ * This file carried twenty-seven more codes for one commit — the whole of 4B through 4F —
+ * and `scripts/check-boundaries.sh` rejected them, correctly and for a reason it records
+ * in its own words: reserving a code keeps a dead name in a FROZEN spec, which is what
+ * `CLAUDE.md` means by "no placeholder abstractions". Its `RESERVED_CODES` list is empty
+ * deliberately.
+ *
+ * So `PRODUCT_NOT_PRICED` lands in the commit that refuses an unpriced product,
+ * `WALLET_INSUFFICIENT_FUNDS` in the one that refuses a debit, `SERVICE_UNRECONCILED` in
+ * the one that refuses to retry after an unknown outcome, and so on. Each is a one-line
+ * contract commit beside the path that throws it, which is also the only way a reader can
+ * tell a live code from an aspiration.
+ */
+
+export type CommerceErrorCode = (typeof COMMERCE_ERROR_CODES)[keyof typeof COMMERCE_ERROR_CODES];

@@ -6,12 +6,18 @@ import { NAV, isCurrent, resolve } from '../../apps/web/src/app';
 import { renderPage, stubApi } from './harness';
 
 /**
- * The nine surfaces with no backend, and the concepts the owner removed.
+ * The eight surfaces with no backend, and the concepts the owner removed.
  *
- * Half of these revisions are satisfied by ABSENCE — no tags, no recent
- * activity, no receipts, no protocol, no least-loaded routing, no logs. An
- * absence with no test is an absence that comes back, so each one is asserted
- * over the rendered page rather than assumed from the fact that nobody wrote it.
+ * Half of these revisions are satisfied by ABSENCE — no receipts, no protocol,
+ * no least-loaded routing, no logs. An absence with no test is an absence that
+ * comes back, so each one is asserted over the rendered page rather than assumed
+ * from the fact that nobody wrote it.
+ *
+ * `users` LEFT this file for `users.test.tsx`. Phase 4A built the surface, so the
+ * two absences recorded on its planned page — no user tags, no recent-activity
+ * feed — are now asserted against the REAL page, where they can actually come
+ * back. Asserting them against a planned page that no route renders any more
+ * would have been a green test for a screen nobody can reach.
  */
 describe('planned surfaces', () => {
   const render = (key: string) => {
@@ -21,6 +27,9 @@ describe('planned surfaces', () => {
 
   it('covers every surface the navigation offers', () => {
     expect(PLANNED_SURFACES.map((s) => s.key).sort()).toEqual(
+      // `users` is deliberately absent: `/users` is a live surface. The list is
+      // written out rather than derived, so activating or deactivating a surface
+      // has to change this line too.
       [
         'bots',
         'discounts',
@@ -30,7 +39,6 @@ describe('planned surfaces', () => {
         'reports',
         'resellers',
         'services',
-        'users',
       ].sort(),
     );
   });
@@ -166,22 +174,6 @@ describe('planned surfaces', () => {
   });
 
   /** Owner revision 15 — user tags are gone entirely. */
-  it('carries no user-tag concept anywhere on the users surface', () => {
-    const { container } = render('users');
-    const text = container.textContent ?? '';
-    expect(text).toContain('برچسب');
-    // ...only as the record of the decision to remove it, never as a feature.
-    expect(text).toContain('وجود نخواهد داشت');
-    expect(screen.queryByText('همه برچسب‌ها')).toBeNull();
-  });
-
-  /** Owner revision 16 — no generic "recent activity" card. */
-  it('records that user detail will not carry a recent-activity feed', () => {
-    render('users');
-    expect(screen.getByText(/فعالیت اخیر/)).toBeInTheDocument();
-    expect(screen.getByText(/ساخته نمی‌شود/)).toBeInTheDocument();
-  });
-
   /** Owner revision 12 — protocol is not a normal service field. */
   it('records that protocol stays out of the normal services UI', () => {
     const { container } = render('services');

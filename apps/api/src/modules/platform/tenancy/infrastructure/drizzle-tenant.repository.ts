@@ -220,4 +220,40 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository {
       { purpose: 'bot_instance.token', tenantId, entityId: row.id },
     );
   }
+
+  /**
+   * The token of ONE named bot instance.
+   *
+   * Distinct from `activeTokenForTenant` on purpose, and the distinction is the point.
+   * Operational notifications go to the people running the installation and any of the
+   * tenant's bots will do; a CUSTOMER reply must come from the bot they wrote to. A
+   * tenant running a public bot and a reseller bot would otherwise answer from the wrong
+   * account — which leaks that the two are related.
+   *
+   * Scoped by tenant as well as id, so a bot instance id from another tenant resolves to
+   * null rather than to that tenant's credential. `ACTIVE` only: stopping a bot should
+   * stop it sending, inbound and outbound alike.
+   */
+  async tokenForBotInstance(
+    scope: ScopeContext,
+    botInstanceId: BotInstanceId,
+  ): Promise<string | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.db
+      .select()
+      .from(botInstances)
+      .where(
+        and(
+          eq(botInstances.tenantId, tenantId),
+          eq(botInstances.id, botInstanceId),
+          eq(botInstances.status, 'ACTIVE'),
+        ),
+      )
+      .limit(1);
+    if (!row) return null;
+    return this.cipher.decrypt(
+      { keyId: row.tokenKeyId, ciphertext: row.tokenCiphertext },
+      { purpose: 'bot_instance.token', tenantId, entityId: row.id },
+    );
+  }
 }

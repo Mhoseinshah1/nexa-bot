@@ -101,6 +101,10 @@ import {
 } from './modules/control/features/application/feature-flags.service.js';
 import { DrizzleTemplateRepository } from './modules/control/templates/infrastructure/drizzle-template.repository.js';
 import { TemplateResolver } from './modules/control/templates/application/template-resolver.js';
+import { CustomerService } from './modules/commerce/customers/application/customer.service.js';
+import { DrizzleCustomerRepository } from './modules/commerce/customers/infrastructure/drizzle-customer.repository.js';
+import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
+import { BotRuntime } from './surfaces/telegram/bot-runtime.js';
 import { I18nTemplateCatalogue } from './modules/control/templates/infrastructure/i18n-template-catalogue.js';
 import { TemplateManagementService } from './modules/control/templates/application/template-management.service.js';
 import { DrizzleNotificationRepository } from './modules/control/notifications/infrastructure/drizzle-notification.repository.js';
@@ -199,6 +203,15 @@ export interface Container {
   readonly installationTenantId: TenantId | null;
   setInstallationTenant(tenantId: TenantId | null): void;
   readonly recordPing: RecordPingService;
+  /**
+   * Phase 4 — the customer-facing commerce lane.
+   *
+   * `botRuntime` is the only thing the Telegram surface needs: it owns the order of
+   * operations (commit the state change, then reply outside the transaction) so a
+   * controller cannot get it wrong.
+   */
+  readonly customers: CustomerService;
+  readonly botRuntime: BotRuntime;
 
   // Control plane — Phase 2
   readonly panels: PanelService;
@@ -544,6 +557,30 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     tenants,
     opsLog,
   );
+
+  /**
+   * Customers, and the bot turn that resolves them.
+   *
+   * Built here rather than inline in the returned object because `BotRuntime` and the
+   * container's own `customers` slot must be the SAME instance: two would each hold
+   * their own idempotency view, and a replay handled by one would not be seen by the
+   * other.
+   */
+  const customerService = new CustomerService({
+    repository: new DrizzleCustomerRepository(database.db),
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    // The same reader every other write path uses. Panels was the one module that
+    // skipped it, which let a stopped tenant be given new panels.
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    outbox,
+    clock,
+    ids,
+  });
 
   // ---------------------------------------------------------------------------
   // Control plane
@@ -1183,6 +1220,28 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       );
     },
     recordPing,
+    customers: customerService,
+    botRuntime: new BotRuntime({
+      customers: customerService,
+      messenger: new TelegramCustomerMessenger(
+        // The tenant's own renderer, so an override lands in exactly the messages a
+        // customer reads. It validates values against the key's declaration on the way
+        // out, which is what stops a literal `{token}` reaching a customer.
+        templateResolver,
+        // The token of the bot the customer WROTE to, never the tenant's active bot.
+        // `botInstances` owns that lookup; `tenants` would be the wrong object and the
+        // wrong question.
+        botInstances,
+        opsLog,
+        // Whether this bot's send-failure condition is still open, read from the
+        // row. It decides whether a successful send writes a recovery, so it must
+        // not be a field this process set on itself: a replica that restarted, or
+        // a second replica, could not then close a condition it did not open.
+        new DrizzleOperationalConditionReader(database.db),
+        config.TELEGRAM_API_BASE_URL,
+        config.NOTIFICATION_SEND_TIMEOUT_MS,
+      ),
+    }),
     panels: new PanelService({
       repository: panelRepository,
       credentials: panelCredentials,

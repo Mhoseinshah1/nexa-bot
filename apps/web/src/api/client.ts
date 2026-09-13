@@ -72,6 +72,12 @@ import {
   type RecoveryDetailResponse,
   type RecoveryListResponse,
   type RunBackupResponse,
+  CUSTOMER_ROUTES,
+  customerListResponseSchema,
+  customerResponseSchema,
+  type CustomerListResponse,
+  type CustomerResponse,
+  type CustomerStatus,
 } from '@nexa/contracts';
 
 /**
@@ -456,6 +462,64 @@ export function fetchProviders(): Promise<ProviderListResponse> {
  * a real cursor with a character appended, inserted and padded, which the
  * decoder used to accept because base64url decoding skips what it cannot read.
  */
+// --- Customers (Phase 4A) ---------------------------------------------------
+
+/**
+ * One page of customers.
+ *
+ * `telegramUserId` and `username` are separate parameters because they are separate
+ * questions on the server: the first is an exact match and the second a prefix, and the
+ * exact one needs `users.search` just as the prefix does. Sent only when non-empty, so
+ * clearing a search box is the unfiltered list rather than a search for the empty string
+ * — which the server would answer with every row while charging the search permission
+ * for it.
+ */
+export function fetchCustomers(
+  query: {
+    limit?: number;
+    cursor?: string;
+    telegramUserId?: string;
+    username?: string;
+    status?: CustomerStatus;
+  } = {},
+): Promise<CustomerListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  if (query.telegramUserId !== undefined && query.telegramUserId !== '') {
+    params.set('telegramUserId', query.telegramUserId);
+  }
+  if (query.username !== undefined && query.username !== '') params.set('username', query.username);
+  if (query.status !== undefined) params.set('status', query.status);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${CUSTOMER_ROUTES.list}?${suffix}` : CUSTOMER_ROUTES.list,
+    customerListResponseSchema,
+  );
+}
+
+export function fetchCustomer(id: string): Promise<CustomerResponse> {
+  return authedGet(CUSTOMER_ROUTES.detail(id), customerResponseSchema);
+}
+
+export function blockCustomer(input: {
+  id: string;
+  reason?: string;
+  idempotencyKey: string;
+}): Promise<CustomerResponse> {
+  const { id, ...body } = input;
+  return post(CUSTOMER_ROUTES.block(id), body, customerResponseSchema);
+}
+
+export function unblockCustomer(input: {
+  id: string;
+  reason?: string;
+  idempotencyKey: string;
+}): Promise<CustomerResponse> {
+  const { id, ...body } = input;
+  return post(CUSTOMER_ROUTES.unblock(id), body, customerResponseSchema);
+}
+
 export function fetchPanels(
   query: { limit?: number; cursor?: string; archived?: PanelListArchivedMode } = {},
 ): Promise<PanelListResponse> {
