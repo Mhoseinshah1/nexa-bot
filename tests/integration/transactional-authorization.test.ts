@@ -115,10 +115,23 @@ describe('fresh transactional authorization', () => {
     return { reached, release };
   }
 
-  /** Owner B removes A's authority and COMMITS, while A is held at the barrier. */
-  async function revokeA(): Promise<void> {
+  /**
+   * Owner B removes A's authority and COMMITS, while A is held at the barrier.
+   *
+   * `roleKeys` is per case, and that turned out to matter. `observer` removes
+   * EVERY permission, so a case revoked to it is denied whichever permission the
+   * mutation names — which made the `customers.block` case unable to tell
+   * `users.block` from `users.view`, and the mutation that swapped them survived
+   * a green run. A case whose rule is "this SPECIFIC permission is re-checked"
+   * has to be revoked to a role that still holds the neighbouring ones.
+   *
+   * The three control-plane cases keep `observer` because their permissions have
+   * no such neighbour in the seeded roles; the note is here so the next case
+   * added does not inherit the weakness by copying the default.
+   */
+  async function revokeA(roleKeys: readonly string[]): Promise<void> {
     await ctx.container.adminManagement.setRoles(tenantA, ownerB, adminA.id, {
-      roleKeys: ['observer'],
+      roleKeys: [...roleKeys],
       reason: 'Authority revoked mid-request by the owner.',
     });
   }
@@ -256,6 +269,16 @@ describe('fresh transactional authorization', () => {
       action: 'customer.block',
       permission: 'users.block',
       eventType: 'CustomerBlocked',
+      /*
+       * `support`, NOT `observer`, and this is the whole point of the case.
+       *
+       * `support` holds `users.view` and `users.search` and NOT `users.block`, so
+       * the revocation removes exactly the one permission under test. Revoked to
+       * `observer` the actor loses everything, the refusal happens whichever
+       * permission the in-transaction check names, and the mutation that replaces
+       * `users.block` with `users.view` there survives — measured, not supposed.
+       */
+      revokeTo: ['support'] as const,
       mutate: () =>
         ctx.container.customers.block(tenantA, actorA, {
           idempotencyKey: 'revoked-customer-block',
@@ -291,7 +314,7 @@ describe('fresh transactional authorization', () => {
       expect(arrived, `${testCase.name} never reached its transaction`).toBe('at the barrier');
 
       // 4. Owner B removes A's authority and commits.
-      await revokeA();
+      await revokeA('revokeTo' in testCase ? testCase.revokeTo : ['observer']);
 
       // 5-7. A resumes, reaches its mutation transaction, and fresh
       //      authorization denies.
@@ -658,7 +681,7 @@ describe('fresh transactional authorization', () => {
     ]);
     expect(arrived, 'notifications.test never reached its transaction').toBe('at the barrier');
 
-    await revokeA();
+    await revokeA(['observer']);
 
     barrier.release();
     const outcome = await settled;
@@ -709,7 +732,7 @@ describe('fresh transactional authorization', () => {
     ]);
     expect(arrived, 'templates.revert never reached its transaction').toBe('at the barrier');
 
-    await revokeA();
+    await revokeA(['observer']);
 
     barrier.release();
     const outcome = await settled;
