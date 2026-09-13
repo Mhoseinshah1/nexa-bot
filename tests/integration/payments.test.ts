@@ -596,6 +596,56 @@ describe('payments and settlement', () => {
     ).rejects.toThrow(/payments_order_confirmed_key/u);
   });
 
+  /*
+   * ONE command, ONE audit action — for the REFUSAL and the SUCCESS alike.
+   *
+   * Self-review finding S2, and the identical defect Phase 4B recorded as M36: the
+   * pre-replay denial wrote `order.create` while success wrote `order.draft_create`,
+   * and the rows that went missing from the established name were exactly the refusals
+   * the check existed to record. Here a wallet settlement audited its denial as
+   * `payment.wallet_settle` and its success as `payment.confirm` — which also made a
+   * customer's own purchase indistinguishable from an operator approving a transfer.
+   *
+   * Asserted as the ACTION, not as the existence of a row. M36 survived a test that
+   * checked only that a denial row existed.
+   */
+  it('audits a wallet settlement under ONE action, refused or not', async () => {
+    const order = await awaitingPayment(tenantA, customerA, panelA, 'audit-1');
+    await credit(tenantA, customerA, 1_000_000n, 'credit-audit-1');
+    await settleFromWallet(tenantA, customerA, order.id, 'settle-audit-0001');
+
+    const success = (await ctx.container.database.db.execute(
+      sql`SELECT action, result FROM audit_logs WHERE entity_type = 'Payment'` as never,
+    )) as unknown as { rows: { action: string; result: string }[] };
+    expect(success.rows).toEqual([{ action: 'payment.wallet_settle', result: 'SUCCESS' }]);
+
+    // And a refusal of the same command carries the SAME name. `support` holds
+    // `maintenance.run`? No — it is an operator role, so it does not, which is what
+    // makes it refused here.
+    const support = adminActorFor(
+      await createAdmin(ctx.container, tenantA, {
+        username: 'support-audit',
+        roleKeys: ['support'],
+      }),
+    );
+    const other = await awaitingPayment(tenantA, customerA, panelA, 'audit-2');
+    await expect(
+      ctx.container.payments.settleFromWallet(tenantA, support, customerA, {
+        idempotencyKey: 'settle-audit-0002',
+        orderId: other.id,
+      }),
+    ).rejects.toMatchObject({ code: 'platform.permission_denied' });
+
+    const both = (await ctx.container.database.db.execute(
+      sql`SELECT action, result FROM audit_logs WHERE entity_type IN ('Payment', 'Order')
+          AND action LIKE 'payment.%' ORDER BY occurred_at ASC, id ASC` as never,
+    )) as unknown as { rows: { action: string; result: string }[] };
+    expect(both.rows).toEqual([
+      { action: 'payment.wallet_settle', result: 'SUCCESS' },
+      { action: 'payment.wallet_settle', result: 'DENIED' },
+    ]);
+  });
+
   // -------------------------------------------------------------------------
   // The repository's own guarantees
   // -------------------------------------------------------------------------

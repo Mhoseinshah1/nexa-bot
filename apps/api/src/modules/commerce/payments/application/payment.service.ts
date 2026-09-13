@@ -303,6 +303,8 @@ export class PaymentService {
             confirmedAt: now,
           },
           now,
+          // The SAME action its refusals carry. See `confirmAndSettle`'s `action`.
+          denial.action,
         );
 
         await this.deps.outbox.write(tx, actor, {
@@ -543,6 +545,7 @@ export class PaymentService {
             confirmedAt: now,
           },
           now,
+          denial.action,
           { idempotencyKey: input.idempotencyKey, requestHash, namespace: OPERATOR_NAMESPACE },
         );
       },
@@ -571,6 +574,17 @@ export class PaymentService {
       readonly confirmedAt: Date;
     },
     now: Date,
+    /**
+     * The audit ACTION, supplied by the caller rather than fixed here.
+     *
+     * One command must not be split across two action names. `settleFromWallet` audits
+     * its refusals as `payment.wallet_settle`, so its success has to say the same thing
+     * — and a wallet settlement is a different act from an operator approving a
+     * transfer, so they must not share a name either. Phase 4B has the identical defect
+     * on record as M36: the pre-replay denial wrote `order.create` while success wrote
+     * `order.draft_create`, and the rows that went missing were exactly the refusals.
+     */
+    action: string,
     remember?: {
       readonly idempotencyKey: string;
       readonly requestHash: string;
@@ -665,7 +679,7 @@ export class PaymentService {
       scope,
       actor,
       {
-        action: 'payment.confirm',
+        action,
         entityType: 'Payment',
         entityId: confirmed.id,
         before: { state: payment.state },

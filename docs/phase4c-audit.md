@@ -250,10 +250,17 @@ payment whose currency differs from the order's is refused, not rescaled.
 root **and** per-gateway minima/maxima — and the global minimum was itself **per
 user tier** (عادی 50,000, نماینده عادی 100,000, نماینده پیشرفته 20,000, an
 ordering the corpus flags as anomalous with cause UNKNOWN, `FBR-012`). Which
-layer wins is **UNKNOWN and deliberately unresolved** (`FBR-008`). 4C has exactly
-one layer — `wallet.topup.minimum`, a single `Money` — because there is no
-gateway to override it and no reseller tier to key it by. The tiered minimum is
-4F's.
+layer wins is **UNKNOWN and deliberately unresolved** (`FBR-008`). 4C has **no
+amount-limit layer at all**, and one sanity rail that is not a policy:
+`PAYMENT_AMOUNT_MAX_MINOR`, the ceiling above which a request is certainly a
+mistake or an attack.
+
+> **Corrected after §8.** An earlier draft of this paragraph said 4C had "exactly
+> one layer — `wallet.topup.minimum`". That was written before standalone top-up
+> was deferred and it contradicted §8 two sections later. `wallet.topup.minimum`
+> stays `PLANNED` with NO consumer in this release: nothing in 4C lets a customer
+> name an amount, so there is no amount for a minimum to bound. The tiered
+> minimum and the per-gateway layering are both 4F's or later.
 
 ---
 
