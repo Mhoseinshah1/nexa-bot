@@ -129,6 +129,7 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     if (search.customerId !== undefined)
       conditions.push(eq(payments.customerId, search.customerId));
     if (search.orderId !== undefined) conditions.push(eq(payments.orderId, search.orderId));
+    if (search.reference !== undefined) conditions.push(eq(payments.reference, search.reference));
     if (cursor !== null) {
       conditions.push(
         sql`(${payments.createdAt}, ${payments.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`,

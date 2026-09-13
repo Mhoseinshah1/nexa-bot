@@ -1672,14 +1672,40 @@ export type WalletEntryListResponse = z.infer<typeof walletEntryListResponseSche
 export const walletAdjustRequestSchema = z.object({
   idempotencyKey: z.string().min(8).max(255),
   direction: z.enum(LEDGER_DIRECTIONS),
-  amount: z
-    .string()
-    .regex(/^\d{1,19}$/u)
-    .refine((v) => BigInt(v) > 0n, 'An adjustment must be greater than zero.')
-    .refine(
-      (v) => BigInt(v) <= PAYMENT_AMOUNT_MAX_MINOR,
-      'That amount is past the largest this system moves.',
-    ),
+  /*
+   * ONE total check, not a chain of refinements, and the difference is a 500.
+   *
+   * Chained `.refine`s on a STRING schema all run even after an earlier check has
+   * failed — unlike the object-level refinements on `productWriteSchema`, which run only
+   * once every field has parsed. So `z.string().regex(...).refine((v) => BigInt(v) > 0n)`
+   * reaches `BigInt('abc')`, which THROWS a SyntaxError out of `safeParse` itself: not a
+   * validation failure the error filter turns into a 400, but an exception that becomes
+   * a 500 for what is an ordinary malformed request.
+   *
+   * `superRefine` with an early return is the fix: the shape is established before any
+   * conversion is attempted, and every later check reads a value already known to be
+   * digits.
+   */
+  amount: z.string().superRefine((value, ctx) => {
+    if (!/^\d{1,19}$/u.test(value)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'An amount is digits only, in minor units.',
+      });
+      return;
+    }
+    const minor = BigInt(value);
+    if (minor <= 0n) {
+      ctx.addIssue({ code: 'custom', message: 'An adjustment must be greater than zero.' });
+      return;
+    }
+    if (minor > PAYMENT_AMOUNT_MAX_MINOR) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'That amount is past the largest this system moves.',
+      });
+    }
+  }),
   currency: z.enum(CURRENCY_CODES),
   note: z.string().trim().min(1).max(500),
 });

@@ -85,6 +85,15 @@ export interface PaymentSearch {
   readonly method?: PaymentMethod;
   readonly customerId?: UserId;
   readonly orderId?: OrderId;
+  /**
+   * The quotable code, matched EXACTLY.
+   *
+   * Exact rather than a prefix or a contains: a reference is what a customer reads out
+   * of a message, and a partial match over money would let an operator open somebody
+   * else's payment by typing four characters. `payments_tenant_reference_key` makes the
+   * exact match a unique lookup within the tenant.
+   */
+  readonly reference?: string;
 }
 
 export interface PaymentRepository {
