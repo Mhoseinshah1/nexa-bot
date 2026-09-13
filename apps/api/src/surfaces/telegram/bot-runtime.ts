@@ -134,7 +134,29 @@ export class BotRuntime {
     const replyKey = replyFor(intent, arrival);
     const chatId = privateChatIdOf(input.update);
 
-    // 2. The reply, after the commit, and only into a private chat.
+    /*
+     * 2. The reply, after the commit, and only into a private chat.
+     *
+     * A REDELIVERED update replies AGAIN, and that is a decision rather than an
+     * oversight. `resolveFromUpdate` is idempotent, so the durable effects — the
+     * customer row, the audit row, the registration event, `last_seen_at` — happen
+     * once across any number of deliveries. The reply cannot join them: Telegram's
+     * `sendMessage` has no idempotency key, so "exactly once" is not on offer and
+     * the choice is between a duplicate greeting and a missing one.
+     *
+     * Telegram redelivers precisely when it did not see a 200, which includes the
+     * case where the first turn committed and the send never happened. Suppressing
+     * the reply on a replay would leave that customer staring at nothing, for ever,
+     * with nothing anywhere saying so — the invisible failure this codebase exists
+     * to remove. A second greeting is visible, harmless and self-correcting.
+     *
+     * What would change this is persisting the SEND OUTCOME and re-sending only when
+     * the first one was not `DELIVERED`. That needs a second durable write after the
+     * commit, which is a mechanism rather than a line, and nothing in this phase
+     * sends anything a duplicate of which costs money. When something does — an
+     * order confirmation, a payment receipt — it gets that mechanism, and this
+     * comment is where to start.
+     */
     if (replyKey === null || chatId === null) {
       return {
         intent,

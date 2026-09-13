@@ -1,0 +1,478 @@
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { sql } from 'drizzle-orm';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { TELEGRAM_SECRET_TOKEN_HEADER } from '@nexa/contracts';
+import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
+import { migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
+
+/**
+ * The customer-facing Telegram turn, end to end.
+ *
+ * Against a REAL socket standing in for Telegram, not a stubbed `fetch`. Two of
+ * the rules under test are about WHEN the send happens relative to the commit,
+ * and a stub cannot witness that ordering honestly: it would assert the test's
+ * own idea of it. The fake records every request with the moment it arrived, so
+ * "the fact committed before the reply went out" is a measurement.
+ *
+ * What the turn must do, and each way it could be wrong:
+ *
+ *   - create the customer on first `/start`, and NOT a second time on the next
+ *     one — the legacy bot has no idempotency anywhere, so a redelivered update
+ *     there is indistinguishable from a second visit;
+ *   - never let a profile refresh touch `status`, because a block any customer
+ *     could lift by typing `/start` is not a block;
+ *   - commit the fact and only then send, because a send inside the transaction
+ *     can be rolled back after Telegram has delivered;
+ *   - keep a failed reply from rolling back the fact, because the customer
+ *     exists whether or not they were greeted.
+ */
+
+const WEBHOOK_SECRET = 'a-sufficiently-long-secret-for-the-turn';
+const BOT_A = SEED_IDS.botA1;
+const BOT_B = SEED_IDS.botB1;
+
+interface Sent {
+  readonly url: string;
+  readonly body: Record<string, unknown>;
+  readonly at: number;
+}
+
+describe('the customer Telegram turn', () => {
+  let api: ApiApp;
+  let telegram: Server;
+  let sent: Sent[];
+  /** What the fake answers. Replaced per test for the failure cases. */
+  let reply: (request: IncomingMessage, response: ServerResponse) => void;
+
+  const inject = (options: Record<string, unknown>) =>
+    api.app
+      .getHttpAdapter()
+      .getInstance()
+      .inject(options as never);
+
+  beforeAll(async () => {
+    sent = [];
+    telegram = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on('data', (chunk: Buffer) => chunks.push(chunk));
+      request.on('end', () => {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        let body: Record<string, unknown> = {};
+        try {
+          body = JSON.parse(raw) as Record<string, unknown>;
+        } catch {
+          body = { unparseable: raw };
+        }
+        sent.push({ url: request.url ?? '', body, at: Date.now() });
+        reply(request, response);
+      });
+    });
+    await new Promise<void>((resolve) => telegram.listen(0, '127.0.0.1', resolve));
+    const address = telegram.address();
+    if (address === null || typeof address === 'string') throw new Error('no address');
+
+    const config = testConfig({
+      TELEGRAM_WEBHOOK_ENABLED: 'true',
+      TELEGRAM_WEBHOOK_SECRET: WEBHOOK_SECRET,
+      // `http://` loopback, which the config schema allows outside production
+      // and refuses in it — the bot token is in the request path.
+      TELEGRAM_API_BASE_URL: `http://127.0.0.1:${String(address.port)}`,
+    });
+    await migrateOnce(config.DATABASE_URL);
+    api = await createApiApp(config);
+  });
+
+  afterAll(async () => {
+    await api?.close();
+    await new Promise<void>((resolve) => telegram.close(() => resolve()));
+  });
+
+  beforeEach(async () => {
+    await resetDatabase(api.container.database.db);
+    await seed(api.container.database.db, api.container.cipher);
+    api.container.setInstallationTenant(tenantA.tenantId);
+    sent = [];
+    reply = (_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true, result: { message_id: 11 } }));
+    };
+  });
+
+  let updateId = 1000;
+  const start = (
+    options: {
+      bot?: string;
+      from?: Record<string, unknown>;
+      text?: string;
+      chatType?: string;
+      update?: number;
+      /** Sends an update with NO `from` at all — the one case a default hides. */
+      omitFrom?: boolean;
+    } = {},
+  ) => {
+    const id = options.update ?? (updateId += 1);
+    return inject({
+      method: 'POST',
+      url: `/telegram/webhook/${options.bot ?? BOT_A}`,
+      headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET },
+      payload: {
+        update_id: id,
+        message: {
+          message_id: id,
+          date: 0,
+          chat: { id: 4242, type: options.chatType ?? 'private' },
+          ...(options.omitFrom === true
+            ? {}
+            : { from: options.from ?? { id: 5551234567, is_bot: false, first_name: 'Ali' } }),
+          text: options.text ?? '/start',
+        },
+      },
+    });
+  };
+
+  const customers = async (where = sql`TRUE`) =>
+    (
+      await api.container.database.db.execute(sql`
+        SELECT id, tenant_id, telegram_user_id, username, first_name, status, blocked_reason,
+               first_seen_at, last_seen_at
+          FROM customers WHERE ${where} ORDER BY created_at ASC`)
+    ).rows as Record<string, unknown>[];
+
+  // -------------------------------------------------------------------------
+  // Creation
+  // -------------------------------------------------------------------------
+
+  it('creates the customer on a first /start, and greets them as new', async () => {
+    const response = await start({ from: { id: 5551234567, is_bot: false, username: 'ali' } });
+    expect(response.statusCode).toBe(201);
+
+    const rows = await customers();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.['telegram_user_id']).toBe('5551234567');
+    expect(rows[0]?.['username']).toBe('ali');
+    expect(rows[0]?.['tenant_id']).toBe(SEED_IDS.tenantA);
+    expect(rows[0]?.['status']).toBe('ACTIVE');
+
+    // The reply went out, to the chat the update named, and the chat id is a
+    // NUMBER in the Telegram body rather than the customer's internal uuid.
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.url).toContain('/sendMessage');
+    // A STRING chat id, which is what Telegram accepts and what the notification
+    // transport has always sent: `textMessageBody` takes `chatId: string`, so
+    // there is one spelling rather than one per caller.
+    expect(sent[0]?.body['chat_id']).toBe('4242');
+    expect(String(sent[0]?.body['text'] ?? '')).not.toBe('');
+
+    // And a domain event exists for the registration, written inside the
+    // business transaction.
+    const events = await api.container.database.db.execute(
+      sql`SELECT event_type FROM outbox_messages WHERE event_type = 'CustomerRegistered'`,
+    );
+    expect(events.rows).toHaveLength(1);
+  });
+
+  it('greets a RETURNING customer differently, and creates no second row', async () => {
+    await start();
+    const first = (await customers())[0] as Record<string, unknown>;
+    sent = [];
+
+    await start();
+    const rows = await customers();
+    // One row, same id. Two rows here would be the whole customer model broken.
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.['id']).toBe(first['id']);
+
+    expect(sent).toHaveLength(1);
+    // A different greeting, which is the only externally visible difference
+    // between `FIRST_SEEN` and `RETURNING` — and the reason `created` has to be
+    // a fact about the statement rather than a guess.
+    expect(sent[0]?.body['text']).not.toBe('');
+    const registrations = await api.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM outbox_messages WHERE event_type = 'CustomerRegistered'`,
+    );
+    expect((registrations.rows[0] as { n: number }).n).toBe(1);
+  });
+
+  it('treats a REDELIVERED update as a replay: one row, one reply', async () => {
+    // Telegram retries any update it did not get a 200 for, and it is the same
+    // `update_id` each time.
+    const id = (updateId += 1);
+    await start({ update: id });
+    await start({ update: id });
+
+    expect(await customers()).toHaveLength(1);
+
+    /*
+     * ONE of every DURABLE effect, and TWO replies. Both halves asserted, because
+     * the second is a decision and an undocumented decision gets "fixed".
+     *
+     * `resolveFromUpdate` is idempotent, so the row, the audit row, the
+     * registration event and `last_seen_at` happen once however many times
+     * Telegram delivers. The reply cannot join them: `sendMessage` has no
+     * idempotency key, so the choice is a duplicate greeting or a missing one —
+     * and Telegram redelivers precisely when it did not see a 200, which includes
+     * the turn that committed and never sent. `bot-runtime.ts` states the
+     * reasoning and names what would change it.
+     */
+    const registrations = await api.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM outbox_messages WHERE event_type = 'CustomerRegistered'`,
+    );
+    expect((registrations.rows[0] as { n: number }).n).toBe(1);
+    const audits = await api.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM audit_logs WHERE action = 'customer.registered'`,
+    );
+    expect((audits.rows[0] as { n: number }).n).toBe(1);
+    expect(sent).toHaveLength(2);
+  });
+
+  it('lets two CONCURRENT first contacts produce one customer and no failure', async () => {
+    /*
+     * Two different updates from the same person at the same moment — a double
+     * tap on Start. Both want to create; the upsert's `ON CONFLICT (tenant_id,
+     * telegram_user_id) DO UPDATE` means one inserts and the other takes the
+     * update branch and reports `created: false`.
+     *
+     * A read-then-write would have both read nothing, both insert, and the loser
+     * surface a unique violation on a path that must answer 200 — which makes
+     * Telegram retry it for ever.
+     */
+    const [a, b] = await Promise.all([
+      start({ update: (updateId += 1) }),
+      start({ update: (updateId += 1) }),
+    ]);
+    expect(a.statusCode).toBe(201);
+    expect(b.statusCode).toBe(201);
+    expect(await customers()).toHaveLength(1);
+    // Both turns replied, because both are real updates from a real person.
+    expect(sent).toHaveLength(2);
+  });
+
+  it('lets two CONCURRENT deliveries of ONE update produce one effect', async () => {
+    const id = (updateId += 1);
+    const [a, b] = await Promise.all([start({ update: id }), start({ update: id })]);
+    // Neither is an error: a replay is a success.
+    expect([a.statusCode, b.statusCode]).toEqual([201, 201]);
+    expect(await customers()).toHaveLength(1);
+    const registrations = await api.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM outbox_messages WHERE event_type = 'CustomerRegistered'`,
+    );
+    // ONE registration event. `rememberOnce` makes the losing insert a conflict,
+    // so the loser's whole transaction rolls back rather than writing a second
+    // event beside the first.
+    expect((registrations.rows[0] as { n: number }).n).toBe(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // The profile refresh
+  // -------------------------------------------------------------------------
+
+  it('refreshes the profile and last_seen_at on a later contact', async () => {
+    await start({ from: { id: 5551234567, is_bot: false, username: 'old', first_name: 'Ali' } });
+    const before = (await customers())[0] as Record<string, unknown>;
+
+    await start({ from: { id: 5551234567, is_bot: false, username: 'new', first_name: 'Ali R' } });
+    const after = (await customers())[0] as Record<string, unknown>;
+
+    expect(after['username']).toBe('new');
+    expect(after['first_name']).toBe('Ali R');
+    // `first_seen_at` is set once. It is the one fact a refresh must not move —
+    // an operator reading it is answering "how long have they been a customer".
+    expect(String(after['first_seen_at'])).toBe(String(before['first_seen_at']));
+  });
+
+  it('does NOT unblock a blocked customer on /start, and replies with the blocked text', async () => {
+    await start();
+    const row = (await customers())[0] as Record<string, unknown>;
+    await api.container.database.db.execute(sql`
+      UPDATE customers
+         SET status = 'BLOCKED', blocked_at = now(), blocked_reason = 'operator note'
+       WHERE id = ${row['id'] as string}`);
+    sent = [];
+    const blockedReply = (await customers())[0] as Record<string, unknown>;
+    expect(blockedReply['status']).toBe('BLOCKED');
+
+    await start({ from: { id: 5551234567, is_bot: false, username: 'renamed' } });
+    const after = (await customers())[0] as Record<string, unknown>;
+
+    // STILL BLOCKED. `status` is absent from the upsert's DO UPDATE list, so
+    // there is no path here that could lift it — and a block any customer could
+    // lift by typing `/start` is not a block.
+    expect(after['status']).toBe('BLOCKED');
+    expect(after['blocked_reason']).toBe('operator note');
+    // The metadata was still refreshed, deliberately: an operator looking at a
+    // blocked account wants the name it is using now.
+    expect(after['username']).toBe('renamed');
+
+    // One reply, and it carries no operator note. `blockedReason` is an operator
+    // field and `bot.blocked` declares no placeholder for it.
+    expect(sent).toHaveLength(1);
+    expect(String(sent[0]?.body['text'] ?? '')).not.toContain('operator note');
+  });
+
+  // -------------------------------------------------------------------------
+  // Ordering: commit, then send
+  // -------------------------------------------------------------------------
+
+  it('commits the customer BEFORE the reply leaves, and sends outside the transaction', async () => {
+    /*
+     * Measured rather than asserted by construction.
+     *
+     * The fake records the instant each request arrives, and the handler reads
+     * the database AT THAT MOMENT. If the send were inside the transaction the
+     * row would not be visible to this separate connection yet — so finding it
+     * is the proof that the commit came first.
+     *
+     * This is also what `assertOutsideTransaction` enforces from the other side:
+     * a send inside the transaction can be rolled back after Telegram has
+     * delivered, and the customer then has a message about something that does
+     * not exist.
+     */
+    let visibleWhenSent: number | null = null;
+    reply = (_request, response) => {
+      void api.container.database.db
+        .execute(sql`SELECT count(*)::int AS n FROM customers`)
+        .then((result) => {
+          visibleWhenSent = (result.rows[0] as { n: number }).n;
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ ok: true, result: { message_id: 12 } }));
+        });
+    };
+
+    await start();
+    expect(sent).toHaveLength(1);
+    expect(visibleWhenSent, 'the customer was not committed before the reply was sent').toBe(1);
+  });
+
+  it('keeps the customer when the reply FAILS, and still answers Telegram 200', async () => {
+    // Telegram is down, or the token is wrong. The customer exists either way:
+    // rolling the row back would mean the next `/start` created them again and
+    // greeted them as new, for ever, while Telegram stayed broken.
+    reply = (_request, response) => {
+      response.writeHead(500, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: false, description: 'Internal Server Error' }));
+    };
+
+    const response = await start();
+    // 200-class, because a non-2xx makes Telegram retry this update for ever and
+    // the update was handled.
+    expect(response.statusCode).toBe(201);
+    expect(await customers()).toHaveLength(1);
+
+    // The refusal was RECORDED rather than swallowed: an operator has to be able
+    // to see that replies are failing.
+    const events = await api.container.database.db.execute(
+      sql`SELECT code FROM operational_events WHERE code LIKE 'telegram.customer_send%'`,
+    );
+    expect(events.rows.length).toBeGreaterThan(0);
+  });
+
+  it('still answers 200 when the reply CANNOT be classified', async () => {
+    // A 2xx whose body stops mid-JSON: Telegram very likely delivered it, and it
+    // is recorded as unobserved rather than as failed.
+    reply = (_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{"ok":tr');
+    };
+    const response = await start();
+    expect(response.statusCode).toBe(201);
+    expect(await customers()).toHaveLength(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // Tenancy and scope activity
+  // -------------------------------------------------------------------------
+
+  it('keeps the same Telegram id in two tenants as two customers', async () => {
+    await start({ bot: BOT_A });
+    await start({ bot: BOT_B });
+
+    const rows = await customers(sql`telegram_user_id = '5551234567'`);
+    expect(rows).toHaveLength(2);
+    // One per tenant, and the ids differ. A globally unique Telegram id would
+    // have made the second update a conflict and handed tenant B tenant A's
+    // customer — a cross-tenant read through an ordinary `/start`.
+    expect(new Set(rows.map((row) => row['tenant_id'])).size).toBe(2);
+    expect(new Set(rows.map((row) => row['id'])).size).toBe(2);
+  });
+
+  it('writes nothing and sends nothing for an INACTIVE bot instance', async () => {
+    await api.container.database.db.execute(
+      sql`UPDATE bot_instances SET status = 'DISABLED' WHERE id = ${BOT_A}`,
+    );
+    const response = await start();
+    // Refused at the edge, before the bot id is trusted for anything.
+    expect(response.statusCode).toBe(404);
+    expect(await customers()).toHaveLength(0);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('writes nothing and sends nothing for an INACTIVE tenant', async () => {
+    await api.container.database.db.execute(
+      // `STOPPED`, from `TENANT_STATUSES`. The CHECK constraint is built from the
+      // contract enum, so a status this product does not declare is refused by the
+      // database — which is how the first version of this line was caught.
+      sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${SEED_IDS.tenantA}`,
+    );
+    const response = await start();
+    expect(response.statusCode).toBe(404);
+    expect(await customers()).toHaveLength(0);
+    expect(sent).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Sender identity
+  // -------------------------------------------------------------------------
+
+  it('creates no customer for an update with no usable sender', async () => {
+    /*
+     * `null` is the MISSING-`from` case, not `undefined`.
+     *
+     * `start` spreads its options over a default `from`, so `from: undefined`
+     * quietly fell back to the valid sender and the case asserted the opposite of
+     * what it claimed — a customer WAS created and the test caught itself only
+     * because the count was then 1. The sentinel is explicit now.
+     */
+    for (const from of [
+      null,
+      { id: '5551234567', is_bot: false },
+      { id: 1.5, is_bot: false },
+      { id: -1, is_bot: false },
+      { id: 0, is_bot: false },
+      // A BOT. A bot is not a customer, and the legacy system has no concept of
+      // the distinction at all.
+      { id: 777000111, is_bot: true },
+    ]) {
+      sent = [];
+      const label = JSON.stringify(from);
+      const response = await start({
+        update: (updateId += 1),
+        ...(from === null ? { omitFrom: true } : { from: from as Record<string, unknown> }),
+      });
+      // 200-class: an update with no customer behind it is not an error, and a
+      // non-2xx would have Telegram retry it for ever.
+      expect(response.statusCode, label).toBe(201);
+      expect(await customers(), label).toHaveLength(0);
+      expect(sent, label).toHaveLength(0);
+    }
+  });
+
+  it('does not reply outside a private chat, but still records the customer', async () => {
+    const response = await start({ chatType: 'group' });
+    expect(response.statusCode).toBe(201);
+    // The customer is a fact — they wrote to this bot — and the reply is not
+    // sent, because a bot answering every `/start` in a group is the legacy
+    // bot's behaviour and an operator cannot switch it off.
+    expect(await customers()).toHaveLength(1);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('answers an UNSUPPORTED message without pretending to understand it', async () => {
+    const response = await start({ text: 'سلام، قیمت چنده؟' });
+    expect(response.statusCode).toBe(201);
+    expect(await customers()).toHaveLength(1);
+    // One reply, and it is the fallback rather than the welcome. The two are
+    // different template keys, so the difference is in the text.
+    expect(sent).toHaveLength(1);
+  });
+});
