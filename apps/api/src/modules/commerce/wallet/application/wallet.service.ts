@@ -71,8 +71,14 @@ export const WALLET_DEBIT_PERMISSION: PermissionKey = 'users.wallet.debit';
  *
  * Deliberately NOT `users.view`. That permission lets an operator read ANY customer's
  * balance, and charging it here would make a customer's own `/wallet` indistinguishable
- * in the audit log from an operator inspecting somebody. The method below takes no
- * customer id from the caller for the same reason.
+ * in the audit log from an operator inspecting somebody.
+ *
+ * What the method below actually guarantees, stated as narrowly as it holds: its
+ * parameter is a branded `UserId` supplied by the Telegram runtime from the customer it
+ * resolved out of the signed update, so no id a CLIENT chose reaches it. It is not that
+ * there is no parameter — there is one, and a caller inside this process could pass any
+ * customer's id. The permission is what stops that being an operator's lookup; the
+ * brand is what stops it being `callback_data`.
  */
 export const WALLET_OWN_VIEW_PERMISSION: PermissionKey = 'maintenance.run';
 

@@ -215,10 +215,10 @@ Eight mutations over the concurrency, HTTP and Web rules; seven rules covered.
 Three findings, recorded here because two of them changed a production rule and
 the third changed only a document — and the difference is the point.
 
-| #   | Rule                                                                  | Mutation                                            | Test that dies                                                                          | Result |
-| --- | --------------------------------------------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------ |
-| S2  | A command's refusal and its success carry the SAME audit action       | `action` hard-coded back to `'payment.confirm'`     | `payments.test.ts` › audits a wallet settlement under ONE action, refused or not | KILLED |
-| S3  | `WalletEntryRecorded` follows the MOVEMENT, not the command           | `if (inserted)` → `if (true)`                       | `wallet.test.ts` › emits no second event when a replay re-reads an entry it did not write   | KILLED |
+| #   | Rule                                                            | Mutation                                        | Test that dies                                                                            | Result |
+| --- | --------------------------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------- | ------ |
+| S2  | A command's refusal and its success carry the SAME audit action | `action` hard-coded back to `'payment.confirm'` | `payments.test.ts` › audits a wallet settlement under ONE action, refused or not          | KILLED |
+| S3  | `WalletEntryRecorded` follows the MOVEMENT, not the command     | `if (inserted)` → `if (true)`                   | `wallet.test.ts` › emits no second event when a replay re-reads an entry it did not write | KILLED |
 
 **S1 has no row, and no mutation exists that would give it one.** It was a
 sentence in `docs/phase4c-audit.md` §6 claiming 4C has "exactly one layer —
