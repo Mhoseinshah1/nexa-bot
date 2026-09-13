@@ -106,6 +106,8 @@ import { DrizzleCustomerRepository } from './modules/commerce/customers/infrastr
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
 import { ProductService } from './modules/commerce/catalog/application/product.service.js';
 import { DrizzleProductRepository } from './modules/commerce/catalog/infrastructure/drizzle-product.repository.js';
+import { OrderService } from './modules/commerce/orders/application/order.service.js';
+import { DrizzleOrderRepository } from './modules/commerce/orders/infrastructure/drizzle-order.repository.js';
 import { BotRuntime } from './surfaces/telegram/bot-runtime.js';
 import { I18nTemplateCatalogue } from './modules/control/templates/infrastructure/i18n-template-catalogue.js';
 import { TemplateManagementService } from './modules/control/templates/application/template-management.service.js';
@@ -214,6 +216,7 @@ export interface Container {
    */
   readonly customers: CustomerService;
   readonly products: ProductService;
+  readonly orders: OrderService;
   readonly botRuntime: BotRuntime;
 
   // Control plane — Phase 2
@@ -569,8 +572,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * their own idempotency view, and a replay handled by one would not be seen by the
    * other.
    */
+  const customerRepository = new DrizzleCustomerRepository(database.db);
+  const productRepository = new DrizzleProductRepository(database.db);
+
   const customerService = new CustomerService({
-    repository: new DrizzleCustomerRepository(database.db),
+    repository: customerRepository,
     guard,
     audit,
     opsLog,
@@ -595,7 +601,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * row.
    */
   const productService = new ProductService({
-    repository: new DrizzleProductRepository(database.db),
+    repository: productRepository,
     guard,
     audit,
     opsLog,
@@ -613,6 +619,35 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const settingRepository = new DrizzleSettingRepository(database.db);
   const settingsResolver = new SettingsResolver(settingRepository, opsLog);
+
+  /**
+   * Orders, up to the boundary where money begins.
+   *
+   * Constructed HERE, after the settings resolver, because the draft's hold is an
+   * operator setting (`sales.order_expiry_minutes`) and a service that hard-coded a
+   * window would be a service the setting silently does not configure.
+   *
+   * It takes the same product and customer repositories the two services above hold —
+   * one instance each, so there is one statement of each tenancy rule rather than two
+   * that can drift. It takes the outbox because `OrderConfirmed` is a declared event
+   * with a declared aggregate, which is exactly what products did not have.
+   */
+  const orderService = new OrderService({
+    repository: new DrizzleOrderRepository(database.db),
+    products: productRepository,
+    customers: customerRepository,
+    settings: settingsResolver,
+    guard,
+    audit,
+    opsLog,
+    outbox,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    clock,
+    ids,
+  });
   /**
    * One HTTP client for every provider call this process makes.
    *
@@ -1247,6 +1282,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     recordPing,
     customers: customerService,
     products: productService,
+    orders: orderService,
     botRuntime: new BotRuntime({
       customers: customerService,
       messenger: new TelegramCustomerMessenger(
