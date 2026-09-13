@@ -92,12 +92,21 @@ const AUDIENCE_LABELS: Readonly<Record<ProductAudience, WebKey>> = {
  * The ORDER matters and matches the server's: status first, then audience, then price,
  * then panel. An operator fixing them one at a time is told the next thing wrong rather
  * than all four at once, and the first is the one they most likely did on purpose.
+ *
+ * The two audience gaps are NOT the same thing and are deliberately separate badges.
+ * `UNLISTED` is a HIDDEN product, which is out of the listing and still ORDERABLE by
+ * anybody holding its reference — that is what the audience is for. `RESELLERS` is a
+ * RESELLERS_ONLY product, which Phase 4B can neither list nor sell, because no reseller
+ * identity exists to check a customer against; `catalog-visibility.ts` carries the whole
+ * argument. Collapsing them would tell an operator their reseller product merely needs a
+ * link passed around, and it does not.
  */
-export type CatalogueGap = 'INACTIVE' | 'UNLISTED' | 'UNPRICED' | 'NO_PANEL';
+export type CatalogueGap = 'INACTIVE' | 'UNLISTED' | 'RESELLERS' | 'UNPRICED' | 'NO_PANEL';
 
 export function catalogueGap(row: ProductSummaryResponse): CatalogueGap | null {
   if (row.status !== 'ACTIVE') return 'INACTIVE';
   if (row.audience === 'HIDDEN') return 'UNLISTED';
+  if (row.audience === 'RESELLERS_ONLY') return 'RESELLERS';
   if (row.priceAmount === null) return 'UNPRICED';
   if (row.panelId === null) return 'NO_PANEL';
   return null;
@@ -106,6 +115,7 @@ export function catalogueGap(row: ProductSummaryResponse): CatalogueGap | null {
 const GAP_LABELS: Readonly<Record<CatalogueGap, WebKey>> = {
   INACTIVE: 'web.product_gap_inactive',
   UNLISTED: 'web.product_gap_unlisted',
+  RESELLERS: 'web.product_gap_resellers',
   UNPRICED: 'web.product_gap_unpriced',
   NO_PANEL: 'web.product_gap_no_panel',
 };
@@ -114,7 +124,8 @@ function CatalogueBadge({ row }: { row: ProductSummaryResponse }) {
   const gap = catalogueGap(row);
   if (gap === null) return <Badge tone="ok">{t('web.product_in_catalogue')}</Badge>;
   // `UNLISTED` is amber and not red: a HIDDEN product is still ORDERABLE by anybody
-  // holding its link, which is what the audience means. The others are configuration.
+  // holding its link, which is what the audience means. The others are configuration —
+  // `RESELLERS` included, because that one is not orderable at all in this phase.
   return <Badge tone={gap === 'UNLISTED' ? 'warn' : 'neutral'}>{t(GAP_LABELS[gap])}</Badge>;
 }
 

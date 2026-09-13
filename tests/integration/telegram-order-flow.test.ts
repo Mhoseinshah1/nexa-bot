@@ -400,6 +400,23 @@ describe('the customer purchase flow over Telegram', () => {
     expect(await orders()).toHaveLength(0);
   });
 
+  it('refuses a reseller-only product handed to an ordinary customer by reference', async () => {
+    /*
+     * The catalogue never offered this button. A callback id survives a screenshot, a
+     * forward and a second customer, so an exclusion that only removed the row from the
+     * listing would sell reseller pricing to whoever had one.
+     */
+    const reseller = await product(tenantA, 'ACTIVE', { audience: 'RESELLERS_ONLY' });
+    await command('/catalog');
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.catalog.empty']);
+
+    await tap(`p:${reseller.id}`);
+    // Deliberately the SAME sentence as every other refusal: a distinct one would teach
+    // a customer that a cheaper tier exists and that they are not in it.
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.unavailable']);
+    expect(await orders()).toHaveLength(0);
+  });
+
   it('tells the customer when the draft outlived its own hold', async () => {
     const sellable = await product(tenantA, 'ACTIVE');
     await tap(`p:${sellable.id}`);

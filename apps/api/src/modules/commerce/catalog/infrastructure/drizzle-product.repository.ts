@@ -216,7 +216,18 @@ export class DrizzleProductRepository implements ProductRepository {
         and(
           eq(products.tenantId, tenantId),
           eq(products.status, 'ACTIVE'),
-          sql`${products.audience} <> 'HIDDEN'`,
+          /*
+           * Neither HIDDEN nor RESELLERS_ONLY.
+           *
+           * HIDDEN is the contract's own exclusion. RESELLERS_ONLY is OURS, and it
+           * fails closed: `isListed` returns true for it because the contract expects
+           * the caller to know whose catalogue this is, and Phase 4B has no reseller
+           * identity to check against. Showing a reseller tier to every ordinary
+           * customer is the price leak that exclusion exists to prevent.
+           * `catalog-visibility.ts` states the same rule and the matrix test asserts
+           * these two agree.
+           */
+          sql`${products.audience} NOT IN ('HIDDEN', 'RESELLERS_ONLY')`,
           isNotNull(products.priceAmount),
           isNotNull(products.panelId),
         ),

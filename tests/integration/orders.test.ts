@@ -307,7 +307,7 @@ describe('orders, up to the payment boundary', () => {
   });
 
   // -------------------------------------------------------------------------
-  // What cannot be ordered, and why — three refusals, not one
+  // What cannot be ordered, and why — four refusals, not one
   // -------------------------------------------------------------------------
 
   it('refuses a withdrawn product as NOT_PURCHASABLE', async () => {
@@ -330,6 +330,25 @@ describe('orders, up to the payment boundary', () => {
     await expect(createDraft(tenantA, customerA, product.id, 'no-3')).rejects.toMatchObject({
       code: 'commerce.product_not_fulfillable',
     });
+  });
+
+  it('refuses a RESELLERS_ONLY product as NOT_FOR_AUDIENCE', async () => {
+    /*
+     * Read together with the HIDDEN case directly below: the two audiences that keep a
+     * product out of the catalogue do NOT have the same effect on an order.
+     *
+     * Phase 4B has no reseller identity, so there is nothing a customer could be checked
+     * against and the only two options are selling reseller pricing to everybody or to
+     * nobody. This fails closed. Hiding it from the listing alone would be cosmetic,
+     * because the id in this very test is all it takes to order one.
+     */
+    const product = await productIn(tenantA, 'ACTIVE', panelA, { audience: 'RESELLERS_ONLY' });
+    expect((await products.listCatalog(tenantA, 50)).items).toHaveLength(0);
+
+    await expect(createDraft(tenantA, customerA, product.id, 'no-4')).rejects.toMatchObject({
+      code: 'commerce.product_not_for_audience',
+    });
+    expect(await orderCount()).toBe(0);
   });
 
   it('ORDERS a HIDDEN product, which no catalogue lists', async () => {
@@ -551,6 +570,26 @@ describe('orders, up to the payment boundary', () => {
 
     await expect(confirm(tenantA, customerA, order.id, 'c-withdrawn-go')).rejects.toMatchObject({
       code: 'commerce.product_not_purchasable',
+    });
+    const after = await ctx.container.orders.get(tenantA, owner, order.id);
+    expect(after.state).toBe('DRAFT');
+  });
+
+  it('re-checks the AUDIENCE at confirmation: a product moved to resellers does not sell', async () => {
+    // The draft was legitimate when it was made. Orderability is re-checked at the
+    // boundary, not carried on the snapshot, so an operator narrowing the audience
+    // between browse and confirm is obeyed rather than ignored.
+    const product = await productIn(tenantA, 'ACTIVE', panelA);
+    const order = await createDraft(tenantA, customerA, product.id, 'c-audience');
+    await products.update(
+      tenantA,
+      product.id,
+      draft(panelA, { audience: 'RESELLERS_ONLY' }),
+      ctx.container.clock.now(),
+    );
+
+    await expect(confirm(tenantA, customerA, order.id, 'c-audience-go')).rejects.toMatchObject({
+      code: 'commerce.product_not_for_audience',
     });
     const after = await ctx.container.orders.get(tenantA, owner, order.id);
     expect(after.state).toBe('DRAFT');

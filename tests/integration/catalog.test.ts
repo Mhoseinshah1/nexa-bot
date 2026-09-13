@@ -139,6 +139,26 @@ describe('the customer catalogue', () => {
     expect(unorderableReason(hidden), 'a hidden product was made unorderable').toBeNull();
   });
 
+  it('keeps a RESELLERS_ONLY product out of the catalogue AND refuses to sell it', async () => {
+    /*
+     * The other audience, and the one where BOTH halves have to close.
+     *
+     * HIDDEN above is the contract's designed asymmetry — unlisted, still sellable.
+     * RESELLERS_ONLY is not: Phase 4B has no reseller entity and nothing on a customer
+     * that could say whether they are one, so there is no caller able to apply the
+     * audience. Excluding it from the listing alone would be cosmetic, because a
+     * product reference travels in a screenshot; the refusal is what makes it real.
+     *
+     * Found by the Codex review of this branch, where `isListed` was used alone.
+     */
+    const reseller = await productIn(tenantA, 'ACTIVE', { audience: 'RESELLERS_ONLY' });
+
+    expect(await catalogueIds(tenantA), 'a reseller product was published').toEqual([]);
+    expect(isCustomerVisible(reseller)).toBe(false);
+    // The half that stops the exclusion being cosmetic.
+    expect(unorderableReason(reseller), 'a reseller product was sellable').toBe('NOT_FOR_AUDIENCE');
+  });
+
   it('makes an INACTIVE product neither listed nor orderable', async () => {
     const inactive = await productIn(tenantA, 'INACTIVE');
     expect(await catalogueIds(tenantA)).toEqual([]);
@@ -215,8 +235,12 @@ describe('the customer catalogue', () => {
       [...fromTypescript].sort(),
     );
     // And the rule actually selects something, so the agreement is not two empty sets.
-    // ACTIVE x {EVERYONE, RESELLERS_ONLY} x priced x fulfillable = 2.
-    expect(fromSql.size).toBe(2);
+    // ACTIVE x EVERYONE x priced x fulfillable = 1. It was 2 until the Codex review of
+    // this branch: RESELLERS_ONLY counted as listed, because `isListed` expects an
+    // audience-aware caller and Phase 4B has none. Pinning the exact number is what
+    // makes this assertion able to fail — two agreeing-but-wrong predicates pass the
+    // set comparison above perfectly.
+    expect(fromSql.size).toBe(1);
   });
 
   // -------------------------------------------------------------------------

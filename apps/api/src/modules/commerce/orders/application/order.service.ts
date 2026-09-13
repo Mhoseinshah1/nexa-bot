@@ -486,6 +486,12 @@ export class OrderService {
         'This product is not available for purchase.',
       );
     }
+    if (reason === 'NOT_FOR_AUDIENCE') {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PRODUCT_NOT_FOR_AUDIENCE,
+        'This product is not available for purchase.',
+      );
+    }
     if (reason === 'NOT_PRICED') {
       throw errors.conflict(
         COMMERCE_ERROR_CODES.PRODUCT_NOT_PRICED,

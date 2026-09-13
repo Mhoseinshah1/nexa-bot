@@ -334,6 +334,17 @@ Recorded so that a later reader can tell a deferral from an oversight:
 - **Provisioning.** `services`, `provisioning_operations`, every provider call. 4D.
 - **Discounts / referrals / trials / resellers.** Tables and contracts exist;
   `RESELLERS_ONLY` is declared and consumed in 4F.
+  **4B FAILS IT CLOSED, which is a product decision and not a deferral.** There is no
+  reseller entity and nothing on a customer that could say whether they are one, so the
+  audience has no caller able to apply it. A `RESELLERS_ONLY` product is therefore
+  excluded from the customer catalogue AND refused at the order boundary — both halves,
+  because a product reference travels in a screenshot and an exclusion that only removed
+  the listing row would still sell reseller pricing to anybody holding one.
+  `catalog-visibility.ts` carries the argument and names this entry.
+  **The trigger to revisit is the first reseller identity**, at which point the audience
+  becomes a check against the buyer rather than a blanket refusal; until then, note that
+  an operator marking a product reseller-only is telling the bot to sell it to nobody,
+  and the Web Admin says so on the product row.
 - **Categories.** Named in a permission label, entity nowhere. Not designed.
 - **Customer-chosen panel at purchase.** The second branch of
   `web.planned_products_panel_choice`.

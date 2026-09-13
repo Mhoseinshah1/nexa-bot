@@ -798,6 +798,8 @@ export const WEB_FA = {
   'web.product_gap_banner_title': 'این محصول در فهرست ربات نیست',
   'web.product_gap_inactive': 'غیرفعال است؛ تا فعال نشود فروخته نمی‌شود.',
   'web.product_gap_unlisted': 'مخاطب آن پنهان است؛ فروخته می‌شود ولی در فهرست نمی‌آید.',
+  'web.product_gap_resellers':
+    'مخاطب آن فقط نمایندگان است؛ تا زمانی که نمایندگی ساخته نشود نه در فهرست می‌آید و نه فروخته می‌شود.',
   'web.product_gap_unpriced': 'قیمت ندارد؛ بدون قیمت قابل فروش نیست.',
   'web.product_gap_no_panel': 'به هیچ پنلی وصل نیست؛ چیزی برای تحویل وجود ندارد.',
 

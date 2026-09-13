@@ -205,6 +205,9 @@ interface PendingReply {
 const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_FOUND]: 'bot.order.unavailable',
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_PURCHASABLE]: 'bot.order.unavailable',
+  // The SAME sentence as the others, deliberately. A customer told "this is for
+  // resellers" learns a tenant's pricing structure from a refusal.
+  [COMMERCE_ERROR_CODES.PRODUCT_NOT_FOR_AUDIENCE]: 'bot.order.unavailable',
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_PRICED]: 'bot.order.unavailable',
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_FULFILLABLE]: 'bot.order.unavailable',
   // An order that is gone, or that belongs to somebody else — the service answers both

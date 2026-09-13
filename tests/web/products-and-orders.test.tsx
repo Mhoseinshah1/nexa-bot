@@ -59,7 +59,11 @@ describe('whether a customer can see a product', () => {
               priceCurrency: priced ? 'IRT' : null,
               panelId: fulfillable ? '01a05e35-c9ad-7e93-bef3-1ed9b55292c8' : null,
             });
-            const visible = status === 'ACTIVE' && audience !== 'HIDDEN' && priced && fulfillable;
+            // `audience === 'EVERYONE'`, not `!== 'HIDDEN'`: RESELLERS_ONLY is excluded
+            // too, because Phase 4B has no reseller identity to check a customer
+            // against. `catalog-visibility.ts` carries the argument; this is the third
+            // of the three copies that have to agree.
+            const visible = status === 'ACTIVE' && audience === 'EVERYONE' && priced && fulfillable;
             const label = `${status}/${audience}/priced=${String(priced)}/panel=${String(fulfillable)}`;
             expect(catalogueGap(row as never) === null, label).toBe(visible);
           }
@@ -77,6 +81,13 @@ describe('whether a customer can see a product', () => {
       ),
     ).toBe('INACTIVE');
     expect(catalogueGap(product({ audience: 'HIDDEN', panelId: null }) as never)).toBe('UNLISTED');
+    // A separate badge from UNLISTED, deliberately: a HIDDEN product is still orderable
+    // by anybody holding its reference and a RESELLERS_ONLY one is not.
+    expect(
+      catalogueGap(
+        product({ audience: 'RESELLERS_ONLY', priceAmount: null, priceCurrency: null }) as never,
+      ),
+    ).toBe('RESELLERS');
     expect(
       catalogueGap(product({ priceAmount: null, priceCurrency: null, panelId: null }) as never),
     ).toBe('UNPRICED');
