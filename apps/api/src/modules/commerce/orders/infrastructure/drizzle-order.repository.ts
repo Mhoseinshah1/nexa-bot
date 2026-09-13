@@ -150,17 +150,18 @@ export class DrizzleOrderRepository implements OrderRepository {
    * the same mechanism for recovery, and states why there is no `setState` taking only
    * a target — that convenience would remove the guarantee from every caller at once.
    *
-   * `confirmedAt` is written by the SAME statement, because `orders_settled_at_check`
-   * and its siblings bind each timestamp to its state: moving the state in one
-   * statement and stamping the time in another opens a window in which the row
-   * violates its own constraint.
+   * `confirmedAt` and `settledAt` are written by the SAME statement, because
+   * `orders_settled_at_check` and its siblings bind each timestamp to its state:
+   * moving the state in one statement and stamping the time in another opens a window
+   * in which the row violates its own constraint. A SETTLE that moved the state
+   * without `settled_at` would simply be refused by the database.
    */
   async transition(
     scope: TenantContext,
     id: OrderId,
     from: OrderState,
     to: OrderState,
-    stamps: { readonly confirmedAt?: Date },
+    stamps: { readonly confirmedAt?: Date; readonly settledAt?: Date },
     now: Date,
     tx?: unknown,
   ): Promise<boolean> {
@@ -170,6 +171,7 @@ export class DrizzleOrderRepository implements OrderRepository {
       .set({
         state: to,
         ...(stamps.confirmedAt === undefined ? {} : { confirmedAt: stamps.confirmedAt }),
+        ...(stamps.settledAt === undefined ? {} : { settledAt: stamps.settledAt }),
         updatedAt: now,
       })
       .where(and(eq(orders.tenantId, tenantId), eq(orders.id, id), eq(orders.state, from)))

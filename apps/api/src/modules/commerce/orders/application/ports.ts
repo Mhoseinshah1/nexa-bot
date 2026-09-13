@@ -114,17 +114,19 @@ export interface OrderRepository {
    * There is no `setState` that takes only a target — that convenience is exactly what
    * would remove the guarantee from all three at once.
    *
-   * `confirmedAt` is written by the same statement, because
+   * `confirmedAt` and `settledAt` are written by the same statement, because
    * `orders_settled_at_check` and its siblings bind each timestamp to its state: a
    * transition that set one without the other would be refused by the database, which
-   * is the point of having the constraint.
+   * is the point of having the constraint. `settled_at` is the one 4C adds a writer
+   * for — `(state = 'PAID' OR state = 'REFUNDED') = (settled_at IS NOT NULL)`, so a
+   * SETTLE that moved the state alone could not commit.
    */
   transition(
     scope: TenantContext,
     id: OrderId,
     from: OrderState,
     to: OrderState,
-    stamps: { readonly confirmedAt?: Date },
+    stamps: { readonly confirmedAt?: Date; readonly settledAt?: Date },
     now: Date,
     tx?: unknown,
   ): Promise<boolean>;
