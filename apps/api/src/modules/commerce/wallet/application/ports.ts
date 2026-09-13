@@ -87,6 +87,20 @@ export interface WalletCursor {
   readonly id: string;
 }
 
+/**
+ * An append, and whether it actually WROTE.
+ *
+ * `inserted` exists so a caller can emit `WalletEntryRecorded` exactly when a movement
+ * happened. Without it a retry that re-read an existing entry would emit the event
+ * again — one movement, two events, and a consumer that acts per event acting twice.
+ * That path is not hypothetical: `WalletService.adjust` documents reaching it when an
+ * idempotency row has outlived its entry, which a restore can produce.
+ */
+export interface WalletAppendResult {
+  readonly entry: WalletEntryRecord;
+  readonly inserted: boolean;
+}
+
 export interface WalletEntryPage {
   readonly items: readonly WalletEntryRecord[];
   readonly nextCursor: WalletCursor | null;
@@ -102,7 +116,7 @@ export interface WalletRepository {
    * `CLAUDE.md` records the same reasoning for the backup lease, and the alternative
    * (a read-then-insert) loses the race it exists to win.
    */
-  append(scope: TenantContext, draft: WalletEntryDraft, tx?: unknown): Promise<WalletEntryRecord>;
+  append(scope: TenantContext, draft: WalletEntryDraft, tx?: unknown): Promise<WalletAppendResult>;
 
   /**
    * Takes the customer's row `FOR UPDATE`, so a balance read after it is a DECISION.

@@ -318,7 +318,7 @@ export class WalletService {
           }
         }
 
-        const entry = await this.deps.repository.append(
+        const { entry, inserted } = await this.deps.repository.append(
           scope,
           {
             id: entryId,
@@ -356,19 +356,29 @@ export class WalletService {
           tx,
         );
 
-        await this.deps.outbox.write(tx, actor, {
-          eventType: 'WalletEntryRecorded',
-          aggregateType: 'Wallet',
-          aggregateId: entry.customerId,
-          payload: {
-            customerId: entry.customerId,
-            entryId: entry.id,
-            direction: entry.direction,
-            reason: entry.reason,
-            amountMinor: entry.amount.amountMinor.toString(),
-            currency: entry.amount.currency,
-          },
-        });
+        /*
+         * The event follows the MOVEMENT, not the command succeeding.
+         *
+         * `inserted` is false on the fall-through the replay branch above documents —
+         * an idempotency row that outlived its entry. Emitting there would be a second
+         * `WalletEntryRecorded` for one movement, which a consumer acting per event
+         * would act on twice.
+         */
+        if (inserted) {
+          await this.deps.outbox.write(tx, actor, {
+            eventType: 'WalletEntryRecorded',
+            aggregateType: 'Wallet',
+            aggregateId: entry.customerId,
+            payload: {
+              customerId: entry.customerId,
+              entryId: entry.id,
+              direction: entry.direction,
+              reason: entry.reason,
+              amountMinor: entry.amount.amountMinor.toString(),
+              currency: entry.amount.currency,
+            },
+          });
+        }
 
         await rememberOnce(
           this.deps.idempotency,

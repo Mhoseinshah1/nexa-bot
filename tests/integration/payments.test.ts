@@ -597,6 +597,26 @@ describe('payments and settlement', () => {
   });
 
   /*
+   * ONE movement, ONE `WalletEntryRecorded` — even when the command runs twice.
+   *
+   * Self-review finding S3. The event is gated on the append having actually WRITTEN,
+   * so a retry whose ledger entry already exists emits nothing further. Driven here
+   * through the SERVICE with the same key, which is the path a redelivery takes.
+   */
+  it('emits one WalletEntryRecorded for one movement, however often it is retried', async () => {
+    const order = await awaitingPayment(tenantA, customerA, panelA, 'evt-1');
+    await credit(tenantA, customerA, 1_000_000n, 'credit-evt-1');
+    await settleFromWallet(tenantA, customerA, order.id, 'settle-evt-0001');
+    await settleFromWallet(tenantA, customerA, order.id, 'settle-evt-0001');
+
+    const events = (await ctx.container.database.db.execute(
+      sql`SELECT event_type FROM outbox_messages WHERE event_type = 'WalletEntryRecorded'` as never,
+    )) as unknown as { rows: { event_type: string }[] };
+    // One for the operator's funding credit, one for the purchase debit. Not three.
+    expect(events.rows).toHaveLength(2);
+  });
+
+  /*
    * ONE command, ONE audit action — for the REFUSAL and the SUCCESS alike.
    *
    * Self-review finding S2, and the identical defect Phase 4B recorded as M36: the

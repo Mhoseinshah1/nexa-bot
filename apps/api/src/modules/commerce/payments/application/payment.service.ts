@@ -273,7 +273,7 @@ export class PaymentService {
          * insert and the ledger insert land on a unique index that already holds their
          * row. One command, two idempotent writes, no process memory.
          */
-        const entry = await this.deps.wallet.append(
+        const { entry, inserted } = await this.deps.wallet.append(
           scope,
           {
             id: this.deps.ids.uuid(),
@@ -307,19 +307,37 @@ export class PaymentService {
           denial.action,
         );
 
-        await this.deps.outbox.write(tx, actor, {
-          eventType: 'WalletEntryRecorded',
-          aggregateType: 'Wallet',
-          aggregateId: entry.customerId,
-          payload: {
-            customerId: entry.customerId,
-            entryId: entry.id,
-            direction: entry.direction,
-            reason: entry.reason,
-            amountMinor: entry.amount.amountMinor.toString(),
-            currency: entry.amount.currency,
-          },
-        });
+        /*
+         * The event follows the MOVEMENT, not the command succeeding.
+         *
+         * `inserted` is false when this transaction re-read an entry that was already
+         * there. On THIS path that is currently unreachable, and the gate is defensive:
+         * the entry and the order's settlement commit together, so an existing entry
+         * implies a PAID order and `orderAwaitingPayment` refuses before reaching here.
+         * The falsification records it as such — mutating it away leaves the suite
+         * green, for the same reason W06, T06 and H01 do.
+         *
+         * It is written anyway because the rule is the same one `WalletService.adjust`
+         * needs and `OrderService` applies to `OrderConfirmed` with `changed`: the
+         * event follows the movement. A later phase that separates the debit from the
+         * settlement would make this reachable, and a gate added then would be a gate
+         * somebody had to notice was missing.
+         */
+        if (inserted) {
+          await this.deps.outbox.write(tx, actor, {
+            eventType: 'WalletEntryRecorded',
+            aggregateType: 'Wallet',
+            aggregateId: entry.customerId,
+            payload: {
+              customerId: entry.customerId,
+              entryId: entry.id,
+              direction: entry.direction,
+              reason: entry.reason,
+              amountMinor: entry.amount.amountMinor.toString(),
+              currency: entry.amount.currency,
+            },
+          });
+        }
 
         await rememberOnce(
           this.deps.idempotency,

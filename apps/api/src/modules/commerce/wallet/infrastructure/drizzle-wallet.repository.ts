@@ -16,6 +16,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { customers, walletEntries } from '../../../../infrastructure/persistence/schema.js';
 import type {
+  WalletAppendResult,
   WalletBalance,
   WalletCursor,
   WalletEntryDraft,
@@ -68,7 +69,7 @@ export class DrizzleWalletRepository implements WalletRepository {
     scope: TenantContext,
     draft: WalletEntryDraft,
     tx?: unknown,
-  ): Promise<WalletEntryRecord> {
+  ): Promise<WalletAppendResult> {
     const tenantId = requireTenantId(scope);
     const rows = await this.exec(tx)
       .insert(walletEntries)
@@ -90,8 +91,10 @@ export class DrizzleWalletRepository implements WalletRepository {
       .onConflictDoNothing({ target: [walletEntries.tenantId, walletEntries.reference] })
       .returning();
 
-    const inserted = rows[0];
-    if (inserted !== undefined) return toRecord(inserted);
+    const written = rows[0];
+    // `inserted: true` ONLY when this call wrote the row. The caller emits the domain
+    // event on that, so one movement produces one event however many times it is retried.
+    if (written !== undefined) return { entry: toRecord(written), inserted: true };
 
     const existing = await this.findByReference(scope, draft.reference, tx);
     if (existing === null) {
@@ -110,7 +113,7 @@ export class DrizzleWalletRepository implements WalletRepository {
           'a constraint other than wallet_entries_tenant_reference_key was violated',
       );
     }
-    return existing;
+    return { entry: existing, inserted: false };
   }
 
   /**

@@ -82,7 +82,7 @@ describe('the wallet ledger', () => {
   }
 
   /** Appends directly, for the cases about the LEDGER rather than about the service. */
-  const append = (
+  const appendResult = (
     scope: typeof tenantA,
     customerId: UserId,
     direction: 'CREDIT' | 'DEBIT',
@@ -100,6 +100,22 @@ describe('the wallet ledger', () => {
       note: 'test',
       now: ctx.container.clock.now(),
     });
+
+  /**
+   * The ENTRY, which is what nearly every case here is about.
+   *
+   * `appendResult` above exposes `inserted` as well — the flag that tells a caller
+   * whether this call WROTE, so a domain event follows the movement rather than the
+   * command. One case below is about that flag; the rest want the row.
+   */
+  const append = async (
+    scope: typeof tenantA,
+    customerId: UserId,
+    direction: 'CREDIT' | 'DEBIT',
+    amountMinor: bigint,
+    reference: string,
+    currency: 'IRT' | 'IRR' = 'IRT',
+  ) => (await appendResult(scope, customerId, direction, amountMinor, reference, currency)).entry;
 
   const balance = (scope: typeof tenantA, customerId: UserId, currency: 'IRT' | 'IRR' = 'IRT') =>
     repository.balanceOf(scope, customerId, currency);
@@ -231,6 +247,25 @@ describe('the wallet ledger', () => {
   // Tenancy
   // -------------------------------------------------------------------------
 
+  /*
+   * `inserted` tells the caller whether this call WROTE, and that is what a domain
+   * event has to follow.
+   *
+   * Self-review finding S3: both services emitted `WalletEntryRecorded` unconditionally
+   * after `append`, so a retry that re-read an existing entry — the fall-through
+   * `WalletService.adjust` documents when an idempotency row has outlived its entry,
+   * which a restore can produce — put a SECOND event on one movement. A consumer
+   * acting per event would act twice.
+   */
+  it('reports whether an append actually WROTE, so an event can follow the movement', async () => {
+    const first = await appendResult(tenantA, customerA, 'CREDIT', 500n, 'once');
+    const again = await appendResult(tenantA, customerA, 'CREDIT', 500n, 'once');
+
+    expect(first.inserted).toBe(true);
+    expect(again.inserted, 'a re-read reported itself as a write').toBe(false);
+    expect(again.entry.id).toBe(first.entry.id);
+  });
+
   it('cannot see, sum or address another tenant’s entries', async () => {
     const customerB = await customer(tenantB, '900600');
     await append(tenantA, customerA, 'CREDIT', 400n, 'mine-1');
@@ -345,7 +380,7 @@ describe('the wallet ledger', () => {
   });
 
   it('records the administrator behind an adjustment, and nobody behind a flow', async () => {
-    const byAdmin = await repository.append(tenantA, {
+    const { entry: byAdmin } = await repository.append(tenantA, {
       id: ctx.container.ids.uuid(),
       customerId: customerA,
       direction: 'CREDIT',
@@ -504,6 +539,38 @@ describe('the wallet ledger', () => {
         sql`SELECT count(*)::int AS n FROM wallet_entries` as never,
       )) as unknown as { rows: { n: number }[] };
       expect(entries.rows[0]?.n).toBe(0);
+    });
+
+    /*
+     * The fall-through `adjust` documents, PRODUCED: an idempotency row that outlived
+     * its entry, which a restore can produce.
+     *
+     * This is the only path on which `inserted` is load-bearing rather than defensive.
+     * The replay lookup finds nothing, the command runs again, and the append re-reads
+     * the entry already sitting under the derived reference — so the movement did not
+     * happen twice and the EVENT must not either. Without the gate a consumer acting
+     * per event acts twice on one movement.
+     *
+     * Reaching it needs the row removed deliberately, because nothing in ordinary
+     * operation separates the two: they commit in one transaction.
+     */
+    it('emits no second event when a replay re-reads an entry it did not write', async () => {
+      await adjust(owner, { key: 'adj-key-restore', direction: 'CREDIT', amountMinor: 400n });
+      await ctx.container.database.db.execute(
+        sql`DELETE FROM request_idempotency WHERE key = 'adj-key-restore'` as never,
+      );
+
+      // The same command, with its remembered answer gone.
+      await adjust(owner, { key: 'adj-key-restore', direction: 'CREDIT', amountMinor: 400n });
+
+      expect(await balance(tenantA, customerA)).toMatchObject({
+        amountMinor: 400n,
+        entryCount: 1,
+      });
+      const events = (await ctx.container.database.db.execute(
+        sql`SELECT event_type FROM outbox_messages WHERE aggregate_type = 'Wallet'` as never,
+      )) as unknown as { rows: { event_type: string }[] };
+      expect(events.rows, 'one movement produced two events').toHaveLength(1);
     });
 
     /*
