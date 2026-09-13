@@ -171,16 +171,14 @@ describe('the recovery page', () => {
     // claim about `resolve`'s return value that never mounts it cannot tell a
     // planned page from a live one.
     //
-    // `/users` is NOT in this list any more: Phase 4A built it, so it is a live
-    // surface with a table, a search form and a pager. It was removed from the
-    // list rather than from the rule — `planned-and-absent.test.tsx` asserts
-    // that the same nine-minus-one set is what `PLANNED_SURFACES` still holds,
-    // so dropping a path here cannot silently deactivate the check for it.
+    // `/users` left this list when Phase 4A built it, and `/orders` and `/products`
+    // left when Phase 4B did. Each was removed from the LIST rather than from the rule:
+    // `planned-and-absent.test.tsx` pins exactly which keys `PLANNED_SURFACES` still
+    // holds, so dropping a path here cannot silently deactivate the check for a surface
+    // that is still planned.
     stubApi([]);
     for (const path of [
       '/services',
-      '/orders',
-      '/products',
       '/payments',
       '/discounts',
       '/resellers',

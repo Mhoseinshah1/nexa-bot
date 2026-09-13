@@ -18,6 +18,13 @@ import { renderPage, stubApi } from './harness';
  * feed — are now asserted against the REAL page, where they can actually come
  * back. Asserting them against a planned page that no route renders any more
  * would have been a green test for a screen nobody can reach.
+ *
+ * `orders` and `products` left for `products-and-orders.test.tsx` in Phase 4B, on the
+ * same terms and for the same reason. Owner revisions 3, 6, 10 and 11 were recorded on
+ * those two planned pages; they moved onto the live pages' scope cards, and the
+ * assertions moved with them. Revision 6 — real order history is preserved — is no
+ * longer only a record: every `line*` field on an order is a snapshot, so there is now
+ * behaviour to assert as well as copy.
  */
 describe('planned surfaces', () => {
   const render = (key: string) => {
@@ -30,16 +37,7 @@ describe('planned surfaces', () => {
       // `users` is deliberately absent: `/users` is a live surface. The list is
       // written out rather than derived, so activating or deactivating a surface
       // has to change this line too.
-      [
-        'bots',
-        'discounts',
-        'orders',
-        'payments',
-        'products',
-        'reports',
-        'resellers',
-        'services',
-      ].sort(),
+      ['bots', 'discounts', 'payments', 'reports', 'resellers', 'services'].sort(),
     );
   });
 
@@ -163,8 +161,6 @@ describe('planned surfaces', () => {
   it.each<[string, RegExp, string]>([
     ['payments', /مهلت پرداخت حداکثر یک ساعت/, 'revision 4 — one-hour payment validity'],
     ['payments', /ترکیب ناممکن/, 'revision 5 — refund and fulfilment stay consistent'],
-    ['orders', /تاریخچهٔ واقعی سفارش/, 'revision 6 — real history is preserved'],
-    ['orders', /پروجکشن مشترک/, 'revision 11 — payment follows the order projection'],
     ['services', /created_at نزولی/, 'revision 13 — newest first, ordered by the server'],
     ['services', /فیلتر چندانتخابی/, 'revision 14 — plan filter replaces location'],
     ['payments', /در پنل وب ذخیره/, 'revision 17 — no Web Admin receipt storage'],
@@ -204,15 +200,6 @@ describe('planned surfaces', () => {
     expect(text).toContain('وجود نخواهد داشت');
   });
 
-  /** Owner revision 10 — no automatic least-loaded panel assignment. */
-  it('records that no least-loaded routing will exist', () => {
-    const { container } = render('products');
-    const text = container.textContent ?? '';
-    expect(text).toContain('کم‌بارترین پنل');
-    expect(text).toContain('وجود نخواهد داشت');
-    expect(text).toContain('مشتری');
-  });
-
   /** Owner revisions 4, 5 and 17. */
   it('records the payment expiry, refund and receipt rules', () => {
     const { container } = render('payments');
@@ -223,15 +210,6 @@ describe('planned surfaces', () => {
     // Enforcement is a server rule, and the page says so rather than implying a
     // browser timer could do it.
     expect(text).toContain('نه با یک تایمر در مرورگر');
-  });
-
-  /** Owner revisions 3, 6 and 11. */
-  it('records the needs-attention, history and shared-projection rules', () => {
-    const { container } = render('orders');
-    const text = container.textContent ?? '';
-    expect(text).toContain('نیازمند توجه');
-    expect(text).toContain('تاریخچه');
-    expect(text).toContain('پروجکشن مشترک');
   });
 
   /** Owner revision 20 — only a reseller sales bot, and not creatable. */

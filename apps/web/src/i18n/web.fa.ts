@@ -11,6 +11,11 @@ export const WEB_FA = {
   'web.subtitle': 'پنل مدیریت',
   'web.system_status': 'وضعیت سامانه',
   'web.dependency': 'وابستگی',
+  'web.unit_bytes': 'بایت',
+  'web.unit_mib': 'مگابایت',
+  'web.unit_gib': 'گیگابایت',
+  'web.unit_tib': 'ترابایت',
+  'web.unit_pib': 'پتابایت',
   'web.status': 'وضعیت',
   'web.latency': 'تأخیر',
   'web.detail': 'توضیح',
@@ -410,8 +415,6 @@ export const WEB_FA = {
     'هیچ دکمه‌ای در این صفحه وجود ندارد، چون هیچ کاری از سرور برنمی‌آید. دکمهٔ غیرفعال هم نگذاشته‌ایم: دکمهٔ غیرفعال یعنی «هست ولی دسترسی ندارید»، و این درست نیست.',
 
   'web.planned_services_summary': 'سرویس‌های تحویل‌شده و مدیریت آنها.',
-  'web.planned_orders_summary': 'سفارش‌ها، وضعیت پرداخت و تحویل.',
-  'web.planned_products_summary': 'محصولات، دسته‌ها و قیمت‌گذاری فروشگاه.',
   'web.planned_payments_summary': 'پرداخت‌ها، درگاه‌ها، بازگشت وجه و دفتر کیف پول.',
   'web.planned_discounts_summary': 'کدهای تخفیف و کمپین‌های فروش.',
   'web.planned_resellers_summary': 'نمایندگان فروش و سقف اختیارات آنها.',
@@ -438,14 +441,6 @@ export const WEB_FA = {
     'ترتیب پیش‌فرض از سمت سرور است: created_at نزولی و سپس id نزولی. مرتب‌سازی یک صفحهٔ واکشی‌شده در مرورگر مجاز نیست.',
   'web.planned_services_plan_filter':
     'فیلتر لوکیشن وجود نخواهد داشت؛ به جای آن فیلتر چندانتخابی «پلن» با پشتیبانی از صفحه‌بندی سمت سرور.',
-  'web.planned_orders_attention':
-    'سفارش عادی «در انتظار پرداخت» جزو «نیازمند توجه» شمرده نمی‌شود؛ این برچسب فقط برای مواردی است که واقعاً دخالت اپراتور لازم است.',
-  'web.planned_orders_history':
-    'تاریخچهٔ واقعی سفارش و سرویس حفظ می‌شود و با یک وضعیت جاری عمومی بازنویسی نمی‌شود.',
-  'web.planned_orders_shared_projection':
-    'صفحهٔ سفارش و صفحهٔ پرداخت از یک پروجکشن مشترک استفاده می‌کنند تا هرگز دو وضعیت متناقض نشان ندهند.',
-  'web.planned_products_panel_choice':
-    'انتخاب خودکار «کم‌بارترین پنل» وجود نخواهد داشت. یا محصول به یک پنل مشخص گره خورده است، یا مشتری هنگام خرید پنل را انتخاب می‌کند.',
   'web.planned_payments_expiry':
     'مهلت پرداخت حداکثر یک ساعت است و پس از آن پرداخت و سفارش باید منقضی یا لغو شوند. این قاعده باید در دامنه و سرور اجرا شود، نه با یک تایمر در مرورگر.',
   'web.planned_payments_refund':
@@ -742,6 +737,164 @@ export const WEB_FA = {
   'web.users_scope_title': 'آنچه در این نسخه نیست',
   'web.users_scope_body':
     'کیف پول، سفارش، پرداخت، سرویس، تخفیف و نمایندگی در این نسخه وجود ندارند؛ بنابراین هیچ عدد یا ستونی برای آنها نشان داده نمی‌شود. نمایش صفر برای چیزی که ساخته نشده، گزارشِ نادرست است.',
+
+  // --- Products (Phase 4B) -------------------------------------------------
+  'web.products_title': 'محصولات',
+  'web.products_intro': 'سرویس‌هایی که مشتری می‌تواند بخرد، و آنهایی که هنوز نمی‌تواند.',
+  'web.products_empty': 'هنوز محصولی تعریف نشده است.',
+  'web.products_empty_hint': 'با فرم پایین همین صفحه اولین محصول را بسازید.',
+  'web.products_search_title': 'عنوان محصول',
+  'web.products_search_title_hint': 'ابتدای عنوان کافی است.',
+  'web.products_search_empty': 'محصولی با این عنوان پیدا نشد.',
+  'web.products_search_empty_hint': 'عبارت را کوتاه‌تر کنید یا جست‌وجو را پاک کنید.',
+  'web.product_title': 'عنوان',
+  'web.product_description': 'توضیح',
+  'web.product_description_hint':
+    'در پیام خلاصهٔ سفارش به مشتری نشان داده نمی‌شود؛ برای خود شماست.',
+  'web.product_detail': 'جزئیات محصول',
+  'web.product_identity_title': 'مشخصات محصول',
+  'web.product_status_active': 'فعال',
+  'web.product_status_inactive': 'غیرفعال',
+  'web.product_audience': 'مخاطب',
+  'web.product_audience_all': 'همهٔ مخاطب‌ها',
+  'web.product_audience_everyone': 'همه',
+  'web.product_audience_resellers': 'فقط نمایندگان',
+  'web.product_audience_hidden': 'پنهان',
+  'web.product_audience_hint':
+    'پنهان یعنی در فهرست ربات نمایش داده نمی‌شود، ولی اگر کسی نشانی آن را داشته باشد می‌تواند سفارش دهد.',
+  'web.product_price': 'قیمت',
+  'web.product_price_hint':
+    'به کوچک‌ترین واحد پول. خالی بگذارید تا محصول فروخته نشود؛ قیمت صفر معنایی ندارد.',
+  'web.product_currency': 'واحد پول',
+  'web.product_duration': 'مدت',
+  'web.product_duration_hint': 'به روز. صفر یعنی بدون محدودیت زمانی.',
+  'web.product_days_unit': 'روز',
+  'web.product_traffic': 'حجم',
+  'web.product_traffic_bytes': 'حجم (بایت)',
+  'web.product_traffic_hint': 'به بایت. صفر یعنی بدون محدودیت حجم.',
+  'web.product_unlimited': 'نامحدود',
+  'web.product_device_limit': 'سقف دستگاه',
+  'web.product_device_limit_hint':
+    'خالی یعنی هر چه پنل به‌صورت پیش‌فرض می‌دهد. صفر یک سقف واقعی نیست و پذیرفته نمی‌شود.',
+  'web.product_devices_provider_default': 'پیش‌فرض پنل',
+  'web.product_sort_order': 'ترتیب',
+  'web.product_sort_hint': 'عدد کوچک‌تر بالاتر دیده می‌شود.',
+  'web.product_panel': 'پنل',
+  'web.product_panel_hint': 'سرویسِ خریداری‌شده روی این پنل ساخته خواهد شد.',
+  'web.product_panel_none': 'بدون پنل',
+  'web.product_panel_denied':
+    'فهرست پنل‌ها برای شما قابل خواندن نیست (دسترسی panels.view)؛ شناسهٔ پنل را دستی وارد کنید.',
+  'web.product_created_at': 'ساخته‌شده در',
+
+  /*
+   * The catalogue badge, which is the reason this page exists in this shape.
+   *
+   * An operator otherwise publishes a plan, sees it in their own list, and finds out it
+   * was invisible to customers when nobody buys it. Four separate sentences rather than
+   * one "not visible", because each names a different thing to go and fix.
+   */
+  'web.product_catalogue': 'در فهرست ربات',
+  'web.product_in_catalogue': 'نمایش داده می‌شود',
+  'web.product_gap_banner_title': 'این محصول در فهرست ربات نیست',
+  'web.product_gap_inactive': 'غیرفعال است؛ تا فعال نشود فروخته نمی‌شود.',
+  'web.product_gap_unlisted': 'مخاطب آن پنهان است؛ فروخته می‌شود ولی در فهرست نمی‌آید.',
+  'web.product_gap_unpriced': 'قیمت ندارد؛ بدون قیمت قابل فروش نیست.',
+  'web.product_gap_no_panel': 'به هیچ پنلی وصل نیست؛ چیزی برای تحویل وجود ندارد.',
+
+  'web.product_new_title': 'محصول تازه',
+  'web.product_edit_title': 'ویرایش محصول',
+  'web.product_edit_denied': 'برای ساخت یا ویرایش محصول به دسترسی catalog.edit نیاز است.',
+  'web.product_create': 'ساخت محصول',
+  'web.product_save': 'ذخیرهٔ تغییرات',
+  'web.product_created': 'محصول ساخته شد.',
+  'web.product_saved': 'تغییرات ذخیره شد.',
+  'web.product_created_inactive':
+    'محصول تازه غیرفعال ساخته می‌شود تا یک دکمه نتواند پلنِ بی‌قیمت یا بی‌پنل را منتشر کند.',
+  'web.product_status_title': 'فعال یا غیرفعال',
+  'web.product_status_hint': 'فقط محصول فعال به مشتری فروخته می‌شود.',
+  'web.product_activate': 'فعال کردن',
+  'web.product_deactivate': 'غیرفعال کردن',
+  'web.product_activated': 'محصول فعال شد.',
+  'web.product_deactivated': 'محصول غیرفعال شد.',
+  'web.product_deactivate_note':
+    'غیرفعال کردن روی سفارش‌های ثبت‌شده اثری ندارد: هر سفارش نسخهٔ خودش از محصول را نگه داشته است.',
+  'web.product_problem_title': 'عنوان نمی‌تواند خالی باشد.',
+  'web.product_problem_sort': 'ترتیب باید عددی صحیح و در بازهٔ مجاز باشد.',
+  'web.product_problem_duration': 'مدت باید عددی صحیح و در بازهٔ مجاز باشد.',
+  'web.product_problem_traffic': 'حجم باید عددی صحیح به بایت باشد.',
+  'web.product_problem_devices': 'سقف دستگاه باید عددی صحیح و بزرگ‌تر از صفر باشد یا خالی بماند.',
+  'web.product_problem_price': 'قیمت باید عددی صحیح و بزرگ‌تر از صفر باشد یا خالی بماند.',
+  'web.products_scope_title': 'آنچه در این نسخه نیست',
+  'web.products_scope_body':
+    'قاعدهٔ قیمت‌گذاری، تخفیف، دسته‌بندی و قیمت ویژهٔ نمایندگان در این نسخه وجود ندارند. قیمت هر محصول همان عددی است که اینجا وارد می‌کنید.',
+  /*
+   * Owner revision 10, carried onto the LIVE page.
+   *
+   * It used to live on the planned products page, which no route renders any more. A
+   * decision recorded only on an unreachable screen is a decision nobody will read
+   * before breaking it — the same reason `users`' two absences moved to the real page
+   * when Phase 4A shipped it.
+   */
+  'web.products_panel_rule':
+    'انتخاب خودکار «کم‌بارترین پنل» وجود نخواهد داشت. یا محصول به یک پنل مشخص گره خورده است، یا مشتری هنگام خرید پنل را انتخاب می‌کند.',
+
+  // --- Orders (Phase 4B) ---------------------------------------------------
+  'web.orders_title': 'سفارش‌ها',
+  'web.orders_intro': 'آنچه مشتری خواسته است، و مبلغی که به او اعلام شده.',
+  'web.orders_empty': 'هنوز سفارشی ثبت نشده است.',
+  'web.orders_empty_hint': 'وقتی مشتری از فهرست ربات چیزی انتخاب کند، اینجا دیده می‌شود.',
+  'web.orders_filter_empty': 'سفارشی با این مشخصات پیدا نشد.',
+  'web.orders_filter_empty_hint': 'شناسه را بررسی کنید یا صافی‌ها را پاک کنید.',
+  'web.orders_filter_customer_hint': 'شناسهٔ داخلی مشتری، نه شناسهٔ تلگرام.',
+  'web.orders_filter_product_hint': 'شناسهٔ محصول.',
+  'web.order_detail': 'جزئیات سفارش',
+  'web.order_line': 'سرویس',
+  'web.order_line_title': 'آنچه خریداری شده',
+  'web.order_snapshot_hint':
+    'این مقادیر در لحظهٔ ثبت سفارش نگه داشته شده‌اند؛ تغییر بعدی محصول آنها را عوض نمی‌کند.',
+  'web.order_unit_price': 'قیمت واحد',
+  'web.order_quantity': 'تعداد',
+  'web.order_totals_title': 'مبلغ',
+  'web.order_subtotal': 'جمع',
+  'web.order_discount': 'تخفیف',
+  'web.order_total': 'مبلغ نهایی',
+  'web.order_lifecycle_title': 'وضعیت و زمان‌ها',
+  'web.order_created_at': 'ثبت‌شده در',
+  'web.order_expires_at': 'اعتبار تا',
+  'web.order_confirmed_at': 'تأییدشده در',
+  'web.order_customer': 'مشتری',
+  'web.order_product': 'محصول',
+  'web.order_references_title': 'ارجاع‌ها',
+  'web.order_references_hint':
+    'برای پیمایش است؛ آنچه خریداری شده از همین سفارش خوانده می‌شود، نه از محصول امروز.',
+  'web.order_state_draft': 'پیش‌نویس',
+  'web.order_state_awaiting_payment': 'در انتظار پرداخت',
+  'web.order_state_paid': 'پرداخت‌شده',
+  'web.order_state_cancelled': 'لغوشده',
+  'web.order_state_expired': 'منقضی‌شده',
+  'web.order_state_refunded': 'بازپرداخت‌شده',
+  'web.order_awaiting_banner_title': 'این سفارش منتظر پرداخت است',
+  'web.order_awaiting_banner_body':
+    'در این نسخه راهی برای دریافت پرداخت وجود ندارد؛ بنابراین دکمه‌ای برای «پرداخت شد»، لغو یا بازپرداخت هم وجود ندارد.',
+  'web.orders_scope_title': 'آنچه در این نسخه نیست',
+  'web.orders_scope_body':
+    'پرداخت، کیف پول، تحویل سرویس، لغو و بازپرداخت در این نسخه وجود ندارند. سفارش تا «در انتظار پرداخت» پیش می‌رود و همان‌جا می‌ماند.',
+  /*
+   * Owner revisions 3, 6 and 11, carried onto the LIVE page.
+   *
+   * Revision 6 is DELIVERED — every `line*` field is a snapshot, so an order's history
+   * is not rewritten by editing the product — and it is stated here beside the two that
+   * are still future so the three are read together. The other two describe the payment
+   * surface, which does not exist yet; recording them on a planned page no route renders
+   * would have left them for nobody.
+   */
+  'web.orders_future_rules_title': 'قاعده‌هایی که در فازهای بعد نگه داشته می‌شوند',
+  'web.orders_rule_history':
+    'تاریخچهٔ واقعی سفارش و سرویس حفظ می‌شود و با یک وضعیت جاری عمومی بازنویسی نمی‌شود؛ در همین نسخه هر سفارش نسخهٔ خودش از محصول را نگه می‌دارد.',
+  'web.orders_rule_attention':
+    'سفارش عادی «در انتظار پرداخت» جزو «نیازمند توجه» شمرده نمی‌شود؛ این برچسب فقط برای مواردی است که واقعاً دخالت اپراتور لازم است.',
+  'web.orders_rule_shared_projection':
+    'صفحهٔ سفارش و صفحهٔ پرداخت از یک پروجکشن مشترک استفاده می‌کنند تا هرگز دو وضعیت متناقض نشان ندهند.',
 
   // --- Units ---------------------------------------------------------------
   'web.unit_seconds': 'ثانیه',

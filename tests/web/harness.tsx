@@ -135,6 +135,60 @@ export function customer(overrides: Record<string, unknown> = {}): Record<string
   };
 }
 
+/**
+ * One product, in the shape `productSummarySchema` declares.
+ *
+ * Parsed by that schema on the way through the real API client, so a fixture that
+ * drifts from the contract fails here rather than in production. The defaults describe
+ * a SELLABLE product — active, listed, priced, panel-bound — and each case spoils
+ * exactly one of those, which is what makes the catalogue-gap assertions readable.
+ */
+export function product(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: '019220ab-cdef-7012-8345-6789abcdef01',
+    title: 'پلن یک‌ماهه',
+    description: null,
+    status: 'ACTIVE',
+    audience: 'EVERYONE',
+    sortOrder: 10,
+    panelId: '01a05e35-c9ad-7e93-bef3-1ed9b55292c8',
+    durationDays: 30,
+    trafficBytes: '53687091200',
+    deviceLimit: 2,
+    priceAmount: '250000',
+    priceCurrency: 'IRT',
+    createdAt: '2026-02-01T08:00:00.000Z',
+    updatedAt: '2026-09-10T12:30:00.000Z',
+    ...overrides,
+  };
+}
+
+/** One order, in the shape `orderSummarySchema` declares. Every `line*` is a snapshot. */
+export function order(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: '019230ab-cdef-7012-8345-6789abcdef01',
+    customerId: '019210ab-cdef-7012-8345-6789abcdef01',
+    state: 'DRAFT',
+    productId: '019220ab-cdef-7012-8345-6789abcdef01',
+    panelId: '01a05e35-c9ad-7e93-bef3-1ed9b55292c8',
+    lineTitle: 'پلن یک‌ماهه',
+    lineDurationDays: 30,
+    lineTrafficBytes: '53687091200',
+    lineDeviceLimit: 2,
+    lineUnitPriceAmount: '250000',
+    lineQuantity: 1,
+    subtotalAmount: '250000',
+    discountAmount: '0',
+    totalAmount: '250000',
+    currency: 'IRT',
+    expiresAt: '2026-09-10T13:30:00.000Z',
+    confirmedAt: null,
+    createdAt: '2026-09-10T12:30:00.000Z',
+    updatedAt: '2026-09-10T12:30:00.000Z',
+    ...overrides,
+  };
+}
+
 export function panel(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: '01a05e35-c9ad-7e93-bef3-1ed9b55292c8',

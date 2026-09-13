@@ -74,6 +74,20 @@ import {
   type RunBackupResponse,
   CUSTOMER_ROUTES,
   customerListResponseSchema,
+  PRODUCT_ROUTES,
+  productListResponseSchema,
+  productResponseSchema,
+  ORDER_ROUTES,
+  orderListResponseSchema,
+  orderResponseSchema,
+  type OrderListResponse,
+  type OrderResponse,
+  type OrderState,
+  type ProductAudience,
+  type ProductListResponse,
+  type ProductResponse,
+  type ProductStatus,
+  type CurrencyCode,
   customerResponseSchema,
   type CustomerListResponse,
   type CustomerResponse,
@@ -518,6 +532,127 @@ export function unblockCustomer(input: {
 }): Promise<CustomerResponse> {
   const { id, ...body } = input;
   return post(CUSTOMER_ROUTES.unblock(id), body, customerResponseSchema);
+}
+
+// --- Products and orders (Phase 4B) -----------------------------------------
+
+/**
+ * One page of products, for the OPERATOR's list.
+ *
+ * Not the customer catalogue: this returns withdrawn, unpriced and hidden products
+ * too, because curating them is what the page is for. The catalogue's four predicates
+ * live in `listCatalog` and are the bot's, not this surface's.
+ */
+export function fetchProducts(
+  query: {
+    limit?: number;
+    cursor?: string;
+    status?: ProductStatus;
+    audience?: ProductAudience;
+    title?: string;
+  } = {},
+): Promise<ProductListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  if (query.status !== undefined) params.set('status', query.status);
+  if (query.audience !== undefined) params.set('audience', query.audience);
+  // Omitted when empty, so clearing the box is the unfiltered list rather than a
+  // search for the empty string.
+  if (query.title !== undefined && query.title !== '') params.set('title', query.title);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${PRODUCT_ROUTES.list}?${suffix}` : PRODUCT_ROUTES.list,
+    productListResponseSchema,
+  );
+}
+
+export function fetchProduct(id: string): Promise<ProductResponse> {
+  return authedGet(PRODUCT_ROUTES.detail(id), productResponseSchema);
+}
+
+/**
+ * The write body for create and edit.
+ *
+ * One shape for both, because the set of mutable properties IS the set of writable
+ * ones. `status` is absent: a product is created INACTIVE and becomes purchasable
+ * through its own command, so one call cannot publish an unpriced plan.
+ */
+export interface ProductWriteInput {
+  title: string;
+  description: string | null;
+  audience: ProductAudience;
+  sortOrder: number;
+  panelId: string | null;
+  durationDays: number;
+  trafficBytes: string;
+  deviceLimit: number | null;
+  priceAmount: string | null;
+  priceCurrency: CurrencyCode | null;
+  idempotencyKey: string;
+}
+
+export function createProduct(input: ProductWriteInput): Promise<ProductResponse> {
+  return post(PRODUCT_ROUTES.create, input, productResponseSchema);
+}
+
+export function updateProduct(input: ProductWriteInput & { id: string }): Promise<ProductResponse> {
+  const { id, ...body } = input;
+  return post(PRODUCT_ROUTES.update(id), body, productResponseSchema);
+}
+
+export function activateProduct(input: {
+  id: string;
+  idempotencyKey: string;
+}): Promise<ProductResponse> {
+  const { id, ...body } = input;
+  return post(PRODUCT_ROUTES.activate(id), body, productResponseSchema);
+}
+
+export function deactivateProduct(input: {
+  id: string;
+  idempotencyKey: string;
+}): Promise<ProductResponse> {
+  const { id, ...body } = input;
+  return post(PRODUCT_ROUTES.deactivate(id), body, productResponseSchema);
+}
+
+/**
+ * One page of orders.
+ *
+ * Read only. There is no `cancelOrder`, `settleOrder` or `refundOrder` here for the
+ * reason `orders.controller.ts` gives: every one of them depends on a payment record
+ * this release does not have, and a client function for a route that does not exist is
+ * how a button comes to be drawn for it.
+ */
+export function fetchOrders(
+  query: {
+    limit?: number;
+    cursor?: string;
+    state?: OrderState;
+    customerId?: string;
+    productId?: string;
+  } = {},
+): Promise<OrderListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  if (query.state !== undefined) params.set('state', query.state);
+  if (query.customerId !== undefined && query.customerId !== '') {
+    params.set('customerId', query.customerId);
+  }
+  if (query.productId !== undefined && query.productId !== '') {
+    params.set('productId', query.productId);
+  }
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${ORDER_ROUTES.list}?${suffix}` : ORDER_ROUTES.list,
+    orderListResponseSchema,
+  );
+}
+
+export function fetchOrder(id: string): Promise<OrderResponse> {
+  return authedGet(ORDER_ROUTES.detail(id), orderResponseSchema);
 }
 
 export function fetchPanels(

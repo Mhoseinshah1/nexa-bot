@@ -95,7 +95,13 @@ describe('the customer catalogue', () => {
       now: ctx.container.clock.now(),
     });
     if (status === 'ACTIVE') {
-      await repository.setStatus(scope, created.id, 'INACTIVE', 'ACTIVE', ctx.container.clock.now());
+      await repository.setStatus(
+        scope,
+        created.id,
+        'INACTIVE',
+        'ACTIVE',
+        ctx.container.clock.now(),
+      );
     }
     const after = await repository.findById(scope, created.id);
     if (after === null) throw new Error('product vanished');
@@ -262,13 +268,7 @@ describe('the customer catalogue', () => {
       draft: draft({ title: 'B plan', panelId: bPanel as PanelId }),
       now: ctx.container.clock.now(),
     });
-    await repository.setStatus(
-      tenantB,
-      theirs.id,
-      'INACTIVE',
-      'ACTIVE',
-      ctx.container.clock.now(),
-    );
+    await repository.setStatus(tenantB, theirs.id, 'INACTIVE', 'ACTIVE', ctx.container.clock.now());
 
     expect(await catalogueIds(tenantA)).toEqual([mine.id]);
     expect(await catalogueIds(tenantB)).toEqual([theirs.id]);

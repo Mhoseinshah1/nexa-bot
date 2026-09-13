@@ -65,8 +65,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // defect this comment was written about.
   'bot.start.welcome':
     'خوش آمدید. حساب شما در این ربات ساخته شد. برای دیدن سرویس‌ها دستور /catalog را بفرستید.',
-  'bot.start.welcome_back':
-    'خوش آمدید. برای دیدن سرویس‌های قابل خرید دستور /catalog را بفرستید.',
+  'bot.start.welcome_back': 'خوش آمدید. برای دیدن سرویس‌های قابل خرید دستور /catalog را بفرستید.',
   'bot.blocked': 'دسترسی این حساب به ربات بسته شده است.',
 
   'bot.catalog.empty': 'در حال حاضر سرویسی برای فروش تنظیم نشده است.',

@@ -178,3 +178,42 @@ export function splitDuration(ms: number): { value: number; unit: 'second' | 'mi
   if (ms % 60_000 === 0 && ms >= 60_000) return { value: ms / 60_000, unit: 'minute' };
   return { value: Math.round(ms / 1000), unit: 'second' };
 }
+
+// ---------------------------------------------------------------------------
+// Traffic
+// ---------------------------------------------------------------------------
+
+/** Binary units, because a panel's allowance is a power of two and not of ten. */
+const BYTE_UNITS: readonly { readonly factor: bigint; readonly key: WebKey }[] = [
+  { factor: 1_125_899_906_842_624n, key: 'web.unit_pib' },
+  { factor: 1_099_511_627_776n, key: 'web.unit_tib' },
+  { factor: 1_073_741_824n, key: 'web.unit_gib' },
+  { factor: 1_048_576n, key: 'web.unit_mib' },
+];
+
+/**
+ * A traffic allowance as a figure and a unit.
+ *
+ * `bigint` in, because the value crosses the wire as a decimal STRING for a reason: a
+ * byte count passes 2^53 at eight petabytes and `Number` would round it. Dividing in
+ * `bigint` and taking one decimal place by hand keeps that exact all the way to the
+ * screen.
+ *
+ * Returns the pieces rather than a sentence, so the Persian unit comes from the
+ * catalogue like every other visible string. `UNLIMITED_TRAFFIC_BYTES` — zero — is NOT
+ * handled here: zero means "no limit" in `catalog.ts` and the caller renders that as a
+ * word, because a formatter that returned "0 MiB" for it would be stating the opposite.
+ */
+export function splitBytes(bytes: bigint): { value: string; unit: WebKey } {
+  const chosen = BYTE_UNITS.find((candidate) => bytes >= candidate.factor) ?? {
+    factor: 1n,
+    key: 'web.unit_bytes' as WebKey,
+  };
+  const whole = bytes / chosen.factor;
+  // One decimal place, computed in `bigint` so nothing rounds on the way. A value that
+  // divides exactly shows no decimal at all, which is the common case for a plan.
+  const tenths = ((bytes - whole * chosen.factor) * 10n) / chosen.factor;
+  const value =
+    tenths === 0n ? formatNumber(Number(whole)) : `${formatNumber(Number(whole))}.${tenths}`;
+  return { value, unit: chosen.key };
+}

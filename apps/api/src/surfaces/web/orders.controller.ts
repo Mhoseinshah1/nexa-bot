@@ -17,10 +17,7 @@ import { adminActor, requireSessionToken } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
-import type {
-  OrderCursor,
-  OrderRecord,
-} from '../../modules/commerce/orders/application/ports.js';
+import type { OrderCursor, OrderRecord } from '../../modules/commerce/orders/application/ports.js';
 
 /**
  * Orders over HTTP, at `/orders`. TWO ROUTES, both reads.
