@@ -53,7 +53,27 @@ export interface CustomerResolution {
  * worse.
  */
 export interface CustomerCursor {
-  readonly createdAt: Date;
+  /**
+   * The stored `created_at`, as PostgreSQL's OWN text, NEVER as a `Date`.
+   *
+   * The same rule `PanelCursor` states, for the same measured reason:
+   * `timestamptz` keeps microseconds and a JavaScript `Date` keeps milliseconds,
+   * and the driver TRUNCATES rather than rounds. A cursor built from a `Date` is
+   * therefore strictly BELOW the row it was built from whenever that row's
+   * microseconds are non-zero, so the tuple comparison lets that row back in —
+   * one duplicate per page boundary, and at `limit=1` a traversal that never
+   * ends because every page hands back the same cursor.
+   *
+   * `customers.created_at` is written by the service from a millisecond
+   * `Clock.now()` today, so the rows with microseconds are the ones a restore,
+   * an import, a fixture or an ops script created. That is exactly the set
+   * nobody would think to test, which is why the cursor does not depend on the
+   * writer's precision at all.
+   *
+   * Rendered by `to_char` and compared with an explicit `::timestamptz`, so the
+   * value that comes out is the value that goes back in.
+   */
+  readonly createdAt: string;
   readonly id: UserId;
 }
 
