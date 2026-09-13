@@ -235,6 +235,48 @@ describe('the customer list', () => {
     expect(url).toContain('username=ali');
   });
 
+  it('applies BOTH search boxes, in one navigation, and clears both', async () => {
+    /*
+     * The page's own use of `setQueries`, not the helper's behaviour.
+     *
+     * Two `setQuery` calls in one handler apply ONE change: each builds from the
+     * `route.query` PROP this render captured, which the first call's navigation does
+     * not update. So the second overwrote the first and `telegramUserId` was silently
+     * dropped — the operator saw the id in the box and a list filtered only by name.
+     * The clear button had it in the other direction.
+     *
+     * `router.test.tsx` proves the helper; only this proves the CALL SITE, and a
+     * falsification that reverted the handler survived the whole suite without it.
+     */
+    stubApi(list([customer()]));
+    window.history.replaceState(null, '', '/users');
+    renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
+    await screen.findByText('5551234567');
+
+    fireEvent.change(screen.getByLabelText('شناسهٔ تلگرام'), { target: { value: '5551234567' } });
+    fireEvent.change(screen.getByLabelText('نام کاربری'), { target: { value: 'ali' } });
+    fireEvent.click(screen.getByText('جست‌وجو'));
+
+    await waitFor(() => {
+      const applied = new URLSearchParams(window.location.search);
+      expect(applied.get('telegramUserId'), 'the id filter was dropped').toBe('5551234567');
+      expect(applied.get('username')).toBe('ali');
+    });
+
+    stubApi(list([customer()]));
+    renderPage(
+      <UsersPage
+        route={{ path: '/users', query: new URLSearchParams(window.location.search) }}
+        maySearch
+        denied={false}
+      />,
+    );
+    fireEvent.click((await screen.findAllByText('پاک کردن'))[0] as HTMLButtonElement);
+    await waitFor(() => {
+      expect(window.location.search).toBe('');
+    });
+  });
+
   it('sends no search parameters at all when the boxes are empty', async () => {
     const api = stubApi(list([customer()]));
     renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);

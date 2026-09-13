@@ -378,6 +378,50 @@ describe('the order list', () => {
     }
   });
 
+  it('applies BOTH filters, in one navigation, and clears both', async () => {
+    /*
+     * The page's own use of `setQueries`, not the helper's behaviour.
+     *
+     * `router.test.tsx` proves the helper applies every parameter; nothing proved THIS
+     * page calls it. Reverting the handler to two `setQuery` calls left that suite
+     * green — a falsification (M34) survived, which is the definition of a rule with no
+     * test. The reverted handler applies `productId` and silently drops `customerId`,
+     * so the operator sees the id they typed in the box and a list that ignored it.
+     */
+    stubApi(orderList([order()]));
+    window.history.replaceState(null, '', '/orders');
+    renderPage(<OrdersPage route={ORDERS_ROUTE} denied={false} />);
+    await screen.findByText('پلن یک‌ماهه');
+
+    const CUSTOMER = '019220ab-cdef-7012-8345-6789abcdef11';
+    const PRODUCT = '019220ab-cdef-7012-8345-6789abcdef22';
+    fireEvent.change(screen.getByLabelText('مشتری'), { target: { value: CUSTOMER } });
+    fireEvent.change(screen.getByLabelText('محصول'), { target: { value: PRODUCT } });
+    fireEvent.click(screen.getByText('جست‌وجو'));
+
+    await waitFor(() => {
+      const applied = new URLSearchParams(window.location.search);
+      expect(applied.get('customerId'), 'the customer filter was dropped').toBe(CUSTOMER);
+      expect(applied.get('productId')).toBe(PRODUCT);
+    });
+
+    // And the CLEAR button, which had the same defect in the other direction: it
+    // removed `productId` and left `customerId` applied, so pressing Clear left a
+    // filter on with an empty box above it.
+    stubApi(orderList([order()]));
+    renderPage(
+      <OrdersPage
+        route={{ path: '/orders', query: new URLSearchParams(window.location.search) }}
+        denied={false}
+      />,
+    );
+    const clear = (await screen.findAllByText('پاک کردن'))[0] as HTMLButtonElement;
+    fireEvent.click(clear);
+    await waitFor(() => {
+      expect(window.location.search).toBe('');
+    });
+  });
+
   it('presses every control it has and still issues nothing but reads', async () => {
     const api = stubApi(orderList([order({ state: 'AWAITING_PAYMENT' })]));
     const { container } = renderPage(<OrdersPage route={ORDERS_ROUTE} denied={false} />);
