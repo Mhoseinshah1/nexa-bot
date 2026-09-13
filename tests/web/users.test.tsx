@@ -180,6 +180,40 @@ describe('the customer list', () => {
     expect(url).not.toContain('username=');
   });
 
+  it('answers a username search separately from a Telegram-id search of the same text', async () => {
+    /*
+     * The cursor trail and the query key are keyed on a SIGNATURE of the applied
+     * search, and the separator is what keeps two searches apart. With an empty one,
+     * `?username=1` and `?telegramUserId=1` are the same string — one key, one trail —
+     * so the page serves one search's cached rows under the other's heading and pages
+     * it with the other's cursor.
+     *
+     * Asserted over the REQUESTS rather than over the string, because the string is an
+     * implementation detail and the thing that matters is that the server is asked two
+     * different questions.
+     */
+    const byName = { path: '/users', query: new URLSearchParams({ username: '1' }) };
+    const byId = { path: '/users', query: new URLSearchParams({ telegramUserId: '1' }) };
+
+    const api = stubApi(list([customer()], 'Y3Vyc29yLXNoYXJlZA'));
+    const view = renderPage(<UsersPage route={byName} maySearch denied={false} />);
+    await screen.findByText('5551234567');
+    const nameUrl = api.calls[api.calls.length - 1]?.url ?? '';
+
+    view.rerender(<UsersPage route={byId} maySearch denied={false} />);
+    await waitFor(() =>
+      expect(api.calls[api.calls.length - 1]?.url ?? '').toContain('telegramUserId=1'),
+    );
+    const idUrl = api.calls[api.calls.length - 1]?.url ?? '';
+
+    expect(nameUrl).toContain('username=1');
+    expect(nameUrl).not.toContain('telegramUserId=');
+    expect(idUrl).not.toContain('username=');
+    // Two distinct requests, which is only true if the two searches did not collapse
+    // into one query key.
+    expect(nameUrl).not.toBe(idUrl);
+  });
+
   it('pages forward with the cursor the server minted, and back without one', async () => {
     const api = stubApi(list([customer()], 'Y3Vyc29yLW9uZQ'));
     renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);

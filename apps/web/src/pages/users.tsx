@@ -123,7 +123,22 @@ export function UsersPage({
    * form's submit handler would survive into a different list — and a cursor
    * minted under one filter strands every row before it under another, silently.
    */
-  const searchSignature = [appliedTelegramId, appliedUsername, appliedStatus ?? ''].join('');
+  /*
+   * Joined on `|`, which cannot appear in any of the three parts.
+   *
+   * A Telegram id is digits, a Telegram username is `[A-Za-z0-9_]`, and the status is
+   * one of two literals, so no two different searches can produce the same signature.
+   * An EMPTY separator could: a username of `1` with no id and an id of `1` with no
+   * username would both be the string `1`, sharing a query key and a cursor trail, and
+   * the page would serve one search's cached rows under the other's heading.
+   *
+   * This was a literal U+001F until the self-review. It WORKED — a unit separator cannot
+   * appear in any part either — and it was invisible in every tool that reads the source,
+   * which is the argument against it: a separator nobody can see in a grep, a diff or a
+   * review is a separator nobody checks. `users.test.tsx` now asserts the behaviour the
+   * string exists for, so neither spelling has to be trusted.
+   */
+  const searchSignature = [appliedTelegramId, appliedUsername, appliedStatus ?? ''].join('|');
   const [trail, setTrail] = useState<{ signature: string; cursors: readonly string[] }>({
     signature: searchSignature,
     cursors: [],

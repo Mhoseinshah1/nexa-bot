@@ -59,7 +59,10 @@ describe('the customer Telegram turn', () => {
       request.on('data', (chunk: Buffer) => chunks.push(chunk));
       request.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf8');
-        let body: Record<string, unknown> = {};
+        // An unparseable body is RECORDED rather than dropped: a case asserting that
+        // no send happened must be able to tell "nothing was sent" from "something was
+        // sent and the fake could not read it".
+        let body: Record<string, unknown>;
         try {
           body = JSON.parse(raw) as Record<string, unknown>;
         } catch {
