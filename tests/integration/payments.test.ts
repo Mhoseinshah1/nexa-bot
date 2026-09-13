@@ -6,6 +6,7 @@ import {
   type BotInstanceId,
   type CorrelationId,
   type PanelId,
+  type PaymentId,
   type ProductId,
   type UserId,
 } from '@nexa/contracts';
@@ -13,6 +14,7 @@ import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/ca
 import type { ProductDraft } from '../../apps/api/src/modules/commerce/catalog/application/ports';
 import type { OrderRecord } from '../../apps/api/src/modules/commerce/orders/application/ports';
 import { DrizzleOrderRepository } from '../../apps/api/src/modules/commerce/orders/infrastructure/drizzle-order.repository';
+import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
 import {
   adminActorFor,
   createAdmin,
@@ -592,6 +594,102 @@ describe('payments and settlement', () => {
         ),
       ),
     ).rejects.toThrow(/payments_order_confirmed_key/u);
+  });
+
+  // -------------------------------------------------------------------------
+  // The repository's own guarantees
+  // -------------------------------------------------------------------------
+
+  /*
+   * These three go to the REPOSITORY directly, and that is the point of them.
+   *
+   * Each rule below is shadowed by a service-level early return — a replay lookup, an
+   * already-CONFIRMED branch — so a service-level test cannot reach it: the command
+   * returns before the statement that carries the guarantee ever runs. P09 and P10
+   * SURVIVED falsification for exactly that reason, which is the "tested the helper,
+   * not the call site" shape recorded on the Phase 4B branch, inverted.
+   */
+  describe('the payment repository', () => {
+    it('confirms only from PENDING, and tells the loser it lost', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'r1');
+      const pending = await ctx.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor('manual-r1'),
+        customerA,
+        { idempotencyKey: 'manual-r1-0001', orderId: order.id },
+      );
+      const repository = new DrizzlePaymentRepository(ctx.container.database.db);
+      const confirmation = {
+        evidenceKind: 'OPERATOR_REVIEW' as const,
+        evidenceNote: 'first',
+        confirmedByAdminId: null,
+        confirmedAt: ctx.container.clock.now(),
+      };
+
+      const first = await repository.confirm(
+        tenantA,
+        pending.id,
+        confirmation,
+        ctx.container.clock.now(),
+      );
+      const second = await repository.confirm(
+        tenantA,
+        pending.id,
+        { ...confirmation, evidenceNote: 'second' },
+        ctx.container.clock.now(),
+      );
+
+      expect(first).toBe(true);
+      // `false` IS the mechanism: two operators approving, a replayed request and two
+      // replicas all produce one confirmation, with no lock and no read-then-write window.
+      expect(second).toBe(false);
+      const after = await repository.findById(tenantA, pending.id);
+      expect(after?.evidenceNote).toBe('first');
+    });
+
+    it('creates ONE payment for a repeated reference, and returns the first', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'r2');
+      const repository = new DrizzlePaymentRepository(ctx.container.database.db);
+      const draftFor = (id: string) => ({
+        id: id as PaymentId,
+        customerId: customerA,
+        orderId: order.id,
+        method: 'MANUAL_TRANSFER' as const,
+        amount: money(250_000n, 'IRT'),
+        reference: 'repeated-reference',
+        expiresAt: null,
+        now: ctx.container.clock.now(),
+      });
+
+      const first = await repository.create(tenantA, draftFor(ctx.container.ids.uuid()));
+      // A retry recomputes the SAME reference and must land on the existing row rather
+      // than mint a second payment the customer could also be asked to pay.
+      const again = await repository.create(tenantA, draftFor(ctx.container.ids.uuid()));
+
+      expect(again.id).toBe(first.id);
+      expect(await countOf('payments')).toBe(1);
+    });
+
+    /*
+     * The freeze is a TRIGGER, so it is tested through the raw client: the repository
+     * has no method that could attempt this, which is the design rather than an
+     * omission. `nexa_payments_confirmation_guard` (0035) is what makes a confirmed
+     * amount unable to change after the fact.
+     */
+    it('refuses to change a CONFIRMED payment’s amount, in the database', async () => {
+      const order = await awaitingPayment(tenantA, customerA, panelA, 'r3');
+      await credit(tenantA, customerA, 1_000_000n, 'credit-r3');
+      const { payment } = await settleFromWallet(tenantA, customerA, order.id, 'settle-r3-0001');
+
+      await expect(
+        ctx.container.database.withClient((client) =>
+          client.query(`UPDATE payments SET amount = 1 WHERE id = $1`, [payment.id]),
+        ),
+      ).rejects.toThrow();
+
+      const after = await ctx.container.payments.get(tenantA, owner, payment.id);
+      expect(after.amount).toEqual(money(250_000n, 'IRT'));
+    });
   });
 
   // -------------------------------------------------------------------------
