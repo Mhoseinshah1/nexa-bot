@@ -17,6 +17,7 @@ import { AlertsPage, NotificationsPage } from './pages/alerts';
 import { SystemPage } from './pages/system';
 import { RecoveryPage } from './pages/recovery';
 import { PlannedPage, PLANNED_SURFACES, type PlannedKey } from './pages/planned';
+import { PaymentsPage, PaymentDetailPage } from './pages/payments';
 import { ProductDetailPage, ProductsPage } from './pages/products';
 import { OrderDetailPage, OrdersPage } from './pages/orders';
 import { UsersPage, UserDetailPage } from './pages/users';
@@ -457,6 +458,38 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
       element: <OrdersPage route={route} denied={!may('orders.view')} />,
       crumbs: [{ label: t('web.orders_title') }],
       title: t('web.orders_title'),
+    };
+  }
+
+  if (route.path === '/payments') {
+    return {
+      element: <PaymentsPage route={route} denied={!may('payments.view')} />,
+      crumbs: [{ label: t('web.payments_title') }],
+      title: t('web.payments_title'),
+    };
+  }
+
+  const payment = match('/payments/:id', route.path);
+  if (payment !== null) {
+    return {
+      element: (
+        <PaymentDetailPage
+          key={payment['id'] ?? ''}
+          id={payment['id'] ?? ''}
+          /*
+           * Confirming is `receipts.review`, NOT `payments.view`.
+           *
+           * A reader who may see a payment must not be able to approve one, and the
+           * two are different permissions with different risk labels. The service
+           * charges `receipts.review` itself; this only decides whether the form is
+           * drawn or the permission is named.
+           */
+          mayReview={may('receipts.review')}
+          denied={!may('payments.view')}
+        />
+      ),
+      crumbs: [nav('payments'), { label: t('web.payment_detail') }],
+      title: t('web.payment_detail'),
     };
   }
 

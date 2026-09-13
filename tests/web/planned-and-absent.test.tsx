@@ -1,4 +1,6 @@
 import type { ReactElement } from 'react';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
 import { PlannedPage, PLANNED_SURFACES } from '../../apps/web/src/pages/planned';
@@ -37,7 +39,10 @@ describe('planned surfaces', () => {
       // `users` is deliberately absent: `/users` is a live surface. The list is
       // written out rather than derived, so activating or deactivating a surface
       // has to change this line too.
-      ['bots', 'discounts', 'payments', 'reports', 'resellers', 'services'].sort(),
+      // `payments` left this list in 4C, exactly as `products` and `orders` left it
+      // in 4B: the surface is real, and a promoted page still listed here renders its
+      // placeholder instead of itself.
+      ['bots', 'discounts', 'reports', 'resellers', 'services'].sort(),
     );
   });
 
@@ -159,14 +164,40 @@ describe('planned surfaces', () => {
    * tell whether they were there.
    */
   it.each<[string, RegExp, string]>([
-    ['payments', /مهلت پرداخت حداکثر یک ساعت/, 'revision 4 — one-hour payment validity'],
-    ['payments', /ترکیب ناممکن/, 'revision 5 — refund and fulfilment stay consistent'],
     ['services', /created_at نزولی/, 'revision 13 — newest first, ordered by the server'],
     ['services', /فیلتر چندانتخابی/, 'revision 14 — plan filter replaces location'],
-    ['payments', /در پنل وب ذخیره/, 'revision 17 — no Web Admin receipt storage'],
   ])('records on %s: %s', (surface, pattern) => {
     render(surface);
     expect(screen.getByText(pattern)).toBeInTheDocument();
+  });
+
+  /*
+   * Revisions 4, 5 and 17 left this page with the placeholder, and none of them was
+   * dropped.
+   *
+   * They were recorded as COPY on a surface that no longer exists, and copy on a
+   * deleted page is a record nobody reads. Each is now in `docs/open-questions.md`,
+   * which is where this repository keeps a deferral:
+   *
+   *   - revision 4 (one-hour payment validity) -> OQ-4C-01, with what 4C actually
+   *     does about expiry and what still has no sweeper;
+   *   - revision 5 (refund and fulfilment never combine impossibly) -> OQ-4C-02;
+   *   - revision 17 (receipt review happens in Telegram, not the web panel) ->
+   *     OQ-4C-03, which states the tension outright rather than resolving it: the
+   *     frozen contracts are web-admin-shaped, and 4C follows them.
+   *
+   * Asserted against the DOCUMENT, so deleting one of those sections fails here.
+   */
+  it('keeps revisions 4, 5 and 17 recorded after the payments placeholder was promoted', () => {
+    const doc = readFileSync(
+      join(import.meta.dirname, '..', '..', 'docs', 'open-questions.md'),
+      'utf8',
+    );
+    expect(doc, 'revision 4 — payment expiry').toContain('OQ-4C-01');
+    expect(doc).toContain('یک ساعت');
+    expect(doc, 'revision 5 — refund as a state').toContain('OQ-4C-02');
+    expect(doc, 'revision 17 — where receipt review happens').toContain('OQ-4C-03');
+    expect(doc).toContain('بررسی رسید در تلگرام انجام می‌شود');
   });
 
   /** Owner revision 15 — user tags are gone entirely. */
@@ -198,18 +229,6 @@ describe('planned surfaces', () => {
     expect(text).toContain('پلن');
     expect(text).toContain('لوکیشن'); // only as the thing being removed
     expect(text).toContain('وجود نخواهد داشت');
-  });
-
-  /** Owner revisions 4, 5 and 17. */
-  it('records the payment expiry, refund and receipt rules', () => {
-    const { container } = render('payments');
-    const text = container.textContent ?? '';
-    expect(text).toContain('یک ساعت');
-    expect(text).toContain('بازگشت وجه');
-    expect(text).toContain('رسید');
-    // Enforcement is a server rule, and the page says so rather than implying a
-    // browser timer could do it.
-    expect(text).toContain('نه با یک تایمر در مرورگر');
   });
 
   /** Owner revision 20 — only a reseller sales bot, and not creatable. */

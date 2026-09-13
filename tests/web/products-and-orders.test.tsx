@@ -460,14 +460,52 @@ describe('the order detail', () => {
     return renderPage(<OrderDetailPage id="019230ab-cdef-7012-8345-6789abcdef01" denied={false} />);
   };
 
-  it('says the order is waiting for a payment this release cannot take', async () => {
+  /*
+   * REWRITTEN for 4C, not deleted.
+   *
+   * This case used to require the banner to say there was no way to take a payment at
+   * all — true of 4B. A customer can now pay, so what the banner must still say is
+   * narrower and more important: there is no «پرداخت شد» button HERE. An operator
+   * asserting that money arrived is exactly what `settlementIsFunded` refuses to take
+   * anyone's word for, and confirming a transfer happens on the payments page where the
+   * evidence and the reviewer are recorded with it.
+   */
+  it('says the order is waiting, and that this page has no mark-paid button', async () => {
     const { container } = detail({
       state: 'AWAITING_PAYMENT',
       confirmedAt: '2026-09-10T12:35:00.000Z',
+      settledAt: null,
     });
     expect(await screen.findByText('این سفارش منتظر پرداخت است')).toBeInTheDocument();
-    // Saying so is the alternative to a button that would pretend.
-    expect(container.textContent).toContain('راهی برای دریافت پرداخت وجود ندارد');
+    const text = container.textContent ?? '';
+    expect(text).toContain('دکمهٔ «پرداخت شد» وجود ندارد');
+    expect(text).toContain('صفحهٔ پرداخت‌ها');
+    // And it does not, in fact, draw one.
+    const labels = [...container.querySelectorAll('button')].map((b) => b.textContent?.trim());
+    expect(labels).not.toContain('پرداخت شد');
+  });
+
+  /**
+   * A settled order says the MONEY arrived and nothing about a service.
+   *
+   * `orders_settled_at_check` binds `settled_at` to PAID, so a timestamp here is the
+   * database's own statement that the order is financially settled. The assertion is a
+   * prohibition as well as a presence: a later phase that starts claiming provisioning
+   * on this page fails here rather than in front of a customer.
+   */
+  it('shows when the money arrived, and claims nothing beyond it', async () => {
+    const { container } = detail({
+      state: 'PAID',
+      confirmedAt: '2026-09-10T12:35:00.000Z',
+      settledAt: '2026-09-10T12:40:00.000Z',
+    });
+    await screen.findByText('زمان تسویه');
+    const text = container.textContent ?? '';
+    for (const claim of ['در حال آماده‌سازی', 'سرویس ساخته شد', 'در حال ساخت', 'تحویل شد']) {
+      expect(text, `the order page claims "${claim}" and 4C provisions nothing`).not.toContain(
+        claim,
+      );
+    }
   });
 
   it('shows the snapshot and the totals, and marks them as a snapshot', async () => {

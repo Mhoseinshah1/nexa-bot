@@ -415,7 +415,6 @@ export const WEB_FA = {
     'هیچ دکمه‌ای در این صفحه وجود ندارد، چون هیچ کاری از سرور برنمی‌آید. دکمهٔ غیرفعال هم نگذاشته‌ایم: دکمهٔ غیرفعال یعنی «هست ولی دسترسی ندارید»، و این درست نیست.',
 
   'web.planned_services_summary': 'سرویس‌های تحویل‌شده و مدیریت آنها.',
-  'web.planned_payments_summary': 'پرداخت‌ها، درگاه‌ها، بازگشت وجه و دفتر کیف پول.',
   'web.planned_discounts_summary': 'کدهای تخفیف و کمپین‌های فروش.',
   'web.planned_resellers_summary': 'نمایندگان فروش و سقف اختیارات آنها.',
   'web.planned_reports_summary': 'گزارش‌های فروش، مشتری و مالی.',
@@ -426,9 +425,20 @@ export const WEB_FA = {
   'web.planned_missing_provisioning':
     'هیچ عملیات تحویلی روی پنل پیاده نشده است؛ تنها قابلیت ارائه‌دهندگان در این نسخه بررسی سلامت است.',
   'web.planned_missing_order': 'موجودیت سفارش وجود ندارد.',
-  'web.planned_missing_payment': 'موجودیت پرداخت و چرخهٔ عمر آن وجود ندارد.',
   'web.planned_missing_catalog': 'کاتالوگ محصول و دسته‌بندی وجود ندارد.',
   'web.planned_missing_pricing': 'قواعد قیمت‌گذاری فقط به صورت قرارداد تعریف شده و اجرا نمی‌شود.',
+  /*
+   * KEPT, and now rendered on the real Payments page rather than on a placeholder.
+   *
+   * A gateway is still absent in 4C — `WALLET` and `MANUAL_TRANSFER` are the two
+   * rails `SELF_CONTAINED_PAYMENT_METHODS` names — so an operator looking at the
+   * method filter needs to know why a third never appears. The other five
+   * `planned_payments_*` strings went with the placeholder: two described a page
+   * that is now real, one said the payment entity does not exist, and one said
+   * receipt review happens in Telegram rather than here, which 4C makes false.
+   * The two that named real deferred decisions (payment expiry, refund state)
+   * are recorded in `docs/open-questions.md`, where a deferral belongs.
+   */
   'web.planned_missing_gateway': 'هیچ درگاه پرداختی ثبت یا تعریف نشده است.',
   'web.planned_missing_reseller': 'موجودیت نماینده وجود ندارد.',
   'web.planned_missing_ledger': 'داده‌ای برای گزارش‌گیری وجود ندارد.',
@@ -441,12 +451,6 @@ export const WEB_FA = {
     'ترتیب پیش‌فرض از سمت سرور است: created_at نزولی و سپس id نزولی. مرتب‌سازی یک صفحهٔ واکشی‌شده در مرورگر مجاز نیست.',
   'web.planned_services_plan_filter':
     'فیلتر لوکیشن وجود نخواهد داشت؛ به جای آن فیلتر چندانتخابی «پلن» با پشتیبانی از صفحه‌بندی سمت سرور.',
-  'web.planned_payments_expiry':
-    'مهلت پرداخت حداکثر یک ساعت است و پس از آن پرداخت و سفارش باید منقضی یا لغو شوند. این قاعده باید در دامنه و سرور اجرا شود، نه با یک تایمر در مرورگر.',
-  'web.planned_payments_refund':
-    'وضعیت بازگشت وجه و وضعیت تحویل هرگز نباید ترکیب ناممکن بسازند؛ «درخواست بازگشت وجه» هم با «بازگشت وجه انجام‌شده» یکی نیست.',
-  'web.planned_payments_no_receipts':
-    'رسید پرداخت در پنل وب ذخیره، بایگانی، نمایش یا بررسی نمی‌شود. بررسی رسید در تلگرام انجام می‌شود.',
   'web.planned_reports_no_logs':
     'صفحهٔ لاگ عمومی در پنل وب ساخته نمی‌شود؛ جریان عملیاتی انسانی به گروه گزارش تلگرام می‌رود.',
   'web.planned_bots_add_flow':
@@ -785,6 +789,63 @@ export const WEB_FA = {
     'تراکنش‌های کیف پول قابل ویرایش یا حذف نیستند. اصلاح یک اشتباه، یک تراکنش جدید در جهت مخالف است.',
   'web.wallet_denied': 'برای دیدن کیف پول دسترسی users.view لازم است.',
 
+  // --- Payments (Phase 4C) -------------------------------------------------
+  /*
+   * PAID means the money arrived and nothing else.
+   *
+   * No string here says a service was created, is being prepared, or is on its
+   * way — because nothing in this release does any of that. The legacy bot's
+   * post-payment copy is the defect this comment exists to prevent being ported:
+   * a message that claims an effect which did not happen.
+   */
+  'web.payments_title': 'پرداخت‌ها',
+  'web.payments_intro': 'پولی که رسیده است، و پولی که هنوز در انتظار بررسی است.',
+  'web.payments_empty': 'هنوز پرداختی ثبت نشده است.',
+  'web.payment_detail': 'جزئیات پرداخت',
+  'web.payment_state': 'وضعیت',
+  'web.payment_state_pending': 'در انتظار',
+  'web.payment_state_confirmed': 'تأیید شده',
+  'web.payment_state_failed': 'ناموفق',
+  'web.payment_state_cancelled': 'لغو شده',
+  'web.payment_state_expired': 'منقضی شده',
+  'web.payment_state_unknown': 'نامشخص',
+  'web.payment_method': 'روش',
+  'web.payment_method_wallet': 'کیف پول',
+  'web.payment_method_manual': 'کارت به کارت',
+  'web.payment_method_gateway': 'درگاه',
+  'web.payment_amount': 'مبلغ',
+  'web.payment_reference': 'کد پیگیری',
+  'web.payment_customer': 'مشتری',
+  'web.payment_order': 'سفارش',
+  'web.payment_evidence_kind': 'مبنای تأیید',
+  'web.payment_evidence_note': 'یادداشت بررسی',
+  'web.payment_reviewer': 'تأییدکننده',
+  'web.payment_confirmed_at': 'زمان تأیید',
+  'web.payment_created_at': 'زمان ثبت',
+  'web.payment_expires_at': 'اعتبار تا',
+  'web.payments_filter_customer_hint': 'شناسهٔ مشتری را کامل وارد کنید.',
+  'web.payments_filter_order_hint': 'شناسهٔ سفارش را کامل وارد کنید.',
+  'web.payments_filter_reference_hint': 'کد پیگیری دقیقاً همان چیزی است که مشتری می‌خواند.',
+  'web.payments_filter_all': 'همه',
+  'web.payments_filter_invalid_id': 'شناسه معتبر نیست.',
+  'web.payments_search_apply': 'جست‌وجو',
+  'web.payment_confirm_title': 'تأیید دریافت وجه',
+  'web.payment_confirm_hint':
+    'با تأیید، سفارش مربوط به این پرداخت پرداخت‌شده می‌شود. مبلغ و ارز قابل تغییر نیستند.',
+  'web.payment_confirm_note': 'یادداشت بررسی',
+  'web.payment_confirm': 'تأیید دریافت',
+  'web.payment_confirm_done': 'پرداخت تأیید شد و سفارش پرداخت‌شده است.',
+  'web.payment_confirm_denied': 'برای تأیید پرداخت دسترسی receipts.review لازم است.',
+  /*
+   * `UNKNOWN` is an ABSENCE of an outcome, not an outcome. `payment.ts` makes it
+   * non-terminal for that reason, and this copy says what an operator must do
+   * rather than inviting them to guess.
+   */
+  'web.payment_unknown_banner':
+    'نتیجهٔ این پرداخت مشخص نیست. تا زمانی که با سوابق طرف مقابل تطبیق داده نشود، نه موفق است و نه ناموفق.',
+  'web.payment_not_settled_here':
+    'این صفحه فقط وضعیت مالی را نشان می‌دهد. ساخت یا تحویل سرویس در این نسخه انجام نمی‌شود.',
+
   // --- Products (Phase 4B) -------------------------------------------------
   'web.products_title': 'محصولات',
   'web.products_intro': 'سرویس‌هایی که مشتری می‌تواند بخرد، و آنهایی که هنوز نمی‌تواند.',
@@ -916,6 +977,9 @@ export const WEB_FA = {
   'web.order_lifecycle_title': 'وضعیت و زمان‌ها',
   'web.order_created_at': 'ثبت‌شده در',
   'web.order_expires_at': 'اعتبار تا',
+  'web.order_settled_at': 'زمان تسویه',
+  'web.order_payments_title': 'پرداخت‌های این سفارش',
+  'web.order_payments_empty': 'هنوز پرداختی برای این سفارش ثبت نشده است.',
   'web.order_confirmed_at': 'تأییدشده در',
   'web.order_customer': 'مشتری',
   'web.order_product': 'محصول',
@@ -929,11 +993,19 @@ export const WEB_FA = {
   'web.order_state_expired': 'منقضی‌شده',
   'web.order_state_refunded': 'بازپرداخت‌شده',
   'web.order_awaiting_banner_title': 'این سفارش منتظر پرداخت است',
+  /*
+   * Rewritten for 4C. It used to say there was no way to take a payment at all,
+   * which was true of 4B and is not now: a customer pays from their wallet or
+   * submits a transfer, and an operator confirms the latter on the payments page.
+   * What stays true is that there is no «پرداخت شد» button HERE — an operator
+   * asserting money arrived is what `settlementIsFunded` refuses to take anyone's
+   * word for.
+   */
   'web.order_awaiting_banner_body':
-    'در این نسخه راهی برای دریافت پرداخت وجود ندارد؛ بنابراین دکمه‌ای برای «پرداخت شد»، لغو یا بازپرداخت هم وجود ندارد.',
+    'این سفارش در انتظار پرداخت مشتری است. تأیید دریافت وجه در صفحهٔ پرداخت‌ها و همراه با ثبت مبنای تأیید انجام می‌شود؛ در این صفحه دکمهٔ «پرداخت شد» وجود ندارد.',
   'web.orders_scope_title': 'آنچه در این نسخه نیست',
   'web.orders_scope_body':
-    'پرداخت، کیف پول، تحویل سرویس، لغو و بازپرداخت در این نسخه وجود ندارند. سفارش تا «در انتظار پرداخت» پیش می‌رود و همان‌جا می‌ماند.',
+    'تحویل سرویس، لغو و بازپرداخت در این نسخه وجود ندارند. سفارش تا «پرداخت‌شده» پیش می‌رود و همان‌جا می‌ماند؛ «پرداخت‌شده» یعنی پول رسیده است و نه بیشتر.',
   /*
    * Owner revisions 3, 6 and 11, carried onto the LIVE page.
    *

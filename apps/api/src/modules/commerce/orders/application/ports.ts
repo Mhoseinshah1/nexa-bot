@@ -53,6 +53,8 @@ export interface OrderRecord {
    */
   readonly expiresAt: Date | null;
   readonly confirmedAt: Date | null;
+  /** When the money arrived. Bound to PAID by `orders_settled_at_check`. */
+  readonly settledAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }

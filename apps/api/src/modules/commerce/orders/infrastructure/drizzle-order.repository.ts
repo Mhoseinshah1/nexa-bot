@@ -264,6 +264,7 @@ function toRecord(row: typeof orders.$inferSelect): OrderRecord {
     },
     expiresAt: row.expiresAt,
     confirmedAt: row.confirmedAt,
+    settledAt: row.settledAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
