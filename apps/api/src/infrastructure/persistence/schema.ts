@@ -2022,14 +2022,30 @@ export const customers = pgTable(
     /** The list's deterministic keyset: created_at then id, never a mutable column. */
     index('customers_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
     /**
-     * Username search, lowercased.
+     * Username search, lowercased, with `text_pattern_ops`.
      *
      * An expression index rather than a lowercased column, because storing a second
      * copy of a mutable field is a second thing to keep in step. Searches are
      * case-insensitive because a customer telling an operator their username does not
      * preserve case.
+     *
+     * `text_pattern_ops` is the part that makes it READABLE, and it was missing.
+     * `/users?username=` is a PREFIX search, and a default-collation btree cannot
+     * serve `LIKE 'x%'` at all — measured on 20 000 rows, the planner ignored this
+     * index, walked `customers_tenant_created_idx` instead and discarded 12 289 rows
+     * to return 26, at 364 shared buffers. With the operator class it is an Index
+     * Cond carrying the prefix range: 111 rows and 31 buffers, and the gap grows with
+     * the tenant's customer count. The repository's comment claimed this index served
+     * the search all along, which made it a promise the plan did not keep — and an
+     * index with no reader is the `callback_refs` situation from migration 0002.
+     *
+     * `customers-plan.test.ts` pins the plan, because a claim about an index that no
+     * test reads is the claim that drifts.
      */
-    index('customers_tenant_username_idx').on(table.tenantId, sql`lower(username)`),
+    index('customers_tenant_username_idx').on(
+      table.tenantId,
+      sql`lower(username) text_pattern_ops`,
+    ),
     check('customers_status_check', enumCheck('status', CUSTOMER_STATUSES)),
     /** A blocked customer has a time; an active one does not. Neither state can lie. */
     check('customers_blocked_at_check', sql`(status = 'BLOCKED') = (blocked_at IS NOT NULL)`),

@@ -173,6 +173,38 @@ export class DrizzleCustomerRepository implements CustomerRepository {
     cursor: CustomerCursor | null,
     tx?: unknown,
   ): Promise<CustomerPage> {
+    const rows = await this.listStatement(scope, search, limit, cursor, tx);
+
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
+    return {
+      items: page.map(toRecord),
+      nextCursor:
+        rows.length > limit && last !== undefined
+          ? { createdAt: last.createdAtText, id: last.id as UserId }
+          : null,
+    };
+  }
+
+  /**
+   * The page statement, exposed so a PLAN regression can explain it.
+   *
+   * Public for the same reason `DrizzlePanelRepository.pageKeysQuery` is: the plan test
+   * has to explain the statement this code issues, and a retyped equivalent in a test
+   * proves a plan for a query nobody runs. `panel-monitor-scale.test.ts` records that
+   * failure in full — a green plan assertion against a simplified `SELECT` while
+   * production also joined two child tables.
+   *
+   * Returns the drizzle builder rather than rows, so `customers-plan.test.ts` can call
+   * `.toSQL()` on the very thing `list` awaits.
+   */
+  listStatement(
+    scope: TenantContext,
+    search: CustomerSearch,
+    limit: number,
+    cursor: CustomerCursor | null,
+    tx?: unknown,
+  ) {
     const tenantId = requireTenantId(scope);
     const conditions: SQL[] = [eq(customers.tenantId, tenantId)];
 
@@ -181,10 +213,21 @@ export class DrizzleCustomerRepository implements CustomerRepository {
       conditions.push(eq(customers.telegramUserId, search.telegramUserId));
     }
     if (search.usernamePrefix !== undefined && search.usernamePrefix !== '') {
-      // The expression index on `lower(username)` is what this uses, so the comparison
-      // is written to match it exactly. `like` with a bound parameter, and the pattern
-      // built from an escaped needle: a username containing `%` would otherwise match
-      // everything.
+      /*
+       * A PREFIX match, against `customers_tenant_username_idx`.
+       *
+       * The index is `(tenant_id, lower(username) text_pattern_ops)`, and the operator
+       * class is what makes this line indexable at all: a default-collation btree
+       * cannot serve `LIKE 'x%'`, so before migration 0036 the planner ignored the
+       * index entirely and filtered a `customers_tenant_created_idx` walk — 12 289 rows
+       * discarded to return 26, measured on 20 000 customers in one tenant. This
+       * comment previously asserted the index was used, which was a promise the plan
+       * did not keep; `customers-plan.test.ts` now reads the plan so neither half can
+       * drift from the other again.
+       *
+       * `like` with a BOUND parameter, and the pattern built from an escaped needle: a
+       * username containing `%` or `_` would otherwise match more than it spelled.
+       */
       const needle = search.usernamePrefix.toLowerCase().replace(/[\\%_]/g, '\\$&');
       conditions.push(sql`lower(${customers.username}) like ${`${needle}%`}`);
     }
@@ -197,7 +240,7 @@ export class DrizzleCustomerRepository implements CustomerRepository {
       );
     }
 
-    const rows = await this.exec(tx)
+    return this.exec(tx)
       .select({
         ...getTableColumns(customers),
         /** The cursor's own half of the key, in the one spelling the cursor carries. */
@@ -207,16 +250,6 @@ export class DrizzleCustomerRepository implements CustomerRepository {
       .where(and(...conditions))
       .orderBy(asc(customers.createdAt), asc(customers.id))
       .limit(limit + 1);
-
-    const page = rows.slice(0, limit);
-    const last = page[page.length - 1];
-    return {
-      items: page.map(toRecord),
-      nextCursor:
-        rows.length > limit && last !== undefined
-          ? { createdAt: last.createdAtText, id: last.id as UserId }
-          : null,
-    };
   }
 
   /**
