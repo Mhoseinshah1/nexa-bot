@@ -56,12 +56,17 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // the copy instructed a customer to do something that could only answer
   // `bot.unknown_command`.
   //
-  // The keys below them — `bot.catalog.*`, `bot.order.*`, `bot.wallet.*` — are the
-  // frozen catalogue for phases that have not shipped, and nothing renders them. These
+  // The keys below them — `bot.catalog.*`, `bot.order.*`, `bot.wallet.*` — were the
+  // frozen catalogue for phases that had not shipped, and nothing rendered them. These
   // two ARE rendered, on every customer's first contact, so they say what is true now.
-  // When the catalogue ships, the sentence changes with it.
-  'bot.start.welcome': 'خوش آمدید. حساب شما در این ربات ساخته شد. خرید سرویس هنوز فعال نیست.',
-  'bot.start.welcome_back': 'خوش آمدید. حساب شما فعال است. خرید سرویس هنوز فعال نیست.',
+  // That sentence said "when the catalogue ships, the sentence changes with it", and
+  // this is that change: `/catalog` answers, so it is named. Payment is NOT mentioned,
+  // because a customer cannot pay yet and an instruction they cannot follow is the
+  // defect this comment was written about.
+  'bot.start.welcome':
+    'خوش آمدید. حساب شما در این ربات ساخته شد. برای دیدن سرویس‌ها دستور /catalog را بفرستید.',
+  'bot.start.welcome_back':
+    'خوش آمدید. برای دیدن سرویس‌های قابل خرید دستور /catalog را بفرستید.',
   'bot.blocked': 'دسترسی این حساب به ربات بسته شده است.',
 
   'bot.catalog.empty': 'در حال حاضر سرویسی برای فروش تنظیم نشده است.',
@@ -69,6 +74,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
 
   'bot.order.summary':
     'سفارش شما\nسرویس: {productTitle}\nمدت: {durationDays}\nحجم: {trafficBytes}\nمبلغ قابل پرداخت: {total}',
+  'bot.order.confirm_button': 'تأیید و ثبت سفارش',
+  'bot.order.unavailable': 'این سرویس در حال حاضر قابل خرید نیست.',
+  'bot.order.expired': 'مهلت این سفارش به پایان رسیده است. لطفاً دوباره سفارش دهید.',
   'bot.order.awaiting_payment':
     'سفارش ثبت شد و در انتظار پرداخت است.\nمبلغ: {total}\nاعتبار تا: {expiresAt}',
   'bot.order.settled': 'پرداخت تأیید شد. سرویس شما در حال آماده‌سازی است.',

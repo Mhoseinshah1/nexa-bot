@@ -361,6 +361,35 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.order.confirm_button',
+    description:
+      'The label on the button a customer presses to confirm the order summary. A ' +
+      'button label is customer-facing text like any other, so it is a key rather ' +
+      'than a literal in a surface — and a tenant that words its confirmation ' +
+      'differently changes it here, not in code.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.unavailable',
+    description:
+      'Shown when a product cannot be ordered — withdrawn, unpriced, or not bound to ' +
+      'a panel. ONE message for all three, deliberately: the operational log names ' +
+      'which it was, and the customer can act on none of them. Telling them a plan ' +
+      'has no panel is telling them about our configuration.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.expired',
+    description:
+      'Shown when a draft order is confirmed after its own hold expired. Distinct ' +
+      'from `bot.order.cancelled`: nobody withdrew this one, the window closed, and ' +
+      'the customer has to start again rather than wonder what they did.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.order.settled',
     description: 'Confirms that payment was accepted and provisioning will follow.',
     format: 'PLAIN_TEXT',
