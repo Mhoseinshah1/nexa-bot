@@ -17,6 +17,7 @@ import type {
   ProductRecord,
 } from '../../apps/api/src/modules/commerce/catalog/application/ports';
 import type { OrderRecord } from '../../apps/api/src/modules/commerce/orders/application/ports';
+import { DrizzleOrderRepository } from '../../apps/api/src/modules/commerce/orders/infrastructure/drizzle-order.repository';
 import {
   adminActorFor,
   createAdmin,
@@ -415,6 +416,103 @@ describe('orders, up to the payment boundary', () => {
     ]);
   });
 
+  /**
+   * The conditional UPDATE, on its own, with no timing in it.
+   *
+   * Two `Promise.allSettled` calls do NOT reliably interleave — whichever one reads
+   * second usually reads the committed `AWAITING_PAYMENT` and takes the early-return
+   * branch, so the race test below passes whether or not `WHERE state = from` is there.
+   * Measured: removing that predicate left the race case green. This is the case that
+   * kills it, and it is deterministic because it makes both calls itself.
+   */
+  it('moves an order only from the state the caller NAMES', async () => {
+    const product = await productIn(tenantA, 'ACTIVE', panelA);
+    const order = await createDraft(tenantA, customerA, product.id, 'cas-1');
+    const repository = new DrizzleOrderRepository(ctx.container.database.db);
+    const now = ctx.container.clock.now();
+
+    const first = await repository.transition(
+      tenantA,
+      order.id,
+      'DRAFT',
+      'AWAITING_PAYMENT',
+      { confirmedAt: now },
+      now,
+    );
+    const second = await repository.transition(
+      tenantA,
+      order.id,
+      'DRAFT',
+      'AWAITING_PAYMENT',
+      { confirmedAt: now },
+      now,
+    );
+
+    expect(first).toBe(true);
+    // `false` is the whole mechanism: a replay, a double-click and two replicas all
+    // produce ONE transition without a lock, and the loser is told it lost.
+    expect(second).toBe(false);
+  });
+
+  /**
+   * `changed === false` with the row still DRAFT when this transaction read it.
+   *
+   * The only way to reach that is a committer landing BETWEEN the read and the update,
+   * which `Promise.allSettled` cannot be relied on to produce. So it is produced: a
+   * transaction is held open having already transitioned the order, the service is
+   * called and blocks on the row lock, and the holder then commits. The service's own
+   * UPDATE then matches nothing.
+   *
+   * The holder moves the row through the REPOSITORY alone, so it writes no event of its
+   * own — which makes the assertion exact rather than a count. Zero events means the
+   * service's gate held; ONE means it emitted `OrderConfirmed` for a transition it did
+   * not make, and in the real race that is the second event reaching a consumer that
+   * charges per event.
+   */
+  it('writes NO event when its own UPDATE moved nothing', async () => {
+    const product = await productIn(tenantA, 'ACTIVE', panelA);
+    const order = await createDraft(tenantA, customerA, product.id, 'race-gate');
+    const repository = new DrizzleOrderRepository(ctx.container.database.db);
+
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const holder = ctx.container.uow.run(tenantA, async (tx) => {
+      const moved = await repository.transition(
+        tenantA,
+        order.id,
+        'DRAFT',
+        'AWAITING_PAYMENT',
+        { confirmedAt: ctx.container.clock.now() },
+        ctx.container.clock.now(),
+        tx,
+      );
+      expect(moved).toBe(true);
+      // Uncommitted. Anything reading now still sees DRAFT; anything WRITING blocks.
+      await held;
+    });
+
+    // Started while the holder's transaction is open, so its `findById` reads DRAFT.
+    const racing = ctx.container.orders.confirm(tenantA, systemActor('race-gate-confirm'), {
+      idempotencyKey: 'race-gate-confirm',
+      customerId: customerA,
+      orderId: order.id,
+    });
+
+    // Give the racing call time to read and reach its blocking UPDATE, then commit.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    release();
+    await holder;
+    await racing;
+
+    // None. The service read DRAFT, was beaten to the UPDATE, and said nothing.
+    expect(await eventTypes(order.id)).toEqual([]);
+    expect((await ctx.container.orders.get(tenantA, owner, order.id)).state).toBe(
+      'AWAITING_PAYMENT',
+    );
+  }, 30_000);
+
   it('two concurrent confirmations produce one transition and one event', async () => {
     const product = await productIn(tenantA, 'ACTIVE', panelA);
     const order = await createDraft(tenantA, customerA, product.id, 'c-race');
@@ -423,6 +521,8 @@ describe('orders, up to the payment boundary', () => {
       confirm(tenantA, customerA, order.id, 'c-race-b'),
     ]);
 
+    // Opportunistic, and recorded as such: the two calls are NOT guaranteed to
+    // interleave, so this case is a smoke test and the two above it are the proofs.
     expect(results.filter((r) => r.status === 'fulfilled').length).toBeGreaterThan(0);
     expect(await eventTypes(order.id)).toEqual(['OrderConfirmed']);
   });
