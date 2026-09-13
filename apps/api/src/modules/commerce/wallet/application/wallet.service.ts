@@ -293,6 +293,18 @@ export class WalletService {
          * would be a number from another moment.
          */
         if (input.direction === 'DEBIT') {
+          /*
+           * The customer row FIRST, then the balance.
+           *
+           * Without the lock two debits cannot see each other: the ledger is append-only,
+           * so there is no shared row for two appends to contend on, and under READ
+           * COMMITTED each `SUM` omits the other's uncommitted entry. Both then decide
+           * they can cover and both commit. `financial-concurrency.test.ts` produced
+           * exactly that and the wallet went to -250,000.
+           */
+          if (!(await this.deps.repository.lockCustomer(scope, id, tx))) {
+            throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+          }
           const balance = await this.deps.repository.balanceOf(scope, id, input.currency, tx);
           if (!canCover(balance.amountMinor, input.amountMinor)) {
             throw errors.conflict(

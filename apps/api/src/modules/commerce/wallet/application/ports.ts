@@ -105,6 +105,27 @@ export interface WalletRepository {
   append(scope: TenantContext, draft: WalletEntryDraft, tx?: unknown): Promise<WalletEntryRecord>;
 
   /**
+   * Takes the customer's row `FOR UPDATE`, so a balance read after it is a DECISION.
+   *
+   * Without this, two debits cannot see each other and both commit. The ledger is
+   * APPEND-ONLY, so there is no shared row for two appends to contend on: under
+   * PostgreSQL's default READ COMMITTED a `SELECT SUM(...)` does not block on another
+   * transaction's uncommitted INSERT, so each sums a balance that omits the other,
+   * each decides it can cover, and the wallet goes negative. `WALLET_ALLOWS_NEGATIVE_BALANCE`
+   * is `false` and was not actually enforced under concurrency until this existed.
+   *
+   * The CUSTOMER row is the lock, for the reason the tenant row lock exists in the
+   * dispatcher: it is a row that already exists, every movement of this wallet names
+   * it, and `payments_customer_fk` guarantees it. An advisory lock would work equally
+   * well and be invisible to anyone reading the schema.
+   *
+   * Returns false when the customer does not exist — `FOR UPDATE` on a missing row
+   * locks NOTHING, which `drizzle-login-throttle.repository.ts` records as the way
+   * this pattern silently stops serialising.
+   */
+  lockCustomer(scope: TenantContext, customerId: UserId, tx: unknown): Promise<boolean>;
+
+  /**
    * The balance, derived by summing the ledger. There is nothing else to read.
    *
    * `CLAUDE.md`: *"Balance is derived from an append-only ledger. Never add a balance

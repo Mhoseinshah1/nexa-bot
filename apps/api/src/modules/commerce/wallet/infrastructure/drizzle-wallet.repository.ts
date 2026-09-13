@@ -14,7 +14,7 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { walletEntries } from '../../../../infrastructure/persistence/schema.js';
+import { customers, walletEntries } from '../../../../infrastructure/persistence/schema.js';
 import type {
   WalletBalance,
   WalletCursor,
@@ -111,6 +111,28 @@ export class DrizzleWalletRepository implements WalletRepository {
       );
     }
     return existing;
+  }
+
+  /**
+   * The serialisation point for every movement that has to read before it writes.
+   *
+   * `SELECT ... FOR UPDATE` on the customer row. The second transaction to ask for it
+   * BLOCKS until the first commits, and its balance read then sees the first's entry —
+   * which is what makes the sufficiency check a decision rather than an observation of
+   * a moment that has passed.
+   *
+   * It has to be a row that EXISTS: `FOR UPDATE` on a missing row locks nothing and
+   * serialises nothing, so this reports whether it found one and the caller refuses when
+   * it did not.
+   */
+  async lockCustomer(scope: TenantContext, customerId: UserId, tx: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: customers.id })
+      .from(customers)
+      .where(and(eq(customers.tenantId, tenantId), eq(customers.id, customerId)))
+      .for('update');
+    return rows.length > 0;
   }
 
   /**

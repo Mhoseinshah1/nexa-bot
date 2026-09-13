@@ -224,6 +224,17 @@ export class PaymentService {
         const order = await this.orderAwaitingPayment(scope, orderId, customerId, tx);
         const total = order.totals.total;
 
+        /*
+         * The customer row FIRST, so the balance read below is a DECISION.
+         *
+         * An admin debit racing this purchase must not let both take the last of the
+         * money. The ledger is append-only and gives two appends nothing to contend
+         * on, so the serialisation point is the customer row — see
+         * `WalletRepository.lockCustomer`.
+         */
+        if (!(await this.deps.wallet.lockCustomer(scope, customerId, tx))) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+        }
         const balance = await this.deps.wallet.balanceOf(scope, customerId, total.currency, tx);
         if (!canCover(balance.amountMinor, total.amountMinor)) {
           throw errors.conflict(
