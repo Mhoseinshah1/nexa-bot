@@ -19,6 +19,7 @@ import {
   PRODUCT_STATUSES,
   PRODUCT_TITLE_MAX_LENGTH,
 } from './catalog.js';
+import { ORDER_STATES } from './commerce.js';
 import { CURRENCY_CODES } from './money.js';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
 import {
@@ -1449,6 +1450,86 @@ export const PRODUCT_ROUTES = {
   update: (id: string) => `/products/${encodeURIComponent(id)}`,
   activate: (id: string) => `/products/${encodeURIComponent(id)}/activate`,
   deactivate: (id: string) => `/products/${encodeURIComponent(id)}/deactivate`,
+} as const;
+
+// --- Orders ------------------------------------------------------------------
+
+export const ORDER_PAGE_DEFAULT = 25;
+export const ORDER_PAGE_MAX = 100;
+
+/**
+ * One order, as the Web Admin renders it.
+ *
+ * Every `line*` field is the SNAPSHOT. `productId` is here for navigation and is
+ * explicitly not how the purchase is reconstructed — the product may since have been
+ * renamed, re-priced or withdrawn, and the legacy «محصول حذف‌شده» is what a report that
+ * joins on today's row produces. So the title an operator reads in this response is the
+ * title the customer bought, not the title the plan has now.
+ *
+ * Amounts are decimal STRINGS for the reason `productSummarySchema` states: JSON has one
+ * number type and an order total in Rial passes 2^53.
+ *
+ * There is deliberately no `quote` field. The trace is stored and an operator will need
+ * it the day a customer disputes a number, but nothing renders it yet, and a field on the
+ * wire with no reader is a field that drifts from the column behind it.
+ */
+export const orderSummarySchema = z.object({
+  id: z.string(),
+  customerId: z.string(),
+  state: z.enum(ORDER_STATES),
+  productId: z.string(),
+  panelId: z.string(),
+  lineTitle: z.string(),
+  lineDurationDays: z.number().int(),
+  lineTrafficBytes: z.string(),
+  lineDeviceLimit: z.number().int().nullable(),
+  lineUnitPriceAmount: z.string(),
+  lineQuantity: z.number().int(),
+  subtotalAmount: z.string(),
+  discountAmount: z.string(),
+  totalAmount: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+  expiresAt: z.iso.datetime().nullable(),
+  confirmedAt: z.iso.datetime().nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type OrderSummaryResponse = z.infer<typeof orderSummarySchema>;
+
+/**
+ * How an operator narrows the list.
+ *
+ * Exact ids and an exact state, and no free-text search: an order has no name, and what
+ * an operator actually quotes from a support conversation is an id.
+ */
+export const orderListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(ORDER_PAGE_MAX).optional(),
+  cursor: z.string().max(512).optional(),
+  state: z.enum(ORDER_STATES).optional(),
+  customerId: z.string().max(64).optional(),
+  productId: z.string().max(64).optional(),
+});
+export type OrderListQuery = z.infer<typeof orderListQuerySchema>;
+
+export const orderListResponseSchema = z.object({
+  orders: z.array(orderSummarySchema),
+  nextCursor: z.string().nullable(),
+});
+export type OrderListResponse = z.infer<typeof orderListResponseSchema>;
+
+export const orderResponseSchema = z.object({ order: orderSummarySchema });
+export type OrderResponse = z.infer<typeof orderResponseSchema>;
+
+/**
+ * Two routes, both reads.
+ *
+ * No cancel, no mark-paid, no refund, no settle. Those are real operator actions and
+ * every one of them belongs to a phase that has not shipped: a "mark paid" button with
+ * no payment behind it is the legacy system's silent-success pattern with a nicer font.
+ */
+export const ORDER_ROUTES = {
+  list: '/orders',
+  detail: (id: string) => `/orders/${encodeURIComponent(id)}`,
 } as const;
 
 // --- Backup and disaster recovery -------------------------------------------
