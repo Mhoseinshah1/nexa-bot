@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import type { UserId } from './ids.js';
 
 /**
  * The customer — the person on the other end of a Telegram bot.
@@ -37,7 +36,18 @@ import type { UserId } from './ids.js';
  * identity does not want. Telegram documents ids as up to 52 bits, so a `number`
  * would survive — surviving is not the argument.
  */
-export type CustomerId = UserId;
+/*
+ * There is NO `CustomerId` type, and that is the point of everything above.
+ *
+ * This file exported `export type CustomerId = UserId` while its own docblock argued
+ * that introducing a second name for one entity is the defect to avoid — and nothing in
+ * the repository ever imported it. An alias in a frozen contract is not free: it is the
+ * vocabulary a later author reaches for, and then half the codebase says `CustomerId`
+ * and half says `UserId` for the same column.
+ *
+ * `UserId` is the customer identifier. Removed rather than documented, because a comment
+ * explaining why not to use an export that exists is weaker than not exporting it.
+ */
 
 /**
  * Telegram's own id for an account, as text.

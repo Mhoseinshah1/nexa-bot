@@ -7,7 +7,7 @@ import {
   NOTIFICATION_TRANSPORTS,
 } from './notifications.js';
 import { uuidV7Schema } from './ids.js';
-import { CUSTOMER_STATUSES } from './customer.js';
+import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
 import {
   SETTING_CLASSIFICATIONS,
@@ -1258,7 +1258,24 @@ export type CustomerSummaryResponse = z.infer<typeof customerSummarySchema>;
 export const customerListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(CUSTOMER_PAGE_MAX).optional(),
   cursor: z.string().max(512).optional(),
-  telegramUserId: z.string().max(32).optional(),
+  /*
+   * The CONTRACT's own Telegram-id schema, not "any short string".
+   *
+   * This was `z.string().max(32)`, so `?telegramUserId=12ab` was accepted, reached the
+   * repository as an exact match, found nothing, and came back 200 with an empty page —
+   * telling an operator that no such customer exists rather than that the identifier
+   * cannot be read. Those are different answers and only one of them is true.
+   *
+   * It also made a comment in `apps/web/src/pages/users.tsx` false: that comment said
+   * the client validates because "the server's refusal for a malformed one is a 400",
+   * and the server did not refuse at all. Reusing `telegramUserIdSchema` here is what
+   * makes the sentence true — one definition of what a Telegram id is, shared with the
+   * webhook that resolves identity from it.
+   *
+   * A prefix-`username` search stays a plain bounded string: a half-remembered username
+   * is exactly what an operator has, and refusing one would remove the feature.
+   */
+  telegramUserId: telegramUserIdSchema.optional(),
   username: z.string().max(64).optional(),
   status: z.enum(CUSTOMER_STATUSES).optional(),
 });
