@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
 import { ORDER_EXPIRY_MINUTES_MAX, ORDER_EXPIRY_MINUTES_MIN } from './commerce.js';
-import { moneySchema } from './money.js';
+import { moneySchema, salesCurrencyCodeSchema } from './money.js';
 
 /**
  * The settings registry.
@@ -241,20 +241,29 @@ export const SETTINGS = [
       'The currency this tenant sells in. Every amount the admin renders takes its unit from ' +
       'the value it belongs to, and this is what a new amount is denominated in. It exists ' +
       'because the alternative is a hardcoded Toman: an installation that prices in Rial would ' +
-      'then be shown Toman labels over Rial figures, which is a factor of ten.',
-    // IRT and IRR only. The catalogue in money.ts carries USD, EUR and USDT
-    // because a converted payment quote will need them; a STORE currency is a
-    // different question, and widening this is a contract change to make when
-    // there is a gateway that settles in one of them.
-    schema: z.enum(['IRT', 'IRR']),
+      'then be shown Toman labels over Rial figures, which is a factor of ten. A product ' +
+      'priced in any other currency is refused when it is written.',
+    // The same list the picker offers and the server refuses against, so the
+    // three cannot drift. See SALES_CURRENCY_CODES for why it is narrower than
+    // the money catalogue.
+    schema: salesCurrencyCodeSchema,
     defaultValue: 'IRT',
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     configures: null,
-    // Nothing prices anything yet. The admin already renders it, which is why
-    // it is here rather than waiting for the storefront.
-    consumer: 'PLANNED',
+    /*
+     * ACTIVE since Phase 4B. `ProductService` reads it inside the write and refuses a
+     * price in any other currency — the setting had been PLANNED, and a declared
+     * setting nothing enforces is a setting an operator believes.
+     *
+     * Changing it does NOT re-price existing products, and that is deliberate rather
+     * than an omission: every stored amount carries its own currency, so a product
+     * priced before the change still renders in the unit it was priced in. The
+     * alternative — reinterpreting stored amounts under a new unit — is the factor of
+     * ten this setting exists to prevent.
+     */
+    consumer: 'ACTIVE',
   },
   {
     key: 'support.accounts',

@@ -463,6 +463,16 @@ export const COMMERCE_ERROR_CODES = {
    * operational log has to tell a misconfiguration from a correct refusal.
    */
   PRODUCT_NOT_FOR_AUDIENCE: 'commerce.product_not_for_audience',
+  /**
+   * The price is in a currency this tenant does not sell in.
+   *
+   * `sales.currency` is the one unit a tenant prices in. A catalogue holding two
+   * currencies is the legacy defect made durable: the same `{price}` placeholder
+   * rendered تومان on one template and ریال on its twin, a factor of ten apart.
+   * Named rather than folded into a request-invalid, because the operator's fix is
+   * to change one field and the message has to say which.
+   */
+  PRODUCT_CURRENCY_UNSUPPORTED: 'commerce.product_currency_unsupported',
   /** No price pair. `catalog.ts`: an absent price means unsellable, never free. */
   PRODUCT_NOT_PRICED: 'commerce.product_not_priced',
   /** No panel bound, so nothing could deliver it. Named rather than hidden. */
