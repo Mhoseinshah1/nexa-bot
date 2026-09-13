@@ -455,10 +455,38 @@ describe('the order list', () => {
 });
 
 describe('the order detail', () => {
-  const detail = (overrides: Record<string, unknown> = {}) => {
+  const detail = (overrides: Record<string, unknown> = {}, mayViewPayments = true) => {
     stubApi([{ url: '/orders/019230ab', body: { order: order(overrides) } }]);
-    return renderPage(<OrderDetailPage id="019230ab-cdef-7012-8345-6789abcdef01" denied={false} />);
+    return renderPage(
+      <OrderDetailPage
+        id="019230ab-cdef-7012-8345-6789abcdef01"
+        denied={false}
+        mayViewPayments={mayViewPayments}
+      />,
+    );
   };
+
+  /*
+   * Payments are a SEPARATE permission, and the absence is a decision rather than a
+   * failed request.
+   *
+   * The embedded card used to query unconditionally, so an operator holding
+   * `orders.view` and not `payments.view` logged a 403 every time they opened an order
+   * they were entitled to read. The assertion is on the REQUEST, not just the missing
+   * list: hiding the card while still asking is the half that would have stayed broken.
+   */
+  it('asks for no payments, and says why, without payments.view', async () => {
+    const api = stubApi([{ url: '/orders/019230ab', body: { order: order() } }]);
+    renderPage(
+      <OrderDetailPage
+        id="019230ab-cdef-7012-8345-6789abcdef01"
+        denied={false}
+        mayViewPayments={false}
+      />,
+    );
+    await screen.findByText('payments.view', { exact: false });
+    expect(api.calls.some((call) => call.url.includes('/payments'))).toBe(false);
+  });
 
   /*
    * REWRITTEN for 4C, not deleted.

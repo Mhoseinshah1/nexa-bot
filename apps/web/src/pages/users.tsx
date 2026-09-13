@@ -747,23 +747,29 @@ function WalletCard({
        * is what `useSubmissionKey` exists to avoid. Leaving it out made the two
        * fingerprints disagree about what the command was.
        */
-      const idempotencyKey = submission.current({
+      /*
+       * The fingerprint is built from the NORMALISED body — the exact bytes sent.
+       *
+       * It used to hash the raw field state while the request below trimmed both
+       * strings, so `«۱۰۰ »` and `«۱۰۰»` minted two different keys for one
+       * server-visible command. After a 5xx or a dropped connection that had in fact
+       * committed, a retry that differed only in whitespace arrived under a new key
+       * and appended a SECOND credit or debit — which is the duplicate movement
+       * `useSubmissionKey` exists to make impossible.
+       *
+       * So the trimming happens once, here, and both the key and the request read the
+       * same values.
+       */
+      const body = {
         customerId,
-        direction: input.direction,
-        amount,
-        currency,
-        note,
-      });
-      return adjustWallet({
-        customerId,
-        idempotencyKey,
         direction: input.direction,
         // A decimal STRING in minor units, straight through. Never parsed to a
         // `number` here: JSON has one numeric type and it rounds past 2^53.
         amount: amount.trim(),
         currency,
         note: note.trim(),
-      });
+      } as const;
+      return adjustWallet({ ...body, idempotencyKey: submission.current(body) });
     },
     onSuccess: (_response, variables) => {
       submission.settle();

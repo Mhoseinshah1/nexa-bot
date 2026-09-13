@@ -980,6 +980,9 @@ export const WEB_FA = {
   'web.order_settled_at': 'زمان تسویه',
   'web.order_payments_title': 'پرداخت‌های این سفارش',
   'web.order_payments_empty': 'هنوز پرداختی برای این سفارش ثبت نشده است.',
+  'web.order_payments_denied': 'نمایش پرداخت‌های این سفارش به دسترسی payments.view نیاز دارد.',
+  'web.order_payments_truncated':
+    'پرداخت‌های بیشتری برای این سفارش ثبت شده است. فهرست کامل در صفحهٔ پرداخت‌ها با فیلتر همین سفارش در دسترس است.',
   'web.order_confirmed_at': 'تأییدشده در',
   'web.order_customer': 'مشتری',
   'web.order_product': 'محصول',

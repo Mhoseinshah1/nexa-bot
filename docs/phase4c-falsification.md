@@ -295,3 +295,46 @@ route test R7w above plus the existing submission-fingerprint cases. R8 is three
 that claimed more than the code does, and a comment has no mutation.
 
 Eight mutations over the review round; eight rules covered.
+
+## The Codex round
+
+Codex reviewed `82ede28`, the head before the review fixes above landed. Six findings.
+Three of them — the blocked customer, the unenforced deadline, and the stale order read
+before the lock — are R1, R2 and R3, found independently and already fixed; they are not
+repeated here. One is answered rather than fixed, with the reason recorded. Three were
+new.
+
+| #   | Rule                                                        | Mutation                                                 | Test that dies                                                                                     | Result |
+| --- | ----------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------ |
+| X1w | The idempotency key is fingerprinted from the bytes SENT    | the fingerprint reads the raw field state again          | `users.test.tsx` › reuses the key when a FAILED submission is retried with only whitespace changed | KILLED |
+| X2w | An order's payments are not fetched without `payments.view` | `enabled: mayView` removed and the denial banner with it | `products-and-orders.test.tsx` › asks for no payments, and says why, without payments.view         | KILLED |
+
+**X1w's first test was wrong and the failure said so.** It asserted that two SUCCESSFUL
+submissions of the same figures share a key. They do not, and should not:
+`useSubmissionKey` settles on success, so retyping the same amount afterwards is a new
+command. The fingerprint only matters when a submission FAILED and is retried with the
+key still held — a 503 that may be a response lost after the write committed. The test
+produces that, and reverting the fix fails it.
+
+**X3 — the payments shown on an order could be truncated silently — is a P2 answered
+without a pager, and the difference is stated rather than hidden.** The list took the
+default page and discarded `nextCursor`. R4 makes more than a page unlikely (one open
+transfer and one confirmed payment per order), but "unlikely" is not "shown", and a
+financial list that stops at a page boundary reads as the whole history. The truncation
+is now NAMED when `nextCursor` is not null. No row: the change adds a banner on a
+condition the existing fixtures do not produce, and a mutation of it is a mutation of a
+string, which W06 and S4 already record as the shape that earns no citation.
+
+**X4 — "recheck the committed idempotency result after taking the lock" — is answered,
+not fixed, and the reason is that the harm it names no longer exists.** Codex's scenario
+was that the loser of two concurrent deliveries resumes with a stale order, reads the
+reduced balance, and reports insufficient funds for a purchase that succeeded. R3 removed
+that: the order is now read after the lock, so the loser sees `PAID` and never reaches
+the balance check. What remains is narrower — the loser answers
+`bot.order.not_awaiting_payment` where returning the winner's result would be kinder.
+Fixing it means re-reading the idempotency record inside the transaction, and
+`IdempotencyStore.find` is on the FROZEN contracts port with no `tx` parameter. Widening
+a frozen port for a message-quality difference is not a trade this phase should make, so
+it is recorded here and in the PR thread instead of done quietly or claimed as fixed.
+
+Two mutations over the Codex round; two rules covered, two findings answered in prose.

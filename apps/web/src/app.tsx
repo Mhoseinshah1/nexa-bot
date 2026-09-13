@@ -501,6 +501,16 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
           key={order['id'] ?? ''}
           id={order['id'] ?? ''}
           denied={!may('orders.view')}
+          /*
+           * Payments are their OWN permission, decided here rather than assumed.
+           *
+           * An operator may hold `orders.view` and not `payments.view`, and the
+           * embedded payments card used to issue its request regardless — so opening
+           * any order they could legitimately read logged a 403 they could do nothing
+           * about. `PaymentService.list` was right to refuse it; the surface was wrong
+           * to ask.
+           */
+          mayViewPayments={may('payments.view')}
         />
       ),
       crumbs: [nav('orders'), { label: t('web.order_detail') }],

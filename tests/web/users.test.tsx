@@ -774,6 +774,57 @@ describe('the wallet card', () => {
   });
 
   /*
+   * The key is bound to the bytes SENT, not to what the operator typed.
+   *
+   * The fingerprint used to read the raw field state while the request trimmed both
+   * strings, so «1000 » and «1000» were two keys for one server-visible adjustment.
+   * That only matters when a command has to be retried — a 5xx or a dropped connection
+   * that had in fact committed — and the retry then appends a SECOND movement under a
+   * key the server has never seen. Typing a stray space is the ordinary way to produce
+   * it.
+   */
+  it('reuses the key when a FAILED submission is retried with only whitespace changed', async () => {
+    const api = stubApi([
+      { url: `/users/${ROW_ID}`, body: { customer: customer() } },
+      ...walletRoutes(),
+      /*
+       * A 503, so `settle()` never runs and the key stays held — which is the only
+       * situation the fingerprint matters in. On SUCCESS the form clears and retyping
+       * the same figures is correctly a new command with a new key.
+       */
+      { url: `/users/${ROW_ID}/wallet/adjust`, status: 503, body: { error: { code: 'x' } } },
+    ]);
+    renderPage(<UserDetailPage id={ROW_ID} mayBlock {...ALL_WALLET} denied={false} />);
+    await screen.findByText('ثبت تراکنش دستی');
+
+    const submit = (amount: string, note: string) => {
+      fireEvent.change(screen.getByLabelText('مبلغ (واحد خرد)'), { target: { value: amount } });
+      fireEvent.change(screen.getByLabelText('یادداشت'), { target: { value: note } });
+      fireEvent.click(screen.getByText('واریز به کیف پول'));
+    };
+    submit('1000', 'spacing');
+    await waitFor(() => {
+      expect(api.calls.filter((c) => c.url.includes('/wallet/adjust'))).toHaveLength(1);
+    });
+    // The operator retypes, adding stray spaces. The server sees the same bytes.
+    submit('  1000  ', '  spacing  ');
+    await waitFor(() => {
+      expect(api.calls.filter((c) => c.url.includes('/wallet/adjust'))).toHaveLength(2);
+    });
+
+    const sent = api.calls
+      .filter((c) => c.url.includes('/wallet/adjust'))
+      .map((c) => c.body as Record<string, unknown>);
+    expect(sent[0]?.['amount']).toBe(sent[1]?.['amount']);
+    expect(sent[0]?.['note']).toBe(sent[1]?.['note']);
+    /*
+     * Identical bodies must carry an identical key. A 503 can be a response lost after
+     * the write committed, so a fresh key here is a second movement for one command.
+     */
+    expect(sent[0]?.['idempotencyKey']).toBe(sent[1]?.['idempotencyKey']);
+  });
+
+  /*
    * CREDIT and DEBIT are SEPARATE permissions with different risk labels, and this
    * is the actor that can tell them apart: an operator holding credit and not debit.
    * One holding neither is refused either way and proves nothing about which.

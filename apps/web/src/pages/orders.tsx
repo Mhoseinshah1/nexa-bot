@@ -392,7 +392,15 @@ function stateFromQuery(raw: string | null): OrderState | null {
 // Detail
 // ---------------------------------------------------------------------------
 
-export function OrderDetailPage({ id, denied }: { id: string; denied: boolean }) {
+export function OrderDetailPage({
+  id,
+  denied,
+  mayViewPayments,
+}: {
+  id: string;
+  denied: boolean;
+  mayViewPayments: boolean;
+}) {
   const onLink = useLinkHandler();
   const order = useQuery({
     queryKey: ['order', id],
@@ -534,7 +542,7 @@ export function OrderDetailPage({ id, denied }: { id: string; denied: boolean })
               />
             </Card>
 
-            <OrderPayments orderId={row.id} />
+            <OrderPayments orderId={row.id} mayView={mayViewPayments} />
 
             <Card title={t('web.orders_scope_title')}>
               <p className="muted">{t('web.orders_scope_body')}</p>
@@ -558,12 +566,23 @@ export function OrderDetailPage({ id, denied }: { id: string; denied: boolean })
  * operator reading a PAID order here learns that the money arrived; what happens next
  * is a later phase's to announce, through its own surface.
  */
-function OrderPayments({ orderId }: { orderId: string }) {
+function OrderPayments({ orderId, mayView }: { orderId: string; mayView: boolean }) {
   const onLink = useLinkHandler();
   const payments = useQuery({
     queryKey: ['payments', 'order', orderId],
     queryFn: () => fetchPayments({ orderId }),
+    // Not merely hidden: an operator without `payments.view` makes no request at all,
+    // so reading an order does not log a 403 against them on every open.
+    enabled: mayView,
   });
+
+  if (!mayView) {
+    return (
+      <Card title={t('web.order_payments_title')}>
+        <Banner tone="info">{t('web.order_payments_denied')}</Banner>
+      </Card>
+    );
+  }
 
   return (
     <Card title={t('web.order_payments_title')}>
@@ -582,6 +601,16 @@ function OrderPayments({ orderId }: { orderId: string }) {
               </li>
             ))}
           </ul>
+        )}
+        {/*
+          A financial list that silently stopped at a page boundary is the legacy
+          reporting defect in miniature: the operator reads it as the whole history.
+          One open transfer per order and one confirmed payment make more than a page
+          unlikely, but "unlikely" is not "shown", so the truncation is NAMED and the
+          full list is one link away rather than paged again here.
+        */}
+        {payments.data?.nextCursor == null ? null : (
+          <Banner tone="info">{t('web.order_payments_truncated')}</Banner>
         )}
       </StateSwitch>
     </Card>
