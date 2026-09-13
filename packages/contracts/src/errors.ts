@@ -454,6 +454,15 @@ export const COMMERCE_ERROR_CODES = {
   PRODUCT_NOT_FOUND: 'commerce.product_not_found',
   /** The product exists and is withdrawn from sale. Not the same as absent. */
   PRODUCT_NOT_PURCHASABLE: 'commerce.product_not_purchasable',
+  /**
+   * The product is priced for an audience this customer is not in.
+   *
+   * `RESELLERS_ONLY` today, and only that: there is no reseller entitlement in this
+   * release, so the audience is refused outright rather than checked. Distinct from
+   * NOT_PURCHASABLE because the product IS purchasable — by somebody else — and the
+   * operational log has to tell a misconfiguration from a correct refusal.
+   */
+  PRODUCT_NOT_FOR_AUDIENCE: 'commerce.product_not_for_audience',
   /** No price pair. `catalog.ts`: an absent price means unsellable, never free. */
   PRODUCT_NOT_PRICED: 'commerce.product_not_priced',
   /** No panel bound, so nothing could deliver it. Named rather than hidden. */
