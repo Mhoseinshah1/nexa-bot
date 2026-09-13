@@ -128,3 +128,34 @@ not in TypeScript: `payments_order_confirmed_key` (at most one CONFIRMED payment
 per order) and `nexa_payments_confirmation_guard` (a CONFIRMED payment's money is
 frozen). Both are proved through the raw client, because the repository
 deliberately has no method that could attempt either.
+
+## What the Telegram round found
+
+**One mutation is invisible because a SECOND mechanism holds.** T06 gives the
+wallet settlement a random idempotency key, so a redelivered update is a new
+command — and the suite stays green, because by the time the replay arrives the
+order is `PAID` and `orderAwaitingPayment` refuses it. That is defence in depth
+working, not a coverage gap: the derived key and the order state are two
+independent reasons a replay moves no money. T06b states the same rule where only
+one of them exists — the MANUAL_TRANSFER path settles nothing, so a new key really
+would mint a second payment — and it kills. Recorded as a pair rather than as one
+KILLED row, because "the rule is covered" and "this path has two backstops" are
+different claims.
+
+## The Telegram financial flow
+
+| #    | Rule                                                           | Mutation                                                       | Test that dies                                                                                                | Result |
+| ---- | -------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------ |
+| T01  | Only rails this installation can perform are offered           | a gateway button added to `paymentButtons`                     | `telegram-payment-flow.test.ts` › never offers a gateway, and refuses one tapped from an older message        | KILLED |
+| T02  | A gateway tap is NAMED, not answered as an unknown command     | `'bot.payment.unconfigured'` → `'bot.unknown_command'`         | `telegram-payment-flow.test.ts` › never offers a gateway, and refuses one tapped from an older message        | KILLED |
+| T03  | The settled message claims no service                          | the shipped copy reverted to «سرویس شما در حال آماده‌سازی است» | `telegram-payment-flow.test.ts` › settles from the wallet, debits exactly the order total, and says only that | KILLED |
+| T04  | An insufficiency names the SHORTFALL                           | the reply key → `'bot.order.unavailable'`                      | `telegram-payment-flow.test.ts` › refuses a settlement the balance cannot cover, and names the SHORTFALL      | KILLED |
+| T05  | A callback id is validated as a UUID at the boundary           | the `uuidV7Schema` parse removed                               | `telegram-payment-flow.test.ts` › ignores an AMOUNT a tampered callback tries to carry                        | KILLED |
+| T06b | A transfer key is derived from the update, not minted          | `:manual-pay` suffix → a random one                            | `telegram-payment-flow.test.ts` › treats a REDELIVERED transfer tap as a replay: one pending payment          | KILLED |
+| T07  | A BLOCKED customer reaches no financial command                | the blocked gate removed from `handle`                         | `telegram-payment-flow.test.ts` › lets a BLOCKED customer move no money at all                                | KILLED |
+| T08  | `/wallet` answers about the RESOLVED customer, from the ledger | the derived balance replaced with a constant zero              | `telegram-payment-flow.test.ts` › answers /wallet with the balance derived from the ledger                    | KILLED |
+
+Nine mutations over the Telegram rules, eight rules covered. T06 is not a row in
+the table, for the reason W06 is not: a citation table lists rules with tests, and
+T06 names none — it is the second-backstop observation recorded above, and T06b
+is the mutation that states its rule where only one backstop exists.
