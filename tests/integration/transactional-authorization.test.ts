@@ -251,102 +251,132 @@ describe('fresh transactional authorization', () => {
         expect(view.source, 'the override was written by a revoked actor').toBe('DEFAULT');
       },
     },
-    {
-      /*
-       * Phase 4A's only operator write, and the case a mutation proved was
-       * missing.
-       *
-       * `CustomerService.setStatus` checks `users.block` twice: once before the
-       * replay lookup, and again INSIDE the committing transaction through
-       * `runAuthorizedMutation`. Replacing the second one with `users.view` left
-       * all 22 `customers-http` cases green, because the first check already
-       * refuses an unprivileged caller — so the in-transaction re-check, which is
-       * the whole reason `runAuthorizedMutation` exists, was unobservable. This
-       * case is the only thing that can see it: authority is removed in the
-       * window between the two.
-       */
-      name: 'customers.block',
-      action: 'customer.block',
-      permission: 'users.block',
-      eventType: 'CustomerBlocked',
-      /*
-       * `support`, NOT `observer`, and this is the whole point of the case.
-       *
-       * `support` holds `users.view` and `users.search` and NOT `users.block`, so
-       * the revocation removes exactly the one permission under test. Revoked to
-       * `observer` the actor loses everything, the refusal happens whichever
-       * permission the in-transaction check names, and the mutation that replaces
-       * `users.block` with `users.view` there survives — measured, not supposed.
-       */
-      revokeTo: ['support'] as const,
-      mutate: () =>
-        ctx.container.customers.block(tenantA, actorA, {
-          idempotencyKey: 'revoked-customer-block',
-          customerId: blockTarget,
-          reason: 'Revocation race.',
-        }),
-      unchanged: async () => {
-        const row = await new DrizzleCustomerRepository(db()).findById(tenantA, blockTarget);
-        expect(row?.status, 'the customer was blocked by a revoked actor').toBe('ACTIVE');
-        expect(row?.blockedAt, 'a blocked_at was written by a revoked actor').toBeNull();
-      },
-    },
   ] as const;
 
-  for (const testCase of CASES) {
-    it(`refuses ${testCase.name} when authority is revoked before the transaction`, async () => {
-      const barrier = barrierOnNextTransaction();
+  /**
+   * The ordering, for ONE protected mutation.
+   *
+   * Extracted from the loop so a case can also be declared with a LITERAL title.
+   * `check:falsification-citations` reads test names from the AST, so a case that
+   * exists only as a template-literal title cannot be cited by name in a
+   * falsification record — and an uncitable proof is exactly the shape that script
+   * exists to refuse. The three control-plane cases keep the loop; `customers.block`
+   * is declared literally below, because the Phase 4A record cites it.
+   */
+  async function expectRevocationRefusal(testCase: {
+    readonly name: string;
+    readonly action: string;
+    readonly permission: string;
+    readonly eventType: string;
+    readonly mutate: () => Promise<unknown>;
+    readonly unchanged: () => Promise<void>;
+    readonly revokeTo?: readonly string[];
+  }): Promise<void> {
+    const barrier = barrierOnNextTransaction();
 
-      // 1-2. A holds the required authority and passes the outer guard.
-      // 3.   A is paused before its authoritative transaction.
-      const attempt = testCase.mutate();
-      const settled = attempt.then(
-        () => ({ ok: true }) as const,
-        (error: unknown) => ({ ok: false, error }) as const,
-      );
-      // A failure BEFORE the barrier means the ordering was never reached, and
-      // waiting on a promise that will not resolve would report it as a
-      // timeout rather than as what it is.
-      const arrived = await Promise.race([
-        barrier.reached.then(() => 'at the barrier' as const),
-        settled.then(() => 'finished early' as const),
-      ]);
-      expect(arrived, `${testCase.name} never reached its transaction`).toBe('at the barrier');
+    // 1-2. A holds the required authority and passes the outer guard.
+    // 3.   A is paused before its authoritative transaction.
+    const attempt = testCase.mutate();
+    const settled = attempt.then(
+      () => ({ ok: true }) as const,
+      (error: unknown) => ({ ok: false, error }) as const,
+    );
+    // A failure BEFORE the barrier means the ordering was never reached, and
+    // waiting on a promise that will not resolve would report it as a
+    // timeout rather than as what it is.
+    const arrived = await Promise.race([
+      barrier.reached.then(() => 'at the barrier' as const),
+      settled.then(() => 'finished early' as const),
+    ]);
+    expect(arrived, `${testCase.name} never reached its transaction`).toBe('at the barrier');
 
-      // 4. Owner B removes A's authority and commits.
-      await revokeA('revokeTo' in testCase ? testCase.revokeTo : ['observer']);
+    // 4. Owner B removes A's authority and commits.
+    await revokeA('revokeTo' in testCase ? testCase.revokeTo : ['observer']);
 
-      // 5-7. A resumes, reaches its mutation transaction, and fresh
-      //      authorization denies.
-      barrier.release();
-      const outcome = await settled;
-      expect(outcome.ok, `${testCase.name} committed on revoked authority`).toBe(false);
-      expect(outcome.ok === false && outcome.error).toMatchObject({
-        code: 'platform.permission_denied',
-      });
+    // 5-7. A resumes, reaches its mutation transaction, and fresh
+    //      authorization denies.
+    barrier.release();
+    const outcome = await settled;
+    expect(outcome.ok, `${testCase.name} committed on revoked authority`).toBe(false);
+    expect(outcome.ok === false && outcome.error).toMatchObject({
+      code: 'platform.permission_denied',
+    });
 
-      // 8. The target state is untouched.
-      await testCase.unchanged();
+    // 8. The target state is untouched.
+    await testCase.unchanged();
 
-      // 9. No SUCCESS audit row and no outbox event for A.
-      const audits = await auditRows(testCase.action);
-      expect(
-        audits.filter((row) => row.result === 'SUCCESS'),
-        'a SUCCESS audit row was committed for a denied actor',
-      ).toEqual([]);
-      expect(
-        await outboxRows(testCase.eventType),
-        'a domain event was committed for a denied actor',
-      ).toEqual([]);
+    // 9. No SUCCESS audit row and no outbox event for A.
+    const audits = await auditRows(testCase.action);
+    expect(
+      audits.filter((row) => row.result === 'SUCCESS'),
+      'a SUCCESS audit row was committed for a denied actor',
+    ).toEqual([]);
+    expect(
+      await outboxRows(testCase.eventType),
+      'a domain event was committed for a denied actor',
+    ).toEqual([]);
 
-      // 10. The denial itself is recorded truthfully.
-      const denied = audits.filter((row) => row.result === 'DENIED');
+    // 10. The denial itself is recorded truthfully.
+    const denied = audits.filter((row) => row.result === 'DENIED');
 
-      // 11. ONE operational event for it, WARN, naming what the audit row
-      //     names and who was refused.
-      await expectOneWarnDenialEvent(testCase.name, denied, testCase.permission);
-    }, 30_000);
+    // 11. ONE operational event for it, WARN, naming what the audit row
+    //     names and who was refused.
+    await expectOneWarnDenialEvent(testCase.name, denied, testCase.permission);
   }
+
+  for (const testCase of CASES) {
+    it(
+      `refuses ${testCase.name} when authority is revoked before the transaction`,
+      () => expectRevocationRefusal(testCase),
+      30_000,
+    );
+  }
+
+  it(
+    'refuses customers.block when authority is revoked before the transaction',
+    () =>
+      expectRevocationRefusal({
+        /*
+         * Phase 4A's only operator write, and the case a mutation proved was
+         * missing.
+         *
+         * `CustomerService.setStatus` checks `users.block` twice: once before the
+         * replay lookup, and again INSIDE the committing transaction through
+         * `runAuthorizedMutation`. Replacing the second one with `users.view` left
+         * all 22 `customers-http` cases green, because the first check already
+         * refuses an unprivileged caller — so the in-transaction re-check, which is
+         * the whole reason `runAuthorizedMutation` exists, was unobservable. This
+         * case is the only thing that can see it: authority is removed in the
+         * window between the two.
+         */
+        name: 'customers.block',
+        action: 'customer.block',
+        permission: 'users.block',
+        eventType: 'CustomerBlocked',
+        /*
+         * `support`, NOT `observer`, and this is the whole point of the case.
+         *
+         * `support` holds `users.view` and `users.search` and NOT `users.block`, so
+         * the revocation removes exactly the one permission under test. Revoked to
+         * `observer` the actor loses everything, the refusal happens whichever
+         * permission the in-transaction check names, and the mutation that replaces
+         * `users.block` with `users.view` there survives — measured, not supposed.
+         */
+        revokeTo: ['support'] as const,
+        mutate: () =>
+          ctx.container.customers.block(tenantA, actorA, {
+            idempotencyKey: 'revoked-customer-block',
+            customerId: blockTarget,
+            reason: 'Revocation race.',
+          }),
+        unchanged: async () => {
+          const row = await new DrizzleCustomerRepository(db()).findById(tenantA, blockTarget);
+          expect(row?.status, 'the customer was blocked by a revoked actor').toBe('ACTIVE');
+          expect(row?.blockedAt, 'a blocked_at was written by a revoked actor').toBeNull();
+        },
+      }),
+    30_000,
+  );
 
   /**
    * Permissions and sessions are two different revocations.
