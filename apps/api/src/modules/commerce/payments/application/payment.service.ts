@@ -229,7 +229,13 @@ export class PaymentService {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS,
             'This wallet does not hold enough to pay for that order.',
-            { shortfallMinor: shortfallMinor(balance.amountMinor, total.amountMinor).toString() },
+            {
+              shortfallMinor: shortfallMinor(balance.amountMinor, total.amountMinor).toString(),
+              // The CURRENCY travels with the figure, always. A shortfall without one is
+              // a bare number, and `bot.wallet.insufficient` declares a MONEY
+              // placeholder precisely so a customer is never shown one.
+              currency: total.currency,
+            },
           );
         }
 

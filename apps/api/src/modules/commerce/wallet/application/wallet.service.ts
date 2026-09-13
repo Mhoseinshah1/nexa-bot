@@ -61,6 +61,21 @@ export const WALLET_VIEW_PERMISSION: PermissionKey = 'users.view';
 export const WALLET_CREDIT_PERMISSION: PermissionKey = 'users.wallet.credit';
 export const WALLET_DEBIT_PERMISSION: PermissionKey = 'users.wallet.debit';
 
+/**
+ * What a CUSTOMER reading their OWN balance acts under.
+ *
+ * `maintenance.run`, the key `CATALOG_BROWSE_PERMISSION` and `ORDER_PLACE_PERMISSION`
+ * already use: this is system work triggered by a customer, `SYSTEM_JOB` holds that one
+ * key and nothing else, and the check is MADE rather than skipped — authorization is
+ * never decided by looking at an actor's type.
+ *
+ * Deliberately NOT `users.view`. That permission lets an operator read ANY customer's
+ * balance, and charging it here would make a customer's own `/wallet` indistinguishable
+ * in the audit log from an operator inspecting somebody. The method below takes no
+ * customer id from the caller for the same reason.
+ */
+export const WALLET_OWN_VIEW_PERMISSION: PermissionKey = 'maintenance.run';
+
 const WALLET_NAMESPACE = 'WEB' as const;
 
 /**
@@ -155,6 +170,23 @@ export class WalletService {
     const id = this.customerId(customerId);
     await this.assertCustomerExists(scope, id);
     return this.deps.repository.balanceOf(scope, id, await this.sellingCurrency(scope));
+  }
+
+  /**
+   * The balance of the customer this turn RESOLVED. Not of a customer a caller names.
+   *
+   * The parameter is a `UserId` rather than a string, and it comes from the customer the
+   * Telegram runtime resolved from the signed update — never from `callback_data`. That
+   * is the whole difference between this and `balance` above: there is no id here a
+   * client could have chosen, so there is no lookup to point at somebody else.
+   */
+  async balanceForCustomer(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+  ): Promise<WalletBalance> {
+    await this.deps.guard.check(scope, actor, WALLET_OWN_VIEW_PERMISSION);
+    return this.deps.repository.balanceOf(scope, customerId, await this.sellingCurrency(scope));
   }
 
   /** A page of movements, newest first. Reading history is reading the customer. */
@@ -266,7 +298,10 @@ export class WalletService {
             throw errors.conflict(
               COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS,
               'This wallet does not hold enough for that debit.',
-              { shortfallMinor: shortfallMinor(balance.amountMinor, input.amountMinor).toString() },
+              {
+                shortfallMinor: shortfallMinor(balance.amountMinor, input.amountMinor).toString(),
+                currency: input.currency,
+              },
             );
           }
         }

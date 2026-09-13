@@ -1362,6 +1362,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     orders: orderService,
     botRuntime: new BotRuntime({
       customers: customerService,
+      payments: paymentService,
+      wallet: walletService,
       // The SAME instances the container exposes, not new ones. Two order services
       // would each hold their own idempotency view, and a redelivered Telegram update
       // handled by one would not be seen as a replay by the other — which is the whole
