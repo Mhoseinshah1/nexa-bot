@@ -383,9 +383,25 @@ export const TEMPLATES = [
   {
     key: 'bot.order.expired',
     description:
-      'Shown when a draft order is confirmed after its own hold expired. Distinct ' +
-      'from `bot.order.cancelled`: nobody withdrew this one, the window closed, and ' +
-      'the customer has to start again rather than wonder what they did.',
+      'Shown when an order is acted on after its own deadline has passed. TWO ' +
+      'producers, and both are the same lapse: confirming a draft whose price hold ' +
+      'expired, and — since 4C — paying for a confirmed order past the deadline the ' +
+      'customer was shown in `bot.order.awaiting_payment`. Distinct from ' +
+      '`bot.order.cancelled`: nobody withdrew this one, the window closed, and the ' +
+      'customer has to start again rather than wonder what they did.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.not_awaiting_payment',
+    description:
+      'Shown when a customer taps a pay button on an order that is no longer ' +
+      'awaiting payment — almost always the one they just paid for, because the ' +
+      'awaiting-payment message keeps its buttons in the chat after settlement. ' +
+      'It replaced `bot.order.unavailable` here, which says a PRODUCT cannot be ' +
+      'bought and told a customer who had just been debited that their service was ' +
+      'unavailable. Says only what is true of the ORDER and claims nothing about ' +
+      'which state it reached, because a cancelled order reaches this too.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

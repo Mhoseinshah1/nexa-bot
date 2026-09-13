@@ -76,6 +76,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.order.confirm_button': 'تأیید و ثبت سفارش',
   'bot.order.unavailable': 'این سرویس در حال حاضر قابل خرید نیست.',
   'bot.order.expired': 'مهلت این سفارش به پایان رسیده است. لطفاً دوباره سفارش دهید.',
+  'bot.order.not_awaiting_payment': 'این سفارش دیگر در انتظار پرداخت نیست.',
   'bot.order.awaiting_payment':
     'سفارش ثبت شد و در انتظار پرداخت است.\nمبلغ: {total}\nاعتبار تا: {expiresAt}',
   /*
