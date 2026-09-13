@@ -180,18 +180,24 @@ physically immutable by the time it can be settled.
 
 ## 4. Which ledger reasons already exist
 
-All 22 are frozen in `LEDGER_REASONS`. **Phase 4C produces four of them**, and
+All 22 are frozen in `LEDGER_REASONS`. **Phase 4C produces three of them**, and
 invents none:
 
-| Reason          | Producer in 4C                                         |
-| --------------- | ------------------------------------------------------ |
-| `PURCHASE`      | the DEBIT that funds an order settlement               |
-| `TOPUP_RECEIPT` | the CREDIT from an operator-confirmed manual transfer  |
-| `ADMIN_CREDIT`  | an operator crediting a wallet (`users.wallet.credit`) |
-| `ADMIN_DEBIT`   | an operator debiting a wallet (`users.wallet.debit`)   |
+| Reason         | Producer in 4C                                         |
+| -------------- | ------------------------------------------------------ |
+| `PURCHASE`     | the DEBIT that funds a wallet settlement               |
+| `ADMIN_CREDIT` | an operator crediting a wallet (`users.wallet.credit`) |
+| `ADMIN_DEBIT`  | an operator debiting a wallet (`users.wallet.debit`)   |
 
-The other eighteen get no producer here and are named so a reader can see the
-absence is deliberate: `TOPUP_GATEWAY`, `TOPUP_STARS`, `TOPUP_CRYPTO` (no
+> **Revised after the audit was accepted.** An earlier draft of this table
+> listed `TOPUP_RECEIPT` as a fourth, produced by a customer-initiated wallet
+> top-up. That is now deferred — see §8, _"Standalone top-up is deferred"_. A
+> manual transfer in this release pays for an ORDER, whose amount is a frozen
+> snapshot; nothing credits a wallet except an operator.
+
+The other nineteen get no producer here and are named so a reader can see the
+absence is deliberate: `TOPUP_RECEIPT` (see §8); `TOPUP_GATEWAY`, `TOPUP_STARS`,
+`TOPUP_CRYPTO` (no
 adapter); `PURCHASE_REVERSAL`, `REFUND`, `CHARGEBACK`, `CORRECTION` (refunds, out
 of scope); `CASHBACK_*` (three unrelated legacy mechanisms, 4E);
 `REFERRAL_*`, `START_GIFT`, `LOTTERY_WIN`, `LUCK_WHEEL_WIN` (4E/4F);
@@ -311,15 +317,56 @@ setting awaits a value, other inline buttons return `⭕️ ورودی نا مع
 next ordinary message typed is consumed as that setting's value. It is the
 mechanism behind `INCIDENT-FIN-001`, where a production gateway setting was
 overwritten by a mistyped menu label. This runtime has no FSM and 4C does not add
-one: the top-up amount is carried in the callback, derived from what the customer
-is actually trying to pay.
+one, and it needs none: no path in this release lets a customer name an amount.
 
-**A top-up is for at least `wallet.topup.minimum`.** When an order's shortfall is
-below the configured minimum the customer is asked to transfer the minimum, not
-the shortfall — the setting's own description defines it as _"the smallest wallet
-top-up accepted"_, and zero means no minimum. The excess stays in the wallet,
-which is what a wallet is for. `wallet.topup.minimum` moves `PLANNED → ACTIVE` in
-this phase, its first real consumer.
+**Standalone top-up is deferred, and this replaces an earlier draft of this
+section.** That draft had a customer top up by
+`max(shortfall, wallet.topup.minimum)`. Both halves are authoritative values on
+their own, and combining them into a payable amount is a FINANCIAL PRODUCT RULE
+that no contract states and no research records — the legacy minimum was per user
+TIER, and its precedence against the per-gateway minimum is explicitly unresolved
+(`FBR-008`, `FBR-012`). Inventing the combination is exactly what this phase must
+not do.
+
+So in this release **every payment names an order**, and its amount is read from
+that order's frozen snapshot. `wallet.topup.minimum` stays `PLANNED`: it gets its
+consumer in the phase that gives a standalone top-up an authoritative amount —
+tenant-defined presets, a gateway's own minimum, or a reseller tier.
+
+The wallet is therefore funded in 4C only by `ADMIN_CREDIT`, where the authority
+is an authenticated operator holding `users.wallet.credit` and the amount is
+their own audited input.
+
+---
+
+## 8a. The client is never the source of a money amount
+
+Stated on its own because it is the invariant both customer paths are built
+around, and because a violation of it looks like ordinary plumbing.
+
+A Telegram callback carries **an order id and nothing else**. It is an INTENT and
+an IDENTIFIER, never a quantity. Every value that decides how much money moves —
+amount, currency, customer, tenant, and the order's state — is re-read from the
+database inside the transaction that moves it, and validated there:
+
+- amount and currency come from `orders.total_amount` / `orders.currency`, which
+  `nexa_orders_snapshot_guard` froze at confirmation;
+- the customer must own the order, checked against the row rather than against
+  anything the update carried;
+- the order must still be `AWAITING_PAYMENT`, checked by the conditional UPDATE
+  itself rather than by a prior read.
+
+A callback that carried an amount would have it ignored. A stale or tampered
+order id fails ownership and state at MUTATION time, not at render time.
+`commerce.ts` states the same rule one step earlier for pricing — _"never because
+a client said so"_ — and this is that rule with money attached.
+
+The two customer paths, and the authoritative source of every figure in each:
+
+| Path                           | Amount                | Currency          | Wallet effect                        | Evidence          |
+| ------------------------------ | --------------------- | ----------------- | ------------------------------------ | ----------------- |
+| `WALLET` settlement            | `orders.total_amount` | `orders.currency` | `PURCHASE` debit, same transaction   | `WALLET_DEBIT`    |
+| `MANUAL_TRANSFER` for an order | `orders.total_amount` | `orders.currency` | none — the money arrived out of band | `OPERATOR_REVIEW` |
 
 ---
 
@@ -348,6 +395,9 @@ Recorded so a reader can tell a deferral from an oversight:
 - **Cashback, referral, lottery, luck wheel, start gift.** 4E.
 - **Resellers**: `RESELLER_SETTLEMENT`, `RESELLER_MEMBERSHIP_FEE`, the
   per-customer negative-balance ceiling, and the tiered top-up minimum. 4F.
+- **Standalone wallet top-up**, and with it `TOPUP_RECEIPT` and
+  `wallet.topup.minimum`'s first consumer. It needs an authoritative amount
+  source this release does not have.
 - **Receipt media handling.** The customer uploading an image the operator then
   views. Every question about that record is open (`UNK-PR-001`…`006`) and the
   queue was empty, so there is nothing to be faithful to. 4C carries the
