@@ -442,6 +442,8 @@ export const COMMERCE_ERROR_CODES = {
   COMMERCE_REQUEST_INVALID: 'commerce.request_invalid',
 
   CUSTOMER_NOT_FOUND: 'commerce.customer_not_found',
+
+  PRODUCT_NOT_FOUND: 'commerce.product_not_found',
 } as const;
 
 /*

@@ -8,6 +8,18 @@ import {
 } from './notifications.js';
 import { uuidV7Schema } from './ids.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
+import {
+  MAX_DEVICE_LIMIT,
+  MAX_DURATION_DAYS,
+  MAX_TRAFFIC_BYTES,
+  PRODUCT_AUDIENCES,
+  PRODUCT_DESCRIPTION_MAX_LENGTH,
+  PRODUCT_SORT_MAX,
+  PRODUCT_SORT_MIN,
+  PRODUCT_STATUSES,
+  PRODUCT_TITLE_MAX_LENGTH,
+} from './catalog.js';
+import { CURRENCY_CODES } from './money.js';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
 import {
   SETTING_CLASSIFICATIONS,
@@ -1316,6 +1328,127 @@ export const CUSTOMER_ROUTES = {
   detail: (id: string) => `/users/${encodeURIComponent(id)}`,
   block: (id: string) => `/users/${encodeURIComponent(id)}/block`,
   unblock: (id: string) => `/users/${encodeURIComponent(id)}/unblock`,
+} as const;
+
+// --- Products (Phase 4B) ----------------------------------------------------
+
+export const PRODUCT_PAGE_DEFAULT = 25;
+export const PRODUCT_PAGE_MAX = 100;
+
+/**
+ * One product, as the Web Admin renders it.
+ *
+ * `trafficBytes` and `priceAmount` are STRINGS on the wire and `bigint` in the
+ * database. JSON has one number type and it is a double: a traffic allowance in bytes
+ * passes 2^53 at eight petabytes, and an amount in minor units passes it at ninety
+ * thousand billion Rial — both reachable, and both silently wrong rather than refused.
+ * `money.ts` makes the same choice for the same reason.
+ *
+ * The price is two nullable fields rather than a nested object because the table stores
+ * two columns and the CHECK binds them together; the application layer reassembles them
+ * into one `Money`. What the wire may NOT do is carry one without the other, which is
+ * why the schema refines the pair rather than trusting the caller.
+ */
+export const productSummarySchema = z
+  .object({
+    id: z.string(),
+    title: z.string(),
+    description: z.string().nullable(),
+    status: z.enum(PRODUCT_STATUSES),
+    audience: z.enum(PRODUCT_AUDIENCES),
+    sortOrder: z.number().int(),
+    panelId: z.string().nullable(),
+    durationDays: z.number().int(),
+    trafficBytes: z.string(),
+    deviceLimit: z.number().int().nullable(),
+    priceAmount: z.string().nullable(),
+    priceCurrency: z.enum(CURRENCY_CODES).nullable(),
+    createdAt: z.iso.datetime(),
+    updatedAt: z.iso.datetime(),
+  })
+  .refine((p) => (p.priceAmount === null) === (p.priceCurrency === null), {
+    message: 'A price is an amount and a currency, or it is absent.',
+  });
+export type ProductSummaryResponse = z.infer<typeof productSummarySchema>;
+
+/**
+ * The fields an operator writes.
+ *
+ * `status` is absent deliberately: a product is created INACTIVE and becomes
+ * purchasable through its own command, so one call cannot publish an unpriced,
+ * unfulfillable plan. The same shape serves create and edit, because the set of mutable
+ * properties IS the set of writable ones — and every one of them is snapshotted onto an
+ * order at confirmation, which is what makes editing safe.
+ */
+export const productWriteSchema = z
+  .object({
+    idempotencyKey: z.string().min(8).max(255),
+    title: z.string().trim().min(1).max(PRODUCT_TITLE_MAX_LENGTH),
+    description: z.string().trim().max(PRODUCT_DESCRIPTION_MAX_LENGTH).nullable(),
+    audience: z.enum(PRODUCT_AUDIENCES),
+    sortOrder: z.number().int().min(PRODUCT_SORT_MIN).max(PRODUCT_SORT_MAX),
+    panelId: z.string().nullable(),
+    durationDays: z.number().int().min(0).max(MAX_DURATION_DAYS),
+    /* A decimal STRING, parsed to `bigint` by the boundary rather than by the service. */
+    trafficBytes: z.string().regex(/^\d{1,19}$/u),
+    deviceLimit: z.number().int().min(1).max(MAX_DEVICE_LIMIT).nullable(),
+    /*
+     * Positive when present. `products_price_positive_check` says the same thing in the
+     * database; a zero price would otherwise mean "free", and `catalog.ts` is explicit
+     * that free is not a concept here — an absent price means unsellable.
+     */
+    priceAmount: z
+      .string()
+      .regex(/^\d{1,19}$/u)
+      .nullable(),
+    priceCurrency: z.enum(CURRENCY_CODES).nullable(),
+  })
+  .refine((p) => (p.priceAmount === null) === (p.priceCurrency === null), {
+    message: 'A price is an amount and a currency, or it is absent.',
+    path: ['priceAmount'],
+  })
+  .refine((p) => p.priceAmount === null || BigInt(p.priceAmount) > 0n, {
+    message:
+      'A price must be greater than zero. Leave it empty for a product that is not for sale.',
+    path: ['priceAmount'],
+  })
+  .refine((p) => BigInt(p.trafficBytes) <= MAX_TRAFFIC_BYTES, {
+    message: 'That traffic allowance is past any real plan.',
+    path: ['trafficBytes'],
+  });
+export type ProductWriteRequest = z.infer<typeof productWriteSchema>;
+
+export const productListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(PRODUCT_PAGE_MAX).optional(),
+  cursor: z.string().max(512).optional(),
+  status: z.enum(PRODUCT_STATUSES).optional(),
+  audience: z.enum(PRODUCT_AUDIENCES).optional(),
+  title: z.string().max(PRODUCT_TITLE_MAX_LENGTH).optional(),
+});
+export type ProductListQuery = z.infer<typeof productListQuerySchema>;
+
+export const productListResponseSchema = z.object({
+  products: z.array(productSummarySchema),
+  nextCursor: z.string().nullable(),
+});
+export type ProductListResponse = z.infer<typeof productListResponseSchema>;
+
+export const productResponseSchema = z.object({ product: productSummarySchema });
+export type ProductResponse = z.infer<typeof productResponseSchema>;
+
+/** A state change carries only its key: the target state is the route. */
+export const productStatusRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type ProductStatusRequest = z.infer<typeof productStatusRequestSchema>;
+
+export const PRODUCT_ROUTES = {
+  list: '/products',
+  create: '/products',
+  detail: (id: string) => `/products/${encodeURIComponent(id)}`,
+  update: (id: string) => `/products/${encodeURIComponent(id)}`,
+  activate: (id: string) => `/products/${encodeURIComponent(id)}/activate`,
+  deactivate: (id: string) => `/products/${encodeURIComponent(id)}/deactivate`,
 } as const;
 
 // --- Backup and disaster recovery -------------------------------------------

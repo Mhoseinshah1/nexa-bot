@@ -104,6 +104,8 @@ import { TemplateResolver } from './modules/control/templates/application/templa
 import { CustomerService } from './modules/commerce/customers/application/customer.service.js';
 import { DrizzleCustomerRepository } from './modules/commerce/customers/infrastructure/drizzle-customer.repository.js';
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
+import { ProductService } from './modules/commerce/catalog/application/product.service.js';
+import { DrizzleProductRepository } from './modules/commerce/catalog/infrastructure/drizzle-product.repository.js';
 import { BotRuntime } from './surfaces/telegram/bot-runtime.js';
 import { I18nTemplateCatalogue } from './modules/control/templates/infrastructure/i18n-template-catalogue.js';
 import { TemplateManagementService } from './modules/control/templates/application/template-management.service.js';
@@ -211,6 +213,7 @@ export interface Container {
    * controller cannot get it wrong.
    */
   readonly customers: CustomerService;
+  readonly products: ProductService;
   readonly botRuntime: BotRuntime;
 
   // Control plane — Phase 2
@@ -578,6 +581,28 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     uow,
     idempotency,
     outbox,
+    clock,
+    ids,
+  });
+
+  /**
+   * Products, under the FROZEN `catalog.*` permissions.
+   *
+   * The same platform dependencies every other write path takes, `scopeActivity`
+   * included — the reader panels once skipped, which let a stopped tenant be given new
+   * rows. No outbox: the event catalogue declares no product event and
+   * `AGGREGATE_TYPES` has no `Product`, so a product mutation's evidence is its audit
+   * row.
+   */
+  const productService = new ProductService({
+    repository: new DrizzleProductRepository(database.db),
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
     clock,
     ids,
   });
@@ -1221,6 +1246,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
     recordPing,
     customers: customerService,
+    products: productService,
     botRuntime: new BotRuntime({
       customers: customerService,
       messenger: new TelegramCustomerMessenger(

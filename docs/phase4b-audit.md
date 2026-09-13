@@ -180,6 +180,16 @@ Products are governed by the **`catalog.*`** vocabulary, not a `products.*` one:
 A product's _price field_ is edited under `catalog.edit` (it is a property of the
 product); `catalog.pricing.edit` governs pricing **rules**, which do not exist yet.
 
+**No system role but `owner` holds `catalog.edit`.** `operator` and `sales` carry
+`catalog.view` only, and `sales` adds `catalog.discounts.edit` without it. Found while
+writing the RBAC tests, which had to build a custom role to charge the permission at
+all. It is a frozen decision — the catalogue is the owner's to curate — and Phase 4B
+does **not** change `ROLE_SEEDS`: widening a role is a permission-model change with no
+producer in this phase, and the rule is that a permission arrives only with its first
+consumer. The tests therefore grant `catalog.edit` through a custom role rather than
+borrowing `owner`, which holds everything and would prove nothing about which key the
+route actually wants.
+
 ---
 
 ## 6. Events and audit
