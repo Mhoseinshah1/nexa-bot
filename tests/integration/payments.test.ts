@@ -983,10 +983,10 @@ describe('payments and settlement', () => {
       const rows = await ctx.container.database.db.execute(
         sql`SELECT id FROM payments WHERE order_id = ${order.id}` as never,
       );
-      expect((rows as unknown as { rows: unknown[] }).rows, 'a second code was issued').toHaveLength(
-        1,
-      );
+      expect(
+        (rows as unknown as { rows: unknown[] }).rows,
+        'a second code was issued',
+      ).toHaveLength(1);
     });
   });
-
 });

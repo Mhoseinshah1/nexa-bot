@@ -320,10 +320,9 @@ describe('the payments route', () => {
    */
   it('derives the review affordance from receipts.review, not from payments.view', async () => {
     stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
-    const reader = resolve(
-      { path: `/payments/${ROW_ID}`, query: new URLSearchParams() },
-      ['payments.view'],
-    );
+    const reader = resolve({ path: `/payments/${ROW_ID}`, query: new URLSearchParams() }, [
+      'payments.view',
+    ]);
     const readerView = renderPage(reader.element as ReactElement);
     // The settled detail, so the assertion below is about a rendered page rather than a
     // spinner that has not drawn the button yet either.
@@ -337,10 +336,10 @@ describe('the payments route', () => {
     cleanup();
 
     stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
-    const approver = resolve(
-      { path: `/payments/${ROW_ID}`, query: new URLSearchParams() },
-      ['payments.view', 'receipts.review'],
-    );
+    const approver = resolve({ path: `/payments/${ROW_ID}`, query: new URLSearchParams() }, [
+      'payments.view',
+      'receipts.review',
+    ]);
     renderPage(approver.element as ReactElement);
     // The card title first, then the BUTTON — the reader above sees the title too, and
     // asserting on it would not distinguish the two operators at all.

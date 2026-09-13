@@ -1015,10 +1015,23 @@ who has been given bank details and an amount is in a different situation from o
 holding a quote. Picking a second window is a financial product rule, and `FBR-008`
 records that the legacy system's own amount/expiry layering is unresolved.
 
-**What holds meanwhile.** An expired deadline never settles anything by accident: the
-guard compares two rows and `orderAwaitingPayment` refuses an order in any other state.
-The gap is that nothing MOVES a stale order to `EXPIRED`, so it sits visible in the
-admin as awaiting payment for ever.
+**What holds meanwhile, corrected.** This paragraph used to say an expired deadline
+never settles anything by accident, because `orderAwaitingPayment` refuses an order in
+any other state. That was circular and the behaviour was the opposite: nothing sweeps a
+stale order, so it is never IN another state, so the refusal never fired. A customer who
+scrolled back weeks later and tapped the still-live pay button settled at a quote they
+had been told expired.
+
+`orderAwaitingPayment` now compares the order's own `expires_at` against the clock and
+refuses with `ORDER_EXPIRED`, on both customer-initiated paths. An OPERATOR confirming a
+transfer that already arrived is deliberately exempt and the parameter says so by name:
+the money is in the bank and this release has no refund path, so refusing because the
+deadline lapsed while the receipt sat in the queue would strand it.
+
+The gap that remains is the one this question is about: nothing MOVES a stale order to
+`EXPIRED`, so it still sits in the admin as awaiting payment for ever. Refusing to act
+on it is what 4C can do without inventing a window; expiring it is what needs the hour
+nobody has stated.
 
 **Trigger to resolve:** the phase that adds a sweeper, or the first operator who asks
 why a month-old order still says it is waiting.
@@ -1069,3 +1082,33 @@ application layer already takes an `ActorContext` and `ACTOR_TYPES` includes
 
 **Trigger to resolve:** the owner, on reading this. Nothing blocks on it: the
 confirmation is audited, permission-checked and idempotent wherever it is invoked from.
+
+## OQ-4C-04 — what happens to wallet funds in a currency the installation stopped selling
+
+`sales.currency` is `RUNTIME`-mutable over `['IRT','IRR']` and the Web Admin ships a
+picker for it. A wallet balance is derived per currency, so changing it strands every
+entry denominated in the old one: `WalletService.adjust` refuses a movement in a
+currency the installation does not sell, and `settleFromWallet` sums only the order's
+currency, so no debit, settlement or adjustment can ever reach those funds.
+
+**What 4C fixed, and what it did not.** The review found the history listing every
+currency while the balance above it counted one, so a tenant that switched saw
+«موجودی: ۰» over a populated table — the residual shape the module exists to prevent.
+The history now takes the same currency predicate as the balance, so the two agree.
+That makes the surface honest and makes the stranded entries INVISIBLE on it, which is
+the half that is still wrong.
+
+**Why it is not resolved here.** Every available answer is a financial product rule. To
+convert needs a rate, and no rate exists anywhere in this system — `docs/research/`
+records that none of the seven inspected gateways carries one. To refuse the setting
+change needs a rule about when a tenant may re-denominate. To show both balances needs
+a wire shape that carries more than one, and `walletBalanceSchema` is frozen with a
+single `currency`. Picking any of them is exactly the invention this phase's runbook
+forbids.
+
+**What holds meanwhile.** The money is not lost — the ledger is append-only and every
+entry keeps its own currency, so whatever is decided later can be applied to rows that
+are all still there. What is missing is any way to see or move them.
+
+**Trigger to resolve:** the first installation that changes `sales.currency` with wallet
+entries already written, or the phase that gives a wallet more than one denomination.

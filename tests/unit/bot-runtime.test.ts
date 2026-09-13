@@ -297,6 +297,13 @@ describe('profile metadata, normalised before it is ever stored', () => {
      *   `bot.payment.manual_button`    a button label.
      *   `bot.payment.unconfigured`     a rail this installation cannot perform, NAMED.
      *                                  Never a simulated success.
+     *   `bot.order.not_awaiting_payment`  the ORDER is past paying for — almost always
+     *                                  because the customer just paid and tapped the
+     *                                  message's still-live button again. It replaced
+     *                                  `bot.order.unavailable` here, which says a
+     *                                  PRODUCT cannot be bought and so told somebody
+     *                                  who had just been debited that their service
+     *                                  was unavailable.
      *
      * None of them instructs a customer to do something that can only answer
      * `bot.unknown_command`, and none claims an effect that did not happen.
@@ -308,6 +315,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.order.awaiting_payment',
       'bot.order.confirm_button',
       'bot.order.expired',
+      'bot.order.not_awaiting_payment',
       'bot.order.settled',
       'bot.order.summary',
       'bot.order.unavailable',

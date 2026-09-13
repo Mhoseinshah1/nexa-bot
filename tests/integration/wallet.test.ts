@@ -185,6 +185,33 @@ describe('the wallet ledger', () => {
     expect((await balance(tenantA, customerA, 'IRR')).amountMinor).toBe(900n);
   });
 
+  /*
+   * The HISTORY answers about the same money as the balance above it.
+   *
+   * `balanceOf` has always filtered by currency; `list` did not. So a page that renders
+   * a balance over a ledger table showed «موجودی: ۰» above rows adding to 5,000,000 as
+   * soon as a tenant changed `sales.currency` — the legacy "residual nobody can
+   * explain" shape, reproduced by a setting with a picker in the Web Admin.
+   *
+   * Two currencies in one customer's ledger is exactly what that change leaves behind:
+   * `WalletService.adjust` refuses a non-selling currency, so this is written through
+   * the repository, which is what the rows look like afterwards.
+   */
+  it('lists the movements the balance is computed from, and no others', async () => {
+    await append(tenantA, customerA, 'CREDIT', 100n, 'mixed-irt-1', 'IRT');
+    await append(tenantA, customerA, 'CREDIT', 900n, 'mixed-irr-1', 'IRR');
+    await append(tenantA, customerA, 'DEBIT', 40n, 'mixed-irt-2', 'IRT');
+
+    const page = await repository.list(tenantA, customerA, 'IRT', 50, null);
+    expect(page.items.map((e) => e.reference).sort()).toEqual(['mixed-irt-1', 'mixed-irt-2']);
+    // Stated as the invariant rather than as a row count: the history and the balance
+    // must agree about WHICH movements exist, not merely about how many.
+    expect(page.items.every((e) => e.amount.currency === 'IRT')).toBe(true);
+
+    const other = await repository.list(tenantA, customerA, 'IRR', 50, null);
+    expect(other.items.map((e) => e.reference)).toEqual(['mixed-irr-1']);
+  });
+
   // -------------------------------------------------------------------------
   // Append-only, and idempotent
   // -------------------------------------------------------------------------

@@ -242,3 +242,56 @@ away.
 
 Two mutations over the self-review fixes; two rules covered, one finding that is
 not a rule.
+
+## The independent review round
+
+Three reviewers over the whole diff on the §19 dimension list. Eight findings survived
+verification against the code; six changed a production rule and are falsified here.
+
+| #   | Rule                                                                         | Mutation                                                   | Test that dies                                                                                                   | Result |
+| --- | ---------------------------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------ |
+| R1  | A BLOCKED customer moves no money, checked inside the transaction            | `if (customer.status === 'BLOCKED')` → `if (false)`        | `payments.test.ts` › refuses a wallet settlement for a customer blocked after the turn began                     | KILLED |
+| R2  | The deadline the customer was SHOWN refuses the payment                      | `deadline === 'REFUSE_AFTER_DEADLINE' &&` → `false &&`     | `payments.test.ts` › refuses to settle an order whose stated deadline has passed                                 | KILLED |
+| R3  | The order is read INSIDE the serialised window, after the customer lock      | the lock and the order read swapped back                   | `financial-concurrency.test.ts` › refuses the loser of two interleaved settlements instead of violating an index | KILLED |
+| R4  | ONE open transfer per order, however many times the customer taps            | `const already = pending.items[0]` → `undefined`           | `payments.test.ts` › hands back the open transfer rather than issuing a second code for one order                | KILLED |
+| R5  | The history lists the movements the balance is computed from, and no others  | the currency predicate removed from `list`                 | `wallet.test.ts` › lists the movements the balance is computed from, and no others                               | KILLED |
+| R6  | A paid customer is told about the ORDER, not that their service is unbuyable | `bot.order.not_awaiting_payment` → `bot.order.unavailable` | `telegram-payment-flow.test.ts` › refuses a second settlement of an order already PAID                           | KILLED |
+| R7w | The route derives debit from `users.wallet.debit`                            | `mayDebit={may('users.view')}`                             | `users.test.tsx` › derives debit from users.wallet.debit, not from a permission that merely reads                | KILLED |
+| R8w | The route derives review from `receipts.review`                              | `mayReview={may('payments.view')}`                         | `payments.test.tsx` › derives the review affordance from receipts.review, not from payments.view                 | KILLED |
+
+**R5 first reported KILLED and was not.** Chasing it found a defect in the harness, and
+the harness defect is the more serious of the two.
+
+`scripts/falsify.sh` takes the vitest PROJECT as its sixth argument. Seven mutations in
+this round were run with `api`, which is not a project — `vitest.config.mts` defines
+`unit`, `web`, `exhaustive` and `integration`. Vitest matched no files, exited non-zero,
+and the script read a non-zero exit as the test having failed. Every one of those runs
+printed KILLED without a single test body having executed.
+
+It was caught because R5's mutation was re-applied by hand to see WHICH test died, and
+the file passed 22/22. A harness whose failure mode is reporting success produces a
+record that reads exactly like a real one, so the fix is a hard refusal on an unknown
+project rather than a warning, and the error names the valid ones.
+
+Every row in this section was then re-run under `integration` or `web`, and the failing
+test is named above from that run rather than from the exit code. S2 and S3 in the
+section before it were re-run the same way and both genuinely kill.
+
+**The record that predates this round was sampled, not assumed.** W04, P09 and C01 were
+re-run under `integration`: all three kill, with the tests their rows name. That is
+evidence the earlier rounds used a real project and only this session's invocations were
+wrong — it is a sample of three out of fifty-one rows, and it is stated as a sample
+rather than as a clean bill of health.
+
+**R6's row is in the table but its finding is not a rule this codebase invented.** The
+mutation restores the frozen key `bot.order.unavailable`, whose own description scopes
+it to a product that cannot be ordered. What the test defends is that a customer who
+has just been debited is not told their service cannot be bought.
+
+Two findings have no row, for the reason S1 and S4 have none: R7 (the wallet form sent a
+hard-coded currency while the balance query was pending) is killed by no mutation of a
+rule — the fix removes a fallback and disables a form, and the regression for it is the
+route test R7w above plus the existing submission-fingerprint cases. R8 is three comments
+that claimed more than the code does, and a comment has no mutation.
+
+Eight mutations over the review round; eight rules covered.
