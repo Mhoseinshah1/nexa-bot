@@ -25,6 +25,18 @@ export const CURRENCY_EXPONENT: Readonly<Record<CurrencyCode, number>> = {
   USDT: 6,
 };
 
+/**
+ * The largest minor-unit amount this system stores: PostgreSQL `bigint`'s maximum.
+ *
+ * Every money column is `bigint`, so this is a property of the storage rather than a
+ * product decision, and it belongs beside the type rather than inside one schema.
+ * Without it a validator that merely counts digits admits values the column cannot
+ * hold, and the refusal arrives as an integrity error reported as a 500 instead of a
+ * named field — which is exactly what `productWriteSchema` did until the Codex review
+ * of the 4B branch.
+ */
+export const MAX_MONEY_AMOUNT_MINOR = 9_223_372_036_854_775_807n;
+
 export const currencyCodeSchema = z.enum(CURRENCY_CODES);
 
 /**

@@ -20,7 +20,7 @@ import {
   PRODUCT_TITLE_MAX_LENGTH,
 } from './catalog.js';
 import { ORDER_STATES } from './commerce.js';
-import { CURRENCY_CODES } from './money.js';
+import { CURRENCY_CODES, MAX_MONEY_AMOUNT_MINOR } from './money.js';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
 import {
   SETTING_CLASSIFICATIONS,
@@ -1388,7 +1388,18 @@ export const productWriteSchema = z
     description: z.string().trim().max(PRODUCT_DESCRIPTION_MAX_LENGTH).nullable(),
     audience: z.enum(PRODUCT_AUDIENCES),
     sortOrder: z.number().int().min(PRODUCT_SORT_MIN).max(PRODUCT_SORT_MAX),
-    panelId: z.string().nullable(),
+    /*
+     * A UUID, validated HERE — this is the REQUEST schema, where a caller's string
+     * arrives. `products.panel_id` is a `uuid` column, so an unvalidated one reaches
+     * PostgreSQL as `invalid input syntax for type uuid` and is answered 500; the
+     * service's own cross-tenant panel check is never reached. The same defect the
+     * order filters had, found by the same review.
+     *
+     * The response projection above stays `z.string()` on purpose: it renders a value
+     * the database already holds, and a validator there would turn a stored row into a
+     * serialization failure rather than refusing anything.
+     */
+    panelId: uuidV7Schema.nullable(),
     durationDays: z.number().int().min(0).max(MAX_DURATION_DAYS),
     /* A decimal STRING, parsed to `bigint` by the boundary rather than by the service. */
     trafficBytes: z.string().regex(/^\d{1,19}$/u),
@@ -1416,6 +1427,19 @@ export const productWriteSchema = z
   .refine((p) => BigInt(p.trafficBytes) <= MAX_TRAFFIC_BYTES, {
     message: 'That traffic allowance is past any real plan.',
     path: ['trafficBytes'],
+  })
+  /*
+   * And it FITS. `price_amount` is a PostgreSQL `bigint`, and the regex above admits
+   * nineteen digits — a range that runs past the column by more than an order of
+   * magnitude, so `9999999999999999999` passed validation and failed the INSERT as a
+   * 500. Refused at the boundary under the field's own name instead.
+   *
+   * `trafficBytes` needs no companion rule: `MAX_TRAFFIC_BYTES` already bounds it far
+   * below this.
+   */
+  .refine((p) => p.priceAmount === null || BigInt(p.priceAmount) <= MAX_MONEY_AMOUNT_MINOR, {
+    message: 'That price is past the largest amount this system stores.',
+    path: ['priceAmount'],
   });
 export type ProductWriteRequest = z.infer<typeof productWriteSchema>;
 
