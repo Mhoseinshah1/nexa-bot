@@ -209,3 +209,36 @@ citation table lists rules with tests, and a mutation nothing can observe names
 none.
 
 Eight mutations over the concurrency, HTTP and Web rules; seven rules covered.
+
+## The self-review pass
+
+Three findings, recorded here because two of them changed a production rule and
+the third changed only a document — and the difference is the point.
+
+| #   | Rule                                                                  | Mutation                                            | Test that dies                                                                          | Result |
+| --- | --------------------------------------------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------ |
+| S2  | A command's refusal and its success carry the SAME audit action       | `action` hard-coded back to `'payment.confirm'`     | `payments.test.ts` › audits a wallet settlement under ONE action, refused or not | KILLED |
+| S3  | `WalletEntryRecorded` follows the MOVEMENT, not the command           | `if (inserted)` → `if (true)`                       | `wallet.test.ts` › emits no second event when a replay re-reads an entry it did not write   | KILLED |
+
+**S1 has no row, and no mutation exists that would give it one.** It was a
+sentence in `docs/phase4c-audit.md` §6 claiming 4C has "exactly one layer —
+`wallet.topup.minimum`", written before standalone top-up was deferred and
+contradicted by §8 two sections later. A prose contradiction is not a rule a test
+can hold, so it is corrected and named here rather than given a citation it cannot
+support. What CAN be checked was checked: `wallet.topup.minimum` has no consumer
+anywhere in the source, which is what §8 says and what §6 now agrees with.
+
+**S3's first mutation SURVIVED, and the survivor is the finding.** Aimed at
+`settleFromWallet`, reverting the gate changed nothing observable: there the entry
+and the order's settlement commit together, so an existing entry implies a PAID
+order and `orderAwaitingPayment` refuses before the append is ever reached. The
+gate is unreachable on that path and the comment there now says so. It is reachable
+on `WalletService.adjust`, whose replay branch documents the case — an idempotency
+row that outlived its entry, which a restore can produce — and the regression
+PRODUCES that separation deliberately, because nothing in ordinary operation does.
+Recorded as a fourth instance of the shape W06, T06 and H01 named, and the only one
+of the four where chasing the survivor moved the test rather than explaining it
+away.
+
+Two mutations over the self-review fixes; two rules covered, one finding that is
+not a rule.
