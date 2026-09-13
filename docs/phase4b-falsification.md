@@ -81,8 +81,9 @@ use the repo's harness, which runs the whole FILE.
 | M33 | The products nav entry is offered on EITHER catalogue permission                 | `['catalog.view', 'catalog.edit']` → `'catalog.view'`        | `permissions-and-refresh.test.tsx` › offers the page to an actor who may only CREATE                        | KILLED |
 | M34 | `/orders` applies both filters in ONE navigation                                 | `setQueries` → two `setQuery` calls                          | `products-and-orders.test.tsx` › applies BOTH filters, in one navigation, and clears both                   | KILLED |
 | M35 | `/users` does too                                                                | `setQueries` → two `setQuery` calls                          | `users.test.tsx` › applies BOTH search boxes, in one navigation, and clears both                            | KILLED |
+| M36 | A refused draft is audited under the action a SUCCESSFUL one uses                | `'order.draft_create'` → `'order.create'` in `authorize`     | `orders.test.ts` › records a refused draft under the SAME action a successful one uses                      | KILLED |
 
-35 mutations, 35 killed. Nothing on this branch is asserted only by a comment.
+36 mutations, 36 killed. Nothing on this branch is asserted only by a comment.
 
 M19 is the one the SELF-REVIEW found rather than the harness: the order list took
 `customerId` and `productId` as bounded strings against `uuid` columns, so a filter that
@@ -111,6 +112,22 @@ the permission before the replay closed a read hole and opened a silent-refusal
 one, because `runAuthorizedMutation` is what records a denial and an early
 refusal never reaches it. The existing denied-write test caught it during
 implementation; M26 is what keeps it caught.
+
+### The focused re-review — M36
+
+One finding, and it is the reason a fix gets reviewed as hard as the bug it fixes.
+
+The C2 fix added a pre-replay permission check that writes its own audit row,
+because an early refusal never reaches `runAuthorizedMutation`. It recorded that
+row as `order.create` — a string that appears nowhere else in this codebase —
+while the success row and the transaction-time denial both say
+`order.draft_create`. One command, two audit actions, and the rows missing from
+the established one are exactly the refusals the fix was written to create.
+
+Nothing caught it. The C2 test asserted that a denied replay is refused and that
+a denial row exists; it did not assert WHICH action that row carries, so the
+defect wrote a row and passed. M36 is the mutation that closes it, and the test
+it names asserts the action rather than the row's existence.
 
 ### What this round does NOT falsify, and why
 
