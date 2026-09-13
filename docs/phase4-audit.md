@@ -55,3 +55,38 @@ sign-off** (O-1, `PRICING_PRECEDENCE = UNKNOWN`, SBR-033). Phase 4 implements th
 declared order because it is the only one in the repository, and the engine reads it
 from the contract rather than hard-coding the sequence — so a sign-off that changes
 the order is a data change with a visible test diff.
+
+## A correction to this branch's own record
+
+Commit `d8d7cb4` renamed three constraints inside migration `0034`, and its message
+said the file "had never applied anywhere, so this is not an edit to an applied
+migration". **That claim was false**, and the false half matters.
+
+It had never applied to any _release_ — true, and the reason the edit is acceptable.
+It had already applied to the developer databases on this machine, and drizzle hashes
+the migration's content. So the readiness probe did exactly what it exists for: it
+reported
+
+```
+diverged: 0034_phase4_cross_entity_customer_agreement was applied with
+          different content than this release ships
+```
+
+and fourteen integration tests across three suites failed, because readiness says
+`down` and they assert `up`. CI was green on the same commit throughout — it starts
+from an empty database — which is precisely the shape of a local-only failure that
+reads like a product defect.
+
+Two things to carry forward:
+
+- **The mechanism worked.** A migration edited after it applied is detected rather
+  than silently tolerated, and the detection names the file. That check earns its
+  keep; the failure was the claim, not the code.
+- **"Never applied anywhere" needs a scope.** The honest sentence is "never applied
+  to a release, and every developer database carrying the old content must be
+  recreated" — which is what fixed it here (`DROP DATABASE nexa_test`, re-migrate,
+  38 readiness cases green).
+
+Migration `0034` is **not** edited again to add this note: changing a byte of it
+would re-diverge every database that has now applied the current content, including
+the one this was just fixed on. A doc costs nothing and a migration file costs that.
