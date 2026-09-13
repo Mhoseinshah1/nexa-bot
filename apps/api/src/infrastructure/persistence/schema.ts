@@ -2280,7 +2280,7 @@ export const payments = pgTable(
     foreignKey({
       columns: [table.tenantId, table.orderId, table.customerId],
       foreignColumns: [orders.tenantId, orders.id, orders.customerId],
-      name: 'payments_order_customer_fk',
+      name: 'payments_order_fk',
     }),
     uniqueIndex('payments_tenant_reference_key').on(table.tenantId, table.reference),
     index('payments_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
@@ -2468,7 +2468,7 @@ export const services = pgTable(
     foreignKey({
       columns: [table.tenantId, table.orderId, table.customerId],
       foreignColumns: [orders.tenantId, orders.id, orders.customerId],
-      name: 'services_order_customer_fk',
+      name: 'services_order_fk',
     }),
     foreignKey({
       columns: [table.tenantId, table.panelId],
@@ -2718,7 +2718,7 @@ export const discountRedemptions = pgTable(
     foreignKey({
       columns: [table.tenantId, table.orderId, table.customerId],
       foreignColumns: [orders.tenantId, orders.id, orders.customerId],
-      name: 'discount_redemptions_order_customer_fk',
+      name: 'discount_redemptions_order_fk',
     }),
     /** One redemption per order, as a constraint rather than a check-then-write. */
     uniqueIndex('discount_redemptions_order_key').on(table.tenantId, table.orderId),

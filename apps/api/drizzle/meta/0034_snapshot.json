@@ -1731,8 +1731,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "discount_redemptions_order_customer_fk": {
-          "name": "discount_redemptions_order_customer_fk",
+        "discount_redemptions_order_fk": {
+          "name": "discount_redemptions_order_fk",
           "tableFrom": "discount_redemptions",
           "tableTo": "orders",
           "columnsFrom": [
@@ -4347,8 +4347,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "payments_order_customer_fk": {
-          "name": "payments_order_customer_fk",
+        "payments_order_fk": {
+          "name": "payments_order_fk",
           "tableFrom": "payments",
           "tableTo": "orders",
           "columnsFrom": [
@@ -6234,8 +6234,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "services_order_customer_fk": {
-          "name": "services_order_customer_fk",
+        "services_order_fk": {
+          "name": "services_order_fk",
           "tableFrom": "services",
           "tableTo": "orders",
           "columnsFrom": [
