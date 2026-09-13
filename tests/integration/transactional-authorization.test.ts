@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import type { ActorContext, AdminSessionId } from '@nexa/contracts';
+import type { ActorContext, AdminSessionId, BotInstanceId, UserId } from '@nexa/contracts';
 import {
   auditLogs,
   notifications,
@@ -9,6 +9,8 @@ import {
   panelCredentials,
   panels,
 } from '../../apps/api/src/infrastructure/persistence/schema';
+import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository';
+import { SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
   adminActorFor,
   createAdmin,
@@ -40,6 +42,7 @@ describe('fresh transactional authorization', () => {
   let ownerB: ActorContext;
   let adminA: SeededAdmin;
   let actorA: ActorContext;
+  let blockTarget: UserId;
 
   beforeEach(async () => {
     ctx ??= await createTestContext();
@@ -52,6 +55,22 @@ describe('fresh transactional authorization', () => {
       roleKeys: ['owner'],
     });
     actorA = adminActorFor(adminA);
+    /*
+     * A customer for the `customers.block` case, written through the real
+     * repository.
+     *
+     * Created HERE rather than inside `mutate`, because `mutate` runs after the
+     * barrier is armed and the first transaction it opened would be the one held —
+     * the fixture would deadlock against the case it exists to set up.
+     */
+    blockTarget = ctx.container.ids.uuid() as UserId;
+    await new DrizzleCustomerRepository(db()).resolve(tenantA, {
+      id: blockTarget,
+      telegramUserId: '5559990001',
+      profile: { username: 'revocation_race', firstName: null, lastName: null, languageCode: null },
+      botInstanceId: SEED_IDS.botA1 as unknown as BotInstanceId,
+      now: ctx.container.clock.now(),
+    });
   });
 
   afterAll(async () => {
@@ -217,6 +236,36 @@ describe('fresh transactional authorization', () => {
           'ops.notification.operational_event',
         );
         expect(view.source, 'the override was written by a revoked actor').toBe('DEFAULT');
+      },
+    },
+    {
+      /*
+       * Phase 4A's only operator write, and the case a mutation proved was
+       * missing.
+       *
+       * `CustomerService.setStatus` checks `users.block` twice: once before the
+       * replay lookup, and again INSIDE the committing transaction through
+       * `runAuthorizedMutation`. Replacing the second one with `users.view` left
+       * all 22 `customers-http` cases green, because the first check already
+       * refuses an unprivileged caller — so the in-transaction re-check, which is
+       * the whole reason `runAuthorizedMutation` exists, was unobservable. This
+       * case is the only thing that can see it: authority is removed in the
+       * window between the two.
+       */
+      name: 'customers.block',
+      action: 'customer.block',
+      permission: 'users.block',
+      eventType: 'CustomerBlocked',
+      mutate: () =>
+        ctx.container.customers.block(tenantA, actorA, {
+          idempotencyKey: 'revoked-customer-block',
+          customerId: blockTarget,
+          reason: 'Revocation race.',
+        }),
+      unchanged: async () => {
+        const row = await new DrizzleCustomerRepository(db()).findById(tenantA, blockTarget);
+        expect(row?.status, 'the customer was blocked by a revoked actor').toBe('ACTIVE');
+        expect(row?.blockedAt, 'a blocked_at was written by a revoked actor').toBeNull();
       },
     },
   ] as const;

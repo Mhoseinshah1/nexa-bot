@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { TELEGRAM_SECRET_TOKEN_HEADER } from '@nexa/contracts';
+import { CATALOGUE_FA } from '@nexa/i18n';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
@@ -162,7 +163,17 @@ describe('the customer Telegram turn', () => {
     // transport has always sent: `textMessageBody` takes `chatId: string`, so
     // there is one spelling rather than one per caller.
     expect(sent[0]?.body['chat_id']).toBe('4242');
-    expect(String(sent[0]?.body['text'] ?? '')).not.toBe('');
+    /*
+     * The EXACT rendered text, from the shared catalogue.
+     *
+     * Asserting merely that something was sent cannot tell one template from
+     * another, which is how the blocked-reply rule came to have no integration
+     * test: a mutation that made every arrival answer with the welcome survived
+     * sixteen green cases. The text is read from `CATALOGUE_FA` rather than
+     * copied, so a wording change moves both sides at once while a WRONG KEY
+     * still fails.
+     */
+    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.start.welcome']);
 
     // And a domain event exists for the registration, written inside the
     // business transaction.
@@ -184,10 +195,11 @@ describe('the customer Telegram turn', () => {
     expect(rows[0]?.['id']).toBe(first['id']);
 
     expect(sent).toHaveLength(1);
-    // A different greeting, which is the only externally visible difference
-    // between `FIRST_SEEN` and `RETURNING` — and the reason `created` has to be
-    // a fact about the statement rather than a guess.
-    expect(sent[0]?.body['text']).not.toBe('');
+    // A DIFFERENT greeting, named. This is the only externally visible difference
+    // between `FIRST_SEEN` and `RETURNING`, and the reason `created` has to be a
+    // fact about the statement rather than a guess.
+    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.start.welcome_back']);
+    expect(sent[0]?.body['text']).not.toBe(CATALOGUE_FA['bot.start.welcome']);
     const registrations = await api.container.database.db.execute(
       sql`SELECT count(*)::int AS n FROM outbox_messages WHERE event_type = 'CustomerRegistered'`,
     );
@@ -304,9 +316,21 @@ describe('the customer Telegram turn', () => {
     // blocked account wants the name it is using now.
     expect(after['username']).toBe('renamed');
 
-    // One reply, and it carries no operator note. `blockedReason` is an operator
-    // field and `bot.blocked` declares no placeholder for it.
+    /*
+     * One reply, and it is `bot.blocked` — asserted by its TEXT.
+     *
+     * This case previously asserted only that one message went out and that it
+     * did not contain the operator note. Both stayed true when `replyFor`'s
+     * BLOCKED branch was removed, so the rule "BLOCKED outranks every intent"
+     * had no integration test at all: the blocked customer was greeted with
+     * `bot.start.welcome_back` and sixteen cases stayed green. Found by mutation,
+     * which is the only thing that finds it.
+     */
     expect(sent).toHaveLength(1);
+    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.blocked']);
+    expect(sent[0]?.body['text']).not.toBe(CATALOGUE_FA['bot.start.welcome_back']);
+    // And it carries no operator note: `blockedReason` is an operator field and
+    // `bot.blocked` declares no placeholder for it.
     expect(String(sent[0]?.body['text'] ?? '')).not.toContain('operator note');
   });
 
@@ -471,8 +495,9 @@ describe('the customer Telegram turn', () => {
     const response = await start({ text: 'سلام، قیمت چنده؟' });
     expect(response.statusCode).toBe(201);
     expect(await customers()).toHaveLength(1);
-    // One reply, and it is the fallback rather than the welcome. The two are
-    // different template keys, so the difference is in the text.
+    // One reply, and it is the FALLBACK rather than the welcome — named, for the
+    // same reason the blocked case is.
     expect(sent).toHaveLength(1);
+    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
   });
 });
