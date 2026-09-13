@@ -69,3 +69,62 @@ are not in TypeScript: `wallet_entries_no_update` and `wallet_entries_no_delete`
 are database triggers, and the test that proves them issues a raw `UPDATE` and
 `DELETE` through the pg client rather than through the repository — the
 repository has no method that could be mutated, which is the point.
+
+## What the payments round found
+
+**Two repository rules were shadowed by a service-level early return.** P09 (the
+confirmation's `WHERE state = 'PENDING'`) and P10 (`create`'s conflict handling)
+both SURVIVED, because no service-level path reaches those statements twice: a
+repeated confirmation hits the already-CONFIRMED branch and a repeated settlement
+hits the replay lookup, so the command returns before the statement carrying the
+guarantee ever runs. That is the Phase 4B _"the helper was tested and the call
+site was not"_ shape inverted — here the call site was tested and the mechanism
+underneath it was not. Three repository-level cases now reach them directly.
+
+**A third rule had no test at all.** P17: dropping the tenant from
+`findByReference` left the suite green. The wallet suite proves that rule and the
+payment suite did not, which for money is not a leak but a way to confirm
+somebody else's payment. The case added for it asserts the row IS visible from
+its own tenant, because a scoping test that cannot tell "invisible" from "absent"
+passes on a repository that returns nothing to anybody.
+
+**The rollback case had to be rewritten before it proved anything.** Its first
+version cancelled the order before calling the service, so the early read refused
+and no debit was ever written — it asserted that nothing happens when nothing
+happens. The interleaving is now PRODUCED: a transaction is held open having
+already settled the order, the service reads `AWAITING_PAYMENT`, writes the
+payment and the DEBIT, blocks on the row lock, and the holder commits. The
+failure then arrives AFTER the money was written, which is the only version of
+that test that says anything about rollback.
+
+## Payments and settlement
+
+| #   | Rule                                                                     | Mutation                                       | Test that dies                                                                                      | Result |
+| --- | ------------------------------------------------------------------------ | ---------------------------------------------- | --------------------------------------------------------------------------------------------------- | ------ |
+| P01 | A payment must EQUAL the order total, not merely cover it                | `!==` → `>`                                    | `payments.test.ts` › refuses to settle an order from a payment that does not cover it               | KILLED |
+| P02 | A currency mismatch is REFUSED, never converted                          | the currency check → `if (false)`              | `payments.test.ts` › refuses to settle across currencies rather than converting                     | KILLED |
+| P03 | The amount comes from the order's frozen snapshot, never from the caller | `order.totals.total` → `money(1n, …)`          | `payments.test.ts` › debits EXACTLY the order total and settles the order, in one transaction       | KILLED |
+| P04 | A settlement that moves no row rolls the DEBIT back                      | the `!changed` refusal → return the payment    | `payments.test.ts` › rolls the DEBIT back when its own UPDATE settles nothing                       | KILLED |
+| P05 | The guard's refusal rolls the confirmation back with it                  | `settlementRefusal(order, confirmed)` → `null` | `payments.test.ts` › refuses to settle an order from a payment that does not cover it               | KILLED |
+| P06 | A wallet cannot overdraw to pay for an order                             | `if (!canCover(…))` → `if (false)`             | `payments.test.ts` › refuses when the balance cannot cover the order, and moves nothing             | KILLED |
+| P07 | A customer may only pay their OWN order                                  | the ownership check dropped from the lookup    | `payments.test.ts` › cannot settle another customer’s order, and says UNKNOWN rather than FORBIDDEN | KILLED |
+| P08 | Only an `AWAITING_PAYMENT` order may be settled                          | the state check → `if (false)`                 | `payments.test.ts` › refuses a second settlement of an order already PAID                           | KILLED |
+| P09 | The confirmation is conditional on `PENDING`                             | `WHERE state = 'PENDING'` dropped              | `payments.test.ts` › confirms only from PENDING, and tells the loser it lost                        | KILLED |
+| P10 | A retried command produces ONE payment                                   | `.onConflictDoNothing({ target })` dropped     | `payments.test.ts` › creates ONE payment for a repeated reference, and returns the first            | KILLED |
+| P11 | A settled order emits `OrderSettled`                                     | `'OrderSettled'` → `'OrderConfirmed'`          | `payments.test.ts` › settles ONCE for a repeated command, and writes one OrderSettled               | KILLED |
+| P12 | An operator confirmation records WHO approved it                         | `adminIdOf(actor)` → `null`                    | `payments.test.ts` › confirms a transfer under receipts.review and settles the order with it        | KILLED |
+| P13 | `settled_at` is stamped by the same statement as the state               | `{ settledAt: now }` → `{}`                    | `payments.test.ts` › debits EXACTLY the order total and settles the order, in one transaction       | KILLED |
+| P14 | Confirming an out-of-band transfer needs `receipts.review`               | the permission → `receipts.view`               | `payments.test.ts` › refuses a confirmation from an operator without receipts.review                | KILLED |
+| P15 | Scope activity is read INSIDE the settling transaction                   | `assertScopeActive` removed                    | `payments.test.ts` › refuses an installation that has stopped accepting work                        | KILLED |
+| P16 | A manual request is priced from the order, not by itself                 | `order.totals.total` → `money(1n, …)`          | `payments.test.ts` › creates a PENDING payment for the order total, with a generated reference      | KILLED |
+| P17 | A reference lookup carries the tenant                                    | `and(tenantId, reference)` → `reference` alone | `payments.test.ts` › cannot see or address another tenant’s payment                                 | KILLED |
+| P18 | An id lookup carries the tenant                                          | `and(tenantId, id)` → `id` alone               | `payments.test.ts` › cannot see or address another tenant’s payment                                 | KILLED |
+
+Twenty mutations run over the payment rules, eighteen rules covered; P09, P10 and
+P17 each SURVIVED first and are recorded as such above rather than quietly fixed.
+
+Two rules here are again NOT falsifiable through this harness because they are
+not in TypeScript: `payments_order_confirmed_key` (at most one CONFIRMED payment
+per order) and `nexa_payments_confirmation_guard` (a CONFIRMED payment's money is
+frozen). Both are proved through the raw client, because the repository
+deliberately has no method that could attempt either.
