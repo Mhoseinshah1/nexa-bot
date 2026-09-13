@@ -12,7 +12,7 @@ import { fetchOrder, fetchOrders } from '../api/client';
 import { formatNumber, formatTimestamp, splitBytes } from '../format';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
-import { setQuery, useLinkHandler, type Route } from '../router';
+import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import {
   Badge,
   Banner,
@@ -183,8 +183,12 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
   const apply = (event: FormEvent) => {
     event.preventDefault();
     if (customerProblem !== undefined || productProblem !== undefined) return;
-    setQuery(route, 'customerId', draftCustomer === '' ? null : draftCustomer);
-    setQuery(route, 'productId', draftProduct === '' ? null : draftProduct);
+    // ONE navigation for both fields. Two `setQuery` calls here dropped the first:
+    // each builds from the `route.query` prop this render captured. See `setQueries`.
+    setQueries(route, [
+      ['customerId', draftCustomer === '' ? null : draftCustomer],
+      ['productId', draftProduct === '' ? null : draftProduct],
+    ]);
   };
 
   const columns: readonly Column<OrderSummaryResponse>[] = [
@@ -288,8 +292,10 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
               disabled={!clearable}
               onClick={() => {
                 setDraft({ signature: appliedSignature, customerId: '', productId: '' });
-                setQuery(route, 'customerId', null);
-                setQuery(route, 'productId', null);
+                setQueries(route, [
+                  ['customerId', null],
+                  ['productId', null],
+                ]);
               }}
             >
               {t('web.users_search_clear')}

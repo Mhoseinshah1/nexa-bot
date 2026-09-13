@@ -187,7 +187,13 @@ export const NAV: readonly NavEntry[] = [
     path: '/products',
     label: 'web.nav_products',
     icon: 'products',
-    permission: 'catalog.view',
+    // EITHER, exactly as `/panels` and `/notifications` do above and below, and for
+    // the identical reason. The route renders the CREATE form on `catalog.edit`
+    // whether or not `catalog.view` is held, and the server authorizes creation on
+    // `catalog.edit` alone — so gating the link on `catalog.view` hid a page that
+    // would have served a custom-role editor correctly. Found by the Codex review of
+    // this branch, which is the third time this shape has been the answer.
+    permission: ['catalog.view', 'catalog.edit'],
     group: 'web.navgroup_sales',
   },
   {

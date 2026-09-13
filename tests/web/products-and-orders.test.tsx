@@ -1,4 +1,4 @@
-import { SALES_CURRENCY_CODES } from '@nexa/contracts';
+import { PANEL_PAGE_MAX, SALES_CURRENCY_CODES } from '@nexa/contracts';
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
@@ -236,6 +236,53 @@ describe('the product form', () => {
       await screen.findByText(/قیمت باید عددی صحیح و بزرگ‌تر از صفر باشد/),
     ).toBeInTheDocument();
     expect((screen.getByText('ذخیرهٔ تغییرات') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('asks for the whole fleet, and falls back to a box when there is more of it', async () => {
+    /*
+     * The picker does not page. It ignored `nextCursor` and asked for the endpoint's
+     * default of fifty, so a tenant's fifty-first panel could not be chosen for a
+     * product — and nothing on screen said a choice was missing, which is what makes a
+     * silent cap worse than a text box.
+     *
+     * Two halves. The request asks for the contract MAXIMUM...
+     */
+    const api = stubApi([
+      { url: '/products/019220ab', body: { product: product() } },
+      { url: '/panels', body: { panels: [panel()], nextCursor: 'more' } },
+    ]);
+    renderPage(
+      <ProductDetailPage id="019220ab-cdef-7012-8345-6789abcdef01" mayEdit denied={false} />,
+    );
+    await screen.findByLabelText('قیمت');
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.url.includes('/panels'))).toBe(true);
+    });
+    const asked = api.calls.find((call) => call.url.includes('/panels'));
+    expect(asked?.url).toContain(`limit=${String(PANEL_PAGE_MAX)}`);
+
+    /*
+     * ...and when the answer says there is MORE than that, the field becomes the same
+     * free-text input an operator without `panels.view` gets, with its own sentence.
+     * Raising the limit moves the cliff from 50 to 200; only this removes it.
+     */
+    expect(await screen.findByText(/بیش از آن است که در یک فهرست بیاید/)).toBeInTheDocument();
+    expect(screen.getByLabelText('پنل').tagName).toBe('INPUT');
+  });
+
+  it('offers a select when the fleet fits in one page', async () => {
+    stubApi([
+      { url: '/products/019220ab', body: { product: product() } },
+      { url: '/panels', body: { panels: [panel()], nextCursor: null } },
+    ]);
+    renderPage(
+      <ProductDetailPage id="019220ab-cdef-7012-8345-6789abcdef01" mayEdit denied={false} />,
+    );
+    // The complement of the case above, so the fallback cannot become the only shape
+    // and go unnoticed.
+    await waitFor(() => {
+      expect(screen.getByLabelText('پنل').tagName).toBe('SELECT');
+    });
   });
 
   it('offers ONLY the currencies a store can sell in', async () => {

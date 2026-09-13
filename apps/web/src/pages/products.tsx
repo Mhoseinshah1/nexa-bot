@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  PANEL_PAGE_MAX,
   SALES_CURRENCY_CODES,
   MAX_DEVICE_LIMIT,
   MAX_DURATION_DAYS,
@@ -548,9 +549,27 @@ function ProductForm({
    * field falls back to a text input and says why — rather than rendering an empty
    * select, which would read as "this tenant has no panels".
    */
-  const panels = useQuery({ queryKey: ['panels', 'for-product'], queryFn: () => fetchPanels({}) });
+  const panels = useQuery({
+    queryKey: ['panels', 'for-product'],
+    // `PANEL_PAGE_MAX`, not the endpoint's default of 50. This picker does not page —
+    // it ignored `nextCursor` and a successful first page switched the field to a
+    // select, so a tenant's fifty-first panel simply could not be chosen. Found by the
+    // Codex review of this branch.
+    queryFn: () => fetchPanels({ limit: PANEL_PAGE_MAX }),
+  });
   const panelOptions = panels.data?.panels ?? [];
-  const panelsReadable = queryState(panels) === 'ready';
+  /*
+   * A select ONLY when the list is complete.
+   *
+   * Raising the limit moves the cliff from 50 to 200; it does not remove it, and a
+   * select that silently omits a panel is worse than a box asking for an id, because
+   * nothing on screen says a choice is missing. So a `nextCursor` means there are more
+   * than this page holds, and the field falls back to the same free-text input an
+   * operator without `panels.view` gets — with its own sentence, so the two cases are
+   * not confused. `no silent caps` is the rule this obeys.
+   */
+  const panelsComplete = (panels.data?.nextCursor ?? null) === null;
+  const panelsReadable = queryState(panels) === 'ready' && panelsComplete;
 
   const checked = bodyFrom(state);
   const problem = 'problem' in checked ? checked.problem : null;
@@ -623,7 +642,13 @@ function ProductForm({
 
       <Field
         label={t('web.product_panel')}
-        hint={panelsReadable ? t('web.product_panel_hint') : t('web.product_panel_denied')}
+        hint={
+          panelsReadable
+            ? t('web.product_panel_hint')
+            : queryState(panels) === 'ready'
+              ? t('web.product_panel_too_many')
+              : t('web.product_panel_denied')
+        }
         htmlFor={`product-panel-${mode}`}
       >
         {panelsReadable ? (

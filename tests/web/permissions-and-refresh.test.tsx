@@ -32,6 +32,56 @@ const routeFor = (path: string, permissions: readonly string[]): ReactElement =>
  * page — not by reading the permission out of the source, which is what made
  * the defect invisible in the first place.
  */
+/**
+ * `/products` is the THIRD page whose nav entry was gated on one of the two
+ * capabilities it serves — after `/notifications` and `/panels`.
+ *
+ * The route renders the create form on `catalog.edit` whether or not `catalog.view` is
+ * held, and `POST /products` authorizes creation on `catalog.edit` alone. So a
+ * custom-role editor had a working page and no link to it, reachable only by typing the
+ * address. Found by the Codex review of the 4B branch.
+ *
+ * Through the real NAV and the real `resolve`, like the suite below, because reading the
+ * permission out of the source is what made this invisible three times.
+ */
+describe('the catalogue permission combinations', () => {
+  const entry = NAV.find((candidate) => candidate.id === 'products');
+  const LIST = { url: '/products', body: { products: [], nextCursor: null } };
+  const PANELS = { url: '/panels', body: { panels: [], nextCursor: null } };
+  const CREATE_FORM = 'محصول تازه';
+  const DENIED = 'شما به این بخش دسترسی ندارید.';
+
+  const open = (permissions: readonly string[]) => {
+    stubApi([LIST, PANELS]);
+    return renderPage(routeFor('/products', permissions));
+  };
+
+  it('offers the page to an actor who may only CREATE', async () => {
+    expect(entry, 'the products nav entry').toBeDefined();
+    expect(navPermitted(entry!, ['catalog.edit'])).toBe(true);
+
+    open(['catalog.edit']);
+    // The capability they hold is offered...
+    expect(await screen.findByText(CREATE_FORM)).toBeInTheDocument();
+    // ...and the list they may not read says so rather than showing an empty table,
+    // which would claim this tenant has no products.
+    expect(await screen.findByText(DENIED)).toBeInTheDocument();
+  });
+
+  it('offers the page to an actor who may only read', async () => {
+    expect(navPermitted(entry!, ['catalog.view'])).toBe(true);
+
+    open(['catalog.view']);
+    await waitFor(() => {
+      expect(screen.queryByText(DENIED)).toBeNull();
+    });
+  });
+
+  it('hides it from an actor holding neither', () => {
+    expect(navPermitted(entry!, ['panels.view'])).toBe(false);
+  });
+});
+
 describe('the notification permission combinations', () => {
   const entry = NAV.find((candidate) => candidate.id === 'notifications');
   const HISTORY = { url: '/notifications', body: { notifications: [], nextCursor: null } };
