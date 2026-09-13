@@ -671,6 +671,36 @@ describe('payments and settlement', () => {
     });
 
     /*
+     * A lookup without the tenant returns another tenant's row and leaves the caller to
+     * decide what to do with something it should never have seen. For money that is not
+     * a leak, it is a way to confirm somebody else's payment.
+     */
+    it('cannot see or address another tenant’s payment', async () => {
+      const customerB = await customer(tenantB, BOT_B, '900703');
+      const orderB = await awaitingPayment(tenantB, customerB, panelB, 'r4');
+      const theirs = await ctx.container.payments.requestManualTransfer(
+        tenantB,
+        systemActor('manual-r4'),
+        customerB,
+        { idempotencyKey: 'manual-r4-0001', orderId: orderB.id },
+      );
+      const repository = new DrizzlePaymentRepository(ctx.container.database.db);
+
+      expect(await repository.findById(tenantA, theirs.id)).toBeNull();
+      expect(await repository.findByReference(tenantA, theirs.reference)).toBeNull();
+      expect((await repository.list(tenantA, {}, 50, null)).items).toEqual([]);
+      // And it is genuinely there, read from its own tenant.
+      expect((await repository.findById(tenantB, theirs.id))?.id).toBe(theirs.id);
+
+      await expect(
+        ctx.container.payments.confirmManualTransfer(tenantA, owner, theirs.id, {
+          idempotencyKey: 'confirm-r4-0001',
+          note: 'not mine to approve',
+        }),
+      ).rejects.toMatchObject({ code: 'commerce.payment_not_found' });
+    });
+
+    /*
      * The freeze is a TRIGGER, so it is tested through the raw client: the repository
      * has no method that could attempt this, which is the design rather than an
      * omission. `nexa_payments_confirmation_guard` (0035) is what makes a confirmed
