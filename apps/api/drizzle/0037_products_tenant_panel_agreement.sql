@@ -12,6 +12,11 @@
 --
 -- `panels_tenant_id_key` (0018) is the UNIQUE(tenant_id, id) this references.
 --
+-- ADD ONLY. The single-column key from 0032 is left in place even though the composite
+-- one implies it: `migration-compatibility.test.ts` requires every dropped constraint to
+-- be re-added by the same file, because the release still running during a rolling
+-- update may rely on it. The cost is one redundant index check per insert.
+--
 -- The column stays NULLABLE and that is deliberate: a composite foreign key is MATCH
 -- SIMPLE by default, so it is not enforced when any of its columns is NULL. A product an
 -- operator has not finished configuring keeps `panel_id IS NULL` and stays legal.
@@ -20,6 +25,4 @@
 -- ships on this branch — so there is no row to repair, and a violating row SHOULD fail
 -- this migration loudly rather than be silently NULLed into an unfulfillable product.
 
-ALTER TABLE "products" DROP CONSTRAINT "products_panel_id_panels_id_fk";
---> statement-breakpoint
 ALTER TABLE "products" ADD CONSTRAINT "products_tenant_panel_fk" FOREIGN KEY ("tenant_id","panel_id") REFERENCES "public"."panels"("tenant_id","id") ON DELETE no action ON UPDATE no action;

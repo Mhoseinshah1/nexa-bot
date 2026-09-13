@@ -19,7 +19,10 @@ import {
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
-import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
+import {
+  recordMutationDenial,
+  runAuthorizedMutation,
+} from '../../../platform/access/application/authorized-mutation.js';
 import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
@@ -148,6 +151,25 @@ export class ProductService {
     input: { readonly idempotencyKey: string; readonly draft: ProductDraft },
   ): Promise<ProductRecord> {
     const requestHash = hashRequest({ draft: serialisableDraft(input.draft) });
+
+    /*
+     * Authorized BEFORE the replay lookup, not only inside the transaction.
+     *
+     * `runAuthorizedMutation` re-checks inside the committing transaction, which is the
+     * rule — but a REPLAY never reaches it, and a replay returns a PRODUCT. Without this
+     * an unauthorized caller replaying somebody else's idempotency key would be answered
+     * with the row, which is `catalog.view` handed out by the write path.
+     *
+     * The check is made twice on a first call and exactly once on a replay. That is the
+     * shape `CustomerService.resolveFromUpdate` records and `OrderService` copies; this
+     * service was the one that did not, found by the Codex review of this branch.
+     */
+    await this.authorize(scope, actor, {
+      action: 'product.create',
+      entityType: 'Product',
+      entityId: null,
+    });
+
     const replay = await this.deps.idempotency.find<{ productId: string }>(
       scope,
       'WEB',
@@ -232,6 +254,14 @@ export class ProductService {
   ): Promise<ProductRecord> {
     const productId = this.productId(input.productId);
     const requestHash = hashRequest({ productId, edit: serialisableDraft(input.edit) });
+
+    /** Before the replay, for the reason `create` states: a replay returns a row. */
+    await this.authorize(scope, actor, {
+      action: 'product.update',
+      entityType: 'Product',
+      entityId: productId,
+    });
+
     const replay = await this.deps.idempotency.find<{ productId: string }>(
       scope,
       'WEB',
@@ -329,6 +359,11 @@ export class ProductService {
   ): Promise<ProductRecord> {
     const productId = this.productId(input.productId);
     const requestHash = hashRequest({ productId, to: input.to });
+    const action = input.to === 'ACTIVE' ? 'product.activate' : 'product.deactivate';
+
+    /** Before the replay, for the reason `create` states: a replay returns a row. */
+    await this.authorize(scope, actor, { action, entityType: 'Product', entityId: productId });
+
     const replay = await this.deps.idempotency.find<{ productId: string }>(
       scope,
       'WEB',
@@ -342,7 +377,6 @@ export class ProductService {
 
     const now = this.deps.clock.now();
     const from: ProductStatus = input.to === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
-    const action = input.to === 'ACTIVE' ? 'product.activate' : 'product.deactivate';
 
     return runAuthorizedMutation(
       this.mutationDeps(),
@@ -427,6 +461,42 @@ export class ProductService {
    * skipped it: panels, which let a tenant an operator had stopped be given new panels.
    * A surface checking on arrival is not enough because a stop can commit in between.
    */
+  /**
+   * Charges `catalog.edit` BEFORE the replay lookup, leaving the same trail as a
+   * refusal inside the transaction.
+   *
+   * `runAuthorizedMutation` re-checks inside the committing transaction, which is the
+   * rule — but a REPLAY returns before it, so without an early check an unauthorized
+   * caller replaying somebody else's idempotency key would be answered with the
+   * product. Found by the Codex review of this branch; `OrderService` and
+   * `CustomerService.resolveFromUpdate` already had it.
+   *
+   * `recordMutationDenial` rather than a bare `guard.check`, and that is the half that
+   * is easy to leave out: an early check that simply throws writes NO audit row, so
+   * closing the read hole would have opened a silent-refusal one. It is the same
+   * division of labour `PanelService.authorize` uses, and it is called from exactly one
+   * place per attempt, so a denial is one audit row on either path.
+   */
+  private async authorize(
+    scope: TenantContext,
+    actor: ActorContext,
+    denial: { action: string; entityType: string; entityId: string | null },
+  ): Promise<void> {
+    try {
+      await this.deps.guard.check(scope, actor, PRODUCT_EDIT_PERMISSION);
+    } catch (error) {
+      await recordMutationDenial(
+        this.mutationDeps(),
+        scope,
+        actor,
+        PRODUCT_EDIT_PERMISSION,
+        denial,
+        error,
+      );
+      throw error;
+    }
+  }
+
   /**
    * A product may only be fulfilled on a panel of its own tenant.
    *

@@ -2081,10 +2081,14 @@ export const products = pgTable(
     /**
      * Where a purchase of this plan is fulfilled. Null until configured.
      *
-     * NO single-column reference. The pair is constrained below — see
-     * `products_tenant_panel_fk`.
+     * The single-column reference is KEPT alongside the composite one below, and that
+     * is not an oversight. It is implied by `products_tenant_panel_fk` and therefore
+     * redundant — but 0032 shipped it, and `migration-compatibility.test.ts` requires
+     * every dropped constraint to be re-added by the same file: a migration that
+     * removed it would take a constraint away from the release still running during a
+     * rolling update. Expand only.
      */
-    panelId: uuid('panel_id'),
+    panelId: uuid('panel_id').references(() => panels.id),
     /** 0 means no time limit (`UNLIMITED_DURATION_DAYS`). */
     durationDays: integer('duration_days').notNull(),
     /** 0 means no traffic limit (`UNLIMITED_TRAFFIC_BYTES`). Bytes, never gigabytes. */

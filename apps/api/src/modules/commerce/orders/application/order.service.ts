@@ -21,7 +21,10 @@ import {
 } from '@nexa/contracts';
 import { productIdSchema } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
-import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
+import {
+  recordMutationDenial,
+  runAuthorizedMutation,
+} from '../../../platform/access/application/authorized-mutation.js';
 import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
@@ -160,8 +163,16 @@ export class OrderService {
      * an unauthorized caller replaying somebody else's key would be answered with one.
      * The check is made twice on a first call and exactly once on a replay, which is the
      * shape `CustomerService.resolveFromUpdate` records for the same reason.
+     *
+     * Through `authorize` rather than the guard directly: an early check that merely
+     * throws leaves NO audit row, so closing the read hole would open a silent-refusal
+     * one. See `authorize`.
      */
-    await this.deps.guard.check(scope, actor, ORDER_PLACE_PERMISSION);
+    await this.authorize(scope, actor, {
+      action: 'order.create',
+      entityType: 'Order',
+      entityId: null,
+    });
 
     const replay = await this.replay(scope, input.idempotencyKey, requestHash);
     if (replay !== null) return replay;
@@ -267,7 +278,11 @@ export class OrderService {
     const requestHash = hashRequest({ customerId, orderId });
 
     /** Before the replay, for the reason `createDraft` states: a replay returns a row. */
-    await this.deps.guard.check(scope, actor, ORDER_PLACE_PERMISSION);
+    await this.authorize(scope, actor, {
+      action: 'order.confirm',
+      entityType: 'Order',
+      entityId: orderId,
+    });
 
     const replay = await this.replay(scope, input.idempotencyKey, requestHash);
     if (replay !== null) return replay;
@@ -533,6 +548,35 @@ export class OrderService {
         COMMERCE_ERROR_CODES.CUSTOMER_BLOCKED,
         'This account cannot place orders.',
       );
+    }
+  }
+
+  /**
+   * Charges the place permission BEFORE the replay lookup, and audits a refusal.
+   *
+   * The check itself is what stops a replay answering an unauthorized caller with an
+   * order. `recordMutationDenial` is what stops that fix from making a denial silent:
+   * `runAuthorizedMutation` records one for a refusal inside the transaction, and an
+   * early refusal never reaches it. One call per attempt, so one audit row either way —
+   * the same division of labour `PanelService.authorize` uses.
+   */
+  private async authorize(
+    scope: TenantContext,
+    actor: ActorContext,
+    denial: { action: string; entityType: string; entityId: string | null },
+  ): Promise<void> {
+    try {
+      await this.deps.guard.check(scope, actor, ORDER_PLACE_PERMISSION);
+    } catch (error) {
+      await recordMutationDenial(
+        this.mutationDeps(),
+        scope,
+        actor,
+        ORDER_PLACE_PERMISSION,
+        denial,
+        error,
+      );
+      throw error;
     }
   }
 

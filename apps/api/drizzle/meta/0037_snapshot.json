@@ -1,5 +1,5 @@
 {
-  "id": "d2e9b6a1-355e-4ad0-aa9d-794596bafa3f",
+  "id": "ddd8a707-3833-4e24-aa21-e3b0d999b23a",
   "prevId": "33405fc0-49fe-4d19-b77d-691faa460e64",
   "version": "7",
   "dialect": "postgresql",
@@ -4622,6 +4622,19 @@
           "tableTo": "tenants",
           "columnsFrom": [
             "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "products_panel_id_panels_id_fk": {
+          "name": "products_panel_id_panels_id_fk",
+          "tableFrom": "products",
+          "tableTo": "panels",
+          "columnsFrom": [
+            "panel_id"
           ],
           "columnsTo": [
             "id"

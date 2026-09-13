@@ -260,6 +260,51 @@ describe('product HTTP surface', () => {
     expect(response.statusCode).toBe(400);
   });
 
+  it('refuses an input a column cannot hold, as a 400 naming the field', async () => {
+    /*
+     * Two shapes that validated and then failed in PostgreSQL, both found by the same
+     * Codex review and both answered 500 with no field named.
+     *
+     * `priceAmount` is checked against `bigint`'s maximum: the digit regex admits
+     * nineteen digits, which runs past the column by more than an order of magnitude.
+     * The boundary is exactly one minor unit past the ceiling AND exactly at it, so a
+     * comparison written with the wrong operator fails one of the two.
+     */
+    const past = await post(
+      PRODUCT_ROUTES.create,
+      editorCookie,
+      body({ priceAmount: '9223372036854775808' }),
+    );
+    expect(past.statusCode, past.body).toBe(400);
+    // `request.invalid`, the error filter's code for a ZodError, not a domain code:
+    // the boundary refused it and no service was reached.
+    expect(past.json().error.kind).toBe('VALIDATION');
+
+    const atTheCeiling = await post(
+      PRODUCT_ROUTES.create,
+      editorCookie,
+      body({ priceAmount: '9223372036854775807' }),
+    );
+    expect(atTheCeiling.statusCode, atTheCeiling.body).toBe(201);
+
+    /*
+     * `panelId` is a `uuid` column, so an unvalidated string reaches PostgreSQL as
+     * `invalid input syntax for type uuid`. Four shapes, because one of them —
+     * the empty string — is the one a form submits when nothing was chosen, and a
+     * validator that only rejected obvious rubbish would let it through.
+     */
+    for (const panelId of [
+      'not-a-uuid',
+      '',
+      '../../etc/passwd',
+      '01900000-0000-4000-8000-000000000001',
+    ]) {
+      const response = await post(PRODUCT_ROUTES.create, editorCookie, body({ panelId }));
+      expect(response.statusCode, `${panelId}: ${response.body}`).toBe(400);
+      expect(response.json().error.kind).toBe('VALIDATION');
+    }
+  });
+
   // -------------------------------------------------------------------------
   // Creation and state
   // -------------------------------------------------------------------------
@@ -398,6 +443,33 @@ describe('product HTTP surface', () => {
       expect(refused.statusCode, path).toBe(403);
       expect(refused.json().error.code).toBe(PLATFORM_ERROR_CODES.PERMISSION_DENIED);
     }
+  });
+
+  it('refuses an unauthorized REPLAY, which never reaches the transaction', async () => {
+    /*
+     * `runAuthorizedMutation` re-checks inside the committing transaction, which is the
+     * rule — and a replay returns before it ever gets there. So a caller holding only
+     * `catalog.view` who guesses or observes an editor's idempotency key was answered
+     * with the product, which is the write path handing out a read it does not hold.
+     *
+     * The key is REUSED verbatim with the same body, so this is a genuine replay of a
+     * committed write rather than a fresh request that merely happens to be refused.
+     */
+    const key = idempotencyKey();
+    const payload = { ...body(), idempotencyKey: key };
+    const first = await post(PRODUCT_ROUTES.create, editorCookie, payload);
+    expect(first.statusCode, first.body).toBe(201);
+
+    const replayed = await post(PRODUCT_ROUTES.create, viewerCookie, payload);
+    expect(replayed.statusCode, replayed.body).toBe(403);
+    expect(replayed.json().error.code).toBe(PLATFORM_ERROR_CODES.PERMISSION_DENIED);
+
+    // The editor's own replay still works, so the guard did not break idempotency.
+    const again = await post(PRODUCT_ROUTES.create, editorCookie, payload);
+    expect(again.statusCode).toBe(201);
+    expect(productResponseSchema.parse(again.json()).product.id).toBe(
+      productResponseSchema.parse(first.json()).product.id,
+    );
   });
 
   it('refuses an actor with no catalog permission even the list', async () => {
