@@ -483,6 +483,30 @@ describe('the wallet ledger', () => {
     });
 
     /*
+     * A stopped installation refuses the write INSIDE the transaction, not in the
+     * controller.
+     *
+     * `CLAUDE.md` makes this a non-negotiable and names why: a surface checks activity
+     * when the request arrives and a stop can commit in between. Panels was the module
+     * that skipped it, which let a tenant an operator had stopped be given new panels
+     * and a background monitor. Here it would be new money.
+     */
+    it('refuses an installation that has stopped accepting work', async () => {
+      await ctx.container.database.db.execute(
+        sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}` as never,
+      );
+
+      await expect(
+        adjust(owner, { key: 'adj-key-stopped', direction: 'CREDIT', amountMinor: 10n }),
+      ).rejects.toThrow();
+
+      const entries = (await ctx.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM wallet_entries` as never,
+      )) as unknown as { rows: { n: number }[] };
+      expect(entries.rows[0]?.n).toBe(0);
+    });
+
+    /*
      * CREDIT and DEBIT are SEPARATE permissions with different risk labels, and this
      * proves the direction picks which one rather than merely that some permission is
      * charged. `finance` is the actor that can tell them apart: it holds
