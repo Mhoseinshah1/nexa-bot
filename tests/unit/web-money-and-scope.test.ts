@@ -489,11 +489,21 @@ describe('the settings the owner revisions add', () => {
     ).toBe(true);
   });
 
-  it('marks the four as having no consumer, and everything older as having one', () => {
+  it('marks the three as having no consumer, and everything older as having one', () => {
     const planned = SETTINGS.filter((s) => s.consumer === 'PLANNED').map((s) => s.key);
+    /*
+     * THREE since Phase 4B. `sales.currency` left this list because `ProductService`
+     * now refuses a price in any other currency — the Codex review found it declared,
+     * rendered by the admin, and enforced by nothing, which is a setting an operator
+     * believes and the system ignores.
+     *
+     * The list is exact rather than a membership check, so a key that quietly gains or
+     * loses a consumer has to say so here.
+     */
     expect(planned.sort()).toEqual(
-      ['sales.currency', 'support.accounts', 'telegram.channels', 'wallet.topup.minimum'].sort(),
+      ['support.accounts', 'telegram.channels', 'wallet.topup.minimum'].sort(),
     );
+    expect(SETTINGS.find((s) => s.key === 'sales.currency')?.consumer).toBe('ACTIVE');
     for (const s of SETTINGS.filter((s) => s.key.startsWith('ops.notifications.'))) {
       expect(s.consumer, s.key).toBe('ACTIVE');
     }
