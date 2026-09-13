@@ -483,27 +483,48 @@ describe('the wallet ledger', () => {
     });
 
     /*
-     * CREDIT and DEBIT are separate permissions with different risk labels, and the
-     * refusal leaves an audit row: an early `guard.check` that merely throws never
-     * reaches `runAuthorizedMutation`, which is what records a denial.
+     * CREDIT and DEBIT are SEPARATE permissions with different risk labels, and this
+     * proves the direction picks which one rather than merely that some permission is
+     * charged. `finance` is the actor that can tell them apart: it holds
+     * `users.wallet.credit` and not `users.wallet.debit`, so an implementation that
+     * charged CREDIT for both would let it take money away. An actor holding neither
+     * — `support` — is refused either way and proves nothing about which was asked.
+     *
+     * The refusal also leaves an audit row: an early `guard.check` that merely throws
+     * never reaches `runAuthorizedMutation`, which is what records a denial.
      */
-    it('charges the direction’s own permission, and audits the refusal', async () => {
-      const support = adminActorFor(
+    it('charges the direction’s OWN permission, and audits the refusal', async () => {
+      const finance = adminActorFor(
         await createAdmin(ctx.container, tenantA, {
-          username: 'support-wallet',
-          roleKeys: ['support'],
+          username: 'finance-wallet',
+          roleKeys: ['finance'],
         }),
       );
 
+      const credited = await adjust(finance, {
+        key: 'adj-key-0006',
+        direction: 'CREDIT',
+        amountMinor: 50n,
+      });
+      expect(credited.actorAdminId).toBe(finance.id);
+
       await expect(
-        adjust(support, { key: 'adj-key-0006', direction: 'DEBIT', amountMinor: 1n }),
+        adjust(finance, { key: 'adj-key-0007', direction: 'DEBIT', amountMinor: 1n }),
       ).rejects.toMatchObject({ code: 'platform.permission_denied' });
 
       const audit = (await ctx.container.database.db.execute(
-        sql`SELECT action, result FROM audit_logs WHERE entity_type = 'Wallet'` as never,
+        sql`SELECT action, result FROM audit_logs WHERE entity_type = 'Wallet'
+            ORDER BY occurred_at ASC, id ASC` as never,
       )) as unknown as { rows: { action: string; result: string }[] };
-      expect(audit.rows).toEqual([{ action: 'wallet.debit', result: 'DENIED' }]);
-      expect(await balance(tenantA, customerA)).toMatchObject({ entryCount: 0 });
+      expect(audit.rows).toEqual([
+        { action: 'wallet.credit', result: 'SUCCESS' },
+        { action: 'wallet.debit', result: 'DENIED' },
+      ]);
+      // The refused debit moved nothing.
+      expect(await balance(tenantA, customerA)).toMatchObject({
+        amountMinor: 50n,
+        entryCount: 1,
+      });
     });
   });
 });
