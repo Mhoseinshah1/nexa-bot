@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
+import { ORDER_EXPIRY_MINUTES_MAX, ORDER_EXPIRY_MINUTES_MIN } from './commerce.js';
 import { moneySchema } from './money.js';
 
 /**
@@ -313,6 +314,33 @@ export const SETTINGS = [
     classification: 'PUBLIC',
     configures: null,
     consumer: 'PLANNED',
+  },
+  {
+    key: 'sales.order_expiry_minutes',
+    description:
+      'How long an unpaid order is held before it may be expired. The window is an operator ' +
+      'setting because a tenant selling to a different market wants a different one, and the ' +
+      'research fixes no number: ORDER_EXPIRY_MINUTES_MIN and _MAX in commerce.ts are the ' +
+      'bounds a configured value is checked against, so a misconfiguration cannot create an ' +
+      'order that never expires or one that expires before a customer can open a payment page. ' +
+      'A DRAFT carries the same deadline and cannot be confirmed past it, which is what stops a ' +
+      'customer holding a stale price open indefinitely.',
+    // Bounded by the CONTRACT's own constants rather than by numbers retyped here.
+    // Two copies of a bound drift; `commerce.ts` owns these.
+    schema: z.number().int().min(ORDER_EXPIRY_MINUTES_MIN).max(ORDER_EXPIRY_MINUTES_MAX),
+    // Sixty minutes. Inside the bounds, and the one number the repository already
+    // records an opinion about: `web.planned_payments_expiry` says the payment window
+    // is at most an hour. That is a PAYMENT decision and this is the order's own
+    // window, but a default longer than the payment deadline would be a default that
+    // guarantees a stranded order.
+    defaultValue: 60,
+    // Zero is outside the schema entirely — the minimum is five — so it can never be
+    // stored and does not need a meaning.
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
   },
   {
     key: 'wallet.topup.minimum',

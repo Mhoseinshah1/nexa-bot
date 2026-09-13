@@ -1,3 +1,5 @@
+import { z } from 'zod';
+import { moneySchema } from './money.js';
 import type { Money } from './money.js';
 import type { ProductId } from './ids.js';
 
@@ -75,3 +77,36 @@ export interface PriceQuote {
 
 /** At most one discount code per order. Stacking is a margin decision, not a default. */
 export const MAX_DISCOUNT_CODES_PER_ORDER = 1;
+
+/**
+ * The quote as it is STORED, and the shape it is parsed back through.
+ *
+ * `orders.quote` is `jsonb`, and a `Money` cannot be written to JSON: `amountMinor` is
+ * a `bigint` and `JSON.stringify` throws on one. So the stored form carries every
+ * amount as the decimal STRING `moneySchema` already defines — the same reason that
+ * schema exists, and not a second convention invented for this table.
+ *
+ * It is a schema rather than an interface because a `jsonb` column is the one place a
+ * document can come back malformed without anything having been wrong at write time: a
+ * restore, a hand-edit, or an older writer. Parsing on read means a quote that cannot
+ * be believed is a refusal and not a total rendered from `undefined`.
+ */
+export const priceQuoteStepWireSchema = z.object({
+  step: z.enum(PRICING_STEPS),
+  effect: z.enum(STEP_EFFECTS),
+  ruleId: z.string().nullable(),
+  ruleLabel: z.string(),
+  amountBefore: moneySchema,
+  amountAfter: moneySchema,
+});
+
+export const priceQuoteWireSchema = z.object({
+  productId: z.string().nullable(),
+  quotedAt: z.iso.datetime(),
+  currency: moneySchema.shape.currency,
+  finalAmount: moneySchema,
+  /** Mandatory, and non-empty: `PriceQuote` calls a quote without a trace not a quote. */
+  trace: z.array(priceQuoteStepWireSchema).min(1),
+});
+
+export type PriceQuoteWire = z.infer<typeof priceQuoteWireSchema>;

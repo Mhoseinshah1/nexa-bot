@@ -442,8 +442,28 @@ export const COMMERCE_ERROR_CODES = {
   COMMERCE_REQUEST_INVALID: 'commerce.request_invalid',
 
   CUSTOMER_NOT_FOUND: 'commerce.customer_not_found',
+  /**
+   * The customer exists and an operator has blocked them.
+   *
+   * Distinct from absent, and deliberately so: a block is a decision somebody made and
+   * can explain, and collapsing it into "unknown customer" is how the legacy system
+   * leaves an operator unable to tell a mistake from a moderation action.
+   */
+  CUSTOMER_BLOCKED: 'commerce.customer_blocked',
 
   PRODUCT_NOT_FOUND: 'commerce.product_not_found',
+  /** The product exists and is withdrawn from sale. Not the same as absent. */
+  PRODUCT_NOT_PURCHASABLE: 'commerce.product_not_purchasable',
+  /** No price pair. `catalog.ts`: an absent price means unsellable, never free. */
+  PRODUCT_NOT_PRICED: 'commerce.product_not_priced',
+  /** No panel bound, so nothing could deliver it. Named rather than hidden. */
+  PRODUCT_NOT_FULFILLABLE: 'commerce.product_not_fulfillable',
+
+  ORDER_NOT_FOUND: 'commerce.order_not_found',
+  /** The order is not in the state this command needs. The machine refused it. */
+  ORDER_STATE_INVALID: 'commerce.order_state_invalid',
+  /** The draft's own deadline passed before it was confirmed. */
+  ORDER_EXPIRED: 'commerce.order_expired',
 } as const;
 
 /*
