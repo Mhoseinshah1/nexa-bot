@@ -38,25 +38,74 @@ import { telegramUserIdOf } from '../../apps/api/src/surfaces/telegram/webhook.c
  */
 describe('a Telegram turn, decided before any I/O', () => {
   it('reads /start, and keeps reading it when Telegram decorates it', () => {
-    expect(intentOf({ message: { text: '/start' } })).toBe('START');
+    expect(intentOf({ message: { text: '/start' } }).intent).toBe('START');
     // A deep link puts a payload after the command. 4F's referral codes arrive this way,
     // so the command must survive one.
-    expect(intentOf({ message: { text: '/start ref_ABC123' } })).toBe('START');
+    expect(intentOf({ message: { text: '/start ref_ABC123' } }).intent).toBe('START');
     // In a group Telegram sends `/start@thebot`. The bot it names is the bot that got it.
-    expect(intentOf({ message: { text: '/start@nexa_bot' } })).toBe('START');
-    expect(intentOf({ message: { text: '  /START  ' } })).toBe('START');
+    expect(intentOf({ message: { text: '/start@nexa_bot' } }).intent).toBe('START');
+    expect(intentOf({ message: { text: '  /START  ' } }).intent).toBe('START');
+  });
+
+  it('reads /catalog the same way, and carries no target for it', () => {
+    expect(intentOf({ message: { text: '/catalog' } })).toEqual({
+      intent: 'CATALOG',
+      targetId: null,
+      callbackQueryId: null,
+    });
+    expect(intentOf({ message: { text: '/catalog@nexa_bot' } }).intent).toBe('CATALOG');
+  });
+
+  it('reads a tapped button, and VALIDATES the id it carries', () => {
+    const product = '01900000-0000-7000-8000-0000000000a1';
+    expect(intentOf({ callback_query: { id: 'q1', data: `p:${product}` } })).toEqual({
+      intent: 'ORDER',
+      targetId: product,
+      callbackQueryId: 'q1',
+    });
+    expect(intentOf({ callback_query: { id: 'q2', data: `c:${product}` } })).toEqual({
+      intent: 'CONFIRM',
+      targetId: product,
+      callbackQueryId: 'q2',
+    });
+
+    /*
+     * `callback_data` is CLIENT-SUPPLIED text and Telegram signs nothing about it, so a
+     * modified client can put anything after the prefix. Every one of these becomes
+     * UNSUPPORTED — which answers the customer — rather than reaching a service that
+     * would cast it into a `uuid` column and answer 500.
+     *
+     * The callback id SURVIVES the refusal, because the button is still spinning and
+     * still has to be stopped.
+     */
+    for (const data of [
+      'p:not-a-uuid',
+      'p:',
+      `p:${product}; DROP TABLE orders`,
+      // A v4 UUID is not a v7 one. Every id this system mints is v7, so accepting
+      // another version would be accepting an id this installation cannot have issued.
+      'p:9f1b7c2e-4d3a-4b7e-8c1f-2a3b4c5d6e7f',
+      'x:whatever',
+      '',
+    ]) {
+      expect(intentOf({ callback_query: { id: 'q3', data } }), data).toEqual({
+        intent: 'UNSUPPORTED',
+        targetId: null,
+        callbackQueryId: 'q3',
+      });
+    }
   });
 
   it('treats anything else as unsupported rather than as an error', () => {
-    expect(intentOf({ message: { text: 'hello' } })).toBe('UNSUPPORTED');
-    expect(intentOf({ message: { text: '/startle' } })).toBe('UNSUPPORTED');
-    expect(intentOf({ message: {} })).toBe('UNSUPPORTED');
-    expect(intentOf({})).toBe('UNSUPPORTED');
-    expect(intentOf(null)).toBe('UNSUPPORTED');
+    expect(intentOf({ message: { text: 'hello' } }).intent).toBe('UNSUPPORTED');
+    expect(intentOf({ message: { text: '/startle' } }).intent).toBe('UNSUPPORTED');
+    expect(intentOf({ message: {} }).intent).toBe('UNSUPPORTED');
+    expect(intentOf({}).intent).toBe('UNSUPPORTED');
+    expect(intentOf(null).intent).toBe('UNSUPPORTED');
     // A photo with a caption is not a command. Reading `caption` as text would make
     // a caption able to drive the bot, which is how the legacy system's Persian
     // caption became an identifier.
-    expect(intentOf({ message: { caption: '/start' } })).toBe('UNSUPPORTED');
+    expect(intentOf({ message: { caption: '/start' } }).intent).toBe('UNSUPPORTED');
   });
 
   it('replies only into a PRIVATE chat', () => {
@@ -67,6 +116,16 @@ describe('a Telegram turn, decided before any I/O', () => {
     expect(privateChatIdOf({ message: { chat: { id: 1, type: 'channel' } } })).toBeNull();
     expect(privateChatIdOf({ message: { chat: { type: 'private' } } })).toBeNull();
     expect(privateChatIdOf({})).toBeNull();
+
+    // A tapped button carries the message it was attached to, and that message carries
+    // the chat. Without this a customer who pressed Order would be answered NOWHERE,
+    // silently — the invisible failure this codebase exists to remove.
+    expect(
+      privateChatIdOf({ callback_query: { message: { chat: { id: 777, type: 'private' } } } }),
+    ).toBe('777');
+    expect(
+      privateChatIdOf({ callback_query: { message: { chat: { id: -100123, type: 'group' } } } }),
+    ).toBeNull();
   });
 
   it('answers a BLOCKED customer with the block message whatever they asked for', () => {
@@ -101,6 +160,20 @@ describe('a Telegram turn, decided before any I/O', () => {
     // row on an identity nobody has.
     expect(telegramUserIdOf({ message: {} })).toBeNull();
     expect(telegramUserIdOf(null)).toBeNull();
+
+    /*
+     * On a tapped button the human is `callback_query.from`, NOT
+     * `callback_query.message.from` — that second one is the BOT that sent the message
+     * the button hangs off. Reading it would resolve a customer row for the bot on every
+     * single tap.
+     */
+    expect(telegramUserIdOf({ callback_query: { from: { id: 777002 } } })).toBe('777002');
+    expect(
+      telegramUserIdOf({
+        callback_query: { from: { id: 777002 }, message: { from: { id: 999, is_bot: true } } },
+      }),
+    ).toBe('777002');
+    expect(telegramUserIdOf({ callback_query: { from: { id: 999, is_bot: true } } })).toBeNull();
   });
 });
 
@@ -185,12 +258,65 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.unknown_command',
     ]);
 
-    // `منو` is "menu"; `خرید` is "purchase". A greeting may say purchasing is not yet
-    // available — it may not direct the customer to a menu, because there is none.
-    for (const key of reachable) {
+    /*
+     * And the keys the RUNTIME itself can send, which `replyFor` no longer covers.
+     *
+     * `act` returns catalogue, order and refusal keys directly, so a set derived only
+     * from `replyFor` would have gone on passing while four new customer-facing
+     * sentences arrived unreviewed — the precise drift the paragraph above warns about,
+     * one release later.
+     *
+     * Read from the SOURCE, because that is the only thing a new send cannot avoid
+     * touching. A constant listing them would be a second list to keep in step, and the
+     * commit that forgot to update it is the commit this case exists to catch.
+     */
+    const runtimeSource = readFileSync(
+      resolve(import.meta.dirname, '../../apps/api/src/surfaces/telegram/bot-runtime.ts'),
+      'utf8',
+    );
+    const sent = new Set<TemplateKey>();
+    for (const [, key] of runtimeSource.matchAll(/'(bot\.[a-z0-9_.]+)'/g)) {
+      if (key !== undefined && key in CATALOGUE_FA) sent.add(key as TemplateKey);
+    }
+    expect([...sent].sort()).toEqual([
+      'bot.blocked',
+      'bot.catalog.empty',
+      'bot.catalog.heading',
+      'bot.order.awaiting_payment',
+      'bot.order.confirm_button',
+      'bot.order.expired',
+      'bot.order.summary',
+      'bot.order.unavailable',
+      'bot.start.welcome',
+      'bot.start.welcome_back',
+      'bot.unknown_command',
+    ]);
+
+    /*
+     * `منو` is "menu". The greetings pointed customers at one that does not exist.
+     *
+     * The sharper form of that rule is the loop below: every `/command` this product
+     * writes to a customer must be a command `intentOf` actually recognises. That is
+     * the defect generalised — the original copy did not fail because of the WORD
+     * "menu", it failed because it instructed somebody to do something that could only
+     * answer `bot.unknown_command`. A word list cannot notice `/orders` or `/support`
+     * arriving in tenant-facing copy next release; this can.
+     *
+     * A deliberate non-rule: these bodies DO name amounts, and `bot.order.summary`
+     * says "amount payable". That is a label on a number the customer is being shown,
+     * not an instruction to pay, and a test that banned the word would be a test whose
+     * exception list eventually covered every case it was meant to check.
+     */
+    for (const key of new Set([...reachable, ...sent])) {
       const body = CATALOGUE_FA[key];
       expect(body, `${key} has no body`).toBeTypeOf('string');
       expect(body, `${key} points the customer at a menu that does not exist`).not.toContain('منو');
+      for (const [, command] of body.matchAll(/(?:^|\s)(\/[a-z_]+)/g)) {
+        expect(
+          intentOf({ message: { text: command } }).intent,
+          `${key} tells the customer to send ${command}, which this bot does not answer`,
+        ).not.toBe('UNSUPPORTED');
+      }
     }
   });
 

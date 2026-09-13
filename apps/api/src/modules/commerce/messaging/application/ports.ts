@@ -1,4 +1,42 @@
-import type { BotInstanceId, TemplateKey, TemplateValues, TenantContext } from '@nexa/contracts';
+import type {
+  BotInstanceId,
+  Money,
+  TemplateKey,
+  TemplateValues,
+  TenantContext,
+} from '@nexa/contracts';
+
+/**
+ * What a button says.
+ *
+ * Two kinds, because there are two kinds of text on a button and only one of them is
+ * ours. A label like "Confirm the order" is catalogue text and travels as a KEY, so a
+ * tenant can reword it and `nexa-conventions` is not broken by a literal in a surface.
+ * A product's title is the TENANT'S OWN DATA and has no key — it is the same string the
+ * order snapshot copies, and routing it through the catalogue would mean inventing a
+ * template key per product.
+ *
+ * `amount` exists so a catalogue button can read "Basic plan — 250,000 Toman" without a
+ * caller formatting money itself. The formatting is the messenger's, using the shared
+ * `formatMoney`, so a price on a button and a price in a message cannot be written two
+ * different ways.
+ */
+export type CustomerButtonLabel =
+  | { readonly kind: 'TEMPLATE'; readonly key: TemplateKey }
+  | { readonly kind: 'TEXT'; readonly text: string; readonly amount?: Money };
+
+/**
+ * One inline-keyboard button.
+ *
+ * `data` is Telegram's `callback_data`, which it caps at 64 BYTES — a real constraint
+ * rather than a guideline, and the reason Phase 0 recorded that a bare UUID plus a route
+ * prefix leaves nothing. The callers here send `<one letter>:<uuid>`, which is 38 bytes,
+ * so an opaque reference table is not needed and is deliberately not introduced.
+ */
+export interface CustomerButton {
+  readonly label: CustomerButtonLabel;
+  readonly data: string;
+}
 
 /**
  * One message to one customer.
@@ -23,6 +61,16 @@ export interface CustomerMessage {
    * operations messages and wrong for this.
    */
   readonly botInstanceId: BotInstanceId;
+  /**
+   * An inline keyboard, ONE BUTTON PER ROW.
+   *
+   * A single column rather than a grid: the labels are product titles in Persian and a
+   * two-column layout truncates them at exactly the width where two plans stop being
+   * distinguishable. Absent means no keyboard at all, which is not the same as an empty
+   * one — Telegram renders an empty `inline_keyboard` as a message with a blank
+   * attachment.
+   */
+  readonly buttons?: readonly CustomerButton[];
 }
 
 /**
@@ -47,6 +95,21 @@ export interface CustomerMessenger {
    * 200".
    */
   send(scope: TenantContext, message: CustomerMessage): Promise<CustomerSendOutcome>;
+
+  /**
+   * Stops the spinner on a tapped button. Best effort, and the outcome is not returned.
+   *
+   * Telegram spins the button until the bot answers the callback query, so NOT calling
+   * this is a visible defect for several seconds on every tap. It is also purely
+   * cosmetic: the durable work is already committed by the time this runs, and a
+   * failure here must not change what the customer is told. So it cannot fail the turn
+   * and has nothing to report — which is why it returns `void` rather than an outcome
+   * nobody could act on.
+   */
+  acknowledge(
+    scope: TenantContext,
+    input: { readonly callbackQueryId: string; readonly botInstanceId: BotInstanceId },
+  ): Promise<void>;
 }
 
 /**

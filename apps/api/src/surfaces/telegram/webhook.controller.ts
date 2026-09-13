@@ -214,7 +214,7 @@ export class TelegramWebhookController {
           botInstanceId: botInstance.id,
           update,
           telegramUserId,
-          from: (update as { message?: { from?: unknown } }).message?.from,
+          from: telegramFromOf(update),
         });
       } catch (error) {
         await this.container.opsLog.record(scope, {
@@ -250,6 +250,25 @@ export class TelegramWebhookController {
  */
 export function telegramUpdateKey(botInstanceId: string, updateId: string): string {
   return `telegram:${botInstanceId}:update:${updateId}`;
+}
+
+/**
+ * Telegram's `from` for the human who caused this update.
+ *
+ * On an ordinary message it is `message.from`; on a tapped button it is
+ * `callback_query.from` — NOT `callback_query.message.from`, which is the BOT that sent
+ * the message the button was attached to. Reading the wrong one would resolve a customer
+ * row for the bot itself on every tap, and `is_bot` would only catch it because
+ * `telegramUserIdOf` checks that flag.
+ *
+ * Exported so the controller passes ONE value to the runtime and nothing re-derives it.
+ */
+export function telegramFromOf(update: unknown): unknown {
+  const shaped = update as {
+    message?: { from?: unknown };
+    callback_query?: { from?: unknown };
+  } | null;
+  return shaped?.message?.from ?? shaped?.callback_query?.from;
 }
 
 /**
@@ -289,8 +308,7 @@ function isPingCommand(update: TelegramUpdate): boolean {
  * key a customer row on whatever was sent.
  */
 export function telegramUserIdOf(update: unknown): string | null {
-  const from = (update as { message?: { from?: { id?: unknown; is_bot?: unknown } } } | null)
-    ?.message?.from;
+  const from = telegramFromOf(update) as { id?: unknown; is_bot?: unknown } | null | undefined;
   if (from === undefined || from === null) return null;
   // A bot is not a customer. Telegram marks its own and other bots' messages, and a
   // customer row for one would be a row no human can ever sign in to.

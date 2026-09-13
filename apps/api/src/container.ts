@@ -1285,6 +1285,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     orders: orderService,
     botRuntime: new BotRuntime({
       customers: customerService,
+      // The SAME instances the container exposes, not new ones. Two order services
+      // would each hold their own idempotency view, and a redelivered Telegram update
+      // handled by one would not be seen as a replay by the other — which is the whole
+      // mechanism that stops a redelivery becoming a second order.
+      products: productService,
+      orders: orderService,
       messenger: new TelegramCustomerMessenger(
         // The tenant's own renderer, so an override lands in exactly the messages a
         // customer reads. It validates values against the key's declaration on the way

@@ -144,6 +144,14 @@ export function textMessageBody(input: {
   readonly chatId: string;
   readonly text: string;
   readonly html: boolean;
+  /**
+   * One inline-keyboard button per row, already labelled.
+   *
+   * Omitted entirely when there are none. An EMPTY `inline_keyboard` is not the same
+   * thing: Telegram accepts it and renders a message carrying a blank attachment, which
+   * is a visible artefact for every reply that happens to have no buttons.
+   */
+  readonly buttons?: readonly { readonly text: string; readonly data: string }[];
 }): Record<string, unknown> {
   const body: Record<string, unknown> = {
     chat_id: input.chatId,
@@ -151,5 +159,26 @@ export function textMessageBody(input: {
     link_preview_options: { is_disabled: true },
   };
   if (input.html) body.parse_mode = 'HTML';
+  if (input.buttons !== undefined && input.buttons.length > 0) {
+    body.reply_markup = {
+      inline_keyboard: input.buttons.map((button) => [
+        { text: button.text, callback_data: button.data },
+      ]),
+    };
+  }
   return body;
+}
+
+/**
+ * The body of an `answerCallbackQuery` call.
+ *
+ * No `text`, deliberately. Telegram would show it as a toast, and every message this
+ * installation shows a customer comes from the template catalogue — a toast written
+ * here would be the one customer-facing string with no key and no tenant override.
+ * Its whole job is to stop the button spinning.
+ */
+export function callbackAnswerBody(input: {
+  readonly callbackQueryId: string;
+}): Record<string, unknown> {
+  return { callback_query_id: input.callbackQueryId };
 }

@@ -7,8 +7,14 @@ import type {
   TenantContext,
 } from '@nexa/contracts';
 import { templateDefinition } from '@nexa/contracts';
-import { telegramSend, textMessageBody } from '../../../../infrastructure/telegram/send-message.js';
+import { formatMoney } from '@nexa/i18n';
+import {
+  callbackAnswerBody,
+  telegramSend,
+  textMessageBody,
+} from '../../../../infrastructure/telegram/send-message.js';
 import type {
+  CustomerButton,
   CustomerMessage,
   CustomerMessenger,
   CustomerSendConditionReader,
@@ -141,11 +147,20 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * send a subscription URL as plain text, or a Persian greeting as unescaped HTML.
      */
     const html = templateDefinition(message.templateKey).format === 'TELEGRAM_HTML';
+    /*
+     * Button labels are rendered HERE, through the same resolver as the message.
+     *
+     * A `TEMPLATE` label is the tenant's catalogue text; a `TEXT` label is the tenant's
+     * own data — a product title — and its price is formatted with the SHARED
+     * `formatMoney`, so an amount on a button and the same amount in the message it
+     * belongs to cannot be written two different ways.
+     */
+    const buttons = await this.labelButtons(scope, message.buttons ?? []);
     const result = await telegramSend({
       token,
       apiBaseUrl: this.apiBaseUrl,
       timeoutMs: this.timeoutMs,
-      body: textMessageBody({ chatId: message.chatId, text, html }),
+      body: textMessageBody({ chatId: message.chatId, text, html, buttons }),
     });
 
     if (result.outcome === 'SUCCEEDED') {
@@ -195,6 +210,49 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
         ...(errorCode === null ? {} : { errorCode }),
       },
     });
+  }
+
+  /**
+   * Stops the spinner on a tapped button, and reports nothing.
+   *
+   * Deliberately silent on failure, including a missing token. The durable work is
+   * already committed and the customer's real answer is a separate message with its own
+   * recorded outcome; a failed cosmetic call that opened the send-failure condition
+   * would make an operator's "this bot is not replying" alarm fire for a bot that is
+   * replying. Telegram also expires a callback query after about a minute, so a
+   * redelivered update legitimately fails here and must not be news.
+   */
+  async acknowledge(
+    scope: TenantContext,
+    input: { readonly callbackQueryId: string; readonly botInstanceId: BotInstanceId },
+  ): Promise<void> {
+    const token = await this.bots.tokenForBotInstance(scope, input.botInstanceId);
+    if (token === null) return;
+    await telegramSend({
+      token,
+      apiBaseUrl: this.apiBaseUrl,
+      timeoutMs: this.timeoutMs,
+      method: 'answerCallbackQuery',
+      body: callbackAnswerBody({ callbackQueryId: input.callbackQueryId }),
+    });
+  }
+
+  /** A label is either a catalogue key or tenant data. One place that knows which. */
+  private async labelButtons(
+    scope: TenantContext,
+    buttons: readonly CustomerButton[],
+  ): Promise<{ readonly text: string; readonly data: string }[]> {
+    const labelled: { text: string; data: string }[] = [];
+    for (const button of buttons) {
+      const text =
+        button.label.kind === 'TEMPLATE'
+          ? await this.templates.render(scope, button.label.key, {})
+          : button.label.amount === undefined
+            ? button.label.text
+            : `${button.label.text} — ${formatMoney(button.label.amount)}`;
+      labelled.push({ text, data: button.data });
+    }
+    return labelled;
   }
 
   /**
