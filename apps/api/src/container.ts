@@ -59,6 +59,7 @@ import { DrizzleIdempotencyStore } from './modules/platform/idempotency/infrastr
 import { PermissionGuard } from './modules/platform/access/application/permission-guard.js';
 import { AdminPermissionResolver } from './modules/platform/access/infrastructure/admin-permission-resolver.js';
 import { ScryptPasswordHasher, scryptParamsFor } from './infrastructure/crypto/password-hasher.js';
+import { operationIdFor } from './infrastructure/crypto/operation-id.js';
 import { DrizzleAdminRepository } from './modules/platform/identity/infrastructure/drizzle-admin.repository.js';
 import { DrizzleRoleRepository } from './modules/platform/identity/infrastructure/drizzle-role.repository.js';
 import { DrizzleSessionRepository } from './modules/platform/identity/infrastructure/drizzle-session.repository.js';
@@ -109,6 +110,8 @@ import {
   DrizzlePanelDirectory,
   DrizzleProductRepository,
 } from './modules/commerce/catalog/infrastructure/drizzle-product.repository.js';
+import { DrizzleWalletRepository } from './modules/commerce/wallet/infrastructure/drizzle-wallet.repository.js';
+import { WalletService } from './modules/commerce/wallet/application/wallet.service.js';
 import { OrderService } from './modules/commerce/orders/application/order.service.js';
 import { DrizzleOrderRepository } from './modules/commerce/orders/infrastructure/drizzle-order.repository.js';
 import { BotRuntime } from './surfaces/telegram/bot-runtime.js';
@@ -219,6 +222,7 @@ export interface Container {
    */
   readonly customers: CustomerService;
   readonly products: ProductService;
+  readonly wallet: WalletService;
   readonly orders: OrderService;
   readonly botRuntime: BotRuntime;
 
@@ -627,6 +631,32 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     idempotency,
     clock,
     ids,
+  });
+
+  /**
+   * The wallet, under the FROZEN `users.wallet.*` permissions.
+   *
+   * `operationId` is bound HERE and not inside the service, for the reason
+   * `operation.ts` gives: `packages/contracts` depends on nothing, so the hash is a
+   * port the composition root supplies. One binding, so every movement's reference is
+   * derived the same way in every process.
+   */
+  const walletRepository = new DrizzleWalletRepository(database.db);
+  const walletService = new WalletService({
+    repository: walletRepository,
+    customers: customerRepository,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    settings: settingsResolver,
+    uow,
+    idempotency,
+    outbox,
+    clock,
+    ids,
+    operationId: (key) => operationIdFor('payment', key),
   });
 
   // ---------------------------------------------------------------------------
@@ -1295,6 +1325,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     recordPing,
     customers: customerService,
     products: productService,
+    wallet: walletService,
     orders: orderService,
     botRuntime: new BotRuntime({
       customers: customerService,

@@ -483,6 +483,26 @@ export const COMMERCE_ERROR_CODES = {
   ORDER_STATE_INVALID: 'commerce.order_state_invalid',
   /** The draft's own deadline passed before it was confirmed. */
   ORDER_EXPIRED: 'commerce.order_expired',
+
+  /**
+   * The wallet does not hold enough to cover this debit.
+   *
+   * A refusal rather than an overdraft: `WALLET_ALLOWS_NEGATIVE_BALANCE` is `false`,
+   * and `payment.ts` records that it is a constant so the reseller credit line in 4F
+   * has to change data rather than code. The detail carries the SHORTFALL and not the
+   * balance — `bot.wallet.insufficient` declares exactly that one placeholder, because
+   * the shortfall is the number a customer can act on.
+   */
+  WALLET_INSUFFICIENT_FUNDS: 'commerce.wallet_insufficient_funds',
+  /**
+   * An amount in a currency this installation does not sell in.
+   *
+   * The same rule `PRODUCT_CURRENCY_UNSUPPORTED` states for a price, applied to a
+   * balance: a wallet credited in a currency no order can be priced in is money that
+   * can never be spent. `sales.currency` is the one denomination, and no conversion
+   * exists anywhere to rescue an amount from the wrong one.
+   */
+  WALLET_CURRENCY_UNSUPPORTED: 'commerce.wallet_currency_unsupported',
 } as const;
 
 /*
