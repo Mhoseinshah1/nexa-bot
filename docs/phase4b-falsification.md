@@ -63,9 +63,16 @@ use the repo's harness, which runs the whole FILE.
 | M15 | A blocked customer is refused at CONFIRMATION, not only at creation              | drop `assertCustomerMayOrder` from `confirm`            | `orders.test.ts` › refuses a blocked customer at confirmation too, not only at creation                    | KILLED |
 | M16 | A catalogue button carries its price, through the shared money renderer          | drop the `formatMoney` half of the label                | `telegram-order-flow.test.ts` › lists every sellable product as a button carrying its id, and nothing else | KILLED |
 | M17 | A reply with buttons sends `reply_markup`                                        | the `buttons.length > 0` guard → `if (false)`           | `telegram-order-flow.test.ts` › lists every sellable product as a button carrying its id, and nothing else | KILLED |
+| M19 | An order FILTER that is not an id is refused, not sent to a `uuid` column        | `uuidV7Schema` → `z.string().max(64)` for both filters  | `orders-http.test.ts` › refuses a FILTER that is not an id, rather than answering 500                      | KILLED |
 | M18 | `/orders` renders the SNAPSHOT title, byte for byte                              | `record.line.title` → `` `${record.line.title} ` ``     | `orders-http.test.ts` › renders the SNAPSHOT, not the product as it reads now                              | KILLED |
 
-18 mutations, 18 killed. Nothing on this branch is asserted only by a comment.
+19 mutations, 19 killed. Nothing on this branch is asserted only by a comment.
+
+M19 is the one the SELF-REVIEW found rather than the harness: the order list took
+`customerId` and `productId` as bounded strings against `uuid` columns, so a filter that
+was not an id was a 500. It is listed last because it was added last, and it is listed
+at all because the fix and its test arrived together — a defect found by reading, fixed
+without a test, is a defect with nothing stopping its return.
 
 ## What is deliberately NOT falsified
 
