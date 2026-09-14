@@ -68,7 +68,7 @@ these was applied by hand and each restore confirmed with `git diff --exit-code`
 | B17 | An unreadable Telegram state is refused, never guessed        | the `*)` arm → `state="none"`                                | `botctl.test.sh` › an unreadable Telegram state is refused rather than guessed                        | KILLED |
 | B18 | `--skip-telegram` on a configured bot says so, not "run this" | drop the `ready` branch from the skip arm                    | `botctl.test.sh` › skip-telegram does not tell a configured installation to configure itself          | KILLED |
 | B19 | A rerun never regenerates the webhook secret                  | drop the `have_secret` guard from `ensure_telegram_config`   | `botctl.test.sh` › a rerun never regenerates the webhook secret                                       | KILLED |
-| B20 | The webhook secret never reaches a process argument list      | pass it as a positional argument to the substituting python3 | `botctl.test.sh` › the installer never puts a secret into a process argument list                    | KILLED |
+| B20 | The webhook secret never reaches a process argument list      | pass it as a positional argument to the substituting python3 | `botctl.test.sh` › the installer never puts a secret into a process argument list                     | KILLED |
 
 ## Rules asserted by a mechanism rather than by a mutation
 

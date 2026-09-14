@@ -239,9 +239,13 @@ export const botInstances = pgTable(
      * and `setWebhook` leaves a row with this NULL: the rerun decrypts the stored token
      * and retries the registration, and never asks for a token again. A crash after
      * Telegram accepted but before this was written leaves the same NULL, and the rerun
-     * re-registers — which Telegram treats as a no-op — and then marks it. Both crashes
-     * converge, which is why the marker is written AFTER the call rather than with the
-     * row.
+     * re-registers and then marks it. Both crashes converge, which is why the marker is
+     * written AFTER the call rather than with the row.
+     *
+     * A repeat `setWebhook` is NOT a no-op — an earlier version of this comment said it
+     * was. It replaces the registration, and it discards whatever Telegram has queued if
+     * the caller asks it to, which is why `dropPendingUpdates` is true only on a first
+     * registration.
      *
      * It is also what `--status` reports, and therefore what stops an installer
      * claiming a Telegram-enabled installation is complete while the bot cannot
@@ -249,6 +253,25 @@ export const botInstances = pgTable(
      */
     webhookRegisteredAt: timestamptz('webhook_registered_at'),
     webhookUrl: text('webhook_url'),
+    /**
+     * SHA-256 of the secret the webhook was registered WITH, as hex.
+     *
+     * Not a credential: it is a one-way digest of one, and it is here because
+     * the marker above records what was registered and the secret is the other
+     * half of what `setWebhook` carried. Without it a rotated
+     * `TELEGRAM_WEBHOOK_SECRET` produces an installation that reports itself
+     * ready while the route refuses every update Telegram signs — the operator
+     * followed the rotation procedure the template documents, and the only
+     * remedy was SQL.
+     *
+     * A digest rather than the value, because nothing needs to read it back:
+     * the question is only "is this the same secret", and a stored plaintext
+     * would be a second copy of a credential that already lives in exactly one
+     * file. Nullable for the rows that predate it; a NULL means "unknown", and
+     * an unknown fingerprint is treated as needing registration rather than as
+     * matching.
+     */
+    webhookSecretFingerprint: text('webhook_secret_fingerprint'),
     status: text('status').notNull().default('ACTIVE'),
     /** Envelope-encrypted. Never returned by any API, never logged. */
     tokenCiphertext: text('token_ciphertext').notNull(),

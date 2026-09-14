@@ -71,6 +71,7 @@ export class TelegramBotBootstrapGateway implements BotBootstrapTelegram {
     readonly token: string;
     readonly url: string;
     readonly secretToken: string;
+    readonly dropPendingUpdates: boolean;
   }): Promise<WebhookRegistration> {
     const outcome = await telegramSetWebhook({
       token: input.token,
@@ -78,6 +79,7 @@ export class TelegramBotBootstrapGateway implements BotBootstrapTelegram {
       timeoutMs: this.timeoutMs,
       url: input.url,
       secretToken: input.secretToken,
+      dropPendingUpdates: input.dropPendingUpdates,
     });
 
     switch (outcome.outcome) {

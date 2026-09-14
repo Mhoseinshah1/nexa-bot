@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   errors,
   NexaError,
@@ -23,6 +24,18 @@ import type {
   WebhookRegistration,
 } from './ports.js';
 
+/**
+ * The one-way digest stored beside a webhook registration.
+ *
+ * SHA-256 hex of the secret, and nothing reads it back: the only question asked
+ * of it is "is this the same secret as the one that was registered". A stored
+ * plaintext would be a second copy of a credential that lives in exactly one
+ * file today.
+ */
+function fingerprintOf(secret: string): string {
+  return createHash('sha256').update(secret, 'utf8').digest('hex');
+}
+
 /** The identity `getMe` reported, once the probe outcome has been unwrapped. */
 interface BotIdentity {
   readonly botId: string;
@@ -36,15 +49,24 @@ interface BotIdentity {
  *  - `incomplete` — a bot instance exists and its webhook is not registered, or
  *                   is registered at a different URL. Rerun to finish; do NOT
  *                   prompt, the token is already stored.
- *  - `ready`      — the bot exists and Telegram is delivering to this
- *                   installation's own webhook URL. Nothing to do.
+ *  - `ready`      — the bot exists, is ACTIVE, and Telegram is delivering to
+ *                   this installation's own webhook URL with the secret this
+ *                   installation currently holds. Nothing to do.
+ *  - `stopped`    — the bot exists and an operator has stopped it. Registering a
+ *                   webhook would be pointless: the route refuses an update for
+ *                   a bot that is not ACTIVE, so Telegram would deliver and be
+ *                   told the bot is unknown. It is reported as its own answer
+ *                   rather than folded into `incomplete`, because the remedy is
+ *                   to start the bot, not to rerun anything.
  *
- * Three values rather than two, for the reason `BootstrapStatus` has three: "a
- * bot instance exists, therefore the bootstrap succeeded" is exactly the
- * reasoning that lets an installer announce a working bot that has never been
- * told where to send anything.
+ * Four values rather than one boolean, for the reason `BootstrapStatus` has
+ * three: "a bot instance exists, therefore the bootstrap succeeded" is exactly
+ * the reasoning that lets an installer announce a working bot that has never
+ * been told where to send anything. Each value here has a DIFFERENT remedy —
+ * prompt, rerun, start the bot, nothing — and collapsing any two of them puts
+ * an operator on the wrong one.
  */
-export type BotBootstrapStatus = 'none' | 'incomplete' | 'ready';
+export type BotBootstrapStatus = 'none' | 'incomplete' | 'ready' | 'stopped';
 
 export interface BotBootstrapInput {
   /**
@@ -89,13 +111,16 @@ export interface BotBootstrapDeps {
   readonly ids: IdGenerator;
   readonly telegram: BotBootstrapTelegram;
   /**
-   * The installation-wide webhook secret, read at the moment it is needed.
+   * The installation-wide webhook secret.
    *
-   * A getter rather than a value because the installer mints the secret and
-   * starts the stack in the same run: a container composed from a config object
-   * read before that would register a webhook signed with a secret this
-   * installation does not hold, and every update would be refused by the route
-   * that checks it.
+   * A getter rather than a string for TESTABILITY and nothing more — the
+   * container closes over an immutable config object read once at process
+   * start, so this is observationally identical to capturing the value in the
+   * constructor. An earlier version of this comment claimed the indirection
+   * protected against a container composed before the secret was minted; it
+   * does not, and a comment describing a mechanism the code does not have is
+   * worse than no comment. What actually makes that case safe is that each CLI
+   * invocation is a fresh process reading `nexa.env` as it stands.
    */
   readonly webhookSecret: () => string;
 }
@@ -140,14 +165,34 @@ export class BotBootstrapService {
   async status(scope: TenantContext, publicBaseUrl: string): Promise<BotBootstrapStatus> {
     const existing = await this.deps.bots.findBootstrapTarget(scope);
     if (existing === null) return 'none';
+    // An operator's stop is not a bootstrap state to converge out of.
+    if (existing.status !== 'ACTIVE') return 'stopped';
     // Normalised through the SAME function `execute` uses, so a trailing slash
     // in the configured origin cannot make `status` report `incomplete` for a
     // webhook `execute` would then find already registered — an installer that
     // re-registers on every rerun, discarding queued updates each time.
     const url = this.webhookUrlFor(this.requireOrigin(publicBaseUrl), existing.id);
-    return existing.webhookRegisteredAt !== null && existing.webhookUrl === url
-      ? 'ready'
-      : 'incomplete';
+    return this.registrationIsCurrent(existing, url) ? 'ready' : 'incomplete';
+  }
+
+  /**
+   * Is Telegram pointed here, with the secret this installation holds NOW?
+   *
+   * Both halves, because `setWebhook` carried both and the marker has to be able
+   * to answer for both. Recording only the URL made a rotated
+   * `TELEGRAM_WEBHOOK_SECRET` unfixable: the rotation procedure the env template
+   * documents left an installation reporting itself ready while the webhook
+   * route refused every update Telegram signed, `botctl telegram register`
+   * answered "nothing was changed", and the only way out was SQL.
+   *
+   * A NULL fingerprint is "unknown", never "matches". A row written before this
+   * column existed needs one registration to become knowable, and one
+   * unnecessary `setWebhook` is a far cheaper mistake than a silent claim.
+   */
+  private registrationIsCurrent(view: BotBootstrapView, url: string): boolean {
+    if (view.webhookRegisteredAt === null || view.webhookUrl !== url) return false;
+    if (view.webhookSecretFingerprint === null) return false;
+    return view.webhookSecretFingerprint === fingerprintOf(this.requireWebhookSecret());
   }
 
   async execute(scope: TenantContext, input: BotBootstrapInput): Promise<BotBootstrapResult> {
@@ -157,6 +202,22 @@ export class BotBootstrapService {
 
     const ensured = await this.ensureBotInstance(scope, input.token);
     const view = ensured.view;
+    /*
+     * A stopped bot is a configuration problem, not a registration to retry.
+     *
+     * The webhook route refuses an update whose bot instance is not ACTIVE, so
+     * registering one would point Telegram at an endpoint that answers "unknown
+     * bot instance" to everything it delivers — a bot that is configured,
+     * reported ready, and silent. The remedy is to start the bot.
+     */
+    if (view.status !== 'ACTIVE') {
+      throw errors.configuration(
+        PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_FAILED,
+        `The bot instance for this tenant is ${view.status}, not ACTIVE. Registering a webhook ` +
+          'would point Telegram at a route that refuses every update for a stopped bot. Start the ' +
+          'bot and run this again.',
+      );
+    }
     const url = this.webhookUrlFor(origin, view.id);
 
     // The token comes from the ROW, never from the input, even on the run that
@@ -186,7 +247,7 @@ export class BotBootstrapService {
      * RUNNING installation — updates belonging to real customers, thrown away by
      * an installer somebody ran to fix something unrelated.
      */
-    if (!ensured.createdNow && view.webhookRegisteredAt !== null && view.webhookUrl === url) {
+    if (!ensured.createdNow && this.registrationIsCurrent(view, url)) {
       return {
         kind: 'ALREADY_COMPLETE',
         botInstanceId: view.id,
@@ -196,10 +257,24 @@ export class BotBootstrapService {
       };
     }
 
+    const secretToken = this.requireWebhookSecret();
     const registered = await this.deps.telegram.registerWebhook({
       token,
       url,
-      secretToken: this.requireWebhookSecret(),
+      secretToken,
+      /*
+       * Queued updates are discarded on a CREATE and never on a reconcile.
+       *
+       * A fresh install has no customers, so whatever Telegram holds predates
+       * this installation entirely and belongs to whatever the token was used
+       * for before; replaying it would deliver somebody else's messages into a
+       * brand-new database. A RECONCILE is the opposite case — a domain change
+       * or a crash recovery on a RUNNING installation — and dropping the queue
+       * there throws away real customers' messages, with no count, no
+       * confirmation and no record. `docs/conventions.md` calls that shape out
+       * by name.
+       */
+      dropPendingUpdates: ensured.createdNow,
     });
     if (registered.outcome !== 'REGISTERED') {
       /*
@@ -219,7 +294,12 @@ export class BotBootstrapService {
     await this.deps.uow.run(scope, async (tx) => {
       await this.deps.bots.lockTenantForBotChange(scope, tx);
       await this.requireActiveScope(scope, tx);
-      await this.deps.bots.markWebhookRegistered(scope, view.id, { url, now }, tx);
+      await this.deps.bots.markWebhookRegistered(
+        scope,
+        view.id,
+        { url, secretFingerprint: fingerprintOf(secretToken), now },
+        tx,
+      );
       await this.deps.audit.record(
         scope,
         actor,
@@ -336,6 +416,7 @@ export class BotBootstrapService {
           telegramBotId: identity.botId,
           webhookRegisteredAt: null,
           webhookUrl: null,
+          webhookSecretFingerprint: null,
         },
         createdNow: true,
         identity,
@@ -368,8 +449,10 @@ export class BotBootstrapService {
       throw errors.configuration(
         PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_TOKEN_REJECTED,
         `Telegram rejected the bot token: ${probe.detail}. ` +
-          'Issue a new token in BotFather. The installer does not replace a stored token by ' +
-          'itself — that is a deliberate, separate operator action.',
+          'The installer does not replace a stored token by itself, and this release ships no ' +
+          'command that does: changing the bot a running installation serves is deliberate work ' +
+          'that has not been built yet (docs/open-questions.md, OQ-TG-01). If the token was ' +
+          'revoked, restore it in BotFather rather than issuing a new one.',
       );
     }
     if (probe.outcome !== 'IDENTIFIED') {
@@ -400,12 +483,21 @@ export class BotBootstrapService {
       await this.deps.uow.run(scope, async (tx) => {
         await this.deps.bots.lockTenantForBotChange(scope, tx);
         await this.requireActiveScope(scope, tx);
-        await this.deps.bots.recordTelegramIdentity(
+        /*
+         * Audited only if the UPDATE actually changed a row.
+         *
+         * Its WHERE carries `telegram_bot_id IS NULL`, and a concurrent run can
+         * fill that blank between this caller's unlocked read and this
+         * statement. Auditing regardless would write a row asserting a `before`
+         * that was not true and a change that did not happen.
+         */
+        const filled = await this.deps.bots.recordTelegramIdentity(
           scope,
           existing.id,
           { telegramBotId: identity.botId, username: identity.username, now },
           tx,
         );
+        if (!filled) return;
         await this.deps.audit.record(
           scope,
           actor,
@@ -551,10 +643,13 @@ export class BotBootstrapService {
    * The webhook secret every later update is authenticated by.
    *
    * Installation-wide configuration rather than a column — ADR-0029 decision 2.
-   * Read through a constructor-injected getter rather than captured at
-   * construction so that a container built before the secret was minted cannot
-   * register a webhook Telegram will sign with a value this installation does
-   * not hold.
+   *
+   * Only a LENGTH check here. Telegram's `A-Za-z0-9_-` alphabet is enforced by
+   * the config schema, which is the earliest point it can be: a secret in the
+   * wrong alphabet is one no webhook could ever be authenticated with, so it
+   * should stop a boot rather than surface at the one moment an operator is
+   * standing at a half-finished install. Checking it twice would be two places
+   * for the rule to drift.
    */
   private requireWebhookSecret(): string {
     const secret = this.deps.webhookSecret();

@@ -281,6 +281,13 @@
       "when": 1789365801663,
       "tag": "0039_bot_instance_webhook_registration",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1789375986026,
+      "tag": "0040_bot_instance_webhook_secret_fingerprint",
+      "breakpoints": true
     }
   ]
 }

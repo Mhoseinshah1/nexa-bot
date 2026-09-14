@@ -1,0 +1,1 @@
+ALTER TABLE "bot_instances" ADD COLUMN "webhook_secret_fingerprint" text;

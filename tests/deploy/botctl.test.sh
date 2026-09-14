@@ -5119,6 +5119,7 @@ test_case 'skip-telegram does not tell a configured installation to configure it
 telegram_skip_ready="$(bash -c '
   . "$1" --domain admin.example.test --acme-email ops@example.test --skip-telegram >/dev/null 2>&1
   telegram_state() { printf "ready"; }
+  nexa_compose() { return 1; }
   configure_telegram_bot 2>&1
 ' _ "${REPO}/deploy/install.sh" || true)"
 assert_contains 'a configured bot was not reported as configured' \
@@ -5129,6 +5130,7 @@ assert_not_contains 'a configured installation was told to register' \
 telegram_skip_none="$(bash -c '
   . "$1" --domain admin.example.test --acme-email ops@example.test --skip-telegram >/dev/null 2>&1
   telegram_state() { printf "none"; }
+  nexa_compose() { return 1; }
   configure_telegram_bot 2>&1
 ' _ "${REPO}/deploy/install.sh" || true)"
 assert_contains 'an unconfigured skip did not name the remedy' \
@@ -5149,13 +5151,92 @@ assert_contains 'a resumed run did not say the token would not be asked for' \
 assert_contains 'a resumed run did not report success' \
   "$telegram_resume" 'configured and receiving updates'
 
+test_case 'a rerun of a READY installation still asks the application'
+# ADR-0029: a rerun asks Telegram whether the stored token still works, EVERY
+# time — the only way the promise to report a revoked token can be kept. This
+# step used to short-circuit on `ready` and never invoke the CLI, so the rule
+# was implemented in the layer that cannot be the last word and bypassed in the
+# layer that is.
+telegram_ready_calls="${NEXA_ROOT}/telegram-ready-calls"
+: >"$telegram_ready_calls"
+telegram_ready="$(bash -c '
+  # Captured BEFORE sourcing. Two reasons, and each alone would be enough:
+  # sourcing with arguments replaces the positional parameters, and inside a
+  # function $2 is that function own second argument rather than the script one.
+  CALLS="$2"
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  telegram_state() { printf "ready"; }
+  nexa_compose() { printf "%s\n" "$*" >>"$CALLS"; return 0; }
+  configure_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" "$telegram_ready_calls" || true)"
+assert_ok 'a READY rerun never invoked the bootstrap CLI' test -s "$telegram_ready_calls"
+assert_contains 'the READY rerun did not run the bootstrap CLI' \
+  "$(cat "$telegram_ready_calls")" 'dist/bootstrap-bot.cli.js'
+# And it did not offer to take a token, because there is nothing to ask for.
+assert_not_contains 'a READY rerun passed a token file' \
+  "$(cat "$telegram_ready_calls")" '--bot-token-file'
+assert_contains 'the READY rerun did not report success' \
+  "$telegram_ready" 'configured and receiving updates'
+
+test_case 'a stopped bot is reported as stopped, not as a registration to retry'
+telegram_stopped="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  telegram_state() { printf "stopped"; }
+  nexa_compose() { return 0; }
+  configure_telegram_bot 2>&1
+  printf "INCOMPLETE=%s\n" "$TELEGRAM_INCOMPLETE"
+' _ "${REPO}/deploy/install.sh" || true)"
+assert_contains 'a stopped bot was not reported as stopped' "$telegram_stopped" 'is stopped'
+assert_contains 'a stopped bot did not fail the install' "$telegram_stopped" 'INCOMPLETE=yes'
+
+test_case 'skip-telegram survives a state that cannot be read'
+# The refusal to guess is right; killing an install that explicitly opted out of
+# Telegram because a Telegram CLI would not answer is not.
+telegram_skip_unknown="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --skip-telegram >/dev/null 2>&1
+  telegram_state() { printf "docker: command not found"; }
+  nexa_compose() { return 1; }
+  configure_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" || printf 'THE_STEP_DIED')"
+assert_not_contains 'an unreadable state killed a skipped install' \
+  "$telegram_skip_unknown" 'THE_STEP_DIED'
+assert_contains 'the operator was not told the state is unknown' \
+  "$telegram_skip_unknown" 'could not be read'
+
+test_case 'a relative --bot-token-file is refused before it becomes an empty volume'
+# Handed to `docker run -v`, a bare name is a NAMED VOLUME rather than a path:
+# the container receives an empty directory and the CLI fails reading it.
+relative_token="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --bot-token-file token.txt >/dev/null 2>&1
+  BOT_TOKEN_FILE="token.txt"
+  SKIP_TELEGRAM="no"
+  case "$BOT_TOKEN_FILE" in
+    /*) printf "ACCEPTED" ;;
+    *) printf "REFUSED" ;;
+  esac
+' _ "${REPO}/deploy/install.sh" || true)"
+assert_equals 'a relative token path was not refused' 'REFUSED' "$relative_token"
+assert_contains 'the installer does not refuse a relative token path' \
+  "$(grep -A 4 'bot-token-file must be an absolute path' "${REPO}/deploy/install.sh" || true)" \
+  'named volume'
+
 test_case 'the token never reaches the bootstrap CLI as an argument'
 # The rule stated as an observation over the installer's own source: every
 # invocation passes `--bot-token-file` or nothing, and `--bot-token` appears
 # nowhere. argv is readable by every user on the machine through `ps`.
-telegram_calls="$(grep -n 'bootstrap-bot.cli.js' -A 4 "${REPO}/deploy/install.sh")"
+# The WHOLE function body, not four lines after each `cli.js`. The `-v`, `-e`
+# and `--rm` arguments sit BEFORE that line, so a forward-only window could not
+# see `-e BOT_TOKEN=…` — which is the other half of the rule the comment states
+# and the likelier regression of the two.
+telegram_calls="$(sed -n '/^configure_telegram_bot() {/,/^}/p' "${REPO}/deploy/install.sh")"
+assert_ok 'the configure_telegram_bot body could not be read; this check is vacuous' \
+  test -n "$telegram_calls"
 assert_not_contains 'the installer passes a bot token as an argument' \
   "$telegram_calls" '--bot-token '
+assert_not_contains 'the installer passes a bot token through the environment' \
+  "$telegram_calls" '-e BOT_TOKEN'
+assert_not_contains 'the installer exports a bot token into the container environment' \
+  "$telegram_calls" 'TELEGRAM_BOT_TOKEN='
 assert_contains 'the unattended path does not use a token FILE' \
   "$telegram_calls" '--bot-token-file'
 

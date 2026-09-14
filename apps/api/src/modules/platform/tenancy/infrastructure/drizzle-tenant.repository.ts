@@ -151,6 +151,7 @@ function toBootstrapView(row: BotInstanceRow): BotBootstrapView {
     telegramBotId: row.telegramBotId,
     webhookRegisteredAt: row.webhookRegisteredAt,
     webhookUrl: row.webhookUrl,
+    webhookSecretFingerprint: row.webhookSecretFingerprint,
   };
 }
 
@@ -346,7 +347,7 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
   async markWebhookRegistered(
     scope: ScopeContext,
     id: BotInstanceId,
-    input: { readonly url: string; readonly now: Date },
+    input: { readonly url: string; readonly secretFingerprint: string; readonly now: Date },
     tx: unknown,
   ): Promise<void> {
     const tenantId = requireTenantId(scope);
@@ -355,6 +356,7 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
       .set({
         webhookRegisteredAt: input.now,
         webhookUrl: input.url,
+        webhookSecretFingerprint: input.secretFingerprint,
         updatedAt: input.now,
       })
       .where(and(eq(botInstances.tenantId, tenantId), eq(botInstances.id, id)));
@@ -365,13 +367,17 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
     id: BotInstanceId,
     input: { readonly telegramBotId: string; readonly username: string; readonly now: Date },
     tx: unknown,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
     // `telegram_bot_id IS NULL` is part of the WHERE, not just a caller-side
     // check. It is what makes this fill-a-blank rather than a rewrite: a row
     // that already names a bot is never repointed by this statement, whatever
     // a caller believes it is doing.
-    await executorOf(this.db, tx)
+    // The affected rows are RETURNED, not assumed. A concurrent run can fill the
+    // blank between the caller's unlocked read and this statement, and a caller
+    // that audited regardless would write a row asserting a `before` that was
+    // not true and a change that did not happen.
+    const filled = await executorOf(this.db, tx)
       .update(botInstances)
       .set({
         telegramBotId: input.telegramBotId,
@@ -384,6 +390,8 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
           eq(botInstances.id, id),
           isNull(botInstances.telegramBotId),
         ),
-      );
+      )
+      .returning({ id: botInstances.id });
+    return filled.length > 0;
   }
 }

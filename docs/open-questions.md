@@ -997,3 +997,59 @@ reader rather than discovered by a tenant.
 phase that adds categories — whichever comes first. Whoever does it decides the ordering
 key at the same time, because a cursor over `sort_order` is the part that is not
 obvious.
+
+## OQ-TG-01 — an installation cannot change the bot it serves, and cannot recover a revoked token
+
+Status: OPEN. Raised by the fresh-install bootstrap (ADR-0029), which is where it
+becomes reachable.
+
+ADR-0029 decision 3 is right and this is its cost, stated plainly rather than
+left for somebody to discover at the worst moment.
+
+The installer reconciles and never rotates: `BotBootstrapRepository` deliberately
+declares no method that writes a token onto an existing row, so the capability
+does not exist to be called by accident. The ADR defers the deliberate version to
+"an explicit operator command or the later Web Admin management workflow".
+Neither has been built. So:
+
+- an installation whose bot token is **revoked** in BotFather is permanently
+  `incomplete`. Every `install.sh` rerun exits non-zero, `botctl telegram
+register` fails with `telegram.bootstrap_token_rejected`, and the only way back
+  is SQL against `bot_instances`;
+- the same is true of a token **rotated** in BotFather, which is the ordinary
+  reaction to a suspected leak — the thing an operator is most likely to do in a
+  hurry;
+- a developer running `bot:bootstrap:dev` against the seeded database hits it
+  immediately: the seed's token is a fixture, `getMe` rejects it, and nothing in
+  this release can replace it.
+
+**What a resolution has to decide**, and why it is not a small command:
+
+1. Whether replacing a token for the SAME `telegram_bot_id` (a rotation) and
+   repointing at a DIFFERENT bot (a migration) are one operation or two. They
+   have different blast radii: a rotation changes a credential, a repoint strands
+   every stored `telegram_user_id` and `chat_id`.
+2. What authorizes it. The bootstrap is a CLI precisely because provisioning has
+   no caller to authorize; a management workflow has one, and needs a permission,
+   an audit row and a confirmation.
+3. What happens to the webhook. A new token does not change the registration, but
+   the old bot may still hold one pointing here.
+
+Until then: the constraint is documented in `docs/deployment.md`, and the error
+message names this entry rather than implying a command that ships.
+
+## OQ-TG-02 — a BotFather rename is not picked up after the first bootstrap
+
+Status: OPEN, and small.
+
+`bot_instances.username` is written from `getMe` when the row is created, and
+refreshed only on the path that fills a NULL `telegram_bot_id` — a row that
+predates migration 0038. For every row this release creates, `getMe` returns
+before that write, so an operator who renames the bot in BotFather leaves the
+stored username stale for ever.
+
+Nothing reads it for routing — the identity that matters is the numeric id, and
+the webhook is addressed by the bot instance's own UUID — so this is a reporting
+defect rather than a functional one. It is recorded because a stale username is
+exactly the kind of thing an operator later reads as evidence of which bot an
+installation is bound to.

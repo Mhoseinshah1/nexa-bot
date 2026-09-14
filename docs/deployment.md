@@ -240,7 +240,24 @@ botctl telegram register   # resumes from the stored token; never asks for one
 ```
 
 `--skip-telegram` leaves the bot unconfigured in this run and says what to run
-later. It does not report an already-configured bot as unconfigured.
+later. It does not report an already-configured bot as unconfigured, and it is
+not defeated by a Telegram state the installer cannot read — skipping is a
+decision you already made.
+
+A rerun asks Telegram whether the stored token still works **every time**,
+including when nothing else is outstanding. That is the only way a revoked token
+can be reported rather than assumed away.
+
+**What this release cannot do: change the bot.** There is no command that
+replaces a stored token, by design — the installer reconciles and never rotates.
+The consequence is that a token revoked or rotated in BotFather leaves the
+installation permanently incomplete, and the only way back is SQL. The deliberate
+replacement workflow is `OQ-TG-01` in `docs/open-questions.md`; do not rotate a
+bot token on a running installation until it exists.
+
+Rotating the **webhook secret** is supported. Change it in `nexa.env`, restart,
+and run `botctl telegram register`: the registration records a digest of the
+secret it used, so a changed value reads as outstanding rather than as done.
 
 An installation created before this release has no Telegram keys in its
 `nexa.env`. A rerun of the installer adds `TELEGRAM_WEBHOOK_ENABLED` and a fresh

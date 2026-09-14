@@ -329,6 +329,15 @@ preflight() {
   # A file only has to be readable and non-empty here. Whether it holds a
   # WORKING token is Telegram's to say, and `getMe` asks.
   if [ "$SKIP_TELEGRAM" = "no" ] && [ -n "$BOT_TOKEN_FILE" ]; then
+    # ABSOLUTE, and this is not pedantry. The same string is handed to
+    # `docker run -v`, where a bare name is a NAMED VOLUME rather than a path:
+    # the container would receive an empty directory, the CLI would fail
+    # reading a directory as a file, and the operator would see a stack trace
+    # about a file they can see on their own disk.
+    case "$BOT_TOKEN_FILE" in
+      /*) ;;
+      *) nexa_die "--bot-token-file must be an absolute path; \"${BOT_TOKEN_FILE}\" is not. Docker reads it as a named volume otherwise, and the container gets an empty directory." ;;
+    esac
     [ -r "$BOT_TOKEN_FILE" ] ||
       nexa_die "cannot read the bot token file at ${BOT_TOKEN_FILE}."
     [ -s "$BOT_TOKEN_FILE" ] ||
@@ -890,12 +899,48 @@ telegram_state() {
     tr -d '\r\n'
 }
 
+# `--skip-telegram` says "do not configure one", not "there is not one".
+#
+# The distinction `--skip-owner` had to learn on a real host, where it told an
+# already-bootstrapped installation to run a bootstrap that would refuse it. The
+# state is read here — and a state that cannot be read is reported rather than
+# fatal, because the operator has already said they are not configuring Telegram
+# in this run.
+skip_telegram_bot() {
+  local state
+  state="$(telegram_state)" || state=""
+  case "$state" in
+    ready)
+      nexa_ok "skipping the Telegram bot; it is already configured and receiving updates"
+      ;;
+    none | incomplete | stopped)
+      nexa_warn "skipping the Telegram bot. It cannot receive any message until you run:"
+      nexa_warn "  botctl telegram register"
+      ;;
+    *)
+      nexa_warn "skipping the Telegram bot, and its state could not be read. Check with:"
+      nexa_warn "  botctl telegram status"
+      ;;
+  esac
+}
+
 configure_telegram_bot() {
+  # `--skip-telegram` FIRST, before the state is even asked for.
+  #
+  # The refusal-to-guess below is right and its position was not: an operator who
+  # explicitly asked not to configure Telegram had their install killed by a
+  # Telegram CLI that would not answer. Skipping is a decision they already made;
+  # it does not need a state to be made against.
+  if [ "$SKIP_TELEGRAM" = "yes" ]; then
+    skip_telegram_bot
+    return 0
+  fi
+
   local state
   state="$(telegram_state)" || state=""
 
   case "$state" in
-    none | incomplete | ready) ;;
+    none | incomplete | ready | stopped) ;;
     *)
       # Not a guess and not a skip. Both readings are wrong in a way the
       # operator pays for: treating an unreadable answer as `none` prompts for
@@ -905,32 +950,32 @@ configure_telegram_bot() {
       ;;
   esac
 
-  if [ "$SKIP_TELEGRAM" = "yes" ]; then
-    # `--skip-telegram` says "do not configure one", not "there is not one" —
-    # the distinction `--skip-owner` had to learn on a real host, where it told
-    # an already-bootstrapped installation to run a bootstrap that would refuse
-    # it.
-    if [ "$state" = "ready" ]; then
-      nexa_ok "skipping the Telegram bot; it is already configured and receiving updates"
-      return 0
-    fi
-    nexa_warn "skipping the Telegram bot. It cannot receive any message until you run:"
-    nexa_warn "  botctl telegram register"
-    return 0
-  fi
-
   nexa_step "configuring Telegram bot"
 
-  if [ "$state" = "ready" ]; then
-    nexa_ok "the Telegram bot is already configured and receiving updates"
+  if [ "$state" = "stopped" ]; then
+    # Not something a rerun converges out of. The webhook route refuses an
+    # update for a bot that is not ACTIVE, so registering one would point
+    # Telegram at an endpoint that answers "unknown bot instance" to everything
+    # it delivers. The remedy is to start the bot, not to run this again.
+    TELEGRAM_INCOMPLETE="yes"
+    nexa_warn "the Telegram bot instance is stopped, so it is not receiving updates."
+    nexa_warn "Start it, then run: botctl telegram register"
     return 0
   fi
 
-  # `incomplete` means the token is already stored and only the registration is
-  # outstanding. ADR-0029 decision 3: a rerun reconciles and never rotates, so
-  # it must not so much as ASK — and the CLI enforces that itself, from the same
-  # state. Saying so here is what stops an operator wondering why they were not
-  # asked.
+  # `incomplete` and `ready` BOTH run the CLI, and `ready` is the one that
+  # matters.
+  #
+  # ADR-0029: a rerun asks Telegram whether the stored token still works, every
+  # time, because that is the only way the promise to report a REVOKED token as
+  # an explicit configuration problem can be kept. The service does that; this
+  # step used to short-circuit on `ready` and never invoke it — so the rule was
+  # implemented in the layer that cannot be the last word and bypassed in the
+  # layer that is, and an installer rerun printed a green "already configured"
+  # for an installation whose bot could not authenticate a single call.
+  #
+  # The CLI is idempotent in that state: it re-checks, registers nothing, and
+  # reports ALREADY_COMPLETE. Its exit status decides what is printed here.
   if [ "$state" = "incomplete" ]; then
     nexa_log "A bot is already configured; resuming from the stored token. You will not be asked for it again."
   fi
@@ -944,8 +989,11 @@ configure_telegram_bot() {
   # never as an argument: argv is readable by every user on the machine via
   # `ps`, and an environment variable would be readable through `docker
   # inspect`. The same rule as the owner's password, and the same reasons.
+  # A token is supplied ONLY when there is no bot instance. On every other state
+  # the CLI resumes from the stored one and refuses to ask, so handing it a file
+  # would be handing it something it must ignore.
   local ok=0
-  if [ -n "$BOT_TOKEN_FILE" ]; then
+  if [ -n "$BOT_TOKEN_FILE" ] && [ "$state" = "none" ]; then
     # Mounted read-only at a fixed path rather than copied anywhere. The file
     # stays the operator's and this installer never writes a token to disk.
     nexa_compose run --rm --no-deps -T \
@@ -953,9 +1001,16 @@ configure_telegram_bot() {
       --entrypoint node api dist/bootstrap-bot.cli.js \
       --public-base-url "https://${DOMAIN}" \
       --bot-token-file /run/nexa-bot-token || ok=1
-  else
+  elif [ "$state" = "none" ]; then
     # Interactive: stdin is left alone, and the CLI prompts with no echo.
     nexa_compose run --rm --no-deps \
+      --entrypoint node api dist/bootstrap-bot.cli.js \
+      --public-base-url "https://${DOMAIN}" || ok=1
+  else
+    # Nothing to ask for, so no terminal is needed and none is allocated: `-T`,
+    # because allocating a pseudo-TTY for a command in a script is how a
+    # non-interactive rerun hangs.
+    nexa_compose run --rm --no-deps -T \
       --entrypoint node api dist/bootstrap-bot.cli.js \
       --public-base-url "https://${DOMAIN}" || ok=1
   fi

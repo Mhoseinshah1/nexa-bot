@@ -285,10 +285,17 @@ export async function telegramGetMe(
 /**
  * Register the webhook, with the secret every later update is authenticated by.
  *
- * `drop_pending_updates: true`, deliberately. A fresh install has no customers and no
- * conversations; whatever is queued at Telegram predates this installation entirely and
- * belongs to whatever the token was used for before. Replaying it would deliver
+ * `drop_pending_updates` is the CALLER'S decision, and it is not a detail.
+ *
+ * On a first registration it is true: a fresh install has no customers and no
+ * conversations, so whatever is queued at Telegram predates this installation entirely
+ * and belongs to whatever the token was used for before — replaying it would deliver
  * somebody else's messages into a brand-new database as if they had just arrived.
+ *
+ * On a RE-registration it is false. A domain change and a crash recovery both
+ * re-register against a RUNNING installation, and discarding the queue there throws away
+ * real customers' messages with no count, no confirmation and no record. Defaulting it
+ * true here would make that the silent behaviour of every later caller.
  *
  * `allowed_updates` is NOT narrowed here. The runtime decides what it handles, and a
  * list set at registration time is a second place that has to be edited when a handler
@@ -298,15 +305,16 @@ export async function telegramSetWebhook(
   request: Omit<TelegramSendRequest, 'body' | 'method'> & {
     readonly url: string;
     readonly secretToken: string;
+    readonly dropPendingUpdates: boolean;
   },
 ): Promise<TelegramSendOutcome> {
   assertOutsideTransaction('A Telegram setWebhook');
 
-  const { url, secretToken, ...rest } = request;
+  const { url, secretToken, dropPendingUpdates, ...rest } = request;
   const call = await telegramCall({
     ...rest,
     method: 'setWebhook',
-    body: { url, secret_token: secretToken, drop_pending_updates: true },
+    body: { url, secret_token: secretToken, drop_pending_updates: dropPendingUpdates },
   });
   if (call.outcome !== 'SUCCEEDED') return call;
   // `setWebhook` answers `result: true`. There is no id to carry, and reporting one

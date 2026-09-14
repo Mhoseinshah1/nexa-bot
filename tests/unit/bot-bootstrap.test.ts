@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { isNexaError, PLATFORM_ERROR_CODES, type TenantContext } from '@nexa/contracts';
+import {
+  isNexaError,
+  PLATFORM_ERROR_CODES,
+  type AuditEntry,
+  type TenantContext,
+} from '@nexa/contracts';
 import {
   BotBootstrapService,
   type BotBootstrapDeps,
@@ -46,6 +51,7 @@ interface Row {
   telegramBotId: string | null;
   webhookRegisteredAt: Date | null;
   webhookUrl: string | null;
+  webhookSecretFingerprint: string | null;
   token: string;
 }
 
@@ -84,6 +90,7 @@ class FakeBots implements BotBootstrapRepository {
       telegramBotId: row.telegramBotId,
       webhookRegisteredAt: row.webhookRegisteredAt,
       webhookUrl: row.webhookUrl,
+      webhookSecretFingerprint: row.webhookSecretFingerprint,
     };
   }
 
@@ -104,6 +111,7 @@ class FakeBots implements BotBootstrapRepository {
       telegramBotId: input.telegramBotId,
       webhookRegisteredAt: null,
       webhookUrl: null,
+      webhookSecretFingerprint: null,
       token: input.token,
     });
   }
@@ -111,13 +119,14 @@ class FakeBots implements BotBootstrapRepository {
   async markWebhookRegistered(
     _scope: unknown,
     id: string,
-    input: { readonly url: string; readonly now: Date },
+    input: { readonly url: string; readonly secretFingerprint: string; readonly now: Date },
   ): Promise<void> {
     this.webhookMarks.push({ id, url: input.url });
     const row = this.rows.find((candidate) => candidate.id === id);
     if (row) {
       row.webhookRegisteredAt = input.now;
       row.webhookUrl = input.url;
+      row.webhookSecretFingerprint = input.secretFingerprint;
     }
   }
 
@@ -125,15 +134,16 @@ class FakeBots implements BotBootstrapRepository {
     _scope: unknown,
     id: string,
     input: { readonly telegramBotId: string; readonly username: string },
-  ): Promise<void> {
+  ): Promise<boolean> {
     const row = this.rows.find((candidate) => candidate.id === id);
-    // The real statement carries `telegram_bot_id IS NULL` in its WHERE; the
-    // fake honours the same rule, so a test cannot pass here and fail in
-    // Postgres.
-    if (!row || row.telegramBotId !== null) return;
+    // The real statement carries `telegram_bot_id IS NULL` in its WHERE and
+    // RETURNS the rows it changed; the fake honours both, so a test cannot pass
+    // here and fail in Postgres.
+    if (!row || row.telegramBotId !== null) return false;
     this.identityWrites.push({ id, telegramBotId: input.telegramBotId });
     row.telegramBotId = input.telegramBotId;
     row.username = input.username;
+    return true;
   }
 
   async resolveToken(_scope: unknown, id: string): Promise<string> {
@@ -145,7 +155,12 @@ class FakeBots implements BotBootstrapRepository {
 
 class FakeTelegram implements BotBootstrapTelegram {
   identifyCalls: string[] = [];
-  webhookCalls: { token: string; url: string; secretToken: string }[] = [];
+  webhookCalls: {
+    token: string;
+    url: string;
+    secretToken: string;
+    dropPendingUpdates: boolean;
+  }[] = [];
   probe: BotIdentityProbe = { outcome: 'IDENTIFIED', botId: '8123456789', username: 'acme_bot' };
   registration: WebhookRegistration = { outcome: 'REGISTERED' };
   /** Thrown instead of answering, to simulate the process dying mid-call. */
@@ -163,6 +178,7 @@ class FakeTelegram implements BotBootstrapTelegram {
     readonly token: string;
     readonly url: string;
     readonly secretToken: string;
+    readonly dropPendingUpdates: boolean;
   }): Promise<WebhookRegistration> {
     expect(currentTransactionLabel()).toBeUndefined();
     this.webhookCalls.push({ ...input });
@@ -171,16 +187,32 @@ class FakeTelegram implements BotBootstrapTelegram {
   }
 }
 
+/** The deps a `build()` result was composed from, for constructing a variant. */
+const DEPS = new WeakMap<object, BotBootstrapDeps>();
+function serviceDeps(built: { service: BotBootstrapService }): BotBootstrapDeps {
+  const deps = DEPS.get(built.service);
+  if (deps === undefined) throw new Error('that service was not built here');
+  return deps;
+}
+
 function build(overrides: Partial<BotBootstrapDeps> = {}): {
   service: BotBootstrapService;
   bots: FakeBots;
   telegram: FakeTelegram;
-  audit: { action: string; entityId: string | null; after: unknown }[];
+  audit: AuditEntry[];
   ids: string[];
 } {
   const bots = new FakeBots();
   const telegram = new FakeTelegram();
-  const audit: { action: string; entityId: string | null; after: unknown }[] = [];
+  /*
+   * The WHOLE entry, not three fields of it.
+   *
+   * An earlier fake recorded only `{action, entityId, after}`, so the test that
+   * says the token never reaches an audit payload was satisfied by the fake's
+   * shape rather than by the rule: a production change putting the token in
+   * `before` or in the `reason` string left it green.
+   */
+  const audit: AuditEntry[] = [];
   const ids: string[] = [];
   let counter = 0;
   let clockMs = 1_700_000_000_000;
@@ -221,7 +253,7 @@ function build(overrides: Partial<BotBootstrapDeps> = {}): {
     },
     audit: {
       record: async (_s, _a, entry) => {
-        audit.push({ action: entry.action, entityId: entry.entityId, after: entry.after });
+        audit.push(entry);
       },
     },
     clock: { now: () => new Date((clockMs += 1_000)) },
@@ -240,13 +272,10 @@ function build(overrides: Partial<BotBootstrapDeps> = {}): {
     webhookSecret: () => SECRET,
   };
 
-  return {
-    service: new BotBootstrapService({ ...deps, ...overrides }),
-    bots,
-    telegram,
-    audit,
-    ids,
-  };
+  const composed = { ...deps, ...overrides };
+  const service = new BotBootstrapService(composed);
+  DEPS.set(service, composed);
+  return { service, bots, telegram, audit, ids };
 }
 
 function codeOf(error: unknown): string {
@@ -562,6 +591,7 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
       telegramBotId: null,
       webhookRegisteredAt: null,
       webhookUrl: null,
+      webhookSecretFingerprint: null,
       token: TOKEN,
     });
 
@@ -571,13 +601,138 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
     expect(bots.identityWrites).toEqual([
       { id: '01890000-0000-7000-8000-0000000001dd', telegramBotId: '8123456789' },
     ]);
-    // The username came from Telegram too, so a BotFather rename is picked up
-    // rather than left to rot in a column nothing reconciles.
+    // The username came from Telegram too — but only on this path. A row whose
+    // `telegram_bot_id` is already set returns before the write, so for every
+    // row this release creates a later BotFather rename is NOT picked up. That
+    // is a gap, not a feature; it is recorded in docs/open-questions.md rather
+    // than described here as a rule the code has.
     expect(bots.rows[0]?.username).toBe('acme_bot');
     expect(bots.tokenWrites).toHaveLength(0);
     // Asked with the STORED token. The installer supplied none, and the row's
     // credential is what identified it.
     expect(telegram.identifyCalls).toEqual([TOKEN]);
+  });
+});
+
+describe('bot bootstrap — the rules the review found untested', () => {
+  async function installed(): Promise<ReturnType<typeof build>> {
+    const built = build();
+    await built.service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN });
+    return built;
+  }
+
+  it('re-registers when the webhook SECRET has been rotated', async () => {
+    /*
+     * The rotation procedure `nexa.env.template` documents, end to end.
+     *
+     * Recording only the URL made this unfixable: the installation reported
+     * itself ready while the webhook route refused every update Telegram signed
+     * with the old secret, `botctl telegram register` answered "nothing was
+     * changed", and the only way out was SQL.
+     */
+    const { bots, telegram } = await installed();
+    const rotated = build();
+    rotated.bots.rows = bots.rows;
+    const after = new BotBootstrapService({
+      ...serviceDeps(rotated),
+      webhookSecret: () => 'a-completely-different-secret',
+    });
+
+    expect(await after.status(scope, ORIGIN)).toBe('incomplete');
+    const result = await after.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+
+    expect(result.kind).toBe('RECONCILED');
+    expect(rotated.telegram.webhookCalls.at(-1)?.secretToken).toBe('a-completely-different-secret');
+    expect(await after.status(scope, ORIGIN)).toBe('ready');
+    // And the credential was still not touched.
+    expect(rotated.bots.tokenWrites).toHaveLength(0);
+    expect(telegram.webhookCalls).toHaveLength(1);
+  });
+
+  it('discards queued updates on a first registration and NEVER on a reconcile', async () => {
+    // `drop_pending_updates` on a re-registration throws away a RUNNING
+    // installation's customers' messages — no count, no confirmation, no record.
+    const { service, telegram } = await installed();
+    expect(telegram.webhookCalls[0]?.dropPendingUpdates).toBe(true);
+
+    const moved = 'https://moved.example.com';
+    await service.execute(scope, { token: null, publicBaseUrl: moved });
+    expect(telegram.webhookCalls.at(-1)?.dropPendingUpdates).toBe(false);
+  });
+
+  it('refuses a STOPPED bot rather than registering a webhook nothing will answer', async () => {
+    // The webhook route refuses an update whose bot is not ACTIVE, so
+    // registering one produces a bot that is configured, reported ready, and
+    // silent.
+    const { service, bots, telegram } = await installed();
+    bots.rows[0]!.status = 'STOPPED';
+    const before = telegram.webhookCalls.length;
+
+    expect(await service.status(scope, ORIGIN)).toBe('stopped');
+    expect(
+      await codeThrownBy(() => service.execute(scope, { token: null, publicBaseUrl: ORIGIN })),
+    ).toBe(PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_FAILED);
+    expect(telegram.webhookCalls).toHaveLength(before);
+  });
+
+  it('refuses a scope that has stopped accepting work, inside the transaction', async () => {
+    // A CLAUDE.md non-negotiable that had no test at all: deleting all three
+    // `requireActiveScope` calls used to leave the whole suite green.
+    const built = build();
+    const refusing = new BotBootstrapService({
+      ...serviceDeps(built),
+      scopeActivity: { scopeIsActive: async () => false },
+    });
+
+    expect(
+      await codeThrownBy(() => refusing.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN })),
+    ).toBe(PLATFORM_ERROR_CODES.TENANT_NOT_FOUND);
+    // Nothing was written, and Telegram was never asked to register anything —
+    // the refusal is inside the transaction, before the row exists.
+    expect(built.bots.rows).toHaveLength(0);
+    expect(built.telegram.webhookCalls).toHaveLength(0);
+  });
+
+  it('refuses the same scope on the RECONCILE path too', async () => {
+    const { bots } = await installed();
+    const second = build();
+    second.bots.rows = bots.rows;
+    second.bots.rows[0]!.webhookUrl = 'https://old.example.com/telegram/webhook/x';
+    const refusing = new BotBootstrapService({
+      ...serviceDeps(second),
+      scopeActivity: { scopeIsActive: async () => false },
+    });
+
+    expect(
+      await codeThrownBy(() => refusing.execute(scope, { token: null, publicBaseUrl: ORIGIN })),
+    ).toBe(PLATFORM_ERROR_CODES.TENANT_NOT_FOUND);
+    expect(second.bots.webhookMarks).toHaveLength(0);
+  });
+
+  it('does not audit an identity write that changed no row', async () => {
+    // `telegram_bot_id IS NULL` is in the UPDATE's WHERE, so a concurrent run
+    // can fill the blank first. Auditing regardless writes a row asserting a
+    // `before` that was not true and a change that did not happen.
+    const { service, bots, audit } = build();
+    bots.rows.push({
+      id: '01890000-0000-7000-8000-0000000001dd',
+      username: 'stale_name_bot',
+      status: 'ACTIVE',
+      telegramBotId: null,
+      webhookRegisteredAt: null,
+      webhookUrl: null,
+      webhookSecretFingerprint: null,
+      token: TOKEN,
+    });
+    // The concurrent run, landing between the unlocked read and the UPDATE.
+    bots.onLocked = () => {
+      bots.rows[0]!.telegramBotId = '8123456789';
+    };
+
+    await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+
+    expect(bots.identityWrites).toHaveLength(0);
+    expect(audit.map((entry) => entry.action)).not.toContain('bot_instance.identity_recorded');
   });
 });
 
@@ -595,6 +750,7 @@ describe('bot bootstrap — two installers at once', () => {
         telegramBotId: '8123456789',
         webhookRegisteredAt: null,
         webhookUrl: null,
+        webhookSecretFingerprint: null,
         token: TOKEN,
       });
     };
@@ -621,6 +777,7 @@ describe('bot bootstrap — two installers at once', () => {
         telegramBotId: '8123456789',
         webhookRegisteredAt: null,
         webhookUrl: null,
+        webhookSecretFingerprint: null,
         token: TOKEN,
       });
     };

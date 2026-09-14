@@ -64,6 +64,8 @@ export interface BotBootstrapView {
   readonly telegramBotId: string | null;
   readonly webhookRegisteredAt: Date | null;
   readonly webhookUrl: string | null;
+  /** SHA-256 of the secret it was registered with. NULL means unknown. */
+  readonly webhookSecretFingerprint: string | null;
 }
 
 /**
@@ -116,7 +118,7 @@ export interface BotBootstrapRepository {
   markWebhookRegistered(
     scope: ScopeContext,
     id: BotInstanceId,
-    input: { readonly url: string; readonly now: Date },
+    input: { readonly url: string; readonly secretFingerprint: string; readonly now: Date },
     tx: unknown,
   ): Promise<void>;
   /**
@@ -126,12 +128,13 @@ export interface BotBootstrapRepository {
    * gave for the token already stored on that row. A row whose
    * `telegram_bot_id` is set is never rewritten here.
    */
+  /** Returns whether the row was still blank — see the WHERE clause. */
   recordTelegramIdentity(
     scope: ScopeContext,
     id: BotInstanceId,
     input: { readonly telegramBotId: string; readonly username: string; readonly now: Date },
     tx: unknown,
-  ): Promise<void>;
+  ): Promise<boolean>;
 }
 
 /**
@@ -172,6 +175,15 @@ export interface BotBootstrapTelegram {
     readonly token: string;
     readonly url: string;
     readonly secretToken: string;
+    /**
+     * Discard whatever Telegram has queued. TRUE only on a first registration.
+     *
+     * On a fresh install the queue predates the installation and belongs to
+     * whatever the token was used for before. On a re-registration it is a
+     * running installation's customers, and discarding it is a destructive
+     * action with no count and no confirmation.
+     */
+    readonly dropPendingUpdates: boolean;
   }): Promise<WebhookRegistration>;
 }
 
