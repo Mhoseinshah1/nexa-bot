@@ -76,9 +76,24 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.order.confirm_button': 'تأیید و ثبت سفارش',
   'bot.order.unavailable': 'این سرویس در حال حاضر قابل خرید نیست.',
   'bot.order.expired': 'مهلت این سفارش به پایان رسیده است. لطفاً دوباره سفارش دهید.',
+  'bot.order.not_awaiting_payment': 'این سفارش دیگر در انتظار پرداخت نیست.',
   'bot.order.awaiting_payment':
     'سفارش ثبت شد و در انتظار پرداخت است.\nمبلغ: {total}\nاعتبار تا: {expiresAt}',
-  'bot.order.settled': 'پرداخت تأیید شد. سرویس شما در حال آماده‌سازی است.',
+  /*
+   * Payment, and NOTHING about a service.
+   *
+   * The shipped copy said «سرویس شما در حال آماده‌سازی است» — "your service is being
+   * prepared" — and Phase 4C is the phase that first SENDS this key. Nothing in this
+   * release provisions anything: no panel call, no service row, no credential. A
+   * message claiming an effect that did not happen is the defect this codebase is
+   * organised around, and 4B could ship the sentence only because 4B never sent it.
+   *
+   * The KEY and its frozen description are untouched — `docs/phase4c-audit.md` records
+   * that the description is a contract and the default copy is not. A tenant running a
+   * later phase words it however they like; the default must not lie in the release
+   * that ships it.
+   */
+  'bot.order.settled': 'پرداخت با موفقیت تأیید شد و سفارش شما پرداخت‌شده است.',
   'bot.order.cancelled': 'سفارش لغو شد.',
 
   'bot.wallet.balance': 'موجودی کیف پول شما: {balance}',
@@ -86,6 +101,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
 
   'bot.payment.manual_instructions':
     'برای پرداخت مبلغ {total} طبق راهنمای فروشنده اقدام کنید و سپس رسید را ارسال نمایید.\nکد پیگیری این پرداخت: {reference}',
+  'bot.payment.wallet_button': 'پرداخت از کیف پول',
+  'bot.payment.manual_button': 'پرداخت کارت به کارت',
   'bot.payment.unconfigured': 'این روش پرداخت در حال حاضر فعال نیست.',
   'bot.payment.received_for_review': 'رسید شما دریافت شد و برای بررسی در نوبت قرار گرفت.',
 

@@ -52,18 +52,15 @@ export const PLANNED_SURFACES: readonly PlannedSurface[] = [
       'web.planned_services_plan_filter',
     ],
   },
-  {
-    key: 'payments',
-    path: '/payments',
-    label: 'web.nav_payments',
-    summary: 'web.planned_payments_summary',
-    missing: ['web.planned_missing_payment', 'web.planned_missing_gateway'],
-    decisions: [
-      'web.planned_payments_expiry',
-      'web.planned_payments_refund',
-      'web.planned_payments_no_receipts',
-    ],
-  },
+  /*
+   * `payments` is no longer here. Phase 4C builds the surface, so a placeholder
+   * claiming it is planned would be the opposite untruth from the one this file
+   * exists to prevent: `planned-and-absent.test.tsx` asserts the two lists agree
+   * with what is routed, and a promoted page left in this list renders its
+   * placeholder instead of itself.
+   *
+   * This is the same promotion `products` and `orders` had in 4B.
+   */
   {
     key: 'discounts',
     path: '/discounts',

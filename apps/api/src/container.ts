@@ -59,6 +59,7 @@ import { DrizzleIdempotencyStore } from './modules/platform/idempotency/infrastr
 import { PermissionGuard } from './modules/platform/access/application/permission-guard.js';
 import { AdminPermissionResolver } from './modules/platform/access/infrastructure/admin-permission-resolver.js';
 import { ScryptPasswordHasher, scryptParamsFor } from './infrastructure/crypto/password-hasher.js';
+import { operationIdFor } from './infrastructure/crypto/operation-id.js';
 import { DrizzleAdminRepository } from './modules/platform/identity/infrastructure/drizzle-admin.repository.js';
 import { DrizzleRoleRepository } from './modules/platform/identity/infrastructure/drizzle-role.repository.js';
 import { DrizzleSessionRepository } from './modules/platform/identity/infrastructure/drizzle-session.repository.js';
@@ -109,6 +110,10 @@ import {
   DrizzlePanelDirectory,
   DrizzleProductRepository,
 } from './modules/commerce/catalog/infrastructure/drizzle-product.repository.js';
+import { DrizzleWalletRepository } from './modules/commerce/wallet/infrastructure/drizzle-wallet.repository.js';
+import { WalletService } from './modules/commerce/wallet/application/wallet.service.js';
+import { DrizzlePaymentRepository } from './modules/commerce/payments/infrastructure/drizzle-payment.repository.js';
+import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
 import { OrderService } from './modules/commerce/orders/application/order.service.js';
 import { DrizzleOrderRepository } from './modules/commerce/orders/infrastructure/drizzle-order.repository.js';
 import { BotRuntime } from './surfaces/telegram/bot-runtime.js';
@@ -219,6 +224,8 @@ export interface Container {
    */
   readonly customers: CustomerService;
   readonly products: ProductService;
+  readonly wallet: WalletService;
+  readonly payments: PaymentService;
   readonly orders: OrderService;
   readonly botRuntime: BotRuntime;
 
@@ -629,6 +636,32 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
   });
 
+  /**
+   * The wallet, under the FROZEN `users.wallet.*` permissions.
+   *
+   * `operationId` is bound HERE and not inside the service, for the reason
+   * `operation.ts` gives: `packages/contracts` depends on nothing, so the hash is a
+   * port the composition root supplies. One binding, so every movement's reference is
+   * derived the same way in every process.
+   */
+  const walletRepository = new DrizzleWalletRepository(database.db);
+  const walletService = new WalletService({
+    repository: walletRepository,
+    customers: customerRepository,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    settings: settingsResolver,
+    uow,
+    idempotency,
+    outbox,
+    clock,
+    ids,
+    operationId: (key) => operationIdFor('payment', key),
+  });
+
   // ---------------------------------------------------------------------------
   // Control plane
   // ---------------------------------------------------------------------------
@@ -645,8 +678,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * that can drift. It takes the outbox because `OrderConfirmed` is a declared event
    * with a declared aggregate, which is exactly what products did not have.
    */
+  const orderRepository = new DrizzleOrderRepository(database.db);
   const orderService = new OrderService({
-    repository: new DrizzleOrderRepository(database.db),
+    repository: orderRepository,
     products: productRepository,
     customers: customerRepository,
     settings: settingsResolver,
@@ -661,6 +695,35 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
+  /**
+   * Payments, and the one place `SETTLE` is taken.
+   *
+   * It holds the ORDER and WALLET repositories rather than their services, and that is
+   * deliberate: the debit, the confirmation and the order transition commit in ONE
+   * transaction, and a service call would open its own. A payment that moved money but
+   * left the order unpaid is the state this wiring makes unrepresentable.
+   *
+   * The same `operationId` binding the wallet uses, so a reference derived from one
+   * idempotency key is the same value in every process.
+   */
+  const paymentService = new PaymentService({
+    repository: new DrizzlePaymentRepository(database.db),
+    orders: orderRepository,
+    wallet: walletRepository,
+    customers: customerRepository,
+    guard,
+    audit,
+    opsLog,
+    outbox,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    clock,
+    ids,
+    operationId: (key) => operationIdFor('payment', key),
+  });
+
   /**
    * One HTTP client for every provider call this process makes.
    *
@@ -1295,9 +1358,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     recordPing,
     customers: customerService,
     products: productService,
+    wallet: walletService,
+    payments: paymentService,
     orders: orderService,
     botRuntime: new BotRuntime({
       customers: customerService,
+      payments: paymentService,
+      wallet: walletService,
       // The SAME instances the container exposes, not new ones. Two order services
       // would each hold their own idempotency view, and a redelivered Telegram update
       // handled by one would not be seen as a replay by the other — which is the whole

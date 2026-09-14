@@ -383,15 +383,35 @@ export const TEMPLATES = [
   {
     key: 'bot.order.expired',
     description:
-      'Shown when a draft order is confirmed after its own hold expired. Distinct ' +
-      'from `bot.order.cancelled`: nobody withdrew this one, the window closed, and ' +
-      'the customer has to start again rather than wonder what they did.',
+      'Shown when an order is acted on after its own deadline has passed. TWO ' +
+      'producers, and both are the same lapse: confirming a draft whose price hold ' +
+      'expired, and — since 4C — paying for a confirmed order past the deadline the ' +
+      'customer was shown in `bot.order.awaiting_payment`. Distinct from ' +
+      '`bot.order.cancelled`: nobody withdrew this one, the window closed, and the ' +
+      'customer has to start again rather than wonder what they did.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.not_awaiting_payment',
+    description:
+      'Shown when a customer taps a pay button on an order that is no longer ' +
+      'awaiting payment — almost always the one they just paid for, because the ' +
+      'awaiting-payment message keeps its buttons in the chat after settlement. ' +
+      'It replaced `bot.order.unavailable` here, which says a PRODUCT cannot be ' +
+      'bought and told a customer who had just been debited that their service was ' +
+      'unavailable. Says only what is true of the ORDER and claims nothing about ' +
+      'which state it reached, because a cancelled order reaches this too.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
   {
     key: 'bot.order.settled',
-    description: 'Confirms that payment was accepted and provisioning will follow.',
+    description:
+      'Confirms that payment was accepted and the order is paid. It says nothing ' +
+      'about a service: a phase that has not provisioned anything may not claim it ' +
+      'has, and 4C is the phase that first sends this key. What follows a payment is ' +
+      "a later phase's to announce, through its own key.",
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -455,6 +475,27 @@ export const TEMPLATES = [
         repeatable: false,
       },
     ],
+  },
+  {
+    key: 'bot.payment.wallet_button',
+    description:
+      'The label on the button a customer presses to pay for an order from their ' +
+      'wallet balance. A button label is customer-facing text like any other, so it ' +
+      'is a key rather than a literal in a surface — the reason ' +
+      '`bot.order.confirm_button` exists, applied to the pair of buttons the payment ' +
+      'choice needs. It carries no amount: the figure a customer is agreeing to is in ' +
+      '`bot.order.awaiting_payment`, and repeating it on a button is a second place ' +
+      'for it to disagree.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.manual_button',
+    description:
+      'The label on the button a customer presses to pay for an order out of band. ' +
+      'A key rather than a literal, for the reason `bot.payment.wallet_button` gives.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
   },
   {
     key: 'bot.payment.unconfigured',

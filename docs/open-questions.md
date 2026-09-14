@@ -997,3 +997,118 @@ reader rather than discovered by a tenant.
 phase that adds categories — whichever comes first. Whoever does it decides the ordering
 key at the same time, because a cursor over `sort_order` is the part that is not
 obvious.
+
+## OQ-4C-01 — when an unpaid order and its pending payment expire
+
+Phase 4C creates orders that reach `AWAITING_PAYMENT` and `MANUAL_TRANSFER` payments
+that sit `PENDING`, and **nothing expires either of them**. `orders.expires_at` is
+written at DRAFT and re-read at confirmation; `payments.expires_at` carries the order's
+deadline onto the payment. Both are read by refusals and neither is swept.
+
+**Why it is not resolved here.** The planned-payments copy this replaces recorded owner
+revision 4 in these words: «مهلت پرداخت حداکثر **یک ساعت** است و پس از آن پرداخت و سفارش
+باید منقضی یا لغو شوند. این قاعده باید در دامنه و سرور اجرا شود، نه با یک تایمر در
+مرورگر.» — at most one hour, enforced in the domain and on the server rather than by a
+browser timer. No contract states that hour. `sales.order_expiry_minutes` is the only configured
+window and it bounds a DRAFT's price hold, not an unpaid confirmed order — a customer
+who has been given bank details and an amount is in a different situation from one
+holding a quote. Picking a second window is a financial product rule, and `FBR-008`
+records that the legacy system's own amount/expiry layering is unresolved.
+
+**What holds meanwhile, corrected.** This paragraph used to say an expired deadline
+never settles anything by accident, because `orderAwaitingPayment` refuses an order in
+any other state. That was circular and the behaviour was the opposite: nothing sweeps a
+stale order, so it is never IN another state, so the refusal never fired. A customer who
+scrolled back weeks later and tapped the still-live pay button settled at a quote they
+had been told expired.
+
+`orderAwaitingPayment` now compares the order's own `expires_at` against the clock and
+refuses with `ORDER_EXPIRED`, on both customer-initiated paths. An OPERATOR confirming a
+transfer that already arrived is deliberately exempt and the parameter says so by name:
+the money is in the bank and this release has no refund path, so refusing because the
+deadline lapsed while the receipt sat in the queue would strand it.
+
+The gap that remains is the one this question is about: nothing MOVES a stale order to
+`EXPIRED`, so it still sits in the admin as awaiting payment for ever. Refusing to act
+on it is what 4C can do without inventing a window; expiring it is what needs the hour
+nobody has stated.
+
+**Trigger to resolve:** the phase that adds a sweeper, or the first operator who asks
+why a month-old order still says it is waiting.
+
+## OQ-4C-02 — what a refund is, as a state
+
+Refunds are out of scope for 4C and `REFUNDED` is in `ORDER_STATES` with no producer.
+The deferred decision, recorded here rather than lost with the placeholder page that
+carried it: **a refund REQUEST and a completed refund are different facts, and a refund
+state and a delivery state must never combine into an impossible pair.** `ledger.ts`
+already has `REFUND`, `PURCHASE_REVERSAL` and `CHARGEBACK` as distinct reasons, which is
+the shape that keeps them apart.
+
+`commerce.ts` also fixes the surrounding rule: a settlement that turns out to be wrong
+is a refund plus a new order, never a reopened one, because the alternative is an order
+whose paid-at timestamp is a lie.
+
+**Trigger to resolve:** the phase that implements refunds.
+
+## OQ-4C-03 — owner revision 17 says receipt review happens in Telegram; 4C confirms in the Web Admin
+
+**The revision, as recorded on the planned payments page:** «رسید پرداخت در پنل وب
+ذخیره، بایگانی، نمایش یا بررسی نمی‌شود. بررسی رسید در تلگرام انجام می‌شود.» — a payment
+receipt is not stored, archived, displayed **or reviewed** in the web panel; receipt
+review happens in Telegram.
+
+**What 4C built, and why it is not simply a violation.** The frozen contracts are
+web-admin-shaped and were frozen before this phase: `receipts.review` is a PERMISSION in
+`permissions.ts` carried by the `finance` and `receipt_reviewer` roles;
+`payments.confirmed_by_admin_id` is a column referencing `admins.id`; and
+`confirmPaymentRequestSchema` takes an operator's `evidenceNote`. An admin id and an
+admin permission do not describe a customer-side Telegram flow. Implementing the
+confirmation anywhere else would have required inventing a mechanism no contract states.
+
+**What 4C does NOT do, which is the half of the revision it honours in full.** No receipt
+FILE is uploaded, stored, archived or displayed anywhere in this release. There is no
+image, no attachment and no document: `payments.evidence_note` is an operator's own
+bounded text, and the schema comment says it is _"never the customer's own message text
+and never a gateway response body"_. `products-and-orders.test.tsx` and the payment page
+tests assert the absence of any upload or attachment control.
+
+**What is genuinely unresolved:** whether the APPROVAL DECISION belongs in Telegram, in
+the Web Admin, or in both. 4C puts it where the frozen permission and the
+`confirmed_by_admin_id` column point. If the owner's intent was that an operator approves
+from a Telegram admin chat, that is a second surface over the same service — the
+application layer already takes an `ActorContext` and `ACTOR_TYPES` includes
+`TELEGRAM_ADMIN`, so it is an addition rather than a rewrite.
+
+**Trigger to resolve:** the owner, on reading this. Nothing blocks on it: the
+confirmation is audited, permission-checked and idempotent wherever it is invoked from.
+
+## OQ-4C-04 — what happens to wallet funds in a currency the installation stopped selling
+
+`sales.currency` is `RUNTIME`-mutable over `['IRT','IRR']` and the Web Admin ships a
+picker for it. A wallet balance is derived per currency, so changing it strands every
+entry denominated in the old one: `WalletService.adjust` refuses a movement in a
+currency the installation does not sell, and `settleFromWallet` sums only the order's
+currency, so no debit, settlement or adjustment can ever reach those funds.
+
+**What 4C fixed, and what it did not.** The review found the history listing every
+currency while the balance above it counted one, so a tenant that switched saw
+«موجودی: ۰» over a populated table — the residual shape the module exists to prevent.
+The history now takes the same currency predicate as the balance, so the two agree.
+That makes the surface honest and makes the stranded entries INVISIBLE on it, which is
+the half that is still wrong.
+
+**Why it is not resolved here.** Every available answer is a financial product rule. To
+convert needs a rate, and no rate exists anywhere in this system — `docs/research/`
+records that none of the seven inspected gateways carries one. To refuse the setting
+change needs a rule about when a tenant may re-denominate. To show both balances needs
+a wire shape that carries more than one, and `walletBalanceSchema` is frozen with a
+single `currency`. Picking any of them is exactly the invention this phase's runbook
+forbids.
+
+**What holds meanwhile.** The money is not lost — the ledger is append-only and every
+entry keeps its own currency, so whatever is decided later can be applied to rows that
+are all still there. What is missing is any way to see or move them.
+
+**Trigger to resolve:** the first installation that changes `sales.currency` with wallet
+entries already written, or the phase that gives a wallet more than one denomination.

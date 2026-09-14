@@ -483,6 +483,57 @@ export const COMMERCE_ERROR_CODES = {
   ORDER_STATE_INVALID: 'commerce.order_state_invalid',
   /** The draft's own deadline passed before it was confirmed. */
   ORDER_EXPIRED: 'commerce.order_expired',
+
+  /**
+   * The wallet does not hold enough to cover this debit.
+   *
+   * A refusal rather than an overdraft: `WALLET_ALLOWS_NEGATIVE_BALANCE` is `false`,
+   * and `payment.ts` records that it is a constant so the reseller credit line in 4F
+   * has to change data rather than code. The detail carries the SHORTFALL and not the
+   * balance — `bot.wallet.insufficient` declares exactly that one placeholder, because
+   * the shortfall is the number a customer can act on.
+   */
+  WALLET_INSUFFICIENT_FUNDS: 'commerce.wallet_insufficient_funds',
+  /**
+   * An amount in a currency this installation does not sell in.
+   *
+   * The same rule `PRODUCT_CURRENCY_UNSUPPORTED` states for a price, applied to a
+   * balance: a wallet credited in a currency no order can be priced in is money that
+   * can never be spent. `sales.currency` is the one denomination, and no conversion
+   * exists anywhere to rescue an amount from the wrong one.
+   */
+  WALLET_CURRENCY_UNSUPPORTED: 'commerce.wallet_currency_unsupported',
+
+  PAYMENT_NOT_FOUND: 'commerce.payment_not_found',
+  /**
+   * The payment is not in the state this command needs. `PAYMENT_MACHINE` refused it.
+   *
+   * A confirmation of something already CONFIRMED is NOT this: that is the end state
+   * the caller asked for, and it is answered with the payment. This is a confirmation
+   * of something FAILED, CANCELLED, EXPIRED or UNKNOWN — states from which the machine
+   * has no `CONFIRM` edge, and the last of which is an absence of an outcome rather
+   * than one.
+   */
+  PAYMENT_STATE_INVALID: 'commerce.payment_state_invalid',
+  /**
+   * A rail this installation cannot actually perform.
+   *
+   * `GATEWAY`, and only that, because `SELF_CONTAINED_PAYMENT_METHODS` is the pair
+   * that needs no third party. `provider.ts` records the rule this follows: Marzban's
+   * descriptor advertising fourteen operations no code could perform was rejected,
+   * because what a product publishes is how it tells an operator what it can do. A
+   * simulated gateway would be that defect with money attached.
+   */
+  PAYMENT_METHOD_UNAVAILABLE: 'commerce.payment_method_unavailable',
+  /**
+   * A confirmed payment does not fund this order, so the order does not settle.
+   *
+   * `settlementIsFunded` refused, and the `reason` detail says which of its checks —
+   * a mismatched amount, a mismatched currency, another customer's payment, an order
+   * no longer awaiting one. Never a conversion and never a partial credit: this is a
+   * refusal, and `LGR-BR-003`'s split payment is deferred for want of a second rail.
+   */
+  SETTLEMENT_NOT_FUNDED: 'commerce.settlement_not_funded',
 } as const;
 
 /*

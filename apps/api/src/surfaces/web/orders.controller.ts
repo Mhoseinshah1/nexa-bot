@@ -22,11 +22,21 @@ import type { OrderCursor, OrderRecord } from '../../modules/commerce/orders/app
 /**
  * Orders over HTTP, at `/orders`. TWO ROUTES, both reads.
  *
- * There is no cancel, no mark-paid, no refund and no settle, and the absence is the
- * point rather than an unfinished edge: every one of those is a real operator action
- * whose meaning depends on a payment record this release does not have. A "mark paid"
- * button with nothing behind it is the legacy system's silent-success pattern, and it
- * is the single easiest thing to add here by accident.
+ * There is no cancel, no mark-paid, no refund and no settle, and the absence is still
+ * the point rather than an unfinished edge — but the reason has changed with 4C and is
+ * restated rather than left stale. A payment record now EXISTS, so "there is nothing to
+ * settle with" is no longer why:
+ *
+ * - **mark-paid** would be an operator asserting money arrived, which is exactly what
+ *   `settlementIsFunded` refuses to take anyone's word for. Settling happens through a
+ *   confirmed payment, at `POST /payments/:id/confirm`, where the evidence and the
+ *   reviewer are recorded with it.
+ * - **cancel** and **refund** have no producer in this release; `REFUNDED` is a frozen
+ *   state with nothing that reaches it, and `docs/open-questions.md` OQ-4C-02 records
+ *   what a refund has to be before one is built.
+ *
+ * A "mark paid" button with nothing behind it is the legacy silent-success pattern, and
+ * it is the single easiest thing to add here by accident.
  *
  * Authentication happens here; AUTHORIZATION does not — `OrderService` charges
  * `orders.view` itself, so no endpoint is protected merely by the Web Admin not drawing
@@ -129,6 +139,7 @@ function toSummary(record: OrderRecord): OrderSummaryResponse {
     currency: record.totals.currency,
     expiresAt: record.expiresAt === null ? null : record.expiresAt.toISOString(),
     confirmedAt: record.confirmedAt === null ? null : record.confirmedAt.toISOString(),
+    settledAt: record.settledAt === null ? null : record.settledAt.toISOString(),
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
   };

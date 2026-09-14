@@ -7,8 +7,9 @@ import {
   uuidV7Schema,
   type OrderState,
   type OrderSummaryResponse,
+  type PaymentState,
 } from '@nexa/contracts';
-import { fetchOrder, fetchOrders } from '../api/client';
+import { fetchOrder, fetchOrders, fetchPayments } from '../api/client';
 import { formatNumber, formatTimestamp, splitBytes } from '../format';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -391,7 +392,15 @@ function stateFromQuery(raw: string | null): OrderState | null {
 // Detail
 // ---------------------------------------------------------------------------
 
-export function OrderDetailPage({ id, denied }: { id: string; denied: boolean }) {
+export function OrderDetailPage({
+  id,
+  denied,
+  mayViewPayments,
+}: {
+  id: string;
+  denied: boolean;
+  mayViewPayments: boolean;
+}) {
   const onLink = useLinkHandler();
   const order = useQuery({
     queryKey: ['order', id],
@@ -490,6 +499,16 @@ export function OrderDetailPage({ id, denied }: { id: string; denied: boolean })
                     t('web.order_confirmed_at'),
                     row.confirmedAt === null ? <Dash key="c" /> : formatTimestamp(row.confirmedAt),
                   ],
+                  /*
+                   * When the money arrived, and nothing else.
+                   * `orders_settled_at_check` binds this to PAID, so a value here is
+                   * the database saying the order is financially settled. It is not a
+                   * delivery date: nothing in this release delivers anything.
+                   */
+                  [
+                    t('web.order_settled_at'),
+                    row.settledAt === null ? <Dash key="st" /> : formatTimestamp(row.settledAt),
+                  ],
                   [t('web.updated_at'), formatTimestamp(row.updatedAt)],
                 ]}
               />
@@ -523,6 +542,8 @@ export function OrderDetailPage({ id, denied }: { id: string; denied: boolean })
               />
             </Card>
 
+            <OrderPayments orderId={row.id} mayView={mayViewPayments} />
+
             <Card title={t('web.orders_scope_title')}>
               <p className="muted">{t('web.orders_scope_body')}</p>
             </Card>
@@ -532,3 +553,82 @@ export function OrderDetailPage({ id, denied }: { id: string; denied: boolean })
     </>
   );
 }
+
+/**
+ * The payments against one order.
+ *
+ * A separate query rather than a field on the order, because a payment is a
+ * FIRST-CLASS record and not a property of an order — the one structural thing the
+ * research settles outright, with 124,196 legacy payments against 74,860 orders. An
+ * order can have a refused attempt and a confirmed one, and both are facts.
+ *
+ * It shows the state, the method and the amount, and NOTHING about a service. An
+ * operator reading a PAID order here learns that the money arrived; what happens next
+ * is a later phase's to announce, through its own surface.
+ */
+function OrderPayments({ orderId, mayView }: { orderId: string; mayView: boolean }) {
+  const onLink = useLinkHandler();
+  const payments = useQuery({
+    queryKey: ['payments', 'order', orderId],
+    queryFn: () => fetchPayments({ orderId }),
+    // Not merely hidden: an operator without `payments.view` makes no request at all,
+    // so reading an order does not log a 403 against them on every open.
+    enabled: mayView,
+  });
+
+  if (!mayView) {
+    return (
+      <Card title={t('web.order_payments_title')}>
+        <Banner tone="info">{t('web.order_payments_denied')}</Banner>
+      </Card>
+    );
+  }
+
+  return (
+    <Card title={t('web.order_payments_title')}>
+      <StateSwitch query={payments}>
+        {payments.data === undefined ? null : payments.data.payments.length === 0 ? (
+          <Empty title={t('web.order_payments_empty')} />
+        ) : (
+          <ul className="plain">
+            {payments.data.payments.map((one) => (
+              <li key={one.id}>
+                <a href={`/payments/${encodeURIComponent(one.id)}`} onClick={onLink}>
+                  <Ltr>{one.reference}</Ltr>
+                </a>{' '}
+                — {t(PAYMENT_STATE_LABELS[one.state])} —{' '}
+                <Money value={{ amountMinor: one.amount, currency: one.currency }} />
+              </li>
+            ))}
+          </ul>
+        )}
+        {/*
+          A financial list that silently stopped at a page boundary is the legacy
+          reporting defect in miniature: the operator reads it as the whole history.
+          One open transfer per order and one confirmed payment make more than a page
+          unlikely, but "unlikely" is not "shown", so the truncation is NAMED and the
+          full list is one link away rather than paged again here.
+        */}
+        {payments.data?.nextCursor == null ? null : (
+          <Banner tone="info">{t('web.order_payments_truncated')}</Banner>
+        )}
+      </StateSwitch>
+    </Card>
+  );
+}
+
+/**
+ * The payment states, labelled HERE as well as on the payments page.
+ *
+ * A second map rather than an import, because importing a page into a page is how two
+ * surfaces come to share a rendering decision neither owns. Both read the same FROZEN
+ * `PAYMENT_STATES`, so a state added to the contract is a compile error in both.
+ */
+const PAYMENT_STATE_LABELS: Readonly<Record<PaymentState, WebKey>> = {
+  PENDING: 'web.payment_state_pending',
+  CONFIRMED: 'web.payment_state_confirmed',
+  FAILED: 'web.payment_state_failed',
+  CANCELLED: 'web.payment_state_cancelled',
+  EXPIRED: 'web.payment_state_expired',
+  UNKNOWN: 'web.payment_state_unknown',
+};

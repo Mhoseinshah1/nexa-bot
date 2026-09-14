@@ -278,6 +278,36 @@ describe('profile metadata, normalised before it is ever stored', () => {
     for (const [, key] of runtimeSource.matchAll(/'(bot\.[a-z0-9_.]+)'/g)) {
       if (key !== undefined && key in CATALOGUE_FA) sent.add(key as TemplateKey);
     }
+    /*
+     * Seven keys joined this list in 4C, and this case is what forced each to be
+     * looked at — which is the whole reason it pins the SET rather than the wording.
+     * Reviewed, one at a time:
+     *
+     *   `bot.order.settled`            the payment was confirmed. It used to say the
+     *                                  service was being prepared; 4C is the phase that
+     *                                  first SENDS this key and prepares nothing, so the
+     *                                  shipped copy was corrected with it.
+     *   `bot.wallet.balance`           a number the customer owns.
+     *   `bot.wallet.insufficient`      the shortfall, which is the figure they can act
+     *                                  on. It offers no top-up: there is none to offer.
+     *   `bot.payment.manual_instructions`  the amount and the code to quote. The
+     *                                  instructions themselves are tenant copy; this
+     *                                  installation ships no bank details.
+     *   `bot.payment.wallet_button`    a button label.
+     *   `bot.payment.manual_button`    a button label.
+     *   `bot.payment.unconfigured`     a rail this installation cannot perform, NAMED.
+     *                                  Never a simulated success.
+     *   `bot.order.not_awaiting_payment`  the ORDER is past paying for — almost always
+     *                                  because the customer just paid and tapped the
+     *                                  message's still-live button again. It replaced
+     *                                  `bot.order.unavailable` here, which says a
+     *                                  PRODUCT cannot be bought and so told somebody
+     *                                  who had just been debited that their service
+     *                                  was unavailable.
+     *
+     * None of them instructs a customer to do something that can only answer
+     * `bot.unknown_command`, and none claims an effect that did not happen.
+     */
     expect([...sent].sort()).toEqual([
       'bot.blocked',
       'bot.catalog.empty',
@@ -285,11 +315,19 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.order.awaiting_payment',
       'bot.order.confirm_button',
       'bot.order.expired',
+      'bot.order.not_awaiting_payment',
+      'bot.order.settled',
       'bot.order.summary',
       'bot.order.unavailable',
+      'bot.payment.manual_button',
+      'bot.payment.manual_instructions',
+      'bot.payment.unconfigured',
+      'bot.payment.wallet_button',
       'bot.start.welcome',
       'bot.start.welcome_back',
       'bot.unknown_command',
+      'bot.wallet.balance',
+      'bot.wallet.insufficient',
     ]);
 
     /*
