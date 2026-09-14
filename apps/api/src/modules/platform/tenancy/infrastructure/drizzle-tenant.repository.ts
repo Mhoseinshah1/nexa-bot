@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import {
   isSystemContext,
   asId,
@@ -6,6 +6,7 @@ import {
   PLATFORM_ERROR_CODES,
   type BotInstance,
   type BotInstanceId,
+  type BotInstanceStatus,
   type Calendar,
   type CurrencyCode,
   type ScopeContext,
@@ -21,7 +22,12 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { BotInstanceRepository, TenantRepository } from '../application/ports.js';
+import type {
+  BotBootstrapRepository,
+  BotBootstrapView,
+  BotInstanceRepository,
+  TenantRepository,
+} from '../application/ports.js';
 
 type TenantRow = typeof tenants.$inferSelect;
 type BotInstanceRow = typeof botInstances.$inferSelect;
@@ -137,7 +143,18 @@ export class DrizzleTenantRepository implements TenantRepository {
   }
 }
 
-export class DrizzleBotInstanceRepository implements BotInstanceRepository {
+function toBootstrapView(row: BotInstanceRow): BotBootstrapView {
+  return {
+    id: asId<'BotInstanceId'>(row.id),
+    username: row.username,
+    status: row.status as BotInstanceStatus,
+    telegramBotId: row.telegramBotId,
+    webhookRegisteredAt: row.webhookRegisteredAt,
+    webhookUrl: row.webhookUrl,
+  };
+}
+
+export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotBootstrapRepository {
   constructor(
     private readonly db: Database,
     private readonly cipher: SecretCipher,
@@ -255,5 +272,118 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository {
       { keyId: row.tokenKeyId, ciphertext: row.tokenCiphertext },
       { purpose: 'bot_instance.token', tenantId, entityId: row.id },
     );
+  }
+
+  // -------------------------------------------------------------------------
+  // BotBootstrapRepository — reachable only from the fresh-install bootstrap
+  // -------------------------------------------------------------------------
+
+  async lockTenantForBotChange(scope: ScopeContext, tx: unknown): Promise<TenantStatus> {
+    const tenantId = requireTenantId(scope);
+    // The TENANT row, not the bot row — because on a fresh install there is no
+    // bot row to lock and the whole race is two installers both finding none.
+    // The same row `lockTenantForAdminChange` takes, which costs nothing: an
+    // installer creating an owner and an installer creating a bot are the same
+    // installer, one step apart.
+    const [row] = await executorOf(this.db, tx)
+      .select({ status: tenants.status })
+      .from(tenants)
+      .where(eq(tenants.id, tenantId))
+      .for('update');
+
+    return (row?.status ?? 'DISABLED') as TenantStatus;
+  }
+
+  async findBootstrapTarget(scope: ScopeContext, tx?: unknown): Promise<BotBootstrapView | null> {
+    const tenantId = requireTenantId(scope);
+    // Ordered by creation so a tenant that somehow acquired two bots resolves
+    // the same one on every call, the way `findPrimary` and
+    // `activeTokenForTenant` already do. Status is deliberately not filtered.
+    const [row] = await executorOf(this.db, tx)
+      .select()
+      .from(botInstances)
+      .where(eq(botInstances.tenantId, tenantId))
+      .orderBy(botInstances.createdAt, botInstances.id)
+      .limit(1);
+    return row ? toBootstrapView(row) : null;
+  }
+
+  async createFromBootstrap(
+    scope: ScopeContext,
+    input: {
+      readonly id: BotInstanceId;
+      readonly username: string;
+      readonly telegramBotId: string;
+      readonly token: string;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    // Encrypted HERE, bound to the id this row is about to be inserted under.
+    // The context is recomputed at decrypt time from the row that is read, so a
+    // ciphertext moved to another row or another tenant fails authentication
+    // rather than decrypting somebody else's credential.
+    const secret = this.cipher.encrypt(input.token, {
+      purpose: 'bot_instance.token',
+      tenantId,
+      entityId: input.id,
+    });
+
+    await executorOf(this.db, tx).insert(botInstances).values({
+      id: input.id,
+      tenantId,
+      username: input.username,
+      telegramBotId: input.telegramBotId,
+      status: 'ACTIVE',
+      tokenCiphertext: secret.ciphertext,
+      tokenKeyId: secret.keyId,
+      createdAt: input.now,
+      updatedAt: input.now,
+    });
+  }
+
+  async markWebhookRegistered(
+    scope: ScopeContext,
+    id: BotInstanceId,
+    input: { readonly url: string; readonly now: Date },
+    tx: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await executorOf(this.db, tx)
+      .update(botInstances)
+      .set({
+        webhookRegisteredAt: input.now,
+        webhookUrl: input.url,
+        updatedAt: input.now,
+      })
+      .where(and(eq(botInstances.tenantId, tenantId), eq(botInstances.id, id)));
+  }
+
+  async recordTelegramIdentity(
+    scope: ScopeContext,
+    id: BotInstanceId,
+    input: { readonly telegramBotId: string; readonly username: string; readonly now: Date },
+    tx: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    // `telegram_bot_id IS NULL` is part of the WHERE, not just a caller-side
+    // check. It is what makes this fill-a-blank rather than a rewrite: a row
+    // that already names a bot is never repointed by this statement, whatever
+    // a caller believes it is doing.
+    await executorOf(this.db, tx)
+      .update(botInstances)
+      .set({
+        telegramBotId: input.telegramBotId,
+        username: input.username,
+        updatedAt: input.now,
+      })
+      .where(
+        and(
+          eq(botInstances.tenantId, tenantId),
+          eq(botInstances.id, id),
+          isNull(botInstances.telegramBotId),
+        ),
+      );
   }
 }

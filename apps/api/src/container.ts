@@ -67,6 +67,8 @@ import { AuthenticationService } from './modules/platform/identity/application/a
 import { CredentialThrottle } from './modules/platform/identity/application/credential-throttle.js';
 import { AdminManagementService } from './modules/platform/identity/application/admin-management.service.js';
 import { BootstrapOwnerService } from './modules/platform/identity/application/bootstrap-owner.service.js';
+import { BotBootstrapService } from './modules/platform/tenancy/application/bot-bootstrap.service.js';
+import { TelegramBotBootstrapGateway } from './modules/platform/tenancy/infrastructure/telegram-bot-bootstrap.gateway.js';
 import { RetentionSweeper } from './modules/platform/identity/application/retention-sweeper.js';
 import { RecordPingService } from './modules/platform/system/application/record-ping.service.js';
 import { PingLogConsumer } from './modules/platform/opslog/application/ping-log.consumer.js';
@@ -198,6 +200,12 @@ export interface Container {
   readonly auth: AuthenticationService;
   readonly adminManagement: AdminManagementService;
   readonly bootstrapOwner: BootstrapOwnerService;
+  /**
+   * The fresh-install Telegram bootstrap. A CLI provisioning step like
+   * `bootstrapOwner`, and fenced the same way: `check-boundaries.sh` fails the
+   * build if a surface reaches either.
+   */
+  readonly bootstrapBot: BotBootstrapService;
   /**
    * The primary tenant this installation serves.
    *
@@ -490,6 +498,20 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
     new DrizzleBootstrapRecordReader(database.db),
   );
+
+  const bootstrapBot = new BotBootstrapService({
+    uow,
+    bots: botInstances,
+    scopeActivity: tenants,
+    audit,
+    clock,
+    ids,
+    telegram: new TelegramBotBootstrapGateway(
+      config.TELEGRAM_API_BASE_URL,
+      config.NOTIFICATION_SEND_TIMEOUT_MS,
+    ),
+    webhookSecret: () => config.TELEGRAM_WEBHOOK_SECRET,
+  });
 
   let installationTenantId: TenantId | null = null;
 
@@ -1279,6 +1301,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     auth,
     adminManagement,
     bootstrapOwner,
+    bootstrapBot,
     get installationTenantId() {
       return installationTenantId;
     },

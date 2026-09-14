@@ -184,6 +184,24 @@ else
   pass "the owner bootstrap is not reachable from any surface"
 fi
 
+# --- The Telegram bot bootstrap is not reachable from a surface -------------
+# The same argument, for the same reason, about a different credential.
+# `BotBootstrapService` accepts a bot token and writes it encrypted without
+# authorizing a caller, because provisioning has no caller. Reachable over HTTP
+# it would be an unauthenticated route that accepts a bearer credential for this
+# installation's bot and repoints where Telegram delivers.
+#
+# It is a separate check rather than an extra pattern on the one above so that a
+# failure names WHICH provisioning path leaked, and so that removing one never
+# quietly removes the other.
+BOT_BOOTSTRAP_LEAK=$(grep -rn "bot-bootstrap.service\|bootstrapBot" apps/api/src/surfaces 2>/dev/null || true)
+if [ -n "$BOT_BOOTSTRAP_LEAK" ]; then
+  fail "A surface reaches the Telegram bot bootstrap" "$BOT_BOOTSTRAP_LEAK" \
+       "The bot bootstrap is a CLI provisioning step (src/bootstrap-bot.cli.ts), not an endpoint."
+else
+  pass "the Telegram bot bootstrap is not reachable from any surface"
+fi
+
 # --- The application layer names what it needs, not who provides it ---------
 # `@nexa/contracts` is the shared specification and may be imported anywhere.
 # `@nexa/i18n` is an IMPLEMENTATION of part of it — a catalogue and a renderer —
