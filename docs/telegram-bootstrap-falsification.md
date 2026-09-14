@@ -184,6 +184,38 @@ operator to do something the code three files away makes impossible — with the
 true statement immediately above it. Nothing in the gate could have caught it:
 every test passed, the summary was reachable, and the sentence was simply false.
 
+## The fourth Codex round
+
+Nine findings, all real, and **five of them are a fix from an earlier round that
+covered one path and not its sibling**. That is the pattern, and it is the rule
+`CLAUDE.md` already states — a fix is reviewed as hard as the bug — missed five
+separate times in a row.
+
+| #   | Rule                                                         | Mutation                                               | Test that dies                                                                                             | Result |
+| --- | ------------------------------------------------------------ | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- | ------ |
+| F1  | An already-bound refusal outranks the `none` rule            | drop the `already-bound` arm of the classifier         | `botctl.test.sh` › an already-bound refusal is classified even though nothing was stored                   | KILLED |
+| F2  | Duplicate bot ids are refused BEFORE 0041 runs               | drop the preflight call                                | `migration-preflight.test.ts` › refuses a database where one Telegram bot is bound twice, before 0041 runs | KILLED |
+| F3  | A `botctl telegram` subcommand refuses an argument           | remove the refusal                                     | `botctl.test.sh` › telegram subcommands refuse an argument rather than dropping it                         | KILLED |
+| F4  | An `unavailable` skipped bot is not sent to `register` alone | make the `unavailable` arm unreachable                 | `botctl.test.sh` › skip-telegram does not prescribe registration for an UNAVAILABLE bot                    | KILLED |
+| F5  | A legacy row still refuses a token naming a different bot    | drop the second `refuseRepointing`                     | `bot-bootstrap.test.ts` › refuses a different bot on a row that predates the identity column               | KILLED |
+| F6  | BOTH writers of `telegram_bot_id` name the collision         | rethrow raw from `recordTelegramIdentity`              | `bot-bootstrap-identity.test.ts` › names the collision when a LEGACY row learns an id another row holds    | KILLED |
+| F7  | A missing token records the release instead of dying         | restore the `nexa_die`                                 | `botctl.test.sh` › a first install with no terminal and no token records its release                       | KILLED |
+| F8  | The decryption summary names each code, not one repair       | restore "restoring the key material makes it readable" | `botctl.test.sh` › a stored token that cannot be DECRYPTED is not a webhook retry either                   | KILLED |
+| F9  | The rejected-token MESSAGE invents no recovery either        | restore "restore it in BotFather"                      | `bot-bootstrap.test.ts` › validates the token with getMe BEFORE it writes anything                         | KILLED |
+
+F9 is E1 again, one layer down: the installer summary was corrected and the CLI
+error printed immediately before it still told the operator to restore a revoked
+token in BotFather. Two messages, one fixed, the other contradicting it — and the
+fix for the first was written without reading the second.
+
+F1 is the most interesting. D3b established that `none` outranks the error code,
+and that rule was falsified and correct — for the failures that existed when it
+was written. An already-bound refusal rolls its insert back, so its state is
+NECESSARILY `none`, and the rule then routed it to a summary naming the wrong
+cause and a retry that would refuse for ever. A correct rule met a case it was
+not written against, which is not the same defect as a wrong rule and needs the
+same watching.
+
 ## The diagnosability round
 
 Not a rule about the product — a rule about the test that guards it. The
