@@ -31,6 +31,14 @@ state the rule, and the suite was green.
   can demonstrate that. The ORDER, though, is this service's to get right, so
   the activity fake now asserts the exclusive lock is already held.
 
+**The review round found what the mutation pass could not.** Twenty rules were
+KILLED before it ran, and the suite was green, and the feature would still have
+failed on every fresh install: the webhook secret was minted in an alphabet
+Telegram refuses. A mutation pass proves that the rules you wrote down are
+tested; it cannot tell you that a rule you did not write down is wrong. The eight
+rows below exist because the review supplied those rules and this then proved
+them.
+
 **One mutation was thrown away rather than recorded.** An early B13 attempt
 substituted a call to a function that does not exist. It reported KILLED, and
 the kill was the TypeScript error, not a test. A compile failure satisfies this
@@ -70,6 +78,23 @@ these was applied by hand and each restore confirmed with `git diff --exit-code`
 | B19 | A rerun never regenerates the webhook secret                  | drop the `have_secret` guard from `ensure_telegram_config`   | `botctl.test.sh` › a rerun never regenerates the webhook secret                                       | KILLED |
 | B20 | The webhook secret never reaches a process argument list      | pass it as a positional argument to the substituting python3 | `botctl.test.sh` › the installer never puts a secret into a process argument list                     | KILLED |
 
+## The review round
+
+Eight rules the adversarial review produced, falsified the same way. Two of them
+— B21 and B27 — are the CRITICAL and one HIGH finding, so these two rows are the
+evidence that those defects cannot come back silently.
+
+| #   | Rule                                                              | Mutation                                                      | Test that dies                                                                                        | Result |
+| --- | ----------------------------------------------------------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------ |
+| B21 | The webhook secret is minted in Telegram's alphabet, not base64's | `random_webhook_secret` → plain `base64 -w0`                  | `deployment-config.test.ts` › mints a webhook secret Telegram will actually accept                    | KILLED |
+| B22 | ...and the schema refuses one that is not, at boot                | the charset predicate → `false`                               | `deployment-config.test.ts` › mints a webhook secret Telegram will actually accept                    | KILLED |
+| B23 | A registration is current only if the SECRET matches too          | the fingerprint comparison → `return true`                    | `bot-bootstrap.test.ts` › re-registers when the webhook SECRET has been rotated                       | KILLED |
+| B24 | Queued updates are discarded on a create and NEVER on a reconcile | `dropPendingUpdates: ensured.createdNow` → `true`             | `bot-bootstrap.test.ts` › discards queued updates on a first registration and NEVER on a reconcile    | KILLED |
+| B25 | A bot an operator stopped is not `ready`                          | the `status !== 'ACTIVE'` guard → `if (false)`                | `bot-bootstrap.test.ts` › refuses a STOPPED bot rather than registering a webhook nothing will answer | KILLED |
+| B26 | Every write path refuses a scope that has stopped accepting work  | `requireActiveScope` → an unconditional early return          | `bot-bootstrap.test.ts` › refuses a scope that has stopped accepting work, inside the transaction     | KILLED |
+| B27 | A rerun of a READY installation still asks the application        | restore the `ready` short-circuit in `configure_telegram_bot` | `botctl.test.sh` › a rerun of a READY installation still asks the application                         | KILLED |
+| B28 | An identity write is audited only if it changed a row             | `if (!filled) return;` → `if (false) return;`                 | `bot-bootstrap.test.ts` › does not audit an identity write that changed no row                        | KILLED |
+
 ## Rules asserted by a mechanism rather than by a mutation
 
 Stated here rather than left out, because "not in the table" reads as "not
@@ -81,3 +106,5 @@ checked" and two of these are load-bearing.
 | A surface may not reach the bootstrap                    | `scripts/check-boundaries.sh` — its own check, separate from the owner bootstrap's, so a failure names which one leaked |
 | The repository cannot write a token onto an existing row | `BotBootstrapRepository` declares no such method; the capability does not exist to be called                            |
 | `telegram_bot_id` is filled but never rewritten          | `isNull(botInstances.telegramBotId)` in the UPDATE's WHERE, not a caller-side check                                     |
+| The bot token never reaches an audit payload             | asserted over the WHOLE entry — an earlier fake discarded `before` and `reason` before the assertion ran                |
+| The installer never passes a token through argv or env   | `botctl.test.sh` reads the whole `configure_telegram_bot` body, not four lines forward from `cli.js`                    |
