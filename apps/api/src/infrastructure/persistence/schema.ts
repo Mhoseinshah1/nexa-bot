@@ -231,6 +231,24 @@ export const botInstances = pgTable(
      * it. `getMe` fills it the first time a bootstrap runs against such a row.
      */
     telegramBotId: text('telegram_bot_id'),
+    /**
+     * When Telegram last ACCEPTED a `setWebhook` for this bot, and the URL it took.
+     *
+     * Separate from the row existing, because the two fail independently and the whole
+     * recovery story depends on telling them apart. A crash between the local commit
+     * and `setWebhook` leaves a row with this NULL: the rerun decrypts the stored token
+     * and retries the registration, and never asks for a token again. A crash after
+     * Telegram accepted but before this was written leaves the same NULL, and the rerun
+     * re-registers — which Telegram treats as a no-op — and then marks it. Both crashes
+     * converge, which is why the marker is written AFTER the call rather than with the
+     * row.
+     *
+     * It is also what `--status` reports, and therefore what stops an installer
+     * claiming a Telegram-enabled installation is complete while the bot cannot
+     * receive a single update.
+     */
+    webhookRegisteredAt: timestamptz('webhook_registered_at'),
+    webhookUrl: text('webhook_url'),
     status: text('status').notNull().default('ACTIVE'),
     /** Envelope-encrypted. Never returned by any API, never logged. */
     tokenCiphertext: text('token_ciphertext').notNull(),
