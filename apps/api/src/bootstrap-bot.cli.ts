@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { stdin, stdout } from 'node:process';
 import { isNexaError, type TenantContext } from '@nexa/contracts';
+import type { BotBootstrapStatus } from './modules/platform/tenancy/application/bot-bootstrap.service.js';
 import { Prompter, PromptInputError } from './infrastructure/tty/prompt.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
@@ -110,7 +111,7 @@ export function parseArgs(argv: readonly string[]): Args {
  * The service uses only the id half of a supplied token on a reconcile, and only
  * ever to refuse. The secret half never replaces a stored credential.
  */
-async function suppliedToken(args: Args): Promise<string | null> {
+export async function suppliedToken(args: Args): Promise<string | null> {
   if (args.tokenStdin) return readTokenFromStdin();
   if (args.tokenFile !== null) return tokenFromFile(args.tokenFile);
   return null;
@@ -155,6 +156,33 @@ export function tokenFromFile(path: string): string {
   return token;
 }
 
+/**
+ * The token this run uses: supplied, prompted for, or none.
+ *
+ * A pure decision with the prompt injected, because it is the ONE place two
+ * rules meet and getting either wrong is silent.
+ *
+ *  - A rerun must not ASK. ADR-0029 decision 3: reconciliation is not a
+ *    credential operation, and an installer that asked and then discarded the
+ *    answer would be training operators to type a bearer credential into a
+ *    prompt that does nothing with it.
+ *  - A SUPPLIED token is not an answer to a question. It is read whatever the
+ *    state and handed on, because the service needs it to REFUSE a token naming
+ *    another bot — and because ignoring it silently is how such a token slipped
+ *    past that refusal while the installer printed success.
+ *
+ * The service uses only the id half of a supplied token on a reconcile, and only
+ * ever to refuse.
+ */
+export async function tokenForRun(
+  supplied: string | null,
+  state: BotBootstrapStatus,
+  prompt: () => Promise<string>,
+): Promise<string | null> {
+  if (supplied !== null) return supplied;
+  return state === 'none' ? prompt() : null;
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const config = loadConfig();
@@ -185,20 +213,8 @@ async function main(): Promise<void> {
     }
 
     const supplied = await suppliedToken(args);
-    /*
-     * PROMPTED only when there is no bot instance yet.
-     *
-     * ADR-0029 decision 3 in one branch: a rerun is reconciliation, not a
-     * credential operation, so it must not so much as ask. An installer that
-     * asked anyway and discarded the answer would be training operators to type
-     * a bearer credential into a prompt that does nothing with it.
-     *
-     * A SUPPLIED token is a different thing and is read above whatever the
-     * state: the operator was not asked, they volunteered it, and the service
-     * needs it to refuse a token that names another bot.
-     */
-    const needsToken = (await container.bootstrapBot.status(scope, publicBaseUrl)) === 'none';
-    const token = supplied ?? (needsToken ? await promptForToken() : null);
+    const state = await container.bootstrapBot.status(scope, publicBaseUrl);
+    const token = await tokenForRun(supplied, state, promptForToken);
 
     const result = await container.bootstrapBot.execute(scope, { token, publicBaseUrl });
 

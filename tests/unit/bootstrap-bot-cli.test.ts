@@ -2,7 +2,12 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseArgs, tokenFromFile } from '../../apps/api/src/bootstrap-bot.cli';
+import {
+  parseArgs,
+  suppliedToken,
+  tokenForRun,
+  tokenFromFile,
+} from '../../apps/api/src/bootstrap-bot.cli';
 
 /**
  * The half of the bootstrap CLI that decides where a bot token comes from.
@@ -102,5 +107,66 @@ describe('bootstrap-bot CLI token file', () => {
     const path = join(dir, 'empty');
     writeFileSync(path, '\n');
     expect(() => tokenFromFile(path)).toThrowError(/is empty/);
+  });
+});
+
+describe('bootstrap-bot CLI token source', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexa-bot-source-'));
+  const args = (over: Partial<Parameters<typeof suppliedToken>[0]>) =>
+    ({
+      status: false,
+      publicBaseUrl: 'https://bot.example.com',
+      tokenFile: null,
+      tokenStdin: false,
+      tenantSlug: null,
+      ...over,
+    }) as Parameters<typeof suppliedToken>[0];
+
+  it('reads a supplied file, and reports none when nothing was supplied', async () => {
+    const path = join(dir, 'supplied');
+    writeFileSync(path, '8123456789:AAH-secret\n');
+    await expect(suppliedToken(args({ tokenFile: path }))).resolves.toBe('8123456789:AAH-secret');
+    await expect(suppliedToken(args({}))).resolves.toBeNull();
+  });
+});
+
+describe('bootstrap-bot CLI token decision', () => {
+  const prompted = '9999999999:from-the-prompt';
+  const supplied = '8123456789:from-the-operator';
+
+  it('never prompts when a token was supplied, whatever the state', async () => {
+    /*
+     * The rule a mutation pass found untested, and the defect it hides is the
+     * one Codex reported: the CLI used to discard an explicitly supplied token
+     * whenever a bot already existed, so a file naming a DIFFERENT bot never
+     * reached the refusal written to catch it and the installer printed success
+     * having changed nothing.
+     */
+    for (const state of ['none', 'incomplete', 'ready', 'unavailable'] as const) {
+      let asked = 0;
+      const token = await tokenForRun(supplied, state, async () => {
+        asked += 1;
+        return prompted;
+      });
+      expect(token, `state ${state} did not use the supplied token`).toBe(supplied);
+      expect(asked, `state ${state} asked for a token that was supplied`).toBe(0);
+    }
+  });
+
+  it('prompts ONLY on a fresh installation when nothing was supplied', async () => {
+    // ADR-0029 decision 3: a rerun reconciles and must not so much as ask.
+    let asked = 0;
+    const ask = async () => {
+      asked += 1;
+      return prompted;
+    };
+
+    await expect(tokenForRun(null, 'none', ask)).resolves.toBe(prompted);
+    expect(asked).toBe(1);
+
+    for (const state of ['incomplete', 'ready', 'unavailable'] as const) {
+      await expect(tokenForRun(null, state, ask), `state ${state}`).resolves.toBeNull();
+    }
+    expect(asked, 'a rerun asked for a token').toBe(1);
   });
 });
