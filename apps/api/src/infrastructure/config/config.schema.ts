@@ -508,6 +508,28 @@ export const configSchema = z
     PANEL_MONITOR_HEARTBEAT_PATH: z.string().trim().min(1).default('/tmp/nexa-monitor.heartbeat'),
 
     /**
+     * Provisioning — the lane that creates services on panels.
+     *
+     * INSTALLATION configuration rather than a tenant setting, on the same reasoning
+     * the monitor's block gives: these decide how a PROCESS behaves, and a per-tenant
+     * switch for "how often does this process wake" is a setting that cannot mean what
+     * it says.
+     */
+    PROVISIONER_ENABLED: z.coerce.boolean().default(true),
+    /**
+     * How often the provisioner looks for due work.
+     *
+     * Short by the standards of the monitor's interval, because the thing waiting is a
+     * customer rather than a health figure. Floored at a second so a misconfiguration
+     * cannot turn the loop into a spin against the database; ceilinged at a minute
+     * because a customer who has paid should not wait longer than that to find out
+     * their service is being made.
+     */
+    PROVISIONER_TICK_MS: z.coerce.number().int().min(1_000).max(60_000).default(5_000),
+    /** Where the provisioner writes its heartbeat. */
+    PROVISIONER_HEARTBEAT_PATH: z.string().trim().min(1).default('/tmp/nexa-provisioner.heartbeat'),
+
+    /**
      * Backup.
      *
      * INSTALLATION configuration, in the environment, not tenant settings. A

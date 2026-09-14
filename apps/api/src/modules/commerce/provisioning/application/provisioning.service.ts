@@ -10,6 +10,7 @@ import {
   type OperationId,
   type ServiceState,
   type TenantContext,
+  type UnitOfWork,
   type UserId,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
@@ -23,10 +24,13 @@ import type {
   ServiceRepository,
   ServiceSearch,
   OperationRepository,
+  PanelOperabilityReader,
 } from './ports.js';
 
 /** Reading a service is `services.view`. Reading somebody's config is not a list right. */
 const SERVICE_VIEW_PERMISSION = 'services.view';
+/** Asking for a provider call to be made again is `services.edit`, not `services.view`. */
+const SERVICE_EDIT_PERMISSION = 'services.edit';
 
 export const SERVICE_PAGE_DEFAULT = 25;
 export const SERVICE_PAGE_MAX = 100;
@@ -34,8 +38,10 @@ export const SERVICE_PAGE_MAX = 100;
 export interface ProvisioningServiceDeps {
   readonly services: ServiceRepository;
   readonly operations: OperationRepository;
+  readonly panels: PanelOperabilityReader;
   readonly guard: PermissionGuard;
   readonly audit: AuditWriter;
+  readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
   readonly ids: IdGenerator;
   /** Derives an operation id from a retry-stable key. Bound in the container. */
@@ -193,6 +199,103 @@ export class ProvisioningService {
     }
 
     return { service, operation };
+  }
+
+  /**
+   * An operator asking for a stalled service to be tried again.
+   *
+   * The three refusals here are the whole value of the method, and each one is a state
+   * an operator can otherwise only discover by watching nothing happen.
+   *
+   * `SERVICE_UNRECONCILED` is the refusal `SERVICE_MACHINE` encodes as a MISSING EDGE,
+   * surfaced. An `UNRECONCILED` service is one whose create timed out or answered with
+   * a 5xx: the panel may hold an account, and asking for another one is how a customer
+   * ends up paying for one service and occupying two. The remedy is a read, and a read
+   * is not something a button labelled "retry" should be allowed to skip.
+   *
+   * `PANEL_NOT_OPERABLE` is the panel refusing before anything is spent — disabled, no
+   * adapter, no capability, no credential, no activation — with the `reason` naming
+   * which screen fixes it. Answered here rather than left to the executor because an
+   * operator pressing retry deserves the answer now, not in a log line after a claim.
+   *
+   * `ORDER_STATE_INVALID` covers a service that is already ACTIVE or TERMINATED: there
+   * is nothing to provision, and planning one would produce a second provider account
+   * for a service that already has one.
+   */
+  async retryProvisioning(
+    scope: TenantContext,
+    actor: ActorContext,
+    serviceId: string,
+  ): Promise<OperationRecord> {
+    await this.deps.guard.check(scope, actor, SERVICE_EDIT_PERMISSION);
+    const service = await this.deps.services.findById(scope, serviceId);
+    if (service === null) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
+    }
+    if (service.state === 'UNRECONCILED') {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_UNRECONCILED,
+        'This service must be reconciled with its panel before it can be created again.',
+        { reason: 'RECONCILE_FIRST' },
+      );
+    }
+    if (service.state !== 'PENDING_PROVISION') {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+        'That service is not awaiting provisioning.',
+        { state: service.state },
+      );
+    }
+    const operable = await this.deps.panels.operability(scope, service.panelId, 'PROVISION');
+    if (!operable.ok) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
+        'The panel this service was promised on cannot be used.',
+        { reason: operable.reason },
+      );
+    }
+
+    const now = this.deps.clock.now();
+    return this.deps.uow.run(scope, async (tx) => {
+      /*
+       * Planned under an id DERIVED from how many operations this service already has.
+       *
+       * Derived, so two operators double-clicking the button agree on one id and the
+       * second `plan` loses on `provisioning_operations_tenant_operation_key` rather
+       * than planning a second create. A generated uuid here would be the duplicate
+       * account this module exists to prevent, arriving through a button.
+       */
+      const already = await this.deps.operations.listForService(scope, serviceId, 100, tx);
+      const operation = await this.deps.operations.plan(
+        scope,
+        {
+          id: this.deps.ids.uuid(),
+          operationId: this.deps.operationId(
+            `${serviceId}:PROVISION:retry:${String(already.length)}`,
+          ),
+          serviceId,
+          orderId: service.orderId,
+          panelId: service.panelId,
+          type: 'PROVISION',
+        },
+        now,
+        tx,
+      );
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: 'service.retry_provision',
+          entityType: 'Service',
+          entityId: serviceId,
+          before: { state: service.state },
+          after: { operationId: operation.operationId, operationState: operation.state },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+      return operation;
+    });
   }
 
   /** A page of services for an operator. */

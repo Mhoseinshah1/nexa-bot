@@ -33,7 +33,7 @@ rather than reasoned about:
 | E2-01 | The per-panel cooldown is floored on a whole PROBE, not on one request    | drop `* MAX_REQUESTS_PER_PROBE` from `container.ts` | `web-admin-v2.test.ts` › reports the cooldown the probes actually obey, not the raw setting         | KILLED |
 | E2-02 | Each provider declares the length of its longest probe path               | `maxRequestsPerProbe: 4` → `1` (Sanaei)             | `probe-cooldown-floor.test.ts` › declares, for every provider, the length of its longest probe path | KILLED |
 | E2-03 | The installation-wide maximum is DERIVED across providers, never restated | the `reduce` reduced to `(most) => most`            | `probe-cooldown-floor.test.ts` › covers the longest probe any registered provider can make          | KILLED |
-| E2-04 | A declared count never exceeds the adapter's own `http.send(` call sites  | `maxRequestsPerProbe: 2` → `9` (Marzban)            | `probe-cooldown-floor.test.ts` › never declares more requests than the adapter has call sites       | KILLED |
+| E2-04 | A declared count never exceeds the adapter's own `http.send(` call sites  | `maxRequestsPerProbe: 2` → `9` (Marzban)            | `probe-cooldown-floor.test.ts` › never declares more requests than the PROBE PATH has call sites    | KILLED |
 
 E2-02 and E2-03 are the two that first reported SURVIVED. They are recorded here
 with their real result, and the reason for the false one is recorded below.
@@ -583,3 +583,17 @@ asserting a rule that is not enforced.
   SURVIVED. That is a no-op mutation, not a survival: it does not reorder two
   awaited calls. It is recorded here rather than in the table, because a SURVIVED
   row whose mutation changes nothing is noise that reads as a finding.
+
+## Phase 4D — provisioning
+
+The E2-04 row above is renamed rather than re-run. Phase 4D put `createUser`,
+`lookupUser` and `readUsage` in the same adapter files as the probe, so a whole-file
+`http.send(` count stopped meaning what that row asserted: it would be satisfied by a
+probe that grew a request while a service method lost one, which is the exact
+substitution the rule exists to refuse. The test now counts only inside the methods a
+probe can reach, and the row cites it under its new name.
+
+| #      | Rule                                                      | Mutation                                                    | Named test                                                                                       | Result |
+| ------ | --------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------ |
+| F4D-01 | The probe budget is not funded by service-half call sites | `maxRequestsPerProbe: 4` → `5` (Sanaei)                     | `probe-cooldown-floor.test.ts` › never declares more requests than the PROBE PATH has call sites | KILLED |
+| F4D-02 | A declared capability has a method behind it              | `async createUser(` → `async createUserDisabled(` (Marzban) | `registries.test.ts` › backs every declared service capability with a method that exists         | KILLED |

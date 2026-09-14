@@ -388,6 +388,23 @@ export interface ProvisionAttemptReport {
  * product re-specified since would otherwise silently change the size of a service
  * somebody already paid for.
  */
+/**
+ * Whether one panel can be operated, without decrypting anything.
+ *
+ * A NARROW port over what `decideOperability` needs: the panel's own four fields and a
+ * credential SUMMARY of three timestamps. A surface answering "can this be retried"
+ * must not materialise a password to find out, and a signature that cannot receive one
+ * is a stronger guarantee than a rule about not passing one.
+ */
+export interface PanelOperabilityReader {
+  operability(
+    scope: TenantContext,
+    panelId: PanelId,
+    type: OperationType,
+    tx?: unknown,
+  ): Promise<PanelOperability>;
+}
+
 export interface PurchaseSnapshotReader {
   specificationFor(
     scope: TenantContext,

@@ -24,6 +24,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
+import type { ProvisioningService } from '../../provisioning/application/provisioning.service.js';
 import {
   recordMutationDenial,
   runAuthorizedMutation,
@@ -90,6 +91,15 @@ export interface PaymentServiceDeps {
    * them.
    */
   readonly customers: CustomerRepository;
+  /**
+   * Plans the service a settled order is owed, in the settling transaction.
+   *
+   * A dependency of payments on provisioning, and not the other way round, because the
+   * settlement is the fact that causes the service — and because the alternative, a
+   * provisioning module that watched for settled orders, would have to re-derive
+   * "settled" from a row it does not own.
+   */
+  readonly provisioning: ProvisioningService;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -819,6 +829,25 @@ export class PaymentService {
         currency: settled.totals.currency,
       },
     });
+
+    /*
+     * The service the customer just bought, recorded in THIS transaction.
+     *
+     * Here rather than in a handler on `OrderSettled`, and that placement is the
+     * exactly-once rule rather than a convenience. An order settles once, atomically,
+     * so a service row written inside the same transaction makes "one settled order
+     * produces at most one logical service" a consequence of `ORDER_MACHINE` plus
+     * `services_tenant_order_key`. A handler would make it depend on the handler being
+     * idempotent, which is a strictly weaker position for no benefit — and on a replay
+     * that missed the outbox, no position at all.
+     *
+     * Nothing here contacts a provider. Two rows are written — a service in
+     * `PENDING_PROVISION` and an operation in `PLANNED` — and the `provisioner` role
+     * picks the work up afterwards, outside every transaction. The comment above this
+     * class that said nothing provisions is now false about the phase and remains true
+     * about this method: it still touches no panel.
+     */
+    await this.deps.provisioning.planForSettledOrder(scope, actor, settled, now, tx);
 
     if (remember !== undefined) {
       await rememberOnce(

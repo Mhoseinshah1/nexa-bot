@@ -1528,15 +1528,19 @@ cmd_logs() {
   require_installed
   if [ $# -gt 0 ]; then
     case "$1" in
-      api | worker | monitor | recovery | postgres | redis | caddy | web-assets)
+      api | worker | monitor | recovery | provisioner | postgres | redis | caddy | web-assets)
         nexa_compose logs -f --tail 200 "$1"
         ;;
       # `monitor` was missing from this list for the whole of Phase 3C, which
       # is the one service an operator reaches for here: it is the process
       # role with no request path, so its log is the only place its behaviour
       # is visible at all. The answer was `unknown service "monitor"`.
+      #
+      # `provisioner` is the same shape and was added with the role rather than
+      # after it: it has no request path either, and when a paid order has not
+      # become a service its log is where the reason is.
       *)
-        nexa_die "unknown service \"$1\". One of: api worker monitor recovery postgres redis caddy web-assets."
+        nexa_die "unknown service \"$1\". One of: api worker monitor recovery provisioner postgres redis caddy web-assets."
         ;;
     esac
   else
