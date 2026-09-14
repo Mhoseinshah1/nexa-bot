@@ -1089,6 +1089,9 @@ function toRecord(row: typeof panels.$inferSelect): PanelRecord {
     providerType: row.providerType as ProviderType,
     baseUrl: row.baseUrl,
     status: row.status as PanelStatus,
+    // Passed through unnarrowed: the shape is per provider and the application layer
+    // owns the schema that decides it. See `PanelRecord.activation`.
+    activation: row.activation,
     archivedAt: row.archivedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,

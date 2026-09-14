@@ -1,7 +1,6 @@
 import {
   providerDescriptor,
   type ProviderAdapter,
-  type ProviderConnectionAdapter,
   type ProviderCapability,
   type ProviderDescriptor,
   type ProviderHttpClient,

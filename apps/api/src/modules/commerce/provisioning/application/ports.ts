@@ -1,5 +1,4 @@
 import type {
-  ActorContext,
   OperationId,
   OperationState,
   OperationType,
@@ -7,13 +6,14 @@ import type {
   PanelActivation,
   PanelId,
   ProductId,
+  ProductSpecification,
   ProviderFailureKind,
   ServiceDeliveryState,
   ServiceState,
   TenantContext,
-  TransactionScope,
   UserId,
 } from '@nexa/contracts';
+import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 
 /**
  * A service, as the application layer sees it.
@@ -374,7 +374,24 @@ export interface ProvisionAttemptReport {
   readonly failureKind: ProviderFailureKind | null;
 }
 
-/** The actor a background provisioning run acts as. Named so nothing fabricates one. */
-export interface ProvisioningActorFactory {
-  systemJob(): ActorContext;
+/**
+ * What was bought, for the order that created a service.
+ *
+ * A NARROW port, deliberately, for the reason the catalogue's `PanelOwnershipReader`
+ * gives: the provisioning module has no business reading an order's totals, its
+ * customer or its state, and handing it `OrderRepository` would also hand it
+ * `transition` — the ability to settle an order from a background worker.
+ *
+ * It needs exactly two numbers, and it must read them from the ORDER's snapshot rather
+ * than from the product: `nexa_orders_snapshot_guard` froze that snapshot at
+ * confirmation, so it is the only copy that still says what the customer agreed to. A
+ * product re-specified since would otherwise silently change the size of a service
+ * somebody already paid for.
+ */
+export interface PurchaseSnapshotReader {
+  specificationFor(
+    scope: TenantContext,
+    orderId: OrderId,
+    tx?: unknown,
+  ): Promise<ProductSpecification | null>;
 }

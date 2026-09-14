@@ -79,7 +79,7 @@ export function decideOperability(input: OperabilityInput): PanelOperability {
     return { ok: false, reason: 'PROVIDER_NOT_OPERABLE' };
   }
   const descriptor = providerDescriptor(panel.providerType);
-  if (descriptor === undefined) {
+  if (descriptor === null) {
     /*
      * A provider type with no descriptor.
      *

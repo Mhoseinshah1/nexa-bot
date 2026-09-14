@@ -37,6 +37,15 @@ export interface PanelRecord {
   readonly providerType: ProviderType;
   readonly baseUrl: string;
   readonly status: PanelStatus;
+  /**
+   * The per-panel provider configuration, exactly as stored, or null when unset.
+   *
+   * `unknown` on purpose. The shape is per provider — `PANEL_ACTIVATION_SCHEMAS` — so
+   * a repository cannot narrow it without knowing which provider this row is, and a
+   * narrowing done here would be a second opinion about a schema that already exists.
+   * Every reader parses it; `decideOperability` is the one that decides.
+   */
+  readonly activation: unknown;
   readonly archivedAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
