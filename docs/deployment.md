@@ -197,7 +197,15 @@ sudo ./install.sh --domain … --acme-email … --version v1.0.0 \
 shred -u /root/bot-token
 ```
 
-The file is mounted read-only into the container and is never copied anywhere.
+The file is **streamed on stdin** into the container, exactly as the owner's
+password is, and is never copied anywhere. It is deliberately not bind-mounted:
+the release image runs as `node` (uid 1000) and a file created under `umask 077`
+is root-owned and mode 0600, so a mount is unreadable inside the container and
+this whole path fails with `EACCES`.
+
+A rerun that supplies a token file for a **different** bot is refused rather than
+ignored — the file is read on every state so the bot id can be compared, and only
+the id half is ever used. The secret half never replaces a stored credential.
 
 ### The Telegram bot
 

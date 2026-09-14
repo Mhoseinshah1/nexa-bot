@@ -511,6 +511,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       config.NOTIFICATION_SEND_TIMEOUT_MS,
     ),
     webhookSecret: () => config.TELEGRAM_WEBHOOK_SECRET,
+    webhookEnabled: () => config.TELEGRAM_WEBHOOK_ENABLED,
   });
 
   let installationTenantId: TenantId | null = null;

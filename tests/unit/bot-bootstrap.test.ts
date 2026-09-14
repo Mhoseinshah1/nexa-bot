@@ -236,7 +236,10 @@ function build(overrides: Partial<BotBootstrapDeps> = {}): {
     },
     bots: bots as unknown as BotBootstrapDeps['bots'],
     scopeActivity: {
-      scopeIsActive: async () => {
+      scopeIsActive: async (_scope: unknown, tx?: unknown) => {
+        // Outside a transaction this is the READ that decides what to report —
+        // `unavailableReason` — and no lock is held or wanted.
+        if (tx === undefined) return true;
         /*
          * The lock must already be held when the activity check runs.
          *
@@ -270,6 +273,7 @@ function build(overrides: Partial<BotBootstrapDeps> = {}): {
     },
     telegram,
     webhookSecret: () => SECRET,
+    webhookEnabled: () => true,
   };
 
   const composed = { ...deps, ...overrides };
@@ -668,20 +672,85 @@ describe('bot bootstrap — the rules the review found untested', () => {
     bots.rows[0]!.status = 'STOPPED';
     const before = telegram.webhookCalls.length;
 
-    expect(await service.status(scope, ORIGIN)).toBe('stopped');
+    expect(await service.status(scope, ORIGIN)).toBe('unavailable');
     expect(
       await codeThrownBy(() => service.execute(scope, { token: null, publicBaseUrl: ORIGIN })),
     ).toBe(PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_FAILED);
     expect(telegram.webhookCalls).toHaveLength(before);
   });
 
+  it('is NOT ready when this installation does not serve the webhook route', async () => {
+    // `app.module.ts` registers the controller only when
+    // TELEGRAM_WEBHOOK_ENABLED is true. A row with a current URL and fingerprint
+    // on an installation with the flag off answered `ready` while every delivery
+    // would 404.
+    const { bots } = await installed();
+    const off = build({ webhookEnabled: () => false });
+    off.bots.rows = bots.rows;
+
+    expect(await off.service.status(scope, ORIGIN)).toBe('unavailable');
+    expect(
+      await codeThrownBy(() => off.service.execute(scope, { token: null, publicBaseUrl: ORIGIN })),
+    ).toBe(PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_FAILED);
+    expect(off.telegram.webhookCalls).toHaveLength(0);
+  });
+
+  it('is NOT ready when the TENANT has stopped accepting work', async () => {
+    // The webhook route refuses every update for a tenant that is not active,
+    // so a complete registration is still a bot that receives nothing. This was
+    // checked only inside the write transactions, which protect the WRITE — not
+    // the claim.
+    const { bots } = await installed();
+    const stopped = build({ scopeActivity: { scopeIsActive: async () => false } });
+    stopped.bots.rows = bots.rows;
+
+    expect(await stopped.service.status(scope, ORIGIN)).toBe('unavailable');
+    expect(
+      await codeThrownBy(() =>
+        stopped.service.execute(scope, { token: null, publicBaseUrl: ORIGIN }),
+      ),
+    ).toBe(PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_FAILED);
+    expect(stopped.telegram.webhookCalls).toHaveLength(0);
+  });
+
+  it('names WHICH of the three reasons a bot is unavailable', async () => {
+    // One status value, three causes, and an operator sent looking in the wrong
+    // place is the cost of collapsing them into one message.
+    const { bots } = await installed();
+
+    const off = build({ webhookEnabled: () => false });
+    off.bots.rows = bots.rows;
+    await expect(
+      off.service.execute(scope, { token: null, publicBaseUrl: ORIGIN }),
+    ).rejects.toThrowError(/TELEGRAM_WEBHOOK_ENABLED is false/);
+
+    const inactive = build({ scopeActivity: { scopeIsActive: async () => false } });
+    inactive.bots.rows = bots.rows;
+    await expect(
+      inactive.service.execute(scope, { token: null, publicBaseUrl: ORIGIN }),
+    ).rejects.toThrowError(/tenant is not accepting work/);
+
+    const halted = build();
+    halted.bots.rows = bots.rows.map((row) => ({ ...row, status: 'STOPPED' as const }));
+    await expect(
+      halted.service.execute(scope, { token: null, publicBaseUrl: ORIGIN }),
+    ).rejects.toThrowError(/not ACTIVE/);
+  });
+
   it('refuses a scope that has stopped accepting work, inside the transaction', async () => {
-    // A CLAUDE.md non-negotiable that had no test at all: deleting all three
-    // `requireActiveScope` calls used to leave the whole suite green.
+    /*
+     * A CLAUDE.md non-negotiable that had no test at all: deleting all three
+     * `requireActiveScope` calls used to leave the whole suite green.
+     *
+     * The reader answers TRUE outside a transaction and FALSE inside one, which
+     * is not a contrivance — it is the exact race the in-transaction check
+     * exists for. A constant `false` would be caught by the readiness read
+     * before the write path is ever reached, and would prove nothing about it.
+     */
     const built = build();
     const refusing = new BotBootstrapService({
       ...serviceDeps(built),
-      scopeActivity: { scopeIsActive: async () => false },
+      scopeActivity: { scopeIsActive: async (_scope: unknown, tx?: unknown) => tx === undefined },
     });
 
     expect(
@@ -700,7 +769,7 @@ describe('bot bootstrap — the rules the review found untested', () => {
     second.bots.rows[0]!.webhookUrl = 'https://old.example.com/telegram/webhook/x';
     const refusing = new BotBootstrapService({
       ...serviceDeps(second),
-      scopeActivity: { scopeIsActive: async () => false },
+      scopeActivity: { scopeIsActive: async (_scope: unknown, tx?: unknown) => tx === undefined },
     });
 
     expect(

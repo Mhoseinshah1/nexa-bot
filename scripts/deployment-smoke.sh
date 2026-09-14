@@ -262,8 +262,8 @@ pass "the bootstrap CLI exits on a real terminal instead of hanging the install"
 # obey. `getMe` runs before a single byte is written, so a token Telegram never
 # confirmed must leave NO bot instance behind. The CLI is exercised in full: the
 # container starts, the config parses, the database is reached, the token is read
-# from a mounted file, and the failure is a named configuration outcome rather
-# than a stack trace.
+# from stdin, and the failure is a named configuration outcome rather than a
+# stack trace.
 #
 # It does NOT prove which of the two outcomes arrives. That depends on the
 # runner's egress, which is not a fact about this product — see the assertion
@@ -277,8 +277,10 @@ telegram_state() {
 [ "$(telegram_state)" = "none" ] ||
   fail "the Telegram bootstrap does not report a fresh installation as unconfigured"
 
-# A syntactically valid token that belongs to nobody. Written inside the smoke
-# root and mounted read-only, the way the installer mounts the operator's file.
+# A syntactically valid token that belongs to nobody, STREAMED the way the
+# installer streams the operator's file. Not mounted: the image runs as `node`
+# (uid 1000) and a 0600 file created here is not readable inside the container,
+# which is the defect that made the documented unattended path impossible.
 telegram_token_file="${ROOT}/bot-token"
 printf '8123456789:AA-smoke-token-that-belongs-to-nobody
 ' >"$telegram_token_file"
@@ -287,10 +289,9 @@ chmod 0600 "$telegram_token_file"
 telegram_log="${ROOT}/bootstrap-bot.log"
 telegram_status=0
 compose run --rm --no-deps -T \
-  -v "${telegram_token_file}:/run/nexa-bot-token:ro" \
   --entrypoint node api dist/bootstrap-bot.cli.js \
   --public-base-url https://smoke.invalid \
-  --bot-token-file /run/nexa-bot-token >"$telegram_log" 2>&1 || telegram_status=$?
+  --bot-token-stdin <"$telegram_token_file" >"$telegram_log" 2>&1 || telegram_status=$?
 
 [ "$telegram_status" -ne 0 ] ||
   fail "the Telegram bootstrap reported SUCCESS with a token that belongs to nobody (see ${telegram_log})"

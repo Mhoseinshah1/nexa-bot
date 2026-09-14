@@ -61,6 +61,11 @@ SKIP_TELEGRAM="no"
 # Telegram-enabled installation whose bot cannot receive updates is not a
 # completed installation, whatever else went right.
 TELEGRAM_INCOMPLETE=""
+# The state AFTER a failed Telegram step, which decides what the summary tells
+# the operator to run. `none` means nothing was written and the retry needs a
+# token source; anything else means the credential is stored and the retry does
+# not.
+TELEGRAM_RETRY=""
 
 usage() {
   cat <<'USAGE'
@@ -343,9 +348,13 @@ preflight() {
     [ -s "$BOT_TOKEN_FILE" ] ||
       nexa_die "the bot token file at ${BOT_TOKEN_FILE} is empty."
   fi
-  if [ "$SKIP_TELEGRAM" = "no" ] && [ -z "$BOT_TOKEN_FILE" ] && [ ! -t 0 ]; then
-    nexa_die "no terminal and no --bot-token-file: there is no safe way to read the Telegram bot token. Pass --bot-token-file, or --skip-telegram and run 'botctl telegram register' later."
-  fi
+  # The "no terminal and no token source" refusal is NOT here, unlike the owner
+  # password's. Preflight runs before the stack is up, so it cannot ask whether a
+  # token is actually needed — and on a reconcile it is not: the row already
+  # carries the encrypted credential. Refusing here broke unattended recovery
+  # after a webhook failure whenever the original token file had been removed,
+  # which is the case the resume path exists for. It moved to
+  # `configure_telegram_bot`, where the state is known.
 }
 
 # ---------------------------------------------------------------------------
@@ -913,7 +922,16 @@ skip_telegram_bot() {
     ready)
       nexa_ok "skipping the Telegram bot; it is already configured and receiving updates"
       ;;
-    none | incomplete | stopped)
+    none)
+      # `botctl telegram register` cannot do this one. It runs the CLI with no
+      # token and no terminal, and creating the FIRST bot row needs a token —
+      # so naming it here would send the operator to a command that must fail.
+      nexa_warn "skipping the Telegram bot. Nothing is configured yet; it cannot receive any"
+      nexa_warn "message until you rerun this installer with a token source, for example:"
+      nexa_warn "  sudo ./install.sh --domain ${DOMAIN} --acme-email ${ACME_EMAIL} --version ${VERSION} --bot-token-file /path/to/token"
+      ;;
+    incomplete | unavailable)
+      # A credential is already stored, so the retry genuinely needs nothing.
       nexa_warn "skipping the Telegram bot. It cannot receive any message until you run:"
       nexa_warn "  botctl telegram register"
       ;;
@@ -940,7 +958,7 @@ configure_telegram_bot() {
   state="$(telegram_state)" || state=""
 
   case "$state" in
-    none | incomplete | ready | stopped) ;;
+    none | incomplete | ready | unavailable) ;;
     *)
       # Not a guess and not a skip. Both readings are wrong in a way the
       # operator pays for: treating an unreadable answer as `none` prompts for
@@ -952,14 +970,16 @@ configure_telegram_bot() {
 
   nexa_step "configuring Telegram bot"
 
-  if [ "$state" = "stopped" ]; then
-    # Not something a rerun converges out of. The webhook route refuses an
-    # update for a bot that is not ACTIVE, so registering one would point
-    # Telegram at an endpoint that answers "unknown bot instance" to everything
-    # it delivers. The remedy is to start the bot, not to run this again.
+  if [ "$state" = "unavailable" ]; then
+    # Not something a rerun converges out of. Something OTHER than a missing
+    # registration stops this bot receiving updates — the bot instance is not
+    # ACTIVE, the tenant has stopped accepting work, or the webhook route is
+    # disabled — and registering a webhook would point Telegram at an endpoint
+    # that refuses everything it delivers. The CLI names which; this only has to
+    # avoid claiming success.
     TELEGRAM_INCOMPLETE="yes"
-    nexa_warn "the Telegram bot instance is stopped, so it is not receiving updates."
-    nexa_warn "Start it, then run: botctl telegram register"
+    nexa_warn "the Telegram bot is not able to receive updates. Run for the reason:"
+    nexa_warn "  botctl telegram register"
     return 0
   fi
 
@@ -989,19 +1009,32 @@ configure_telegram_bot() {
   # never as an argument: argv is readable by every user on the machine via
   # `ps`, and an environment variable would be readable through `docker
   # inspect`. The same rule as the owner's password, and the same reasons.
-  # A token is supplied ONLY when there is no bot instance. On every other state
-  # the CLI resumes from the stored one and refuses to ask, so handing it a file
-  # would be handing it something it must ignore.
+  # A supplied token is passed on EVERY state, not only `none`.
+  #
+  # The CLI never ASKS on a rerun — that is ADR-0029 decision 3 and it is
+  # unchanged — but an operator who explicitly staged a token file has not been
+  # asked. Ignoring it silently is how a file naming a DIFFERENT bot slipped past
+  # the refusal that exists to catch exactly that, while the installer printed
+  # success having changed nothing.
+  #
+  # STDIN, not a bind mount. The release image runs as `node` (uid 1000) and the
+  # file this installer's own documentation tells an operator to create is
+  # root-owned and mode 0600, so a mount is unreadable inside the container and
+  # the whole unattended path fails with EACCES. The owner's password has always
+  # been streamed this way; not copying it was the mistake.
   local ok=0
-  if [ -n "$BOT_TOKEN_FILE" ] && [ "$state" = "none" ]; then
-    # Mounted read-only at a fixed path rather than copied anywhere. The file
-    # stays the operator's and this installer never writes a token to disk.
+  if [ -n "$BOT_TOKEN_FILE" ]; then
     nexa_compose run --rm --no-deps -T \
-      -v "${BOT_TOKEN_FILE}:/run/nexa-bot-token:ro" \
       --entrypoint node api dist/bootstrap-bot.cli.js \
       --public-base-url "https://${DOMAIN}" \
-      --bot-token-file /run/nexa-bot-token || ok=1
+      --bot-token-stdin <"$BOT_TOKEN_FILE" || ok=1
   elif [ "$state" = "none" ]; then
+    # No token source and no terminal: refused HERE, where the state is known,
+    # rather than in preflight where it is not. This is the only state in which
+    # a token is needed.
+    if [ ! -t 0 ]; then
+      nexa_die "no terminal and no --bot-token-file: there is no safe way to read the Telegram bot token for a first configuration. Pass --bot-token-file, or --skip-telegram and configure it later by rerunning this installer with a token source."
+    fi
     # Interactive: stdin is left alone, and the CLI prompts with no echo.
     nexa_compose run --rm --no-deps \
       --entrypoint node api dist/bootstrap-bot.cli.js \
@@ -1026,6 +1059,19 @@ configure_telegram_bot() {
     # the outstanding step named.
     TELEGRAM_INCOMPLETE="yes"
     nexa_warn "the Telegram bot is not receiving updates yet. The error above says why."
+
+    # WHICH failure this was decides what the operator is told to run, and the
+    # state is asked again rather than assumed.
+    #
+    # Every failure used to land in one branch and print the resume story: "the
+    # token is stored encrypted; `botctl telegram register` will retry without
+    # asking". For a rejected token or an unreachable `getMe` on a FIRST attempt
+    # that is false in every part — nothing was written, there is no stored
+    # token, and that command deliberately supplies neither a token nor a
+    # terminal, so the advertised retry cannot work. `getMe` runs before
+    # `createFromBootstrap` precisely so no row exists, and the summary has to
+    # say so.
+    TELEGRAM_RETRY="$(telegram_state)" || TELEGRAM_RETRY=""
     return 0
   fi
 
@@ -1129,6 +1175,33 @@ main() {
   # describe it is the exact failure a real staging host produced when the owner
   # step was allowed to abandon the manifest.
   if [ -n "$TELEGRAM_INCOMPLETE" ]; then
+    # Two summaries, because there are two failures and only one of them has the
+    # cheap retry. Saying "the token is stored, the retry resumes from it" after
+    # a failure that stored NOTHING is a false statement that sends the operator
+    # to a command which cannot work.
+    if [ "$TELEGRAM_RETRY" = "none" ]; then
+      cat >&2 <<INCOMPLETE_NOTHING_STORED
+
+$(nexa_warn "Nexa ${VERSION} is installed, and its Telegram bot is NOT configured.")
+
+  outstanding   configuring the bot at all — nothing was stored
+  retry         rerun this installer with a token source:
+                sudo ./install.sh --domain ${DOMAIN} --acme-email ${ACME_EMAIL} --version ${VERSION} --bot-token-file /path/to/token
+  why           the error printed above this summary
+
+The token was NOT stored: it is validated with Telegram before anything is
+written, so a rejected token or a Telegram this host cannot reach leaves no
+credential behind and nothing to resume from. \`botctl telegram register\` cannot
+finish this — it supplies no token by design — so the retry is this installer.
+
+  panel      https://${DOMAIN}
+  status     botctl telegram status
+
+Configuration and secrets live in ${NEXA_CONFIG_DIR} (0700, root-owned).
+INCOMPLETE_NOTHING_STORED
+      return 1
+    fi
+
     cat >&2 <<INCOMPLETE
 
 $(nexa_warn "Nexa ${VERSION} is installed, and its Telegram bot is NOT receiving updates.")
@@ -1144,7 +1217,7 @@ certificate not yet issued: Telegram will not deliver to an endpoint it cannot
 reach over HTTPS.
 
   panel      https://${DOMAIN}
-  status     botctl status
+  status     botctl telegram status
 
 Configuration and secrets live in ${NEXA_CONFIG_DIR} (0700, root-owned).
 INCOMPLETE

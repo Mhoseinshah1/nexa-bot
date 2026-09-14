@@ -1846,8 +1846,21 @@ cmd_telegram() {
       # refuses to ask (ADR-0029 decision 3). That is why this command needs no
       # terminal and no arguments — and why it is safe to put in a runbook.
       #
+      # THE LOCK, for the same reason update and rollback take it.
+      #
+      # A registration is an external effect followed by a local one, and the
+      # two cannot be made atomic: `setWebhook` must happen outside the
+      # transaction that records it, or a rolled-back transaction would leave
+      # Telegram pointed somewhere the database does not know about. So the
+      # ordering has to be protected from outside, and this is the only other
+      # writer: an installer changing the domain to B, racing this command which
+      # already read domain A, can have Telegram accept B then A while the
+      # database records A then B — leaving a row that says `ready` for B while
+      # Telegram delivers to A. Both paths take this lock, so they queue.
+      #
       # `-T`: nothing is read from stdin, and allocating a pseudo-TTY for a
       # command in a script is how a non-interactive run hangs.
+      nexa_acquire_lock 0
       nexa_compose run --rm --no-deps -T --entrypoint node api \
         dist/bootstrap-bot.cli.js --public-base-url "$(telegram_origin)"
       ;;

@@ -29,6 +29,7 @@ describe('bootstrap-bot CLI arguments', () => {
       status: false,
       publicBaseUrl: 'https://bot.example.com',
       tokenFile: '/run/secrets/token',
+      tokenStdin: false,
       tenantSlug: 'acme',
     });
   });
@@ -49,6 +50,23 @@ describe('bootstrap-bot CLI arguments', () => {
     expect(() => parseArgs(['--bot-token-file', '--status'])).toThrowError(
       /--bot-token-file needs a value/,
     );
+  });
+
+  it('refuses two token sources rather than picking one', () => {
+    // Not a preference to resolve: a caller passing both does not know where its
+    // own credential is coming from.
+    expect(() => parseArgs(['--bot-token-file', '/x', '--bot-token-stdin'])).toThrowError(
+      /either --bot-token-file or --bot-token-stdin/,
+    );
+  });
+
+  it('reads the stdin flag the installer uses', () => {
+    // The installer streams the token rather than mounting the file: the image
+    // runs as `node` (uid 1000), and the token file the documented flow creates
+    // is root-owned 0600, so a bind mount is unreadable inside the container.
+    const args = parseArgs(['--bot-token-stdin', '--public-base-url', 'https://bot.example.com']);
+    expect(args.tokenStdin).toBe(true);
+    expect(args.tokenFile).toBeNull();
   });
 
   it('reads --status without needing anything else', () => {

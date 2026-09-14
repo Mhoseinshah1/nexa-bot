@@ -52,12 +52,17 @@ interface BotIdentity {
  *  - `ready`      — the bot exists, is ACTIVE, and Telegram is delivering to
  *                   this installation's own webhook URL with the secret this
  *                   installation currently holds. Nothing to do.
- *  - `stopped`    — the bot exists and an operator has stopped it. Registering a
- *                   webhook would be pointless: the route refuses an update for
- *                   a bot that is not ACTIVE, so Telegram would deliver and be
- *                   told the bot is unknown. It is reported as its own answer
- *                   rather than folded into `incomplete`, because the remedy is
- *                   to start the bot, not to rerun anything.
+ *  - `unavailable` — the bot exists and something OTHER than a missing
+ *                   registration stops it receiving updates. Three causes, and
+ *                   each is a state in which registering a webhook would point
+ *                   Telegram at an endpoint that refuses everything it delivers:
+ *                   the bot instance is not ACTIVE, the tenant has stopped
+ *                   accepting work, or `TELEGRAM_WEBHOOK_ENABLED` is false so
+ *                   the route is not even registered. One answer rather than
+ *                   three, because the operator action has one shape — fix the
+ *                   thing, then rerun — and `execute` names WHICH. Folding any
+ *                   of them into `ready` is how an installation reports a bot
+ *                   that is receiving updates while every delivery 404s.
  *
  * Four values rather than one boolean, for the reason `BootstrapStatus` has
  * three: "a bot instance exists, therefore the bootstrap succeeded" is exactly
@@ -66,7 +71,7 @@ interface BotIdentity {
  * prompt, rerun, start the bot, nothing — and collapsing any two of them puts
  * an operator on the wrong one.
  */
-export type BotBootstrapStatus = 'none' | 'incomplete' | 'ready' | 'stopped';
+export type BotBootstrapStatus = 'none' | 'incomplete' | 'ready' | 'unavailable';
 
 export interface BotBootstrapInput {
   /**
@@ -123,6 +128,16 @@ export interface BotBootstrapDeps {
    * invocation is a fresh process reading `nexa.env` as it stands.
    */
   readonly webhookSecret: () => string;
+  /**
+   * Whether this installation serves the webhook route at all.
+   *
+   * `app.module.ts` registers `TelegramWebhookController` only when
+   * `TELEGRAM_WEBHOOK_ENABLED` is true. Without this, a row with a current URL
+   * and fingerprint answered `ready` on an installation where every delivery
+   * would 404 — the readiness question is "can this bot receive an update", and
+   * the route existing is part of the answer.
+   */
+  readonly webhookEnabled: () => boolean;
 }
 
 /**
@@ -165,8 +180,8 @@ export class BotBootstrapService {
   async status(scope: TenantContext, publicBaseUrl: string): Promise<BotBootstrapStatus> {
     const existing = await this.deps.bots.findBootstrapTarget(scope);
     if (existing === null) return 'none';
-    // An operator's stop is not a bootstrap state to converge out of.
-    if (existing.status !== 'ACTIVE') return 'stopped';
+    // Not a bootstrap state to converge out of — see `unavailableReason`.
+    if ((await this.unavailableReason(scope, existing)) !== null) return 'unavailable';
     // Normalised through the SAME function `execute` uses, so a trailing slash
     // in the configured origin cannot make `status` report `incomplete` for a
     // webhook `execute` would then find already registered — an installer that
@@ -189,6 +204,44 @@ export class BotBootstrapService {
    * column existed needs one registration to become knowable, and one
    * unnecessary `setWebhook` is a far cheaper mistake than a silent claim.
    */
+  /**
+   * Why this bot cannot receive an update, beyond a missing registration.
+   *
+   * Null when nothing is in the way. The three causes are checked in the order
+   * an operator can act on them, and each message names the one thing to fix —
+   * a single "not receiving updates" would send them looking in three places.
+   *
+   * `scopeIsActive` is called WITHOUT a transaction here on purpose: this is a
+   * read that decides what to report, not a write that needs holding still. The
+   * transactional checks inside `uow.run` are untouched, and they are the ones
+   * that make a write safe.
+   */
+  private async unavailableReason(
+    scope: TenantContext,
+    view: BotBootstrapView,
+  ): Promise<string | null> {
+    if (!this.deps.webhookEnabled()) {
+      return (
+        'TELEGRAM_WEBHOOK_ENABLED is false, so this installation does not serve the webhook route ' +
+        'at all. Telegram would deliver every update to a 404. Set it to true in nexa.env, ' +
+        'restart, and run this again.'
+      );
+    }
+    if (view.status !== 'ACTIVE') {
+      return (
+        `The bot instance for this tenant is ${view.status}, not ACTIVE. The webhook route refuses ` +
+        'every update for a bot that is not active. Start the bot and run this again.'
+      );
+    }
+    if (!(await this.deps.scopeActivity.scopeIsActive(scope))) {
+      return (
+        'This tenant is not accepting work, so the webhook route refuses every update for it. ' +
+        'Reactivate the tenant and run this again.'
+      );
+    }
+    return null;
+  }
+
   private registrationIsCurrent(view: BotBootstrapView, url: string): boolean {
     if (view.webhookRegisteredAt === null || view.webhookUrl !== url) return false;
     if (view.webhookSecretFingerprint === null) return false;
@@ -203,19 +256,20 @@ export class BotBootstrapService {
     const ensured = await this.ensureBotInstance(scope, input.token);
     const view = ensured.view;
     /*
-     * A stopped bot is a configuration problem, not a registration to retry.
+     * Checked BEFORE the registration and before any ALREADY_COMPLETE, not only
+     * inside the write transactions further down.
      *
-     * The webhook route refuses an update whose bot instance is not ACTIVE, so
-     * registering one would point Telegram at an endpoint that answers "unknown
-     * bot instance" to everything it delivers — a bot that is configured,
-     * reported ready, and silent. The remedy is to start the bot.
+     * Each of these is a state in which the webhook route refuses every update
+     * Telegram delivers. Registering one — or reporting it complete — produces a
+     * bot that is configured, announced as receiving updates, and silent. The
+     * write-transaction checks stay: they protect the WRITE, and this protects
+     * the CLAIM.
      */
-    if (view.status !== 'ACTIVE') {
+    const unavailable = await this.unavailableReason(scope, view);
+    if (unavailable !== null) {
       throw errors.configuration(
         PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_FAILED,
-        `The bot instance for this tenant is ${view.status}, not ACTIVE. Registering a webhook ` +
-          'would point Telegram at a route that refuses every update for a stopped bot. Start the ' +
-          'bot and run this again.',
+        unavailable,
       );
     }
     const url = this.webhookUrlFor(origin, view.id);
@@ -257,6 +311,21 @@ export class BotBootstrapService {
       };
     }
 
+    /*
+     * This call and the marker below are NOT one atomic step, and cannot be.
+     *
+     * `setWebhook` has to happen outside the transaction that records it — a
+     * rolled-back transaction would otherwise leave Telegram pointed somewhere
+     * the database does not know about — so two reconciliations with different
+     * origins could commit the external and the local effect in opposite orders
+     * and leave a row claiming `ready` for a URL Telegram is not using.
+     *
+     * The ordering is protected from OUTSIDE instead: every path that reaches
+     * here — `install.sh` and `botctl telegram register` — takes the
+     * installation's exclusive lock first, so they queue rather than interleave.
+     * There is no third caller; `check-boundaries.sh` fails the build if a
+     * surface acquires one.
+     */
     const secretToken = this.requireWebhookSecret();
     const registered = await this.deps.telegram.registerWebhook({
       token,
