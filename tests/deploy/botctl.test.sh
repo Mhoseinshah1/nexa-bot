@@ -5104,6 +5104,11 @@ test_case 'an unreadable Telegram state is refused rather than guessed'
 telegram_unknown="$(bash -c '
   . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
   telegram_state() { printf "docker: command not found"; }
+  # Stubbed as well, so the refusal cannot be satisfied by an accident: without
+  # it, a version of this step that GUESSED would fall through to a real
+  # `docker compose` on the build machine and hang rather than fail — which is
+  # how the mutation aimed at this rule first presented.
+  nexa_compose() { return 1; }
   configure_telegram_bot 2>&1
 ' _ "${REPO}/deploy/install.sh" || true)"
 assert_contains 'an unreadable state was not refused' "$telegram_unknown" 'Refusing to guess'

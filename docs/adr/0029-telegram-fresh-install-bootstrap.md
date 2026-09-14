@@ -140,3 +140,46 @@ while the bot still cannot receive updates._
   installer's own idempotency story.
 - The bootstrap runs after `bootstrap_owner`: it needs migrations, a tenant, and — unlike
   provisioning — an outbound network call, so it needs the stack up.
+
+## What the implementation settled that this ADR did not
+
+Four questions the four decisions above did not answer, decided while building
+and recorded here so the next reader does not have to reconstruct them.
+
+**The webhook URL is composed from an ORIGIN, not accepted whole.** The CLI takes
+`--public-base-url https://bot.example.com` and appends
+`/telegram/webhook/<bot instance id>` itself. Accepting a full URL would make
+"the URL Telegram was given" and "the URL this installation answers on" two
+statements that can disagree, and the failure is silent: Telegram delivers, the
+edge answers 404, and nothing in any log says why. An origin carrying a path, a
+query or plain `http` is refused before the token is sent anywhere.
+
+It is NOT derived from `WEB_ADMIN_ORIGINS` either. That value is the admin
+session's CSRF origin and it is a LIST; making it mean "and also where Telegram
+delivers" would let adding a second admin origin silently change which one a
+webhook is registered against.
+
+**A rerun asks Telegram whether the stored token still works, every time.**
+Decision 3 promises that a revoked token is reported as an explicit
+configuration problem. That promise can only be kept by asking, so `getMe` runs
+even on a run with nothing left to do — a rerun that skipped it because the
+local state looked finished would report a ready installation whose bot cannot
+authenticate a single call.
+
+**A token for a different bot supplied on a rerun is REFUSED, not ignored.**
+Decision 3 says such a token must not repoint or rotate anything. Ignoring it
+silently obeys the letter and is the silent-success pattern: an operator who
+edited their token file to change bots would watch the installer print success
+and change nothing. The comparison is local and costs no network call — a
+Telegram token is `<bot id>:<secret>`, so the part before the colon is the
+identity the token CLAIMS — and it is only ever used to refuse. The identity
+that gets recorded still comes from `getMe`, because a claim an operator typed
+is not evidence.
+
+**The webhook secret is added to an existing `nexa.env` but never regenerated.**
+`generate_secrets` runs once and is skipped wholesale on a rerun, so a key
+introduced after an installation was created would never reach it;
+`ensure_telegram_config` is the additive half. It must not mint a new secret over
+an existing one: Telegram holds the value it was given at registration and signs
+every update with it, so a fresh one would make the API reject every update from
+a working bot — silently, until somebody re-registered the webhook.
