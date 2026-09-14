@@ -255,15 +255,19 @@ grep -q 'bootstrap.already_completed' "$owner_tty_log" ||
   fail "a second bootstrap on a terminal did not reach the first-owner fence (see ${owner_tty_log})"
 pass "the bootstrap CLI exits on a real terminal instead of hanging the install"
 
-# The Telegram bootstrap, from the release image, against a Telegram that is not
-# there.
+# The Telegram bootstrap, from the release image, with a token that belongs to
+# nobody.
 #
-# CI has no route to api.telegram.org and no bot token, so what this can prove is
-# the ORDERING — which is the rule the whole create path exists to obey. `getMe`
-# runs before a single byte is written, so a token that could not be validated
-# must leave NO bot instance behind. The CLI is exercised in full: the container
-# starts, the config parses, the database is reached, the token is read from a
-# file, and the failure is the specific one.
+# What this proves is the ORDERING — the rule the whole create path exists to
+# obey. `getMe` runs before a single byte is written, so a token Telegram never
+# confirmed must leave NO bot instance behind. The CLI is exercised in full: the
+# container starts, the config parses, the database is reached, the token is read
+# from a mounted file, and the failure is a named configuration outcome rather
+# than a stack trace.
+#
+# It does NOT prove which of the two outcomes arrives. That depends on the
+# runner's egress, which is not a fact about this product — see the assertion
+# below, which an earlier version got wrong by pinning it.
 telegram_state() {
   compose run --rm --no-deps -T --entrypoint node api \
     dist/bootstrap-bot.cli.js --status --public-base-url https://smoke.invalid 2>/dev/null |
@@ -289,12 +293,22 @@ compose run --rm --no-deps -T \
   --bot-token-file /run/nexa-bot-token >"$telegram_log" 2>&1 || telegram_status=$?
 
 [ "$telegram_status" -ne 0 ] ||
-  fail "the Telegram bootstrap reported SUCCESS with no reachable Telegram (see ${telegram_log})"
-# `unreachable` and not `token_rejected`: the distinction is the point of having
-# two codes, and an installer that told an operator to mint a new token when the
-# network is the problem costs them an afternoon.
-grep -q 'telegram.bootstrap_unreachable' "$telegram_log" ||
-  fail "the failure was not reported as unreachable (see ${telegram_log})"
+  fail "the Telegram bootstrap reported SUCCESS with a token that belongs to nobody (see ${telegram_log})"
+
+# EITHER named code, and the choice between them is not this test's to make.
+#
+# Which one arrives depends on whether the runner can reach api.telegram.org: a
+# GitHub-hosted runner can, so Telegram answers 401 and the token is REJECTED;
+# an environment with no egress produces UNREACHABLE. Both are correct, and both
+# are the point — the failure is a NAMED configuration outcome rather than a
+# stack trace or a silent success.
+#
+# The first version of this assertion required `unreachable` and failed in CI
+# for exactly this reason. Pinning it to one code would have meant a smoke test
+# asserting a fact about the runner's network rather than about the product.
+if ! grep -qE 'telegram\.bootstrap_(unreachable|token_rejected)' "$telegram_log"; then
+  fail "the failure was not one of the two named bootstrap outcomes (see ${telegram_log})"
+fi
 # THE ordering assertion. A token Telegram never confirmed must not have become a
 # row: a stored credential that has never worked is indistinguishable from one
 # that stopped working.
