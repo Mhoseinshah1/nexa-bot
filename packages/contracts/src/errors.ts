@@ -598,6 +598,41 @@ export const COMMERCE_ERROR_CODES = {
    * refusal, and `LGR-BR-003`'s split payment is deferred for want of a second rail.
    */
   SETTLEMENT_NOT_FUNDED: 'commerce.settlement_not_funded',
+
+  SERVICE_NOT_FOUND: 'commerce.service_not_found',
+  /**
+   * This installation does not know whether a provider user exists for this service.
+   *
+   * The refusal `SERVICE_MACHINE` encodes as the absence of an edge, surfaced. An
+   * `UNRECONCILED` service is one whose create timed out or answered with a 5xx: the
+   * panel may hold an account, and asking for another one is how a customer ends up
+   * paying for one service and occupying two. The remedy is a READ — reconciliation —
+   * and it is not something a customer can ask for, so the message says an operator has
+   * been told rather than inviting a retry.
+   */
+  SERVICE_UNRECONCILED: 'commerce.service_unreconciled',
+  /**
+   * The service has nothing to re-send, or is not in a state where sending means
+   * anything.
+   *
+   * Distinct from `SERVICE_NOT_FOUND` because the service is real and the customer owns
+   * it — it simply has no subscription link yet, or it is terminated. Naming it is what
+   * stops a "re-send my config" button from answering with an empty message that reads
+   * like a delivery.
+   */
+  SERVICE_NOT_DELIVERABLE: 'commerce.service_not_deliverable',
+  /**
+   * The panel this order was promised on cannot be operated.
+   *
+   * One code for four situations that share one remedy — an operator must fix the panel
+   * or the product's binding: the panel is `DISABLED`, its provider type resolves to no
+   * registered adapter, that adapter does not declare the capability the operation
+   * needs, or a field the provider requires before it can be used is unset. The `reason`
+   * detail carries which. Not folded into `PRODUCT_NOT_FULFILLABLE`, which means no
+   * panel is bound at all: "nothing was chosen" and "what was chosen cannot be used" send
+   * an operator to two different screens.
+   */
+  PANEL_NOT_OPERABLE: 'commerce.panel_not_operable',
 } as const;
 
 /*

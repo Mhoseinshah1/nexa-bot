@@ -298,3 +298,47 @@ export function providerUsernameFor(serviceId: string): string {
   }
   return `${PROVIDER_USERNAME_PREFIX}${compact}`;
 }
+
+/**
+ * Whether the customer has actually been told about their service.
+ *
+ * A SEPARATE axis from `ServiceState`, and that separation is the whole point. A
+ * service whose provider user exists is `ACTIVE` whether or not Telegram accepted the
+ * message announcing it — folding the two together would mean a failed send made a
+ * real, paid-for, provider-side account look unprovisioned, and the obvious "fix" for
+ * that is to provision it again.
+ *
+ * Four values, because there are four genuinely different operator situations:
+ *
+ * - `PENDING` — not yet announced, or announced and DEFINITELY refused. Retryable, and
+ *   the only value a background sweep will act on.
+ * - `DELIVERED` — Telegram accepted it.
+ * - `UNCONFIRMED` — the send outcome was `UNKNOWN`: a timeout, a 5xx, a 429, or a 2xx
+ *   whose body would not parse. The customer MAY have it. Never retried automatically —
+ *   the customer messenger's own port already states the reason, that a retried "your
+ *   service is ready" is a customer wondering which one is true. Re-delivery from here
+ *   is a deliberate act by an operator or by the customer opening their service.
+ * - `FAILED` — definitely refused `DELIVERY_MAX_ATTEMPTS` times. Not retried
+ *   automatically either, because something is wrong that another attempt will not fix
+ *   — the customer has blocked the bot, or the bot's token is dead.
+ *
+ * `PENDING` covering "refused once" rather than a fifth value is deliberate: a definite
+ * refusal changed nothing, so the situation is identical to never having tried.
+ */
+export const SERVICE_DELIVERY_STATES = ['PENDING', 'DELIVERED', 'UNCONFIRMED', 'FAILED'] as const;
+export type ServiceDeliveryState = (typeof SERVICE_DELIVERY_STATES)[number];
+export const serviceDeliveryStateSchema = z.enum(SERVICE_DELIVERY_STATES);
+
+/** The states a background sweep may act on. Everything else needs a person. */
+export const DELIVERY_AUTO_RETRY_STATES: readonly ServiceDeliveryState[] = ['PENDING'];
+
+/**
+ * How many definite refusals before a delivery stops being retried on its own.
+ *
+ * Lower than `OPERATION_MAX_ATTEMPTS` on purpose. A provider create is worth persisting
+ * with because the customer has paid and nothing else can produce the thing they bought;
+ * a Telegram send that has been refused three times is being refused for a reason that
+ * a fourth attempt does not change, and the remaining attempts would be spent messaging
+ * somebody who has blocked the bot.
+ */
+export const DELIVERY_MAX_ATTEMPTS = 3;
