@@ -203,7 +203,22 @@ function build(overrides: Partial<BotBootstrapDeps> = {}): {
       },
     },
     bots: bots as unknown as BotBootstrapDeps['bots'],
-    scopeActivity: { scopeIsActive: async () => true },
+    scopeActivity: {
+      scopeIsActive: async () => {
+        /*
+         * The lock must already be held when the activity check runs.
+         *
+         * `scopeIsActive` takes a SHARE lock on the same tenant row the
+         * exclusive lock takes. Two transactions that both take the shared one
+         * first and then try to upgrade deadlock; taking the exclusive one
+         * first makes them queue. That is a Postgres property no unit test can
+         * demonstrate — but the ORDER is this service's to get right, and this
+         * is what holds it to it.
+         */
+        expect(bots.locks).toBeGreaterThan(0);
+        return true;
+      },
+    },
     audit: {
       record: async (_s, _a, entry) => {
         audit.push({ action: entry.action, entityId: entry.entityId, after: entry.after });
@@ -463,6 +478,24 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
     // Counted, not compared. An identical re-encryption would leave the value
     // looking unchanged and would still be a credential write on a rerun.
     expect(bots.tokenWrites).toEqual([TOKEN]);
+  });
+
+  it('registers with the STORED token, not one handed to the rerun', async () => {
+    const { service, bots, telegram } = await installed();
+    // The same bot, a different secret half: an operator who rotated in
+    // BotFather and reran the installer expecting it to be picked up. It is not
+    // picked up, and it is not used for anything either — the run reconciles
+    // with the credential on the row, which is the one this installation holds.
+    const rotated = `8123456789:CCH${'x'.repeat(32)}`;
+    const moved = 'https://moved.example.com';
+
+    const result = await service.execute(scope, { token: rotated, publicBaseUrl: moved });
+
+    expect(result.kind).toBe('RECONCILED');
+    expect(telegram.webhookCalls.at(-1)?.token).toBe(TOKEN);
+    expect(telegram.identifyCalls).not.toContain(rotated);
+    expect(bots.tokenWrites).toEqual([TOKEN]);
+    expect(bots.rows[0]?.token).toBe(TOKEN);
   });
 
   it('refuses a token for a different bot instead of repointing', async () => {
