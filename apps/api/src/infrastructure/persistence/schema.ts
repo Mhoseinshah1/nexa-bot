@@ -58,6 +58,7 @@ import {
   PAYMENT_EVIDENCE_KINDS,
   LEDGER_DIRECTIONS,
   LEDGER_REASONS,
+  SERVICE_DELIVERY_STATES,
   SERVICE_STATES,
   OPERATION_STATES,
   OPERATION_TYPES,
@@ -2579,6 +2580,17 @@ export const services = pgTable(
       .notNull()
       .default(sql`0`),
     usageSyncedAt: timestamptz('usage_synced_at'),
+    /**
+     * Whether the customer has been told. A separate axis from `state`, deliberately.
+     *
+     * A failed Telegram send must leave a paid-for, provider-side account `ACTIVE`;
+     * anything else invites re-provisioning a service that already exists.
+     */
+    deliveryState: text('delivery_state').notNull().default('PENDING'),
+    deliveryAttempts: integer('delivery_attempts').notNull().default(0),
+    deliveredAt: timestamptz('delivered_at'),
+    /** When the delivery sweep may next try. Null means it may try now. */
+    deliveryNextAttemptAt: timestamptz('delivery_next_attempt_at'),
     provisionedAt: timestamptz('provisioned_at'),
     terminatedAt: timestamptz('terminated_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
@@ -2636,6 +2648,34 @@ export const services = pgTable(
       'services_usage_synced_check',
       sql`traffic_used_bytes = 0 OR usage_synced_at IS NOT NULL`,
     ),
+    check('services_delivery_state_check', enumCheck('delivery_state', SERVICE_DELIVERY_STATES)),
+    check(
+      'services_delivery_attempts_check',
+      sql`delivery_attempts >= 0 AND delivery_attempts <= 100`,
+    ),
+    /** A delivery time and the state that claims one travel together, or neither is true. */
+    check(
+      'services_delivered_at_check',
+      sql`(delivery_state = 'DELIVERED') = (delivered_at IS NOT NULL)`,
+    ),
+    /**
+     * ONE service per order, as a constraint rather than as worker discipline.
+     *
+     * This is the exactly-once rule. The service row is written inside the SAME
+     * transaction that takes `SETTLE`, so an order settles once and this index says an
+     * order produces at most one service — two workers, a replayed command and a
+     * double-tapped button all lose here rather than each creating a provider account
+     * the customer pays for once and occupies twice.
+     *
+     * On `(tenant_id, order_id)` and NOT on `(tenant_id, customer_id, product_id)`,
+     * because a renewal is a NEW order against the SAME service: a customer may hold
+     * two services bought from one product, and must.
+     */
+    uniqueIndex('services_tenant_order_key').on(table.tenantId, table.orderId),
+    /** The delivery sweep: undelivered services whose backoff has elapsed. */
+    index('services_delivery_due_idx')
+      .on(table.deliveryNextAttemptAt)
+      .where(sql`delivery_state = 'PENDING'`),
     unique('services_tenant_id_key').on(table.tenantId, table.id),
   ],
 );
@@ -2669,6 +2709,16 @@ export const provisioningOperations = pgTable(
     type: text('type').notNull(),
     state: text('state').notNull().default('PLANNED'),
     attempts: integer('attempts').notNull().default(0),
+    /**
+     * The earliest a claim may take this row. Null means now.
+     *
+     * Backoff, and the reason it is a column rather than a sleep: the retry delay has to
+     * survive the process that decided it. Without this a `FAILED` attempt is re-claimed
+     * on the very next tick, which is a hot loop of authentication attempts against
+     * somebody else's panel — and 3X-UI blocks an IP-and-username pair after enough of
+     * them, so the loop ends by locking the installation out of its own provider.
+     */
+    nextAttemptAt: timestamptz('next_attempt_at'),
     /** Who holds the claim, and until when. Both null when unclaimed. */
     claimedBy: text('claimed_by'),
     leaseUntil: timestamptz('lease_until'),
@@ -2705,9 +2755,15 @@ export const provisioningOperations = pgTable(
       table.tenantId,
       table.operationId,
     ),
-    /** The worker's claim scan: due work, oldest first, nothing else read. */
+    /**
+     * The worker's claim scan: due work, oldest first, nothing else read.
+     *
+     * Leads with `next_attempt_at` because that is what the scan filters on; a row whose
+     * backoff has not elapsed is not due, and ordering by creation date alone would put
+     * the oldest permanently-failing operation at the front of every tick.
+     */
     index('provisioning_operations_due_idx')
-      .on(table.createdAt)
+      .on(table.nextAttemptAt, table.createdAt)
       .where(sql`state = 'PLANNED'`),
     /** Expired leases, for the release sweep. */
     index('provisioning_operations_lease_idx')
