@@ -131,7 +131,8 @@ open(target, "w", encoding="utf-8").write(text)
   "__SECRETS_KEK__=${KEK}" \
   "__SECRETS_ACTIVE_KEY_ID__=smoke-1" \
   "__DOMAIN__=localhost" \
-  "__EDGE_SUBNET__=172.29.0.0/24"
+  "__EDGE_SUBNET__=172.29.0.0/24" \
+  "__TELEGRAM_WEBHOOK_SECRET__=smoke-webhook-secret-not-a-real-one"
 
 # The one production value CI must override: the schema requires a canonical
 # https admin origin, and CI has no certificate. Changed HERE, in the smoke
@@ -253,6 +254,57 @@ printf 'someone\nSomeone Else\nanother-long-smoke-password\nanother-long-smoke-p
 grep -q 'bootstrap.already_completed' "$owner_tty_log" ||
   fail "a second bootstrap on a terminal did not reach the first-owner fence (see ${owner_tty_log})"
 pass "the bootstrap CLI exits on a real terminal instead of hanging the install"
+
+# The Telegram bootstrap, from the release image, against a Telegram that is not
+# there.
+#
+# CI has no route to api.telegram.org and no bot token, so what this can prove is
+# the ORDERING — which is the rule the whole create path exists to obey. `getMe`
+# runs before a single byte is written, so a token that could not be validated
+# must leave NO bot instance behind. The CLI is exercised in full: the container
+# starts, the config parses, the database is reached, the token is read from a
+# file, and the failure is the specific one.
+telegram_state() {
+  compose run --rm --no-deps -T --entrypoint node api \
+    dist/bootstrap-bot.cli.js --status --public-base-url https://smoke.invalid 2>/dev/null |
+    tr -d '\r\n'
+}
+
+[ "$(telegram_state)" = "none" ] ||
+  fail "the Telegram bootstrap does not report a fresh installation as unconfigured"
+
+# A syntactically valid token that belongs to nobody. Written inside the smoke
+# root and mounted read-only, the way the installer mounts the operator's file.
+telegram_token_file="${ROOT}/bot-token"
+printf '8123456789:AA-smoke-token-that-belongs-to-nobody
+' >"$telegram_token_file"
+chmod 0600 "$telegram_token_file"
+
+telegram_log="${ROOT}/bootstrap-bot.log"
+telegram_status=0
+compose run --rm --no-deps -T \
+  -v "${telegram_token_file}:/run/nexa-bot-token:ro" \
+  --entrypoint node api dist/bootstrap-bot.cli.js \
+  --public-base-url https://smoke.invalid \
+  --bot-token-file /run/nexa-bot-token >"$telegram_log" 2>&1 || telegram_status=$?
+
+[ "$telegram_status" -ne 0 ] ||
+  fail "the Telegram bootstrap reported SUCCESS with no reachable Telegram (see ${telegram_log})"
+# `unreachable` and not `token_rejected`: the distinction is the point of having
+# two codes, and an installer that told an operator to mint a new token when the
+# network is the problem costs them an afternoon.
+grep -q 'telegram.bootstrap_unreachable' "$telegram_log" ||
+  fail "the failure was not reported as unreachable (see ${telegram_log})"
+# THE ordering assertion. A token Telegram never confirmed must not have become a
+# row: a stored credential that has never worked is indistinguishable from one
+# that stopped working.
+[ "$(telegram_state)" = "none" ] ||
+  fail "a bot instance was written for a token Telegram never confirmed"
+# And the token never reached a place a person could read it.
+if grep -qF -- '8123456789:AA-smoke-token-that-belongs-to-nobody' "$telegram_log"; then
+  fail "the bot token was printed by the bootstrap CLI (see ${telegram_log})"
+fi
+pass "the Telegram bootstrap validates before it writes, and writes nothing when it cannot"
 
 compose up -d --remove-orphans >/dev/null || fail "the full stack did not start"
 

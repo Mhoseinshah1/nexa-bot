@@ -102,6 +102,9 @@ botctl — operate a Nexa installation
   botctl logs [SERVICE]      follow logs
   botctl restart             restart the stack
 
+  botctl telegram status     whether the bot is configured and receiving updates
+  botctl telegram register   register the webhook with Telegram, or retry it
+
   botctl secrets status                    configuration, envelope versions and key ids in use
   botctl secrets rewrap [--batch N] [--max N]
                                            re-encrypt secrets under the active key
@@ -118,6 +121,12 @@ migration and restoring it would discard every write made since.
 strand ciphertext. It never edits the configuration, and it is not permission to
 DESTROY the key material: backups taken before the re-encryption still contain
 ciphertext under that key.
+
+`telegram register` never asks for a token and never replaces a stored one. It
+resumes from the encrypted token the install already holds and retries the
+registration with Telegram — which is the command to run after fixing DNS or
+waiting for a certificate. Changing the bot itself is a separate, deliberate act
+and is not this command.
 
 `secrets migrate-config` and `secrets disable-v1` are the only commands that
 edit /etc/nexa/nexa.env. Neither generates, changes or prints key material.
@@ -1806,6 +1815,48 @@ cmd_secrets() {
     dist/secrets.cli.js "$action" "$@"
 }
 
+# The bot's public origin, from the installation's own deploy.env.
+#
+# NEXA_DOMAIN is what the edge serves and what a certificate is issued for, so
+# it is the only value that can be the webhook's origin without being a second
+# place for the domain to be recorded and go stale.
+telegram_origin() {
+  local domain
+  domain="$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_DOMAIN 2>/dev/null || true)"
+  [ -n "$domain" ] ||
+    nexa_die "deploy.env names no NEXA_DOMAIN, so there is no origin to register a webhook against."
+  printf 'https://%s' "$domain"
+}
+
+cmd_telegram() {
+  require_installed
+  local action="${1:-}"
+  shift || true
+
+  case "$action" in
+    status)
+      # Read-only, and the one word goes to stdout so a script can read it
+      # without parsing prose.
+      nexa_compose run --rm --no-deps -T --entrypoint node api \
+        dist/bootstrap-bot.cli.js --status --public-base-url "$(telegram_origin)"
+      ;;
+    register)
+      # NO token, ever, from here. A rerun of the registration is
+      # reconciliation: the CLI resumes from the stored encrypted token and
+      # refuses to ask (ADR-0029 decision 3). That is why this command needs no
+      # terminal and no arguments — and why it is safe to put in a runbook.
+      #
+      # `-T`: nothing is read from stdin, and allocating a pseudo-TTY for a
+      # command in a script is how a non-interactive run hangs.
+      nexa_compose run --rm --no-deps -T --entrypoint node api \
+        dist/bootstrap-bot.cli.js --public-base-url "$(telegram_origin)"
+      ;;
+    *)
+      nexa_die "usage: botctl telegram <status|register>"
+      ;;
+  esac
+}
+
 main() {
   local command="${1:-}"
   shift || true
@@ -1816,6 +1867,7 @@ main() {
     update) cmd_update "$@" ;;
     rollback) cmd_rollback "$@" ;;
     secrets) cmd_secrets "$@" ;;
+    telegram) cmd_telegram "$@" ;;
     logs) cmd_logs "$@" ;;
     restart) cmd_restart "$@" ;;
     -h | --help | help | '') usage ;;

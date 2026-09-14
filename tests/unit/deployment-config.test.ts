@@ -34,6 +34,9 @@ describe('the production environment template', () => {
     __SECRETS_ACTIVE_KEY_ID__: 'install-1',
     __DOMAIN__: 'admin.example.com',
     __EDGE_SUBNET__: '172.29.0.0/24',
+    // At least 16 characters, which is what the schema requires once
+    // TELEGRAM_WEBHOOK_ENABLED is true. Nothing here is a real secret.
+    __TELEGRAM_WEBHOOK_SECRET__: 'template-test-webhook-secret',
   };
 
   function render(overrides: Record<string, string> = {}): Record<string, string> {

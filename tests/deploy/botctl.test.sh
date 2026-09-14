@@ -615,10 +615,13 @@ s3_redis_password="$(nexa_env_value "${s3_config}/redis.env" REDIS_PASSWORD)"
 s3_keyring="$(nexa_env_value "${s3_config}/nexa.env" SECRETS_KEYS)"
 s3_kek="${s3_keyring#*:}"
 
-for secret_key in POSTGRES_PASSWORD REDIS_PASSWORD SECRETS_KEK; do
+s3_webhook_secret="$(nexa_env_value "${s3_config}/nexa.env" TELEGRAM_WEBHOOK_SECRET)"
+
+for secret_key in POSTGRES_PASSWORD REDIS_PASSWORD SECRETS_KEK TELEGRAM_WEBHOOK_SECRET; do
   case "$secret_key" in
     POSTGRES_PASSWORD) secret_value="$s3_pg_password" ;;
     REDIS_PASSWORD) secret_value="$s3_redis_password" ;;
+    TELEGRAM_WEBHOOK_SECRET) secret_value="$s3_webhook_secret" ;;
     *) secret_value="$s3_kek" ;;
   esac
   # Length, not merely non-emptiness: a one-character needle would match almost
@@ -5014,5 +5017,141 @@ assert_contains 'the no-op was not reported' "$BOTCTL_OUTPUT" 'Nothing to do'
 assert_not_contains 'a restart was advised with nothing removed' \
   "$BOTCTL_OUTPUT" "still in the running containers' environment"
 teardown_root
+
+# ---------------------------------------------------------------------------
+# The Telegram fresh-install bootstrap
+# ---------------------------------------------------------------------------
+#
+# Driven by SOURCING the installer and calling one function, the way every other
+# installer test here does: a real run would install Docker on the build
+# machine. What each case exercises is a decision the installer makes, and each
+# of those decisions has a failure mode an operator pays for — being asked for a
+# token twice, being told a working bot needs configuring, or being told an
+# installation succeeded when its bot cannot receive a message.
+
+test_case 'the installer adds the Telegram configuration to a nexa.env that predates it'
+tg_config="${NEXA_ROOT}/etc/nexa-telegram-old"
+rm -rf "$tg_config"
+install -d -m 0700 "$tg_config"
+# A nexa.env exactly as a pre-Telegram release left it.
+cat >"${tg_config}/nexa.env" <<'OLDENV'
+NODE_ENV=production
+DATABASE_URL=postgres://nexa:pw@postgres:5432/nexa
+NOTIFICATION_TRANSPORT=telegram
+OLDENV
+chmod 0600 "${tg_config}/nexa.env"
+NEXA_CONFIG_DIR="$tg_config" bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  ensure_telegram_config >/dev/null 2>&1
+' _ "${REPO}/deploy/install.sh" || fail_test 'ensure_telegram_config did not complete'
+
+tg_added_secret="$(nexa_env_value "${tg_config}/nexa.env" TELEGRAM_WEBHOOK_SECRET)"
+tg_added_enabled="$(nexa_env_value "${tg_config}/nexa.env" TELEGRAM_WEBHOOK_ENABLED)"
+assert_equals 'the webhook was not enabled on the upgraded host' 'true' "$tg_added_enabled"
+# Length, not non-emptiness: the schema requires at least 16 characters once the
+# webhook is on, so a short one would fail the application's own boot.
+if [ "${#tg_added_secret}" -lt 16 ]; then
+  fail_test 'ensure_telegram_config wrote no usable TELEGRAM_WEBHOOK_SECRET'
+fi
+assert_file_mode 'the upgraded nexa.env lost its mode' "${tg_config}/nexa.env" 600
+# The operator's existing lines are untouched: `>>` is the only safe edit to a
+# file somebody else owns.
+assert_contains 'an existing key was lost' \
+  "$(cat "${tg_config}/nexa.env")" 'DATABASE_URL=postgres://nexa:pw@postgres:5432/nexa'
+
+test_case 'a rerun never regenerates the webhook secret'
+# THE rule this function exists to keep. Telegram holds the value it was given
+# at registration and signs every update with it, so minting a new one here
+# would make the API reject every update from a working bot — silently, until
+# somebody re-registered the webhook.
+NEXA_CONFIG_DIR="$tg_config" bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  ensure_telegram_config >/dev/null 2>&1
+' _ "${REPO}/deploy/install.sh" || fail_test 'the second ensure_telegram_config did not complete'
+assert_equals 'the webhook secret was regenerated on a rerun' \
+  "$tg_added_secret" "$(nexa_env_value "${tg_config}/nexa.env" TELEGRAM_WEBHOOK_SECRET)"
+# And exactly one of each key: an append that ran twice would leave two, and
+# Compose takes the LAST — so the file would say one thing and the running
+# container another.
+assert_equals 'TELEGRAM_WEBHOOK_SECRET was appended twice' '1' \
+  "$(grep -c '^TELEGRAM_WEBHOOK_SECRET=' "${tg_config}/nexa.env")"
+assert_equals 'TELEGRAM_WEBHOOK_ENABLED was appended twice' '1' \
+  "$(grep -c '^TELEGRAM_WEBHOOK_ENABLED=' "${tg_config}/nexa.env")"
+
+test_case 'a webhook failure does not report a successful install, and does not undo anything'
+# The installer step with the CLI forced to fail. `configure_telegram_bot` must
+# NOT die — the tenant, the owner, the encrypted token and the bot row are all
+# correct and expensive to produce — and must set the flag that makes `main`
+# exit non-zero with the outstanding step named.
+telegram_fail_output="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  # The two seams: what the CLI answers about state, and whether it succeeds.
+  telegram_state() { printf "none"; }
+  nexa_compose() { return 1; }
+  configure_telegram_bot 2>&1
+  printf "INCOMPLETE=%s\n" "$TELEGRAM_INCOMPLETE"
+' _ "${REPO}/deploy/install.sh" || printf 'THE_STEP_DIED')"
+assert_not_contains 'the failed Telegram step aborted the install' \
+  "$telegram_fail_output" 'THE_STEP_DIED'
+assert_contains 'the install was not marked incomplete' "$telegram_fail_output" 'INCOMPLETE=yes'
+assert_contains 'the operator was not told the bot is not receiving updates' \
+  "$telegram_fail_output" 'not receiving updates'
+
+test_case 'an unreadable Telegram state is refused rather than guessed'
+# Both readings are wrong in a way the operator pays for: treating it as `none`
+# asks for a token an installation may already have, and treating it as `ready`
+# reports a bot that may never have been configured.
+telegram_unknown="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  telegram_state() { printf "docker: command not found"; }
+  configure_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" || true)"
+assert_contains 'an unreadable state was not refused' "$telegram_unknown" 'Refusing to guess'
+
+test_case 'skip-telegram does not tell a configured installation to configure itself'
+# `--skip-owner` had to learn this on a real host: it told an already
+# bootstrapped installation to run a bootstrap that would refuse it. Same shape.
+telegram_skip_ready="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --skip-telegram >/dev/null 2>&1
+  telegram_state() { printf "ready"; }
+  configure_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" || true)"
+assert_contains 'a configured bot was not reported as configured' \
+  "$telegram_skip_ready" 'already configured'
+assert_not_contains 'a configured installation was told to register' \
+  "$telegram_skip_ready" 'botctl telegram register'
+
+telegram_skip_none="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --skip-telegram >/dev/null 2>&1
+  telegram_state() { printf "none"; }
+  configure_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" || true)"
+assert_contains 'an unconfigured skip did not name the remedy' \
+  "$telegram_skip_none" 'botctl telegram register'
+
+test_case 'a rerun with a stored token says it will not ask again'
+# `incomplete` means the credential is already stored and only the registration
+# is outstanding. The CLI refuses to ask from the same state; saying so here is
+# what stops an operator wondering why they were not prompted.
+telegram_resume="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  telegram_state() { printf "incomplete"; }
+  nexa_compose() { return 0; }
+  configure_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" || true)"
+assert_contains 'a resumed run did not say the token would not be asked for' \
+  "$telegram_resume" 'will not be asked for it again'
+assert_contains 'a resumed run did not report success' \
+  "$telegram_resume" 'configured and receiving updates'
+
+test_case 'the token never reaches the bootstrap CLI as an argument'
+# The rule stated as an observation over the installer's own source: every
+# invocation passes `--bot-token-file` or nothing, and `--bot-token` appears
+# nowhere. argv is readable by every user on the machine through `ps`.
+telegram_calls="$(grep -n 'bootstrap-bot.cli.js' -A 4 "${REPO}/deploy/install.sh")"
+assert_not_contains 'the installer passes a bot token as an argument' \
+  "$telegram_calls" '--bot-token '
+assert_contains 'the unattended path does not use a token FILE' \
+  "$telegram_calls" '--bot-token-file'
 
 report

@@ -356,7 +356,8 @@ open(sys.argv[2], "w", encoding="utf-8").write(text)
   "__SECRETS_KEK__=$(head -c 32 /dev/urandom | base64 -w0)" \
   "__SECRETS_ACTIVE_KEY_ID__=smoke-1" \
   "__DOMAIN__=localhost" \
-  "__EDGE_SUBNET__=172.29.0.0/24"
+  "__EDGE_SUBNET__=172.29.0.0/24" \
+  "__TELEGRAM_WEBHOOK_SECRET__=smoke-webhook-secret-not-a-real-one"
 sed -i 's|^WEB_ADMIN_ORIGINS=.*|WEB_ADMIN_ORIGINS=https://localhost|' "${NEXA_CONFIG_DIR}/nexa.env"
 # An nexa.env that predates the policy: no data-subnet key of any kind.
 sed -i '/^PANEL_HTTP_DENIED_SUBNETS=/d; /^NEXA_DATA_SUBNET=/d' "${NEXA_CONFIG_DIR}/nexa.env"

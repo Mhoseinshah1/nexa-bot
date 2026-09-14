@@ -56,6 +56,20 @@ that has to be read rather than counted.
 | B13 | The token registered with comes from the ROW, never from the input        | `resolveToken(...)` → `input.token ?? resolveToken(...)`                 | `bot-bootstrap.test.ts` › registers with the STORED token, not one handed to the rerun           | KILLED |
 | B14 | The exclusive lock is taken BEFORE the activity check, never after        | swap the two calls in the create transaction                             | `bot-bootstrap.test.ts` › creates the bot, registers the webhook, and marks it afterwards        | KILLED |
 
+## The installer
+
+The installer is shell, which `scripts/falsify.sh` does not reach, so each of
+these was applied by hand and each restore confirmed with `git diff --exit-code`.
+
+| #   | Rule                                                          | Mutation                                                     | Test that dies                                                                                        | Result |
+| --- | ------------------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- | ------ |
+| B15 | A webhook failure does not abort the install                  | the `TELEGRAM_INCOMPLETE` branch → `nexa_die`                | `botctl.test.sh` › a webhook failure does not report a successful install, and does not undo anything | KILLED |
+| B16 | ...and does not report success either                         | drop the `TELEGRAM_INCOMPLETE="yes"` assignment              | `botctl.test.sh` › a webhook failure does not report a successful install, and does not undo anything | KILLED |
+| B17 | An unreadable Telegram state is refused, never guessed        | the `*)` arm → `state="none"`                                | `botctl.test.sh` › an unreadable Telegram state is refused rather than guessed                        | KILLED |
+| B18 | `--skip-telegram` on a configured bot says so, not "run this" | drop the `ready` branch from the skip arm                    | `botctl.test.sh` › skip-telegram does not tell a configured installation to configure itself          | KILLED |
+| B19 | A rerun never regenerates the webhook secret                  | drop the `have_secret` guard from `ensure_telegram_config`   | `botctl.test.sh` › a rerun never regenerates the webhook secret                                       | KILLED |
+| B20 | The webhook secret never reaches a process argument list      | pass it as a positional argument to the substituting python3 | `botctl.test.sh` › the installer never puts a secret into a process argument list                    | KILLED |
+
 ## Rules asserted by a mechanism rather than by a mutation
 
 Stated here rather than left out, because "not in the table" reads as "not

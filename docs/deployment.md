@@ -117,6 +117,8 @@ The installer will:
 6. Start PostgreSQL and Redis, migrate, provision the installation.
 7. Start the whole stack and wait for readiness.
 8. Create the first owner.
+9. Configure the Telegram bot: ask for the token, validate it with Telegram, and
+   register the webhook.
 
 It is **idempotent**: a run that fails at any step can be repeated. Secrets are
 never regenerated — a second run that minted a new database password would lock
@@ -182,6 +184,69 @@ shred -u /root/owner-password
 
 An install with no terminal and no `--owner-password-file` fails rather than
 silently skipping the owner.
+
+The bot token follows exactly the same rule, for the same reason, and has the
+same escape hatch:
+
+```bash
+umask 077
+printf '%s' "$BOT_TOKEN" > /root/bot-token
+sudo ./install.sh --domain … --acme-email … --version v1.0.0 \
+  --owner-password-file /root/owner-password \
+  --bot-token-file /root/bot-token
+shred -u /root/bot-token
+```
+
+The file is mounted read-only into the container and is never copied anywhere.
+
+### The Telegram bot
+
+The installer's last step asks for the bot token:
+
+```
+==> configuring Telegram bot
+Telegram Bot Token:
+```
+
+Nothing is echoed, and the token is never an argument, never an environment
+variable, and never written to disk in plaintext. It is validated against
+Telegram with `getMe` **before** it is stored, so a token Telegram refuses never
+becomes a row — a stored credential that has never worked is indistinguishable
+from one that stopped working, and an operator debugging the second would be
+looking in the wrong place. The bot's identity comes from Telegram's answer, not
+from anything typed.
+
+The webhook is then registered at
+`https://<your domain>/telegram/webhook/<bot instance id>`, authenticated by the
+installation-wide `TELEGRAM_WEBHOOK_SECRET` the installer mints.
+
+**A rerun reconciles; it never rotates.** If a bot is already configured the
+installer does not ask for the token again, does not replace it, and does not
+repoint the installation at another bot — a token for a different bot supplied
+on a rerun is refused with a message saying so, rather than silently ignored.
+Changing which bot an installation serves is a deliberate, separate act, because
+every stored Telegram user and chat belongs to the bot it already has.
+
+**A failed registration is not a failed install, and is not a successful one
+either.** If Telegram cannot be reached — DNS not yet propagated, a certificate
+not yet issued — the tenant, the owner, the encrypted token and the bot row all
+survive, the release is recorded, and the installer reports the Telegram
+bootstrap as INCOMPLETE and **exits non-zero**. Nothing needs undoing and
+nothing needs typing again:
+
+```bash
+botctl telegram status     # none | incomplete | ready
+botctl telegram register   # resumes from the stored token; never asks for one
+```
+
+`--skip-telegram` leaves the bot unconfigured in this run and says what to run
+later. It does not report an already-configured bot as unconfigured.
+
+An installation created before this release has no Telegram keys in its
+`nexa.env`. A rerun of the installer adds `TELEGRAM_WEBHOOK_ENABLED` and a fresh
+`TELEGRAM_WEBHOOK_SECRET`, and **never regenerates a secret that is already
+there**: Telegram holds the value it was given at registration, so minting a new
+one would make the API reject every update from a working bot.
 
 ### A private release package
 

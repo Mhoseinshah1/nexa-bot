@@ -54,6 +54,13 @@ OWNER_PASSWORD_FILE=""
 # Set by `require_owner_state`: "none" or "bootstrapped". Anything else dies.
 OWNER_STATE=""
 SKIP_OWNER="no"
+BOT_TOKEN_FILE=""
+SKIP_TELEGRAM="no"
+# Set by `configure_telegram_bot` when it could not finish. The install then
+# reports INCOMPLETE and exits non-zero — ADR-0029 decision 4: a
+# Telegram-enabled installation whose bot cannot receive updates is not a
+# completed installation, whatever else went right.
+TELEGRAM_INCOMPLETE=""
 
 usage() {
   cat <<'USAGE'
@@ -74,10 +81,19 @@ Optional:
   --owner-password-file PATH   read the first owner's password from PATH
                                (the file is never copied and never logged)
   --skip-owner                 do not create the first owner in this run
+  --bot-token-file PATH        read the Telegram bot token from PATH, for an
+                               unattended install (the file is never copied and
+                               never logged). Without it the installer ASKS,
+                               hiding what you type.
+  --skip-telegram              do not configure the Telegram bot in this run
   -h, --help                   this text
 
-The owner's password is never accepted as a command-line argument: argv is
-readable by every user on the machine and lands in shell history.
+Neither the owner's password nor the bot token is ever accepted as a
+command-line argument: argv is readable by every user on the machine and lands
+in shell history.
+
+A rerun of this installer does not ask for the bot token again and never
+replaces a stored one. Changing the token is a separate, deliberate act.
 USAGE
 }
 
@@ -125,6 +141,14 @@ while [ $# -gt 0 ]; do
       ;;
     --skip-owner)
       SKIP_OWNER="yes"
+      shift
+      ;;
+    --bot-token-file)
+      BOT_TOKEN_FILE="${2:-}"
+      shift 2
+      ;;
+    --skip-telegram)
+      SKIP_TELEGRAM="yes"
       shift
       ;;
     -h | --help)
@@ -293,6 +317,26 @@ preflight() {
   if [ "$SKIP_OWNER" = "no" ] && [ -z "$OWNER_PASSWORD_FILE" ] && [ ! -t 0 ]; then
     nexa_die "no terminal and no --owner-password-file: there is no safe way to read the first owner's password. Pass --owner-password-file, or --skip-owner and run the bootstrap later."
   fi
+
+  # --- The bot token's source ---
+  #
+  # Checked HERE, before anything is created, and not when the step is reached.
+  # The Telegram step is the LAST one: discovering there is no way to read a
+  # token at that point means a fully installed system that fails on its final
+  # command, and the operator reruns the whole thing. The owner password's own
+  # check is two lines up for the same reason.
+  #
+  # A file only has to be readable and non-empty here. Whether it holds a
+  # WORKING token is Telegram's to say, and `getMe` asks.
+  if [ "$SKIP_TELEGRAM" = "no" ] && [ -n "$BOT_TOKEN_FILE" ]; then
+    [ -r "$BOT_TOKEN_FILE" ] ||
+      nexa_die "cannot read the bot token file at ${BOT_TOKEN_FILE}."
+    [ -s "$BOT_TOKEN_FILE" ] ||
+      nexa_die "the bot token file at ${BOT_TOKEN_FILE} is empty."
+  fi
+  if [ "$SKIP_TELEGRAM" = "no" ] && [ -z "$BOT_TOKEN_FILE" ] && [ ! -t 0 ]; then
+    nexa_die "no terminal and no --bot-token-file: there is no safe way to read the Telegram bot token. Pass --bot-token-file, or --skip-telegram and run 'botctl telegram register' later."
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -452,7 +496,14 @@ generate_secrets() {
   # write reached it.
   #
   # It was BUILD_TIME until the build-identity block was removed from the
-  # template; if a key is ever appended after this one, this list moves with it.
+  # template; if a key is ever appended after this one, this list moves with it,
+  # and `deployment-config.test.ts` fails the build if it does not. The Telegram
+  # block was deliberately placed ABOVE this key rather than after it, so this
+  # stays an end-of-file test — and the newer keys are NOT named here, because
+  # requiring them would make a rerun on a host installed before they existed
+  # decide its own configuration was half-written and refuse to continue. That
+  # is the same installer-breaks-its-own-installations failure the SECRETS_KEK
+  # note below describes; `ensure_telegram_config` adds them instead.
   # EITHER spelling of the key configuration counts as complete.
   #
   # A host installed before the keyring release has SECRETS_KEK and
@@ -479,9 +530,14 @@ generate_secrets() {
 
   umask 077
 
-  local pg_password redis_password kek kek_id
+  local pg_password redis_password kek kek_id webhook_secret
   pg_password="$(random_password)"
   redis_password="$(random_password)"
+  # 32 bytes of base64, not the 32-character alphabet `random_password` trims
+  # to. Telegram compares this byte for byte and never shows it to a person,
+  # so there is nothing to be gained by making it typeable and something to
+  # lose by narrowing its alphabet.
+  webhook_secret="$(random_base64)"
   kek="$(random_base64)"
   kek_id="install-$(date -u +%Y%m%d)"
 
@@ -532,7 +588,8 @@ EOF
     "__SECRETS_KEK__=${kek}" \
     "__SECRETS_ACTIVE_KEY_ID__=${kek_id}" \
     "__DOMAIN__=${DOMAIN}" \
-    "__EDGE_SUBNET__=${NEXA_EDGE_SUBNET:-172.29.0.0/24}" |
+    "__EDGE_SUBNET__=${NEXA_EDGE_SUBNET:-172.29.0.0/24}" \
+    "__TELEGRAM_WEBHOOK_SECRET__=${webhook_secret}" |
     python3 -c '
 import sys
 source, target = sys.argv[1], sys.argv[2]
@@ -557,6 +614,53 @@ with open(target, "w", encoding="utf-8") as handle:
 
   chmod 0600 "$pg_env" "$redis_env" "$app_env"
   nexa_ok "secrets generated (0600, root-owned, never printed)"
+}
+
+# The Telegram webhook configuration, for a file that predates it.
+#
+# `generate_secrets` runs ONCE and is skipped wholesale on a rerun, which is the
+# single most important idempotency rule in this file — so a key introduced
+# after an installation was created would never reach it. This is the additive
+# half: it adds what is missing and never touches what is there.
+#
+# NEVER regenerates the secret. Telegram holds the value it was given at
+# registration and signs every update with it; minting a new one here would make
+# the API reject every update from a bot that is working, silently, until
+# somebody re-registered the webhook. An existing value is left exactly alone.
+#
+# It is NOT the torn-write check: `secrets_complete` above still names the last
+# key in the template, and the Telegram block sits above that key precisely so
+# that stays true. This handles the other case — a file that is complete for the
+# release that wrote it and older than these keys.
+ensure_telegram_config() {
+  local app_env="${NEXA_CONFIG_DIR}/nexa.env"
+  [ -s "$app_env" ] || return 0
+
+  local have_secret have_enabled
+  have_secret="$(nexa_env_value "$app_env" TELEGRAM_WEBHOOK_SECRET 2>/dev/null || true)"
+  have_enabled="$(nexa_env_value "$app_env" TELEGRAM_WEBHOOK_ENABLED 2>/dev/null || true)"
+  if [ -n "${have_secret//[[:space:]]/}" ] && [ -n "${have_enabled//[[:space:]]/}" ]; then
+    return 0
+  fi
+
+  nexa_step "adding the Telegram webhook configuration"
+
+  # Appended by redirection and never echoed, the same rule the generated files
+  # follow. `>>` rather than a rewrite: this file is the operator's, and the
+  # only safe edit to one is one that adds.
+  {
+    printf '\n# --- The Telegram webhook ---------------------------------------------------\n'
+    printf '# Added by the installer: this installation predates these keys.\n'
+    if [ -z "${have_enabled//[[:space:]]/}" ]; then
+      printf 'TELEGRAM_WEBHOOK_ENABLED=true\n'
+    fi
+    if [ -z "${have_secret//[[:space:]]/}" ]; then
+      printf 'TELEGRAM_WEBHOOK_SECRET=%s\n' "$(random_base64)"
+    fi
+  } >>"$app_env" || nexa_die "cannot write ${app_env} (is /var full?)."
+
+  chmod 0600 "$app_env"
+  nexa_ok "the Telegram webhook configuration is present (the secret was not printed)"
 }
 
 install_assets() {
@@ -759,6 +863,108 @@ bootstrap_owner() {
   nexa_ok "first owner created"
 }
 
+# ---------------------------------------------------------------------------
+# The Telegram bot
+# ---------------------------------------------------------------------------
+
+# What this installation's Telegram bootstrap still needs: none, incomplete or
+# ready. Asked BEFORE anything is said, on both paths, the way the owner state
+# is — the answer decides whether a token is asked for at all, and getting it
+# wrong in either direction is the whole failure this step exists to avoid.
+telegram_state() {
+  nexa_compose run --rm --no-deps -T \
+    --entrypoint node api dist/bootstrap-bot.cli.js \
+    --status --public-base-url "https://${DOMAIN}" 2>/dev/null |
+    tr -d '\r\n'
+}
+
+configure_telegram_bot() {
+  local state
+  state="$(telegram_state)" || state=""
+
+  case "$state" in
+    none | incomplete | ready) ;;
+    *)
+      # Not a guess and not a skip. Both readings are wrong in a way the
+      # operator pays for: treating an unreadable answer as `none` prompts for
+      # a token an installation may already have, and treating it as `ready`
+      # reports a working bot that may never have been configured.
+      nexa_die "could not determine whether this installation's Telegram bot is configured (the bootstrap CLI answered \"${state}\"). Refusing to guess."
+      ;;
+  esac
+
+  if [ "$SKIP_TELEGRAM" = "yes" ]; then
+    # `--skip-telegram` says "do not configure one", not "there is not one" —
+    # the distinction `--skip-owner` had to learn on a real host, where it told
+    # an already-bootstrapped installation to run a bootstrap that would refuse
+    # it.
+    if [ "$state" = "ready" ]; then
+      nexa_ok "skipping the Telegram bot; it is already configured and receiving updates"
+      return 0
+    fi
+    nexa_warn "skipping the Telegram bot. It cannot receive any message until you run:"
+    nexa_warn "  botctl telegram register"
+    return 0
+  fi
+
+  nexa_step "configuring Telegram bot"
+
+  if [ "$state" = "ready" ]; then
+    nexa_ok "the Telegram bot is already configured and receiving updates"
+    return 0
+  fi
+
+  # `incomplete` means the token is already stored and only the registration is
+  # outstanding. ADR-0029 decision 3: a rerun reconciles and never rotates, so
+  # it must not so much as ASK — and the CLI enforces that itself, from the same
+  # state. Saying so here is what stops an operator wondering why they were not
+  # asked.
+  if [ "$state" = "incomplete" ]; then
+    nexa_log "A bot is already configured; resuming from the stored token. You will not be asked for it again."
+  fi
+
+  # Two invocations rather than one clever one, for the reason the owner
+  # bootstrap gives: they differ in whether a pseudo-TTY is allocated and where
+  # stdin comes from, and a single call with `-T` toggled reads as if it were
+  # the same operation when it is not.
+  #
+  # The token reaches the CLI on stdin or from a file inside the container, and
+  # never as an argument: argv is readable by every user on the machine via
+  # `ps`, and an environment variable would be readable through `docker
+  # inspect`. The same rule as the owner's password, and the same reasons.
+  local ok=0
+  if [ -n "$BOT_TOKEN_FILE" ]; then
+    # Mounted read-only at a fixed path rather than copied anywhere. The file
+    # stays the operator's and this installer never writes a token to disk.
+    nexa_compose run --rm --no-deps -T \
+      -v "${BOT_TOKEN_FILE}:/run/nexa-bot-token:ro" \
+      --entrypoint node api dist/bootstrap-bot.cli.js \
+      --public-base-url "https://${DOMAIN}" \
+      --bot-token-file /run/nexa-bot-token || ok=1
+  else
+    # Interactive: stdin is left alone, and the CLI prompts with no echo.
+    nexa_compose run --rm --no-deps \
+      --entrypoint node api dist/bootstrap-bot.cli.js \
+      --public-base-url "https://${DOMAIN}" || ok=1
+  fi
+
+  if [ "$ok" -ne 0 ]; then
+    # NOT a `nexa_die`. ADR-0029 decision 4, both halves: the tenant, the owner,
+    # the validated token and the bot row are all correct and expensive to
+    # produce, and a DNS record that has not propagated is no reason to destroy
+    # them — so the install finishes writing the release manifest and the
+    # `current` pointer, which is what makes the rerun cheap.
+    #
+    # But it does not report success. `main` reads this and exits non-zero with
+    # the outstanding step named.
+    TELEGRAM_INCOMPLETE="yes"
+    nexa_warn "the Telegram bot is not receiving updates yet. The error above says why."
+    return 0
+  fi
+
+  nexa_ok "the Telegram bot is configured and receiving updates"
+}
+
 start_everything() {
   nexa_step "starting the full stack"
   nexa_compose up -d --remove-orphans
@@ -808,6 +1014,10 @@ main() {
   install_assets
 
   generate_secrets
+  # Additive, and separate from the once-only generation above: a host installed
+  # before these keys existed gets them here, and one that already has them is
+  # left exactly alone.
+  ensure_telegram_config
   write_deploy_env "$image"
 
   nexa_step "pulling the release"
@@ -824,6 +1034,10 @@ main() {
   provision_installation
   start_everything
   bootstrap_owner
+  # LAST of the creating steps, and after the stack is up: unlike provisioning
+  # it makes an outbound call, so it needs a running API's network and a
+  # database that has been migrated.
+  configure_telegram_bot
 
   # What this install put on the host, recorded under the DIGEST it runs.
   #
@@ -841,6 +1055,39 @@ main() {
   # no release at all, which is the one state neither update nor rollback can
   # recover from.
   nexa_write_atomic "$NEXA_CURRENT_FILE" "$VERSION"
+
+  # The release is recorded whatever happened to Telegram, and that ordering is
+  # the point of recording it here: an installation whose bot is not yet
+  # registered is still an installation, and `botctl version` refusing to
+  # describe it is the exact failure a real staging host produced when the owner
+  # step was allowed to abandon the manifest.
+  if [ -n "$TELEGRAM_INCOMPLETE" ]; then
+    cat >&2 <<INCOMPLETE
+
+$(nexa_warn "Nexa ${VERSION} is installed, and its Telegram bot is NOT receiving updates.")
+
+  outstanding   registering the webhook with Telegram
+  retry         botctl telegram register
+  why           the error printed above this summary
+
+Nothing needs undoing and nothing needs typing again. The bot token is stored,
+encrypted, and the retry resumes from it — it will not ask you for it. The
+usual causes are DNS for ${DOMAIN} not yet resolving to this host, or a
+certificate not yet issued: Telegram will not deliver to an endpoint it cannot
+reach over HTTPS.
+
+  panel      https://${DOMAIN}
+  status     botctl status
+
+Configuration and secrets live in ${NEXA_CONFIG_DIR} (0700, root-owned).
+INCOMPLETE
+    # Non-zero, deliberately. ADR-0029 decision 4: a Telegram-enabled
+    # installation whose bot cannot receive a single update is not a completed
+    # installation, and an installer that exits 0 here is the silent-success
+    # pattern this codebase exists to avoid. A script driving this installer
+    # must be able to tell the difference without parsing prose.
+    return 1
+  fi
 
   cat <<SUMMARY
 
