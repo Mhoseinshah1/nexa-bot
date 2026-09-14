@@ -95,6 +95,32 @@ evidence that those defects cannot come back silently.
 | B27 | A rerun of a READY installation still asks the application        | restore the `ready` short-circuit in `configure_telegram_bot` | `botctl.test.sh` › a rerun of a READY installation still asks the application                         | KILLED |
 | B28 | An identity write is audited only if it changed a row             | `if (!filled) return;` → `if (false) return;`                 | `bot-bootstrap.test.ts` › does not audit an identity write that changed no row                        | KILLED |
 
+## The Codex round
+
+Eight findings from an independent review of the pushed head. Every one was
+real, and four of them were states in which something claimed success that had
+not happened — the same class the self-review round found, reached from
+different directions.
+
+One of the fixes SURVIVED its own mutation and had to be made testable first:
+gutting `suppliedToken` left the suite green, because the CLI's tests covered
+`parseArgs` and `tokenFromFile` while the rule lived in `main`, which needs a
+database. The decision is now a pure function with the prompt injected, and C2
+below is the two halves of it.
+
+| #   | Rule                                                                  | Mutation                                                         | Test that dies                                                                                  | Result |
+| --- | --------------------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------ |
+| C1  | The token is STREAMED to the container, never bind-mounted            | restore the `-v` mount and `--bot-token-file`                    | `botctl.test.sh` › the token never reaches the bootstrap CLI as an argument                     | KILLED |
+| C2  | A supplied token is READ whatever the state                           | `suppliedToken` → `return null`                                  | `bootstrap-bot-cli.test.ts` › reads a supplied file, and reports none when nothing was supplied | KILLED |
+| C2b | ...and used rather than prompted over                                 | drop the `supplied !== null` arm of `tokenForRun`                | `bootstrap-bot-cli.test.ts` › never prompts when a token was supplied, whatever the state       | KILLED |
+| C3  | Readiness requires the webhook ROUTE to be served                     | the `webhookEnabled()` guard → `if (false)`                      | `bot-bootstrap.test.ts` › is NOT ready when this installation does not serve the webhook route  | KILLED |
+| C4  | Readiness requires the TENANT to be accepting work                    | the `scopeIsActive` guard → `if (false)`                         | `bot-bootstrap.test.ts` › is NOT ready when the TENANT has stopped accepting work               | KILLED |
+| C5  | A failure that stored nothing is not told it can resume               | `TELEGRAM_RETRY="$(telegram_state)"` → a hard-coded `incomplete` | `botctl.test.sh` › a FIRST-attempt failure does not claim a stored token                        | KILLED |
+| C6  | `--skip-telegram` on a fresh install names a remedy that can work     | fold `none` back into the `botctl telegram register` arm         | `botctl.test.sh` › skip-telegram does not tell a configured installation to configure itself    | KILLED |
+| C7  | `botctl telegram register` takes the installation's exclusive lock    | drop `nexa_acquire_lock 0`                                       | `botctl.test.sh` › telegram register takes the deployment lock                                  | KILLED |
+| C8  | A first configuration with no terminal and no token source is refused | the `[ ! -t 0 ]` refusal → `:`                                   | `botctl.test.sh` › a first configuration with no terminal and no token source is refused        | KILLED |
+| C8b | ...and a RECONCILE without one is NOT, because none is needed         | (covered by the same fix; the two halves are separate cases)     | `botctl.test.sh` › a RECONCILE with no terminal and no token source is NOT refused              | KILLED |
+
 ## Rules asserted by a mechanism rather than by a mutation
 
 Stated here rather than left out, because "not in the table" reads as "not

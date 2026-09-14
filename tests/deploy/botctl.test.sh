@@ -5265,6 +5265,64 @@ assert_contains 'the installer does not refuse a relative token path' \
   "$(grep -A 4 'bot-token-file must be an absolute path' "${REPO}/deploy/install.sh" || true)" \
   'named volume'
 
+test_case 'a first configuration with no terminal and no token source is refused'
+# The refusal that moved OUT of preflight, which could not know whether a token
+# was needed. It belongs here, where the state is known — and `none` is the only
+# state that needs one.
+telegram_no_source="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  telegram_state() { printf "none"; }
+  nexa_compose() { printf "COMPOSE_RAN"; return 0; }
+  configure_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" || true)"
+assert_contains 'a first configuration without a token source was not refused' \
+  "$telegram_no_source" 'no safe way to read the Telegram bot token'
+assert_not_contains 'it ran the CLI anyway' "$telegram_no_source" 'COMPOSE_RAN'
+
+test_case 'a RECONCILE with no terminal and no token source is NOT refused'
+# The other half, and the reason the refusal had to move: on a rerun the row
+# already carries the encrypted credential, so no token is needed and demanding
+# one broke unattended recovery whenever the original file had been removed.
+telegram_resume_no_source="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  telegram_state() { printf "incomplete"; }
+  nexa_compose() { printf "COMPOSE_RAN\n"; return 0; }
+  configure_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" || printf 'THE_STEP_DIED')"
+assert_not_contains 'a reconcile without a token source was refused' \
+  "$telegram_resume_no_source" 'THE_STEP_DIED'
+assert_contains 'a reconcile without a token source never ran the CLI' \
+  "$telegram_resume_no_source" 'COMPOSE_RAN'
+
+# A live fixture root: the two cases below drive `botctl` itself rather than a
+# sourced installer function, so they need the config, the lock file and the fake
+# docker that `setup_root` creates. The Telegram cases above make their own
+# directories and run after `teardown_root`, which is why this is here.
+setup_root
+setup_fake_docker
+
+test_case 'telegram register takes the deployment lock'
+# A registration is an external effect followed by a local one and the two
+# cannot be atomic — `setWebhook` must happen outside the transaction that
+# records it. So the ordering is protected from outside, and this is the only
+# other writer: an installer changing the domain while this command is mid-flight
+# can have Telegram accept the new URL and the database record the old one.
+printf 'NEXA_DOMAIN=admin.example.test\n' >>"${NEXA_CONFIG_DIR}/deploy.env"
+exec 9>>"$NEXA_LOCK_FILE"
+flock -x 9
+run_botctl telegram register
+assert_fails 'telegram register ran while the lock was held' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the lock refusal was not explained' "$BOTCTL_OUTPUT" 'already running'
+exec 9>&-
+
+test_case 'telegram status does NOT take the lock'
+# It only reads, and a status command that blocks behind a running update is a
+# status command nobody can use to find out why their update is slow.
+run_botctl telegram status
+assert_ok 'telegram status was refused' test "$BOTCTL_STATUS" -eq 0
+
+teardown_root
+
 test_case 'the token never reaches the bootstrap CLI as an argument'
 # The rule stated as an observation over the installer's own source: every
 # invocation passes `--bot-token-file` or nothing, and `--bot-token` appears
