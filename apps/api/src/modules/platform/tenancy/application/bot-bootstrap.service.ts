@@ -294,6 +294,23 @@ export class BotBootstrapService {
     const identity = ensured.identity ?? (await this.getMe(scope, view, token));
 
     /*
+     * The supplied token is compared AGAIN, now that the bot's identity is known.
+     *
+     * `refuseRepointing` runs inside `ensureBotInstance`, against the stored row
+     * — and on a row created before migration 0038 that row's `telegram_bot_id`
+     * is NULL, so it returned having compared nothing. A supplied token naming a
+     * DIFFERENT bot was therefore silently ignored on exactly the rows an
+     * upgrade produces, and the installer printed success. `getMe` has since
+     * said which bot the STORED token belongs to, which is the value the first
+     * comparison did not have.
+     *
+     * Cheap and idempotent on every other path: on a create the supplied token
+     * IS this identity, and on an ordinary reconcile the first comparison has
+     * already passed or thrown.
+     */
+    this.refuseRepointing({ ...view, telegramBotId: identity.botId }, input.token);
+
+    /*
      * Already pointed here: register nothing, and say so.
      *
      * Not "register it again to be sure". A `setWebhook` on every rerun would
@@ -537,8 +554,10 @@ export class BotBootstrapService {
         `Telegram rejected the bot token: ${probe.detail}. ` +
           'The installer does not replace a stored token by itself, and this release ships no ' +
           'command that does: changing the bot a running installation serves is deliberate work ' +
-          'that has not been built yet (docs/open-questions.md, OQ-TG-01). If the token was ' +
-          'revoked, restore it in BotFather rather than issuing a new one.',
+          'that has not been built yet (docs/open-questions.md, OQ-TG-01). There is no supported ' +
+          'recovery for a revoked token in this release — a revoked one cannot be restored in ' +
+          'BotFather, and a newly issued one is not used, because the registration always reads ' +
+          'the credential already stored.',
       );
     }
     if (probe.outcome !== 'IDENTIFIED') {

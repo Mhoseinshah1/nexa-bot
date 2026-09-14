@@ -960,9 +960,24 @@ skip_telegram_bot() {
       nexa_warn "message until you rerun this installer with a token source, for example:"
       nexa_warn "  sudo ./install.sh --domain ${DOMAIN} --acme-email ${ACME_EMAIL} --version ${VERSION} --bot-token-file /path/to/token"
       ;;
-    incomplete | unavailable)
+    incomplete)
       # A credential is already stored, so the retry genuinely needs nothing.
       nexa_warn "skipping the Telegram bot. It cannot receive any message until you run:"
+      nexa_warn "  botctl telegram register"
+      ;;
+    unavailable)
+      # NOT folded in with `incomplete`, though both have a stored credential.
+      # `unavailable` means something other than the registration is stopping
+      # this bot — the webhook route disabled, the bot instance not ACTIVE, the
+      # tenant not accepting work — and `execute` refuses BEFORE `setWebhook`
+      # until that is repaired. Naming `botctl telegram register` on its own here
+      # sends the operator to a command that cannot succeed, which is the same
+      # defect this case was split out of `configure_telegram_bot` to fix, left
+      # behind in the branch beside it.
+      nexa_warn "skipping the Telegram bot, and something other than registration is holding it"
+      nexa_warn "back — the webhook route disabled, the bot not ACTIVE, or the tenant not"
+      nexa_warn "accepting work. Find out which, fix that, and only then register:"
+      nexa_warn "  botctl telegram status"
       nexa_warn "  botctl telegram register"
       ;;
     *)
@@ -1084,13 +1099,29 @@ configure_telegram_bot() {
     # No token source and no terminal: refused HERE, where the state is known,
     # rather than in preflight where it is not. This is the only state in which
     # a token is needed.
+    #
+    # NOT a `nexa_die`, and that was a real defect rather than a style choice.
+    # By the time this runs the host has been changed and STARTED — data
+    # services, migrations, a provisioned tenant, the full stack, an owner — and
+    # dying here exits before the release manifest and the `current` pointer are
+    # written. That leaves a running installation `botctl version` cannot
+    # describe, which the owner step's own comment records as a failure a real
+    # staging host produced. The remedy is the one ADR-0029 decision 4 already
+    # names: finish recording the release, report INCOMPLETE, exit non-zero.
+    #
+    # The summary this reaches is the nothing-stored one, which is exactly right
+    # here — nothing was stored, and the retry is this installer with a token
+    # source.
     if [ ! -t 0 ]; then
-      nexa_die "no terminal and no --bot-token-file: there is no safe way to read the Telegram bot token for a first configuration. Pass --bot-token-file, or --skip-telegram and configure it later by rerunning this installer with a token source."
+      nexa_warn "no terminal and no --bot-token-file: there is no safe way to read the Telegram"
+      nexa_warn "bot token for a first configuration. Nothing was asked for and nothing stored."
+      ok=1
+    else
+      # Interactive: stdin is left alone, and the CLI prompts with no echo.
+      nexa_compose run --rm --no-deps \
+        --entrypoint node api dist/bootstrap-bot.cli.js \
+        --public-base-url "https://${DOMAIN}" || ok=1
     fi
-    # Interactive: stdin is left alone, and the CLI prompts with no echo.
-    nexa_compose run --rm --no-deps \
-      --entrypoint node api dist/bootstrap-bot.cli.js \
-      --public-base-url "https://${DOMAIN}" || ok=1
   else
     # Nothing to ask for, so no terminal is needed and none is allocated: `-T`,
     # because allocating a pseudo-TTY for a command in a script is how a
@@ -1137,7 +1168,18 @@ configure_telegram_bot() {
     # there; the remedy is a token source, not a report about a credential that
     # does not exist.
     TELEGRAM_RETRY="$(telegram_state)" || TELEGRAM_RETRY=""
-    if [ "$TELEGRAM_RETRY" != "none" ]; then
+    # ...with ONE exception, and it is the one the `none` rule did not foresee.
+    #
+    # An already-bound refusal rolls its insert back, so the state after it is
+    # NECESSARILY `none` — and the nothing-stored summary then told the operator
+    # their token was rejected or Telegram unreachable, and to rerun with a token
+    # source, which would refuse identically for ever. `none` is right about what
+    # is stored and wrong about what to do, and this is the case where the code
+    # knows better.
+    case "$out" in
+      *telegram.bootstrap_bot_already_bound*) TELEGRAM_RETRY="already-bound" ;;
+    esac
+    if [ "$TELEGRAM_RETRY" != "none" ] && [ "$TELEGRAM_RETRY" != "already-bound" ]; then
       case "$out" in
         *telegram.bootstrap_different_bot*) TELEGRAM_RETRY="different-bot" ;;
         *telegram.bootstrap_token_rejected*) TELEGRAM_RETRY="token-rejected" ;;
@@ -1321,6 +1363,30 @@ INCOMPLETE_TOKEN_REJECTED
       return 1
     fi
 
+    if [ "$TELEGRAM_RETRY" = "already-bound" ]; then
+      cat >&2 <<INCOMPLETE_ALREADY_BOUND
+
+$(nexa_warn "Nexa ${VERSION} is installed, and that Telegram bot already belongs to another tenant here.")
+
+  outstanding   a bot of its own for this tenant
+  retry         NOT this installer with the same token — it will refuse again,
+                and correctly. Create a second bot in BotFather and rerun with
+                that one.
+  why           the error printed above names the bot id
+
+Nothing was written for this tenant, and the tenant that already holds that bot
+is untouched. Telegram delivers a bot's updates to ONE webhook, so binding it
+twice would not share it — it would move delivery here and stop the other tenant
+receiving anything, silently, while both looked configured.
+
+  panel      https://${DOMAIN}
+  status     botctl telegram status
+
+Configuration and secrets live in ${NEXA_CONFIG_DIR} (0700, root-owned).
+INCOMPLETE_ALREADY_BOUND
+      return 1
+    fi
+
     if [ "$TELEGRAM_RETRY" = "token-unreadable" ]; then
       cat >&2 <<INCOMPLETE_TOKEN_UNREADABLE
 
@@ -1332,12 +1398,25 @@ $(nexa_warn "Nexa ${VERSION} is installed, and its stored bot token cannot be DE
                   botctl secrets status
   why           the error printed above this summary names the key
 
-Nothing was changed and the token is still there. This is a KEY problem, not a
-token problem: the stored credential was encrypted with a key this installation
-can no longer use — usually SECRETS_KEK or SECRETS_ACTIVE_KEY_ID in
-${NEXA_CONFIG_DIR}/nexa.env having changed, or v1 acceptance having been turned
-off while a v1 ciphertext is still stored. Restoring the key material makes the
-existing token readable again; nothing needs reissuing in BotFather.
+Nothing was changed and the ciphertext is still there. This is a SECRETS problem,
+not a token problem, and nothing needs reissuing in BotFather.
+
+Which repair depends on the code above, and they are not the same:
+
+  platform.secret_key_unknown          the key that encrypted it is not in the
+                                       keyring. Restore SECRETS_KEK / the key id
+                                       it names in ${NEXA_CONFIG_DIR}/nexa.env.
+  platform.secret_version_unsupported  a v1 envelope with v1 acceptance turned
+                                       off, or an envelope this release does not
+                                       know. Re-enable acceptance, or upgrade.
+  platform.secret_key_id_mismatch      the stored metadata contradicts itself.
+                                       Restoring a key does NOT fix this.
+  platform.secret_auth_failed          the ciphertext did not authenticate —
+                                       corruption, or a value moved between rows
+                                       or tenants. A key is not the problem.
+
+The last two are not recoverable by restoring key material, and this summary will
+not pretend otherwise.
 
   panel      https://${DOMAIN}
   status     botctl telegram status

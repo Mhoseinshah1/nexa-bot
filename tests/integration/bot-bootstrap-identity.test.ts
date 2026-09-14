@@ -105,6 +105,60 @@ describe('a Telegram bot belongs to one tenant', () => {
     expect(rows[0]?.username).toBe('acme_bot');
   });
 
+  it('names the collision when a LEGACY row learns an id another row holds', async () => {
+    /*
+     * The second writer of `telegram_bot_id`, and only the first was translated.
+     *
+     * Two rows predating migration 0038 can hold credentials for the same bot —
+     * the username index never stopped that, which is why 0041 exists. The first
+     * reconciliation fills its id; the second reaches the UPDATE and collides.
+     * That path emitted a raw 23505, so the CLI printed a stack trace and the
+     * installer fell through to the webhook summary whose suggested retry
+     * repeats it exactly.
+     */
+    const first = tenantA as TenantContext;
+    const second = tenantB as TenantContext;
+
+    // Two legacy rows: same bot, no identity recorded, different usernames.
+    for (const [scope, username] of [
+      [first, 'acme_bot'],
+      [second, 'acme_support_bot'],
+    ] as const) {
+      await new DrizzleBotInstanceRepository(
+        ctx.container.database.db,
+        ctx.container.cipher,
+      ).createFromBootstrap(
+        scope,
+        {
+          id: ctx.container.ids.uuid() as never,
+          username,
+          token: `${SAME_BOT}:AAH-${username}`,
+          now: new Date(),
+        } as never,
+        undefined,
+      );
+    }
+    // Clear the identities the create path recorded, which is the shape a row
+    // written before 0038 actually has.
+    await ctx.container.database.db.update(botInstances).set({ telegramBotId: null });
+
+    await bootstrap('acme_bot').execute(first, {
+      token: null,
+      publicBaseUrl: 'https://bot.example.com',
+    });
+
+    // The SECOND row's own username, which is the rename scenario: if both runs
+    // reported the same name the UPDATE would collide on
+    // `bot_instances_username_key` instead, and that is a genuinely different
+    // mistake this refusal must not claim.
+    await expect(
+      bootstrap('acme_support_bot').execute(second, {
+        token: null,
+        publicBaseUrl: 'https://bot.example.com',
+      }),
+    ).rejects.toThrowError(/already configured for another tenant/);
+  });
+
   it('still lets the tenant that owns the bot reconcile it', async () => {
     // The other half. A constraint that refused the owner's own rerun would be
     // the same defect from the other side — and a rerun is the documented

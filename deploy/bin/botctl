@@ -1833,6 +1833,19 @@ cmd_telegram() {
   local action="${1:-}"
   shift || true
 
+  # Neither subcommand takes an argument, so anything left is REFUSED rather
+  # than dropped.
+  #
+  # `botctl telegram register --tenant reseller` shifted the action off and
+  # discarded the rest, so `--tenant` never reached the CLI and the PRIMARY
+  # tenant was reconciled and reported as a success — the exact wrong-tenant
+  # outcome the CLI's own unknown-argument refusal was added to prevent, walking
+  # straight past it at the installed entry point. A wrapper that silently drops
+  # what it was given is the same defect as a parser that does.
+  if [ "$#" -gt 0 ]; then
+    nexa_die "botctl telegram ${action} takes no arguments (got: $*). This command reconciles the installation's own bot from its stored credential; there is nothing to aim it at."
+  fi
+
   case "$action" in
     status)
       # Read-only, and the one word goes to stdout so a script can read it

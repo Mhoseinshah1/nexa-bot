@@ -102,6 +102,79 @@ describe('the migration preflight', () => {
     }
   }, 60_000);
 
+  it('refuses a database where one Telegram bot is bound twice, before 0041 runs', async () => {
+    /*
+     * Migration 0041 makes a non-null `telegram_bot_id` unique, and an
+     * installation that applied 0038 and then bound one bot to two rows meets a
+     * raw uniqueness error with the migration run half-done — which is the state
+     * 0041 exists to make impossible, so it is exactly the database that reaches
+     * it. Nothing prevented that shape: `bot_instances_username_key` is not the
+     * identity, and a BotFather rename makes the stored username stale
+     * (OQ-TG-02).
+     */
+    await createScratch('nexa_preflight_bots', async (client) => {
+      await client.query(
+        `CREATE TABLE bot_instances (id uuid PRIMARY KEY, username text NOT NULL, telegram_bot_id text)`,
+      );
+      await client.query(
+        `INSERT INTO bot_instances VALUES
+           (gen_random_uuid(), 'acme_bot', '8123456789'),
+           (gen_random_uuid(), 'acme_support_bot', '8123456789'),
+           (gen_random_uuid(), 'other_bot', '5555555555'),
+           (gen_random_uuid(), 'legacy_bot', NULL)`,
+      );
+    });
+    const url = urlFor('nexa_preflight_bots');
+
+    await expect(preflightMigrations(url)).rejects.toBeInstanceOf(MigrationPreflightError);
+    await expect(preflightMigrations(url)).rejects.toThrow(/1 Telegram bot id\(s\)/);
+    await expect(preflightMigrations(url)).rejects.toThrow(/0041_bot_instance_telegram_id_unique/);
+    await expect(preflightMigrations(url)).rejects.toThrow(/Nothing was migrated/);
+    // The id itself is NEVER in the message: this text reaches a log, and a
+    // Telegram bot id names somebody's installation.
+    await expect(preflightMigrations(url)).rejects.not.toThrow(/8123456789/);
+
+    // And nothing was chosen on the operator's behalf. Which tenant keeps a bot
+    // decides who goes on receiving messages.
+    const client = new Client({ connectionString: url });
+    await client.connect();
+    try {
+      const count = await client.query(`SELECT count(*)::int AS n FROM bot_instances`);
+      expect(count.rows[0]?.n).toBe(4);
+    } finally {
+      await client.end();
+    }
+  }, 60_000);
+
+  it('passes a database whose bot ids are distinct, nulls and all', async () => {
+    // The other half. A preflight that refuses a healthy database is the same
+    // defect from the other side — and several NULLs are the ordinary shape of
+    // an installation upgrading from before 0038.
+    await createScratch('nexa_preflight_bots_ok', async (client) => {
+      await client.query(
+        `CREATE TABLE bot_instances (id uuid PRIMARY KEY, username text NOT NULL, telegram_bot_id text)`,
+      );
+      await client.query(
+        `INSERT INTO bot_instances VALUES
+           (gen_random_uuid(), 'acme_bot', '8123456789'),
+           (gen_random_uuid(), 'other_bot', '5555555555'),
+           (gen_random_uuid(), 'legacy_one', NULL),
+           (gen_random_uuid(), 'legacy_two', NULL)`,
+      );
+    });
+    const report = await preflightMigrations(urlFor('nexa_preflight_bots_ok'));
+    expect(report.checks).toContain('Telegram bot ids bound more than once: 0');
+  }, 60_000);
+
+  it('passes a database with no bot_instances table at all', async () => {
+    // The check must not become the reason a fresh database cannot migrate.
+    await createScratch('nexa_preflight_no_bots', async (client) => {
+      await client.query(`CREATE TABLE unrelated (id uuid PRIMARY KEY)`);
+    });
+    const report = await preflightMigrations(urlFor('nexa_preflight_no_bots'));
+    expect(report.checks).toContain('bot_instances.telegram_bot_id: absent, nothing to check');
+  }, 60_000);
+
   it('passes a legacy database with exactly one PRIMARY tenant', async () => {
     await createScratch('nexa_preflight_one', async (client) => {
       await client.query(`CREATE TABLE tenants (id uuid PRIMARY KEY, kind text NOT NULL)`);
@@ -143,6 +216,10 @@ describe('the migration preflight', () => {
 
   it('passes the ordinary test database, which is migrated and has one PRIMARY at most', async () => {
     const report = await preflightMigrations(config.DATABASE_URL);
-    expect(report.checks.at(-1)).toMatch(/^PRIMARY tenants: [01]$/);
+    // By CONTENT, not by position. This asserted `checks.at(-1)`, which was only
+    // ever right while there was exactly one check — so adding a second one made
+    // it fail for a reason that had nothing to do with what it was checking.
+    expect(report.checks.some((check) => /^PRIMARY tenants: [01]$/.test(check))).toBe(true);
+    expect(report.checks).toContain('Telegram bot ids bound more than once: 0');
   });
 });

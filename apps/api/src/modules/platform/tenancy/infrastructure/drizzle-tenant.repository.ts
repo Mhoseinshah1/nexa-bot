@@ -364,16 +364,7 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
        * one would be a confident wrong answer — the username index catches a
        * genuinely different mistake, and it is not this one.
        */
-      if (isUniqueViolation(error, 'bot_instances_telegram_bot_id_key')) {
-        throw errors.conflict(
-          PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_BOT_ALREADY_BOUND,
-          `Telegram bot ${input.telegramBotId} is already configured for another tenant on this ` +
-            "installation, and Telegram delivers a bot's updates to one webhook only — binding " +
-            'it here would silently stop the other tenant receiving anything. Nothing was ' +
-            'changed. Use a separate bot for this tenant.',
-        );
-      }
-      throw error;
+      rethrowAlreadyBound(error, input.telegramBotId);
     }
   }
 
@@ -410,21 +401,61 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
     // blank between the caller's unlocked read and this statement, and a caller
     // that audited regardless would write a row asserting a `before` that was
     // not true and a change that did not happen.
-    const filled = await executorOf(this.db, tx)
-      .update(botInstances)
-      .set({
-        telegramBotId: input.telegramBotId,
-        username: input.username,
-        updatedAt: input.now,
-      })
-      .where(
-        and(
-          eq(botInstances.tenantId, tenantId),
-          eq(botInstances.id, id),
-          isNull(botInstances.telegramBotId),
-        ),
-      )
-      .returning({ id: botInstances.id });
-    return filled.length > 0;
+    /*
+     * The SECOND writer of `telegram_bot_id`, and it violates the same index.
+     *
+     * Two rows predating migration 0038 can hold credentials for the SAME bot —
+     * the username index never stopped that, which is the whole reason 0041
+     * exists. The first reconciliation fills its id; the second reaches this
+     * statement and collides. Only `createFromBootstrap` translated the
+     * violation, so this path emitted a raw database error, the CLI printed a
+     * stack trace, and the installer fell through to the webhook summary whose
+     * suggested retry repeats it exactly.
+     */
+    try {
+      const filled = await executorOf(this.db, tx)
+        .update(botInstances)
+        .set({
+          telegramBotId: input.telegramBotId,
+          username: input.username,
+          updatedAt: input.now,
+        })
+        .where(
+          and(
+            eq(botInstances.tenantId, tenantId),
+            eq(botInstances.id, id),
+            isNull(botInstances.telegramBotId),
+          ),
+        )
+        .returning({ id: botInstances.id });
+      return filled.length > 0;
+    } catch (error: unknown) {
+      rethrowAlreadyBound(error, input.telegramBotId);
+    }
   }
+}
+
+/**
+ * One Telegram bot, one row — as an operator reads it.
+ *
+ * Shared by the two statements that write `telegram_bot_id`, because the first
+ * version translated only the INSERT and the UPDATE beside it went on emitting a
+ * raw 23505. Two copies of one refusal drift, and the copy that drifts is the
+ * one nobody reached in testing.
+ *
+ * Named constraint, not bare 23505: `bot_instances` also has a unique index on
+ * `username`, and answering "already bound to another tenant" for that one would
+ * be a confident wrong answer about a genuinely different mistake.
+ */
+function rethrowAlreadyBound(error: unknown, telegramBotId: string): never {
+  if (isUniqueViolation(error, 'bot_instances_telegram_bot_id_key')) {
+    throw errors.conflict(
+      PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_BOT_ALREADY_BOUND,
+      `Telegram bot ${telegramBotId} is already configured for another tenant on this ` +
+        "installation, and Telegram delivers a bot's updates to one webhook only — binding it " +
+        'here would silently stop the other tenant receiving anything. Nothing was changed. Use ' +
+        'a separate bot for this tenant.',
+    );
+  }
+  throw error;
 }

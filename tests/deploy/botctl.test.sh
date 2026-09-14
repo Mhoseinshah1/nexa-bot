@@ -5315,6 +5315,50 @@ assert_contains 'the revoked-token summary does not refuse the retry that cannot
 assert_contains 'the revoked-token summary does not name the open question' \
   "$telegram_revoked_summary" 'OQ-TG-01'
 
+test_case 'an already-bound refusal is classified even though nothing was stored'
+# The `none`-outranks-the-code rule, and the one case it got wrong. An
+# already-bound refusal rolls its insert back, so the state after it is
+# NECESSARILY `none` — and the nothing-stored summary then told the operator
+# their token was rejected or Telegram unreachable, and to rerun with a token
+# source, which would refuse identically for ever.
+telegram_bound="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --bot-token-file "$2" >/dev/null 2>&1
+  telegram_state() { printf "none"; }
+  nexa_compose() { printf "telegram.bootstrap_bot_already_bound: bot 8123456789 is taken.\n"; return 1; }
+  configure_telegram_bot 2>&1
+  printf "RETRY=%s\n" "$TELEGRAM_RETRY"
+' _ "${REPO}/deploy/install.sh" "${NEXA_ROOT}/unavailable-token" || printf 'THE_STEP_DIED')"
+assert_contains 'an already-bound refusal was reported as nothing-stored' \
+  "$telegram_bound" 'RETRY=already-bound'
+telegram_bound_summary="$(sed -n '/INCOMPLETE_ALREADY_BOUND$/,/^INCOMPLETE_ALREADY_BOUND$/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the already-bound summary does not say a second bot is needed' \
+  "$telegram_bound_summary" 'Create a second bot'
+assert_contains 'the already-bound summary does not say the other tenant is untouched' \
+  "$telegram_bound_summary" 'untouched'
+
+test_case 'a first install with no terminal and no token records its release'
+# `nexa_die` here exited before the manifest and the `current` pointer were
+# written, leaving a RUNNING installation that `botctl version` cannot describe
+# — the failure the owner step records from a real staging host. ADR-0029
+# decision 4 already says what to do instead: finish recording the release,
+# report INCOMPLETE, exit non-zero.
+telegram_no_tty="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  telegram_state() { printf "none"; }
+  nexa_compose() { printf "SHOULD_NOT_RUN\n"; return 0; }
+  configure_telegram_bot 2>&1 </dev/null
+  printf "INCOMPLETE=%s RETRY=%s\n" "$TELEGRAM_INCOMPLETE" "$TELEGRAM_RETRY"
+' _ "${REPO}/deploy/install.sh" </dev/null || printf 'THE_STEP_DIED')"
+assert_not_contains 'a missing token killed the install before the manifest' \
+  "$telegram_no_tty" 'THE_STEP_DIED'
+assert_contains 'a missing token did not mark the install incomplete' \
+  "$telegram_no_tty" 'INCOMPLETE=yes'
+assert_contains 'a missing token did not reach the nothing-stored summary' \
+  "$telegram_no_tty" 'RETRY=none'
+# And it did not silently run the CLI without a way to read a token.
+assert_not_contains 'the CLI was invoked with no token source and no terminal' \
+  "$telegram_no_tty" 'SHOULD_NOT_RUN'
+
 test_case 'a stored token that cannot be DECRYPTED is not a webhook retry either'
 # The round that made this five summaries was not exhaustive either. `execute`
 # resolves the credential before it calls anything, so a missing key, a key id
@@ -5332,8 +5376,16 @@ telegram_unreadable="$(bash -c '
 assert_contains 'a decryption failure was not distinguished from a webhook failure' \
   "$telegram_unreadable" 'RETRY=token-unreadable'
 telegram_unreadable_summary="$(sed -n '/INCOMPLETE_TOKEN_UNREADABLE$/,/^INCOMPLETE_TOKEN_UNREADABLE$/p' "${REPO}/deploy/install.sh")"
-assert_contains 'the unreadable-token summary does not say it is a key problem' \
-  "$telegram_unreadable_summary" 'KEY problem'
+assert_contains 'the unreadable-token summary does not say it is a secrets problem' \
+  "$telegram_unreadable_summary" 'SECRETS problem'
+# It must not promise ONE repair for four codes. `secret_auth_failed` is
+# corruption or a value moved between rows, and `secret_key_id_mismatch` is
+# contradictory metadata — restoring key material fixes neither, and the first
+# version of this summary said it would.
+assert_contains 'the unreadable-token summary does not name the concrete codes' \
+  "$telegram_unreadable_summary" 'platform.secret_key_id_mismatch'
+assert_contains 'the unreadable-token summary still promises one key-shaped repair' \
+  "$telegram_unreadable_summary" 'not recoverable by restoring key material'
 assert_contains 'the unreadable-token summary does not name the secrets command' \
   "$telegram_unreadable_summary" 'botctl secrets'
 # And it must NOT send them to BotFather: the token is fine and reissuing it
@@ -5382,6 +5434,33 @@ telegram_first_rejected="$(bash -c '
 ' _ "${REPO}/deploy/install.sh" "${NEXA_ROOT}/unavailable-token" || printf 'THE_STEP_DIED')"
 assert_contains 'a rejected token on a first attempt claimed a stored credential' \
   "$telegram_first_rejected" 'RETRY=none'
+
+test_case 'skip-telegram does not prescribe registration for an UNAVAILABLE bot'
+# `unavailable` was folded in with `incomplete` because both have a stored
+# credential — but `execute` refuses BEFORE `setWebhook` until the availability
+# problem is repaired, so `botctl telegram register` on its own cannot recover
+# it. The same defect that was split out of `configure_telegram_bot`, left
+# behind in the branch beside it.
+telegram_skip_unavailable="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --skip-telegram >/dev/null 2>&1
+  telegram_state() { printf "unavailable"; }
+  skip_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" || true)"
+assert_contains 'an unavailable skipped bot was not told what is holding it back' \
+  "$telegram_skip_unavailable" 'other than registration'
+assert_contains 'an unavailable skipped bot was not sent to status first' \
+  "$telegram_skip_unavailable" 'botctl telegram status'
+# The `incomplete` branch is the one that MAY name register on its own, and it
+# must still do so — a refusal that refuses too much is the same defect.
+telegram_skip_incomplete="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --skip-telegram >/dev/null 2>&1
+  telegram_state() { printf "incomplete"; }
+  skip_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" || true)"
+assert_contains 'an incomplete skipped bot lost its one-command retry' \
+  "$telegram_skip_incomplete" 'botctl telegram register'
+assert_not_contains 'an incomplete skipped bot was given the unavailable remedy' \
+  "$telegram_skip_incomplete" 'other than registration'
 
 test_case 'skip-telegram survives a state that cannot be read'
 # The refusal to guess is right; killing an install that explicitly opted out of
@@ -5452,7 +5531,7 @@ telegram_no_source="$(bash -c '
   configure_telegram_bot 2>&1
 ' _ "${REPO}/deploy/install.sh" || true)"
 assert_contains 'a first configuration without a token source was not refused' \
-  "$telegram_no_source" 'no safe way to read the Telegram bot token'
+  "$telegram_no_source" 'no safe way to read the Telegram'
 assert_not_contains 'it ran the CLI anyway' "$telegram_no_source" 'COMPOSE_RAN'
 
 test_case 'a RECONCILE with no terminal and no token source is NOT refused'
@@ -5490,6 +5569,25 @@ run_botctl telegram register
 assert_fails 'telegram register ran while the lock was held' test "$BOTCTL_STATUS" -eq 0
 assert_contains 'the lock refusal was not explained' "$BOTCTL_OUTPUT" 'already running'
 exec 9>&-
+
+test_case 'telegram subcommands refuse an argument rather than dropping it'
+# `botctl telegram register --tenant reseller` shifted the action off and
+# discarded the rest, so `--tenant` never reached the CLI and the PRIMARY tenant
+# was reconciled and reported as a success — walking straight past the CLI's own
+# unknown-argument refusal at the installed entry point.
+run_botctl telegram register --tenant reseller
+assert_fails 'botctl telegram register accepted an argument it drops' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'botctl telegram register accepted an argument it drops' \
+  "$BOTCTL_OUTPUT" 'takes no arguments'
+run_botctl telegram status --tenant reseller
+assert_fails 'botctl telegram status accepted an argument it drops' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'botctl telegram status accepted an argument it drops' \
+  "$BOTCTL_OUTPUT" 'takes no arguments'
+# The other half: the bare forms must still work, or the refusal refuses too
+# much — the same defect from the other side.
+run_botctl telegram status
+assert_not_contains 'the bare status form was refused as if it had arguments' \
+  "$BOTCTL_OUTPUT" 'takes no arguments'
 
 test_case 'telegram status does NOT take the lock'
 # It only reads, and a status command that blocks behind a running update is a

@@ -295,6 +295,16 @@ async function codeThrownBy(fn: () => Promise<unknown>): Promise<string> {
   return 'nothing was thrown';
 }
 
+/** The message of whatever a call threw, for the strings an operator reads. */
+async function messageThrownBy(fn: () => Promise<unknown>): Promise<string> {
+  try {
+    await fn();
+  } catch (error: unknown) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error('expected the call to throw, and it did not');
+}
+
 describe('bot bootstrap — a fresh install', () => {
   it('validates the token with getMe BEFORE it writes anything', async () => {
     const { service, bots, telegram } = build();
@@ -310,6 +320,22 @@ describe('bot bootstrap — a fresh install', () => {
     // indistinguishable from one that stopped working.
     expect(bots.rows).toHaveLength(0);
     expect(bots.tokenWrites).toHaveLength(0);
+
+    /*
+     * And the message names no remedy that does not exist.
+     *
+     * It used to end "If the token was revoked, restore it in BotFather rather
+     * than issuing a new one" — which cannot be done, contradicted the installer
+     * summary printed immediately afterwards, and contradicted the sentence
+     * before it in the same string. That is the second time on this branch that
+     * a message invented a recovery; the first was the installer's own summary.
+     */
+    const message = await messageThrownBy(() =>
+      service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN }),
+    );
+    expect(message).not.toMatch(/restore it in BotFather/);
+    expect(message).toMatch(/no supported recovery/);
+    expect(message).toMatch(/OQ-TG-01/);
   });
 
   it('creates the bot, registers the webhook, and marks it afterwards', async () => {
@@ -547,6 +573,69 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
     // Refused locally, from the id half of the token. The other bot's secret
     // was never sent anywhere.
     expect(telegram.identifyCalls).not.toContain(OTHER_TOKEN);
+  });
+
+  it('refuses a different bot on a row that predates the identity column', async () => {
+    /*
+     * `refuseRepointing` runs against the STORED row, and on a row created
+     * before migration 0038 that row's `telegram_bot_id` is NULL — so it
+     * returned having compared nothing, and a supplied token naming a DIFFERENT
+     * bot was silently ignored on exactly the rows an upgrade produces. The
+     * installer then printed success having changed nothing.
+     *
+     * `getMe` has since said which bot the STORED token belongs to, and that is
+     * the value the first comparison did not have.
+     */
+    const { service, bots, telegram } = build();
+    bots.rows.push({
+      id: '01890000-0000-7000-8000-0000000001dd',
+      username: 'stale_name_bot',
+      status: 'ACTIVE',
+      telegramBotId: null,
+      webhookRegisteredAt: null,
+      webhookUrl: null,
+      webhookSecretFingerprint: null,
+      token: TOKEN,
+    });
+
+    expect(
+      await codeThrownBy(() =>
+        service.execute(scope, { token: OTHER_TOKEN, publicBaseUrl: ORIGIN }),
+      ),
+    ).toBe(PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_DIFFERENT_BOT);
+
+    // The stored credential is untouched, and the other bot's secret half was
+    // never sent anywhere.
+    expect(bots.tokenWrites).toHaveLength(0);
+    expect(bots.rows[0]?.token).toBe(TOKEN);
+    expect(telegram.identifyCalls).not.toContain(OTHER_TOKEN);
+    // The row DID learn its own identity on the way past — that is a correct
+    // fill, not a repoint, and it is what makes the next run refuse earlier.
+    expect(bots.rows[0]?.telegramBotId).toBe('8123456789');
+    // And nothing was registered: the refusal is before `setWebhook`.
+    expect(telegram.webhookCalls).toHaveLength(0);
+  });
+
+  it('still reconciles a legacy row when the supplied token names the SAME bot', async () => {
+    // The other half. A refusal that refuses too much is the same defect from
+    // the other side, and this is the ordinary upgrade path: an operator reruns
+    // with the token file they have always used.
+    const { service, bots } = build();
+    bots.rows.push({
+      id: '01890000-0000-7000-8000-0000000001dd',
+      username: 'stale_name_bot',
+      status: 'ACTIVE',
+      telegramBotId: null,
+      webhookRegisteredAt: null,
+      webhookUrl: null,
+      webhookSecretFingerprint: null,
+      token: TOKEN,
+    });
+
+    const result = await service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN });
+
+    expect(result.kind).toBe('RECONCILED');
+    expect(bots.rows[0]?.telegramBotId).toBe('8123456789');
   });
 
   it('refuses when the stored token has come to belong to another bot', async () => {
