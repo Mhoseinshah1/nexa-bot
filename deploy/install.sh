@@ -430,6 +430,21 @@ create_layout() {
 random_base64() { head -c 32 /dev/urandom | base64 -w0; }
 random_password() { head -c 24 /dev/urandom | base64 -w0 | tr -d '=+/' | cut -c1-32; }
 
+# Telegram's `secret_token` alphabet: `A-Za-z0-9_-` and nothing else.
+#
+# Base64url with the padding stripped — 32 random bytes become 43 characters,
+# comfortably over the 16 the application's schema requires, with no `+`, `/` or
+# `=` left in them.
+#
+# `random_base64` is NOT usable here, and the mistake it caused is worth naming:
+# it produces standard base64, so every minted secret contained `+` or `/` and
+# always ended in `=`. Telegram answers `setWebhook` with a 400 for any of them,
+# which means every fresh installation would have finished with a bot that could
+# not receive a message — and the installer's own INCOMPLETE summary would have
+# sent the operator to debug DNS. The application's config schema now refuses
+# such a value at boot as well, so the two halves cannot drift apart again.
+random_webhook_secret() { head -c 32 /dev/urandom | base64 -w0 | tr '+/' '-_' | tr -d '='; }
+
 # Does this file exist AND carry every key it is supposed to carry, each with a
 # value? A file that exists is not a file that is finished.
 secrets_complete() {
@@ -533,11 +548,8 @@ generate_secrets() {
   local pg_password redis_password kek kek_id webhook_secret
   pg_password="$(random_password)"
   redis_password="$(random_password)"
-  # 32 bytes of base64, not the 32-character alphabet `random_password` trims
-  # to. Telegram compares this byte for byte and never shows it to a person,
-  # so there is nothing to be gained by making it typeable and something to
-  # lose by narrowing its alphabet.
-  webhook_secret="$(random_base64)"
+  # Telegram's alphabet, not ours — see `random_webhook_secret`.
+  webhook_secret="$(random_webhook_secret)"
   kek="$(random_base64)"
   kek_id="install-$(date -u +%Y%m%d)"
 
@@ -655,7 +667,7 @@ ensure_telegram_config() {
       printf 'TELEGRAM_WEBHOOK_ENABLED=true\n'
     fi
     if [ -z "${have_secret//[[:space:]]/}" ]; then
-      printf 'TELEGRAM_WEBHOOK_SECRET=%s\n' "$(random_base64)"
+      printf 'TELEGRAM_WEBHOOK_SECRET=%s\n' "$(random_webhook_secret)"
     fi
   } >>"$app_env" || nexa_die "cannot write ${app_env} (is /var full?)."
 
