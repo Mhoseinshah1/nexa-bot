@@ -22,8 +22,11 @@ VERSION_B="${VERSION_B:-v0.0.2-smoke}"
 IMAGE_REPO="${IMAGE_REPO:-nexa-smoke/nexa-bot}"
 HTTP_PORT="${NEXA_CI_HTTP_PORT:-18080}"
 
+# Any further arguments are log files, dumped in order — see `dump_log`.
 fail() {
   printf '\033[31mFAIL\033[0m  %s\n' "$1" >&2
+  shift
+  for log in "$@"; do dump_log "$log"; done
   dump_diagnostics
   exit 1
 }
@@ -50,6 +53,25 @@ compose() {
     -f "${NEXA_DEPLOY_DIR}/compose.yml" \
     -f "${REPO}/deploy/compose.ci.yml" \
     "$@"
+}
+
+# A log file dumped INTO the failure rather than named by it.
+#
+# The EXIT trap removes `$ROOT`, so a message reading "see
+# /tmp/tmp.XXXX/bootstrap-bot.log" names a file that is gone by the time anyone
+# reads the message. Two CI failures arrived that way with their reason
+# discarded, and the second one was a different defect from the first.
+#
+# The redaction is not decoration. This dumps a log the test has NOT yet proved
+# credential-free — the assertion that the bootstrap CLI never prints the token
+# runs later, against the unredacted file, and is not weakened by this.
+dump_log() {
+  if [ ! -f "$1" ]; then
+    printf '\n--- %s (no such file) ---\n' "$1"
+    return 0
+  fi
+  printf '\n--- %s ---\n' "$1"
+  sed -e "s|${SMOKE_BOT_TOKEN:-__no_token_has_been_written_yet__}|<redacted>|g" "$1" | tail -80
 }
 
 dump_diagnostics() {
@@ -248,11 +270,11 @@ printf 'someone\nSomeone Else\nanother-long-smoke-password\nanother-long-smoke-p
 # 124 is `timeout` reporting that it had to kill the command. That is the whole
 # assertion: any other status means the process decided something and left.
 [ "$owner_tty_status" -ne 124 ] ||
-  fail "the bootstrap CLI never exited on a terminal (see ${owner_tty_log}); an install would hang here"
+  fail "the bootstrap CLI never exited on a terminal; an install would hang here" "$owner_tty_log"
 [ "$owner_tty_status" -ne 0 ] ||
   fail "a second bootstrap on a terminal SUCCEEDED; the first-owner fence is gone"
 grep -q 'bootstrap.already_completed' "$owner_tty_log" ||
-  fail "a second bootstrap on a terminal did not reach the first-owner fence (see ${owner_tty_log})"
+  fail "a second bootstrap on a terminal did not reach the first-owner fence" "$owner_tty_log"
 pass "the bootstrap CLI exits on a real terminal instead of hanging the install"
 
 # The Telegram bootstrap, from the release image, with a token that belongs to
@@ -268,22 +290,33 @@ pass "the bootstrap CLI exits on a real terminal instead of hanging the install"
 # It does NOT prove which of the two outcomes arrives. That depends on the
 # runner's egress, which is not a fact about this product — see the assertion
 # below, which an earlier version got wrong by pinning it.
+#
+# Only the state word reaches stdout; everything else this CLI writes goes to
+# stderr, which is APPENDED to a log rather than discarded. Discarding it meant
+# a container that failed to start and one that answered correctly produced the
+# same empty string, and the same assertion failure with nothing to read.
+telegram_status_log="${ROOT}/bootstrap-bot-status.log"
 telegram_state() {
   compose run --rm --no-deps -T --entrypoint node api \
-    dist/bootstrap-bot.cli.js --status --public-base-url https://smoke.invalid 2>/dev/null |
+    dist/bootstrap-bot.cli.js --status --public-base-url https://smoke.invalid \
+    2>>"$telegram_status_log" |
     tr -d '\r\n'
 }
 
 [ "$(telegram_state)" = "none" ] ||
-  fail "the Telegram bootstrap does not report a fresh installation as unconfigured"
+  fail "the Telegram bootstrap does not report a fresh installation as unconfigured" \
+    "$telegram_status_log"
 
 # A syntactically valid token that belongs to nobody, STREAMED the way the
 # installer streams the operator's file. Not mounted: the image runs as `node`
 # (uid 1000) and a 0600 file created here is not readable inside the container,
 # which is the defect that made the documented unattended path impossible.
 telegram_token_file="${ROOT}/bot-token"
-printf '8123456789:AA-smoke-token-that-belongs-to-nobody
-' >"$telegram_token_file"
+# One literal, named once: `dump_log` redacts it and the leak assertion below
+# greps for it. Two copies of it would drift, and the copy that drifted would be
+# the one deciding whether a credential had been printed.
+SMOKE_BOT_TOKEN='8123456789:AA-smoke-token-that-belongs-to-nobody'
+printf '%s\n' "$SMOKE_BOT_TOKEN" >"$telegram_token_file"
 chmod 0600 "$telegram_token_file"
 
 telegram_log="${ROOT}/bootstrap-bot.log"
@@ -294,7 +327,7 @@ compose run --rm --no-deps -T \
   --bot-token-stdin <"$telegram_token_file" >"$telegram_log" 2>&1 || telegram_status=$?
 
 [ "$telegram_status" -ne 0 ] ||
-  fail "the Telegram bootstrap reported SUCCESS with a token that belongs to nobody (see ${telegram_log})"
+  fail "the Telegram bootstrap reported SUCCESS with a token that belongs to nobody" "$telegram_log"
 
 # EITHER named code, and the choice between them is not this test's to make.
 #
@@ -308,16 +341,24 @@ compose run --rm --no-deps -T \
 # for exactly this reason. Pinning it to one code would have meant a smoke test
 # asserting a fact about the runner's network rather than about the product.
 if ! grep -qE 'telegram\.bootstrap_(unreachable|token_rejected)' "$telegram_log"; then
-  fail "the failure was not one of the two named bootstrap outcomes (see ${telegram_log})"
+  fail "the failure was not one of the two named bootstrap outcomes" "$telegram_log"
 fi
 # THE ordering assertion. A token Telegram never confirmed must not have become a
 # row: a stored credential that has never worked is indistinguishable from one
 # that stopped working.
+# BOTH logs: the assertion fires either because a row genuinely exists, or
+# because the status probe itself failed and produced an empty string. The
+# second is invisible without the probe's own stderr, which is how it would be
+# mistaken for the first.
 [ "$(telegram_state)" = "none" ] ||
-  fail "a bot instance was written for a token Telegram never confirmed"
+  fail "a bot instance was written for a token Telegram never confirmed" \
+    "$telegram_log" "$telegram_status_log"
 # And the token never reached a place a person could read it.
-if grep -qF -- '8123456789:AA-smoke-token-that-belongs-to-nobody' "$telegram_log"; then
-  fail "the bot token was printed by the bootstrap CLI (see ${telegram_log})"
+if grep -qF -- "$SMOKE_BOT_TOKEN" "$telegram_log"; then
+  # Deliberately NOT dumped: this is the one failure whose log is known to
+  # contain a credential, and `dump_log` redacting it would print a file the
+  # assertion has just proved unsafe.
+  fail "the bot token was printed by the bootstrap CLI"
 fi
 pass "the Telegram bootstrap validates before it writes, and writes nothing when it cannot"
 

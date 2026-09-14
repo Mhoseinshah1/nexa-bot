@@ -121,6 +121,31 @@ below is the two halves of it.
 | C8  | A first configuration with no terminal and no token source is refused | the `[ ! -t 0 ]` refusal → `:`                                   | `botctl.test.sh` › a first configuration with no terminal and no token source is refused        | KILLED |
 | C8b | ...and a RECONCILE without one is NOT, because none is needed         | (covered by the same fix; the two halves are separate cases)     | `botctl.test.sh` › a RECONCILE with no terminal and no token source is NOT refused              | KILLED |
 
+## The diagnosability round
+
+Not a rule about the product — a rule about the test that guards it. The
+Telegram bootstrap step failed in CI twice, and both failures named a log file
+inside the directory the EXIT trap removes. Two different defects therefore
+arrived as the same opaque line, and the second was diagnosed by reasoning about
+the release image's uid rather than by reading what the container said.
+
+These four are mutated the same way everything else here is, because a
+diagnostic that silently stops working is indistinguishable from one that was
+never needed.
+
+| #   | Rule                                                            | Mutation                                               | Test that dies                                                                                         | Result |
+| --- | --------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ------ |
+| S1  | `dump_log` redacts the bot token out of a log it dumps          | the redacting `sed` → a plain `tail`                   | `deployment-smoke-diagnostics.test.ts` › redacts the bot token out of a log it has not yet proved safe | KILLED |
+| S2  | ...and survives the failures that run before a token is written | drop the `:-` default on `SMOKE_BOT_TOKEN`             | `deployment-smoke-diagnostics.test.ts` › prints the log when no token has been written yet             | KILLED |
+| S3  | A log that does not exist is reported, not an abort in `fail`   | remove the missing-file arm                            | `deployment-smoke-diagnostics.test.ts` › says so when the log it was asked for does not exist          | KILLED |
+| S4  | A failure never names a log path instead of dumping it          | restore one `fail "... (see ${telegram_log})"` message | `deployment-smoke-diagnostics.test.ts` › never names a log file it does not also dump                  | KILLED |
+
+S1's ordering is the reason it is a rule and not a nicety: the outcome assertion
+dumps the log, and the assertion that the CLI never printed the token runs after
+it. Without the redaction, the diagnostic for one failure would publish the
+credential the next assertion exists to catch. The one failure whose log is
+KNOWN to contain the token is deliberately not dumped at all.
+
 ## Rules asserted by a mechanism rather than by a mutation
 
 Stated here rather than left out, because "not in the table" reads as "not
