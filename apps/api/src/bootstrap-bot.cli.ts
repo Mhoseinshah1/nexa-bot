@@ -91,6 +91,38 @@ export function parseArgs(argv: readonly string[]): Args {
     tokenStdin: argv.includes('--bot-token-stdin'),
     tenantSlug: get('--tenant'),
   };
+  /*
+   * Everything else is REFUSED, and this is the same rule as the missing-value
+   * check above rather than tidiness.
+   *
+   * That check exists because `--tenant` followed by nothing fell through to the
+   * primary tenant, so an operator aiming at one tenant configured another and
+   * was told it had worked. `--tenent reseller` does exactly that and was not
+   * caught: the parser took the flags it recognised and ignored the rest, so the
+   * typo left `tenantSlug` null and the run reconciled the primary tenant's bot
+   * and printed success.
+   *
+   * Positional values too. Nothing here takes one, so a bare word is either a
+   * flag's value that a typo has orphaned or a misunderstanding of the command —
+   * and both are better said out loud than acted on.
+   */
+  const consumed = new Set<number>();
+  for (const flag of ['--public-base-url', '--bot-token-file', '--tenant'] as const) {
+    const index = argv.indexOf(flag);
+    if (index === -1) continue;
+    consumed.add(index);
+    consumed.add(index + 1);
+  }
+  for (const [index, argument] of argv.entries()) {
+    if (consumed.has(index)) continue;
+    if (argument === '--status' || argument === '--bot-token-stdin') continue;
+    throw new PromptInputError(
+      `Unrecognised argument "${argument}". This command takes --status, --public-base-url, ` +
+        '--tenant, --bot-token-file and --bot-token-stdin, and nothing else. It is refused ' +
+        'rather than ignored: a mistyped --tenant would otherwise fall through to the primary ' +
+        "tenant and configure a different tenant's bot while reporting success.",
+    );
+  }
   // Two sources is not a preference to resolve, it is a caller that does not
   // know where its own credential is coming from.
   if (args.tokenFile !== null && args.tokenStdin) {

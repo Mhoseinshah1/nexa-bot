@@ -343,6 +343,14 @@ preflight() {
       /*) ;;
       *) nexa_die "--bot-token-file must be an absolute path; \"${BOT_TOKEN_FILE}\" is not. Docker reads it as a named volume otherwise, and the container gets an empty directory." ;;
     esac
+    # A REGULAR file, and `-r`/`-s` do not say that. A directory such as `/tmp`
+    # satisfies both — it is readable and its size is non-zero — so it passed
+    # preflight, the whole deployment ran, and the redirection that finally
+    # reads it failed at the very end. The installer then recorded an incomplete
+    # release and reported that Telegram had rejected or could not be reached
+    # for a token it had never managed to read.
+    [ -f "$BOT_TOKEN_FILE" ] ||
+      nexa_die "--bot-token-file must be a regular file; \"${BOT_TOKEN_FILE}\" is not."
     [ -r "$BOT_TOKEN_FILE" ] ||
       nexa_die "cannot read the bot token file at ${BOT_TOKEN_FILE}."
     [ -s "$BOT_TOKEN_FILE" ] ||
@@ -675,10 +683,24 @@ ensure_telegram_config() {
 
   nexa_step "adding the Telegram webhook configuration"
 
-  # Appended by redirection and never echoed, the same rule the generated files
-  # follow. `>>` rather than a rewrite: this file is the operator's, and the
-  # only safe edit to one is one that adds.
+  # Still only ADDS — this file is the operator's — but through a rename rather
+  # than a `>>`, because a partial append is unrecoverable here.
+  #
+  # A `>>` interrupted by ENOSPC or an I/O error can land
+  # `TELEGRAM_WEBHOOK_ENABLED=true` and a TRUNCATED but non-empty
+  # `TELEGRAM_WEBHOOK_SECRET`. The next run reads both keys as present and
+  # returns without repairing them, while the application refuses a secret below
+  # the schema's minimum length — so the installation cannot boot and cannot be
+  # resumed without an operator editing the file by hand. The whole file plus the
+  # addition is written to a temporary file in the same directory and renamed
+  # over the original, so the only two outcomes are the old file and the complete
+  # new one. Nothing is echoed, and the temporary file is 0600 before it holds
+  # anything.
+  local tmp
+  tmp="$(mktemp "${app_env}.XXXXXX")" || nexa_die "cannot write ${app_env}."
+  chmod 0600 "$tmp"
   {
+    cat "$app_env"
     printf '\n# --- The Telegram webhook ---------------------------------------------------\n'
     printf '# Added by the installer: this installation predates these keys.\n'
     if [ -z "${have_enabled//[[:space:]]/}" ]; then
@@ -687,9 +709,17 @@ ensure_telegram_config() {
     if [ -z "${have_secret//[[:space:]]/}" ]; then
       printf 'TELEGRAM_WEBHOOK_SECRET=%s\n' "$(random_webhook_secret)"
     fi
-  } >>"$app_env" || nexa_die "cannot write ${app_env} (is /var full?)."
-
-  chmod 0600 "$app_env"
+  } >"$tmp" || {
+    rm -f "$tmp"
+    nexa_die "cannot write ${app_env} (is /var full?)."
+  }
+  # Durable before it is visible: a rename that beats the data to disk would
+  # leave a file whose CONTENT is the torn write this whole change is about.
+  sync "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$app_env" || {
+    rm -f "$tmp"
+    nexa_die "cannot replace ${app_env}."
+  }
   nexa_ok "the Telegram webhook configuration is present (the secret was not printed)"
 }
 
@@ -1111,6 +1141,17 @@ configure_telegram_bot() {
       case "$out" in
         *telegram.bootstrap_different_bot*) TELEGRAM_RETRY="different-bot" ;;
         *telegram.bootstrap_token_rejected*) TELEGRAM_RETRY="token-rejected" ;;
+        # The stored token could not be DECRYPTED, which is not the same failure
+        # as Telegram refusing it and does not have the same remedy. `execute`
+        # resolves the credential before it calls anything, so a missing key, a
+        # key id that no longer matches, or v1 acceptance having been turned off
+        # fails here — and the first version of this classifier knew only the two
+        # Telegram codes, so every one of them fell through to the webhook
+        # summary and was told to run a command that reads the same unreadable
+        # ciphertext. Matched by PREFIX: these four codes are one remedy, and a
+        # fifth added to the taxonomy belongs with them rather than silently
+        # back in the fallback.
+        *platform.secret_*) TELEGRAM_RETRY="token-unreadable" ;;
       esac
     fi
     return 0
@@ -1216,15 +1257,17 @@ main() {
   # describe it is the exact failure a real staging host produced when the owner
   # step was allowed to abandon the manifest.
   if [ -n "$TELEGRAM_INCOMPLETE" ]; then
-    # FIVE summaries, because there are five failures and they have five
-    # different remedies. Saying "the token is stored, the retry resumes from it"
+    # SIX summaries, because there are six failures and they have six different
+    # remedies. Saying "the token is stored, the retry resumes from it"
     # is a false statement after a failure that stored NOTHING, and it is equally
     # false after one whose stored token is the thing Telegram refused — both
     # send the operator to a command that cannot work.
     #
-    # This started as two and was not exhaustive. The state alone answers only
-    # "is a row there", which is why the three added here are keyed on the CLI's
-    # error code or on the `unavailable` state rather than on row existence.
+    # This started as two and was not exhaustive, and the round that made it
+    # five was not either: a stored token that cannot be DECRYPTED fails before
+    # Telegram is reached at all, and fell through to the webhook summary. The
+    # state alone answers only "is a row there", which is why every one added
+    # since is keyed on the CLI's error code or on the `unavailable` state.
     if [ "$TELEGRAM_RETRY" = "none" ]; then
       cat >&2 <<INCOMPLETE_NOTHING_STORED
 
@@ -1260,16 +1303,47 @@ $(nexa_warn "Nexa ${VERSION} is installed, and Telegram REFUSED its stored bot t
 
 Nothing was changed and nothing was lost. The stored token is the one Telegram
 is refusing, which usually means it was revoked in BotFather — a configuration
-problem, not a step to retry. There is no command in this release that replaces
-a stored token (\`docs/open-questions.md\`, OQ-TG-01); reissuing the token for the
-SAME bot in BotFather and rerunning this installer with it is the supported
-route, and a token for a DIFFERENT bot is refused on purpose.
+problem, not a step to retry.
+
+This release cannot replace a stored token, and rerunning this installer with a
+newly issued one does NOT: a supplied token is read only to refuse one naming a
+different bot, and the registration itself always uses the credential already in
+the row. A rerun with a reissued token for the same bot therefore fails exactly
+as this run did. The gap is recorded as OQ-TG-01 in \`docs/open-questions.md\`;
+until a release adds an explicit rotation command there is no supported
+procedure here, and this summary will not invent one.
 
   panel      https://${DOMAIN}
   status     botctl telegram status
 
 Configuration and secrets live in ${NEXA_CONFIG_DIR} (0700, root-owned).
 INCOMPLETE_TOKEN_REJECTED
+      return 1
+    fi
+
+    if [ "$TELEGRAM_RETRY" = "token-unreadable" ]; then
+      cat >&2 <<INCOMPLETE_TOKEN_UNREADABLE
+
+$(nexa_warn "Nexa ${VERSION} is installed, and its stored bot token cannot be DECRYPTED.")
+
+  outstanding   the secrets configuration that can read the stored token
+  retry         NOT \`botctl telegram register\` — it reads the same ciphertext
+                and fails before it reaches Telegram. Repair the keys first:
+                  botctl secrets status
+  why           the error printed above this summary names the key
+
+Nothing was changed and the token is still there. This is a KEY problem, not a
+token problem: the stored credential was encrypted with a key this installation
+can no longer use — usually SECRETS_KEK or SECRETS_ACTIVE_KEY_ID in
+${NEXA_CONFIG_DIR}/nexa.env having changed, or v1 acceptance having been turned
+off while a v1 ciphertext is still stored. Restoring the key material makes the
+existing token readable again; nothing needs reissuing in BotFather.
+
+  panel      https://${DOMAIN}
+  status     botctl telegram status
+
+Configuration and secrets live in ${NEXA_CONFIG_DIR} (0700, root-owned).
+INCOMPLETE_TOKEN_UNREADABLE
       return 1
     fi
 

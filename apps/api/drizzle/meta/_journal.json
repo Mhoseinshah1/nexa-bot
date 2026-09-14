@@ -288,6 +288,13 @@
       "when": 1789375986026,
       "tag": "0040_bot_instance_webhook_secret_fingerprint",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1789399815566,
+      "tag": "0041_bot_instance_telegram_id_unique",
+      "breakpoints": true
     }
   ]
 }

@@ -74,6 +74,43 @@ describe('bootstrap-bot CLI arguments', () => {
     expect(args.tokenFile).toBeNull();
   });
 
+  it('refuses an unknown flag rather than ignoring it', () => {
+    /*
+     * The same rule as the missing-value check above, and the same failure. That
+     * one exists because `--tenant` with nothing after it fell through to the
+     * primary tenant; `--tenent reseller` did exactly that and was NOT caught,
+     * because the parser took the flags it recognised and ignored the rest. The
+     * run then reconciled the primary tenant's bot and printed success.
+     */
+    expect(() => parseArgs(['--tenent', 'reseller'])).toThrowError(/Unrecognised argument/);
+    expect(() => parseArgs(['--status', '--dry-run'])).toThrowError(/--dry-run/);
+  });
+
+  it('refuses a positional value, which no flag here takes', () => {
+    // Either a flag's value orphaned by a typo, or a misunderstanding of the
+    // command. Both are better said out loud than acted on.
+    expect(() => parseArgs(['reseller'])).toThrowError(/Unrecognised argument "reseller"/);
+    expect(() => parseArgs(['--public-base-url', 'https://bot.example.com', 'extra'])).toThrowError(
+      /Unrecognised argument "extra"/,
+    );
+  });
+
+  it('accepts every flag it does take, in combination', () => {
+    // The other half: a refusal that refuses too much is the same defect from
+    // the other side, and an over-eager unknown-argument check is the obvious
+    // way to get there.
+    expect(() =>
+      parseArgs([
+        '--status',
+        '--public-base-url',
+        'https://bot.example.com',
+        '--tenant',
+        'acme',
+        '--bot-token-stdin',
+      ]),
+    ).not.toThrow();
+  });
+
   it('reads --status without needing anything else', () => {
     expect(parseArgs(['--status', '--public-base-url', 'https://bot.example.com']).status).toBe(
       true,

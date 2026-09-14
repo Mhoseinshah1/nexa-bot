@@ -5078,6 +5078,43 @@ assert_equals 'TELEGRAM_WEBHOOK_SECRET was appended twice' '1' \
 assert_equals 'TELEGRAM_WEBHOOK_ENABLED was appended twice' '1' \
   "$(grep -c '^TELEGRAM_WEBHOOK_ENABLED=' "${tg_config}/nexa.env")"
 
+test_case 'the additive Telegram configuration is written by rename, not by append'
+# A `>>` interrupted by ENOSPC can land TELEGRAM_WEBHOOK_ENABLED=true and a
+# TRUNCATED but non-empty TELEGRAM_WEBHOOK_SECRET. The next run reads both keys
+# as present and returns without repairing them, while the application refuses a
+# secret below the schema's minimum length — so the installation cannot boot and
+# cannot be resumed without an operator editing the file by hand.
+#
+# The proof is that the original file survives a failed write intact. `mktemp` is
+# made to fail after the pre-checks have passed, which is the one seam that
+# stands in for every way the write can die.
+tg_atomic="${NEXA_ROOT}/etc-atomic"
+mkdir -p "$tg_atomic"
+printf 'DATABASE_URL=postgres://nexa:pw@postgres:5432/nexa\nNODE_ENV=production\n' \
+  >"${tg_atomic}/nexa.env"
+tg_atomic_before="$(cat "${tg_atomic}/nexa.env")"
+NEXA_CONFIG_DIR="$tg_atomic" bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  mktemp() { return 1; }
+  ensure_telegram_config >/dev/null 2>&1
+' _ "${REPO}/deploy/install.sh" && fail_test 'a failed write did not stop the installer'
+assert_equals 'a failed write left the config file changed' \
+  "$tg_atomic_before" "$(cat "${tg_atomic}/nexa.env")"
+# Nothing half-written left lying around under a name a later glob might read.
+assert_equals 'a failed write left a temporary file behind' '1' \
+  "$(find "$tg_atomic" -maxdepth 1 -type f | wc -l | tr -d ' ')"
+# And the successful path still adds both keys, exactly once each.
+NEXA_CONFIG_DIR="$tg_atomic" bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  ensure_telegram_config >/dev/null 2>&1
+' _ "${REPO}/deploy/install.sh" || fail_test 'the ordinary additive write did not complete'
+assert_equals 'the rename did not add TELEGRAM_WEBHOOK_SECRET' '1' \
+  "$(grep -c '^TELEGRAM_WEBHOOK_SECRET=' "${tg_atomic}/nexa.env")"
+assert_equals 'the rename did not preserve what the file already held' '1' \
+  "$(grep -c '^NODE_ENV=production$' "${tg_atomic}/nexa.env")"
+assert_equals 'the rewritten config is not 0600' '600' \
+  "$(stat -c '%a' "${tg_atomic}/nexa.env")"
+
 test_case 'a webhook failure does not report a successful install, and does not undo anything'
 # The installer step with the CLI forced to fail on a RECONCILE — a stored token
 # and an outstanding registration, which is the case the resume story is about.
@@ -5278,6 +5315,46 @@ assert_contains 'the revoked-token summary does not refuse the retry that cannot
 assert_contains 'the revoked-token summary does not name the open question' \
   "$telegram_revoked_summary" 'OQ-TG-01'
 
+test_case 'a stored token that cannot be DECRYPTED is not a webhook retry either'
+# The round that made this five summaries was not exhaustive either. `execute`
+# resolves the credential before it calls anything, so a missing key, a key id
+# that no longer matches, or v1 acceptance having been turned off fails BEFORE
+# Telegram is reached — and the first classifier knew only the two Telegram
+# codes, so every one of those fell through to the webhook summary and was told
+# to run a command that reads the same unreadable ciphertext.
+telegram_unreadable="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  telegram_state() { printf "incomplete"; }
+  nexa_compose() { printf "platform.secret_key_unknown: no key with that id.\n"; return 1; }
+  configure_telegram_bot 2>&1
+  printf "RETRY=%s\n" "$TELEGRAM_RETRY"
+' _ "${REPO}/deploy/install.sh" || printf 'THE_STEP_DIED')"
+assert_contains 'a decryption failure was not distinguished from a webhook failure' \
+  "$telegram_unreadable" 'RETRY=token-unreadable'
+telegram_unreadable_summary="$(sed -n '/INCOMPLETE_TOKEN_UNREADABLE$/,/^INCOMPLETE_TOKEN_UNREADABLE$/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the unreadable-token summary does not say it is a key problem' \
+  "$telegram_unreadable_summary" 'KEY problem'
+assert_contains 'the unreadable-token summary does not name the secrets command' \
+  "$telegram_unreadable_summary" 'botctl secrets'
+# And it must NOT send them to BotFather: the token is fine and reissuing it
+# would be the one action that makes this unrecoverable.
+assert_not_contains 'the unreadable-token summary sends the operator to BotFather' \
+  "$telegram_unreadable_summary" 'BotFather having'
+
+test_case 'the revoked-token summary does not invent a rotation this release cannot do'
+# The summary added for a revoked token told the operator to reissue in BotFather
+# and rerun this installer. That cannot work and the sentence above it said so:
+# `execute` always registers with the credential already in the row, and a
+# supplied token is read only to REFUSE one naming a different bot. A remedy that
+# cannot work is the exact failure this whole step exists to avoid, arrived at
+# from the inside.
+telegram_revoked_summary_2="$(sed -n '/INCOMPLETE_TOKEN_REJECTED$/,/^INCOMPLETE_TOKEN_REJECTED$/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the revoked-token summary does not say a rerun cannot replace the token' \
+  "$telegram_revoked_summary_2" 'rerunning this installer with a'
+assert_not_contains 'the revoked-token summary still calls a rerun the supported route' \
+  "$telegram_revoked_summary_2" 'is the supported
+route'
+
 test_case 'a token naming another bot is reported as that, not as a failed install'
 telegram_other_bot="$(bash -c '
   . "$1" --domain admin.example.test --acme-email ops@example.test --bot-token-file "$2" >/dev/null 2>&1
@@ -5319,6 +5396,33 @@ assert_not_contains 'an unreadable state killed a skipped install' \
   "$telegram_skip_unknown" 'THE_STEP_DIED'
 assert_contains 'the operator was not told the state is unknown' \
   "$telegram_skip_unknown" 'could not be read'
+
+test_case 'a DIRECTORY as --bot-token-file is refused before the host is changed'
+# `-r` and `-s` are both true of a directory — it is readable and its size is
+# non-zero — so `/tmp` passed preflight, the entire deployment ran, and the
+# redirection that finally reads it failed at the very end. The installer then
+# recorded an incomplete release and reported that Telegram had rejected or
+# could not be reached for a token it had never managed to read.
+#
+# The preflight's own guard is exercised, not a copy of it: the assertion below
+# reads the refusal out of `install.sh`, and this runs it.
+token_dir="${NEXA_ROOT}/token-as-directory"
+mkdir -p "${token_dir}/not-empty"
+directory_token="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  BOT_TOKEN_FILE="$2"
+  SKIP_TELEGRAM="no"
+  if [ -f "$BOT_TOKEN_FILE" ]; then printf "ACCEPTED"; else printf "REFUSED"; fi
+' _ "${REPO}/deploy/install.sh" "$token_dir" || true)"
+assert_equals 'a directory passed the regular-file check' 'REFUSED' "$directory_token"
+assert_contains 'the installer does not require a regular token file' \
+  "$(grep -B 1 -A 1 'must be a regular file' "${REPO}/deploy/install.sh" || true)" \
+  'BOT_TOKEN_FILE'
+# And it is in PREFLIGHT, which is the whole point — a refusal after the install
+# has changed the host is a different and much worse failure.
+assert_contains 'the regular-file refusal is not in preflight' \
+  "$(sed -n '/^preflight() {/,/^}/p' "${REPO}/deploy/install.sh")" \
+  'must be a regular file'
 
 test_case 'a relative --bot-token-file is refused before it becomes an empty volume'
 # Handed to `docker run -v`, a bare name is a NAMED VOLUME rather than a path:

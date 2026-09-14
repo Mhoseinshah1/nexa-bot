@@ -191,6 +191,23 @@ export const PLATFORM_ERROR_CODES = {
   TELEGRAM_BOOTSTRAP_DIFFERENT_BOT: 'telegram.bootstrap_different_bot',
 
   /**
+   * This Telegram bot is already bound to ANOTHER tenant on this installation.
+   *
+   * Distinct from `TELEGRAM_BOOTSTRAP_DIFFERENT_BOT`, which is the same question
+   * asked of one row: there the supplied token names a bot this tenant is not
+   * bound to; here the token is fine and the BOT is already somebody else's.
+   * Different remedy, so a different code.
+   *
+   * Telegram keeps one webhook per bot, so a second binding does not coexist with
+   * the first — it MOVES the delivery, and the first installation goes on
+   * reporting `ready` for a URL that receives nothing. `bot_instances_username_key`
+   * looked like it prevented this and does not: a username is changed in BotFather
+   * at will, and the stored copy goes stale the moment it is. The rule is the
+   * partial unique index on `telegram_bot_id`; this is how it reaches an operator.
+   */
+  TELEGRAM_BOOTSTRAP_BOT_ALREADY_BOUND: 'telegram.bootstrap_bot_already_bound',
+
+  /**
    * The webhook could not be registered, though the bot instance is written.
    *
    * The one outcome that is deliberately NOT fatal to an install: DNS that has

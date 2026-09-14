@@ -17,6 +17,7 @@ import {
   type TenantStatus,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
+import { isUniqueViolation } from '../../../../infrastructure/persistence/sqlstate.js';
 import { botInstances, tenants } from '../../../../infrastructure/persistence/schema.js';
 import {
   requireTenantId,
@@ -331,17 +332,49 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
       entityId: input.id,
     });
 
-    await executorOf(this.db, tx).insert(botInstances).values({
-      id: input.id,
-      tenantId,
-      username: input.username,
-      telegramBotId: input.telegramBotId,
-      status: 'ACTIVE',
-      tokenCiphertext: secret.ciphertext,
-      tokenKeyId: secret.keyId,
-      createdAt: input.now,
-      updatedAt: input.now,
-    });
+    try {
+      await executorOf(this.db, tx).insert(botInstances).values({
+        id: input.id,
+        tenantId,
+        username: input.username,
+        telegramBotId: input.telegramBotId,
+        status: 'ACTIVE',
+        tokenCiphertext: secret.ciphertext,
+        tokenKeyId: secret.keyId,
+        createdAt: input.now,
+        updatedAt: input.now,
+      });
+    } catch (error: unknown) {
+      /*
+       * Another TENANT on this installation is already bound to this bot.
+       *
+       * The service's `refuseRepointing` asks the same question of one row and
+       * cannot see this: it compares a supplied token against the tenant's OWN
+       * bot, and here the tenant has none. The index is the rule — cross-tenant
+       * deliberately, because two tenants binding one bot is exactly the
+       * collision — and this is how the rule reaches the operator instead of a
+       * bare 23505 leaving the CLI as a stack trace.
+       *
+       * Telegram keeps ONE webhook per bot, so the second binding would not
+       * coexist with the first: it moves the delivery, and the first tenant goes
+       * on reporting `ready` for a URL that receives nothing.
+       *
+       * Named constraint, not bare 23505. `bot_instances` also has a unique index
+       * on `username`, and answering "already bound to another tenant" for that
+       * one would be a confident wrong answer — the username index catches a
+       * genuinely different mistake, and it is not this one.
+       */
+      if (isUniqueViolation(error, 'bot_instances_telegram_bot_id_key')) {
+        throw errors.conflict(
+          PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_BOT_ALREADY_BOUND,
+          `Telegram bot ${input.telegramBotId} is already configured for another tenant on this ` +
+            "installation, and Telegram delivers a bot's updates to one webhook only — binding " +
+            'it here would silently stop the other tenant receiving anything. Nothing was ' +
+            'changed. Use a separate bot for this tenant.',
+        );
+      }
+      throw error;
+    }
   }
 
   async markWebhookRegistered(

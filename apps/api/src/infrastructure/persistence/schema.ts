@@ -281,6 +281,31 @@ export const botInstances = pgTable(
   },
   (table) => [
     uniqueIndex('bot_instances_username_key').on(table.username),
+    /**
+     * One Telegram bot, one row. The identity, not the display name.
+     *
+     * `bot_instances_username_key` looked like it already held this and does not:
+     * a username is changed in BotFather at will, and the stored copy goes stale
+     * the moment it is (OQ-TG-02). So bootstrapping a SECOND tenant with the same
+     * token after a rename passes the username index — `getMe` returns the new
+     * name, which collides with nothing — and writes a second row carrying the
+     * same `telegram_bot_id`. Telegram has one webhook per bot, so the second
+     * registration moves it, and the first row goes on reporting `ready` for a
+     * URL that no longer receives anything.
+     *
+     * PARTIAL, because the column is nullable for rows that predate migration
+     * 0038 and a unique index would otherwise make at most one of them legal.
+     * `getMe` fills those in the first time a bootstrap runs against them, which
+     * is the point at which the constraint should start applying to them — and
+     * does.
+     *
+     * Deliberately NOT scoped to the tenant. Cross-tenant is the case: two
+     * tenants on one installation binding the same bot is exactly the collision,
+     * and a `(tenant_id, telegram_bot_id)` index would permit it.
+     */
+    uniqueIndex('bot_instances_telegram_bot_id_key')
+      .on(table.telegramBotId)
+      .where(sql`telegram_bot_id IS NOT NULL`),
     index('bot_instances_tenant_idx').on(table.tenantId),
     check('bot_instances_status_check', enumCheck('status', BOT_INSTANCE_STATUSES)),
   ],
