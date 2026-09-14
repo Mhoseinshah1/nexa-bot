@@ -323,8 +323,25 @@ export class BotBootstrapService {
      * The ordering is protected from OUTSIDE instead: every path that reaches
      * here — `install.sh` and `botctl telegram register` — takes the
      * installation's exclusive lock first, so they queue rather than interleave.
-     * There is no third caller; `check-boundaries.sh` fails the build if a
-     * surface acquires one.
+     * `check-boundaries.sh` holds BOTH halves of that: no surface may reach this
+     * service, and no file but those two (and the checks that test them) may run
+     * the compiled CLI. `apps/api/package.json` used to expose it as
+     * `bot:bootstrap`, a third caller taking no lock at all on a host holding the
+     * production database — so the sentence that stood here, "there is no third
+     * caller", was false and nothing said so. It is now a check rather than a
+     * claim.
+     *
+     * NOT a database advisory lock, which would otherwise be the obvious answer.
+     * It would have to be held across the two Telegram calls while the marker
+     * transaction below checks out a SECOND connection from the same pool —
+     * `DATABASE_POOL_MAX` may be 1, and this codebase has twice reproduced the
+     * deadlock that produces (`permission-guard.ts` names it, "reproduced at pool
+     * size 1"). The lock that can span a network call is the host one.
+     *
+     * What remains: a caller that bypasses both shell paths — running the CLI
+     * inside the container by hand — can still race a concurrent reconcile, and
+     * only when the two use DIFFERENT origins. `docs/open-questions.md` OQ-TG-03
+     * carries it rather than this comment implying it is closed.
      */
     const secretToken = this.requireWebhookSecret();
     const registered = await this.deps.telegram.registerWebhook({

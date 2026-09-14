@@ -28,7 +28,6 @@
     "db:check": "pnpm --filter @nexa/api db:check",
     "db:seed": "pnpm --filter @nexa/api db:seed",
     "admin:bootstrap": "pnpm --filter @nexa/api admin:bootstrap",
-    "bot:bootstrap": "pnpm --filter @nexa/api bot:bootstrap",
     "provision": "pnpm --filter @nexa/api provision",
     "check:runtime": "bash scripts/check-runtime-cli.sh",
     "test:deploy": "bash tests/deploy/botctl.test.sh && bash tests/deploy/check-shell.test.sh",

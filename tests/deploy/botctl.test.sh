@@ -5223,16 +5223,88 @@ assert_not_contains 'a READY rerun invented a token source' \
 assert_contains 'the READY rerun did not report success' \
   "$telegram_ready" 'configured and receiving updates'
 
-test_case 'an unavailable bot is reported as such, not as a registration to retry'
+test_case 'an unavailable bot still runs the CLI, and a supplied token still reaches it'
+# This state used to RETURN before the CLI was invoked, and returning was wrong
+# twice over. A supplied token file never reached `refuseRepointing`, so a file
+# naming a DIFFERENT bot was silently ignored in the one state an operator is
+# most likely to be reaching for one; and the reason nothing could be registered
+# was never printed, only a second command to go and ask for it.
+: >"${NEXA_ROOT}/unavailable-calls"
+printf '8123456789:AA-not-a-real-token\n' >"${NEXA_ROOT}/unavailable-token"
 telegram_stopped="$(bash -c '
-  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  CALLS="$2"
+  . "$1" --domain admin.example.test --acme-email ops@example.test --bot-token-file "$3" >/dev/null 2>&1
   telegram_state() { printf "unavailable"; }
-  nexa_compose() { return 0; }
+  nexa_compose() { printf "%s\n" "$*" >>"$CALLS"; return 1; }
   configure_telegram_bot 2>&1
-  printf "INCOMPLETE=%s\n" "$TELEGRAM_INCOMPLETE"
-' _ "${REPO}/deploy/install.sh" || true)"
-assert_contains 'an unavailable bot was not reported' "$telegram_stopped" 'not able to receive updates'
+  printf "INCOMPLETE=%s RETRY=%s\n" "$TELEGRAM_INCOMPLETE" "$TELEGRAM_RETRY"
+' _ "${REPO}/deploy/install.sh" "${NEXA_ROOT}/unavailable-calls" "${NEXA_ROOT}/unavailable-token" || printf 'THE_STEP_DIED')"
+assert_not_contains 'an unavailable bot aborted the install' "$telegram_stopped" 'THE_STEP_DIED'
 assert_contains 'an unavailable bot did not fail the install' "$telegram_stopped" 'INCOMPLETE=yes'
+assert_contains 'the supplied token never reached the CLI in the unavailable state' \
+  "$(cat "${NEXA_ROOT}/unavailable-calls")" '--bot-token-stdin'
+# And its own summary, because the outstanding work is NOT the webhook: telling
+# the operator to register one sends them to a call the service refuses before
+# it makes it.
+assert_contains 'an unavailable bot was not given its own retry state' \
+  "$telegram_stopped" 'RETRY=unavailable'
+telegram_unavailable_summary="$(sed -n '/INCOMPLETE_UNAVAILABLE$/,/^INCOMPLETE_UNAVAILABLE$/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the unavailable summary does not say the webhook is not the outstanding work' \
+  "$telegram_unavailable_summary" 'NOT the webhook'
+
+test_case 'a revoked stored token is not reported as a registration to retry'
+# The two summaries were not exhaustive, and the state alone cannot make them
+# so: `ready` and `incomplete` are equally true of a webhook that was never
+# registered and of a stored token Telegram has since refused. The old branch
+# sent the second case to `botctl telegram register`, which reads the same
+# stored token and fails identically.
+telegram_revoked="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  telegram_state() { printf "ready"; }
+  nexa_compose() { printf "telegram.bootstrap_token_rejected: Telegram refused it.\n"; return 1; }
+  configure_telegram_bot 2>&1
+  printf "INCOMPLETE=%s RETRY=%s\n" "$TELEGRAM_INCOMPLETE" "$TELEGRAM_RETRY"
+' _ "${REPO}/deploy/install.sh" || printf 'THE_STEP_DIED')"
+assert_not_contains 'a revoked token aborted the install' "$telegram_revoked" 'THE_STEP_DIED'
+assert_contains 'a revoked stored token was not distinguished from a webhook failure' \
+  "$telegram_revoked" 'RETRY=token-rejected'
+# The CLI's own output still reaches the operator: capturing it to classify the
+# failure must not be the same as swallowing it.
+assert_contains 'the CLI output was swallowed by the capture' \
+  "$telegram_revoked" 'telegram.bootstrap_token_rejected'
+telegram_revoked_summary="$(sed -n '/INCOMPLETE_TOKEN_REJECTED$/,/^INCOMPLETE_TOKEN_REJECTED$/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the revoked-token summary does not refuse the retry that cannot work' \
+  "$telegram_revoked_summary" 'NOT'
+assert_contains 'the revoked-token summary does not name the open question' \
+  "$telegram_revoked_summary" 'OQ-TG-01'
+
+test_case 'a token naming another bot is reported as that, not as a failed install'
+telegram_other_bot="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --bot-token-file "$2" >/dev/null 2>&1
+  telegram_state() { printf "ready"; }
+  nexa_compose() { printf "telegram.bootstrap_different_bot: belongs to bot 999.\n"; return 1; }
+  configure_telegram_bot 2>&1
+  printf "INCOMPLETE=%s RETRY=%s\n" "$TELEGRAM_INCOMPLETE" "$TELEGRAM_RETRY"
+' _ "${REPO}/deploy/install.sh" "${NEXA_ROOT}/unavailable-token" || printf 'THE_STEP_DIED')"
+assert_contains 'a different-bot refusal was not distinguished' \
+  "$telegram_other_bot" 'RETRY=different-bot'
+telegram_other_summary="$(sed -n '/INCOMPLETE_DIFFERENT_BOT$/,/^INCOMPLETE_DIFFERENT_BOT$/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the different-bot summary does not say nothing was changed' \
+  "$telegram_other_summary" 'Nothing was changed'
+
+test_case 'a first attempt that stored nothing outranks the error code'
+# Order matters and is easy to get backwards. A rejected token on a FIRST
+# attempt stored nothing, and "nothing was stored" is the whole story: the
+# remedy is a token source, not a report about a credential that does not exist.
+telegram_first_rejected="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --bot-token-file "$2" >/dev/null 2>&1
+  telegram_state() { printf "none"; }
+  nexa_compose() { printf "telegram.bootstrap_token_rejected: Telegram refused it.\n"; return 1; }
+  configure_telegram_bot 2>&1
+  printf "RETRY=%s\n" "$TELEGRAM_RETRY"
+' _ "${REPO}/deploy/install.sh" "${NEXA_ROOT}/unavailable-token" || printf 'THE_STEP_DIED')"
+assert_contains 'a rejected token on a first attempt claimed a stored credential' \
+  "$telegram_first_rejected" 'RETRY=none'
 
 test_case 'skip-telegram survives a state that cannot be read'
 # The refusal to guess is right; killing an install that explicitly opted out of

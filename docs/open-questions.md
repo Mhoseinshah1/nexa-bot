@@ -1053,3 +1053,33 @@ the webhook is addressed by the bot instance's own UUID — so this is a reporti
 defect rather than a functional one. It is recorded because a stale username is
 exactly the kind of thing an operator later reads as evidence of which bot an
 installation is bound to.
+
+## OQ-TG-03 — the bootstrap's serialization is a host lock, not a database one
+
+Status: OPEN, and bounded.
+
+`BotBootstrapService.execute` makes two Telegram calls and then records what it
+did. `setWebhook` cannot be inside the transaction that records it — a rolled-back
+transaction would leave Telegram pointed somewhere the database does not know
+about — so two concurrent reconciliations using DIFFERENT origins can commit the
+external and the local effect in opposite orders, leaving a row that says `ready`
+for a URL Telegram is not using.
+
+The ordering is held from outside: `install.sh` and `botctl telegram register`
+each take the installation's exclusive lock, and `check-boundaries.sh` now fails
+the build if any other file runs the compiled CLI. That check exists because the
+claim it replaces was false — `apps/api/package.json` exposed `bot:bootstrap`,
+a third entry point taking no lock, on a host holding the production database.
+
+What is NOT closed: an operator running the CLI inside the container by hand
+bypasses the lock, and nothing in the application would refuse them.
+
+A database advisory lock is the obvious alternative and is deliberately not used.
+It would have to be held across two network calls while the marker transaction
+checks out a second connection from the same pool; `DATABASE_POOL_MAX` may be 1,
+and this codebase has already reproduced that deadlock twice — `permission-guard.ts`
+records it as "reproduced at pool size 1". Closing this properly means either a
+lease row with a takeover rule, the way the backup pipeline does it, or asking
+Telegram what it actually has (`getWebhookInfo`) and recording that rather than
+what was requested. Neither is worth doing before something other than an
+installer reconciles a webhook.

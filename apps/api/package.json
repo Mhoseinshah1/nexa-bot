@@ -17,7 +17,6 @@
     "db:seed": "node dist/infrastructure/persistence/seed.js",
     "clean": "rm -rf dist",
     "admin:bootstrap": "node dist/bootstrap-owner.cli.js",
-    "bot:bootstrap": "node dist/bootstrap-bot.cli.js",
     "provision": "node dist/provision-installation.cli.js",
     "backup": "node dist/backup.cli.js",
     "db:migrate:dev": "tsx src/infrastructure/persistence/migrate.ts",
