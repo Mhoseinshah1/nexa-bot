@@ -15,20 +15,35 @@ Four choices had to be made before any of it could be written. Each is recorded 
 with the alternative that was rejected, because each is a policy decision rather than a
 technical one and the next person will otherwise have to guess which way it went.
 
-## Decision 1 — the token arrives on stdin or by file path, never in argv
+## Decision 1 — the token is asked for, interactively, with no echo
 
-`--bot-token-file PATH`, read the same way the first owner's password already is. Never
-`--bot-token VALUE`, and never an environment variable.
+The normal fresh install prompts:
 
-`deploy/install.sh` already states the rule for the owner's password, twice, and gives
-both reasons: _"argv is readable by every user on the machine via `ps`, and an
+```
+==> configuring Telegram bot
+Telegram Bot Token:
+```
+
+Read through the same `Prompter.secret` the first owner's password already uses, which
+puts the terminal in raw mode and echoes nothing. Never argv, never an environment
+variable, never printed, never logged, never plaintext on disk.
+
+`--bot-token-file PATH` exists as an OPTIONAL, documented automation path for
+unattended installs, the way `--owner-password-file` does. It is not the normal UX and
+the installer does not steer anyone towards it.
+
+`install.sh` already states the argv half of this rule twice for the owner's password,
+with both reasons: _"argv is readable by every user on the machine via `ps`, and an
 environment variable would be readable through `docker inspect`."_ A bot token is a
-bearer credential for the same installation. It gets the same treatment or the rule
-means nothing.
+bearer credential for the same installation. What that rule did not settle, and this
+decision does, is that the ordinary human install should simply **ask** — the same way
+it asks for the owner's password — rather than require the operator to have staged a
+file first.
 
-The consequence is that the installer's existing `-T`/no-`-T` split for stdin applies
-unchanged, and `deployment-smoke.sh` can drive it exactly as it drives the owner
-bootstrap.
+The confirmation prompt the password gets is deliberately NOT copied. A password is
+typed blind and creates a row that cannot be re-created; a token is pasted, and
+`getMe` validates it against Telegram before anything is written, so a mistyped one is
+rejected with a specific reason rather than silently stored.
 
 ## Decision 2 — the webhook secret stays installation-wide, in configuration
 
@@ -53,48 +68,67 @@ the current ordering is written to prevent.
 One installation runs one bot today. When it runs several, the question reopens, and
 the answer will have to solve the probing problem rather than ignore it.
 
-## Decision 3 — a rerun may rotate the token, but may not repoint the installation at a different bot
+## Decision 3 — an install rerun reconciles; it never rotates a credential
 
-This needs an identity for "the same bot", and the username is not one: BotFather lets
-it change. The numeric id cannot change, so `bot_instances.telegram_bot_id` is added
-and `getMe` is what fills it.
+_(This supersedes an earlier version of this decision, which had a rerun re-encrypt and
+replace the token whenever `telegram_bot_id` matched. That made an ordinary
+reconciliation into a credential operation, and it is wrong.)_
 
-The rule, then:
+A rerun of `install.sh` is **reconciliation**. When a usable bot instance already
+exists, the installer:
 
-- **Same `telegram_bot_id`, different token** → the token is re-encrypted and replaced.
-  This is rotation, it is a real operation, and there is no other path in the product
-  that performs it.
-- **Different `telegram_bot_id`** → refused. Repointing an installation at another bot
-  would leave every `customers.telegram_user_id` row attached to conversations that bot
-  has never had, and every stored `chat_id` addressed to a bot that cannot send to it.
-  Nothing about that is recoverable by rerunning anything.
-- **Same id, same token** → nothing is written, and it says so. This is the ordinary
-  rerun, and it is a success.
+- does not ask for a token again;
+- does not rotate, replace or re-encrypt the stored one;
+- preserves the bot identity and the webhook secret;
+- re-registers the webhook if that is the step still outstanding.
 
-`provision-installation` refuses to modify an existing tenant on adjacent reasoning; the
-difference is that a tenant has no external identity to check against, and a bot does.
+A different token supplied during an ordinary rerun does **not** repoint or rotate
+anything. There is no path through the normal installer that changes a credential.
 
-## Decision 4 — an unreachable public URL fails the registration, not the row and not the install
+If the stored token has since been revoked, `getMe` says so and the installer reports
+an explicit configuration problem naming the token — it does not quietly accept a new
+one to route around the failure. An operator who wants to change the token is
+performing a deliberate, separate act, and that belongs to an explicit operator command
+or the later Web Admin management workflow, not to a rerun somebody performed to fix
+something else.
 
-The row is written and the webhook registration is attempted separately. When `setWebhook`
-fails — DNS that has not propagated, a certificate not yet issued, Telegram unreachable —
-the bot instance stays written and the installer reports the registration as the one
-outstanding step, with the command that completes it.
+`bot_instances.telegram_bot_id` is still recorded, and still comes from `getMe` rather
+than from anything an operator types. Its job is now identity and truthful reporting
+rather than deciding a rotation: it is how the installation knows which bot it is bound
+to, and how a disagreement is described precisely instead of as a generic failure.
 
-The alternative is to fail the install. That was rejected because it makes a slow DNS
-record destroy work that succeeded: the tenant, the owner, the encrypted token and the
-recorded release are all correct and none of them should be rolled back because a
-propagation delay outlasted the installer. The installer's own history has the matching
-lesson recorded at length — an install interrupted between the owner and the release
-manifest left a healthy installation that `botctl version` refused to describe, and the
-fix was to make the rerun work rather than to make the failure louder.
+## Decision 4 — durable state survives a webhook failure, and the install does not claim success
 
-Registration is therefore idempotent and separately invocable, and a rerun of the whole
-installer performs it.
+Two halves, and the earlier version of this decision only had the first.
+
+**Nothing is rolled back.** The tenant, the owner, the validated and encrypted token and
+the `bot_instances` row all stay. They are correct, they were expensive to produce, and
+a DNS record that has not propagated is no reason to destroy them. The installer's own
+history carries the matching lesson: an install interrupted between the owner and the
+release manifest left a healthy installation `botctl version` refused to describe, and
+the fix was to make the rerun work rather than to make the failure louder.
+
+**But the install does not report success.** A Telegram-enabled installation whose bot
+cannot receive updates is not a completed installation, and saying otherwise is the
+silent-success pattern this codebase exists to avoid. So the installer reports the
+Telegram bootstrap as INCOMPLETE, names the outstanding step, and exits non-zero.
+
+The two halves are compatible because the state is recoverable and the rerun is the
+recovery: it resumes from the stored encrypted token **without asking for it again**,
+retries `setWebhook`, and converges to success when registration succeeds.
+
+The invariant, stated once so it can be checked: _a fresh install may leave recoverable
+local state after an external failure, but it must never report full install success
+while the bot still cannot receive updates._
 
 ## Consequences
 
-- A new column, `bot_instances.telegram_bot_id`, and the migration that adds it.
+- A new column, `bot_instances.telegram_bot_id`, and the migration that adds it. It
+  records identity and makes a disagreement describable; it does not authorise a
+  rotation.
+- The bootstrap is therefore **create-or-reconcile**, never update-in-place of a
+  credential. Its outcomes are: created, already configured and reconciled, webhook
+  registration still outstanding, or a named configuration problem.
 - `getMe` and `setWebhook` need a Telegram client that can carry their results.
   `telegramSend` cannot: it extracts `result.message_id` and nothing else. The HTTP
   mechanics — the timeout, `redirect: 'error'`, the retryable/permanent taxonomy — are
