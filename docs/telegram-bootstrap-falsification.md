@@ -152,6 +152,38 @@ while the marker transaction takes a second connection from the same pool, and
 twice. `docs/open-questions.md` OQ-TG-03 carries the residual rather than a
 comment implying it is gone.
 
+## The third Codex round
+
+Six findings, all real, and the first two are the round before this one: the
+summary added for a revoked token recommended a procedure that cannot work, and
+the classifier that was supposed to make the summaries exhaustive left out every
+failure that happens before Telegram is reached at all. `CLAUDE.md` says to
+review a fix as hard as the bug; this is what that looks like when it is not
+done.
+
+| #   | Rule                                                             | Mutation                                                      | Test that dies                                                                                             | Result |
+| --- | ---------------------------------------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------ |
+| E1  | The revoked-token summary invents no rotation this release lacks | restore "reissuing ... is the supported route"                | `botctl.test.sh` › the revoked-token summary does not invent a rotation this release cannot do             | KILLED |
+| E2  | The additive Telegram config is written by rename, not by append | write straight to `$app_env` instead of a temp file           | `botctl.test.sh` › the additive Telegram configuration is written by rename, not by append                 | KILLED |
+| E3  | One Telegram bot binds to one row, cross-tenant                  | point `isUniqueViolation` at an index that does not exist     | `bot-bootstrap-identity.test.ts` › refuses a second tenant binding the same bot, even under a new username | KILLED |
+| E3b | ...and the INDEX is what holds it, not the mapping               | `DROP INDEX bot_instances_telegram_bot_id_key` in `nexa_test` | `bot-bootstrap-identity.test.ts` › refuses a second tenant binding the same bot, even under a new username | KILLED |
+| E4  | An unrecognised CLI argument is refused, not ignored             | accept every argument the parser does not recognise           | `bootstrap-bot-cli.test.ts` › refuses an unknown flag rather than ignoring it                              | KILLED |
+| E5  | A directory is refused as a token file, in PREFLIGHT             | remove the `-f` check                                         | `botctl.test.sh` › a DIRECTORY as --bot-token-file is refused before the host is changed                   | KILLED |
+| E6  | A stored token that cannot be DECRYPTED is its own outcome       | match a code no error produces                                | `botctl.test.sh` › a stored token that cannot be DECRYPTED is not a webhook retry either                   | KILLED |
+
+E3b is the only mutation in this record made against a database rather than a
+file, and it is the one that matters: the mapping E3 kills is how the rule
+reaches an operator, and the index is the rule. Dropping it in `nexa_test` let
+the second tenant's insert succeed, which is the defect exactly — two rows for
+one bot, Telegram's single webhook moved to the second, and the first still
+reporting `ready`. It was restored and the suite re-run green.
+
+E1 is the one to read twice. It was written in the round before this one, in the
+same commit as the mechanism that classifies failures correctly, and it told the
+operator to do something the code three files away makes impossible — with the
+true statement immediately above it. Nothing in the gate could have caught it:
+every test passed, the summary was reachable, and the sentence was simply false.
+
 ## The diagnosability round
 
 Not a rule about the product — a rule about the test that guards it. The

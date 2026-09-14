@@ -1083,3 +1083,19 @@ lease row with a takeover rule, the way the backup pipeline does it, or asking
 Telegram what it actually has (`getWebhookInfo`) and recording that rather than
 what was requested. Neither is worth doing before something other than an
 installer reconciles a webhook.
+
+## OQ-TG-01 addendum — what a revoked token actually leaves an operator
+
+Recorded because the installer told them otherwise for one commit.
+
+The summary added for `telegram.bootstrap_token_rejected` said that reissuing the
+token for the same bot in BotFather and rerunning the installer was the supported
+route. It is not, and the sentence above it already said why: `execute` resolves
+the credential from the row and registers with that, every time. A supplied token
+is read only so `refuseRepointing` can refuse one naming a different bot; its
+secret half never replaces a stored credential, by design (ADR-0029 decision 3).
+
+So a rerun with a reissued token fails exactly as the run before it did. Until a
+release adds an explicit rotation command there is no supported recovery, and the
+summary now says that rather than naming a procedure. This is the concrete cost
+of OQ-TG-01 and the reason it should not stay open indefinitely.
