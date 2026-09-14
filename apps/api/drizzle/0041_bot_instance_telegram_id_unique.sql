@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "bot_instances_telegram_bot_id_key" ON "bot_instances" USING btree ("telegram_bot_id") WHERE telegram_bot_id IS NOT NULL;

@@ -267,6 +267,34 @@
       "when": 1789306342751,
       "tag": "0037_products_tenant_panel_agreement",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1789365229175,
+      "tag": "0038_bot_instance_telegram_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1789365801663,
+      "tag": "0039_bot_instance_webhook_registration",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1789375986026,
+      "tag": "0040_bot_instance_webhook_secret_fingerprint",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1789399815566,
+      "tag": "0041_bot_instance_telegram_id_unique",
+      "breakpoints": true
     }
   ]
 }

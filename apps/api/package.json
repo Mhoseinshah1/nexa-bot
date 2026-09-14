@@ -22,6 +22,7 @@
     "db:migrate:dev": "tsx src/infrastructure/persistence/migrate.ts",
     "db:seed:dev": "tsx src/infrastructure/persistence/seed.ts",
     "admin:bootstrap:dev": "tsx src/bootstrap-owner.cli.ts",
+    "bot:bootstrap:dev": "tsx src/bootstrap-bot.cli.ts",
     "provision:dev": "tsx src/provision-installation.cli.ts",
     "backup:dev": "tsx src/backup.cli.ts",
     "start:recovery": "node dist/main.recovery.js"

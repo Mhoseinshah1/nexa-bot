@@ -998,6 +998,217 @@ phase that adds categories — whichever comes first. Whoever does it decides th
 key at the same time, because a cursor over `sort_order` is the part that is not
 obvious.
 
+## OQ-TG-01 — an installation cannot change the bot it serves, and cannot recover a revoked token
+
+Status: OPEN. Raised by the fresh-install bootstrap (ADR-0029), which is where it
+becomes reachable.
+
+ADR-0029 decision 3 is right and this is its cost, stated plainly rather than
+left for somebody to discover at the worst moment.
+
+The installer reconciles and never rotates: `BotBootstrapRepository` deliberately
+declares no method that writes a token onto an existing row, so the capability
+does not exist to be called by accident. The ADR defers the deliberate version to
+"an explicit operator command or the later Web Admin management workflow".
+Neither has been built. So:
+
+- an installation whose bot token is **revoked** in BotFather is permanently
+  `incomplete`. Every `install.sh` rerun exits non-zero, `botctl telegram
+register` fails with `telegram.bootstrap_token_rejected`, and the only way back
+  is SQL against `bot_instances`;
+- the same is true of a token **rotated** in BotFather, which is the ordinary
+  reaction to a suspected leak — the thing an operator is most likely to do in a
+  hurry;
+- a developer running `bot:bootstrap:dev` against the seeded database hits it
+  immediately: the seed's token is a fixture, `getMe` rejects it, and nothing in
+  this release can replace it.
+
+**What a resolution has to decide**, and why it is not a small command:
+
+1. Whether replacing a token for the SAME `telegram_bot_id` (a rotation) and
+   repointing at a DIFFERENT bot (a migration) are one operation or two. They
+   have different blast radii: a rotation changes a credential, a repoint strands
+   every stored `telegram_user_id` and `chat_id`.
+2. What authorizes it. The bootstrap is a CLI precisely because provisioning has
+   no caller to authorize; a management workflow has one, and needs a permission,
+   an audit row and a confirmation.
+3. What happens to the webhook. A new token does not change the registration, but
+   the old bot may still hold one pointing here.
+
+Until then: the constraint is documented in `docs/deployment.md`, and the error
+message names this entry rather than implying a command that ships.
+
+## OQ-TG-02 — a BotFather rename is not picked up after the first bootstrap
+
+Status: OPEN, and small.
+
+`bot_instances.username` is written from `getMe` when the row is created, and
+refreshed only on the path that fills a NULL `telegram_bot_id` — a row that
+predates migration 0038. For every row this release creates, `getMe` returns
+before that write, so an operator who renames the bot in BotFather leaves the
+stored username stale for ever.
+
+Nothing reads it for routing — the identity that matters is the numeric id, and
+the webhook is addressed by the bot instance's own UUID — so this is a reporting
+defect rather than a functional one. It is recorded because a stale username is
+exactly the kind of thing an operator later reads as evidence of which bot an
+installation is bound to.
+
+## OQ-TG-03 — the bootstrap's serialization is a host lock, not a database one
+
+Status: OPEN, and bounded.
+
+`BotBootstrapService.execute` makes two Telegram calls and then records what it
+did. `setWebhook` cannot be inside the transaction that records it — a rolled-back
+transaction would leave Telegram pointed somewhere the database does not know
+about — so two concurrent reconciliations using DIFFERENT origins can commit the
+external and the local effect in opposite orders, leaving a row that says `ready`
+for a URL Telegram is not using.
+
+The ordering is held from outside: `install.sh` and `botctl telegram register`
+each take the installation's exclusive lock, and `check-boundaries.sh` now fails
+the build if any other file runs the compiled CLI. That check exists because the
+claim it replaces was false — `apps/api/package.json` exposed `bot:bootstrap`,
+a third entry point taking no lock, on a host holding the production database.
+
+What is NOT closed: an operator running the CLI inside the container by hand
+bypasses the lock, and nothing in the application would refuse them.
+
+A database advisory lock is the obvious alternative and is deliberately not used.
+It would have to be held across two network calls while the marker transaction
+checks out a second connection from the same pool; `DATABASE_POOL_MAX` may be 1,
+and this codebase has already reproduced that deadlock twice — `permission-guard.ts`
+records it as "reproduced at pool size 1". Closing this properly means either a
+lease row with a takeover rule, the way the backup pipeline does it, or asking
+Telegram what it actually has (`getWebhookInfo`) and recording that rather than
+what was requested. Neither is worth doing before something other than an
+installer reconciles a webhook.
+
+## OQ-TG-01 addendum — what a revoked token actually leaves an operator
+
+Recorded because the installer told them otherwise for one commit.
+
+The summary added for `telegram.bootstrap_token_rejected` said that reissuing the
+token for the same bot in BotFather and rerunning the installer was the supported
+route. It is not, and the sentence above it already said why: `execute` resolves
+the credential from the row and registers with that, every time. A supplied token
+is read only so `refuseRepointing` can refuse one naming a different bot; its
+secret half never replaces a stored credential, by design (ADR-0029 decision 3).
+
+So a rerun with a reissued token fails exactly as the run before it did. Until a
+release adds an explicit rotation command there is no supported recovery, and the
+summary now says that rather than naming a procedure. This is the concrete cost
+of OQ-TG-01 and the reason it should not stay open indefinitely.
+
+## OQ-TG-04 — Telegram bootstrap hardening deferred by owner decision
+
+Status: OPEN, DEFERRED. **Not rejected, and not false positives** — every item below
+was reported by an independent review of head `22239a6` and is, as far as it was
+examined, real. The owner stopped the review-and-fix loop and deferred them; this
+entry exists so they can be picked up rather than rediscovered.
+
+One finding from that round was NOT deferred and is fixed: `botctl telegram`
+echoed its rejected arguments, so a token passed in argv reached stderr and any
+log capturing it. See `tests/deploy/botctl.test.sh` › "a token passed in argv is
+never echoed back by any refusal".
+
+### Why the list is this long, which matters more than any single item
+
+Five review rounds on this branch each found a defect inside the previous round's
+fix. The shape is the same every time: **the installer derives an operator-facing
+remedy from a cause, in prose, in a file that cannot see the code that decided
+it.** `deploy/install.sh` now carries seven `INCOMPLETE_*` summaries — roughly 180
+lines — and each new cause adds a message that must be true in every state
+reachable with it. Nine of the thirteen items below are "that prose is false in
+state X".
+
+A structural fix was started and reverted unfinished when the loop was stopped:
+collapse the seven cause-derived summaries to the TWO the installer can state
+correctly from its own knowledge — whether anything was STORED, read back from the
+database — and defer the cause and remedy to the CLI's error, which is printed
+immediately above and is written by the code that decided it. That removes the
+surface rather than adding to it, and would close items 1, 2, 4, 5, 7, 8, 9 and 11
+at the root. Anyone resuming this should consider doing that before fixing the
+items individually.
+
+### Deferred items
+
+1. **A rejected token on a FRESH bootstrap is told there is no recovery.**
+   `bot-bootstrap.service.ts` `getMe`. The message says no supported recovery
+   exists and a newly issued token will not be used. True of a STORED credential;
+   false when no row exists yet, where rerunning with a corrected token is exactly
+   the recovery — and is what the installer's own nothing-stored summary then
+   advises. Two messages, contradicting each other.
+
+2. **An already-bound refusal from a TTY install is not classified.**
+   `deploy/install.sh`. The classifier reads captured output, and the interactive
+   path is deliberately not captured, so a fresh bootstrap at a terminal with a
+   bot already bound to another tenant falls to the nothing-stored summary and is
+   told to retry with a token source, which will refuse for ever.
+
+3. **The legacy identity fill commits before the different-bot refusal.**
+   `bot-bootstrap.service.ts`. On a pre-0038 row, `getMe` records the stored
+   token's bot id and refreshes the username in a committed transaction, with an
+   audit row, before the second `refuseRepointing` throws. The different-bot
+   summary then opens "Nothing was changed." Either compare before that commit,
+   or stop claiming nothing was written.
+
+4. **The decryption summary's header still prescribes key repair.** Its body was
+   corrected to admit that restoring key material fixes neither
+   `platform.secret_auth_failed` nor `platform.secret_key_id_mismatch`; the
+   heading above it still says "Repair the keys first" and that the error names a
+   key. `secret_auth_failed` deliberately names none.
+
+5. **Already-bound needs two remedies, not one.** From the fresh INSERT the row
+   rolled back and "create a second bot and rerun" is right. From
+   `recordTelegramIdentity` the tenant already holds a legacy row and an encrypted
+   token for the duplicated bot; reconciliation resolves that stored credential,
+   hits the same violation, and no token-replacement operation exists — so the
+   advertised retry cannot repair it.
+
+6. **A misconfigured API base reports as a revoked token.**
+   `telegram-bot-bootstrap.gateway.ts` maps every `FAILED_PERMANENT` to
+   `REJECTED`, including a 2xx whose `result` is not a bot — the shape a wrong
+   `TELEGRAM_API_BASE_URL` produces. Correcting that variable is the recovery, and
+   the operator is told their token was revoked instead.
+
+7. **The 0041 preflight names a remedy that does not remediate.** Creating
+   separate bots and retrying changes no existing `telegram_bot_id` and no stored
+   credential, so the same preflight fails again. The real remediation is direct
+   database work (see OQ-TG-01), and `docs/deployment.md`'s "Migration preflight"
+   section covers only duplicate PRIMARY tenants.
+
+8. **A permanent `setWebhook` refusal is told to rerun.** `webhookFailure` shares
+   one detail across `REFUSED` and `UNREACHABLE`; only the transient one is fixed
+   by rerunning. A 4xx means the URL itself is wrong, and an unchanged rerun
+   submits the same URL.
+
+9. **`botctl telegram status` cannot report WHY a bot is unavailable.** It prints
+   the literal state. The `--skip-telegram` text sends the operator there to find
+   out which of three conditions applies, and skipping is precisely the path that
+   avoids the `execute` call which would have said.
+
+10. **Stale-username collisions are still a raw 23505.** `rethrowAlreadyBound`
+    translates the bot-id constraint only; `bot_instances_username_key` can be
+    violated by either writer when a bot takes a username still stored on another
+    row after a rename, and surfaces as an unhandled database error.
+
+11. **A disabled tenant with no bot is asked for a token first.** `status()`
+    returns `none` before consulting `scopeIsActive`, so the installer prompts for
+    a bearer credential and sends it to `getMe` before the create transaction
+    refuses the inactive tenant. The credential need never have been transmitted.
+
+12. **An outbound failure during `getMe` is diagnosed as a webhook problem.** On a
+    rerun it leaves the state `ready` or `incomplete` and emits
+    `telegram.bootstrap_unreachable`, which the classifier does not recognise, so
+    the webhook summary points at inbound DNS and certificates — the wrong network
+    boundary — for a call that never reached `setWebhook`.
+
+13. **`docs/deployment.md` documents three status values, not four.** The
+    script-readable contract still reads `none | incomplete | ready`; `unavailable`
+    is missing, so automation written from that section rejects a legitimate
+    answer exactly when something is disabled.
+
 ## OQ-4C-01 — when an unpaid order and its pending payment expire
 
 Phase 4C creates orders that reach `AWAITING_PAYMENT` and `MANUAL_TRANSFER` payments

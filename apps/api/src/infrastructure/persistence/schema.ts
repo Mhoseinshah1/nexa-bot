@@ -214,6 +214,64 @@ export const botInstances = pgTable(
       .notNull()
       .references(() => tenants.id),
     username: text('username').notNull(),
+    /**
+     * Telegram's own numeric id for this bot, as a decimal STRING.
+     *
+     * The identity a rerun is decided against. A username can be changed in BotFather
+     * and a token can be rotated; this cannot, so it is what says whether a second
+     * bootstrap is rotating THIS bot's token or repointing the installation at a
+     * different bot — the refusal ADR-0029 records, because repointing would leave
+     * every stored `telegram_user_id` attached to conversations that bot never had.
+     *
+     * Text rather than bigint for the reason every other id on the wire is text: JSON
+     * has one numeric type, and a value stored and compared for the life of an
+     * installation must not be able to lose a digit in transit.
+     *
+     * Nullable because rows created before the bootstrap existed have no way to know
+     * it. `getMe` fills it the first time a bootstrap runs against such a row.
+     */
+    telegramBotId: text('telegram_bot_id'),
+    /**
+     * When Telegram last ACCEPTED a `setWebhook` for this bot, and the URL it took.
+     *
+     * Separate from the row existing, because the two fail independently and the whole
+     * recovery story depends on telling them apart. A crash between the local commit
+     * and `setWebhook` leaves a row with this NULL: the rerun decrypts the stored token
+     * and retries the registration, and never asks for a token again. A crash after
+     * Telegram accepted but before this was written leaves the same NULL, and the rerun
+     * re-registers and then marks it. Both crashes converge, which is why the marker is
+     * written AFTER the call rather than with the row.
+     *
+     * A repeat `setWebhook` is NOT a no-op — an earlier version of this comment said it
+     * was. It replaces the registration, and it discards whatever Telegram has queued if
+     * the caller asks it to, which is why `dropPendingUpdates` is true only on a first
+     * registration.
+     *
+     * It is also what `--status` reports, and therefore what stops an installer
+     * claiming a Telegram-enabled installation is complete while the bot cannot
+     * receive a single update.
+     */
+    webhookRegisteredAt: timestamptz('webhook_registered_at'),
+    webhookUrl: text('webhook_url'),
+    /**
+     * SHA-256 of the secret the webhook was registered WITH, as hex.
+     *
+     * Not a credential: it is a one-way digest of one, and it is here because
+     * the marker above records what was registered and the secret is the other
+     * half of what `setWebhook` carried. Without it a rotated
+     * `TELEGRAM_WEBHOOK_SECRET` produces an installation that reports itself
+     * ready while the route refuses every update Telegram signs — the operator
+     * followed the rotation procedure the template documents, and the only
+     * remedy was SQL.
+     *
+     * A digest rather than the value, because nothing needs to read it back:
+     * the question is only "is this the same secret", and a stored plaintext
+     * would be a second copy of a credential that already lives in exactly one
+     * file. Nullable for the rows that predate it; a NULL means "unknown", and
+     * an unknown fingerprint is treated as needing registration rather than as
+     * matching.
+     */
+    webhookSecretFingerprint: text('webhook_secret_fingerprint'),
     status: text('status').notNull().default('ACTIVE'),
     /** Envelope-encrypted. Never returned by any API, never logged. */
     tokenCiphertext: text('token_ciphertext').notNull(),
@@ -223,6 +281,31 @@ export const botInstances = pgTable(
   },
   (table) => [
     uniqueIndex('bot_instances_username_key').on(table.username),
+    /**
+     * One Telegram bot, one row. The identity, not the display name.
+     *
+     * `bot_instances_username_key` looked like it already held this and does not:
+     * a username is changed in BotFather at will, and the stored copy goes stale
+     * the moment it is (OQ-TG-02). So bootstrapping a SECOND tenant with the same
+     * token after a rename passes the username index — `getMe` returns the new
+     * name, which collides with nothing — and writes a second row carrying the
+     * same `telegram_bot_id`. Telegram has one webhook per bot, so the second
+     * registration moves it, and the first row goes on reporting `ready` for a
+     * URL that no longer receives anything.
+     *
+     * PARTIAL, because the column is nullable for rows that predate migration
+     * 0038 and a unique index would otherwise make at most one of them legal.
+     * `getMe` fills those in the first time a bootstrap runs against them, which
+     * is the point at which the constraint should start applying to them — and
+     * does.
+     *
+     * Deliberately NOT scoped to the tenant. Cross-tenant is the case: two
+     * tenants on one installation binding the same bot is exactly the collision,
+     * and a `(tenant_id, telegram_bot_id)` index would permit it.
+     */
+    uniqueIndex('bot_instances_telegram_bot_id_key')
+      .on(table.telegramBotId)
+      .where(sql`telegram_bot_id IS NOT NULL`),
     index('bot_instances_tenant_idx').on(table.tenantId),
     check('bot_instances_status_check', enumCheck('status', BOT_INSTANCE_STATUSES)),
   ],

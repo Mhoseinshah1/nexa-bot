@@ -34,6 +34,9 @@ describe('the production environment template', () => {
     __SECRETS_ACTIVE_KEY_ID__: 'install-1',
     __DOMAIN__: 'admin.example.com',
     __EDGE_SUBNET__: '172.29.0.0/24',
+    // At least 16 characters, which is what the schema requires once
+    // TELEGRAM_WEBHOOK_ENABLED is true. Nothing here is a real secret.
+    __TELEGRAM_WEBHOOK_SECRET__: 'template-test-webhook-secret',
   };
 
   function render(overrides: Record<string, string> = {}): Record<string, string> {
@@ -176,6 +179,45 @@ describe('the production environment template', () => {
         `this test never renders ${placeholder}, so it proves nothing about it`,
       ).toHaveProperty(placeholder);
     }
+  });
+
+  it('mints a webhook secret Telegram will actually accept', () => {
+    /*
+     * The alphabet is TELEGRAM'S, and the installer got it wrong.
+     *
+     * `setWebhook` accepts `secret_token` of `A-Za-z0-9_-` only. The first
+     * version of `generate_secrets` used `random_base64`, whose output contains
+     * `+` and `/` and — for 32 bytes, always — ends in `=`. Every fresh
+     * installation would have registered nothing and reported INCOMPLETE with
+     * DNS named as the likely cause.
+     *
+     * Asserted against the generator's own definition rather than by running it,
+     * because this file has no shell: what makes the check real is that the
+     * schema clause below refuses the OLD generator's output, so the two cannot
+     * disagree without one of them failing.
+     */
+    const installer = readFileSync(join(__dirname, '../../deploy/install.sh'), 'utf8');
+    const definition = /^random_webhook_secret\(\)\s*\{([^}]*)\}/m.exec(installer)?.[1] ?? '';
+    expect(definition, 'install.sh defines no random_webhook_secret').not.toBe('');
+    expect(definition, 'the webhook secret is not folded into base64url').toContain("tr '+/' '-_'");
+    expect(definition, 'the webhook secret keeps its base64 padding').toContain("tr -d '='");
+
+    // And every place that mints one uses it. `random_base64` here is the bug.
+    const minting = [
+      ...installer.matchAll(/TELEGRAM_WEBHOOK_SECRET.*|webhook_secret="\$\(.*/g),
+    ].map((m) => m[0]);
+    expect(minting.length, 'nothing in the installer mints a webhook secret').toBeGreaterThan(0);
+    for (const line of minting) {
+      expect(line, `${line} mints a webhook secret with the wrong alphabet`).not.toContain(
+        'random_base64',
+      );
+    }
+
+    // The schema is the other half: a value in the old alphabet must not boot.
+    const bad = Buffer.from('a'.repeat(32)).toString('base64'); // contains '='
+    expect(() => configSchema.parse(render({ TELEGRAM_WEBHOOK_SECRET: bad }))).toThrowError(
+      /A-Z, a-z, 0-9/,
+    );
   });
 
   it('the installer checks the LAST key in the template for a torn write', () => {

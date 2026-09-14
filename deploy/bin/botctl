@@ -102,6 +102,9 @@ botctl — operate a Nexa installation
   botctl logs [SERVICE]      follow logs
   botctl restart             restart the stack
 
+  botctl telegram status     whether the bot is configured and receiving updates
+  botctl telegram register   register the webhook with Telegram, or retry it
+
   botctl secrets status                    configuration, envelope versions and key ids in use
   botctl secrets rewrap [--batch N] [--max N]
                                            re-encrypt secrets under the active key
@@ -118,6 +121,12 @@ migration and restoring it would discard every write made since.
 strand ciphertext. It never edits the configuration, and it is not permission to
 DESTROY the key material: backups taken before the re-encryption still contain
 ciphertext under that key.
+
+`telegram register` never asks for a token and never replaces a stored one. It
+resumes from the encrypted token the install already holds and retries the
+registration with Telegram — which is the command to run after fixing DNS or
+waiting for a certificate. Changing the bot itself is a separate, deliberate act
+and is not this command.
 
 `secrets migrate-config` and `secrets disable-v1` are the only commands that
 edit /etc/nexa/nexa.env. Neither generates, changes or prints key material.
@@ -1806,6 +1815,96 @@ cmd_secrets() {
     dist/secrets.cli.js "$action" "$@"
 }
 
+# The bot's public origin, from the installation's own deploy.env.
+#
+# NEXA_DOMAIN is what the edge serves and what a certificate is issued for, so
+# it is the only value that can be the webhook's origin without being a second
+# place for the domain to be recorded and go stale.
+telegram_origin() {
+  local domain
+  domain="$(nexa_env_value "${NEXA_CONFIG_DIR}/deploy.env" NEXA_DOMAIN 2>/dev/null || true)"
+  [ -n "$domain" ] ||
+    nexa_die "deploy.env names no NEXA_DOMAIN, so there is no origin to register a webhook against."
+  printf 'https://%s' "$domain"
+}
+
+cmd_telegram() {
+  require_installed
+  local action="${1:-}"
+  shift || true
+
+  # Neither subcommand takes an argument, so anything left is REFUSED rather
+  # than dropped.
+  #
+  # `botctl telegram register --tenant reseller` shifted the action off and
+  # discarded the rest, so `--tenant` never reached the CLI and the PRIMARY
+  # tenant was reconciled and reported as a success — the exact wrong-tenant
+  # outcome the CLI's own unknown-argument refusal was added to prevent, walking
+  # straight past it at the installed entry point. A wrapper that silently drops
+  # what it was given is the same defect as a parser that does.
+  # NOTHING from argv is ever echoed back, and the subcommand is validated FIRST
+  # so that it cannot be.
+  #
+  # An operator who reasonably tries `botctl telegram register --bot-token <token>`
+  # — or, mistyping, `botctl telegram <token>` — would otherwise have the
+  # credential written into their terminal scrollback, their shell's history of
+  # the session, and any CI or installer log capturing this stream. From a
+  # refusal that exists to protect them. `bootstrap-bot.cli.ts` refuses argv
+  # tokens for precisely this reason, and a refusal that reproduces what it
+  # refused is worse than the thing it refuses.
+  #
+  # The order is the mechanism. After this case, `$action` is provably one of two
+  # literals, so nothing downstream can name a caller's value even by accident;
+  # the arity refusal below therefore states a COUNT and no content at all.
+  case "$action" in
+    status | register) ;;
+    *) nexa_die "usage: botctl telegram <status|register>" ;;
+  esac
+
+  if [ "$#" -gt 0 ]; then
+    nexa_die "botctl telegram ${action} takes no arguments, and was given $#. This command reconciles the installation's own bot from its stored credential: there is nothing to aim it at, and nothing here reads a token. What you passed is not repeated here in case it was one."
+  fi
+
+  case "$action" in
+    status)
+      # Read-only, and the one word goes to stdout so a script can read it
+      # without parsing prose.
+      nexa_compose run --rm --no-deps -T --entrypoint node api \
+        dist/bootstrap-bot.cli.js --status --public-base-url "$(telegram_origin)"
+      ;;
+    register)
+      # NO token, ever, from here. A rerun of the registration is
+      # reconciliation: the CLI resumes from the stored encrypted token and
+      # refuses to ask (ADR-0029 decision 3). That is why this command needs no
+      # terminal and no arguments — and why it is safe to put in a runbook.
+      #
+      # THE LOCK, for the same reason update and rollback take it.
+      #
+      # A registration is an external effect followed by a local one, and the
+      # two cannot be made atomic: `setWebhook` must happen outside the
+      # transaction that records it, or a rolled-back transaction would leave
+      # Telegram pointed somewhere the database does not know about. So the
+      # ordering has to be protected from outside, and this is the only other
+      # writer: an installer changing the domain to B, racing this command which
+      # already read domain A, can have Telegram accept B then A while the
+      # database records A then B — leaving a row that says `ready` for B while
+      # Telegram delivers to A. Both paths take this lock, so they queue.
+      #
+      # `-T`: nothing is read from stdin, and allocating a pseudo-TTY for a
+      # command in a script is how a non-interactive run hangs.
+      nexa_acquire_lock 0
+      nexa_compose run --rm --no-deps -T --entrypoint node api \
+        dist/bootstrap-bot.cli.js --public-base-url "$(telegram_origin)"
+      ;;
+    *)
+      # Unreachable: the validation above admits exactly `status` and `register`.
+      # Kept as an assertion rather than deleted, because a `case` with no default
+      # silently does nothing if that validation is ever loosened.
+      nexa_die "internal error: unvalidated telegram subcommand"
+      ;;
+  esac
+}
+
 main() {
   local command="${1:-}"
   shift || true
@@ -1816,6 +1915,7 @@ main() {
     update) cmd_update "$@" ;;
     rollback) cmd_rollback "$@" ;;
     secrets) cmd_secrets "$@" ;;
+    telegram) cmd_telegram "$@" ;;
     logs) cmd_logs "$@" ;;
     restart) cmd_restart "$@" ;;
     -h | --help | help | '') usage ;;

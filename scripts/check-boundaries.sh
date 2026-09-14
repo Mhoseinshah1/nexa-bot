@@ -184,6 +184,59 @@ else
   pass "the owner bootstrap is not reachable from any surface"
 fi
 
+# --- The Telegram bot bootstrap is not reachable from a surface -------------
+# The same argument, for the same reason, about a different credential.
+# `BotBootstrapService` accepts a bot token and writes it encrypted without
+# authorizing a caller, because provisioning has no caller. Reachable over HTTP
+# it would be an unauthenticated route that accepts a bearer credential for this
+# installation's bot and repoints where Telegram delivers.
+#
+# It is a separate check rather than an extra pattern on the one above so that a
+# failure names WHICH provisioning path leaked, and so that removing one never
+# quietly removes the other.
+BOT_BOOTSTRAP_LEAK=$(grep -rn "bot-bootstrap.service\|bootstrapBot" apps/api/src/surfaces 2>/dev/null || true)
+if [ -n "$BOT_BOOTSTRAP_LEAK" ]; then
+  fail "A surface reaches the Telegram bot bootstrap" "$BOT_BOOTSTRAP_LEAK" \
+       "The bot bootstrap is a CLI provisioning step (src/bootstrap-bot.cli.ts), not an endpoint."
+else
+  pass "the Telegram bot bootstrap is not reachable from any surface"
+fi
+
+# --- The compiled bot bootstrap has only callers that hold the lock ---------
+# `BotBootstrapService` cannot make its own two Telegram calls atomic with the
+# row that records them — `setWebhook` must happen outside the transaction — so
+# two reconciliations with DIFFERENT origins could commit the external and the
+# local effect in opposite orders and leave a row claiming `ready` for a URL
+# Telegram is not using. The ordering is protected from OUTSIDE: `install.sh`
+# and `botctl telegram register` each take the installation's exclusive lock.
+#
+# That argument is only true while those are the only callers, and it was not:
+# `apps/api/package.json` exposed `bot:bootstrap` running the COMPILED CLI, a
+# third entry point that takes no lock at all, on a host that has the production
+# database and secrets. The comment asserting "there is no third caller" was
+# therefore false, and nothing would have said so.
+#
+# `bot:bootstrap:dev` is deliberately allowed: it runs from source under `tsx`
+# and needs devDependencies the release image does not ship, so it cannot be a
+# caller on a production host. `check-runtime-cli.sh` is what holds that.
+#
+# The allow list is the two locked callers plus the files that CHECK them — the
+# smoke test, the runtime-CLI check and `botctl`'s own test. None of those runs
+# on an operator's host, and each names the compiled path precisely because it
+# is asserting something about it.
+BOOTSTRAP_CALLERS=$(grep -rln "dist/bootstrap-bot.cli.js" \
+  --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git . 2>/dev/null |
+  sed 's|^\./||' | grep -vxF \
+    -e 'deploy/install.sh' -e 'deploy/bin/botctl' \
+    -e 'scripts/deployment-smoke.sh' -e 'scripts/check-runtime-cli.sh' \
+    -e 'tests/deploy/botctl.test.sh' -e 'scripts/check-boundaries.sh' || true)
+if [ -n "$BOOTSTRAP_CALLERS" ]; then
+  fail "An unlocked caller reaches the compiled Telegram bot bootstrap" "$BOOTSTRAP_CALLERS" \
+       "Only install.sh and 'botctl telegram register' may run it: both take the deployment lock first, and that is the only thing serialising setWebhook with the row that records it."
+else
+  pass "the compiled bot bootstrap is reached only by callers that take the lock"
+fi
+
 # --- The application layer names what it needs, not who provides it ---------
 # `@nexa/contracts` is the shared specification and may be imported anywhere.
 # `@nexa/i18n` is an IMPLEMENTATION of part of it — a catalogue and a renderer —

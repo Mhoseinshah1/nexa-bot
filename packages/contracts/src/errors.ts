@@ -152,6 +152,70 @@ export const PLATFORM_ERROR_CODES = {
   SECRET_KEY_ID_MISMATCH: 'platform.secret_key_id_mismatch',
   TELEGRAM_BAD_SECRET_TOKEN: 'telegram.bad_secret_token',
 
+  /*
+   * The fresh-install bot bootstrap. Four codes, and the split is the point:
+   * each one has a DIFFERENT remedy, and collapsing them would tell an operator
+   * standing at a half-finished install to try the same thing four times.
+   */
+
+  /**
+   * Telegram rejected the token. `getMe` answered, and its answer was no.
+   *
+   * Distinct from `TELEGRAM_BOOTSTRAP_UNREACHABLE` because the remedy is a new
+   * token from BotFather rather than waiting: an installation that cannot reach
+   * Telegram at all has a network to fix, and one holding a revoked token has a
+   * credential to replace. Telling an operator to check their DNS when the token
+   * is wrong is how an install stalls for an afternoon.
+   */
+  TELEGRAM_BOOTSTRAP_TOKEN_REJECTED: 'telegram.bootstrap_token_rejected',
+
+  /**
+   * Telegram could not be reached, or answered in a way that says try again.
+   *
+   * A timeout, a 5xx, a 429, an unreadable 2xx. The bot instance may well be
+   * written already — see ADR-0029 decision 4 — so this is the code that means
+   * "rerun this step", not "the install failed".
+   */
+  TELEGRAM_BOOTSTRAP_UNREACHABLE: 'telegram.bootstrap_unreachable',
+
+  /**
+   * The token names a DIFFERENT bot than the one this installation already has.
+   *
+   * Refused rather than applied, and never automatically resolved. Repointing an
+   * installation at another bot leaves every stored `telegram_user_id` attached
+   * to conversations that bot has never had, and every stored `chat_id`
+   * addressed to a bot that cannot send to it. ADR-0029 decision 3 records the
+   * reasoning; the check is on `telegram_bot_id`, because a username can be
+   * changed in BotFather and a numeric id cannot.
+   */
+  TELEGRAM_BOOTSTRAP_DIFFERENT_BOT: 'telegram.bootstrap_different_bot',
+
+  /**
+   * This Telegram bot is already bound to ANOTHER tenant on this installation.
+   *
+   * Distinct from `TELEGRAM_BOOTSTRAP_DIFFERENT_BOT`, which is the same question
+   * asked of one row: there the supplied token names a bot this tenant is not
+   * bound to; here the token is fine and the BOT is already somebody else's.
+   * Different remedy, so a different code.
+   *
+   * Telegram keeps one webhook per bot, so a second binding does not coexist with
+   * the first — it MOVES the delivery, and the first installation goes on
+   * reporting `ready` for a URL that receives nothing. `bot_instances_username_key`
+   * looked like it prevented this and does not: a username is changed in BotFather
+   * at will, and the stored copy goes stale the moment it is. The rule is the
+   * partial unique index on `telegram_bot_id`; this is how it reaches an operator.
+   */
+  TELEGRAM_BOOTSTRAP_BOT_ALREADY_BOUND: 'telegram.bootstrap_bot_already_bound',
+
+  /**
+   * The webhook could not be registered, though the bot instance is written.
+   *
+   * The one outcome that is deliberately NOT fatal to an install: DNS that has
+   * not propagated and a certificate not yet issued both land here, and both are
+   * fixed by waiting and rerunning rather than by undoing anything.
+   */
+  TELEGRAM_BOOTSTRAP_WEBHOOK_FAILED: 'telegram.bootstrap_webhook_failed',
+
   /**
    * A backup archive failed authenticated decryption. ONE code, as above.
    *

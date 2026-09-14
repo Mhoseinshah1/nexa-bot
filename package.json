@@ -35,6 +35,7 @@
     "db:migrate:dev": "pnpm --filter @nexa/api db:migrate:dev",
     "db:seed:dev": "pnpm --filter @nexa/api db:seed:dev",
     "admin:bootstrap:dev": "pnpm --filter @nexa/api admin:bootstrap:dev",
+    "bot:bootstrap:dev": "pnpm --filter @nexa/api bot:bootstrap:dev",
     "provision:dev": "pnpm --filter @nexa/api provision:dev",
     "backup": "pnpm --filter @nexa/api backup",
     "backup:dev": "pnpm --filter @nexa/api backup:dev",

@@ -24,6 +24,9 @@ ENTRYPOINTS=(
   "apps/api/dist/infrastructure/persistence/migrate.js"
   "apps/api/dist/infrastructure/persistence/seed.js"
   "apps/api/dist/bootstrap-owner.cli.js"
+  # The Telegram bootstrap runs at the same moment as the owner bootstrap — on
+  # a fresh install, from the runtime image, before anything else has loaded it.
+  "apps/api/dist/bootstrap-bot.cli.js"
   "apps/api/dist/provision-installation.cli.js"
   # The one that runs during a disaster. If its graph does not load from a
   # production runtime, the operator finds out at the worst possible moment.
@@ -46,6 +49,7 @@ node --input-type=module -e "
   const migrate = await import('./apps/api/dist/infrastructure/persistence/migrate.js');
   const seed = await import('./apps/api/dist/infrastructure/persistence/seed.js');
   await import('./apps/api/dist/bootstrap-owner.cli.js');
+  const bootstrapBot = await import('./apps/api/dist/bootstrap-bot.cli.js');
   const provision = await import('./apps/api/dist/provision-installation.cli.js');
   const backup = await import('./apps/api/dist/backup.cli.js');
 
@@ -55,6 +59,11 @@ node --input-type=module -e "
   if (typeof seed.seed !== 'function') problems.push('seed.seed');
   if (typeof provision.provisionInstallation !== 'function')
     problems.push('provision.provisionInstallation');
+  // \`parseArgs\` is the half the installer's contract rests on: it decides
+  // whether a token reaches this process from a file or from a terminal, and it
+  // refuses argv outright.
+  if (typeof bootstrapBot.parseArgs !== 'function') problems.push('bootstrapBot.parseArgs');
+  if (typeof bootstrapBot.tokenFromFile !== 'function') problems.push('bootstrapBot.tokenFromFile');
   // \`verify\` is the command that must work with no database and no container,
   // so it is the one whose presence is asserted rather than assumed.
   if (typeof backup.cmdVerify !== 'function') problems.push('backup.cmdVerify');

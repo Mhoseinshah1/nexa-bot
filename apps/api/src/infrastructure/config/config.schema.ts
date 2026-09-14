@@ -1114,6 +1114,36 @@ export const configSchema = z
           'Every update is authenticated by this header.',
       });
     }
+    /*
+     * TELEGRAM'S alphabet, not ours, and the reason it is checked HERE.
+     *
+     * `setWebhook` documents `secret_token` as 1-256 characters of `A-Za-z0-9_-`
+     * and refuses anything else with a 400. A value this installation cannot
+     * register is a value the webhook can never be authenticated with, so the
+     * failure belongs at boot, next to the length rule, rather than at the one
+     * moment an operator is standing at a half-finished install.
+     *
+     * This was not hypothetical. The installer minted the secret with plain
+     * `base64`, whose alphabet includes `+` and `/` and whose 32-byte output
+     * always ends in `=` — so every fresh installation would have produced a
+     * secret Telegram rejects, and the installer's own INCOMPLETE summary would
+     * have sent the operator to debug DNS for a character-set bug. The
+     * generator is fixed; this is what stops the next one being wrong quietly.
+     */
+    if (
+      config.TELEGRAM_WEBHOOK_ENABLED &&
+      config.TELEGRAM_WEBHOOK_SECRET.length >= 16 &&
+      !/^[A-Za-z0-9_-]{1,256}$/.test(config.TELEGRAM_WEBHOOK_SECRET)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TELEGRAM_WEBHOOK_SECRET'],
+        message:
+          'TELEGRAM_WEBHOOK_SECRET may contain only A-Z, a-z, 0-9, underscore and hyphen, and at ' +
+          'most 256 characters. Telegram refuses any other secret_token with a 400, so a webhook ' +
+          'registered with one could never be authenticated. (The value itself is not shown.)',
+      });
+    }
 
     // Half-configured delivery is the failure worth catching here. Neither set
     // is a deliberate choice — the archive stays on the server and the run says

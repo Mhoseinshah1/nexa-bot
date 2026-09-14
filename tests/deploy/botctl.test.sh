@@ -615,10 +615,13 @@ s3_redis_password="$(nexa_env_value "${s3_config}/redis.env" REDIS_PASSWORD)"
 s3_keyring="$(nexa_env_value "${s3_config}/nexa.env" SECRETS_KEYS)"
 s3_kek="${s3_keyring#*:}"
 
-for secret_key in POSTGRES_PASSWORD REDIS_PASSWORD SECRETS_KEK; do
+s3_webhook_secret="$(nexa_env_value "${s3_config}/nexa.env" TELEGRAM_WEBHOOK_SECRET)"
+
+for secret_key in POSTGRES_PASSWORD REDIS_PASSWORD SECRETS_KEK TELEGRAM_WEBHOOK_SECRET; do
   case "$secret_key" in
     POSTGRES_PASSWORD) secret_value="$s3_pg_password" ;;
     REDIS_PASSWORD) secret_value="$s3_redis_password" ;;
+    TELEGRAM_WEBHOOK_SECRET) secret_value="$s3_webhook_secret" ;;
     *) secret_value="$s3_kek" ;;
   esac
   # Length, not merely non-emptiness: a one-character needle would match almost
@@ -5014,5 +5017,645 @@ assert_contains 'the no-op was not reported' "$BOTCTL_OUTPUT" 'Nothing to do'
 assert_not_contains 'a restart was advised with nothing removed' \
   "$BOTCTL_OUTPUT" "still in the running containers' environment"
 teardown_root
+
+# ---------------------------------------------------------------------------
+# The Telegram fresh-install bootstrap
+# ---------------------------------------------------------------------------
+#
+# Driven by SOURCING the installer and calling one function, the way every other
+# installer test here does: a real run would install Docker on the build
+# machine. What each case exercises is a decision the installer makes, and each
+# of those decisions has a failure mode an operator pays for — being asked for a
+# token twice, being told a working bot needs configuring, or being told an
+# installation succeeded when its bot cannot receive a message.
+
+test_case 'the installer adds the Telegram configuration to a nexa.env that predates it'
+tg_config="${NEXA_ROOT}/etc/nexa-telegram-old"
+rm -rf "$tg_config"
+install -d -m 0700 "$tg_config"
+# A nexa.env exactly as a pre-Telegram release left it.
+cat >"${tg_config}/nexa.env" <<'OLDENV'
+NODE_ENV=production
+DATABASE_URL=postgres://nexa:pw@postgres:5432/nexa
+NOTIFICATION_TRANSPORT=telegram
+OLDENV
+chmod 0600 "${tg_config}/nexa.env"
+NEXA_CONFIG_DIR="$tg_config" bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  ensure_telegram_config >/dev/null 2>&1
+' _ "${REPO}/deploy/install.sh" || fail_test 'ensure_telegram_config did not complete'
+
+tg_added_secret="$(nexa_env_value "${tg_config}/nexa.env" TELEGRAM_WEBHOOK_SECRET)"
+tg_added_enabled="$(nexa_env_value "${tg_config}/nexa.env" TELEGRAM_WEBHOOK_ENABLED)"
+assert_equals 'the webhook was not enabled on the upgraded host' 'true' "$tg_added_enabled"
+# Length, not non-emptiness: the schema requires at least 16 characters once the
+# webhook is on, so a short one would fail the application's own boot.
+if [ "${#tg_added_secret}" -lt 16 ]; then
+  fail_test 'ensure_telegram_config wrote no usable TELEGRAM_WEBHOOK_SECRET'
+fi
+assert_file_mode 'the upgraded nexa.env lost its mode' "${tg_config}/nexa.env" 600
+# The operator's existing lines are untouched: `>>` is the only safe edit to a
+# file somebody else owns.
+assert_contains 'an existing key was lost' \
+  "$(cat "${tg_config}/nexa.env")" 'DATABASE_URL=postgres://nexa:pw@postgres:5432/nexa'
+
+test_case 'a rerun never regenerates the webhook secret'
+# THE rule this function exists to keep. Telegram holds the value it was given
+# at registration and signs every update with it, so minting a new one here
+# would make the API reject every update from a working bot — silently, until
+# somebody re-registered the webhook.
+NEXA_CONFIG_DIR="$tg_config" bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  ensure_telegram_config >/dev/null 2>&1
+' _ "${REPO}/deploy/install.sh" || fail_test 'the second ensure_telegram_config did not complete'
+assert_equals 'the webhook secret was regenerated on a rerun' \
+  "$tg_added_secret" "$(nexa_env_value "${tg_config}/nexa.env" TELEGRAM_WEBHOOK_SECRET)"
+# And exactly one of each key: an append that ran twice would leave two, and
+# Compose takes the LAST — so the file would say one thing and the running
+# container another.
+assert_equals 'TELEGRAM_WEBHOOK_SECRET was appended twice' '1' \
+  "$(grep -c '^TELEGRAM_WEBHOOK_SECRET=' "${tg_config}/nexa.env")"
+assert_equals 'TELEGRAM_WEBHOOK_ENABLED was appended twice' '1' \
+  "$(grep -c '^TELEGRAM_WEBHOOK_ENABLED=' "${tg_config}/nexa.env")"
+
+test_case 'the additive Telegram configuration is written by rename, not by append'
+# A `>>` interrupted by ENOSPC can land TELEGRAM_WEBHOOK_ENABLED=true and a
+# TRUNCATED but non-empty TELEGRAM_WEBHOOK_SECRET. The next run reads both keys
+# as present and returns without repairing them, while the application refuses a
+# secret below the schema's minimum length — so the installation cannot boot and
+# cannot be resumed without an operator editing the file by hand.
+#
+# The proof is that the original file survives a failed write intact. `mktemp` is
+# made to fail after the pre-checks have passed, which is the one seam that
+# stands in for every way the write can die.
+tg_atomic="${NEXA_ROOT}/etc-atomic"
+mkdir -p "$tg_atomic"
+printf 'DATABASE_URL=postgres://nexa:pw@postgres:5432/nexa\nNODE_ENV=production\n' \
+  >"${tg_atomic}/nexa.env"
+tg_atomic_before="$(cat "${tg_atomic}/nexa.env")"
+NEXA_CONFIG_DIR="$tg_atomic" bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  mktemp() { return 1; }
+  ensure_telegram_config >/dev/null 2>&1
+' _ "${REPO}/deploy/install.sh" && fail_test 'a failed write did not stop the installer'
+assert_equals 'a failed write left the config file changed' \
+  "$tg_atomic_before" "$(cat "${tg_atomic}/nexa.env")"
+# Nothing half-written left lying around under a name a later glob might read.
+assert_equals 'a failed write left a temporary file behind' '1' \
+  "$(find "$tg_atomic" -maxdepth 1 -type f | wc -l | tr -d ' ')"
+# And the successful path still adds both keys, exactly once each.
+NEXA_CONFIG_DIR="$tg_atomic" bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  ensure_telegram_config >/dev/null 2>&1
+' _ "${REPO}/deploy/install.sh" || fail_test 'the ordinary additive write did not complete'
+assert_equals 'the rename did not add TELEGRAM_WEBHOOK_SECRET' '1' \
+  "$(grep -c '^TELEGRAM_WEBHOOK_SECRET=' "${tg_atomic}/nexa.env")"
+assert_equals 'the rename did not preserve what the file already held' '1' \
+  "$(grep -c '^NODE_ENV=production$' "${tg_atomic}/nexa.env")"
+assert_equals 'the rewritten config is not 0600' '600' \
+  "$(stat -c '%a' "${tg_atomic}/nexa.env")"
+
+test_case 'a webhook failure does not report a successful install, and does not undo anything'
+# The installer step with the CLI forced to fail on a RECONCILE — a stored token
+# and an outstanding registration, which is the case the resume story is about.
+# `configure_telegram_bot` must NOT die: the tenant, the owner, the encrypted
+# token and the bot row are all correct and expensive to produce. It must set
+# the flag that makes `main` exit non-zero with the outstanding step named.
+telegram_fail_output="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  # The two seams: what the CLI answers about state, and whether it succeeds.
+  telegram_state() { printf "incomplete"; }
+  nexa_compose() { return 1; }
+  configure_telegram_bot 2>&1
+  printf "INCOMPLETE=%s RETRY=%s\n" "$TELEGRAM_INCOMPLETE" "$TELEGRAM_RETRY"
+' _ "${REPO}/deploy/install.sh" || printf 'THE_STEP_DIED')"
+assert_not_contains 'the failed Telegram step aborted the install' \
+  "$telegram_fail_output" 'THE_STEP_DIED'
+assert_contains 'the install was not marked incomplete' "$telegram_fail_output" 'INCOMPLETE=yes'
+assert_contains 'the operator was not told the bot is not receiving updates' \
+  "$telegram_fail_output" 'not receiving updates'
+# The state is re-read AFTER the failure, because it decides which summary the
+# operator gets. A stored credential means the cheap retry is honest.
+assert_contains 'the retry state was not recorded' "$telegram_fail_output" 'RETRY=incomplete'
+
+test_case 'a FIRST-attempt failure does not claim a stored token'
+printf '8123456789:AA-not-a-real-token\n' >"${NEXA_ROOT}/first-fail-token"
+: >"${NEXA_ROOT}/first-fail-calls"
+# `getMe` runs before `createFromBootstrap`, so a rejected token or an
+# unreachable Telegram on a first attempt writes NOTHING. Every failure used to
+# land in one branch and print "the token is stored encrypted; botctl telegram
+# register will retry without asking" — false in every part, and it sends the
+# operator to a command that supplies no token by design and therefore cannot
+# create the first row.
+telegram_first_fail="$(bash -c '
+  CALLS="$2"
+  . "$1" --domain admin.example.test --acme-email ops@example.test --bot-token-file "$3" >/dev/null 2>&1
+  telegram_state() { printf "none"; }
+  nexa_compose() { printf "%s\n" "$*" >>"$CALLS"; return 1; }
+  configure_telegram_bot 2>&1
+  printf "INCOMPLETE=%s RETRY=%s\n" "$TELEGRAM_INCOMPLETE" "$TELEGRAM_RETRY"
+' _ "${REPO}/deploy/install.sh" "${NEXA_ROOT}/first-fail-calls" "${NEXA_ROOT}/first-fail-token" || printf 'THE_STEP_DIED')"
+assert_not_contains 'a first-attempt failure aborted the install' \
+  "$telegram_first_fail" 'THE_STEP_DIED'
+assert_contains 'a first-attempt failure was not marked incomplete' \
+  "$telegram_first_fail" 'INCOMPLETE=yes'
+# `none` after the failure is the whole point: nothing was written, so the
+# summary must not promise a resume.
+assert_contains 'the retry state after a first-attempt failure was not none' \
+  "$telegram_first_fail" 'RETRY=none'
+# The summary this state gets says the opposite of the other one, and says the
+# retry is the installer rather than a command that cannot create a first row.
+telegram_nothing_summary="$(sed -n '/INCOMPLETE_NOTHING_STORED$/,/^INCOMPLETE_NOTHING_STORED$/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the summary does not distinguish a failure that stored nothing' \
+  "$telegram_nothing_summary" 'The token was NOT stored'
+assert_contains 'the nothing-stored summary does not name the installer retry' \
+  "$telegram_nothing_summary" '--bot-token-file'
+assert_contains 'the nothing-stored summary does not say why botctl cannot finish it' \
+  "$telegram_nothing_summary" 'supplies no token by design'
+
+test_case 'an unreadable Telegram state is refused rather than guessed'
+# Both readings are wrong in a way the operator pays for: treating it as `none`
+# asks for a token an installation may already have, and treating it as `ready`
+# reports a bot that may never have been configured.
+telegram_unknown="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  telegram_state() { printf "docker: command not found"; }
+  # Stubbed as well, so the refusal cannot be satisfied by an accident: without
+  # it, a version of this step that GUESSED would fall through to a real
+  # `docker compose` on the build machine and hang rather than fail — which is
+  # how the mutation aimed at this rule first presented.
+  nexa_compose() { return 1; }
+  configure_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" || true)"
+assert_contains 'an unreadable state was not refused' "$telegram_unknown" 'Refusing to guess'
+
+test_case 'skip-telegram does not tell a configured installation to configure itself'
+# `--skip-owner` had to learn this on a real host: it told an already
+# bootstrapped installation to run a bootstrap that would refuse it. Same shape.
+telegram_skip_ready="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --skip-telegram >/dev/null 2>&1
+  telegram_state() { printf "ready"; }
+  nexa_compose() { return 1; }
+  configure_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" || true)"
+assert_contains 'a configured bot was not reported as configured' \
+  "$telegram_skip_ready" 'already configured'
+assert_not_contains 'a configured installation was told to register' \
+  "$telegram_skip_ready" 'botctl telegram register'
+
+telegram_skip_none="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --skip-telegram >/dev/null 2>&1
+  telegram_state() { printf "none"; }
+  nexa_compose() { return 1; }
+  configure_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" || true)"
+# `botctl telegram register` supplies no token by design, so it CANNOT create
+# the first bot row. Naming it here sent the operator to a command that must
+# fail; the remedy for `none` is an installer rerun with a token source.
+assert_not_contains 'a fresh skip named a command that cannot create the first bot' \
+  "$telegram_skip_none" 'botctl telegram register'
+assert_contains 'a fresh skip did not name the installer rerun' \
+  "$telegram_skip_none" '--bot-token-file'
+
+test_case 'a rerun with a stored token says it will not ask again'
+# `incomplete` means the credential is already stored and only the registration
+# is outstanding. The CLI refuses to ask from the same state; saying so here is
+# what stops an operator wondering why they were not prompted.
+telegram_resume="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  telegram_state() { printf "incomplete"; }
+  nexa_compose() { return 0; }
+  configure_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" || true)"
+assert_contains 'a resumed run did not say the token would not be asked for' \
+  "$telegram_resume" 'will not be asked for it again'
+assert_contains 'a resumed run did not report success' \
+  "$telegram_resume" 'configured and receiving updates'
+
+test_case 'a rerun of a READY installation still asks the application'
+# ADR-0029: a rerun asks Telegram whether the stored token still works, EVERY
+# time — the only way the promise to report a revoked token can be kept. This
+# step used to short-circuit on `ready` and never invoke the CLI, so the rule
+# was implemented in the layer that cannot be the last word and bypassed in the
+# layer that is.
+telegram_ready_calls="${NEXA_ROOT}/telegram-ready-calls"
+: >"$telegram_ready_calls"
+telegram_ready="$(bash -c '
+  # Captured BEFORE sourcing. Two reasons, and each alone would be enough:
+  # sourcing with arguments replaces the positional parameters, and inside a
+  # function $2 is that function own second argument rather than the script one.
+  CALLS="$2"
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  telegram_state() { printf "ready"; }
+  nexa_compose() { printf "%s\n" "$*" >>"$CALLS"; return 0; }
+  configure_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" "$telegram_ready_calls" || true)"
+assert_ok 'a READY rerun never invoked the bootstrap CLI' test -s "$telegram_ready_calls"
+assert_contains 'the READY rerun did not run the bootstrap CLI' \
+  "$(cat "$telegram_ready_calls")" 'dist/bootstrap-bot.cli.js'
+# And it did not offer to take a token, because there is nothing to ask for.
+# No token source was given to THIS run, so none is passed on.
+assert_not_contains 'a READY rerun invented a token source' \
+  "$(cat "$telegram_ready_calls")" '--bot-token-stdin'
+assert_contains 'the READY rerun did not report success' \
+  "$telegram_ready" 'configured and receiving updates'
+
+test_case 'an unavailable bot still runs the CLI, and a supplied token still reaches it'
+# This state used to RETURN before the CLI was invoked, and returning was wrong
+# twice over. A supplied token file never reached `refuseRepointing`, so a file
+# naming a DIFFERENT bot was silently ignored in the one state an operator is
+# most likely to be reaching for one; and the reason nothing could be registered
+# was never printed, only a second command to go and ask for it.
+: >"${NEXA_ROOT}/unavailable-calls"
+printf '8123456789:AA-not-a-real-token\n' >"${NEXA_ROOT}/unavailable-token"
+telegram_stopped="$(bash -c '
+  CALLS="$2"
+  . "$1" --domain admin.example.test --acme-email ops@example.test --bot-token-file "$3" >/dev/null 2>&1
+  telegram_state() { printf "unavailable"; }
+  nexa_compose() { printf "%s\n" "$*" >>"$CALLS"; return 1; }
+  configure_telegram_bot 2>&1
+  printf "INCOMPLETE=%s RETRY=%s\n" "$TELEGRAM_INCOMPLETE" "$TELEGRAM_RETRY"
+' _ "${REPO}/deploy/install.sh" "${NEXA_ROOT}/unavailable-calls" "${NEXA_ROOT}/unavailable-token" || printf 'THE_STEP_DIED')"
+assert_not_contains 'an unavailable bot aborted the install' "$telegram_stopped" 'THE_STEP_DIED'
+assert_contains 'an unavailable bot did not fail the install' "$telegram_stopped" 'INCOMPLETE=yes'
+assert_contains 'the supplied token never reached the CLI in the unavailable state' \
+  "$(cat "${NEXA_ROOT}/unavailable-calls")" '--bot-token-stdin'
+# And its own summary, because the outstanding work is NOT the webhook: telling
+# the operator to register one sends them to a call the service refuses before
+# it makes it.
+assert_contains 'an unavailable bot was not given its own retry state' \
+  "$telegram_stopped" 'RETRY=unavailable'
+telegram_unavailable_summary="$(sed -n '/INCOMPLETE_UNAVAILABLE$/,/^INCOMPLETE_UNAVAILABLE$/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the unavailable summary does not say the webhook is not the outstanding work' \
+  "$telegram_unavailable_summary" 'NOT the webhook'
+
+test_case 'a revoked stored token is not reported as a registration to retry'
+# The two summaries were not exhaustive, and the state alone cannot make them
+# so: `ready` and `incomplete` are equally true of a webhook that was never
+# registered and of a stored token Telegram has since refused. The old branch
+# sent the second case to `botctl telegram register`, which reads the same
+# stored token and fails identically.
+telegram_revoked="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  telegram_state() { printf "ready"; }
+  nexa_compose() { printf "telegram.bootstrap_token_rejected: Telegram refused it.\n"; return 1; }
+  configure_telegram_bot 2>&1
+  printf "INCOMPLETE=%s RETRY=%s\n" "$TELEGRAM_INCOMPLETE" "$TELEGRAM_RETRY"
+' _ "${REPO}/deploy/install.sh" || printf 'THE_STEP_DIED')"
+assert_not_contains 'a revoked token aborted the install' "$telegram_revoked" 'THE_STEP_DIED'
+assert_contains 'a revoked stored token was not distinguished from a webhook failure' \
+  "$telegram_revoked" 'RETRY=token-rejected'
+# The CLI's own output still reaches the operator: capturing it to classify the
+# failure must not be the same as swallowing it.
+assert_contains 'the CLI output was swallowed by the capture' \
+  "$telegram_revoked" 'telegram.bootstrap_token_rejected'
+telegram_revoked_summary="$(sed -n '/INCOMPLETE_TOKEN_REJECTED$/,/^INCOMPLETE_TOKEN_REJECTED$/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the revoked-token summary does not refuse the retry that cannot work' \
+  "$telegram_revoked_summary" 'NOT'
+assert_contains 'the revoked-token summary does not name the open question' \
+  "$telegram_revoked_summary" 'OQ-TG-01'
+
+test_case 'an already-bound refusal is classified even though nothing was stored'
+# The `none`-outranks-the-code rule, and the one case it got wrong. An
+# already-bound refusal rolls its insert back, so the state after it is
+# NECESSARILY `none` — and the nothing-stored summary then told the operator
+# their token was rejected or Telegram unreachable, and to rerun with a token
+# source, which would refuse identically for ever.
+telegram_bound="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --bot-token-file "$2" >/dev/null 2>&1
+  telegram_state() { printf "none"; }
+  nexa_compose() { printf "telegram.bootstrap_bot_already_bound: bot 8123456789 is taken.\n"; return 1; }
+  configure_telegram_bot 2>&1
+  printf "RETRY=%s\n" "$TELEGRAM_RETRY"
+' _ "${REPO}/deploy/install.sh" "${NEXA_ROOT}/unavailable-token" || printf 'THE_STEP_DIED')"
+assert_contains 'an already-bound refusal was reported as nothing-stored' \
+  "$telegram_bound" 'RETRY=already-bound'
+telegram_bound_summary="$(sed -n '/INCOMPLETE_ALREADY_BOUND$/,/^INCOMPLETE_ALREADY_BOUND$/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the already-bound summary does not say a second bot is needed' \
+  "$telegram_bound_summary" 'Create a second bot'
+assert_contains 'the already-bound summary does not say the other tenant is untouched' \
+  "$telegram_bound_summary" 'untouched'
+
+test_case 'a first install with no terminal and no token records its release'
+# `nexa_die` here exited before the manifest and the `current` pointer were
+# written, leaving a RUNNING installation that `botctl version` cannot describe
+# — the failure the owner step records from a real staging host. ADR-0029
+# decision 4 already says what to do instead: finish recording the release,
+# report INCOMPLETE, exit non-zero.
+telegram_no_tty="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  telegram_state() { printf "none"; }
+  nexa_compose() { printf "SHOULD_NOT_RUN\n"; return 0; }
+  configure_telegram_bot 2>&1 </dev/null
+  printf "INCOMPLETE=%s RETRY=%s\n" "$TELEGRAM_INCOMPLETE" "$TELEGRAM_RETRY"
+' _ "${REPO}/deploy/install.sh" </dev/null || printf 'THE_STEP_DIED')"
+assert_not_contains 'a missing token killed the install before the manifest' \
+  "$telegram_no_tty" 'THE_STEP_DIED'
+assert_contains 'a missing token did not mark the install incomplete' \
+  "$telegram_no_tty" 'INCOMPLETE=yes'
+assert_contains 'a missing token did not reach the nothing-stored summary' \
+  "$telegram_no_tty" 'RETRY=none'
+# And it did not silently run the CLI without a way to read a token.
+assert_not_contains 'the CLI was invoked with no token source and no terminal' \
+  "$telegram_no_tty" 'SHOULD_NOT_RUN'
+
+test_case 'a stored token that cannot be DECRYPTED is not a webhook retry either'
+# The round that made this five summaries was not exhaustive either. `execute`
+# resolves the credential before it calls anything, so a missing key, a key id
+# that no longer matches, or v1 acceptance having been turned off fails BEFORE
+# Telegram is reached — and the first classifier knew only the two Telegram
+# codes, so every one of those fell through to the webhook summary and was told
+# to run a command that reads the same unreadable ciphertext.
+telegram_unreadable="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  telegram_state() { printf "incomplete"; }
+  nexa_compose() { printf "platform.secret_key_unknown: no key with that id.\n"; return 1; }
+  configure_telegram_bot 2>&1
+  printf "RETRY=%s\n" "$TELEGRAM_RETRY"
+' _ "${REPO}/deploy/install.sh" || printf 'THE_STEP_DIED')"
+assert_contains 'a decryption failure was not distinguished from a webhook failure' \
+  "$telegram_unreadable" 'RETRY=token-unreadable'
+telegram_unreadable_summary="$(sed -n '/INCOMPLETE_TOKEN_UNREADABLE$/,/^INCOMPLETE_TOKEN_UNREADABLE$/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the unreadable-token summary does not say it is a secrets problem' \
+  "$telegram_unreadable_summary" 'SECRETS problem'
+# It must not promise ONE repair for four codes. `secret_auth_failed` is
+# corruption or a value moved between rows, and `secret_key_id_mismatch` is
+# contradictory metadata — restoring key material fixes neither, and the first
+# version of this summary said it would.
+assert_contains 'the unreadable-token summary does not name the concrete codes' \
+  "$telegram_unreadable_summary" 'platform.secret_key_id_mismatch'
+assert_contains 'the unreadable-token summary still promises one key-shaped repair' \
+  "$telegram_unreadable_summary" 'not recoverable by restoring key material'
+assert_contains 'the unreadable-token summary does not name the secrets command' \
+  "$telegram_unreadable_summary" 'botctl secrets'
+# And it must NOT send them to BotFather: the token is fine and reissuing it
+# would be the one action that makes this unrecoverable.
+assert_not_contains 'the unreadable-token summary sends the operator to BotFather' \
+  "$telegram_unreadable_summary" 'BotFather having'
+
+test_case 'the revoked-token summary does not invent a rotation this release cannot do'
+# The summary added for a revoked token told the operator to reissue in BotFather
+# and rerun this installer. That cannot work and the sentence above it said so:
+# `execute` always registers with the credential already in the row, and a
+# supplied token is read only to REFUSE one naming a different bot. A remedy that
+# cannot work is the exact failure this whole step exists to avoid, arrived at
+# from the inside.
+telegram_revoked_summary_2="$(sed -n '/INCOMPLETE_TOKEN_REJECTED$/,/^INCOMPLETE_TOKEN_REJECTED$/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the revoked-token summary does not say a rerun cannot replace the token' \
+  "$telegram_revoked_summary_2" 'rerunning this installer with a'
+assert_not_contains 'the revoked-token summary still calls a rerun the supported route' \
+  "$telegram_revoked_summary_2" 'is the supported
+route'
+
+test_case 'a token naming another bot is reported as that, not as a failed install'
+telegram_other_bot="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --bot-token-file "$2" >/dev/null 2>&1
+  telegram_state() { printf "ready"; }
+  nexa_compose() { printf "telegram.bootstrap_different_bot: belongs to bot 999.\n"; return 1; }
+  configure_telegram_bot 2>&1
+  printf "INCOMPLETE=%s RETRY=%s\n" "$TELEGRAM_INCOMPLETE" "$TELEGRAM_RETRY"
+' _ "${REPO}/deploy/install.sh" "${NEXA_ROOT}/unavailable-token" || printf 'THE_STEP_DIED')"
+assert_contains 'a different-bot refusal was not distinguished' \
+  "$telegram_other_bot" 'RETRY=different-bot'
+telegram_other_summary="$(sed -n '/INCOMPLETE_DIFFERENT_BOT$/,/^INCOMPLETE_DIFFERENT_BOT$/p' "${REPO}/deploy/install.sh")"
+assert_contains 'the different-bot summary does not say nothing was changed' \
+  "$telegram_other_summary" 'Nothing was changed'
+
+test_case 'a first attempt that stored nothing outranks the error code'
+# Order matters and is easy to get backwards. A rejected token on a FIRST
+# attempt stored nothing, and "nothing was stored" is the whole story: the
+# remedy is a token source, not a report about a credential that does not exist.
+telegram_first_rejected="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --bot-token-file "$2" >/dev/null 2>&1
+  telegram_state() { printf "none"; }
+  nexa_compose() { printf "telegram.bootstrap_token_rejected: Telegram refused it.\n"; return 1; }
+  configure_telegram_bot 2>&1
+  printf "RETRY=%s\n" "$TELEGRAM_RETRY"
+' _ "${REPO}/deploy/install.sh" "${NEXA_ROOT}/unavailable-token" || printf 'THE_STEP_DIED')"
+assert_contains 'a rejected token on a first attempt claimed a stored credential' \
+  "$telegram_first_rejected" 'RETRY=none'
+
+test_case 'skip-telegram does not prescribe registration for an UNAVAILABLE bot'
+# `unavailable` was folded in with `incomplete` because both have a stored
+# credential — but `execute` refuses BEFORE `setWebhook` until the availability
+# problem is repaired, so `botctl telegram register` on its own cannot recover
+# it. The same defect that was split out of `configure_telegram_bot`, left
+# behind in the branch beside it.
+telegram_skip_unavailable="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --skip-telegram >/dev/null 2>&1
+  telegram_state() { printf "unavailable"; }
+  skip_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" || true)"
+assert_contains 'an unavailable skipped bot was not told what is holding it back' \
+  "$telegram_skip_unavailable" 'other than registration'
+assert_contains 'an unavailable skipped bot was not sent to status first' \
+  "$telegram_skip_unavailable" 'botctl telegram status'
+# The `incomplete` branch is the one that MAY name register on its own, and it
+# must still do so — a refusal that refuses too much is the same defect.
+telegram_skip_incomplete="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --skip-telegram >/dev/null 2>&1
+  telegram_state() { printf "incomplete"; }
+  skip_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" || true)"
+assert_contains 'an incomplete skipped bot lost its one-command retry' \
+  "$telegram_skip_incomplete" 'botctl telegram register'
+assert_not_contains 'an incomplete skipped bot was given the unavailable remedy' \
+  "$telegram_skip_incomplete" 'other than registration'
+
+test_case 'skip-telegram survives a state that cannot be read'
+# The refusal to guess is right; killing an install that explicitly opted out of
+# Telegram because a Telegram CLI would not answer is not.
+telegram_skip_unknown="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --skip-telegram >/dev/null 2>&1
+  telegram_state() { printf "docker: command not found"; }
+  nexa_compose() { return 1; }
+  configure_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" || printf 'THE_STEP_DIED')"
+assert_not_contains 'an unreadable state killed a skipped install' \
+  "$telegram_skip_unknown" 'THE_STEP_DIED'
+assert_contains 'the operator was not told the state is unknown' \
+  "$telegram_skip_unknown" 'could not be read'
+
+test_case 'a DIRECTORY as --bot-token-file is refused before the host is changed'
+# `-r` and `-s` are both true of a directory — it is readable and its size is
+# non-zero — so `/tmp` passed preflight, the entire deployment ran, and the
+# redirection that finally reads it failed at the very end. The installer then
+# recorded an incomplete release and reported that Telegram had rejected or
+# could not be reached for a token it had never managed to read.
+#
+# The preflight's own guard is exercised, not a copy of it: the assertion below
+# reads the refusal out of `install.sh`, and this runs it.
+token_dir="${NEXA_ROOT}/token-as-directory"
+mkdir -p "${token_dir}/not-empty"
+directory_token="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  BOT_TOKEN_FILE="$2"
+  SKIP_TELEGRAM="no"
+  if [ -f "$BOT_TOKEN_FILE" ]; then printf "ACCEPTED"; else printf "REFUSED"; fi
+' _ "${REPO}/deploy/install.sh" "$token_dir" || true)"
+assert_equals 'a directory passed the regular-file check' 'REFUSED' "$directory_token"
+assert_contains 'the installer does not require a regular token file' \
+  "$(grep -B 1 -A 1 'must be a regular file' "${REPO}/deploy/install.sh" || true)" \
+  'BOT_TOKEN_FILE'
+# And it is in PREFLIGHT, which is the whole point — a refusal after the install
+# has changed the host is a different and much worse failure.
+assert_contains 'the regular-file refusal is not in preflight' \
+  "$(sed -n '/^preflight() {/,/^}/p' "${REPO}/deploy/install.sh")" \
+  'must be a regular file'
+
+test_case 'a relative --bot-token-file is refused before it becomes an empty volume'
+# Handed to `docker run -v`, a bare name is a NAMED VOLUME rather than a path:
+# the container receives an empty directory and the CLI fails reading it.
+relative_token="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test --bot-token-file token.txt >/dev/null 2>&1
+  BOT_TOKEN_FILE="token.txt"
+  SKIP_TELEGRAM="no"
+  case "$BOT_TOKEN_FILE" in
+    /*) printf "ACCEPTED" ;;
+    *) printf "REFUSED" ;;
+  esac
+' _ "${REPO}/deploy/install.sh" || true)"
+assert_equals 'a relative token path was not refused' 'REFUSED' "$relative_token"
+assert_contains 'the installer does not refuse a relative token path' \
+  "$(grep -A 4 'bot-token-file must be an absolute path' "${REPO}/deploy/install.sh" || true)" \
+  'named volume'
+
+test_case 'a first configuration with no terminal and no token source is refused'
+# The refusal that moved OUT of preflight, which could not know whether a token
+# was needed. It belongs here, where the state is known — and `none` is the only
+# state that needs one.
+telegram_no_source="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  telegram_state() { printf "none"; }
+  nexa_compose() { printf "COMPOSE_RAN"; return 0; }
+  configure_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" || true)"
+assert_contains 'a first configuration without a token source was not refused' \
+  "$telegram_no_source" 'no safe way to read the Telegram'
+assert_not_contains 'it ran the CLI anyway' "$telegram_no_source" 'COMPOSE_RAN'
+
+test_case 'a RECONCILE with no terminal and no token source is NOT refused'
+# The other half, and the reason the refusal had to move: on a rerun the row
+# already carries the encrypted credential, so no token is needed and demanding
+# one broke unattended recovery whenever the original file had been removed.
+telegram_resume_no_source="$(bash -c '
+  . "$1" --domain admin.example.test --acme-email ops@example.test >/dev/null 2>&1
+  telegram_state() { printf "incomplete"; }
+  nexa_compose() { printf "COMPOSE_RAN\n"; return 0; }
+  configure_telegram_bot 2>&1
+' _ "${REPO}/deploy/install.sh" || printf 'THE_STEP_DIED')"
+assert_not_contains 'a reconcile without a token source was refused' \
+  "$telegram_resume_no_source" 'THE_STEP_DIED'
+assert_contains 'a reconcile without a token source never ran the CLI' \
+  "$telegram_resume_no_source" 'COMPOSE_RAN'
+
+# A live fixture root: the two cases below drive `botctl` itself rather than a
+# sourced installer function, so they need the config, the lock file and the fake
+# docker that `setup_root` creates. The Telegram cases above make their own
+# directories and run after `teardown_root`, which is why this is here.
+setup_root
+setup_fake_docker
+
+test_case 'telegram register takes the deployment lock'
+# A registration is an external effect followed by a local one and the two
+# cannot be atomic — `setWebhook` must happen outside the transaction that
+# records it. So the ordering is protected from outside, and this is the only
+# other writer: an installer changing the domain while this command is mid-flight
+# can have Telegram accept the new URL and the database record the old one.
+printf 'NEXA_DOMAIN=admin.example.test\n' >>"${NEXA_CONFIG_DIR}/deploy.env"
+exec 9>>"$NEXA_LOCK_FILE"
+flock -x 9
+run_botctl telegram register
+assert_fails 'telegram register ran while the lock was held' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the lock refusal was not explained' "$BOTCTL_OUTPUT" 'already running'
+exec 9>&-
+
+test_case 'telegram subcommands refuse an argument rather than dropping it'
+# `botctl telegram register --tenant reseller` shifted the action off and
+# discarded the rest, so `--tenant` never reached the CLI and the PRIMARY tenant
+# was reconciled and reported as a success — walking straight past the CLI's own
+# unknown-argument refusal at the installed entry point.
+run_botctl telegram register --tenant reseller
+assert_fails 'botctl telegram register accepted an argument it drops' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'botctl telegram register accepted an argument it drops' \
+  "$BOTCTL_OUTPUT" 'takes no arguments'
+run_botctl telegram status --tenant reseller
+assert_fails 'botctl telegram status accepted an argument it drops' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'botctl telegram status accepted an argument it drops' \
+  "$BOTCTL_OUTPUT" 'takes no arguments'
+# The other half: the bare forms must still work, or the refusal refuses too
+# much — the same defect from the other side.
+run_botctl telegram status
+assert_not_contains 'the bare status form was refused as if it had arguments' \
+  "$BOTCTL_OUTPUT" 'takes no arguments'
+
+test_case 'a token passed in argv is never echoed back by any refusal'
+# THE security rule of this command, and it was broken by the refusal added to
+# protect it: the arity check interpolated "$*" into its message, so
+# `botctl telegram register --bot-token <token>` wrote the credential into the
+# operator's terminal, the session's scrollback, and any CI or installer log
+# capturing this stream.
+#
+# `bootstrap-bot.cli.ts` refuses argv tokens for exactly this reason. A refusal
+# that reproduces what it refused is worse than the thing it refuses.
+#
+# Every shape an operator could plausibly reach it by, including the token as the
+# SUBCOMMAND — which the first fix still echoed, because `$action` is an argv
+# value too.
+argv_token='8123456789:AA-a-real-looking-secret-half'
+for argv_case in \
+  "register --bot-token ${argv_token}" \
+  "register ${argv_token}" \
+  "status --bot-token ${argv_token}" \
+  "${argv_token}" \
+  "${argv_token} extra"; do
+  # Unquoted on purpose: each case is a whole argument vector.
+  # shellcheck disable=SC2086
+  run_botctl telegram ${argv_case}
+  assert_fails "botctl telegram ${argv_case%% *} accepted a token in argv" \
+    test "$BOTCTL_STATUS" -eq 0
+  assert_not_contains 'a bot token passed in argv was echoed back' \
+    "$BOTCTL_OUTPUT" "$argv_token"
+  # The secret half alone, in case a refusal ever splits or truncates the value.
+  assert_not_contains 'the secret half of an argv token was echoed back' \
+    "$BOTCTL_OUTPUT" 'AA-a-real-looking-secret-half'
+done
+# And the refusal still SAYS something useful — a fix that refuses silently would
+# pass every assertion above and leave the operator with nothing.
+run_botctl telegram register --bot-token "$argv_token"
+assert_contains 'the refusal says nothing at all' "$BOTCTL_OUTPUT" 'takes no arguments'
+
+test_case 'telegram status does NOT take the lock'
+# It only reads, and a status command that blocks behind a running update is a
+# status command nobody can use to find out why their update is slow.
+run_botctl telegram status
+assert_ok 'telegram status was refused' test "$BOTCTL_STATUS" -eq 0
+
+teardown_root
+
+test_case 'the token never reaches the bootstrap CLI as an argument'
+# The rule stated as an observation over the installer's own source: every
+# invocation passes `--bot-token-file` or nothing, and `--bot-token` appears
+# nowhere. argv is readable by every user on the machine through `ps`.
+# The WHOLE function body, not four lines after each `cli.js`. The `-v`, `-e`
+# and `--rm` arguments sit BEFORE that line, so a forward-only window could not
+# see `-e BOT_TOKEN=…` — which is the other half of the rule the comment states
+# and the likelier regression of the two.
+telegram_calls="$(sed -n '/^configure_telegram_bot() {/,/^}/p' "${REPO}/deploy/install.sh")"
+assert_ok 'the configure_telegram_bot body could not be read; this check is vacuous' \
+  test -n "$telegram_calls"
+assert_not_contains 'the installer passes a bot token as an argument' \
+  "$telegram_calls" '--bot-token '
+assert_not_contains 'the installer passes a bot token through the environment' \
+  "$telegram_calls" '-e BOT_TOKEN'
+assert_not_contains 'the installer exports a bot token into the container environment' \
+  "$telegram_calls" 'TELEGRAM_BOT_TOKEN='
+assert_contains 'the unattended path does not stream the token on stdin' \
+  "$telegram_calls" '--bot-token-stdin'
+# A bind mount is how this was first written and it could not work: the image
+# runs as `node` (uid 1000) and the documented token file is root-owned 0600, so
+# the container gets EACCES.
+assert_not_contains 'the installer bind-mounts the token file into the container' \
+  "$telegram_calls" '/run/nexa-bot-token'
 
 report

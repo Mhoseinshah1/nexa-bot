@@ -46,6 +46,7 @@ const RECORDS = [
   'docs/phase4a-falsification.md',
   'docs/phase4b-falsification.md',
   'docs/phase4c-falsification.md',
+  'docs/telegram-bootstrap-falsification.md',
 ];
 /**
  * The fewest citations this record may contain.
@@ -72,7 +73,7 @@ const RECORDS = [
  * have to be a map, and a map is a place for a record to be added with no entry
  * and checked against nothing — which is this script's own failure mode.
  */
-const EXPECTED = 777;
+const EXPECTED = 841;
 /**
  * A table whose last column is one of these is making citations.
  *
@@ -99,7 +100,23 @@ const CITATION_HEADERS = ['named test', 'test that dies', 'tests that die'];
  * exactly that reason, which is the disease this script's own header comment
  * names. The narrowing is gone and the table is declared.
  */
-const NON_CITING_HEADERS = ['what dies', 'what the check prints', 'what it is now'];
+const NON_CITING_HEADERS = [
+  'what dies',
+  'what the check prints',
+  'what it is now',
+  /*
+   * A rule held by a MECHANISM rather than by a mutation — a boundary check, a
+   * SQL predicate, a capability that does not exist to be called.
+   *
+   * Declared rather than omitted, because "absent from the falsification table"
+   * reads as "unchecked", and a record that silently drops such rules is making
+   * the same understatement this script exists to refuse from the other
+   * direction. Nothing in such a table cites a test, so nothing in one is
+   * resolvable; naming the header is how it stays readable AND unchecked
+   * on purpose.
+   */
+  'what holds it',
+];
 
 /**
  * Every shell test suite, by path, and the test names it declares.
