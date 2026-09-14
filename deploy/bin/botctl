@@ -1842,8 +1842,27 @@ cmd_telegram() {
   # outcome the CLI's own unknown-argument refusal was added to prevent, walking
   # straight past it at the installed entry point. A wrapper that silently drops
   # what it was given is the same defect as a parser that does.
+  # NOTHING from argv is ever echoed back, and the subcommand is validated FIRST
+  # so that it cannot be.
+  #
+  # An operator who reasonably tries `botctl telegram register --bot-token <token>`
+  # — or, mistyping, `botctl telegram <token>` — would otherwise have the
+  # credential written into their terminal scrollback, their shell's history of
+  # the session, and any CI or installer log capturing this stream. From a
+  # refusal that exists to protect them. `bootstrap-bot.cli.ts` refuses argv
+  # tokens for precisely this reason, and a refusal that reproduces what it
+  # refused is worse than the thing it refuses.
+  #
+  # The order is the mechanism. After this case, `$action` is provably one of two
+  # literals, so nothing downstream can name a caller's value even by accident;
+  # the arity refusal below therefore states a COUNT and no content at all.
+  case "$action" in
+    status | register) ;;
+    *) nexa_die "usage: botctl telegram <status|register>" ;;
+  esac
+
   if [ "$#" -gt 0 ]; then
-    nexa_die "botctl telegram ${action} takes no arguments (got: $*). This command reconciles the installation's own bot from its stored credential; there is nothing to aim it at."
+    nexa_die "botctl telegram ${action} takes no arguments, and was given $#. This command reconciles the installation's own bot from its stored credential: there is nothing to aim it at, and nothing here reads a token. What you passed is not repeated here in case it was one."
   fi
 
   case "$action" in
@@ -1878,7 +1897,10 @@ cmd_telegram() {
         dist/bootstrap-bot.cli.js --public-base-url "$(telegram_origin)"
       ;;
     *)
-      nexa_die "usage: botctl telegram <status|register>"
+      # Unreachable: the validation above admits exactly `status` and `register`.
+      # Kept as an assertion rather than deleted, because a `case` with no default
+      # silently does nothing if that validation is ever loosened.
+      nexa_die "internal error: unvalidated telegram subcommand"
       ;;
   esac
 }

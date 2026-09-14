@@ -5589,6 +5589,42 @@ run_botctl telegram status
 assert_not_contains 'the bare status form was refused as if it had arguments' \
   "$BOTCTL_OUTPUT" 'takes no arguments'
 
+test_case 'a token passed in argv is never echoed back by any refusal'
+# THE security rule of this command, and it was broken by the refusal added to
+# protect it: the arity check interpolated "$*" into its message, so
+# `botctl telegram register --bot-token <token>` wrote the credential into the
+# operator's terminal, the session's scrollback, and any CI or installer log
+# capturing this stream.
+#
+# `bootstrap-bot.cli.ts` refuses argv tokens for exactly this reason. A refusal
+# that reproduces what it refused is worse than the thing it refuses.
+#
+# Every shape an operator could plausibly reach it by, including the token as the
+# SUBCOMMAND — which the first fix still echoed, because `$action` is an argv
+# value too.
+argv_token='8123456789:AA-a-real-looking-secret-half'
+for argv_case in \
+  "register --bot-token ${argv_token}" \
+  "register ${argv_token}" \
+  "status --bot-token ${argv_token}" \
+  "${argv_token}" \
+  "${argv_token} extra"; do
+  # Unquoted on purpose: each case is a whole argument vector.
+  # shellcheck disable=SC2086
+  run_botctl telegram ${argv_case}
+  assert_fails "botctl telegram ${argv_case%% *} accepted a token in argv" \
+    test "$BOTCTL_STATUS" -eq 0
+  assert_not_contains 'a bot token passed in argv was echoed back' \
+    "$BOTCTL_OUTPUT" "$argv_token"
+  # The secret half alone, in case a refusal ever splits or truncates the value.
+  assert_not_contains 'the secret half of an argv token was echoed back' \
+    "$BOTCTL_OUTPUT" 'AA-a-real-looking-secret-half'
+done
+# And the refusal still SAYS something useful — a fix that refuses silently would
+# pass every assertion above and leave the operator with nothing.
+run_botctl telegram register --bot-token "$argv_token"
+assert_contains 'the refusal says nothing at all' "$BOTCTL_OUTPUT" 'takes no arguments'
+
 test_case 'telegram status does NOT take the lock'
 # It only reads, and a status command that blocks behind a running update is a
 # status command nobody can use to find out why their update is slow.

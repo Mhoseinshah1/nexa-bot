@@ -1099,3 +1099,112 @@ So a rerun with a reissued token fails exactly as the run before it did. Until a
 release adds an explicit rotation command there is no supported recovery, and the
 summary now says that rather than naming a procedure. This is the concrete cost
 of OQ-TG-01 and the reason it should not stay open indefinitely.
+
+## OQ-TG-04 — Telegram bootstrap hardening deferred by owner decision
+
+Status: OPEN, DEFERRED. **Not rejected, and not false positives** — every item below
+was reported by an independent review of head `22239a6` and is, as far as it was
+examined, real. The owner stopped the review-and-fix loop and deferred them; this
+entry exists so they can be picked up rather than rediscovered.
+
+One finding from that round was NOT deferred and is fixed: `botctl telegram`
+echoed its rejected arguments, so a token passed in argv reached stderr and any
+log capturing it. See `tests/deploy/botctl.test.sh` › "a token passed in argv is
+never echoed back by any refusal".
+
+### Why the list is this long, which matters more than any single item
+
+Five review rounds on this branch each found a defect inside the previous round's
+fix. The shape is the same every time: **the installer derives an operator-facing
+remedy from a cause, in prose, in a file that cannot see the code that decided
+it.** `deploy/install.sh` now carries seven `INCOMPLETE_*` summaries — roughly 180
+lines — and each new cause adds a message that must be true in every state
+reachable with it. Nine of the thirteen items below are "that prose is false in
+state X".
+
+A structural fix was started and reverted unfinished when the loop was stopped:
+collapse the seven cause-derived summaries to the TWO the installer can state
+correctly from its own knowledge — whether anything was STORED, read back from the
+database — and defer the cause and remedy to the CLI's error, which is printed
+immediately above and is written by the code that decided it. That removes the
+surface rather than adding to it, and would close items 1, 2, 4, 5, 7, 8, 9 and 11
+at the root. Anyone resuming this should consider doing that before fixing the
+items individually.
+
+### Deferred items
+
+1. **A rejected token on a FRESH bootstrap is told there is no recovery.**
+   `bot-bootstrap.service.ts` `getMe`. The message says no supported recovery
+   exists and a newly issued token will not be used. True of a STORED credential;
+   false when no row exists yet, where rerunning with a corrected token is exactly
+   the recovery — and is what the installer's own nothing-stored summary then
+   advises. Two messages, contradicting each other.
+
+2. **An already-bound refusal from a TTY install is not classified.**
+   `deploy/install.sh`. The classifier reads captured output, and the interactive
+   path is deliberately not captured, so a fresh bootstrap at a terminal with a
+   bot already bound to another tenant falls to the nothing-stored summary and is
+   told to retry with a token source, which will refuse for ever.
+
+3. **The legacy identity fill commits before the different-bot refusal.**
+   `bot-bootstrap.service.ts`. On a pre-0038 row, `getMe` records the stored
+   token's bot id and refreshes the username in a committed transaction, with an
+   audit row, before the second `refuseRepointing` throws. The different-bot
+   summary then opens "Nothing was changed." Either compare before that commit,
+   or stop claiming nothing was written.
+
+4. **The decryption summary's header still prescribes key repair.** Its body was
+   corrected to admit that restoring key material fixes neither
+   `platform.secret_auth_failed` nor `platform.secret_key_id_mismatch`; the
+   heading above it still says "Repair the keys first" and that the error names a
+   key. `secret_auth_failed` deliberately names none.
+
+5. **Already-bound needs two remedies, not one.** From the fresh INSERT the row
+   rolled back and "create a second bot and rerun" is right. From
+   `recordTelegramIdentity` the tenant already holds a legacy row and an encrypted
+   token for the duplicated bot; reconciliation resolves that stored credential,
+   hits the same violation, and no token-replacement operation exists — so the
+   advertised retry cannot repair it.
+
+6. **A misconfigured API base reports as a revoked token.**
+   `telegram-bot-bootstrap.gateway.ts` maps every `FAILED_PERMANENT` to
+   `REJECTED`, including a 2xx whose `result` is not a bot — the shape a wrong
+   `TELEGRAM_API_BASE_URL` produces. Correcting that variable is the recovery, and
+   the operator is told their token was revoked instead.
+
+7. **The 0041 preflight names a remedy that does not remediate.** Creating
+   separate bots and retrying changes no existing `telegram_bot_id` and no stored
+   credential, so the same preflight fails again. The real remediation is direct
+   database work (see OQ-TG-01), and `docs/deployment.md`'s "Migration preflight"
+   section covers only duplicate PRIMARY tenants.
+
+8. **A permanent `setWebhook` refusal is told to rerun.** `webhookFailure` shares
+   one detail across `REFUSED` and `UNREACHABLE`; only the transient one is fixed
+   by rerunning. A 4xx means the URL itself is wrong, and an unchanged rerun
+   submits the same URL.
+
+9. **`botctl telegram status` cannot report WHY a bot is unavailable.** It prints
+   the literal state. The `--skip-telegram` text sends the operator there to find
+   out which of three conditions applies, and skipping is precisely the path that
+   avoids the `execute` call which would have said.
+
+10. **Stale-username collisions are still a raw 23505.** `rethrowAlreadyBound`
+    translates the bot-id constraint only; `bot_instances_username_key` can be
+    violated by either writer when a bot takes a username still stored on another
+    row after a rename, and surfaces as an unhandled database error.
+
+11. **A disabled tenant with no bot is asked for a token first.** `status()`
+    returns `none` before consulting `scopeIsActive`, so the installer prompts for
+    a bearer credential and sends it to `getMe` before the create transaction
+    refuses the inactive tenant. The credential need never have been transmitted.
+
+12. **An outbound failure during `getMe` is diagnosed as a webhook problem.** On a
+    rerun it leaves the state `ready` or `incomplete` and emits
+    `telegram.bootstrap_unreachable`, which the classifier does not recognise, so
+    the webhook summary points at inbound DNS and certificates — the wrong network
+    boundary — for a call that never reached `setWebhook`.
+
+13. **`docs/deployment.md` documents three status values, not four.** The
+    script-readable contract still reads `none | incomplete | ready`; `unavailable`
+    is missing, so automation written from that section rejects a legitimate
+    answer exactly when something is disabled.
