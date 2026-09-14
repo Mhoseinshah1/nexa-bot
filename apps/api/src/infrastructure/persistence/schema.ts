@@ -214,6 +214,23 @@ export const botInstances = pgTable(
       .notNull()
       .references(() => tenants.id),
     username: text('username').notNull(),
+    /**
+     * Telegram's own numeric id for this bot, as a decimal STRING.
+     *
+     * The identity a rerun is decided against. A username can be changed in BotFather
+     * and a token can be rotated; this cannot, so it is what says whether a second
+     * bootstrap is rotating THIS bot's token or repointing the installation at a
+     * different bot — the refusal ADR-0029 records, because repointing would leave
+     * every stored `telegram_user_id` attached to conversations that bot never had.
+     *
+     * Text rather than bigint for the reason every other id on the wire is text: JSON
+     * has one numeric type, and a value stored and compared for the life of an
+     * installation must not be able to lose a digit in transit.
+     *
+     * Nullable because rows created before the bootstrap existed have no way to know
+     * it. `getMe` fills it the first time a bootstrap runs against such a row.
+     */
+    telegramBotId: text('telegram_bot_id'),
     status: text('status').notNull().default('ACTIVE'),
     /** Envelope-encrypted. Never returned by any API, never logged. */
     tokenCiphertext: text('token_ciphertext').notNull(),

@@ -57,6 +57,38 @@ export async function telegramSend(request: TelegramSendRequest): Promise<Telegr
   // message about a purchase that does not exist.
   assertOutsideTransaction('A Telegram send');
 
+  const call = await telegramCall(request);
+  if (call.outcome !== 'SUCCEEDED') return call;
+  // The ONE thing a send reads out of a result. `telegramCall` returns the whole
+  // `result`; this narrows it, which is why the bootstrap needed its own callers
+  // rather than a wider return type here.
+  const result = call.result as { message_id?: number } | null;
+  return { outcome: 'SUCCEEDED', messageId: result?.message_id ?? null };
+}
+
+/**
+ * ONE Telegram API call, with the result left intact.
+ *
+ * Extracted from `telegramSend` rather than copied beside it, and the reason is the
+ * rule `probe-core.ts` already records for panel probes: the copy that would silently
+ * keep the old behaviour is the one nobody looks at again. Everything that makes this
+ * call safe — the abort timeout, `redirect: 'error'` because the token is in the PATH,
+ * the retryable/permanent taxonomy, never throwing — is decided here and inherited by
+ * every caller.
+ *
+ * `telegramSend` narrows the result to a message id. The bootstrap needs
+ * `result.username` and `result.id` from `getMe`, which is why the success case carries
+ * the whole thing rather than a shape chosen for one method.
+ *
+ * NOT exported for general use: the callers are `telegramSend`, `telegramGetMe` and
+ * `telegramSetWebhook`, and a fourth should be a named function here rather than an
+ * arbitrary method string passed in from a surface.
+ */
+type TelegramCallOutcome =
+  | { readonly outcome: 'SUCCEEDED'; readonly result: unknown }
+  | Exclude<TelegramSendOutcome, { outcome: 'SUCCEEDED' }>;
+
+async function telegramCall(request: TelegramSendRequest): Promise<TelegramCallOutcome> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), request.timeoutMs);
   try {
@@ -73,7 +105,8 @@ export async function telegramSend(request: TelegramSendRequest): Promise<Telegr
 
     let payload: {
       ok?: boolean;
-      result?: { message_id?: number };
+      // `unknown`, because this function serves every method. Each caller narrows it.
+      result?: unknown;
       description?: string;
       error_code?: number;
       parameters?: { retry_after?: number };
@@ -85,7 +118,7 @@ export async function telegramSend(request: TelegramSendRequest): Promise<Telegr
     }
 
     if (response.ok && payload?.ok === true) {
-      return { outcome: 'SUCCEEDED', messageId: payload.result?.message_id ?? null };
+      return { outcome: 'SUCCEEDED', result: payload.result ?? null };
     }
 
     if (payload === null && response.ok) {
@@ -181,4 +214,102 @@ export function callbackAnswerBody(input: {
   readonly callbackQueryId: string;
 }): Record<string, unknown> {
   return { callback_query_id: input.callbackQueryId };
+}
+
+// ---------------------------------------------------------------------------
+// The fresh-install bootstrap's two calls
+// ---------------------------------------------------------------------------
+
+/**
+ * What `getMe` establishes: that the token works, and WHICH bot it belongs to.
+ *
+ * The numeric `id` is the identity that makes a rerun decidable. A username can be
+ * changed in BotFather and a token can be rotated; the id cannot, which is why
+ * ADR-0029 makes it the thing `bot_instances.telegram_bot_id` stores and compares.
+ */
+export interface TelegramBotIdentity {
+  readonly botId: string;
+  readonly username: string;
+}
+
+export type TelegramIdentityOutcome =
+  | { readonly outcome: 'SUCCEEDED'; readonly identity: TelegramBotIdentity }
+  | Exclude<TelegramSendOutcome, { outcome: 'SUCCEEDED' }>;
+
+/**
+ * Ask Telegram who this token belongs to.
+ *
+ * The bootstrap's FIRST call, before anything is written, because a token Telegram
+ * rejects must not reach the database: a stored credential that has never worked is
+ * indistinguishable from one that stopped working, and an operator debugging the
+ * second would be looking in the wrong place entirely.
+ *
+ * A 401 arrives here as `FAILED_PERMANENT` with `telegram.rejected.401`, which the
+ * caller maps to `TELEGRAM_BOOTSTRAP_TOKEN_REJECTED` — a different remedy from
+ * unreachable, and the whole reason those are two codes.
+ *
+ * `id` is read as a NUMBER and rendered as a decimal string. Telegram bot ids are
+ * comfortably inside 2^53 today, but this value is stored and compared for the life of
+ * the installation and JSON has one numeric type; a string cannot silently lose a digit.
+ */
+export async function telegramGetMe(
+  request: Omit<TelegramSendRequest, 'body' | 'method'>,
+): Promise<TelegramIdentityOutcome> {
+  assertOutsideTransaction('A Telegram getMe');
+
+  const call = await telegramCall({ ...request, method: 'getMe', body: {} });
+  if (call.outcome !== 'SUCCEEDED') return call;
+
+  const result = call.result as { id?: unknown; username?: unknown } | null;
+  const id = result?.id;
+  const username = result?.username;
+
+  /*
+   * A 2xx that parsed but does not describe a bot.
+   *
+   * PERMANENT rather than retryable: retrying cannot make a well-formed answer grow
+   * the fields it did not have, and the realistic cause is an `apiBaseUrl` pointing at
+   * something that is not Telegram — which waiting does not fix.
+   */
+  if (typeof id !== 'number' || !Number.isSafeInteger(id) || typeof username !== 'string') {
+    return {
+      outcome: 'FAILED_PERMANENT',
+      errorCode: 'telegram.rejected.getme_shape',
+      errorMessage: 'getMe answered without a usable numeric id and username.',
+    };
+  }
+
+  return { outcome: 'SUCCEEDED', identity: { botId: String(id), username } };
+}
+
+/**
+ * Register the webhook, with the secret every later update is authenticated by.
+ *
+ * `drop_pending_updates: true`, deliberately. A fresh install has no customers and no
+ * conversations; whatever is queued at Telegram predates this installation entirely and
+ * belongs to whatever the token was used for before. Replaying it would deliver
+ * somebody else's messages into a brand-new database as if they had just arrived.
+ *
+ * `allowed_updates` is NOT narrowed here. The runtime decides what it handles, and a
+ * list set at registration time is a second place that has to be edited when a handler
+ * is added — the kind of duplicated decision that goes stale silently.
+ */
+export async function telegramSetWebhook(
+  request: Omit<TelegramSendRequest, 'body' | 'method'> & {
+    readonly url: string;
+    readonly secretToken: string;
+  },
+): Promise<TelegramSendOutcome> {
+  assertOutsideTransaction('A Telegram setWebhook');
+
+  const { url, secretToken, ...rest } = request;
+  const call = await telegramCall({
+    ...rest,
+    method: 'setWebhook',
+    body: { url, secret_token: secretToken, drop_pending_updates: true },
+  });
+  if (call.outcome !== 'SUCCEEDED') return call;
+  // `setWebhook` answers `result: true`. There is no id to carry, and reporting one
+  // would be inventing a fact.
+  return { outcome: 'SUCCEEDED', messageId: null };
 }
