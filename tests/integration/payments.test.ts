@@ -802,31 +802,74 @@ describe('payments and settlement', () => {
    * Asserted by asking: no service row, no panel call, no provisioning event. A comment
    * saying "we did not build these" cannot notice the commit that does.
    */
-  it('settles to PAID and claims nothing beyond it', async () => {
+  it('settles to PAID, plans the service, and still touches no provider', async () => {
     const order = await awaitingPayment(tenantA, customerA, panelA, 'b1');
     await credit(tenantA, customerA, 1_000_000n, 'credit-b1');
     await settleFromWallet(tenantA, customerA, order.id, 'settle-b1-0001');
 
     expect((await stateOf(order.id)).state).toBe('PAID');
 
+    /*
+     * The boundary this case guards MOVED in Phase 4D, and it is worth saying how.
+     *
+     * Before 4D it asserted a settled order produced no service row at all, because
+     * nothing could provision. That is now false by design: the service and its
+     * PROVISION operation are written in this very transaction, which is what makes
+     * "one settled order produces at most one logical service" a unique index rather
+     * than a worker's discipline.
+     *
+     * What has NOT moved, and what this case is really about, is that settlement still
+     * contacts nothing. So the assertions invert from "no row" to "a row in
+     * PENDING_PROVISION, an operation in PLANNED, and no event that claims an external
+     * effect" — which is a stronger statement than the one it replaces, because a
+     * service row that appeared ACTIVE here would mean a panel had been called inside a
+     * money transaction.
+     */
+    const services = (await ctx.container.database.db.execute(
+      sql`SELECT state, provisioned_at, subscription_url, delivery_state FROM services` as never,
+    )) as unknown as {
+      rows: {
+        state: string;
+        provisioned_at: string | null;
+        subscription_url: string | null;
+        delivery_state: string;
+      }[];
+    };
+    expect(services.rows, 'a settled order is owed exactly one service').toHaveLength(1);
+    expect(services.rows[0]?.state).toBe('PENDING_PROVISION');
+    expect(services.rows[0]?.provisioned_at, 'nothing has provisioned it').toBeNull();
+    expect(services.rows[0]?.subscription_url, 'no provider has issued anything').toBeNull();
+    expect(services.rows[0]?.delivery_state, 'nobody has been told anything').toBe('PENDING');
+
+    const operations = (await ctx.container.database.db.execute(
+      sql`SELECT type, state, attempts, call_started_at FROM provisioning_operations` as never,
+    )) as unknown as {
+      rows: { type: string; state: string; attempts: number; call_started_at: string | null }[];
+    };
+    expect(operations.rows).toHaveLength(1);
+    expect(operations.rows[0]?.type).toBe('PROVISION');
+    expect(operations.rows[0]?.state).toBe('PLANNED');
+    expect(operations.rows[0]?.attempts, 'nothing has been attempted').toBe(0);
+    expect(operations.rows[0]?.call_started_at, 'no provider call was started').toBeNull();
+
     const events = (await ctx.container.database.db.execute(
       sql`SELECT DISTINCT event_type FROM outbox_messages` as never,
     )) as unknown as { rows: { event_type: string }[] };
     const types = events.rows.map((r) => r.event_type);
+    /*
+     * Still none of these, and for the same reason as before: each one asserts
+     * something happened on somebody else's machine, and nothing has been contacted.
+     * `ServiceProvisioned` is written by the executor, outside every transaction.
+     */
     for (const claimed of [
       'ServiceProvisioned',
       'ServiceStateChanged',
       'ProvisioningOutcomeUnknown',
     ]) {
-      expect(types, `${claimed} was emitted by a phase that provisions nothing`).not.toContain(
+      expect(types, `${claimed} claims an external effect settlement did not have`).not.toContain(
         claimed,
       );
     }
-
-    const services = (await ctx.container.database.db.execute(
-      sql`SELECT count(*)::int AS n FROM services` as never,
-    )) as unknown as { rows: { n: number }[] };
-    expect(services.rows[0]?.n).toBe(0);
   });
 
   // -------------------------------------------------------------------------

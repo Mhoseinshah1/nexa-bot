@@ -163,7 +163,12 @@ describe('panel HTTP surface', () => {
     // EXACT, not "more than zero". A length assertion passes whatever the list
     // contains, which is how a catalogue advertising fourteen unimplemented
     // operations stayed green for a release.
-    expect(marzban?.capabilities).toEqual(['HEALTH_CHECK']);
+    expect(marzban?.capabilities).toEqual([
+      'HEALTH_CHECK',
+      'CREATE_USER',
+      'READ_USAGE',
+      'DELIVER_SUBSCRIPTION_LINK',
+    ]);
   });
 
   it('publishes for EVERY provider only what this release can execute', () => {
@@ -174,7 +179,36 @@ describe('panel HTTP surface', () => {
       const body = providerListResponseSchema.parse(response.json());
       expect(body.providers.length).toBeGreaterThan(0);
       for (const provider of body.providers) {
-        expect(provider.capabilities, provider.key).toEqual(['HEALTH_CHECK']);
+        // Both providers implement the same four in this release. Asserted as an
+        // EXACT list per provider rather than as a shared constant, so a provider
+        // that later implements a fifth has to say so here.
+        expect(provider.capabilities, provider.key).toEqual([
+          'HEALTH_CHECK',
+          'CREATE_USER',
+          'READ_USAGE',
+          'DELIVER_SUBSCRIPTION_LINK',
+        ]);
+        // And the twelve that have no code behind them are named, not inferred by
+        // omission — a complement computed from the descriptor would pass whichever
+        // side a capability moved to.
+        for (const unimplemented of [
+          'RENEW_USER',
+          'DELETE_USER',
+          'DISABLE_USER',
+          'ENABLE_USER',
+          'RESET_USAGE',
+          'ADD_VOLUME',
+          'ADD_TIME',
+          'ROTATE_SUBSCRIPTION_LINK',
+          'DELIVER_RAW_CONFIGS',
+          'DELIVER_CONFIG_FILE',
+          'LIMIT_DEVICES',
+          'INACTIVE_ACCOUNT_INBOUND',
+        ]) {
+          expect(provider.capabilities, `${provider.key}.${unimplemented}`).not.toContain(
+            unimplemented,
+          );
+        }
       }
     });
   });
@@ -189,23 +223,34 @@ describe('panel HTTP surface', () => {
     });
     expect(created.statusCode).toBe(201);
     const body = panelResponseSchema.parse(created.json());
-    expect(body.panel.capabilities).toEqual(['HEALTH_CHECK']);
-    expect(body.panel.capabilities).not.toContain('CREATE_USER');
+    expect(body.panel.capabilities).toEqual([
+      'HEALTH_CHECK',
+      'CREATE_USER',
+      'READ_USAGE',
+      'DELIVER_SUBSCRIPTION_LINK',
+    ]);
+    expect(body.panel.capabilities).not.toContain('RENEW_USER');
   });
 
-  it('publishes for Sanaei only the capability this release implements', () => {
+  it('publishes for Sanaei only the capabilities this release implements', () => {
     // The named case, kept beside the generic one above: a regression that
     // somehow left other providers correct would still name Sanaei here.
     // This endpoint is where a capability becomes a public claim: whatever is
     // listed here is what the product tells an operator it can do. Phase 3B
-    // implements authentication, connection testing and a read-only health
-    // probe for 3X-UI, so anything else would be an advertisement with no
-    // implementation behind it.
+    // implemented authentication, connection testing and a read-only health probe
+    // for 3X-UI; Phase 4D added creating a client, reading its traffic and handing
+    // back a subscription link. Anything beyond those four would be an
+    // advertisement with no implementation behind it.
     return get(PANEL_ROUTES.providers, ownerCookie).then((response) => {
       const body = providerListResponseSchema.parse(response.json());
       const sanaei = body.providers.find((provider) => provider.key === 'sanaei');
-      expect(sanaei?.capabilities).toEqual(['HEALTH_CHECK']);
-      for (const unimplemented of ['CREATE_USER', 'RENEW_USER', 'READ_USAGE', 'ADD_VOLUME']) {
+      expect(sanaei?.capabilities).toEqual([
+        'HEALTH_CHECK',
+        'CREATE_USER',
+        'READ_USAGE',
+        'DELIVER_SUBSCRIPTION_LINK',
+      ]);
+      for (const unimplemented of ['RENEW_USER', 'ADD_VOLUME', 'ADD_TIME', 'DELETE_USER']) {
         expect(sanaei?.capabilities, unimplemented).not.toContain(unimplemented);
       }
     });
@@ -223,8 +268,13 @@ describe('panel HTTP surface', () => {
     });
     expect(created.statusCode).toBe(201);
     const body = panelResponseSchema.parse(created.json());
-    expect(body.panel.capabilities).toEqual(['HEALTH_CHECK']);
-    expect(body.panel.capabilities).not.toContain('CREATE_USER');
+    expect(body.panel.capabilities).toEqual([
+      'HEALTH_CHECK',
+      'CREATE_USER',
+      'READ_USAGE',
+      'DELIVER_SUBSCRIPTION_LINK',
+    ]);
+    expect(body.panel.capabilities).not.toContain('RENEW_USER');
   });
 
   it('creates a panel and returns credential STATE, never a value', async () => {
