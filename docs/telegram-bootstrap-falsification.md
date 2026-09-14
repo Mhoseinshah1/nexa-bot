@@ -121,6 +121,37 @@ below is the two halves of it.
 | C8  | A first configuration with no terminal and no token source is refused | the `[ ! -t 0 ]` refusal → `:`                                   | `botctl.test.sh` › a first configuration with no terminal and no token source is refused        | KILLED |
 | C8b | ...and a RECONCILE without one is NOT, because none is needed         | (covered by the same fix; the two halves are separate cases)     | `botctl.test.sh` › a RECONCILE with no terminal and no token source is NOT refused              | KILLED |
 
+## The second Codex round
+
+Three findings on the pushed head, all real, and all three were the SAME defect
+class reached from a new direction: something claiming a state it was not in.
+Two of them are the states the first round's fixes did not cover — which is the
+pattern `CLAUDE.md` records about reviewing a fix as hard as the bug.
+
+| #   | Rule                                                              | Mutation                                                    | Test that dies                                                                                  | Result |
+| --- | ----------------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------ |
+| D1  | Only callers that take the deployment lock run the compiled CLI   | restore `bot:bootstrap` to `apps/api/package.json`          | `bootstrap-callers.test.ts` › does not expose the compiled CLI as a package script              | KILLED |
+| D1b | ...and the allow list holding that rule cannot be widened quietly | add `apps/api/package.json` to the check's `grep -vxF` list | `bootstrap-callers.test.ts` › agrees with the allow list the build actually enforces            | KILLED |
+| D2  | An `unavailable` installation still runs the CLI                  | restore the early `return 0`                                | `botctl.test.sh` › an unavailable bot still runs the CLI, and a supplied token still reaches it | KILLED |
+| D3  | The CLI's error CODE refines what the state cannot say            | drop the `case "$out"` refinement                           | `botctl.test.sh` › a revoked stored token is not reported as a registration to retry            | KILLED |
+| D3b | ...but `none` outranks it, because nothing was stored             | `[ "$TELEGRAM_RETRY" != "none" ]` → `true`                  | `botctl.test.sh` › a first attempt that stored nothing outranks the error code                  | KILLED |
+| D3c | Capturing the CLI's output is not the same as swallowing it       | drop the `printf '%s\n' "$out" >&2` echo                    | `botctl.test.sh` › a revoked stored token is not reported as a registration to retry            | KILLED |
+
+D1 is the one worth reading twice. The service's comment asserted "there is no
+third caller" and `apps/api/package.json` had been exposing one — the COMPILED
+CLI, on a host holding the production database and secrets, taking no lock at
+all. The claim was checkable and had never been checked, so it read as a
+guarantee for as long as it was false. It is now `check-boundaries.sh`, and
+`bootstrap-callers.test.ts` reads that script's allow list rather than restating
+it, so widening the list without moving the expectation fails too.
+
+What D1 does NOT do is close the race. Serialization across a network call needs
+a lock this application cannot take — a database advisory lock would be held
+while the marker transaction takes a second connection from the same pool, and
+`DATABASE_POOL_MAX` may be 1, which is a deadlock this codebase has reproduced
+twice. `docs/open-questions.md` OQ-TG-03 carries the residual rather than a
+comment implying it is gone.
+
 ## The diagnosability round
 
 Not a rule about the product — a rule about the test that guards it. The
