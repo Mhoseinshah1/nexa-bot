@@ -17,11 +17,13 @@
     "db:seed": "node dist/infrastructure/persistence/seed.js",
     "clean": "rm -rf dist",
     "admin:bootstrap": "node dist/bootstrap-owner.cli.js",
+    "bot:bootstrap": "node dist/bootstrap-bot.cli.js",
     "provision": "node dist/provision-installation.cli.js",
     "backup": "node dist/backup.cli.js",
     "db:migrate:dev": "tsx src/infrastructure/persistence/migrate.ts",
     "db:seed:dev": "tsx src/infrastructure/persistence/seed.ts",
     "admin:bootstrap:dev": "tsx src/bootstrap-owner.cli.ts",
+    "bot:bootstrap:dev": "tsx src/bootstrap-bot.cli.ts",
     "provision:dev": "tsx src/provision-installation.cli.ts",
     "backup:dev": "tsx src/backup.cli.ts",
     "start:recovery": "node dist/main.recovery.js"
