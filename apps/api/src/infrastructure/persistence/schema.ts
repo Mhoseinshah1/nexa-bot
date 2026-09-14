@@ -1243,6 +1243,19 @@ export const panels = pgTable(
     providerType: text('provider_type').notNull(),
     baseUrl: text('base_url').notNull(),
     status: text('status').notNull().default('ACTIVE'),
+    /**
+     * The per-panel configuration this provider needs before it can build a config.
+     *
+     * `requiredActivationFields` on the descriptor has named this since Phase 3 and
+     * nothing stored a value, so a 3X-UI panel could be connected, probed and reported
+     * healthy while being unable to produce the one thing a customer buys.
+     *
+     * Validated against `PANEL_ACTIVATION_SCHEMAS[providerType]` at the application
+     * boundary, never here: the shape is per provider and a CHECK constraint cannot
+     * know which provider a row is. Null means unset, which is a real state a fresh
+     * panel is in and which `PANEL_NOT_OPERABLE` names rather than guesses past.
+     */
+    activation: jsonb('activation'),
     /** Set when the panel is archived, so the event has a time and not just a state. */
     archivedAt: timestamptz('archived_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),

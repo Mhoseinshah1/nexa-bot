@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isServiceAdapter,
   PROVIDER_CAPABILITIES,
   PROVIDER_TYPES,
   type ProviderCapability,
@@ -294,8 +295,8 @@ describe('the provider registry', () => {
     // it. This test is what makes that a deliberate edit rather than a
     // declaration somebody made in a descriptor.
     const EXECUTABLE_NOW: Record<ProviderType, readonly ProviderCapability[]> = {
-      marzban: ['HEALTH_CHECK'],
-      sanaei: ['HEALTH_CHECK'],
+      marzban: ['HEALTH_CHECK', 'CREATE_USER', 'READ_USAGE', 'DELIVER_SUBSCRIPTION_LINK'],
+      sanaei: ['HEALTH_CHECK', 'CREATE_USER', 'READ_USAGE', 'DELIVER_SUBSCRIPTION_LINK'],
     };
 
     for (const type of IMPLEMENTED_PROVIDER_TYPES) {
@@ -314,14 +315,37 @@ describe('the provider registry', () => {
     }
   });
 
-  it('offers a service operation through no adapter yet', () => {
+  it('backs every declared service capability with a method that exists', () => {
     // The other half of the same rule, stated where it cannot be satisfied by
-    // editing a descriptor: no adapter in this release implements the service
-    // surface at all, so there is nothing a capability could have described.
+    // editing a descriptor. Until Phase 4D no adapter implemented the service
+    // surface at all, and this asserted exactly that. Now that both do, the
+    // assertion inverts into its stronger form: a descriptor claiming CREATE_USER
+    // must come with a `createUser` that a caller can invoke, and
+    // `isServiceAdapter` — which `providerServiceAdapter` gates on — must agree.
+    //
+    // The direction matters. Checking only "the methods exist" would pass for an
+    // adapter that had them and declared nothing, which is the harmless case;
+    // checking the IMPLICATION catches the harmful one, a descriptor that
+    // advertises an operation to an operator with no code behind it.
     for (const type of IMPLEMENTED_PROVIDER_TYPES) {
-      const adapter = providerAdapter(type) as unknown as Partial<Record<string, unknown>>;
-      expect(typeof adapter['createUser'], `${type}.createUser`).toBe('undefined');
-      expect(typeof adapter['readUsage'], `${type}.readUsage`).toBe('undefined');
+      const adapter = providerAdapter(type);
+      const claimed = adapter.descriptor.capabilities;
+      const methods = adapter as unknown as Partial<Record<string, unknown>>;
+      if (claimed.includes('CREATE_USER')) {
+        expect(typeof methods['createUser'], `${type}.createUser`).toBe('function');
+      }
+      if (claimed.includes('READ_USAGE')) {
+        expect(typeof methods['readUsage'], `${type}.readUsage`).toBe('function');
+      }
+      // `lookupUser` has no capability of its own — OPERATION_REQUIRED_CAPABILITIES
+      // gives RECONCILE an empty list, because reading a user is how both adapters
+      // already establish health. It is required of any adapter that can create,
+      // because a create with no way to ask what happened afterwards is the
+      // duplicate-account path this whole design exists to close.
+      if (claimed.includes('CREATE_USER')) {
+        expect(typeof methods['lookupUser'], `${type}.lookupUser`).toBe('function');
+        expect(isServiceAdapter(adapter), `${type} is a service adapter`).toBe(true);
+      }
     }
   });
 });

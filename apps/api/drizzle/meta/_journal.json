@@ -302,6 +302,13 @@
       "when": 1789421838066,
       "tag": "0042_provisioning_delivery_and_backoff",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1789422725927,
+      "tag": "0043_panel_activation",
+      "breakpoints": true
     }
   ]
 }
