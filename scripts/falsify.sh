@@ -9,6 +9,28 @@ cd "$(dirname "$0")/.." || exit 1
 
 LABEL="$1"; FILE="$2"; FROM="$3"; TO="$4"; TEST="$5"; PROJECT="${6:-unit}"
 
+# The PROJECT must be one vitest actually defines, or `shell`.
+#
+# This check exists because its absence manufactured evidence. `--project api`
+# is not a project — `vitest.config.mts` defines unit, web, exhaustive and
+# integration — so vitest matched no files, exited non-zero, and every mutation
+# run that way was reported KILLED without a single test having been executed.
+# Seven rules were "falsified" against it in one session before a mutation that
+# genuinely survived was checked by hand and found to pass.
+#
+# A harness whose failure mode is reporting success is worse than no harness:
+# the record it produces reads exactly like a real one. So an unknown project is
+# a hard refusal, and the message names the valid ones rather than making the
+# next person read this file to find them.
+case "$PROJECT" in
+  unit|web|exhaustive|integration|shell) ;;
+  *)
+    echo "$LABEL  SETUP-FAILED: unknown project '$PROJECT'" >&2
+    echo "         valid: unit, web, exhaustive, integration, shell" >&2
+    exit 1
+    ;;
+esac
+
 # The file must be COMMITTED and clean before it is mutated.
 #
 # Restore below is `git checkout --`, which restores the file as committed — so

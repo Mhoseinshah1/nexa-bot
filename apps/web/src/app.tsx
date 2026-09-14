@@ -17,6 +17,7 @@ import { AlertsPage, NotificationsPage } from './pages/alerts';
 import { SystemPage } from './pages/system';
 import { RecoveryPage } from './pages/recovery';
 import { PlannedPage, PLANNED_SURFACES, type PlannedKey } from './pages/planned';
+import { PaymentsPage, PaymentDetailPage } from './pages/payments';
 import { ProductDetailPage, ProductsPage } from './pages/products';
 import { OrderDetailPage, OrdersPage } from './pages/orders';
 import { UsersPage, UserDetailPage } from './pages/users';
@@ -411,6 +412,9 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
           key={user['id'] ?? ''}
           id={user['id'] ?? ''}
           mayBlock={may('users.block')}
+          mayViewWallet={may('users.view')}
+          mayCredit={may('users.wallet.credit')}
+          mayDebit={may('users.wallet.debit')}
           denied={!may('users.view')}
         />
       ),
@@ -457,6 +461,38 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
     };
   }
 
+  if (route.path === '/payments') {
+    return {
+      element: <PaymentsPage route={route} denied={!may('payments.view')} />,
+      crumbs: [{ label: t('web.payments_title') }],
+      title: t('web.payments_title'),
+    };
+  }
+
+  const payment = match('/payments/:id', route.path);
+  if (payment !== null) {
+    return {
+      element: (
+        <PaymentDetailPage
+          key={payment['id'] ?? ''}
+          id={payment['id'] ?? ''}
+          /*
+           * Confirming is `receipts.review`, NOT `payments.view`.
+           *
+           * A reader who may see a payment must not be able to approve one, and the
+           * two are different permissions with different risk labels. The service
+           * charges `receipts.review` itself; this only decides whether the form is
+           * drawn or the permission is named.
+           */
+          mayReview={may('receipts.review')}
+          denied={!may('payments.view')}
+        />
+      ),
+      crumbs: [nav('payments'), { label: t('web.payment_detail') }],
+      title: t('web.payment_detail'),
+    };
+  }
+
   const order = match('/orders/:id', route.path);
   if (order !== null) {
     return {
@@ -465,6 +501,16 @@ export function resolve(route: Route, permissions: readonly string[]): Resolved 
           key={order['id'] ?? ''}
           id={order['id'] ?? ''}
           denied={!may('orders.view')}
+          /*
+           * Payments are their OWN permission, decided here rather than assumed.
+           *
+           * An operator may hold `orders.view` and not `payments.view`, and the
+           * embedded payments card used to issue its request regardless — so opening
+           * any order they could legitimately read logged a 403 they could do nothing
+           * about. `PaymentService.list` was right to refuse it; the surface was wrong
+           * to ask.
+           */
+          mayViewPayments={may('payments.view')}
         />
       ),
       crumbs: [nav('orders'), { label: t('web.order_detail') }],

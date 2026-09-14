@@ -20,6 +20,13 @@ import {
   PRODUCT_TITLE_MAX_LENGTH,
 } from './catalog.js';
 import { ORDER_STATES } from './commerce.js';
+import { LEDGER_DIRECTIONS, LEDGER_REASONS } from './ledger.js';
+import {
+  PAYMENT_AMOUNT_MAX_MINOR,
+  PAYMENT_EVIDENCE_KINDS,
+  PAYMENT_METHODS,
+  PAYMENT_STATES,
+} from './payment.js';
 import { CURRENCY_CODES, MAX_MONEY_AMOUNT_MINOR } from './money.js';
 import { OPERATIONAL_SEVERITIES } from './ports.js';
 import {
@@ -1515,6 +1522,15 @@ export const orderSummarySchema = z.object({
   currency: z.enum(CURRENCY_CODES),
   expiresAt: z.iso.datetime().nullable(),
   confirmedAt: z.iso.datetime().nullable(),
+  /**
+   * When the money arrived, and NOTHING about a service.
+   *
+   * `orders_settled_at_check` binds this to `PAID` or `REFUNDED`, so a non-null value
+   * here is the database's own statement that the order is financially settled. It says
+   * nothing about delivery: no phase before 4D provisions anything, and an operator
+   * reading a settled order must not infer one from a timestamp.
+   */
+  settledAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });
@@ -1567,6 +1583,243 @@ export type OrderResponse = z.infer<typeof orderResponseSchema>;
 export const ORDER_ROUTES = {
   list: '/orders',
   detail: (id: string) => `/orders/${encodeURIComponent(id)}`,
+} as const;
+
+// --- Wallet and payments (Phase 4C) -----------------------------------------
+
+/**
+ * How many ledger entries and payments a page may carry.
+ *
+ * The same shape every other list here uses. The ledger page is a KEYSET over
+ * `(createdAt, id)` and never an offset, for the reason `/panels` records: an
+ * append-only table grows at the head while an operator reads it, and an offset
+ * page shows them the same row twice.
+ */
+export const WALLET_PAGE_DEFAULT = 25;
+export const WALLET_PAGE_MAX = 100;
+export const PAYMENT_PAGE_DEFAULT = 25;
+export const PAYMENT_PAGE_MAX = 100;
+
+/**
+ * One ledger entry, as the Web Admin renders it.
+ *
+ * `amount` is a STRING and `direction` is its own field, which is the ledger's
+ * invariant restated on the wire: an amount is positive and the sign lives beside
+ * it. A signed number here would let a client add them up and get the balance
+ * wrong in exactly the way `RSV2-BR-019` records — the legacy report adds admin
+ * DEBITS to the top-up total instead of subtracting them.
+ *
+ * `note` is an operator's bounded text and never a customer's. `actorAdminId` is
+ * present only for an administrative reason; a flow-produced entry has none, and
+ * that difference is the answer to "did a person do this".
+ */
+export const walletEntrySummarySchema = z.object({
+  id: z.string(),
+  customerId: z.string(),
+  direction: z.enum(LEDGER_DIRECTIONS),
+  reason: z.enum(LEDGER_REASONS),
+  /** Minor units, always positive. A string because JSON has no bigint. */
+  amount: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+  orderId: z.string().nullable(),
+  paymentId: z.string().nullable(),
+  actorAdminId: z.string().nullable(),
+  note: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+});
+export type WalletEntrySummaryResponse = z.infer<typeof walletEntrySummarySchema>;
+
+/**
+ * A customer's wallet: the derived balance and nothing that could disagree with it.
+ *
+ * `balance` is computed from the entries in the same read, so a caller cannot be
+ * shown a balance from one moment and a history from another. There is no stored
+ * balance to return and this response is deliberately not a place one could
+ * appear.
+ *
+ * `entryCount` is how many entries the balance was derived FROM. It is here
+ * because a balance with no idea how many facts produced it is the legacy summary
+ * that left a 916,550 residual unexplained.
+ */
+export const walletBalanceSchema = z.object({
+  customerId: z.string(),
+  balanceAmount: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+  entryCount: z.number().int().nonnegative(),
+});
+export type WalletBalanceResponse = z.infer<typeof walletBalanceSchema>;
+
+export const walletResponseSchema = z.object({ wallet: walletBalanceSchema });
+export type WalletResponse = z.infer<typeof walletResponseSchema>;
+
+/**
+ * One entry, wrapped, as an adjustment answers with.
+ *
+ * A WRAPPER rather than the bare summary, like every other response here: a top-level
+ * object leaves room for a field to be added without changing the shape a client
+ * destructures, and `apps/web` may not import `zod` to build one of its own.
+ */
+export const walletEntryResponseSchema = z.object({ entry: walletEntrySummarySchema });
+export type WalletEntryResponse = z.infer<typeof walletEntryResponseSchema>;
+
+export const walletEntryListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(WALLET_PAGE_MAX).optional(),
+  cursor: z.string().min(1).max(255).optional(),
+});
+export type WalletEntryListQuery = z.infer<typeof walletEntryListQuerySchema>;
+
+export const walletEntryListResponseSchema = z.object({
+  entries: z.array(walletEntrySummarySchema),
+  nextCursor: z.string().nullable(),
+});
+export type WalletEntryListResponse = z.infer<typeof walletEntryListResponseSchema>;
+
+/**
+ * An operator moving a customer's money by hand.
+ *
+ * `direction` is explicit rather than a signed amount, for the same reason the
+ * ledger stores it that way. `reason` is NOT a free choice: the service maps a
+ * direction to `ADMIN_CREDIT` or `ADMIN_DEBIT`, because those are the only two
+ * administrative reasons a single adjustment can legitimately carry and letting a
+ * caller pick from the whole vocabulary would let an admin file a debit as a
+ * `PURCHASE`.
+ *
+ * `note` is required and bounded. The legacy system's manual adjustments record
+ * the actor, target, delta and resulting balance but NOT the reason
+ * (`LGR-BR-063`), which makes every historical adjustment unexplainable.
+ */
+export const walletAdjustRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  direction: z.enum(LEDGER_DIRECTIONS),
+  /*
+   * ONE total check, not a chain of refinements, and the difference is a 500.
+   *
+   * Chained `.refine`s on a STRING schema all run even after an earlier check has
+   * failed — unlike the object-level refinements on `productWriteSchema`, which run only
+   * once every field has parsed. So `z.string().regex(...).refine((v) => BigInt(v) > 0n)`
+   * reaches `BigInt('abc')`, which THROWS a SyntaxError out of `safeParse` itself: not a
+   * validation failure the error filter turns into a 400, but an exception that becomes
+   * a 500 for what is an ordinary malformed request.
+   *
+   * `superRefine` with an early return is the fix: the shape is established before any
+   * conversion is attempted, and every later check reads a value already known to be
+   * digits.
+   */
+  amount: z.string().superRefine((value, ctx) => {
+    if (!/^\d{1,19}$/u.test(value)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'An amount is digits only, in minor units.',
+      });
+      return;
+    }
+    const minor = BigInt(value);
+    if (minor <= 0n) {
+      ctx.addIssue({ code: 'custom', message: 'An adjustment must be greater than zero.' });
+      return;
+    }
+    if (minor > PAYMENT_AMOUNT_MAX_MINOR) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'That amount is past the largest this system moves.',
+      });
+    }
+  }),
+  currency: z.enum(CURRENCY_CODES),
+  note: z.string().trim().min(1).max(500),
+});
+export type WalletAdjustRequest = z.infer<typeof walletAdjustRequestSchema>;
+
+/**
+ * One payment, as the Web Admin renders it.
+ *
+ * `orderId` nullable is the whole model on the wire: a payment that names an
+ * order settles it, one that does not credits the wallet, and which a given
+ * payment is, is a column rather than an inference. `UNK-PR-007` asks that
+ * question of the legacy system and cannot answer it.
+ *
+ * What is NOT here: `evidenceNote` is an operator's own text about somebody's
+ * bank transfer and is returned only on the DETAIL, behind the same permission;
+ * `externalReference` is a gateway's id and no gateway ships.
+ */
+export const paymentSummarySchema = z.object({
+  id: z.string(),
+  customerId: z.string(),
+  orderId: z.string().nullable(),
+  state: z.enum(PAYMENT_STATES),
+  method: z.enum(PAYMENT_METHODS),
+  amount: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+  /** The code the customer quotes. Generated, never customer-supplied. */
+  reference: z.string(),
+  evidenceKind: z.enum(PAYMENT_EVIDENCE_KINDS).nullable(),
+  confirmedAt: z.iso.datetime().nullable(),
+  /** Which administrator confirmed it. Frozen once set — migration 0035. */
+  confirmedByAdminId: z.string().nullable(),
+  expiresAt: z.iso.datetime().nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type PaymentSummaryResponse = z.infer<typeof paymentSummarySchema>;
+
+export const paymentDetailSchema = paymentSummarySchema.extend({
+  /** The operator's note about the evidence. Detail only. */
+  evidenceNote: z.string().nullable(),
+});
+export type PaymentDetailResponse = z.infer<typeof paymentDetailSchema>;
+
+export const paymentListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(PAYMENT_PAGE_MAX).optional(),
+  cursor: z.string().min(1).max(255).optional(),
+  state: z.enum(PAYMENT_STATES).optional(),
+  method: z.enum(PAYMENT_METHODS).optional(),
+  /* Ids, validated HERE: these reach `uuid` columns. See `orderListQuerySchema`. */
+  customerId: uuidV7Schema.optional(),
+  orderId: uuidV7Schema.optional(),
+  /** The quotable code, matched exactly. What an operator has in front of them. */
+  reference: z.string().trim().min(1).max(64).optional(),
+});
+export type PaymentListQuery = z.infer<typeof paymentListQuerySchema>;
+
+export const paymentListResponseSchema = z.object({
+  payments: z.array(paymentSummarySchema),
+  nextCursor: z.string().nullable(),
+});
+export type PaymentListResponse = z.infer<typeof paymentListResponseSchema>;
+
+export const paymentResponseSchema = z.object({ payment: paymentDetailSchema });
+export type PaymentResponse = z.infer<typeof paymentResponseSchema>;
+
+/**
+ * An operator confirming that money arrived.
+ *
+ * The note is REQUIRED, and that is the point of the whole endpoint: the legacy
+ * receipt review records neither the reviewer nor the time (`UNK-PR-010`), so
+ * "was this approved by a human, and on what basis" is unanswerable there. Here
+ * the reviewer is taken from the session, the time from the `Clock`, and the
+ * basis from this field — and migration 0035 freezes all three the moment the
+ * payment is confirmed.
+ *
+ * The amount is NOT a parameter. A confirmation asserts that the payment's own
+ * recorded amount arrived; an editable amount at confirmation time is the legacy
+ * unknown `UNK-PR-004` and a way to settle a large order with a small transfer.
+ */
+export const confirmPaymentRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  evidenceNote: z.string().trim().min(1).max(500),
+});
+export type ConfirmPaymentRequest = z.infer<typeof confirmPaymentRequestSchema>;
+
+export const WALLET_ROUTES = {
+  balance: (customerId: string) => `/users/${encodeURIComponent(customerId)}/wallet`,
+  entries: (customerId: string) => `/users/${encodeURIComponent(customerId)}/wallet/entries`,
+  adjust: (customerId: string) => `/users/${encodeURIComponent(customerId)}/wallet/adjust`,
+} as const;
+
+export const PAYMENT_ROUTES = {
+  list: '/payments',
+  detail: (id: string) => `/payments/${encodeURIComponent(id)}`,
+  confirm: (id: string) => `/payments/${encodeURIComponent(id)}/confirm`,
 } as const;
 
 // --- Backup and disaster recovery -------------------------------------------

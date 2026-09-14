@@ -1,8 +1,15 @@
-import { COMMERCE_ERROR_CODES, isNexaError, uuidV7Schema } from '@nexa/contracts';
+import {
+  COMMERCE_ERROR_CODES,
+  isNexaError,
+  currencyCodeSchema,
+  money,
+  uuidV7Schema,
+} from '@nexa/contracts';
 import type {
   ActorContext,
   BotInstanceId,
   CustomerArrival,
+  Money,
   TemplateKey,
   TemplateValues,
   TenantContext,
@@ -15,6 +22,8 @@ import type {
 import type { CustomerRecord } from '../../modules/commerce/customers/application/ports.js';
 import type { ProductService } from '../../modules/commerce/catalog/application/product.service.js';
 import type { OrderService } from '../../modules/commerce/orders/application/order.service.js';
+import type { PaymentService } from '../../modules/commerce/payments/application/payment.service.js';
+import type { WalletService } from '../../modules/commerce/wallet/application/wallet.service.js';
 
 /**
  * What the customer asked for.
@@ -28,7 +37,17 @@ import type { OrderService } from '../../modules/commerce/orders/application/ord
  * (INCIDENT-FIN-001), which is what a stateful prompt does when it outlives the
  * question it was asked for.
  */
-export const BOT_INTENTS = ['START', 'CATALOG', 'ORDER', 'CONFIRM', 'UNSUPPORTED'] as const;
+export const BOT_INTENTS = [
+  'START',
+  'CATALOG',
+  'ORDER',
+  'CONFIRM',
+  'WALLET',
+  'PAY_WALLET',
+  'PAY_MANUAL',
+  'PAY_GATEWAY',
+  'UNSUPPORTED',
+] as const;
 export type BotIntent = (typeof BOT_INTENTS)[number];
 
 /**
@@ -57,6 +76,26 @@ export interface BotCommand {
  */
 export const ORDER_CALLBACK_PREFIX = 'p:';
 export const CONFIRM_CALLBACK_PREFIX = 'c:';
+/**
+ * The payment-method taps. Each names an ORDER and nothing else.
+ *
+ * That is the trust boundary, not an encoding detail: a callback is an INTENT and an
+ * IDENTIFIER, never a quantity. There is no prefix here that could carry an amount, a
+ * currency or a customer, so a modified client has nothing to tamper with beyond the
+ * order id — and an id that is not theirs, or not awaiting payment, fails at MUTATION
+ * time against the row rather than at render time against what the tap claimed.
+ */
+export const WALLET_PAY_CALLBACK_PREFIX = 'w:';
+export const MANUAL_PAY_CALLBACK_PREFIX = 'm:';
+/**
+ * A rail this installation does not have.
+ *
+ * The button is NOT drawn — `paymentButtons` offers only what can be performed — and the
+ * prefix exists anyway, because a customer holding an older message can still tap one.
+ * Answering it with `bot.payment.unconfigured` is the honest reply; letting it fall
+ * through to `bot.unknown_command` would tell them they typed something wrong.
+ */
+export const GATEWAY_PAY_CALLBACK_PREFIX = 'g:';
 
 /**
  * How many products one `/catalog` answer shows.
@@ -104,6 +143,15 @@ export function intentOf(update: unknown): BotCommand {
     if (data.startsWith(CONFIRM_CALLBACK_PREFIX)) {
       return callbackCommand('CONFIRM', data.slice(CONFIRM_CALLBACK_PREFIX.length), id);
     }
+    if (data.startsWith(WALLET_PAY_CALLBACK_PREFIX)) {
+      return callbackCommand('PAY_WALLET', data.slice(WALLET_PAY_CALLBACK_PREFIX.length), id);
+    }
+    if (data.startsWith(MANUAL_PAY_CALLBACK_PREFIX)) {
+      return callbackCommand('PAY_MANUAL', data.slice(MANUAL_PAY_CALLBACK_PREFIX.length), id);
+    }
+    if (data.startsWith(GATEWAY_PAY_CALLBACK_PREFIX)) {
+      return callbackCommand('PAY_GATEWAY', data.slice(GATEWAY_PAY_CALLBACK_PREFIX.length), id);
+    }
     return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
   }
 
@@ -115,6 +163,7 @@ export function intentOf(update: unknown): BotCommand {
   const command = first?.split('@')[0];
   if (command === '/start') return { intent: 'START', targetId: null, callbackQueryId: null };
   if (command === '/catalog') return { intent: 'CATALOG', targetId: null, callbackQueryId: null };
+  if (command === '/wallet') return { intent: 'WALLET', targetId: null, callbackQueryId: null };
   return UNSUPPORTED;
 }
 
@@ -157,6 +206,8 @@ export interface BotRuntimeDeps {
   readonly messenger: CustomerMessenger;
   readonly products: ProductService;
   readonly orders: OrderService;
+  readonly payments: PaymentService;
+  readonly wallet: WalletService;
 }
 
 /**
@@ -213,11 +264,55 @@ const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   // An order that is gone, or that belongs to somebody else — the service answers both
   // the same way on purpose, so this does too.
   [COMMERCE_ERROR_CODES.ORDER_NOT_FOUND]: 'bot.order.unavailable',
-  [COMMERCE_ERROR_CODES.ORDER_STATE_INVALID]: 'bot.order.unavailable',
+  /*
+   * The ORDER, not the product. `bot.order.unavailable` says a PLAN cannot be bought,
+   * and the ordinary way to reach this code is a customer tapping the pay button a
+   * second time on the message they just paid from — the buttons stay in the chat
+   * after settlement. Telling somebody who has just been debited that their service is
+   * unavailable is the class of untruth 4C rewrote `bot.order.settled` to remove.
+   */
+  [COMMERCE_ERROR_CODES.ORDER_STATE_INVALID]: 'bot.order.not_awaiting_payment',
   [COMMERCE_ERROR_CODES.ORDER_EXPIRED]: 'bot.order.expired',
   // Reachable despite the surface's own check: an operator can block a customer between
   // the resolve and the order write, and the service refuses it inside the transaction.
   [COMMERCE_ERROR_CODES.CUSTOMER_BLOCKED]: 'bot.blocked',
+  /*
+   * A rail this installation cannot perform. NAMED rather than hidden — the button is
+   * not drawn, and a customer holding an older message still gets a sentence that says
+   * what happened instead of "unknown command".
+   */
+  [COMMERCE_ERROR_CODES.PAYMENT_METHOD_UNAVAILABLE]: 'bot.payment.unconfigured',
+  [COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND]: 'bot.order.unavailable',
+  [COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID]: 'bot.order.unavailable',
+  /*
+   * The guard refused. ONE sentence for every reason it gives, exactly as the product
+   * refusals collapse: the customer can act on none of "the amount does not match", "the
+   * currency does not match" and "another customer's payment", and each of them tells
+   * them something about our data. The `reason` detail is in the audit row and the
+   * operational log, which is where it is useful.
+   */
+  [COMMERCE_ERROR_CODES.SETTLEMENT_NOT_FUNDED]: 'bot.order.unavailable',
+  /*
+   * This entry is for `WALLET_CURRENCY_UNSUPPORTED`, and the comment here used to
+   * describe a DIFFERENT code — it explained a fallback for
+   * `WALLET_INSUFFICIENT_FUNDS`, which is not the key below and is not in this map.
+   *
+   * What is actually true of each:
+   *
+   * - `WALLET_INSUFFICIENT_FUNDS` is answered inside `walletPayment`, because
+   *   `bot.wallet.insufficient` renders the shortfall and this map carries no values.
+   *   It has NO entry here, so if that handler could not read the shortfall the turn
+   *   would reach `refusal`'s `throw` and the customer would get no reply. It cannot
+   *   today: the service always attaches a positive `shortfallMinor` bounded by
+   *   `PAYMENT_AMOUNT_MAX_MINOR` and a valid `currency`, which is exactly what
+   *   `shortfallOf` parses. Left as is rather than given a key that would exist for an
+   *   unreachable branch — but stated, because the previous comment implied a
+   *   protection that is not here.
+   * - `WALLET_CURRENCY_UNSUPPORTED` has no Telegram producer at all: only
+   *   `WalletService.adjust` raises it and no customer path calls that. It stays
+   *   listed because an unlisted code is the failure mode, not a tidy absence.
+   */
+  [COMMERCE_ERROR_CODES.WALLET_CURRENCY_UNSUPPORTED]: 'bot.order.unavailable',
 };
 
 function refusal(error: unknown): PendingReply {
@@ -376,6 +471,23 @@ export class BotRuntime {
     if (command.intent === 'CONFIRM' && command.targetId !== null) {
       return this.confirm(scope, actor, command.targetId, customer, input.idempotencyKey);
     }
+    if (command.intent === 'WALLET') return this.walletBalance(scope, actor, customer);
+    if (command.intent === 'PAY_WALLET' && command.targetId !== null) {
+      return this.walletPayment(scope, actor, command.targetId, customer, input.idempotencyKey);
+    }
+    if (command.intent === 'PAY_MANUAL' && command.targetId !== null) {
+      return this.manualPayment(scope, actor, command.targetId, customer, input.idempotencyKey);
+    }
+    /*
+     * A rail with no adapter, answered rather than simulated.
+     *
+     * No button offers it — `paymentButtons` draws only what can be performed — so this
+     * is reached by a customer holding an older message, and it is the one place that
+     * answer is produced. Nothing here pretends money moved.
+     */
+    if (command.intent === 'PAY_GATEWAY') {
+      return { key: 'bot.payment.unconfigured', values: {}, buttons: [], orderId: null };
+    }
     return { key: replyFor(command.intent, arrival), values: {}, buttons: [], orderId: null };
   }
 
@@ -469,9 +581,13 @@ export class BotRuntime {
       return {
         key: 'bot.order.awaiting_payment',
         /*
-         * What is owed, and until when. Nothing about HOW to pay, because there is no
-         * way to pay: payment is the next phase's, and an instruction a customer cannot
-         * follow is the defect the `bot.start.*` copy was corrected for.
+         * What is owed, until when, and — since 4C — the buttons that pay it.
+         *
+         * The sentence here used to say there was no way to pay, which was true when
+         * this message was written and false the moment `paymentButtons` was attached
+         * below. The deadline it renders is now enforced where the money moves:
+         * `orderAwaitingPayment` refuses a tap after `expiresAt`, so «اعتبار تا» is a
+         * fact rather than decoration on a button that worked for ever.
          *
          * `expiresAt` is required by the key's declaration, and an order that reached
          * AWAITING_PAYMENT always has one — the draft carried it. The fallback is the
@@ -482,8 +598,123 @@ export class BotRuntime {
           total: order.totals.total,
           ...(order.expiresAt === null ? {} : { expiresAt: order.expiresAt }),
         },
-        buttons: [],
+        buttons: paymentButtons(order.id),
         orderId: order.id,
+      };
+    } catch (error) {
+      return refusal(error);
+    }
+  }
+
+  /**
+   * The customer's own balance, derived from the ledger every time it is asked for.
+   *
+   * There is no balance column to read and no cache to go stale — `balanceOf` sums the
+   * entries. `bot.wallet.balance` declares exactly one placeholder and this supplies
+   * exactly that.
+   */
+  private async walletBalance(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+  ): Promise<PendingReply> {
+    const balance = await this.deps.wallet.balanceForCustomer(scope, actor, customer.id);
+    return {
+      key: 'bot.wallet.balance',
+      values: { balance: money(balance.amountMinor, balance.currency) },
+      buttons: [],
+      orderId: null,
+    };
+  }
+
+  /**
+   * Paying for an order from the wallet. The tap carries the ORDER ID AND NOTHING ELSE.
+   *
+   * Every figure that decides how much money moves is read by the service inside the
+   * transaction that moves it — the amount and currency from the order's frozen
+   * snapshot, the owner from the order row, the state by the conditional UPDATE. Nothing
+   * this surface passes could change any of them: it has an id and a customer, and the
+   * customer comes from the resolved Telegram user rather than from the tap.
+   *
+   * The success reply is `bot.order.settled`, which says the payment was confirmed and
+   * the order is paid. It does NOT say a service is being prepared, because nothing in
+   * this release prepares one.
+   */
+  private async walletPayment(
+    scope: TenantContext,
+    actor: ActorContext,
+    orderId: string,
+    customer: CustomerRecord,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    try {
+      const { order } = await this.deps.payments.settleFromWallet(scope, actor, customer.id, {
+        // Suffixed within the update's own key, the shape `draft` and `confirm` use: the
+        // bare key was consumed by `resolveFromUpdate`, and presenting it again with a
+        // different payload is an idempotency payload mismatch. A REDELIVERED update
+        // recomputes this same suffix, which is what makes the replay produce one debit.
+        idempotencyKey: `${idempotencyKey}:wallet-pay`,
+        orderId,
+      });
+      return { key: 'bot.order.settled', values: {}, buttons: [], orderId: order.id };
+    } catch (error) {
+      /*
+       * Insufficient funds is answered HERE rather than through `REFUSAL_REPLIES`,
+       * because the reply needs the shortfall and that map carries no values.
+       *
+       * The shortfall comes from the ERROR's detail, which the service computed from the
+       * ledger inside its transaction — not recomputed here, which would be a second
+       * statement of the same subtraction reading a balance from a different moment.
+       *
+       * What is deliberately NOT offered: a top-up for the difference. That would need a
+       * standalone top-up with an authoritative amount, and `docs/phase4c-audit.md`
+       * records why there is none — combining a shortfall with a configured minimum is a
+       * financial product rule no contract states. The customer is told what is missing
+       * and left to act on it.
+       */
+      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS) {
+        const shortfall = shortfallOf(error.details);
+        if (shortfall !== null) {
+          return {
+            key: 'bot.wallet.insufficient',
+            values: { shortfall },
+            buttons: [],
+            orderId,
+          };
+        }
+      }
+      return refusal(error);
+    }
+  }
+
+  /**
+   * Choosing to pay out of band: a PENDING payment, the amount, and the code to quote.
+   *
+   * No money moves and nothing settles. `bot.payment.manual_instructions` declares
+   * `{total}` and `{reference}` and both come from the payment the service created — the
+   * total from the order's frozen snapshot, the reference GENERATED, because a customer
+   * who could choose it could choose somebody else's.
+   *
+   * The instructions themselves are tenant copy. This installation ships no bank details
+   * and invents none, which the key's own description says.
+   */
+  private async manualPayment(
+    scope: TenantContext,
+    actor: ActorContext,
+    orderId: string,
+    customer: CustomerRecord,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    try {
+      const payment = await this.deps.payments.requestManualTransfer(scope, actor, customer.id, {
+        idempotencyKey: `${idempotencyKey}:manual-pay`,
+        orderId,
+      });
+      return {
+        key: 'bot.payment.manual_instructions',
+        values: { total: payment.amount, reference: payment.reference },
+        buttons: [],
+        orderId,
       };
     } catch (error) {
       return refusal(error);
@@ -527,3 +758,44 @@ export function replyFor(intent: BotIntent, arrival: CustomerArrival): TemplateK
 
 /** Re-exported so the controller need not know the record shape to log an outcome. */
 export type { CustomerRecord };
+
+/**
+ * The payment methods this installation can actually perform, as buttons.
+ *
+ * `WALLET` and `MANUAL_TRANSFER`, which is exactly `SELF_CONTAINED_PAYMENT_METHODS`. A
+ * gateway button is NOT drawn, and that is the rule `provider.ts` records applied to
+ * money: Marzban's descriptor advertising fourteen operations no code could perform was
+ * rejected, because what a product publishes is how it tells a user what it can do.
+ *
+ * Each button carries the ORDER ID and nothing else. There is no amount in a callback
+ * and no place to put one.
+ */
+function paymentButtons(orderId: string): readonly CustomerButton[] {
+  return [
+    {
+      label: { kind: 'TEMPLATE', key: 'bot.payment.wallet_button' },
+      data: `${WALLET_PAY_CALLBACK_PREFIX}${orderId}`,
+    },
+    {
+      label: { kind: 'TEMPLATE', key: 'bot.payment.manual_button' },
+      data: `${MANUAL_PAY_CALLBACK_PREFIX}${orderId}`,
+    },
+  ];
+}
+
+/**
+ * The shortfall the service put on the refusal, or null.
+ *
+ * Parsed rather than cast, because `details` is `Record<string, unknown>` and a template
+ * that declares a MONEY placeholder will refuse a string. Returning null on anything
+ * unexpected sends the customer the generic refusal instead of a message with a hole in
+ * it — the shortfall is a number they act on, and a wrong one is worse than none.
+ */
+function shortfallOf(details: Record<string, unknown> | undefined): Money | null {
+  const minor = details?.shortfallMinor;
+  const currency = details?.currency;
+  if (typeof minor !== 'string' || !/^\d{1,19}$/u.test(minor)) return null;
+  const parsed = currencyCodeSchema.safeParse(currency);
+  if (!parsed.success) return null;
+  return money(BigInt(minor), parsed.data);
+}

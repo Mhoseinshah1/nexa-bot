@@ -368,8 +368,22 @@ describe('the customer purchase flow over Telegram', () => {
 
     const text = String(lastMessage()?.body['text']);
     expect(text).toContain(formatMoney(money(250_000n, 'IRT')));
-    // No buttons: there is nothing further a customer can do in this release.
-    expect(lastMessage()?.body['reply_markup']).toBeUndefined();
+
+    /*
+     * The two rails this installation can actually perform, and ONLY those.
+     *
+     * Phase 4B asserted no buttons here and said "there is nothing further a customer
+     * can do in this release", which was true of 4B and is not true of 4C. The claim is
+     * replaced rather than deleted: what matters now is that a gateway button is NOT
+     * drawn, because there is no adapter behind it, and that each button carries the
+     * order id and nothing else.
+     */
+    const buttons = buttonsOf(lastMessage());
+    expect(buttons.map((b) => b.callback_data)).toEqual([`w:${orderId}`, `m:${orderId}`]);
+    expect(buttons.map((b) => b.text)).toEqual([
+      CATALOGUE_FA['bot.payment.wallet_button'],
+      CATALOGUE_FA['bot.payment.manual_button'],
+    ]);
   });
 
   it('lets a double tap of Confirm produce ONE transition and ONE event', async () => {
