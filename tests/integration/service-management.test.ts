@@ -622,13 +622,13 @@ describe('a customer manages the service they bought', () => {
     expect(panel.users.get(service.username)?.status).toBe('disabled');
   });
 
-  it('does not answer an outage with a sentence about the customer\u2019s panel', async () => {
+  it('does not answer an outage with a sentence about the customer’s panel', async () => {
     /*
      * The refusal mapping is a CLOSED list, and this is the half of that decision no
      * reader can check by reading it.
      *
      * A catch-all would answer a database failure with `bot.service.capability_unsupported`
-     * \u2014 "this is not available for your service" \u2014 which is a false statement about
+     * — "this is not available for your service" — which is a false statement about
      * the customer's panel, made to hide an outage, and indistinguishable in every log
      * this installation keeps from the three codes that really are refusals. The request
      * would also be reported as handled, so nothing would retry it and nothing would
