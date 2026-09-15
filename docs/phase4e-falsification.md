@@ -16,6 +16,45 @@ finding rather than a gap — see F4E-02.
 | F4E-04 | A Bearer create sends no CSRF token                                 | covered by the same header removal as F4E-01, from the other direction | `sanaei-adapter.test.ts` › 18. a BEARER create sends no CSRF token, because api_authed short-circuits it | n/a      |
 | F4E-05 | The CSRF rule reaches provisioning end to end, not just the adapter | `'x-csrf-token': csrfToken,` removed from the session auth headers     | `provisioning-delivery.test.ts` › sends the subscription in the SAME tick that provisions it             | KILLED   |
 
+## The SYNC_USAGE sweep and the operation dispatch
+
+| #      | Rule                                                            | Mutation                                                                     | Named test                                                                                                         | Result   |
+| ------ | --------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------- |
+| F4E-06 | `PERFORMABLE_OPERATION_TYPES` names only what has a branch      | `'TERMINATE'` appended to the constant                                       | `registries.test.ts` › names exactly the three types 4E performs, and no more                                      | KILLED   |
+| F4E-07 | The executor refuses an unperformable type before anything else | `if (!isPerformableOperation(operation.type)) {` → `if (false as boolean) {` | `provisioning-delivery.test.ts` › refuses an operation type this release cannot perform, before contacting a panel | SURVIVED |
+| F4E-08 | An unperformable type is legal from NO service state            | `TERMINATE: []` → `TERMINATE: ['ACTIVE']`                                    | `provisioning-delivery.test.ts` › refuses an operation type this release cannot perform, before contacting a panel | SURVIVED |
+| F4E-09 | A usage sync writes what the panel said                         | `recordUsage(...)` call removed from `finishUsageSync`                       | `provisioning-delivery.test.ts` › refreshes a stale usage figure from the panel, and writes what the panel said    | KILLED   |
+| F4E-10 | A fresh figure is not re-read                                   | `COALESCE(usage_synced_at, created_at)` → `usage_synced_at IS NULL OR …`     | `provisioning-delivery.test.ts` › does not sync a service whose figure is still fresh                              | KILLED   |
+| F4E-11 | One sync per cadence window, however many ticks run             | the window removed from the derived operation id                             | `provisioning-delivery.test.ts` › plans ONE sync per cadence window however many ticks run                         | KILLED   |
+| F4E-12 | A failed sync claims no refresh it did not make                 | `if (!read.ok)` branch falls through to `recordUsage`                        | `provisioning-delivery.test.ts` › a sync that the panel refuses is FAILED, never UNKNOWN, and moves no service     | KILLED   |
+
+### F4E-07 and F4E-08, the two survivals, and what they actually mean
+
+Neither mutation fails a test **on its own**, and that is the design rather than a
+gap: they are two independent refusals of the same thing, so removing either leaves
+the other standing. What had to be measured is whether the PAIR is load-bearing, so
+both were applied together — the membership check disabled and `TERMINATE` declared
+legal from `ACTIVE` — and the test then FAILED:
+
+```
+× refuses an operation type this release cannot perform, before contacting a panel
+AssertionError: expected 'FAILED' to be 'ABANDONED'
+```
+
+The restore afterwards was verified byte-identical against copies taken beforehand,
+and `git status` was clean.
+
+That result also names a THIRD refusal, which is worth writing down because it is the
+one nobody designed. With both of this phase's checks removed the TERMINATE still
+never reached `provisionCall`: `decideOperability` refused it, because
+`OPERATION_REQUIRED_CAPABILITIES['TERMINATE']` is `['DELETE_USER']` and no adapter
+declares it. Today every unperformable type happens to require a capability no adapter
+has, so that check covers all of them.
+
+It is an accident and not a guarantee. `RECONCILE` already requires none, and the next
+type added with an empty capability list would have exactly the two refusals this phase
+adds standing between it and a create on somebody's panel. Which is why they are two.
+
 ## F4E-02, the survival
 
 Disabling the fake's CSRF gate does not fail a test **on its own**, and that is
