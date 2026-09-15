@@ -1095,6 +1095,48 @@ describe('a customer manages the service they bought', () => {
     );
   });
 
+  it('charges and plans once when the same paid order is settled again', async () => {
+    /*
+     * Two refusals stand between a replayed settlement and a second renewal, and this
+     * names which one actually fires.
+     *
+     * The OUTER one is the order state machine: a SETTLED order is not
+     * `AWAITING_PAYMENT`, so a second settlement is refused before any of this phase's
+     * code runs — even under a fresh idempotency key, which is what makes it a real
+     * refusal rather than a cached answer.
+     *
+     * The INNER one is the operation id, derived from `service:kind:order` so a replay
+     * plans the SAME row rather than a second one. F4F-24 replaced that derivation
+     * with a fresh uuid and nothing failed, because the outer refusal fires first —
+     * recorded as a survival in `docs/phase4f-falsification.md` rather than dressed up
+     * as coverage. This case is the evidence for that reading, and it is what would
+     * start failing if the order machine ever let a second settlement through.
+     */
+    const service = await activeService('settle-twice');
+    await fund('settle-twice');
+    const orderId = await buy(service.id, 'RENEW', null, 'settle-twice');
+    const balanceAfterOne = await ctx.container.wallet.balance(tenantA, owner, customerA);
+
+    await expect(
+      ctx.container.payments.settleFromWallet(tenantA, systemActor('s2'), customerA, {
+        idempotencyKey: 'act-settle-twice-pay-again',
+        orderId,
+      }),
+    ).rejects.toMatchObject({ code: 'commerce.order_state_invalid' });
+
+    const renewals = (await operations.listForService(tenantA, service.id, 50)).filter(
+      (operation) => operation.type === 'RENEW',
+    );
+    expect(renewals).toHaveLength(1);
+    const actions = await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM service_commercial_actions
+           WHERE tenant_id = ${tenantA.tenantId} AND service_id = ${service.id}`,
+    );
+    expect((actions.rows[0] as { n: number }).n).toBe(1);
+    const balanceAfterTwo = await ctx.container.wallet.balance(tenantA, owner, customerA);
+    expect(balanceAfterTwo.amountMinor).toBe(balanceAfterOne.amountMinor);
+  });
+
   it('refuses a package of the wrong kind on the extra-traffic path', async () => {
     /*
      * The ONE thing a client can influence here: the add-on id. A callback naming an
