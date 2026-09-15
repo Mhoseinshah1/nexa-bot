@@ -633,6 +633,38 @@ export const COMMERCE_ERROR_CODES = {
    * an operator to two different screens.
    */
   PANEL_NOT_OPERABLE: 'commerce.panel_not_operable',
+
+  /**
+   * The service exists, the customer owns it, and this action cannot be taken on it
+   * in the state it is in.
+   *
+   * Phase 4E answered this with `ORDER_STATE_INVALID` — a code named for orders, on a
+   * path that has no order — because there was nothing better and every caller was a
+   * management action rather than a purchase. 4F makes the path one a customer pays
+   * through, and a refusal a customer is shown has to name the thing they were looking
+   * at. The `state` detail says which state it was refused from.
+   */
+  SERVICE_ACTION_NOT_ALLOWED: 'commerce.service_action_not_allowed',
+
+  /**
+   * The action is real and this installation cannot currently sell it.
+   *
+   * Distinct from NOT_ALLOWED, which is about the service, and from
+   * `PANEL_NOT_OPERABLE`, which is about the panel. This one is about CONFIGURATION:
+   * no add-on of that kind is offered, or the product a renewal would be priced from
+   * has been withdrawn, is unpriced, or is priced in a currency the tenant does not
+   * sell in.
+   *
+   * Named rather than folded into a not-found, because the operator's fix is to
+   * configure something and the message has to say so. `catalog.ts` states the rule
+   * this enforces: an absent price means unsellable, never free.
+   */
+  SERVICE_ACTION_UNAVAILABLE: 'commerce.service_action_unavailable',
+
+  /** No add-on with that id for this tenant. */
+  ADDON_NOT_FOUND: 'commerce.addon_not_found',
+  /** The add-on exists and is withdrawn. Not the same as absent. */
+  ADDON_NOT_PURCHASABLE: 'commerce.addon_not_purchasable',
 } as const;
 
 /*

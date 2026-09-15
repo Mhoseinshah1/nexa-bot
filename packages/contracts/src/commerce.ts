@@ -110,6 +110,73 @@ export interface OrderLineSnapshot {
 }
 
 /**
+ * What an order is FOR.
+ *
+ * Added in Phase 4F, and the absence of it was the phase's headline finding.
+ * `PaymentService.confirmAndSettle` ended in an unconditional `planForSettledOrder`,
+ * so every order that settled wrote a `services` row and a `PROVISION` operation. A
+ * renewal is a NEW order against the SAME service — `services.order_id`'s own docblock
+ * has said so since 4D — and routed through that path it would have settled and then
+ * created a **second provider account** the customer did not buy.
+ * `services_tenant_order_key` does not catch it: the index is unique on
+ * `(tenant_id, order_id)` and a renewal has its own order id.
+ *
+ * So the discriminator is on the ORDER, where settlement can read it, rather than
+ * inferred from whether a service happens to exist. Inference is what makes a commercial
+ * record depend on the order things are read in; a column is what makes a settlement
+ * path a decision somebody made.
+ *
+ * - `NEW_SERVICE` — the original purchase. Produces a service and a `PROVISION`.
+ * - `RENEW` — a new period and a new allowance on an existing service.
+ * - `ADD_TRAFFIC` — more allowance, bought from a configured add-on.
+ * - `ADD_TIME` — more window, likewise.
+ *
+ * The last three each name a `service_id` and produce NO service. The first names none
+ * and produces exactly one. `orderPurposeNeedsService` is that rule, and the schema
+ * carries it as a CHECK so a row cannot exist in the shape the settlement path would
+ * misread.
+ *
+ * `NEW_SERVICE` is the DEFAULT on the column, which is what makes this expand-only: the
+ * release running during a rolling update writes orders without the field and gets the
+ * behaviour it already had.
+ */
+export const ORDER_PURPOSES = ['NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME'] as const;
+export type OrderPurpose = (typeof ORDER_PURPOSES)[number];
+export const orderPurposeSchema = z.enum(ORDER_PURPOSES);
+
+/**
+ * The purposes that act on a service that already exists.
+ *
+ * Derived from `ORDER_PURPOSES` by exclusion rather than listed again, because the one
+ * thing that must never drift is which purposes provision. A new purpose added without
+ * a thought lands here — as one that does NOT create a service — which is the safe side
+ * of the mistake: an operation that refuses is a bug report, and a second provider
+ * account is a customer paying twice.
+ */
+export const COMMERCIAL_ORDER_PURPOSES = ORDER_PURPOSES.filter(
+  (purpose) => purpose !== 'NEW_SERVICE',
+) as readonly OrderPurpose[];
+
+/** Whether this purpose names an existing service rather than producing one. */
+export function orderPurposeNeedsService(purpose: OrderPurpose): boolean {
+  return purpose !== 'NEW_SERVICE';
+}
+
+/**
+ * The operation type a commercial purpose is executed as.
+ *
+ * Total over the three, and it returns `null` for `NEW_SERVICE` rather than throwing:
+ * the caller that asks this question is the settlement dispatch, and a dispatch whose
+ * safe branch is reached by catching an exception is a dispatch one refactor away from
+ * catching the wrong one.
+ */
+export function operationTypeForOrderPurpose(
+  purpose: OrderPurpose,
+): 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | null {
+  return purpose === 'NEW_SERVICE' ? null : purpose;
+}
+
+/**
  * One product per order.
  *
  * Not a technical limit — a decision, and it is narrower than the schema has to be so
