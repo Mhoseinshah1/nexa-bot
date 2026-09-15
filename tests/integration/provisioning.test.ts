@@ -533,6 +533,65 @@ describe('provisioning invariants', () => {
     expect(await services.claimDeliveryDue(tenantA, later, lease(later), 10)).toHaveLength(0);
   });
 
+  it('refuses a delivery claim on a row another sweep leased while this one was blocked', async () => {
+    const order = await awaitingPayment('deliver-lock');
+    await settle('deliver-lock', order);
+    const service = await services.findByOrderId(tenantA, order.id);
+    const serviceId = service?.id ?? '';
+    const now = ctx.container.clock.now();
+    await ctx.container.uow.run(tenantA, async (tx) => {
+      await services.transition(
+        tenantA,
+        serviceId,
+        'PENDING_PROVISION',
+        'ACTIVE',
+        {
+          providerUserId: null,
+          subscriptionUrl: 'https://sub.example.test/sub/locked',
+          expiresAt: null,
+          trafficUsedBytes: null,
+          usageSyncedAt: null,
+        },
+        now,
+        tx,
+      );
+    });
+
+    /*
+     * The interleaving is MADE, not hoped for — the same shape as the operation claim
+     * above, and for the same reason.
+     *
+     * Two sequential claims are satisfied by the LEASE alone: the second caller's
+     * sub-select sees a `delivery_next_attempt_at` in the future and scans nothing. The
+     * rule this case is about is the concurrent one. Two sweeps' sub-selects can both
+     * see a due row before either UPDATE commits; under READ COMMITTED the loser BLOCKS
+     * on the row lock and re-evaluates its WHERE clause against the winner's committed
+     * row. Without the outer `ready` predicate it would lease a row somebody else is
+     * already sending — which is the customer receiving "your service is ready" twice,
+     * with two different-looking links if the second attempt is ever redelivered.
+     */
+    const claimed = await ctx.container.database.withClient(async (holder) => {
+      await holder.query('BEGIN');
+      await holder.query(
+        `UPDATE services SET delivery_next_attempt_at = now() + interval '1 hour' WHERE id = $1`,
+        [serviceId],
+      );
+
+      // Started, not awaited: it reaches the row lock and stops there.
+      const blocked = services.claimDeliveryDue(tenantA, now, new Date(now.getTime() + 60_000), 10);
+      // Long enough for the claim to be queued on the lock rather than still parsing.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await holder.query('COMMIT');
+      return blocked;
+    });
+
+    expect(claimed, 'the blocked sweep sees the leased row and takes nothing').toHaveLength(0);
+
+    const after = await services.findById(tenantA, serviceId);
+    expect(after?.deliveryState, "and it is still nobody's delivered service").toBe('PENDING');
+    expect(after?.deliveryAttempts, 'a lease is not an attempt').toBe(0);
+  });
+
   it('never sweeps a delivery whose outcome was unknown', async () => {
     const order = await awaitingPayment('unknown-send');
     await settle('unknown-send', order);
