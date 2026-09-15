@@ -3,6 +3,7 @@ import {
   MAX_ORDER_QUANTITY,
   ORDER_MACHINE,
   errors,
+  COMMERCIAL_ORDER_PURPOSES,
   isAddonPurchasable,
   isPurchasable,
   nextState,
@@ -178,6 +179,53 @@ export class CommercialActionService {
       );
     }
     return { kind, product: null, addons: addons.items };
+  }
+
+  /**
+   * Which of the three a customer could actually buy for this service, right now.
+   *
+   * The read a surface uses to decide which buttons to draw, and it applies EVERY
+   * condition the purchase would: the service's state, the panel's declared capability,
+   * and whether there is anything configured to sell. A button drawn without the third
+   * is a button whose tap is a refusal, which is the legacy defect this codebase keeps
+   * naming — a product that offers what it cannot honour.
+   *
+   * Not drawing a button is still never the control. `draft` re-checks all three when
+   * the tap arrives, and `planCommercialAction` checks the state again when the money
+   * moves, so a customer scrolling back to an older message is refused rather than sold
+   * something.
+   */
+  async availableFor(
+    scope: TenantContext,
+    actor: ActorContext,
+    service: ServiceRecord,
+  ): Promise<readonly CommercialKind[]> {
+    await this.deps.guard.check(scope, actor, COMMERCIAL_ACTION_PERMISSION);
+    const available: CommercialKind[] = [];
+    for (const kind of COMMERCIAL_ORDER_PURPOSES as readonly CommercialKind[]) {
+      if (!OPERATION_LEGAL_FROM[kind].includes(service.state)) continue;
+      const operable = await this.deps.panels.operability(scope, service.panelId, kind);
+      if (!operable.ok) continue;
+      if (kind === 'RENEW') {
+        /*
+         * The product must still be sellable, in the tenant's own currency.
+         *
+         * Caught rather than re-implemented: `renewableProduct` is the one place those
+         * three conditions live, and a second copy here is a second thing to keep in
+         * step. A refusal means "not offerable", which is exactly what this asks.
+         */
+        try {
+          await this.renewableProduct(scope, service);
+        } catch {
+          continue;
+        }
+        available.push(kind);
+        continue;
+      }
+      const offered = await this.deps.addons.listOfferable(scope, kind, 1);
+      if (offered.items.length > 0) available.push(kind);
+    }
+    return available;
   }
 
   /**

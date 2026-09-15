@@ -382,6 +382,43 @@ describe('profile metadata, normalised before it is ever stored', () => {
      *                                  apart would describe an operator's panel to a
      *                                  customer.
      *
+     * Nine more joined in 4F, when a customer could BUY something for a service they
+     * already own. Reviewed, one at a time:
+     *
+     *   `bot.service.renew_button`     opens a quote and buys nothing. Drawn only when
+     *                                  the state allows it, the panel declares
+     *                                  RENEW_USER, and the plan behind it is still
+     *                                  sellable — all three, because a button with only
+     *                                  two of them is a button whose tap is a refusal.
+     *   `bot.service.add_traffic_button`
+     *   `bot.service.add_time_button`  the same, against ADD_VOLUME and ADD_TIME, and
+     *                                  additionally requiring a configured package: an
+     *                                  action with no configured price is explicitly
+     *                                  unavailable rather than free.
+     *   `bot.service.addon_choice`     the heading over the packages. The amounts and
+     *                                  prices are on the BUTTONS and neither travels in
+     *                                  a callback — what comes back is two identifiers.
+     *   `bot.service.addon_option`     one package: what it adds, what it costs. The
+     *                                  price is a MONEY value, so a customer never
+     *                                  reads a bare number whose currency is implied.
+     *   `bot.service.action_quote`     the offer being answered. The number is the one
+     *                                  the order was written with and is never re-taken,
+     *                                  so nobody is charged a price they did not see.
+     *   `bot.service.action_confirm_button`
+     *                                  commits to that quote and moves the order to
+     *                                  awaiting payment. Its own key rather than the
+     *                                  purchase confirmation's, because the two answer
+     *                                  different questions.
+     *   `bot.service.action_unavailable`
+     *                                  one sentence for "nothing is configured", "the
+     *                                  plan was withdrawn" and "this panel cannot do
+     *                                  it". The customer's next step is the same for
+     *                                  all three, and naming which would describe an
+     *                                  operator's configuration to a customer.
+     *   `bot.service.action_not_allowed`
+     *                                  the SERVICE's state refuses it — distinct,
+     *                                  because that one IS the customer's to act on.
+     *
      * None of them instructs a customer to do something that can only answer
      * `bot.unknown_command` either — `/services` is a real command in `intentOf`, and
      * every callback prefix is parsed.
@@ -401,12 +438,21 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.manual_instructions',
       'bot.payment.unconfigured',
       'bot.payment.wallet_button',
+      'bot.service.action_confirm_button',
+      'bot.service.action_not_allowed',
+      'bot.service.action_quote',
       'bot.service.action_requested',
+      'bot.service.action_unavailable',
+      'bot.service.add_time_button',
+      'bot.service.add_traffic_button',
+      'bot.service.addon_choice',
+      'bot.service.addon_option',
       'bot.service.capability_unsupported',
       'bot.service.detail',
       'bot.service.list_empty',
       'bot.service.list_heading',
       'bot.service.not_found',
+      'bot.service.renew_button',
       'bot.service.resend_button',
       'bot.service.resume_button',
       'bot.service.suspend_button',

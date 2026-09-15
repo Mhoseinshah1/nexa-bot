@@ -1761,6 +1761,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // handled by one would not be seen as a replay by the other — which is the whole
       // mechanism that stops a redelivery becoming a second order.
       products: productService,
+      commercial: commercialActionService,
       orders: orderService,
       // The SAME messenger the delivery sweep uses, for the reason above it.
       messenger: customerMessenger,
