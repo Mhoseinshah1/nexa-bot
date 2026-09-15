@@ -3,7 +3,12 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ProviderTarget } from '@nexa/contracts';
+import type {
+  CreateProviderUserInput,
+  ProviderServiceTarget,
+  ProviderTarget,
+  SanaeiActivation,
+} from '@nexa/contracts';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
 import { SanaeiAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/sanaei.adapter';
 import { providerAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
@@ -507,6 +512,127 @@ describe('the Sanaei adapter — session compatibility mode', () => {
       username: CANARY.username,
       password: CANARY.password,
     });
+  });
+});
+
+// ===========================================================================
+// Session mode, MUTATING — the CSRF rule that a real panel found
+// ===========================================================================
+describe('the Sanaei adapter — a session-mode create carries the CSRF token', () => {
+  const activation: SanaeiActivation = {
+    subscriptionDomain: 'subs.example.test',
+    inboundId: 1,
+  };
+
+  const ref = {
+    username: 'svc-csrf-unit-1',
+    subscriptionRef: 'subcsrfunit1',
+    clientId: '11111111-2222-4333-8444-555555555555',
+  };
+
+  const input = {
+    ...ref,
+    serviceId: '99999999-8888-4777-8666-555555555555' as CreateProviderUserInput['serviceId'],
+    volumeBytes: 1024n,
+    durationDays: 7,
+    expiresAt: new Date('2027-01-01T00:00:00.000Z'),
+    deviceLimit: 2,
+  } satisfies CreateProviderUserInput;
+
+  const serviceTarget = (
+    server: Fake3xUi,
+    credentials: ProviderTarget['credentials'],
+  ): ProviderServiceTarget => ({ baseUrl: server.baseUrl, credentials, activation });
+
+  /**
+   * The finding this section exists for.
+   *
+   * v3.7.0 mounts `middleware.CSRFMiddleware()` on the WHOLE `/panel/api` group
+   * (`internal/web/controller/api.go`, `initRouter`), and it short-circuits on
+   * exactly one condition: `c.GetBool("api_authed")`, which `checkAPIAuth` sets
+   * for a BEARER caller and never for a session one. So an unsafe method sent
+   * with a session cookie and no `X-CSRF-Token` is `AbortWithStatus(403)`, no
+   * body.
+   *
+   * The adapter used to drop the token after login, under a comment asserting
+   * the group was exempt, and the fake had no gate — so 42 scenarios agreed
+   * with each other while every session-mode create against a real panel was
+   * refused 403. It was found by `tests/acceptance/real-panel-sanaei.test.ts`
+   * against the actual upstream binary, not here.
+   *
+   * These are the unit-level pins, so that removing the header fails a test
+   * that CI runs rather than one that needs a panel.
+   */
+  it('17. creates a client through a session and sends the token on the POST', async () => {
+    const server = await panel();
+    const outcome = await new SanaeiAdapter().createUser(
+      serviceTarget(server, withPassword()),
+      client(server.baseUrl),
+      input,
+    );
+    expect(outcome).toMatchObject({ ok: true, providerUserId: ref.clientId });
+
+    const add = server.requests.find((r) => r.path.includes('panel/api/clients/add'));
+    expect(add, 'the create reached the panel').toBeDefined();
+    // The token the panel actually minted for THIS session, not merely some
+    // header of that name: an invented value satisfies the weaker check and is
+    // refused by a real panel.
+    expect(server.mintedCsrfTokens).toHaveLength(1);
+    expect(add?.headers['x-csrf-token']).toBe(server.mintedCsrfTokens[0]);
+  });
+
+  it('18. a BEARER create sends no CSRF token, because api_authed short-circuits it', async () => {
+    const server = await panel({ tokens: TOKENS });
+    const outcome = await new SanaeiAdapter().createUser(
+      serviceTarget(server, withToken(CANARY.token)),
+      client(server.baseUrl),
+      input,
+    );
+    expect(outcome).toMatchObject({ ok: true });
+
+    const add = server.requests.find((r) => r.path.includes('panel/api/clients/add'));
+    expect(add?.headers['x-csrf-token']).toBeUndefined();
+    // One request: no csrf-token round trip, no 2FA question, no login.
+    expect(server.requests).toHaveLength(1);
+  });
+
+  it('19. a replay of the same create is an idempotent success, not a refusal', async () => {
+    // v3.7.0 exempts a matching subId from `checkEmailsExistForClients` and
+    // then skips anything already on the inbound, returning `(false, nil)` —
+    // reported as success. #5770, `TestAddInboundClient_SkipsClientsAlreadyOnInbound`.
+    const server = await panel();
+    const adapter = new SanaeiAdapter();
+    const first = await adapter.createUser(
+      serviceTarget(server, withPassword()),
+      client(server.baseUrl),
+      input,
+    );
+    const second = await adapter.createUser(
+      serviceTarget(server, withPassword()),
+      client(server.baseUrl),
+      input,
+    );
+    expect(first).toMatchObject({ ok: true });
+    expect(second).toMatchObject({ ok: true });
+    expect(server.clients.size, 'one account, not two').toBe(1);
+  });
+
+  it('20. a DIFFERENT identity on a taken name is refused', async () => {
+    const server = await panel();
+    const adapter = new SanaeiAdapter();
+    await adapter.createUser(
+      serviceTarget(server, withPassword()),
+      client(server.baseUrl),
+      input,
+    );
+    const impostor = await adapter.createUser(
+      serviceTarget(server, withPassword()),
+      client(server.baseUrl),
+      { ...input, subscriptionRef: 'a-different-subid', clientId: ref.clientId },
+    );
+    expect(impostor).toMatchObject({ ok: false, failure: 'PROVIDER_ERROR' });
+    expect(server.clients.size).toBe(1);
+    expect(server.clients.get(ref.username)?.subId).toBe(ref.subscriptionRef);
   });
 });
 

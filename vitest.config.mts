@@ -98,6 +98,29 @@ export default defineConfig({
         plugins: [tsExtensionResolver()],
         test: {
           ...shared,
+          /**
+           * The real-panel acceptance.
+           *
+           * Its own project because it needs something no other suite does: an
+           * actual MHSanaei/3x-ui panel, running. `pnpm verify` does not name
+           * it and CI does not run it — a suite that needs a panel and is run
+           * where there is none would either fail for the wrong reason or, far
+           * worse, skip and report the same green as a suite that checked.
+           *
+           * `pnpm test:acceptance` is the only thing that runs it, and without
+           * NEXA_ACCEPTANCE_PANEL_URL it FAILS rather than skips.
+           */
+          name: 'acceptance',
+          include: ['tests/acceptance/**/*.test.ts'],
+          fileParallelism: false,
+          testTimeout: 120_000,
+          hookTimeout: 120_000,
+        },
+      },
+      {
+        plugins: [tsExtensionResolver()],
+        test: {
+          ...shared,
           name: 'integration',
           include: ['tests/integration/**/*.test.ts'],
           setupFiles: ['tests/integration/setup.ts'],

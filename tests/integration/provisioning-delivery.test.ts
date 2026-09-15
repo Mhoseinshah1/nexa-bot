@@ -833,24 +833,37 @@ describe('a provisioned service announces itself', () => {
     await ctx.container.provisionerLoop.tick();
 
     /*
-     * v3.7.0 refuses a duplicate email with a successful envelope carrying
-     * `success: false` — a `PROVIDER_ERROR`, which `failureOutcome` classifies UNKNOWN
-     * on a mutating call, which is the state that means "ask the panel". The tick then
-     * DRAINS: the next `runOnce` plans the reconcile, claims it and adopts what is
-     * there, so one tick carries the service all the way to ACTIVE.
+     * The retry meets its own account and the panel says so.
+     *
+     * v3.7.0 exempts a MATCHING `subId` from `checkEmailsExistForClients` and then
+     * drops any client already on the inbound, returning `(false, nil)` when that
+     * leaves nothing — which the controller reports as success. Nexa's three
+     * identities are derived per service, so the replay carries the same email and
+     * the same subId: the panel treats it as the idempotent no-op it is, and the
+     * PROVISION operation simply SUCCEEDS. No reconcile is needed, because nothing
+     * was ever unknown.
+     *
+     * This assertion used to expect a `PROVIDER_ERROR` and a RECONCILE, on the
+     * strength of a docblock saying v3.7.0 "refuses a duplicate email". A real
+     * v3.7.0 panel does not, and `tests/acceptance/real-panel-sanaei.test.ts`
+     * is what established that — the fake had been written to agree with the
+     * adapter rather than with upstream.
+     *
+     * The claim this case exists to make is unchanged and still proven below: the
+     * optimism in `SAFE_TO_REPLAY_FAILURE_KINDS` costs an ATTEMPT and never an
+     * ACCOUNT, because the derived username makes the retry collide with itself.
      */
     const adopted = await services.findByOrderId(tenantA, orderId);
     expect(addClientCalls(), 'the retry did reach the panel').toBe(2);
     expect(panel.clients.size, 'and it did NOT make a second account').toBe(1);
-    expect(adopted?.state, 'the account was found and adopted').toBe('ACTIVE');
+    expect(adopted?.state, 'the replay completed the provision').toBe('ACTIVE');
     expect(adopted?.subscriptionUrl).not.toBeNull();
     expect(adopted?.expiresAt, 'with the duration the order paid for').not.toBeNull();
-    expect(addClientCalls(), 'and the reconcile created nothing').toBe(2);
     expect(panel.clients.size, 'one account, for one paid order').toBe(1);
 
     const all = await operations.listForService(tenantA, adopted?.id ?? '', 10);
-    expect(all.map((o) => o.type).sort()).toEqual(['PROVISION', 'RECONCILE']);
-    expect(all.find((o) => o.type === 'RECONCILE')?.state).toBe('SUCCEEDED');
+    expect(all.map((o) => o.type).sort()).toEqual(['PROVISION']);
+    expect(all.find((o) => o.type === 'PROVISION')?.state).toBe('SUCCEEDED');
 
     // And now that it is ACTIVE, the customer is told.
     expect(sent, 'the announcement follows the adoption').toHaveLength(1);

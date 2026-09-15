@@ -168,6 +168,15 @@ export interface Fake3xUi {
   /** Every client `clients/add` accepted, keyed by the `email` it was given. */
   readonly clients: ReadonlyMap<string, FakeClient>;
   /**
+   * Every CSRF token `csrf-token` has minted, in order.
+   *
+   * Exposed so a test can assert that the token a LATER request carried is the
+   * one this session was actually given, rather than merely that some header
+   * with that name was present. A caller that invented a token would satisfy
+   * the weaker check and be refused by a real panel.
+   */
+  readonly mintedCsrfTokens: readonly string[];
+  /**
    * Changes what the panel does, without changing its address.
    *
    * A panel that fails a create and then recovers is ONE panel: the same row, the same
@@ -235,6 +244,7 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
   // v3.7.0 binds its CSRF token to the session rather than to the request.
   const sessions = new Map<string, { csrf: string; loggedIn: boolean }>();
   const clients = new Map<string, FakeClient>();
+  const minted: string[] = [];
   let issued = 0;
 
   const handler = (request: IncomingMessage, response: ServerResponse): void => {
@@ -300,6 +310,7 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
         const id = `${CANARY.cookie}-${issued}`;
         const csrf = `${CANARY.csrf}-${issued}`;
         sessions.set(id, { csrf, loggedIn: false });
+        minted.push(csrf);
         const session = `3x-ui=${id}; Path=${basePath}; Expires=Wed, 09 Jun 2027 10:18:14 GMT; HttpOnly`;
         // A second cookie carrying a canary. Anything else at this origin — a
         // proxy, a WAF, an analytics tag — can set one, and replaying it back
@@ -480,6 +491,30 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
           );
           return true;
         }
+        /*
+         * The CSRF gate, which the `/panel/api` group also has.
+         *
+         * `initRouter` mounts, in this order: `checkAPIAuth`,
+         * `enforceTokenScope`, `ConfigEnvelopeMiddleware`, then
+         * `CSRFMiddleware` — so authentication is decided FIRST and a caller
+         * whose token is unknown gets 401, not 403, even on a POST. Only after
+         * that does the CSRF check run, and it short-circuits on
+         * `api_authed`, which `checkAPIAuth` sets for a Bearer caller and never
+         * for a session one.
+         *
+         * This fake had no gate here at all, and the adapter had a comment
+         * asserting the group was exempt. They agreed; the panel did not, and a
+         * real v3.7.0 answered 403 with no body to every session-mode create.
+         * The gate is here so that removing the adapter's `x-csrf-token` header
+         * makes a test fail instead of nothing happening.
+         */
+        const unsafe = request.method !== 'GET' && request.method !== 'HEAD';
+        if (bearer === null && unsafe && !csrfOk()) {
+          // AbortWithStatus(403): status only, no body.
+          response.writeHead(403);
+          response.end();
+          return true;
+        }
         return false;
       };
 
@@ -517,10 +552,36 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
           return void json(200, envelope(false, null, 'invalid parameter'));
         }
         const email = String(first['email'] ?? '');
-        if (clients.has(email)) {
-          // v3.7.0 refuses a duplicate email inside one inbound. Recorded so a test can
-          // prove a retry did not reach here twice with the same name.
-          return void json(200, envelope(false, null, 'duplicate email'));
+        const subId = String(first['subId'] ?? '');
+        const existing = clients.get(email);
+        if (existing !== undefined) {
+          /*
+           * v3.7.0 has TWO answers for a name that is already taken, and which
+           * one it gives turns on the `subId`. `ClientService.AddInboundClient`
+           * runs `checkEmailsExistForClients`, which EXEMPTS a client whose
+           * subId matches (so one identity can live on several inbounds), and
+           * then filters out anything already on this inbound; when that leaves
+           * nothing it returns `(false, nil)` — no error, so the controller
+           * answers success. Upstream added that filter deliberately, in
+           * `TestAddInboundClient_SkipsClientsAlreadyOnInbound`, for #5770:
+           * retried and raced adds were duplicating one email inside a single
+           * settings array.
+           *
+           * So a REPLAY of the same create — same email, same subId, which is
+           * what Nexa's derived identities guarantee — is an idempotent no-op
+           * reported as SUCCESS. A DIFFERENT identity claiming a taken email is
+           * still refused, with `Duplicate email: <email>`.
+           *
+           * This fake used to answer every repeat `success: false`, and the
+           * adapter's docblock said the same. Against the real panel a replayed
+           * create succeeds, which is a materially different thing for the
+           * provisioner to do next, and neither the fake nor forty-odd green
+           * scenarios could tell.
+           */
+          if (existing.subId === subId) {
+            return void json(200, envelope(true, null, 'Client(s) added Successfully'));
+          }
+          return void json(200, envelope(false, null, `Duplicate email: ${email}`));
         }
         clients.set(email, {
           id: String(first['id'] ?? ''),
@@ -676,6 +737,7 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
     origin,
     requests,
     clients,
+    mintedCsrfTokens: minted,
     setBehaviour(next: Behaviour): void {
       behaviour = next;
     },
@@ -683,6 +745,7 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
       requests.length = 0;
       sessions.clear();
       clients.clear();
+      minted.length = 0;
     },
     async close(): Promise<void> {
       server.closeAllConnections();
