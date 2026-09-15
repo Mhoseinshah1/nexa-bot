@@ -110,6 +110,24 @@ export const LEASE_SWEEP_LIMIT = 20;
  */
 export const RECONCILE_PLAN_LIMIT = 5;
 
+/**
+ * How many times one service may go round create → unknown → reconcile → absent.
+ *
+ * The cycle is legitimate ONCE: a create whose answer was lost, a panel that proves it
+ * has no such account, and a fresh create that is therefore safe. It is a bug twice
+ * over in a row, and left unbounded it is a loop with no ceiling at all — each round
+ * derives a NEW operation id from the round before, so nothing collides, the per-
+ * operation attempt ceiling never applies, and a panel that fails every create while
+ * answering every lookup "absent" would be dialled for ever at the tenant's budget.
+ *
+ * The bound is on the SERVICE rather than on an operation, because an operation is
+ * what the cycle keeps making. At the ceiling the reconcile stops re-planning and opens
+ * `provisioning.stalled` instead: nothing is left claimable, nothing is left in the
+ * reconcile queue, and an operator has a row to act on with `retryProvisioning` as the
+ * deliberate way back in.
+ */
+export const SERVICE_PROVISION_CYCLE_LIMIT = 3;
+
 export interface ProvisionerDeps {
   readonly operations: OperationRepository;
   readonly services: ServiceRepository;
@@ -636,6 +654,16 @@ export class ProvisionerService {
      * for what was sold, and this column is the second.
      */
     const bought = await this.deps.purchases.specificationFor(scope, service.orderId);
+    /*
+     * How many creates this service has already been through.
+     *
+     * Read before the transaction because it bounds a DECISION rather than guarding a
+     * write: the re-plan below is refused at the ceiling, and a count that is one stale
+     * either way changes only which round is the last.
+     */
+    const cycles = (await this.deps.operations.listForService(scope, serviceId, 50)).filter(
+      (candidate) => candidate.type === 'PROVISION',
+    ).length;
 
     if (verdict.kind === 'UNDECIDED') {
       await this.persistFailure(
@@ -737,21 +765,52 @@ export class ProvisionerService {
          * because the service's first PROVISION already spent `<serviceId>:PROVISION`
          * and that row is terminal.
          */
-        await this.deps.operations.plan(
-          scope,
-          {
-            id: this.deps.ids.uuid(),
-            operationId: this.deps.operationId(
-              `${serviceId}:PROVISION:after:${operation.operationId}`,
-            ),
-            serviceId,
-            orderId: operation.orderId,
-            panelId: service.panelId,
-            type: 'PROVISION',
-          },
-          now,
-          tx,
-        );
+        if (cycles >= SERVICE_PROVISION_CYCLE_LIMIT) {
+          /*
+           * The cycle has gone round enough times to be a pattern, not an accident.
+           *
+           * Re-planning here is what makes the loop a loop: each round derives a new
+           * operation id from the round before, so nothing ever collides and the
+           * per-operation attempt ceiling never applies. A panel that fails every
+           * create while answering every lookup "absent" would be dialled for ever.
+           *
+           * So the service is left `PENDING_PROVISION` with NOTHING claimable — no
+           * open operation, and not in the reconcile queue, because that queue asks
+           * for `UNRECONCILED` services. An operator gets the stalled condition and
+           * `retryProvisioning` is the deliberate way back in.
+           */
+          await this.deps.opsLog.record(
+            scope,
+            {
+              code: PROVISIONING_STALLED_CODE,
+              severity: 'ERROR',
+              message: 'A paid service could not be created on its panel.',
+              context: {
+                serviceId,
+                panelId: service.panelId,
+                reason: 'PROVISION_CYCLE_EXHAUSTED',
+              },
+              dedupeKey: provisioningConditionKey(serviceId),
+            },
+            tx,
+          );
+        } else {
+          await this.deps.operations.plan(
+            scope,
+            {
+              id: this.deps.ids.uuid(),
+              operationId: this.deps.operationId(
+                `${serviceId}:PROVISION:after:${operation.operationId}`,
+              ),
+              serviceId,
+              orderId: operation.orderId,
+              panelId: service.panelId,
+              type: 'PROVISION',
+            },
+            now,
+            tx,
+          );
+        }
       }
       await this.deps.audit.record(
         scope,

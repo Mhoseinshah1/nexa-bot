@@ -209,6 +209,13 @@ describe('a provisioned service announces itself', () => {
   const addClientCalls = (): number =>
     panel.requests.filter((request) => request.path.includes('addClient')).length;
 
+  /** Makes a backed-off operation due again without waiting out its retry interval. */
+  async function makeOperationDue(): Promise<void> {
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET next_attempt_at = now() - interval '1 hour'`,
+    );
+  }
+
   /** Makes a pending delivery due again without waiting out its five-minute backoff. */
   async function makeDeliveryDue(): Promise<void> {
     await ctx.container.database.db.execute(
@@ -512,5 +519,230 @@ describe('a provisioned service announces itself', () => {
     const sweep = await ctx.container.delivery.deliverDue(tenantA, 10);
     expect(sweep.claimed).toBe(0);
     expect(sent).toHaveLength(1);
+  });
+
+  // =========================================================================
+  // What happens when the PROVIDER fails
+  //
+  // Nothing above this line makes the panel misbehave, and that was a real gap: the
+  // rules the whole phase is built around — `call_started_at`, `UNRECONCILED`, the
+  // reconcile — were all reachable only through a provider failure, and a mutation of
+  // each survived the suite.
+  // =========================================================================
+
+  it('stamps that a provider call started, before making it', async () => {
+    const orderId = await paidOrder('call-started');
+    await ctx.container.provisionerLoop.tick();
+
+    const service = await services.findByOrderId(tenantA, orderId);
+    const ops = await operations.listForService(tenantA, service?.id ?? '', 10);
+    /*
+     * The one fact that stops a crash mid-create becoming a second paid-for account.
+     *
+     * `releaseExpiredLeases` refuses to re-hand any row carrying it, and that guard has
+     * its own test — but nothing distinguished "the executor stamps it" from "the
+     * executor does not", so deleting the stamp left the suite green and every crash
+     * mid-create a duplicate.
+     */
+    expect(ops[0]?.callStartedAt, 'the executor stamped the call before making it').not.toBeNull();
+  });
+
+  it('creates one account when a create is cut off after the panel stored it', async () => {
+    // The client IS written, and the connection dies before the answer arrives.
+    panel.setBehaviour('add-client-lost-reply');
+    const orderId = await paidOrder('lost-reply');
+
+    await ctx.container.provisionerLoop.tick();
+
+    const lost = await services.findByOrderId(tenantA, orderId);
+    /*
+     * A connection torn down mid-response reads as `UNREACHABLE`, which
+     * `SAFE_TO_REPLAY_FAILURE_KINDS` calls safe — and here it is NOT: the request was
+     * fully sent and the panel committed the write. `SafeHttpClient` cannot tell a
+     * refused connection from a reset one after the fact, so the taxonomy is optimistic
+     * for exactly this shape. `docs/open-questions.md` records it.
+     *
+     * What this case exists to prove is that the optimism costs an attempt and never an
+     * account, because the DERIVED username makes the retry collide instead of
+     * duplicating. That containment is the claim; this is the test of it.
+     */
+    expect(lost?.state, 'the retry is still pending').toBe('PENDING_PROVISION');
+    expect(panel.clients.size, 'and the panel really does have the account').toBe(1);
+
+    /*
+     * And it is NOT announced while it waits.
+     *
+     * The sweep takes ACTIVE services only. Without that predicate this service — born
+     * `PENDING` with no next-attempt time, so immediately due — would be claimed, found
+     * to have no subscription URL, and recorded `FAILED`; and `FAILED` is not in
+     * `DELIVERY_AUTO_RETRY_STATES`, so the customer would never be told even after the
+     * provisioning eventually succeeded.
+     */
+    const early = await ctx.container.delivery.deliverDue(tenantA, 10);
+    expect(early.claimed, 'an unprovisioned service is not due for delivery').toBe(0);
+    expect(lost?.deliveryAttempts, 'and no attempt was spent on it').toBe(0);
+    expect(sent).toHaveLength(0);
+
+    // The panel answers again, and the retry meets the account it already made.
+    panel.setBehaviour('healthy');
+    await makeOperationDue();
+    await ctx.container.provisionerLoop.tick();
+
+    /*
+     * v3.7.0 refuses a duplicate email with a successful envelope carrying
+     * `success: false` — a `PROVIDER_ERROR`, which `failureOutcome` classifies UNKNOWN
+     * on a mutating call, which is the state that means "ask the panel". The tick then
+     * DRAINS: the next `runOnce` plans the reconcile, claims it and adopts what is
+     * there, so one tick carries the service all the way to ACTIVE.
+     */
+    const adopted = await services.findByOrderId(tenantA, orderId);
+    expect(addClientCalls(), 'the retry did reach the panel').toBe(2);
+    expect(panel.clients.size, 'and it did NOT make a second account').toBe(1);
+    expect(adopted?.state, 'the account was found and adopted').toBe('ACTIVE');
+    expect(adopted?.subscriptionUrl).not.toBeNull();
+    expect(adopted?.expiresAt, 'with the duration the order paid for').not.toBeNull();
+    expect(addClientCalls(), 'and the reconcile created nothing').toBe(2);
+    expect(panel.clients.size, 'one account, for one paid order').toBe(1);
+
+    const all = await operations.listForService(tenantA, adopted?.id ?? '', 10);
+    expect(all.map((o) => o.type).sort()).toEqual(['PROVISION', 'RECONCILE']);
+    expect(all.find((o) => o.type === 'RECONCILE')?.state).toBe('SUCCEEDED');
+
+    // And now that it is ACTIVE, the customer is told.
+    expect(sent, 'the announcement follows the adoption').toHaveLength(1);
+    expect(adopted?.deliveryState).toBe('DELIVERED');
+  });
+
+  it('bounds the create-reconcile-absent cycle instead of dialling for ever', async () => {
+    // A 5xx that stored nothing: indistinguishable from a lost answer, from here.
+    panel.setBehaviour('add-client-500');
+    const orderId = await paidOrder('absent');
+
+    /*
+     * One tick DRAINS, so the whole cycle runs inside it: create fails UNKNOWN, the
+     * reconcile asks the panel, the panel proves absence, a fresh create is planned —
+     * and round again.
+     *
+     * Absence is what makes a fresh create legal, and that is right ONCE. Left
+     * unbounded it is a loop with no ceiling at all: each round derives a new operation
+     * id from the round before, so nothing collides and the per-operation attempt
+     * ceiling never applies. A panel that fails every create while answering every
+     * lookup "absent" would be dialled for ever at the tenant's budget. This test
+     * exists because writing it is what found that.
+     */
+    await ctx.container.provisionerLoop.tick();
+
+    expect(addClientCalls(), 'three cycles, and then it stops').toBe(3);
+    expect(panel.clients.size).toBe(0);
+
+    const stalled = await services.findByOrderId(tenantA, orderId);
+    const serviceId = stalled?.id ?? '';
+    expect(stalled?.state, 'left where a retry can reach it').toBe('PENDING_PROVISION');
+    expect(
+      await operations.findOpen(tenantA, serviceId, 'PROVISION'),
+      'and with nothing claimable, so the loop cannot restart itself',
+    ).toBeNull();
+    expect(await operations.findOpen(tenantA, serviceId, 'RECONCILE')).toBeNull();
+
+    // An operator has a row to act on.
+    const events = await ctx.container.database.db.execute(
+      sql`SELECT code, context FROM operational_events WHERE code = 'provisioning.stalled'`,
+    );
+    expect(events.rows, 'the operator is told').toHaveLength(1);
+
+    // Another tick changes nothing at all: no operation, no call.
+    await ctx.container.provisionerLoop.tick();
+    expect(addClientCalls(), 'and it stays stopped').toBe(3);
+
+    /*
+     * And the deliberate way back in still works.
+     *
+     * `retryProvisioning` is the remedy the stalled condition points at, and the panel
+     * having recovered is exactly when an operator presses it.
+     */
+    panel.setBehaviour('healthy');
+    await ctx.container.provisioning.retryProvisioning(tenantA, owner, serviceId, {
+      idempotencyKey: 'operator-retry-absent',
+    });
+    await ctx.container.provisionerLoop.tick();
+
+    const active = await services.findByOrderId(tenantA, orderId);
+    expect(active?.state).toBe('ACTIVE');
+    expect(panel.clients.size, 'one account, for one paid order').toBe(1);
+    expect(addClientCalls(), 'the three that failed, and the one that worked').toBe(4);
+
+    const rows = await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM services WHERE order_id = ${orderId}`,
+    );
+    expect((rows.rows[0] as { n: number }).n).toBe(1);
+  });
+
+  it('holds off a stopped tenant without spending an attempt on it', async () => {
+    const orderId = await paidOrder('stopped-provision');
+    const service = await services.findByOrderId(tenantA, orderId);
+    const serviceId = service?.id ?? '';
+
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`,
+    );
+
+    /*
+     * Five ticks, which is `OPERATION_MAX_ATTEMPTS`.
+     *
+     * The gate itself had no test — CLAUDE.md names this as a non-negotiable and names
+     * panels as the module that skipped it — and neither did the accounting. A hold-off
+     * that SPENT its attempt left the operation PLANNED at the ceiling after exactly
+     * this many ticks, where `claimDue` can never select it again: an operator stopping
+     * a tenant for twenty-five seconds retired a paid order that no panel ever heard
+     * about, silently.
+     */
+    for (let tick = 0; tick < 5; tick += 1) await ctx.container.provisionerLoop.tick();
+
+    expect(addClientCalls(), 'a stopped tenant dials nothing').toBe(0);
+    const held = await operations.listForService(tenantA, serviceId, 10);
+    expect(held, 'and plans nothing new').toHaveLength(1);
+    expect(held[0]?.state, 'the operation is still claimable').toBe('PLANNED');
+    expect(held[0]?.attempts, 'a hold-off contacted nothing, so it costs nothing').toBe(0);
+
+    // Restarting the tenant resumes it, which is the point.
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET status = 'ACTIVE' WHERE id = ${tenantA.tenantId}`,
+    );
+    await ctx.container.provisionerLoop.tick();
+    expect(addClientCalls()).toBe(1);
+    expect((await services.findByOrderId(tenantA, orderId))?.state).toBe('ACTIVE');
+  });
+
+  it('gives up announcing after the attempts are spent, and says so', async () => {
+    reply = (_request, response) => {
+      response.writeHead(403, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: false, error_code: 403, description: 'Forbidden' }));
+    };
+    const orderId = await paidOrder('deliver-ceiling');
+
+    /*
+     * `DELIVERY_MAX_ATTEMPTS` attempts, then `FAILED`.
+     *
+     * The ceiling and the long argument for why it is lower than
+     * `OPERATION_MAX_ATTEMPTS` described behaviour nothing checked: replacing the whole
+     * branch with "always PENDING" — never give up — passed the suite.
+     */
+    await ctx.container.provisionerLoop.tick();
+    for (let attempt = 1; attempt < 3; attempt += 1) {
+      await makeDeliveryDue();
+      await ctx.container.delivery.deliverDue(tenantA, 10);
+    }
+
+    const service = await services.findByOrderId(tenantA, orderId);
+    expect(sent, 'three attempts, and no more').toHaveLength(3);
+    expect(service?.deliveryAttempts).toBe(3);
+    expect(service?.deliveryState, 'and then it needs a person').toBe('FAILED');
+    expect(service?.state, 'the service is still the one they paid for').toBe('ACTIVE');
+
+    // FAILED is never swept again, whatever the clock says.
+    await makeDeliveryDue();
+    const sweep = await ctx.container.delivery.deliverDue(tenantA, 10);
+    expect(sweep.claimed).toBe(0);
+    expect(sent).toHaveLength(3);
   });
 });

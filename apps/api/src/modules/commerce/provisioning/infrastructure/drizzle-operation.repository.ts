@@ -360,8 +360,8 @@ export class DrizzleOperationRepository implements OperationRepository {
          */
         completedAt: terminal ? (result.completedAt ?? now) : null,
         /*
-         * A row that is no longer in flight holds no claim, and has no call in
-         * progress. The first two together because
+         * A row that is no longer in flight holds no claim, and a row going BACK to
+         * `PLANNED` has no call in progress. The first because
          * `provisioning_operations_claim_check` requires it; the third because
          * `call_started_at` is the fact that decides whether a lease expiry may
          * release this row, and a stale one disables that decision for ever.
@@ -377,7 +377,11 @@ export class DrizzleOperationRepository implements OperationRepository {
          * `markCallStarted` only writes when the column is null, so clearing it here
          * is what lets the next attempt stamp its own.
          */
-        ...(to === 'IN_FLIGHT' ? {} : { claimedBy: null, leaseUntil: null, callStartedAt: null }),
+        ...(to === 'IN_FLIGHT' ? {} : { claimedBy: null, leaseUntil: null }),
+        // Cleared on the way back to PLANNED ONLY. A terminal row keeps the fact that a
+        // call was made — history an operator reads, and the lease sweep never looks at
+        // a terminal row.
+        ...(to === 'PLANNED' ? { callStartedAt: null } : {}),
         updatedAt: now,
       })
       .where(

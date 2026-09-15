@@ -141,7 +141,24 @@ export type Behaviour =
   /** The LOGIN response rotates the session to a value larger than any real one. */
   | 'login-enormous-cookie'
   /** The 2FA question's response rotates the session the same way. */
-  | 'twofactor-enormous-cookie';
+  | 'twofactor-enormous-cookie'
+  /**
+   * `addClient` RECORDS the client and then dies without answering.
+   *
+   * The create whose answer was lost — the case `failureOutcome` classifies UNKNOWN on
+   * a mutating call and the reason `UNRECONCILED` exists. The account is really there,
+   * so a reconcile that ASKS the panel must find it.
+   */
+  | 'add-client-lost-reply'
+  /**
+   * `addClient` answers 500 and stores NOTHING.
+   *
+   * The other half of the same uncertainty: a 5xx may or may not have committed a
+   * write, so Nexa cannot tell these two apart from the outside — which is exactly why
+   * the remedy is a read rather than a guess. Here the read finds nothing and a fresh
+   * create becomes legal.
+   */
+  | 'add-client-500';
 
 export interface Fake3xUi {
   readonly baseUrl: string;
@@ -150,6 +167,14 @@ export interface Fake3xUi {
   readonly requests: ReadonlyArray<RecordedRequest>;
   /** Every client `addClient` accepted, keyed by the `email` it was given. */
   readonly clients: ReadonlyMap<string, FakeClient>;
+  /**
+   * Changes what the panel does, without changing its address.
+   *
+   * A panel that fails a create and then recovers is ONE panel: the same row, the same
+   * credentials, the same base URL. Restarting the fake on a new port would give the
+   * test a second panel and prove nothing about a panel that came back.
+   */
+  setBehaviour(next: Behaviour): void;
   reset(): void;
   close(): Promise<void>;
 }
@@ -204,7 +229,7 @@ const STATUS_OBJ = {
 export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake3xUi> {
   const basePath = options.basePath ?? '/';
   const tokens = options.tokens ?? {};
-  const behaviour = options.behaviour ?? 'healthy';
+  let behaviour = options.behaviour ?? 'healthy';
   const requests: RecordedRequest[] = [];
   // The session store. Keyed by the cookie value the fake issued, exactly as
   // v3.7.0 binds its CSRF token to the session rather than to the request.
@@ -467,6 +492,9 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
       if (route === 'panel/api/inbounds/addClient') {
         if (request.method !== 'POST') return void json(404, envelope(false, null));
         if (apiRefused()) return;
+        if (behaviour === 'add-client-500') {
+          return void json(500, { error: 'internal' });
+        }
         const form = new URLSearchParams(body);
         const settingsRaw = form.get('settings');
         if (form.get('id') === null || settingsRaw === null) {
@@ -496,6 +524,11 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
           up: 0,
           down: 0,
         });
+        if (behaviour === 'add-client-lost-reply') {
+          // Stored, and the answer never arrives. The client IS on the panel.
+          request.socket.destroy();
+          return;
+        }
         return void json(200, envelope(true, null, 'Client added Successfully'));
       }
 
@@ -638,6 +671,9 @@ export async function startFake3xUi(options: Fake3xUiOptions = {}): Promise<Fake
     origin,
     requests,
     clients,
+    setBehaviour(next: Behaviour): void {
+      behaviour = next;
+    },
     reset(): void {
       requests.length = 0;
       sessions.clear();
