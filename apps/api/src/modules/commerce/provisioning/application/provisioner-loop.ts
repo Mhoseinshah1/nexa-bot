@@ -1,4 +1,5 @@
 import type { TenantContext } from '@nexa/contracts';
+import type { DeliveryService } from './delivery.service.js';
 import type { ProvisionerService } from './provisioner.service.js';
 
 /**
@@ -32,6 +33,20 @@ export class ProvisionerLoop {
 
   constructor(
     private readonly executor: ProvisionerService,
+    /**
+     * The announcement half, driven by the SAME tick.
+     *
+     * Here rather than in `ProvisionerService`, and that placement is the rule this
+     * pair exists to hold: a failed Telegram message must not be able to reach the
+     * provisioning transaction. The executor cannot call the messenger because it does
+     * not have one, which is a stronger guarantee than a comment saying it must not.
+     *
+     * Driven by this loop rather than by a second process because the trigger is
+     * immediate: a service reaches `ACTIVE` in the provisioning drain above, and the
+     * delivery drain below finds it due in the same tick. A customer who has just paid
+     * does not wait for another process's timer.
+     */
+    private readonly delivery: DeliveryService,
     private readonly options: {
       readonly scope: () => TenantContext;
       readonly tickMs: number;
@@ -75,8 +90,12 @@ export class ProvisionerLoop {
    * Re-entrancy is refused rather than queued: a tick that overran its interval is a
    * tick still holding a provider call, and starting a second one would double this
    * process's outbound rate exactly when the panels are slowest.
+   *
+   * Public so a test can drive exactly one tick and assert what it did. A timer-driven
+   * private tick can only be observed by waiting, and a test that waits for a loop is a
+   * test that passes on a slow machine for the wrong reason.
    */
-  private async tick(): Promise<void> {
+  async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
     try {
@@ -85,6 +104,17 @@ export class ProvisionerLoop {
         const result = await this.executor.runOnce(scope);
         if (result.kind === 'IDLE' || result.kind === 'REFUSED') break;
       }
+      /*
+       * Then the announcements, for the services the drain above just activated.
+       *
+       * ONE batch per tick, not drained to empty like the provisioning half. A
+       * provisioning backlog clears against panels this installation's operator owns
+       * and whose rate this installation's own budget already bounds; an announcement
+       * backlog clears against Telegram, whose limits are somebody else's and which
+       * answers a burst by refusing the rest. `DRAIN_LIMIT` per tick is the ceiling,
+       * and a backlog larger than that takes more ticks rather than one long one.
+       */
+      await this.delivery.deliverDue(scope, DRAIN_LIMIT);
       this.lastProgressAt = this.options.now();
     } catch (error: unknown) {
       /*

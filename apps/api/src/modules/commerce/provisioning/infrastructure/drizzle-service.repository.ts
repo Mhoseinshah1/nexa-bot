@@ -13,7 +13,7 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { services } from '../../../../infrastructure/persistence/schema.js';
+import { customers, services } from '../../../../infrastructure/persistence/schema.js';
 import type {
   ProvisionOutcome,
   ServiceCursor,
@@ -256,7 +256,19 @@ export class DrizzleServiceRepository implements ServiceRepository {
   }
 
   /**
-   * Services whose announcement is due.
+   * Takes the services whose announcement is due, and leases them to this sweep.
+   *
+   * A sub-select of the candidates and a conditional UPDATE that re-checks the same
+   * predicates — the shape `OperationRepository.claimDue` already uses, and for the same
+   * reason. Two replicas racing the same row produce one winner: the loser blocks on the
+   * row lock, re-evaluates `delivery_next_attempt_at` after the winner committed, finds
+   * it in the future and updates nothing. No `SKIP LOCKED` and no advisory lock, because
+   * nothing about a claim is decided in a process.
+   *
+   * The lease is the ONLY thing written. `delivery_attempts` is untouched here and
+   * advanced by `recordDelivery`, so an attempt always means an outcome somebody saw: a
+   * sweep that died holding a lease would otherwise spend one of a service's three
+   * attempts on a message that was never submitted.
    *
    * `PENDING` only — `DELIVERY_AUTO_RETRY_STATES` is that one value, and the other
    * three are deliberately never swept: `DELIVERED` is done, and `UNCONFIRMED` and
@@ -269,23 +281,66 @@ export class DrizzleServiceRepository implements ServiceRepository {
   async claimDeliveryDue(
     scope: TenantContext,
     now: Date,
+    leaseUntil: Date,
     limit: number,
     tx?: unknown,
   ): Promise<readonly ServiceRecord[]> {
     const tenantId = requireTenantId(scope);
-    const rows = await this.exec(tx)
-      .select()
+    const ready = or(
+      isNull(services.deliveryNextAttemptAt),
+      lte(services.deliveryNextAttemptAt, now),
+    );
+    const due = this.exec(tx)
+      .select({ id: services.id })
       .from(services)
+      /*
+       * Joined to the customer so a BLOCKED one is not due AT THE QUERY.
+       *
+       * Not checked in the sweep afterwards, and the difference matters. A service the
+       * sweep picked up and then declined would either burn an attempt against the
+       * ceiling — punishing a customer for a moderation decision that may be reversed
+       * — or be skipped without one, which returns the same row on every tick for ever
+       * and crowds out deliveries that could actually be made.
+       *
+       * Excluding it here means a block pauses delivery and an unblock resumes it, with
+       * no attempt spent either way and nothing to remember.
+       *
+       * An INNER join, so a service whose customer row is somehow absent is not due
+       * either: there is nobody to send to, and the composite foreign key says that
+       * cannot happen anyway.
+       */
+      .innerJoin(
+        customers,
+        and(eq(customers.tenantId, services.tenantId), eq(customers.id, services.customerId)),
+      )
       .where(
         and(
           eq(services.tenantId, tenantId),
           eq(services.deliveryState, 'PENDING'),
           eq(services.state, 'ACTIVE'),
-          or(isNull(services.deliveryNextAttemptAt), lte(services.deliveryNextAttemptAt, now)),
+          eq(customers.status, 'ACTIVE'),
+          ready,
         ),
       )
       .orderBy(asc(services.createdAt), asc(services.id))
       .limit(limit);
+
+    const rows = await this.exec(tx)
+      .update(services)
+      .set({ deliveryNextAttemptAt: leaseUntil, updatedAt: now })
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          // Re-checked in the UPDATE, not only in the sub-select. The sub-select alone
+          // is satisfied by a caller whose scan simply found nothing; it is this
+          // predicate, evaluated after the row lock is granted, that refuses a row a
+          // concurrent sweep leased while this caller was blocked on it.
+          eq(services.deliveryState, 'PENDING'),
+          ready,
+          sql`${services.id} IN ${due}`,
+        ),
+      )
+      .returning();
     return rows.map(toRecord);
   }
 }

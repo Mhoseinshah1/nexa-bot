@@ -1,4 +1,5 @@
 import type {
+  BotInstanceId,
   OperationId,
   OperationState,
   OperationType,
@@ -173,13 +174,60 @@ export interface ServiceRepository {
     tx: TransactionScope,
   ): Promise<boolean>;
 
-  /** Services whose announcement is due. Bounded, oldest first. */
+  /**
+   * Takes the services whose announcement is due, for THIS sweep. Bounded, oldest first.
+   *
+   * A claim, not a read. It pushes `delivery_next_attempt_at` out to `leaseUntil` in the
+   * same statement that selects, so a second replica sweeping concurrently does not find
+   * the same rows and send the customer a second "your service is ready". Two replicas
+   * are the normal case on every rolling update, and a duplicate announcement is a
+   * customer wondering which of the two links is the real one.
+   *
+   * The lease is NOT an attempt, and nothing here touches `delivery_attempts`. An attempt
+   * is an outcome we know — `recordDelivery` counts it — and a sweep that died holding a
+   * lease learned nothing. Counting the lease instead would let a process that crashes
+   * between claim and send exhaust a service's three attempts without a single message
+   * ever being submitted to Telegram.
+   */
   claimDeliveryDue(
     scope: TenantContext,
     now: Date,
+    leaseUntil: Date,
     limit: number,
     tx?: unknown,
   ): Promise<readonly ServiceRecord[]>;
+}
+
+/**
+ * Where one customer's announcement goes.
+ *
+ * `botInstanceId` rather than "the tenant's active bot", because `CustomerMessage`
+ * forbids exactly that: a customer wrote to a specific bot, and a message from a
+ * different one arrives from an account they have never heard of — which, for a tenant
+ * running a public bot beside a reseller bot, leaks the relationship between them.
+ */
+export interface CustomerContact {
+  readonly chatId: string;
+  readonly botInstanceId: BotInstanceId;
+}
+
+/**
+ * Where to send one customer's service announcement, or nothing.
+ *
+ * A NARROW port, for the reason `PurchaseSnapshotReader` gives one line above: handing
+ * the delivery sweep `CustomerRepository` would also hand a background worker
+ * `setStatus`, and therefore the ability to block or unblock a customer.
+ *
+ * `null` means REFUSE, never "fall back to some bot". The only durable customer-to-bot
+ * link is `customers.first_bot_instance_id`, which is nullable; a customer whose row has
+ * none cannot be announced to automatically, and guessing is the failure mode above.
+ */
+export interface CustomerContactReader {
+  contactFor(
+    scope: TenantContext,
+    customerId: UserId,
+    tx?: unknown,
+  ): Promise<CustomerContact | null>;
 }
 
 /**

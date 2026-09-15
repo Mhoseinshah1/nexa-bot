@@ -517,11 +517,20 @@ describe('provisioning invariants', () => {
     expect(after?.deliveredAt).toBeNull();
     expect(after?.subscriptionUrl).toBe('https://sub.example.test/sub/abc');
 
-    // And it is not due again until its backoff has elapsed.
-    expect(await services.claimDeliveryDue(tenantA, now, 10)).toHaveLength(0);
-    expect(
-      await services.claimDeliveryDue(tenantA, new Date(now.getTime() + 300_001), 10),
-    ).toHaveLength(1);
+    // And it is not due again until its backoff has elapsed. The second argument is the
+    // lease a sweep would take; it changes nothing for a row that is not due.
+    const lease = (at: Date): Date => new Date(at.getTime() + 60_000);
+    expect(await services.claimDeliveryDue(tenantA, now, lease(now), 10)).toHaveLength(0);
+    const later = new Date(now.getTime() + 300_001);
+    expect(await services.claimDeliveryDue(tenantA, later, lease(later), 10)).toHaveLength(1);
+    /*
+     * And the claim LEASED it: a second sweep at the same moment finds nothing.
+     *
+     * The property two replicas depend on, asserted here rather than inferred from the
+     * statement, because a `claimDeliveryDue` that only selected would satisfy every
+     * other assertion in this test.
+     */
+    expect(await services.claimDeliveryDue(tenantA, later, lease(later), 10)).toHaveLength(0);
   });
 
   it('never sweeps a delivery whose outcome was unknown', async () => {
@@ -566,9 +575,8 @@ describe('provisioning invariants', () => {
      * is true. Re-delivery from here is a deliberate act, so the sweep must not see it
      * at any time.
      */
-    expect(await services.claimDeliveryDue(tenantA, now, 10)).toHaveLength(0);
-    expect(
-      await services.claimDeliveryDue(tenantA, new Date(now.getTime() + 86_400_000), 10),
-    ).toHaveLength(0);
+    expect(await services.claimDeliveryDue(tenantA, now, now, 10)).toHaveLength(0);
+    const far = new Date(now.getTime() + 86_400_000);
+    expect(await services.claimDeliveryDue(tenantA, far, far, 10)).toHaveLength(0);
   });
 });

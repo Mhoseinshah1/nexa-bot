@@ -13,7 +13,8 @@ import {
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CustomerMessenger } from '../../messaging/application/ports.js';
-import type { ServiceRecord, ServiceRepository } from './ports.js';
+import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
+import type { CustomerContactReader, ServiceRecord, ServiceRepository } from './ports.js';
 
 /**
  * How long before a refused delivery is tried again.
@@ -52,9 +53,51 @@ export function deliveryStateFor(
   return attemptsAfter >= DELIVERY_MAX_ATTEMPTS ? 'FAILED' : 'PENDING';
 }
 
+/**
+ * How long a claimed service is held before another sweep may take it.
+ *
+ * The LONGEST backoff, not the shortest. A leased row that never came back was held by
+ * a process that died somewhere between the claim and the send, and the message may
+ * well have reached Telegram — so the next attempt waits at least as long as a refused
+ * one would have, rather than announcing again a few seconds later.
+ */
+export const DELIVERY_LEASE_MS = DELIVERY_BACKOFF_MS * DELIVERY_MAX_ATTEMPTS;
+
+/**
+ * What one sweep did, for the loop's log and for a test.
+ *
+ * Counted rather than returned as records, because nothing downstream acts on the
+ * services and a sweep that handed them back would invite a caller to send again.
+ */
+export interface DeliverySweepReport {
+  readonly claimed: number;
+  readonly delivered: number;
+  /** Refused by Telegram, and still `PENDING` — the attempts are not spent. */
+  readonly pending: number;
+  /** Refused by Telegram for the last time. Needs a person. */
+  readonly failed: number;
+  /** Telegram may have delivered it. Never retried automatically. */
+  readonly unconfirmed: number;
+  /** Nothing to send, or nobody to send to. Recorded as `FAILED`. */
+  readonly undeliverable: number;
+  /** The send threw. The lease stands and the row comes back later. */
+  readonly errored: number;
+}
+
 export interface DeliveryServiceDeps {
   readonly services: ServiceRepository;
+  readonly contacts: CustomerContactReader;
   readonly messenger: CustomerMessenger;
+  /**
+   * The tenant kill switch, read before anything leaves the process.
+   *
+   * Required of every write path by `nexa-conventions`, and this one sends a message as
+   * well as writing a row. An operator who stopped a tenant expects its customers to
+   * stop hearing from it — a background sweep that kept announcing services would be the
+   * panels module's omission repeated, where a stopped tenant went on being given new
+   * panels and a background monitor.
+   */
+  readonly scopeActivity: ScopeActivityReader;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
   readonly ids: IdGenerator;
@@ -113,6 +156,21 @@ export class DeliveryService {
       );
     }
 
+    if (!(await this.scopeIsActive(scope))) {
+      /*
+       * The tenant has stopped accepting work.
+       *
+       * Refused BEFORE the send, not after: the record is the cheap half and the message
+       * is the half that cannot be taken back. `SCOPE_INACTIVE` is the same code every
+       * other stopped-tenant refusal uses, so a surface does not learn a second one.
+       */
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_NOT_DELIVERABLE,
+        'That tenant has stopped accepting work.',
+        { reason: 'SCOPE_INACTIVE' },
+      );
+    }
+
     const from = service.deliveryState;
     const outcome = await this.deps.messenger.send(scope, {
       chatId,
@@ -147,13 +205,118 @@ export class DeliveryService {
   }
 
   /**
-   * The services whose announcement is due, for the sweep.
+   * One sweep: claim what is due, announce each, record what happened.
    *
-   * `PENDING` only. `UNCONFIRMED` and `FAILED` are deliberately never swept — both need
-   * a person, for reasons `SERVICE_DELIVERY_STATES` gives — and `DELIVERED` is done.
+   * This is the automatic half of delivery, and the ONLY caller of `deliver` that is not
+   * a customer asking. It claims first — see `claimDeliveryDue` — so a second replica
+   * sweeping at the same moment does not send the same customer a second message.
+   *
+   * Each service is handled inside its own `try`. A sweep that let one bad row throw
+   * would abandon every service behind it in the batch, for ever, because the batch is
+   * ordered oldest-first and the same row would lead the next one. The lease the claim
+   * took is what makes the abandoned row safe to leave: it comes back when the lease
+   * expires, with no attempt spent on an outcome nobody observed.
    */
-  async due(scope: TenantContext, limit: number): Promise<readonly ServiceRecord[]> {
-    return this.deps.services.claimDeliveryDue(scope, this.deps.clock.now(), limit);
+  async deliverDue(scope: TenantContext, limit: number): Promise<DeliverySweepReport> {
+    if (!(await this.scopeIsActive(scope))) {
+      // Asked once here as well as inside `deliver`, so a stopped tenant's rows are not
+      // claimed and leased only to have every one of them refused a moment later.
+      return EMPTY_SWEEP;
+    }
+    const now = this.deps.clock.now();
+    const claimed = await this.deps.services.claimDeliveryDue(
+      scope,
+      now,
+      new Date(now.getTime() + DELIVERY_LEASE_MS),
+      limit,
+    );
+
+    let delivered = 0;
+    let pending = 0;
+    let failed = 0;
+    let unconfirmed = 0;
+    let undeliverable = 0;
+    let errored = 0;
+
+    for (const service of claimed) {
+      try {
+        /*
+         * Two ways a claimed service has no announcement to make, both recorded as
+         * `FAILED` rather than left `PENDING`.
+         *
+         * `subscriptionUrl === null` is a provider whose `ServiceDelivery` was not a
+         * subscription link — `RAW_CONFIGS` and `CONFIG_FILE` exist in the contract and
+         * no adapter in this release produces them, so there is no column holding one.
+         * `contact === null` is a customer with no durable bot link.
+         *
+         * Neither improves by being retried, and `FAILED` is not the end of the road:
+         * `redeliver` is allowed from every delivery state, so the customer asking for
+         * their configuration still gets it and an operator can see the row.
+         */
+        const contact =
+          service.subscriptionUrl === null
+            ? null
+            : await this.deps.contacts.contactFor(scope, service.customerId);
+        if (contact === null) {
+          await this.abandon(scope, service);
+          undeliverable += 1;
+          continue;
+        }
+        const state = await this.deliver(scope, service, contact.chatId, contact.botInstanceId);
+        if (state === 'DELIVERED') delivered += 1;
+        else if (state === 'PENDING') pending += 1;
+        else if (state === 'FAILED') failed += 1;
+        else unconfirmed += 1;
+      } catch {
+        /*
+         * Swallowed, and deliberately not re-thrown.
+         *
+         * `CustomerMessenger.send` promises not to throw for a send failure, so reaching
+         * here means something else broke — and the one thing that must not happen is
+         * this exception reaching the service row. Delivery is a separate axis from
+         * `ServiceState`; a thrown send that rolled anything back would be the start of
+         * "the message failed, so provision it again".
+         */
+        errored += 1;
+      }
+    }
+
+    return {
+      claimed: claimed.length,
+      delivered,
+      pending,
+      failed,
+      unconfirmed,
+      undeliverable,
+      errored,
+    };
+  }
+
+  /**
+   * Whether this tenant is still accepting work, read INSIDE a transaction.
+   *
+   * In a transaction rather than on the pool because that is what
+   * `ScopeActivityReader` is for: a stop can commit between a surface's check and this
+   * one, and a read outside a transaction can observe a snapshot either side of it.
+   */
+  private async scopeIsActive(scope: TenantContext): Promise<boolean> {
+    return this.deps.uow.run(scope, async (tx) => this.deps.scopeActivity.scopeIsActive(scope, tx));
+  }
+
+  /** Records a claimed service that cannot be announced at all. Never a send. */
+  private async abandon(scope: TenantContext, service: ServiceRecord): Promise<void> {
+    const now = this.deps.clock.now();
+    await this.deps.uow.run(scope, async (tx) => {
+      await this.deps.services.recordDelivery(
+        scope,
+        service.id,
+        service.deliveryState,
+        'FAILED',
+        { deliveredAt: null, nextAttemptAt: null },
+        now,
+        tx,
+      );
+    });
   }
 
   /**
@@ -177,6 +340,17 @@ export class DeliveryService {
     return this.deliver(scope, service, chatId, botInstanceId);
   }
 }
+
+/** Nothing claimed, nothing sent. The answer for a tenant that has stopped. */
+const EMPTY_SWEEP: DeliverySweepReport = {
+  claimed: 0,
+  delivered: 0,
+  pending: 0,
+  failed: 0,
+  unconfirmed: 0,
+  undeliverable: 0,
+  errored: 0,
+};
 
 /** Kept so a reader can see the actor shape a sweep uses without opening the loop. */
 export type DeliveryActor = ActorContext;
