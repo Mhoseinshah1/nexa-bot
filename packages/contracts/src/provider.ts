@@ -974,6 +974,64 @@ export interface ProviderAdapter extends ProviderConnectionAdapter {
     http: ProviderHttpClient,
     ref: ProviderUserRef,
   ): Promise<ProviderRemovalOutcome>;
+
+  /*
+   * The commercial half: make this account's allowance read as the caller says.
+   *
+   * ONE method for three capabilities, which is the opposite arrangement to the three
+   * above, and the difference is real rather than stylistic.
+   *
+   * `suspendUser`, `resumeUser` and `terminateUser` are three different requests — two
+   * statuses and a delete — so three methods describe three things. A renewal, an extra
+   * traffic purchase and an extra time purchase are ONE request on the pinned Marzban:
+   * a single `PUT /api/user/{username}` carrying an expiry, an allowance, or both, and
+   * an omitted key means no change (`scripts/marzban-allowance-check.sh`, row 3). Three
+   * methods here would be three copies of one call differing only in which field they
+   * left out, and the copy that drifts is the one nobody is looking at.
+   *
+   * It takes a TARGET rather than an increment, and that is the load-bearing part.
+   * `IDEMPOTENT_MUTATIONS` includes `RENEW`, `ADD_TRAFFIC` and `ADD_TIME` only because
+   * of it: replaying "make the expiry this instant and the allowance these bytes" is a
+   * no-op, and replaying "add thirty days" is a customer receiving sixty.
+   *
+   * `null` on either field means the caller did not buy it and the adapter must not
+   * send it. An adapter that substituted a value it read back would turn a replay into
+   * a different request, which is exactly the property the target exists to remove.
+   *
+   * Which of the three operations an adapter may be asked to perform is still three
+   * separate promises, declared in `capabilities` and checked by the three predicates
+   * below. A panel that can extend an expiry but not raise a limit declares `ADD_TIME`
+   * and not `ADD_VOLUME`, and `decideOperability` refuses the other before anything is
+   * dialled.
+   */
+  applyAllowance?(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+    plan: ProviderAllowancePlan,
+  ): Promise<ProviderStateChangeOutcome>;
+}
+
+/**
+ * The absolute state a commercial operation asks a provider to make true.
+ *
+ * Structurally `OperationTarget` from `provisioning.ts`, restated here because
+ * `provider.ts` describes a wire contract and must not depend on the operation
+ * vocabulary that happens to drive it — the same separation `ProviderUserRef` keeps
+ * from `services`. The executor converts.
+ *
+ * `expiresAt` is an instant, not a duration. `trafficLimitBytes` is the TOTAL
+ * allowance including whatever has already been consumed, not a delta: the pinned
+ * Marzban keeps `used_traffic` when a limit is raised and compares the two to decide
+ * whether the account is `limited`, so a number that excluded consumption would cut a
+ * customer off at exactly the point they had already reached.
+ *
+ * `null` means the caller did not buy that field, and it is NOT "unlimited" —
+ * unlimited traffic is zero, the sentinel the whole codebase already uses.
+ */
+export interface ProviderAllowancePlan {
+  readonly expiresAt: Date | null;
+  readonly trafficLimitBytes: bigint | null;
 }
 
 /** An adapter narrowed to one it is safe to call `suspendUser` on. */
@@ -1004,6 +1062,30 @@ export function canEnableUser(adapter: ProviderAdapter): adapter is CanEnableUse
 
 export function canDeleteUser(adapter: ProviderAdapter): adapter is CanDeleteUser {
   return typeof adapter.terminateUser === 'function' && adapter.supports('DELETE_USER');
+}
+
+/** An adapter narrowed to one it is safe to call `applyAllowance` on. */
+export type CanApplyAllowance = ProviderAdapter & Pick<Required<ProviderAdapter>, 'applyAllowance'>;
+
+/*
+ * Three predicates over ONE method, and each asks its own capability.
+ *
+ * The method is shared because the request is; the promises are separate because a
+ * panel may extend a window and refuse to raise an allowance, or price the two
+ * differently, or implement one and not the other. Collapsing them into a single
+ * `canApplyAllowance` would advertise all three the moment a provider could do any —
+ * the failure mode the capability array was rewritten to stop.
+ */
+export function canRenewUser(adapter: ProviderAdapter): adapter is CanApplyAllowance {
+  return typeof adapter.applyAllowance === 'function' && adapter.supports('RENEW_USER');
+}
+
+export function canAddVolume(adapter: ProviderAdapter): adapter is CanApplyAllowance {
+  return typeof adapter.applyAllowance === 'function' && adapter.supports('ADD_VOLUME');
+}
+
+export function canAddTime(adapter: ProviderAdapter): adapter is CanApplyAllowance {
+  return typeof adapter.applyAllowance === 'function' && adapter.supports('ADD_TIME');
 }
 
 /** Whether this adapter implements the service half, not just the connection half. */
